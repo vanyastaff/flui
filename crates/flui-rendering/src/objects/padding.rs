@@ -85,7 +85,7 @@ impl RenderBox for RenderPadding {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
@@ -115,7 +115,7 @@ impl RenderBox for RenderPadding {
 
         // Constrain to parent's constraints
         self.size = constraints.constrain(self.size);
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

@@ -102,7 +102,7 @@ impl RenderBox for RenderSizedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constraints = ctx.constraints();
 
         // Use fixed dimension or constrain to max
@@ -117,7 +117,7 @@ impl RenderBox for RenderSizedBox {
             .unwrap_or(constraints.max_height);
 
         self.size = Size::new(width, height);
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

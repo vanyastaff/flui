@@ -162,7 +162,7 @@ impl RenderBox for RenderParagraph {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let max_width = self.layout_max_width(&constraints);
         self.painter.layout(constraints.min_width.get(), max_width);
@@ -170,7 +170,7 @@ impl RenderBox for RenderParagraph {
         // (Flutter `size = constraints.constrain(textPainter.size)`).
         let size = constraints.constrain(self.painter.size());
         self.size = size;
-        ctx.complete_with_size(size);
+        size
     }
 
     fn compute_dry_layout(

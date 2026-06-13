@@ -115,14 +115,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
             self.size = constraints.smallest();
         }
 
-        layout_ctx.complete_with_size(self.size);
-
-        layout_ctx.inner().geometry().copied().ok_or_else(|| {
-            crate::error::RenderError::contract_violation(
-                self.debug_name(),
-                "RenderRepaintBoundary layout did not complete",
-            )
-        })
+        Ok(self.size)
     }
 
     fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {

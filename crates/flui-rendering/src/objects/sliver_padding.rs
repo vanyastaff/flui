@@ -344,7 +344,7 @@ impl RenderSliver for RenderSliverPadding {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) {
+    ) -> SliverGeometry {
         let constraints = *ctx.constraints();
         self.constraints = constraints;
 
@@ -353,8 +353,7 @@ impl RenderSliver for RenderSliverPadding {
         if ctx.child_count() == 0 {
             let geometry = self.empty_geometry(&constraints);
             self.geometry = geometry;
-            ctx.complete(geometry);
-            return;
+            return geometry;
         }
 
         let child_constraints = self.child_constraints(&constraints);
@@ -365,8 +364,7 @@ impl RenderSliver for RenderSliverPadding {
         if let Some(correction) = child_geometry.scroll_offset_correction {
             let geometry = SliverGeometry::scroll_offset_correction(correction);
             self.geometry = geometry;
-            ctx.complete(geometry);
-            return;
+            return geometry;
         }
 
         let (geometry, child_paint_offset) = self.padded_geometry(&constraints, &child_geometry);
@@ -376,7 +374,7 @@ impl RenderSliver for RenderSliverPadding {
         // later paint and hit-test phases use the same placement.
         ctx.position_child(0, child_paint_offset);
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

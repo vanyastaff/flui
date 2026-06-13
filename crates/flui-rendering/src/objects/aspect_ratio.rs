@@ -242,7 +242,7 @@ impl RenderBox for RenderAspectRatio {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let incoming = *ctx.constraints();
         let target_size = self.apply_aspect_ratio(incoming);
 
@@ -258,7 +258,7 @@ impl RenderBox for RenderAspectRatio {
         }
 
         self.size = target_size;
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

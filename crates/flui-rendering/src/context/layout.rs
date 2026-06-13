@@ -25,8 +25,8 @@
 //!         y_offset += child_size.height;
 //!     }
 //!
-//!     // Complete layout with computed size
-//!     ctx.complete(Size::new(constraints.max_width(), y_offset));
+//!     // Return the computed size
+//!     Size::new(constraints.max_width(), y_offset)
 //! }
 //! ```
 
@@ -71,11 +71,6 @@ where
     /// Gets the layout constraints from parent.
     pub fn constraints(&self) -> &<P::Layout as LayoutCapability>::Constraints {
         self.inner.constraints()
-    }
-
-    /// Checks if layout is complete.
-    pub fn is_complete(&self) -> bool {
-        self.inner.is_complete()
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -134,15 +129,6 @@ where
     /// Gets mutable reference to child's parent data.
     pub fn child_parent_data_mut(&mut self, index: usize) -> Option<&mut PD> {
         self.inner.child_parent_data_mut(index)
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // LAYOUT COMPLETION
-    // ════════════════════════════════════════════════════════════════════════
-
-    /// Completes layout with the given geometry.
-    pub fn complete(&mut self, geometry: <P::Layout as LayoutCapability>::Geometry) {
-        self.inner.complete_layout(geometry);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -311,29 +297,6 @@ where
         if self.child_count() > 0 {
             self.inner.position_child(0, Offset::ZERO);
         }
-    }
-
-    /// Completes layout with the given size.
-    pub fn complete_with_size(&mut self, size: Size) {
-        self.inner.complete_layout(size);
-    }
-
-    /// Completes layout matching the biggest allowed size.
-    pub fn complete_with_biggest(&mut self) {
-        let size = self.biggest();
-        self.inner.complete_layout(size);
-    }
-
-    /// Completes layout matching the smallest allowed size.
-    pub fn complete_with_smallest(&mut self) {
-        let size = self.smallest();
-        self.inner.complete_layout(size);
-    }
-
-    /// Completes layout matching a single child's size.
-    pub fn complete_matching_child(&mut self) {
-        let size = self.child_geometry(0).cloned().unwrap_or(Size::ZERO);
-        self.inner.complete_layout(size);
     }
 }
 

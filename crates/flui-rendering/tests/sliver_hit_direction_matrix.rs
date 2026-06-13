@@ -67,12 +67,12 @@ impl RenderBox for SliverHitHost {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
         }
         self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {
@@ -115,7 +115,10 @@ impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.extent);
         self.geometry = SliverGeometry {
@@ -128,7 +131,7 @@ impl RenderSliver for MainAxisBandSliver {
             visible: paint_extent > 0.0,
             ..SliverGeometry::ZERO
         };
-        ctx.complete(self.geometry);
+        self.geometry
     }
 
     fn constraints(&self) -> &SliverConstraints {

@@ -82,7 +82,7 @@ impl RenderBox for RenderColoredBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constrained = ctx.constrain(self.preferred_size);
         self.size = constrained;
         tracing::debug!(
@@ -90,7 +90,7 @@ impl RenderBox for RenderColoredBox {
             self.preferred_size,
             constrained
         );
-        ctx.complete_with_size(constrained);
+        constrained
     }
 
     fn size(&self) -> &Size {

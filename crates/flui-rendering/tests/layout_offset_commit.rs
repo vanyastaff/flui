@@ -113,7 +113,7 @@ impl RenderBox for PositionFirstChildOnly {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         for i in 0..child_count {
@@ -123,7 +123,7 @@ impl RenderBox for PositionFirstChildOnly {
             ctx.position_child(0, Offset::new(px(7.0), px(3.0)));
         }
         self.size = constraints.constrain(Size::new(px(100.0), px(100.0)));
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

@@ -103,7 +103,7 @@ impl RenderBox for SimpleRow {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         for i in 0..ctx.child_count() {
             let _ = ctx.layout_child(i, constraints);
@@ -111,7 +111,7 @@ impl RenderBox for SimpleRow {
             ctx.position_child(i, Offset::new(px(i as f32 * 50.0), px(0.0)));
         }
         self.size = constraints.constrain(Size::new(px(150.0), px(50.0)));
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {
@@ -278,12 +278,12 @@ impl RenderBox for SliverPaintHost {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
         }
         self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {
@@ -314,7 +314,10 @@ impl RenderSliver for PaintLeafSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         let geometry = SliverGeometry {
             scroll_extent: 80.0,
@@ -326,7 +329,7 @@ impl RenderSliver for PaintLeafSliver {
             ..SliverGeometry::ZERO
         };
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {
@@ -370,7 +373,10 @@ impl RenderSliver for InvisiblePaintLeafSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         let geometry = SliverGeometry {
             scroll_extent: 80.0,
@@ -382,7 +388,7 @@ impl RenderSliver for InvisiblePaintLeafSliver {
             ..SliverGeometry::ZERO
         };
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

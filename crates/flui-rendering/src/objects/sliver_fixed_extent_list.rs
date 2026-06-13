@@ -83,7 +83,10 @@ impl RenderSliver for RenderSliverFixedExtentList {
     type Arity = Variable;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         self.child_count = ctx.child_count();
 
@@ -125,7 +128,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
         }
 
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

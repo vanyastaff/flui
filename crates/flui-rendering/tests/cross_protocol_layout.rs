@@ -85,7 +85,10 @@ impl RenderSliver for StubLeafSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         let paint = 200.0_f32.min(self.constraints.remaining_paint_extent);
         let geom = SliverGeometry {
@@ -100,7 +103,7 @@ impl RenderSliver for StubLeafSliver {
         // Keep the object's own fields in sync with the layout result so
         // `constraints()` / `geometry()` honor the RenderSliver contract.
         self.geometry = geom;
-        ctx.complete(geom);
+        geom
     }
 
     fn constraints(&self) -> &SliverConstraints {
@@ -156,10 +159,10 @@ impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
         let geom = ctx.layout_sliver_child(0, self.sliver_constraints);
         *self.captured.lock().unwrap() = Some(geom);
-        ctx.complete_with_size(ctx.constraints().biggest());
+        ctx.constraints().biggest()
     }
 
     fn size(&self) -> &Size {
@@ -345,9 +348,9 @@ fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_keeps_dirty(
 
     let box_constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
 
-    // The parent's perform_layout calls complete_with_size and returns Ok,
-    // so layout_dirty_root itself returns Ok.  Only the descendant-error flag
-    // prevents NEEDS_LAYOUT from being cleared.
+    // The parent's perform_layout returns Ok, so layout_dirty_root itself
+    // returns Ok.  Only the descendant-error flag prevents NEEDS_LAYOUT
+    // from being cleared.
     let result = pipeline.layout_dirty_root(parent_id, box_constraints);
     assert!(
         result.is_ok(),

@@ -115,7 +115,7 @@ impl RenderSliver for RenderSliverOffstage {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) {
+    ) -> SliverGeometry {
         let constraints = *ctx.constraints();
         self.constraints = constraints;
 
@@ -128,13 +128,11 @@ impl RenderSliver for RenderSliverOffstage {
                 if let Some(correction) = child_geometry.scroll_offset_correction {
                     let geometry = SliverGeometry::scroll_offset_correction(correction);
                     self.geometry = geometry;
-                    ctx.complete(geometry);
-                    return;
+                    return geometry;
                 }
             }
             self.geometry = SliverGeometry::ZERO;
-            ctx.complete(SliverGeometry::ZERO);
-            return;
+            return SliverGeometry::ZERO;
         }
 
         // Transparent passthrough.
@@ -145,7 +143,7 @@ impl RenderSliver for RenderSliverOffstage {
         };
 
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

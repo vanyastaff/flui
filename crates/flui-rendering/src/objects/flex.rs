@@ -283,7 +283,7 @@ impl RenderBox for RenderFlex {
     type Arity = Variable;
     type ParentData = FlexParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, FlexParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, FlexParentData>) -> Size {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
@@ -291,8 +291,7 @@ impl RenderBox for RenderFlex {
         if child_count == 0 {
             // No children - use minimum size
             self.size = constraints.smallest();
-            ctx.complete_with_size(self.size);
-            return;
+            return self.size;
         }
 
         // ====================================================================
@@ -535,7 +534,7 @@ impl RenderBox for RenderFlex {
             main_offset += self.main_size(child_size) + px(self.spacing) + between_space;
         }
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

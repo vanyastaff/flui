@@ -186,7 +186,10 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
         type Arity = Single;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+        ) -> Size {
             if !self.already_panicked {
                 self.already_panicked = true;
                 panic!("PanicOnceWidget intentional first-call panic");
@@ -194,7 +197,7 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
             let constraints = *ctx.constraints();
             let child_size = ctx.layout_child(0, constraints);
             self.size = child_size;
-            ctx.complete_with_size(self.size);
+            self.size
         }
 
         fn size(&self) -> &Size {
@@ -231,6 +234,19 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
     assert!(
         matches!(frame_1, Err(RenderError::Poisoned { .. })),
         "frame 1 PanicOnceWidget panic must surface as Poisoned; got {frame_1:?}",
+    );
+
+    // The aborted pass committed nothing and left NEEDS_LAYOUT set, so the
+    // node is eligible for the frame-2 retry below. (Completion is now the
+    // return value of `perform_layout`, so a panicked pass cannot have
+    // half-committed a size.)
+    assert!(
+        pipeline
+            .render_tree()
+            .get(parent_id)
+            .expect("panicked node stays in the tree")
+            .needs_layout(),
+        "a Poisoned layout must leave NEEDS_LAYOUT set for next-frame retry",
     );
 
     // Frame 2: retry must succeed. Guard's Drop on the unwind path

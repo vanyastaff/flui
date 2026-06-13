@@ -177,7 +177,7 @@ impl RenderSliver for RenderSliverOpacity {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) {
+    ) -> SliverGeometry {
         let constraints = *ctx.constraints();
         self.constraints = constraints;
 
@@ -189,7 +189,7 @@ impl RenderSliver for RenderSliverOpacity {
         };
 
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

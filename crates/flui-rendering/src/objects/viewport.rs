@@ -503,7 +503,10 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> Size {
         self.size = ctx.constraints().biggest();
         let main_axis_extent = self.main_axis_extent();
         let cross_axis_extent = self.cross_axis_extent();
@@ -517,8 +520,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             self.sliver_obstruction_extents.clear();
             self.has_visual_overflow = false;
             let _ = self.offset.apply_content_dimensions(0.0, 0.0);
-            ctx.complete_with_size(self.size);
-            return;
+            return self.size;
         }
 
         let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
@@ -550,7 +552,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             "RenderViewport exceeded its bounded layout correction loop"
         );
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

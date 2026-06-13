@@ -292,7 +292,7 @@ impl RenderBox for RenderFractionallySizedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let incoming = *ctx.constraints();
 
         if ctx.child_count() > 0 {
@@ -313,7 +313,7 @@ impl RenderBox for RenderFractionallySizedBox {
             self.child_offset = Offset::ZERO;
         }
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

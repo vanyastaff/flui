@@ -179,7 +179,7 @@ impl RenderBox for RenderLimitedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let incoming = *ctx.constraints();
         let limited = self.limit_constraints(incoming);
 
@@ -196,7 +196,7 @@ impl RenderBox for RenderLimitedBox {
             self.size = incoming.constrain(Size::new(limited.min_width, limited.min_height));
         }
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

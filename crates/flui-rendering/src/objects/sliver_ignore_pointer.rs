@@ -96,7 +96,7 @@ impl RenderSliver for RenderSliverIgnorePointer {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) {
+    ) -> SliverGeometry {
         let constraints = *ctx.constraints();
         self.constraints = constraints;
 
@@ -107,7 +107,7 @@ impl RenderSliver for RenderSliverIgnorePointer {
         };
 
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

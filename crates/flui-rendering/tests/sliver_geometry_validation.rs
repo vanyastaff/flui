@@ -86,9 +86,12 @@ impl RenderSliver for BadGeometrySliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
-        ctx.complete(self.geometry);
+        self.geometry
     }
 
     fn constraints(&self) -> &SliverConstraints {
@@ -141,11 +144,14 @@ impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> Size {
         let geometry = ctx.layout_sliver_child(0, self.sliver_constraints);
         *self.captured.lock().unwrap() = Some(geometry);
         self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

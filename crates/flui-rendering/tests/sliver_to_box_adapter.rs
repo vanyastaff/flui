@@ -95,9 +95,9 @@ impl RenderBox for FixedHitBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
         self.size = ctx.constraints().constrain(self.desired);
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {
@@ -133,9 +133,9 @@ impl RenderBox for VerticalBandHitBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
         self.size = ctx.constraints().constrain(Size::new(px(300.0), px(180.0)));
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {
@@ -208,12 +208,12 @@ impl RenderBox for SliverHost {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, flui_tree::Variable, Self::ParentData>,
-    ) {
+    ) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
         }
         self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

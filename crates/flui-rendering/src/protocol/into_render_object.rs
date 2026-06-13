@@ -60,9 +60,8 @@
 //!     type Arity = Leaf;
 //!     type ParentData = BoxParentData;
 //!
-//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) {
-//!         let size = ctx.constraints().constrain(self.size);
-//!         ctx.complete_with_size(size);
+//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) -> Size {
+//!         ctx.constraints().constrain(self.size)
 //!     }
 //!
 //!     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
@@ -210,8 +209,8 @@ mod tests {
         type Arity = Leaf;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
-            // Test implementation
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::ZERO
         }
 
         // paint() uses default no-op

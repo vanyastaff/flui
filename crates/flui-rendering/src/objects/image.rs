@@ -354,10 +354,10 @@ impl RenderBox for RenderImage {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let size = self.compute_size(ctx.constraints());
         self.size = size;
-        ctx.complete_with_size(size);
+        size
     }
 
     fn size(&self) -> &Size {

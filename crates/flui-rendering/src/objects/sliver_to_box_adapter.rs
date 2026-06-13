@@ -51,12 +51,14 @@ impl RenderSliver for RenderSliverToBoxAdapter {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         if ctx.child_count() == 0 {
             self.geometry = SliverGeometry::ZERO;
-            ctx.complete(self.geometry);
-            return;
+            return self.geometry;
         }
 
         let child_size =
@@ -84,7 +86,7 @@ impl RenderSliver for RenderSliverToBoxAdapter {
             child_paint_offset(&self.constraints, &geometry, px(0.0), px(child_extent));
         ctx.position_child(0, child_paint_offset);
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

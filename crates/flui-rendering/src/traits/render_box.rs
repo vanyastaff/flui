@@ -92,24 +92,27 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Layout
     // ========================================================================
 
-    /// Computes the layout of this render object.
+    /// Computes the layout of this render object and returns the resulting
+    /// size.
     ///
     /// The context provides:
     /// - Constraints from parent via `ctx.constraints()`
     /// - Type-safe child access via `ctx.layout_child()`,
     ///   `ctx.position_child()`
-    /// - Completion via `ctx.complete_with_size()`
     ///
     /// # Example
     ///
     /// ```ignore
-    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) {
+    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> Size {
     ///     let child_size = ctx.layout_single_child_loose();
     ///     ctx.position_single_child_at_origin();
-    ///     ctx.complete_with_size(ctx.constrain(child_size));
+    ///     ctx.constrain(child_size)
     /// }
     /// ```
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>);
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> Size;
 
     /// Returns a reference to the current size of this render object.
     ///
@@ -426,27 +429,12 @@ where
         // `&mut dyn BoxLayoutCtxErased` (the GAT for `BoxProtocol`
         // resolves to exactly this). We reconstruct a typed
         // `BoxLayoutCtx<T::Arity, T::ParentData>` via the `from_erased`
-        // ctor (Proxy storage that delegates child / completion ops
-        // back through the erased trait), wrap it in the ergonomic
-        // `BoxLayoutContext` so user widgets get `complete_with_size`
-        // etc., and call `T::perform_layout`.
+        // ctor (Proxy storage that delegates child ops back through the
+        // erased trait), wrap it in the ergonomic `BoxLayoutContext` so
+        // user widgets get nice helpers, and call `T::perform_layout`.
         //
-        // The user's `perform_layout` body must call
-        // `ctx.complete_with_size(...)` (or equivalent) to record the
-        // computed size; we read it back from the inner BoxLayoutCtx
-        // and return to the caller.
-        //
-        // # Contract-violation handling (follow-up to PR #141 #5 Option A)
-        //
-        // If `perform_layout` returns without calling
-        // `ctx.complete_with_size(...)`, we return
-        // [`RenderError::ContractViolation`] as `Err(...)` directly —
-        // no `panic_any`, no `catch_unwind` dance. The PR #141 review
-        // (finding #5) called out the previous panic_any path as a
-        // Constitution Principle 6 violation; this PR closes that
-        // technical debt by making the signature
-        // `RenderResult<ProtocolGeometry<P>>` so contract violations
-        // propagate as typed errors through `?`.
+        // `T::perform_layout` now returns `Size` directly — a missing
+        // completion is a compile error, not a runtime `ContractViolation`.
         //
         // `catch_unwind` in `RenderEntry::layout_leaf_only` is retained
         // only for genuine third-party panics (panic! / unwrap in user
@@ -455,14 +443,7 @@ where
             crate::protocol::BoxLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::BoxLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
-        T::perform_layout(self, &mut layout_ctx);
-        layout_ctx.inner().geometry().copied().ok_or_else(|| {
-            crate::error::RenderError::contract_violation(
-                self.debug_name(),
-                "RenderBox::perform_layout returned without calling \
-                     ctx.complete_with_size(...)",
-            )
-        })
+        Ok(T::perform_layout(self, &mut layout_ctx))
     }
 
     fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {

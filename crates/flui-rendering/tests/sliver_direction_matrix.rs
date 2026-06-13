@@ -57,8 +57,9 @@ impl RenderSliver for DirectionProbe {
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) {
+    ) -> flui_rendering::constraints::SliverGeometry {
         let _ = ctx;
+        flui_rendering::constraints::SliverGeometry::ZERO
     }
 
     fn geometry(&self) -> &flui_rendering::constraints::SliverGeometry {

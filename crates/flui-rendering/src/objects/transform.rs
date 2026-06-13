@@ -177,7 +177,7 @@ impl RenderBox for RenderTransform {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
@@ -186,13 +186,11 @@ impl RenderBox for RenderTransform {
             // Layout child with same constraints
             let child_size = ctx.layout_child(0, constraints);
             self.size = child_size;
-
-            ctx.complete_with_size(self.size);
         } else {
             self.has_child = false;
             self.size = constraints.smallest();
-            ctx.complete_with_size(self.size);
         }
+        self.size
     }
 
     fn size(&self) -> &Size {

@@ -348,7 +348,10 @@ fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
         type Arity = Single;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
-        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>) {
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>,
+        ) -> Size {
             panic!("PanickingNonLeaf intentionally panics");
         }
 
@@ -523,9 +526,13 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
         type Arity = Leaf;
         type ParentData = flui_rendering::parent_data::SliverParentData;
 
-        fn perform_layout(&mut self, _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+        ) -> SliverGeometry {
             // Never invoked in this test — protocol-mismatch error
             // returns before perform_layout.
+            SliverGeometry::ZERO
         }
 
         fn constraints(&self) -> &SliverConstraints {

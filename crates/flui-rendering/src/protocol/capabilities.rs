@@ -76,12 +76,6 @@ pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: Pare
     /// Gets the layout constraints from parent.
     fn constraints(&self) -> &L::Constraints;
 
-    /// Checks if layout is complete.
-    fn is_complete(&self) -> bool;
-
-    /// Marks layout complete with final geometry.
-    fn complete_layout(&mut self, geometry: L::Geometry);
-
     /// Gets the number of children.
     fn child_count(&self) -> usize;
 

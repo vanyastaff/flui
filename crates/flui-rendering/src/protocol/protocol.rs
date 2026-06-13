@@ -78,8 +78,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// **D-block PR-A1b U19 (companion memo D5):** for `BoxProtocol` this
     /// resolves to `dyn BoxLayoutCtxErased + 'ctx`; for `SliverProtocol`
     /// to `dyn SliverLayoutCtxErased + 'ctx`. Each per-protocol trait
-    /// exposes the small protocol-shared surface (constraints, child ops,
-    /// complete_layout) that the [`RenderObject`](crate::traits::RenderObject)
+    /// exposes the small protocol-shared surface (constraints, child ops)
+    /// that the [`RenderObject`](crate::traits::RenderObject)
     /// blanket impl needs to reconstruct a typed layout context via a
     /// `Proxy` storage variant on the typed context type.
     type LayoutCtxErased<'ctx>: ?Sized
@@ -223,7 +223,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
 /// is a boundary. `InPlacement` is the middle ground: the parent uses the
 /// child's size for positioning (scroll offset) but not for its own size
 /// computation. This is the common case for viewport → sliver children.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum UsageByParent {
     /// Parent doesn't depend on this child's geometry at all.
     /// Changes to this child's size don't affect the parent's layout.
@@ -231,18 +231,13 @@ pub enum UsageByParent {
 
     /// Parent reads this child's geometry during its own layout pass.
     /// Changes to this child's size may require the parent to re-layout.
+    #[default]
     InLayout,
 
     /// Parent only positions this child (e.g., scroll viewport placing
     /// sliver children). The parent's own size doesn't depend on this
     /// child's geometry — only the child's position within the parent.
     InPlacement,
-}
-
-impl Default for UsageByParent {
-    fn default() -> Self {
-        Self::InLayout
-    }
 }
 
 // ============================================================================

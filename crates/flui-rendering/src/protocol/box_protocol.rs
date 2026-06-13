@@ -371,7 +371,6 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
     /// synchronous layout callback.
     Direct {
         constraints: BoxConstraints,
-        geometry: Option<Size>,
         /// Reference to children states for position_child to update
         /// offsets.
         children: Option<&'ctx mut Vec<ChildState<P>>>,
@@ -390,7 +389,6 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
         /// reference-lifetime mismatch with the erased
         /// `fn constraints(&self) -> BoxConstraints` (owned).
         constraints: BoxConstraints,
-        geometry: Option<Size>,
         /// Lazy cache of child sizes returned from
         /// `erased.layout_child(idx, c)` — see [`ProxyChildSizeCache`].
         child_sizes: ProxyChildSizeCache,
@@ -408,7 +406,6 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
                 constraints,
-                geometry: None,
                 children: None,
                 child_ids: None,
                 layout_child_callback: None,
@@ -425,7 +422,6 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
                 constraints,
-                geometry: None,
                 children: Some(children),
                 child_ids: None,
                 layout_child_callback: None,
@@ -449,7 +445,6 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
                 constraints,
-                geometry: None,
                 children: Some(children),
                 child_ids: Some(child_ids),
                 layout_child_callback: Some(layout_child_callback),
@@ -459,8 +454,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     }
 
     /// **D-block PR-A1b U19** — constructs a Proxy-mode `BoxLayoutCtx`
-    /// that delegates child / completion operations to the given erased
-    /// context. Used by the `RenderObject<BoxProtocol>` blanket impl in
+    /// that delegates child operations to the given erased context. Used by
+    /// the `RenderObject<BoxProtocol>` blanket impl in
     /// [`crate::traits::RenderBox`] to hand a typed
     /// `&mut BoxLayoutCtx<T::Arity, T::ParentData>` to
     /// `RenderBox::perform_layout`, given only `&mut dyn BoxLayoutCtxErased`
@@ -514,19 +509,10 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         Self {
             storage: BoxLayoutCtxStorage::Proxy {
                 constraints,
-                geometry: None,
                 child_sizes: vec![None; child_count],
                 erased,
             },
             _phantom: std::marker::PhantomData,
-        }
-    }
-
-    /// Gets the current geometry if layout is complete.
-    pub fn geometry(&self) -> Option<&Size> {
-        match &self.storage {
-            BoxLayoutCtxStorage::Direct { geometry, .. }
-            | BoxLayoutCtxStorage::Proxy { geometry, .. } => geometry.as_ref(),
         }
     }
 
@@ -553,31 +539,6 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
         match &self.storage {
             BoxLayoutCtxStorage::Direct { constraints, .. }
             | BoxLayoutCtxStorage::Proxy { constraints, .. } => constraints,
-        }
-    }
-
-    fn is_complete(&self) -> bool {
-        match &self.storage {
-            BoxLayoutCtxStorage::Direct { geometry, .. }
-            | BoxLayoutCtxStorage::Proxy { geometry, .. } => geometry.is_some(),
-        }
-    }
-
-    fn complete_layout(&mut self, geometry: Size) {
-        match &mut self.storage {
-            BoxLayoutCtxStorage::Direct { geometry: g, .. } => *g = Some(geometry),
-            BoxLayoutCtxStorage::Proxy {
-                geometry: g,
-                erased,
-                ..
-            } => {
-                *g = Some(geometry);
-                // Mirror completion to the underlying erased ctx so any
-                // pipeline-side reader of the original Direct ctx sees
-                // the result. (The blanket-impl bridge returns the Size
-                // directly as well — this keeps both paths consistent.)
-                erased.complete_layout(geometry);
-            }
         }
     }
 
@@ -804,18 +765,6 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
 
-    /// Records the layout result (parent's own size) on the context.
-    ///
-    /// The completed size is read back from the typed context via
-    /// `BoxLayoutCtx::geometry()` (returning `Option<&Size>`) — see the
-    /// `RenderObject<BoxProtocol>` blanket impl in
-    /// [`crate::traits::RenderBox`] for the read site. The erased trait
-    /// intentionally exposes only the write — owned-`Size`-by-reference
-    /// has no stable storage to bind to through trait-object dispatch,
-    /// and the only readers are the bridge (typed-side `.geometry()`)
-    /// and Proxy `complete_layout` mirror.
-    fn complete_layout(&mut self, size: Size);
-
     /// Distance from the top of child `index` to its first baseline of
     /// `baseline` kind, after the child has been laid out in this walk.
     ///
@@ -952,11 +901,6 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     }
 
     #[inline]
-    fn complete_layout(&mut self, size: Size) {
-        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::complete_layout(self, size)
-    }
-
-    #[inline]
     fn child_distance_to_actual_baseline(
         &self,
         index: usize,
@@ -1071,7 +1015,6 @@ impl ErasedChildState {
 /// `from_erased` with the node's OWN `Arity` and `ParentData`.
 pub struct ErasedBoxLayoutCtx<'ctx> {
     constraints: BoxConstraints,
-    geometry: Option<Size>,
     children: &'ctx mut Vec<ErasedChildState>,
     child_ids: &'ctx [flui_foundation::RenderId],
     layout_child_callback: LayoutChildCallback<'ctx>,
@@ -1100,18 +1043,12 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     ) -> Self {
         Self {
             constraints,
-            geometry: None,
             children,
             child_ids,
             layout_child_callback,
             actual_baseline_callback,
             sliver_layout_child_callback,
         }
-    }
-
-    /// The parent's completed size, when `complete_layout` ran.
-    pub fn geometry(&self) -> Option<&Size> {
-        self.geometry.as_ref()
     }
 }
 
@@ -1183,10 +1120,6 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         if let Some(slot) = self.children.get_mut(index) {
             slot.offset = offset;
         }
-    }
-
-    fn complete_layout(&mut self, size: Size) {
-        self.geometry = Some(size);
     }
 
     fn child_parent_data_dyn(&self, index: usize) -> Option<&dyn ParentData> {
@@ -1582,16 +1515,12 @@ mod tests {
     #[test]
     fn test_box_layout_context() {
         let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-        let mut ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
+        let ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
 
-        // D-block PR-A1b U19: `BoxLayoutCtx` now implements both
-        // `LayoutContextApi` (user-facing API, returns `&BoxConstraints`)
-        // and `BoxLayoutCtxErased` (trait-object bridge, returns owned
-        // `BoxConstraints` by Copy). UFCS disambiguates inside this
-        // module where both traits are in scope; downstream user code
-        // typically only imports `LayoutContextApi` so the bare-method
-        // form keeps working.
-        assert!(!ctx.is_complete());
+        // `BoxLayoutCtx` implements `LayoutContextApi` (user-facing API,
+        // returns `&BoxConstraints`) and `BoxLayoutCtxErased` (trait-object
+        // bridge, returns owned `BoxConstraints` by Copy). UFCS
+        // disambiguates inside this module where both traits are in scope.
         assert_eq!(
             <BoxLayoutCtx<'_, Leaf, BoxParentData> as LayoutContextApi<
                 '_,
@@ -1602,14 +1531,6 @@ mod tests {
             .max_width,
             px(100.0)
         );
-
-        <BoxLayoutCtx<'_, Leaf, BoxParentData> as LayoutContextApi<
-            '_,
-            BoxLayout,
-            Leaf,
-            BoxParentData,
-        >>::complete_layout(&mut ctx, Size::new(px(100.0), px(100.0)));
-        assert!(ctx.is_complete());
     }
 
     #[test]

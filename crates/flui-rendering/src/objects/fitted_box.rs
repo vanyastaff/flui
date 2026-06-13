@@ -225,7 +225,7 @@ impl RenderBox for RenderFittedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let incoming = *ctx.constraints();
 
         // (1) No child → smallest size, identity transform.
@@ -233,8 +233,7 @@ impl RenderBox for RenderFittedBox {
             self.has_child = false;
             self.size = incoming.smallest();
             self.reset_transform_cache();
-            ctx.complete_with_size(self.size);
-            return;
+            return self.size;
         }
 
         // (2) Lay out the child unconstrained so it picks its intrinsic size.
@@ -246,8 +245,7 @@ impl RenderBox for RenderFittedBox {
         if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
             self.size = incoming.smallest();
             self.reset_transform_cache();
-            ctx.complete_with_size(self.size);
-            return;
+            return self.size;
         }
 
         // (4) Our size = constrain(child_size) — we honour the parent
@@ -288,7 +286,7 @@ impl RenderBox for RenderFittedBox {
         self.has_visual_overflow = destination.width.get() > self.size.width.get()
             || destination.height.get() > self.size.height.get();
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

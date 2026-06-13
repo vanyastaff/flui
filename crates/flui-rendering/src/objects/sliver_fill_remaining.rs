@@ -56,7 +56,10 @@ impl RenderSliver for RenderSliverFillRemaining {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         let mut extent = (self.constraints.viewport_main_axis_extent
             - self.constraints.preceding_scroll_extent)
@@ -86,7 +89,7 @@ impl RenderSliver for RenderSliverFillRemaining {
             ctx.position_child(0, child_paint_offset(&self.constraints, &geometry));
         }
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {
@@ -155,7 +158,10 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         let mut extent = (self.constraints.viewport_main_axis_extent
             - self.constraints.preceding_scroll_extent)
@@ -197,7 +203,7 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
             );
         }
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {
@@ -266,7 +272,10 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
+    ) -> SliverGeometry {
         self.constraints = *ctx.constraints();
         let extent = self.constraints.remaining_paint_extent - self.constraints.overlap.min(0.0);
         let cache_extent = self.calculate_cache_offset(
@@ -305,7 +314,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
             ctx.position_child(0, child_paint_offset(&self.constraints, &geometry));
         }
         self.geometry = geometry;
-        ctx.complete(geometry);
+        geometry
     }
 
     fn geometry(&self) -> &SliverGeometry {

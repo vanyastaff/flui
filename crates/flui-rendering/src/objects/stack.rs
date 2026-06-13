@@ -348,7 +348,10 @@ impl RenderBox for RenderStack {
     type Arity = Variable;
     type ParentData = StackParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
+    ) -> Size {
         let incoming = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
@@ -362,8 +365,7 @@ impl RenderBox for RenderStack {
             } else {
                 incoming.smallest()
             };
-            ctx.complete_with_size(self.size);
-            return;
+            return self.size;
         }
 
         // -----------------------------------------------------------------
@@ -450,7 +452,7 @@ impl RenderBox for RenderStack {
             }
         }
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

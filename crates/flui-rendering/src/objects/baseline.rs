@@ -72,14 +72,13 @@ impl RenderBox for RenderBaseline {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() == 0 {
             self.has_child = false;
             self.size = constraints.smallest();
-            ctx.complete_with_size(self.size);
-            return;
+            return self.size;
         }
 
         self.has_child = true;
@@ -99,7 +98,7 @@ impl RenderBox for RenderBaseline {
 
         ctx.position_child(0, self.child_offset);
         self.size = constraints.constrain(self.size);
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

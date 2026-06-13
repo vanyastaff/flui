@@ -96,7 +96,7 @@ impl RenderBox for RenderCenter {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
         tracing::debug!(
@@ -149,7 +149,7 @@ impl RenderBox for RenderCenter {
             tracing::debug!("RenderCenter: no child, size={:?}", self.size);
         }
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

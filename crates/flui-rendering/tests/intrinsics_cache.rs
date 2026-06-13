@@ -61,10 +61,10 @@ impl RenderBox for CountingLeaf {
     type Arity = Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
         let constraints = *ctx.constraints();
         self.size = constraints.constrain(Size::new(px(40.0), px(40.0)));
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {
@@ -120,14 +120,17 @@ impl RenderBox for CountingRoot {
     type Arity = Variable;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> Size {
         self.layout_runs.fetch_add(1, Ordering::Relaxed);
         let constraints = *ctx.constraints();
         for i in 0..ctx.child_count() {
             ctx.layout_child(i, constraints.loosen());
         }
         self.size = constraints.biggest();
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

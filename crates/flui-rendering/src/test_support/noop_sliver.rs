@@ -42,8 +42,11 @@ impl RenderSliver for NoopSliver {
     type Arity = Leaf;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>) {
-        let _ = ctx;
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> SliverGeometry {
+        SliverGeometry::ZERO
     }
 
     fn geometry(&self) -> &SliverGeometry {

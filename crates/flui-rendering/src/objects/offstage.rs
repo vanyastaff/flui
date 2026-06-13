@@ -98,7 +98,7 @@ impl RenderBox for RenderOffstage {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         if self.offstage {
             // Lay out the child at zero size so its layout state stays
             // valid (Flutter parity — the child is still part of the
@@ -126,7 +126,7 @@ impl RenderBox for RenderOffstage {
             }
         }
 
-        ctx.complete_with_size(self.size);
+        self.size
     }
 
     fn size(&self) -> &Size {

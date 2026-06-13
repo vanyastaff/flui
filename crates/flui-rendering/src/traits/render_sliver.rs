@@ -31,7 +31,7 @@ use crate::{
 ///
 /// 1. Parent (viewport) calls `perform_layout()` with context
 /// 2. Sliver determines visible portion based on scroll offset
-/// 3. Sliver completes layout via `ctx.complete(geometry)`
+/// 3. Sliver returns the computed `SliverGeometry` as the return value
 /// 4. Viewport composes geometries to build scrollable view
 ///
 /// # Key Concepts
@@ -48,10 +48,10 @@ use crate::{
 ///     type Arity = Variable;
 ///     type ParentData = SliverMultiBoxAdaptorParentData;
 ///
-///     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<Variable, Self::ParentData>) {
+///     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<Variable, Self::ParentData>) -> SliverGeometry {
 ///         let scroll_offset = ctx.constraints().scroll_offset;
 ///         // ... compute visible items ...
-///         ctx.complete(SliverGeometry { ... });
+///         SliverGeometry { ... }
 ///     }
 /// }
 /// ```
@@ -69,13 +69,15 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     // Layout
     // ========================================================================
 
-    /// Computes the layout of this sliver.
+    /// Computes the layout of this sliver and returns the resulting geometry.
     ///
     /// The context provides:
     /// - Constraints via `ctx.constraints()`
     /// - Child layout via `ctx.layout_child()`
-    /// - Completion via `ctx.complete(geometry)`
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>);
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> SliverGeometry;
 
     /// Returns the current geometry of this sliver.
     ///
@@ -380,35 +382,19 @@ where
         // (the GAT `SliverProtocol::LayoutCtxErased<'_>` resolves to
         // exactly this). We reconstruct a typed
         // `SliverLayoutCtx<T::Arity, T::ParentData>` via `from_erased`
-        // (Proxy storage — caches constraints, writes geometry through
-        // to the erased ctx on completion), wrap it in the ergonomic
+        // (Proxy storage — caches constraints, delegates child ops
+        // back through the erased ctx), wrap it in the ergonomic
         // `SliverLayoutContext` so the user's `perform_layout` body
-        // receives `ctx.constraints()`, `ctx.complete(geometry)`, etc.,
+        // receives `ctx.constraints()`, `ctx.layout_child()`, etc.,
         // and call `T::perform_layout`.
         //
-        // The user's `perform_layout` body must call `ctx.complete(…)`
-        // to record the computed geometry; we read it back via
-        // `layout_ctx.inner().geometry()` and return to the caller.
-        //
-        // If `perform_layout` returns without calling `ctx.complete(…)`
-        // we return `Err(RenderError::ContractViolation)` — typed
-        // propagation, no panic.
-        //
-        // Child layout operations delegate through `SliverLayoutCtxErased`,
-        // so non-leaf slivers such as `RenderSliverPadding` can synchronously
-        // lay out their sliver children during the pipeline walk.
+        // `T::perform_layout` now returns `SliverGeometry` directly —
+        // a missing completion is a compile error, not a runtime error.
         let typed_inner =
             crate::protocol::SliverLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::SliverLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
-        T::perform_layout(self, &mut layout_ctx);
-        layout_ctx.inner().geometry().copied().ok_or_else(|| {
-            crate::error::RenderError::contract_violation(
-                self.debug_name(),
-                "RenderSliver::perform_layout returned without calling \
-                 ctx.complete(...)",
-            )
-        })
+        Ok(T::perform_layout(self, &mut layout_ctx))
     }
 
     fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
@@ -587,7 +573,10 @@ mod tests {
         type Arity = Leaf;
         type ParentData = crate::parent_data::SliverParentData;
 
-        fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        fn perform_layout(
+            &mut self,
+            ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+        ) -> SliverGeometry {
             let c = *ctx.constraints();
             self.constraints = c;
 
@@ -599,65 +588,7 @@ mod tests {
                 0.0, // paint_origin
             );
             self.geometry = geom;
-            ctx.complete(geom);
-        }
-
-        fn geometry(&self) -> &SliverGeometry {
-            &self.geometry
-        }
-
-        fn constraints(&self) -> &SliverConstraints {
-            &self.constraints
-        }
-
-        fn set_geometry(&mut self, geometry: SliverGeometry) {
-            self.geometry = geometry;
-        }
-
-        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-            false
-        }
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Test double — non-completing leaf (contract-violation probe)
-    // ────────────────────────────────────────────────────────────────────────
-
-    struct NonCompletingSliver {
-        constraints: SliverConstraints,
-        geometry: SliverGeometry,
-    }
-
-    impl std::fmt::Debug for NonCompletingSliver {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("NonCompletingSliver")
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl NonCompletingSliver {
-        fn new() -> Self {
-            Self {
-                constraints: vertical_constraints(0.0, 0.0),
-                geometry: SliverGeometry::ZERO,
-            }
-        }
-    }
-
-    impl flui_foundation::Diagnosticable for NonCompletingSliver {
-        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
-    }
-    impl PaintEffectsCapability for NonCompletingSliver {}
-    impl SemanticsCapability for NonCompletingSliver {}
-    impl HotReloadCapability for NonCompletingSliver {}
-
-    impl RenderSliver for NonCompletingSliver {
-        type Arity = Leaf;
-        type ParentData = crate::parent_data::SliverParentData;
-
-        fn perform_layout(&mut self, _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-            // Intentionally does NOT call ctx.complete(…) — exercises the
-            // contract-violation path in `perform_layout_raw`.
+            geom
         }
 
         fn geometry(&self) -> &SliverGeometry {
@@ -808,45 +739,19 @@ mod tests {
         }
     }
 
-    /// A `perform_layout` that never calls `ctx.complete(…)` must cause
-    /// `perform_layout_raw` to return `Err(ContractViolation)`.
-    #[test]
-    fn sliver_leaf_bridge_non_completing_yields_contract_violation() {
-        let constraints = vertical_constraints(0.0, 600.0);
-        let mut sliver = NonCompletingSliver::new();
-
-        let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
-            use crate::protocol::RenderObject;
-            sliver.perform_layout_raw(erased)
-        });
-
-        assert!(
-            matches!(
-                result,
-                Err(crate::error::RenderError::ContractViolation { .. })
-            ),
-            "expected ContractViolation, got {:?}",
-            result
-        );
-    }
-
     /// Regression guard for the Direct-storage path: `SliverLayoutCtx::new`
-    /// must still work after the storage refactor.
+    /// must still work after the storage refactor. `perform_layout` returns
+    /// `SliverGeometry` directly — the context is only a constraints carrier,
+    /// so we verify constraint access here.
     #[test]
     fn sliver_layout_ctx_direct_path_smoke() {
         use crate::protocol::sliver_protocol::SliverLayoutCtx;
 
         let c = vertical_constraints(0.0, 300.0);
-        let mut ctx = SliverLayoutCtx::<Leaf, crate::parent_data::SliverParentData>::new(c);
+        let ctx = SliverLayoutCtx::<Leaf, crate::parent_data::SliverParentData>::new(c);
 
-        assert!(!ctx.is_complete());
         assert_eq!(ctx.remaining_paint_extent(), 300.0);
-
-        ctx.complete_layout(SliverGeometry::new(100.0, 100.0, 0.0));
-        assert!(ctx.is_complete());
-        let geom = ctx.geometry().copied().unwrap();
-        assert_eq!(geom.scroll_extent, 100.0);
-        assert_eq!(geom.paint_extent, 100.0);
+        assert_eq!(ctx.constraints().remaining_paint_extent, 300.0);
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -876,15 +781,17 @@ mod tests {
         type Arity = Single;
         type ParentData = crate::parent_data::SliverParentData;
 
-        fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
-            // A well-behaved body that DOES complete — proving the bridge
-            // rejects on arity *before* running it, not because of a missing
-            // completion call.
+        fn perform_layout(
+            &mut self,
+            ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
+        ) -> SliverGeometry {
+            // A well-behaved body — proves the bridge rejects on arity
+            // *before* running it, not because of a missing return.
             let c = *ctx.constraints();
             self.constraints = c;
             let geom = SliverGeometry::new(c.remaining_paint_extent, c.remaining_paint_extent, 0.0);
             self.geometry = geom;
-            ctx.complete(geom);
+            geom
         }
 
         fn geometry(&self) -> &SliverGeometry {
