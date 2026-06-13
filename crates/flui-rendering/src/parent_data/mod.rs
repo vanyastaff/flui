@@ -84,6 +84,9 @@ mod table_text;
 // ============================================================================
 
 // Base
+// `LogicalIndexParentData` is intentionally NOT re-exported: it is pipeline-
+// internal plumbing (only `apply_deferred_mutation` calls `as_logical_index_mut`)
+// and carries no external contract.
 pub use base::ParentData;
 // Core types
 pub use box_parent_data::BoxParentData;

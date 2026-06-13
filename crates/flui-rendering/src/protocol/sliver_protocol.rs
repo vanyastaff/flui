@@ -15,7 +15,7 @@ use flui_types::{
 
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
-    parent_data::{ParentData, SliverParentData},
+    parent_data::{ParentData, SliverMultiBoxAdaptorParentData, SliverParentData},
     protocol::{
         box_protocol::BoxProtocol,
         capabilities::{
@@ -70,6 +70,17 @@ pub(crate) struct PendingBuild {
     pub parent: RenderId,
     /// Index within the parent at which to insert the child.
     pub index: usize,
+    /// Logical item index to stamp into the child's parent-data after insertion.
+    /// This is the key that maps back to the virtualizer's item space and is
+    /// distinct from `index` (the dense child-slot position).
+    pub logical_index: usize,
+    /// Pre-built parent-data to install on the fresh `RenderNode` immediately
+    /// after insertion.  Fresh nodes start with `parent_data = None`; the
+    /// build backend seeds this field so `apply_deferred_mutation` can set the
+    /// logical index even though no parent-data box exists yet.
+    ///
+    /// `None` for legacy non-lazy inserts that use the stamp-if-present path.
+    pub initial_parent_data: Option<Box<dyn ParentData>>,
     /// The freshly-built (not-yet-inserted) child render object.
     pub object: Box<dyn RenderObject<BoxProtocol>>,
 }
@@ -681,6 +692,12 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     /// children created during the parent's own layout (e.g. a lazy `SliverList`
     /// building only the visible-plus-cache band).
     ///
+    /// `logical_index` is the item index in the data source (e.g. the position in
+    /// the list). It is distinct from `index` (the dense child-slot in the current
+    /// render children vec). The backend stamps `logical_index` into the fresh
+    /// child's parent-data after insertion, so the virtualizer reconciliation can
+    /// identify which item each child represents.
+    ///
     /// Returns a [`ChildLayout<BoxChildRef>`]: `Ready(handle)` when the child is
     /// laid out in this pass (the handle carries the child's id + size, so it can
     /// be re-measured or disposed later — a future true-mid-pass backend),
@@ -697,10 +714,11 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     fn build_and_layout_box_child(
         &mut self,
         index: usize,
+        logical_index: usize,
         constraints: BoxConstraints,
         build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
     ) -> ChildLayout<BoxChildRef> {
-        let _ = (index, constraints, build);
+        let _ = (index, logical_index, constraints, build);
         ChildLayout::Unwired
     }
 
@@ -735,6 +753,27 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
         None
     }
+
+    /// Enqueues a deferred removal for the child with the given render id.
+    ///
+    /// The removal is applied after the current layout walk releases its
+    /// borrows (same discipline as [`Self::build_and_layout_box_child`]).
+    /// The default is a no-op so leaf / test / Direct contexts need not
+    /// override it.
+    fn dispose_box_child(&mut self, id: flui_foundation::RenderId) {
+        let _ = id;
+    }
+
+    /// Returns the [`RenderId`](flui_foundation::RenderId) of the child at
+    /// dense slot `index`, if it exists.
+    ///
+    /// Used by consumers that need to dispose off-band children by id
+    /// (see [`Self::dispose_box_child`]). Returns `None` when the slot is
+    /// out of range or the context carries no id table (default).
+    fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
+        let _ = index;
+        None
+    }
 }
 
 impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P> {
@@ -764,6 +803,7 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     fn build_and_layout_box_child(
         &mut self,
         index: usize,
+        logical_index: usize,
         constraints: BoxConstraints,
         build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
     ) -> ChildLayout<BoxChildRef> {
@@ -778,7 +818,7 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
             // Proxy forwards to the pipeline-built context underneath, so a
             // backend wired there (U3) is reached through this wrapper unchanged.
             SliverLayoutCtxStorage::Proxy { erased, .. } => {
-                erased.build_and_layout_box_child(index, constraints, build)
+                erased.build_and_layout_box_child(index, logical_index, constraints, build)
             }
         }
     }
@@ -828,6 +868,22 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
             } => Some(std::any::TypeId::of::<P>()),
             SliverLayoutCtxStorage::Direct { children: None, .. }
             | SliverLayoutCtxStorage::Proxy { .. } => None,
+        }
+    }
+
+    #[inline]
+    fn dispose_box_child(&mut self, id: flui_foundation::RenderId) {
+        match &mut self.storage {
+            SliverLayoutCtxStorage::Direct { .. } => {}
+            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.dispose_box_child(id),
+        }
+    }
+
+    #[inline]
+    fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
+        match &self.storage {
+            SliverLayoutCtxStorage::Direct { .. } => None,
+            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_id(index),
         }
     }
 }
@@ -880,12 +936,22 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// deferred-mutation queue once the walk releases its borrows. Empty unless a
     /// lazy sliver requests a not-yet-built child.
     pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
+    /// Symmetric remove sink for the re-entrant build contract (U3c D2): `(parent,
+    /// child)` pairs of children the consumer wants evicted from the tree.
+    /// The `parent` here is always `self.node_id` (the sliver itself), not the
+    /// walk root — the pipeline must call `defer_remove(parent, child)` so that
+    /// `mark_needs_layout` targets the sliver and it reflows after its child list
+    /// changes.  Drained after the walk releases its borrows, before
+    /// pending_builds are applied (Remove → Insert ordering, D3). Same
+    /// `Mutex`-for-Send discipline as `pending_builds`.
+    pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
 }
 
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
     /// Creates the walk-side context over pre-built child slots. `node_id` is the
-    /// sliver being laid out and `pending_builds` is the walk-owned sink for
-    /// on-demand child builds (see [`PendingBuild`]).
+    /// sliver being laid out, `pending_builds` is the walk-owned sink for
+    /// on-demand child builds (see [`PendingBuild`]), and `pending_removes` is the
+    /// symmetric sink for deferred child removals (U3c D2).
     ///
     /// `pub(crate)`: the only constructor caller is the pipeline's sliver layout
     /// walk; the `PendingBuild` sink type it takes is crate-internal.
@@ -898,6 +964,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
         node_id: RenderId,
         pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
+        pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
     ) -> Self {
         Self {
             constraints,
@@ -908,6 +975,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             box_child_intrinsic_callback,
             node_id,
             pending_builds,
+            pending_removes,
         }
     }
 }
@@ -942,6 +1010,7 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
     fn build_and_layout_box_child(
         &mut self,
         index: usize,
+        logical_index: usize,
         constraints: BoxConstraints,
         build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
     ) -> ChildLayout<BoxChildRef> {
@@ -959,9 +1028,19 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         // `None` from the builder means the data source has no item here.
         match build(index) {
             Some(object) => {
+                // Pre-build the parent-data box so `apply_deferred_mutation`
+                // can install it on the fresh `RenderNode` even though the node
+                // starts with `parent_data = None`.  This is D1 of the lazy-
+                // sliver re-entrant build contract: the logical index must be
+                // readable by `perform_layout` on the very next pass.
+                let initial_parent_data: Option<Box<dyn ParentData>> = Some(Box::new(
+                    SliverMultiBoxAdaptorParentData::new(logical_index),
+                ));
                 self.pending_builds.lock().push(PendingBuild {
                     parent: self.node_id,
                     index,
+                    logical_index,
+                    initial_parent_data,
                     object,
                 });
                 ChildLayout::Scheduled
@@ -1014,6 +1093,19 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
             .iter()
             .find_map(|slot| slot.parent_data.as_deref())
             .map(|pd| pd.as_any().type_id())
+    }
+
+    fn dispose_box_child(&mut self, id: RenderId) {
+        // Tag with `self.node_id` (the sliver) as the parent so the drain in
+        // `layout_dirty_root` calls `defer_remove(sliver, child)` rather than
+        // `defer_remove(walk_root, child)`. Using the walk root would misdirect
+        // `mark_needs_layout` to a distant ancestor, preventing the lazy sliver
+        // from reflowing after its child list shrinks.
+        self.pending_removes.lock().push((self.node_id, id));
+    }
+
+    fn child_id(&self, index: usize) -> Option<RenderId> {
+        self.child_ids.get(index).copied()
     }
 }
 
@@ -1291,6 +1383,7 @@ mod tests {
         let outcome = SliverLayoutCtxErased::build_and_layout_box_child(
             &mut ctx,
             0,
+            0,
             BoxConstraints::tight(Size::new(px(100.0), px(20.0))),
             &mut build,
         );
@@ -1338,6 +1431,8 @@ mod tests {
             |_id: RenderId, _c: SliverConstraints| -> SliverGeometry { SliverGeometry::ZERO };
         let intrinsic = |_id: RenderId, _d: IntrinsicDimension, _e: f32| -> f32 { 0.0 };
 
+        let pending_removes: parking_lot::Mutex<Vec<(RenderId, RenderId)>> =
+            parking_lot::Mutex::new(Vec::new());
         let mut ctx = ErasedSliverLayoutCtx::new(
             constraints,
             &mut children,
@@ -1347,6 +1442,7 @@ mod tests {
             &intrinsic,
             parent,
             &sink,
+            &pending_removes,
         );
 
         // index 0 exists -> Ready(handle), builder untouched, nothing parked.
@@ -1355,6 +1451,7 @@ mod tests {
         };
         let r0 = SliverLayoutCtxErased::build_and_layout_box_child(
             &mut ctx,
+            0,
             0,
             BoxConstraints::tight(Size::new(px(50.0), px(30.0))),
             &mut never,
@@ -1375,6 +1472,7 @@ mod tests {
         let r1 = SliverLayoutCtxErased::build_and_layout_box_child(
             &mut ctx,
             1,
+            1,
             BoxConstraints::tight(Size::ZERO),
             &mut build_one,
         );
@@ -1390,6 +1488,7 @@ mod tests {
         let mut decline = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> { None };
         let r2 = SliverLayoutCtxErased::build_and_layout_box_child(
             &mut ctx,
+            5,
             5,
             BoxConstraints::tight(Size::ZERO),
             &mut decline,

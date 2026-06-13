@@ -578,8 +578,13 @@ fn deferred_insert_box_schedules_layout_and_paint_for_new_child() {
     assert_eq!(before.len(), 1);
 
     // Enqueue an append and run a frame: the drain inserts + schedules.
-    run.owner_mut()
-        .defer_insert_box(root, Box::new(RenderColoredBox::blue(40.0, 40.0)), None);
+    run.owner_mut().defer_insert_box(
+        root,
+        Box::new(RenderColoredBox::blue(40.0, 40.0)),
+        None,
+        None,
+        None,
+    );
     run.owner_mut().mark_needs_layout(root);
     run.pump();
 
@@ -632,8 +637,13 @@ fn deferred_insert_box_honors_requested_index() {
     let b = run.id("b");
 
     // Insert between the two existing children.
-    run.owner_mut()
-        .defer_insert_box(root, Box::new(RenderColoredBox::blue(10.0, 10.0)), Some(1));
+    run.owner_mut().defer_insert_box(
+        root,
+        Box::new(RenderColoredBox::blue(10.0, 10.0)),
+        Some(1),
+        None,
+        None,
+    );
     run.owner_mut().mark_needs_layout(root);
     run.pump();
 

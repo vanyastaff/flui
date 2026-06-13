@@ -550,6 +550,33 @@ impl RenderNode {
         }
     }
 
+    /// Mutable access to the persistent parent data for this node.
+    ///
+    /// Returns `None` if no parent data has been set yet.
+    #[inline]
+    pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::parent_data::ParentData> {
+        match self {
+            Self::Box(entry) => entry.state_mut().parent_data_mut(),
+            Self::Sliver(entry) => entry.state_mut().parent_data_mut(),
+        }
+    }
+
+    /// Installs `data` as this node's parent data, replacing any previously
+    /// stored value.
+    ///
+    /// Used by the deferred-insert path to seed a freshly-inserted node with
+    /// the parent-data box that the build backend pre-built (e.g.
+    /// `SliverMultiBoxAdaptorParentData { index: logical_index }`).  Prefer
+    /// [`Self::parent_data_mut`] when the node already has parent-data and
+    /// only a field needs updating.
+    #[inline]
+    pub fn set_parent_data(&mut self, data: Box<dyn crate::parent_data::ParentData>) {
+        match self {
+            Self::Box(entry) => entry.state_mut().set_parent_data(data),
+            Self::Sliver(entry) => entry.state_mut().set_parent_data(data),
+        }
+    }
+
     // 2B field dedup: `RenderNode::paint_bounds` was deleted. It had zero
     // call sites workspace-wide (a dead producer — the paint pipeline does
     // no bounds-based culling yet) and, once geometry moved to

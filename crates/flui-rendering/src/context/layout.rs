@@ -404,6 +404,11 @@ where
     /// drives this during its own layout to build only the visible-plus-cache
     /// band rather than every child up front.
     ///
+    /// `logical_index` is the item index in the data source (e.g. position in the
+    /// virtual list). Distinct from `index` (the dense child-slot). The backend
+    /// stamps `logical_index` into the freshly-inserted child's parent-data so
+    /// the consumer can reconcile it on the next pass.
+    ///
     /// Returns a [`ChildLayout<BoxChildRef>`]: `Ready(handle)` when the child is
     /// laid out in this pass (the handle carries its id + size), `Scheduled` when
     /// queued for a later pass (the v1 next-frame backend), `NoChild` when `build`
@@ -413,12 +418,14 @@ where
     pub fn build_and_layout_box_child(
         &mut self,
         index: usize,
+        logical_index: usize,
         constraints: BoxConstraints,
         build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
     ) -> ChildLayout<BoxChildRef> {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::build_and_layout_box_child(
             &mut self.inner,
             index,
+            logical_index,
             constraints,
             build,
         )
@@ -447,6 +454,25 @@ where
     /// Convenience wrapper for the child's maximum intrinsic width.
     pub fn box_child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
         self.box_child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
+    }
+
+    /// Enqueues a deferred removal for the Box child with the given
+    /// [`RenderId`](flui_foundation::RenderId). Applied after the current layout
+    /// walk releases its borrows (same discipline as
+    /// [`Self::build_and_layout_box_child`]). No-op when the context carries no
+    /// remove sink (Direct storage / test contexts).
+    pub fn dispose_box_child(&mut self, id: flui_foundation::RenderId) {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::dispose_box_child(
+            &mut self.inner,
+            id,
+        )
+    }
+
+    /// Returns the [`RenderId`](flui_foundation::RenderId) of the Box child at
+    /// dense slot `index`, if it exists. Used together with
+    /// [`Self::dispose_box_child`] to evict off-band children by id.
+    pub fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::child_id(&self.inner, index)
     }
 }
 

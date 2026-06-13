@@ -1267,11 +1267,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// direct mutation impossible. This method collects mutations in a
     /// queue that is drained after the pass completes.
     ///
+    /// `logical_index`: if `Some(li)`, the pipeline stamps `li` into the
+    /// inserted child's parent-data after insertion (if the parent-data
+    /// type implements [`crate::parent_data::LogicalIndexParentData`]).
+    /// Pass `None` for non-lazy inserts.
+    ///
     /// # Example
     ///
     /// ```ignore
     /// // During layout:
-    /// owner.defer_insert_box(parent_id, Box::new(new_child), None);
+    /// owner.defer_insert_box(parent_id, Box::new(new_child), None, None);
     /// owner.defer_remove(parent_id, child_id);
     /// owner.defer_update(target_id, Box::new(|obj| { /* mutate */ }));
     /// ```
@@ -1280,20 +1285,40 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         parent_id: RenderId,
         render_object: Box<dyn crate::protocol::RenderObject<BoxProtocol>>,
         index: Option<usize>,
+        logical_index: Option<usize>,
+        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
     ) {
-        self.deferred_mutations
-            .insert_box(parent_id, render_object, index);
+        self.deferred_mutations.insert_box(
+            parent_id,
+            render_object,
+            index,
+            logical_index,
+            initial_parent_data,
+        );
     }
 
     /// Enqueues a deferred Sliver child insertion.
+    ///
+    /// `logical_index`: if `Some(li)`, stamps `li` into the child's
+    /// parent-data after insertion.  Pass `None` for non-lazy inserts.
+    ///
+    /// `initial_parent_data`: pre-built parent-data to install on the fresh
+    /// node immediately after insertion.  See [`DeferredMutation::Insert`].
     pub fn defer_insert_sliver(
         &mut self,
         parent_id: RenderId,
         render_object: Box<dyn crate::protocol::RenderObject<SliverProtocol>>,
         index: Option<usize>,
+        logical_index: Option<usize>,
+        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
     ) {
-        self.deferred_mutations
-            .insert_sliver(parent_id, render_object, index);
+        self.deferred_mutations.insert_sliver(
+            parent_id,
+            render_object,
+            index,
+            logical_index,
+            initial_parent_data,
+        );
     }
 
     /// Enqueues a deferred removal.
@@ -1958,15 +1983,24 @@ impl PipelineOwner<Layout> {
         // This is the Rust-native alternative to Flutter's
         // `invokeLayoutCallback`.
         //
-        // Ordering: Remove before Insert before Update. This ensures:
-        // - Removed nodes don't get updated (conflict detected)
-        // - Inserted nodes can be updated in the same pass
-        // - Update targets are guaranteed to exist
+        // U3c D3 — true Remove → Insert → Update ordering. Previously the
+        // apply loop was strict FIFO with only a remove-vs-update skip,
+        // which let a frame that enqueues both Remove and Insert apply them
+        // in arbitrary order. Stable-partition into three buckets and apply
+        // each bucket in order. This makes the ordering comment above
+        // factually true rather than aspirational.
         if !self.deferred_mutations.is_empty() {
             let mutations = self.deferred_mutations.drain();
 
-            // Phase 1: collect removed IDs for conflict detection
-            let removed_ids: rustc_hash::FxHashSet<RenderId> = mutations
+            let (mut removes, rest): (Vec<_>, Vec<_>) = mutations
+                .into_iter()
+                .partition(|m| matches!(m, super::deferred::DeferredMutation::Remove { .. }));
+            let (inserts, updates): (Vec<_>, Vec<_>) = rest
+                .into_iter()
+                .partition(|m| matches!(m, super::deferred::DeferredMutation::Insert { .. }));
+
+            // Collect removed IDs for conflict detection (Update on same target).
+            let removed_ids: rustc_hash::FxHashSet<RenderId> = removes
                 .iter()
                 .filter_map(|m| match m {
                     super::deferred::DeferredMutation::Remove { child_id, .. } => Some(*child_id),
@@ -1975,15 +2009,30 @@ impl PipelineOwner<Layout> {
                 .collect();
 
             tracing::trace!(
-                "run_layout: applying {} deferred mutations ({} removals)",
-                mutations.len(),
-                removed_ids.len()
+                "run_layout: applying {} deferred mutations ({} removes, {} inserts, {} updates)",
+                removes.len() + inserts.len() + updates.len(),
+                removes.len(),
+                inserts.len(),
+                updates.len(),
             );
 
-            // Phase 2: apply in order, detect conflicts
             let mut applied = 0usize;
             let mut skipped = 0usize;
-            for mutation in mutations {
+
+            // Phase 1: Removes.
+            for mutation in removes.drain(..) {
+                self.apply_deferred_mutation(mutation);
+                applied += 1;
+            }
+
+            // Phase 2: Inserts.
+            for mutation in inserts {
+                self.apply_deferred_mutation(mutation);
+                applied += 1;
+            }
+
+            // Phase 3: Updates — skip any whose target was removed this batch.
+            for mutation in updates {
                 match &mutation {
                     super::deferred::DeferredMutation::Update { target_id, .. }
                         if removed_ids.contains(target_id) =>
@@ -2025,6 +2074,8 @@ impl PipelineOwner<Layout> {
                 parent_id,
                 render_object,
                 index,
+                logical_index,
+                initial_parent_data,
             } => {
                 // A deferred insert must schedule the new child (and re-dirty
                 // its parent) for layout and paint — mirroring
@@ -2058,6 +2109,53 @@ impl PipelineOwner<Layout> {
                     parent.remove_child(child_id);
                     let clamped = i.min(parent.child_count());
                     parent.insert_child(clamped, child_id);
+                }
+
+                // D1 (lazy-sliver re-entrant build contract): install the
+                // logical index on the fresh child's parent-data so the lazy
+                // sliver consumer can reconcile it on the next pass.
+                //
+                // Fresh `RenderNode`s start with `parent_data = None`; the
+                // build backend seeds `initial_parent_data` with a pre-built
+                // `SliverMultiBoxAdaptorParentData { index: logical_index }`
+                // for exactly this case.  If parent-data is already present
+                // (e.g. a re-inserted node whose data survived) we stamp the
+                // index field directly instead so we never overwrite unrelated
+                // fields the existing box carries.
+                if (logical_index.is_some() || initial_parent_data.is_some())
+                    && let Some(child_node) = self.render_tree.get_mut(child_id)
+                {
+                    match child_node.parent_data_mut() {
+                        None => {
+                            // Node has no parent-data yet: install the
+                            // pre-built box wholesale.
+                            if let Some(pd) = initial_parent_data {
+                                child_node.set_parent_data(pd);
+                                tracing::trace!(
+                                    ?child_id,
+                                    logical_index,
+                                    "apply_deferred_mutation: installed \
+                                     initial parent-data on fresh child",
+                                );
+                            }
+                        }
+                        Some(pd) => {
+                            // Parent-data already present: stamp only the
+                            // logical-index field so other fields are
+                            // preserved.
+                            if let Some(li) = logical_index
+                                && let Some(lip) = pd.as_logical_index_mut()
+                            {
+                                lip.set_logical_index(li);
+                                tracing::trace!(
+                                    ?child_id,
+                                    logical_index = li,
+                                    "apply_deferred_mutation: stamped \
+                                     logical index into existing parent-data",
+                                );
+                            }
+                        }
+                    }
                 }
 
                 self.bootstrap_repaint_boundary_flag(child_id);
@@ -2355,19 +2453,38 @@ impl PipelineOwner<Layout> {
         // (parent ≠ child in a well-formed tree).
         let result = unsafe { layout_subtree_borrowed(&borrows, id, constraints) };
 
-        // Step 5: drain on-demand child builds the walk recorded (the re-entrant
-        // build contract's v1 next-frame backend, ADR-0003 Decision 2). The walk's
-        // tree borrows were frozen, so a lazy sliver that requested a not-yet-built
-        // child parked it in `borrows.pending_builds` rather than mutating the
-        // tree. Take the requests (owned), then DROP `borrows` to release the
-        // `&mut RenderTree` subtree borrow before touching `&mut self`. Enqueueing
-        // only pushes onto the deferred-mutation queue (applied after the layout
-        // pass, which re-marks the parent for layout), so the child is built and
-        // laid out — returning `Ready` — on a subsequent pass.
+        // Step 5: drain on-demand child builds AND removals the walk recorded
+        // (the re-entrant build contract's v1 next-frame backend, ADR-0003
+        // Decision 2 + U3c D2). The walk's tree borrows were frozen, so a lazy
+        // sliver that requested a build or removal parked it in the pending sinks
+        // rather than mutating the tree. Take both (owned), then DROP `borrows`
+        // to release the `&mut RenderTree` subtree borrow before touching
+        // `&mut self`.
+        //
+        // D3 ordering: Remove → Insert → Update. Removes are drained first so
+        // that an off-band child evicted this pass does not collide with the
+        // Insert that replaces it in the same batch.
+        let pending_removes = borrows.take_pending_removes();
         let pending_builds = borrows.take_pending_builds();
         drop(borrows);
+
+        // Apply removes first (D3 ordering). Each entry is `(parent, child)`:
+        // the parent is the sliver's own node_id (tagged at push time in
+        // ErasedSliverLayoutCtx::dispose_box_child), NOT the walk root `id`.
+        // Using `id` here would misdirect `mark_needs_layout` to the viewport
+        // root instead of the lazy sliver, preventing it from reflowing.
+        for (parent, child_id) in pending_removes {
+            self.defer_remove(parent, child_id);
+        }
+
         for pending in pending_builds {
-            self.defer_insert_box(pending.parent, pending.object, Some(pending.index));
+            self.defer_insert_box(
+                pending.parent,
+                pending.object,
+                Some(pending.index),
+                Some(pending.logical_index),
+                pending.initial_parent_data,
+            );
         }
 
         result
@@ -2463,6 +2580,18 @@ struct SubtreeBorrows<'tree> {
     /// layout-child closure requires `&SubtreeBorrows: Send + Sync`. Empty unless
     /// a lazy sliver requests a not-yet-built child.
     pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
+    /// Symmetric remove sink (U3c D2): `(parent, child)` pairs of children the
+    /// consumer wants evicted from the tree.  The `parent` is the sliver's own
+    /// `node_id` — **not** the walk root `id` passed to `layout_dirty_root`.
+    /// For a real `viewport → sliver → lazy → child` chain the walk root is the
+    /// viewport, but `defer_remove` / `mark_needs_layout` must target the lazy
+    /// sliver so it reflows after its child list changes.
+    ///
+    /// Drained before `pending_builds` in `layout_dirty_root`
+    /// (Remove → Insert ordering, D3), post-drop of the subtree borrows, so no
+    /// aliased `NodePtr` is live when the `defer_remove` calls touch `&mut self`.
+    /// `Mutex` for the same reason as `pending_builds`.
+    pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: std::marker::PhantomData<&'tree mut ()>,
 }
@@ -2510,6 +2639,7 @@ impl<'tree> SubtreeBorrows<'tree> {
                 Default::default(),
             )),
             pending_builds: Mutex::new(Vec::new()),
+            pending_removes: Mutex::new(Vec::new()),
             owner_thread,
             _lifetime: std::marker::PhantomData,
         }
@@ -2561,6 +2691,16 @@ impl<'tree> SubtreeBorrows<'tree> {
     /// [`NodePtr`] — so it does not interact with the raw-pointer aliasing.
     fn take_pending_builds(&self) -> Vec<crate::protocol::sliver_protocol::PendingBuild> {
         std::mem::take(&mut *self.pending_builds.lock())
+    }
+
+    /// Takes the deferred child removals recorded during this walk.
+    /// Returns `(parent, child)` pairs — the parent is the sliver's `node_id`,
+    /// not the walk root — so `defer_remove` targets the correct ancestor.
+    /// Symmetric to [`Self::take_pending_builds`]; called in `layout_dirty_root`
+    /// BEFORE `take_pending_builds` (Remove → Insert ordering, D3) and AFTER
+    /// `drop(borrows)` so no `NodePtr` alias is live when the removes are applied.
+    fn take_pending_removes(&self) -> Vec<(flui_foundation::RenderId, flui_foundation::RenderId)> {
+        std::mem::take(&mut *self.pending_removes.lock())
     }
 }
 
@@ -3220,18 +3360,29 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     };
     let child_ids: Vec<RenderId> = entry.links().children().to_vec();
 
-    if child_ids.is_empty() {
-        return entry.layout_leaf_only(constraints);
-    }
-
+    // No early-return here for the empty case: a lazy sliver (e.g.
+    // `RenderSliverListLazy`) starts with zero attached children and must
+    // call `build_and_layout_box_child` on its first frame to schedule
+    // initial builds via `pending_builds`. The `ErasedSliverLayoutCtx`
+    // path is always taken for slivers so that the context's
+    // `pending_builds` / `pending_removes` sinks are wired in — even when
+    // the current child list is empty.
     let mut child_states: Vec<crate::protocol::ErasedSliverChildState> = child_ids
         .iter()
         .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid))
         .collect();
 
-    // Seed child offsets from persisted RenderState so a sliver parent that
-    // does not call `position_child` on a later pass preserves its child's
-    // previous placement, matching the Box path's offset semantics.
+    // Seed child offsets and parent-data from persisted `RenderNode` state.
+    //
+    // Offset: a sliver parent that does not call `position_child` on a later
+    // pass preserves its child's previous placement, matching Box semantics.
+    //
+    // Parent-data: the transient `ErasedSliverChildState.parent_data` starts
+    // as `None`; seed it from the node's persisted parent-data so that lazy
+    // sliver consumers (e.g. `RenderSliverListLazy`) can read the logical
+    // index installed by `apply_deferred_mutation` on the previous frame.
+    // `ParentData: DynClone` makes this a cheap heap clone (one `Box` per
+    // attached child; K is bounded by viewport/cache band, not by item count).
     for cs in &mut child_states {
         if let Some(child_ptr) = borrows.get(cs.id) {
             // SAFETY: shared reborrow of a DISTINCT child slot
@@ -3240,6 +3391,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             // the current sliver parent slot.
             let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
             cs.offset = child_node.offset();
+            if let Some(pd) = child_node.parent_data() {
+                cs.parent_data = Some(dyn_clone::clone_box(pd));
+            }
         }
         #[cfg(any(test, feature = "testing"))]
         borrows.seed_child_parent_data(cs.id, &mut cs.parent_data);
@@ -3333,6 +3487,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
         box_intrinsic_cb_ref,
         id,
         &borrows.pending_builds,
+        &borrows.pending_removes,
     );
     let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 

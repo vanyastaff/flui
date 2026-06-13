@@ -76,6 +76,18 @@ pub enum DeferredMutation {
         render_object: DeferredRenderObject,
         /// Optional index to insert at (None = append).
         index: Option<usize>,
+        /// Logical item index to stamp into the child's parent-data after
+        /// insertion, if the parent-data type implements
+        /// [`crate::parent_data::LogicalIndexParentData`]. `None` means "no
+        /// stamping" (legacy / non-lazy inserts).
+        logical_index: Option<usize>,
+        /// Pre-built parent-data to install on the fresh child node immediately
+        /// after insertion.  Used by the lazy-sliver re-entrant build contract
+        /// (U3c D1): `ErasedSliverLayoutCtx::build_and_layout_box_child` seeds
+        /// a `SliverMultiBoxAdaptorParentData { index: logical_index }` here so
+        /// `apply_deferred_mutation` can set it even though the freshly-inserted
+        /// `RenderNode` starts with `parent_data = None`.
+        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
     },
     /// Remove a child.
     Remove {
@@ -105,11 +117,18 @@ impl std::fmt::Debug for DeferredMutation {
                 parent_id,
                 render_object,
                 index,
+                logical_index,
+                initial_parent_data,
             } => f
                 .debug_struct("Insert")
                 .field("parent_id", parent_id)
                 .field("render_object", render_object)
                 .field("index", index)
+                .field("logical_index", logical_index)
+                .field(
+                    "initial_parent_data",
+                    &initial_parent_data.as_ref().map(|_| "<parent-data>"),
+                )
                 .finish(),
             Self::Remove {
                 parent_id,
@@ -155,14 +174,14 @@ impl std::fmt::Debug for DeferredMutation {
 /// ```ignore
 /// // Replace a child: remove old, insert new (different IDs)
 /// owner.defer_remove(parent_id, old_child_id);
-/// owner.defer_insert_box(parent_id, Box::new(new_child), None);
+/// owner.defer_insert_box(parent_id, Box::new(new_child), None, None);
 ///
 /// // Update an existing node
 /// owner.defer_update(existing_id, Box::new(|obj| { /* mutate */ }));
 ///
 /// // Insert with configuration: pass config through constructor
 /// let child = MyRenderObject::new(config);
-/// owner.defer_insert_box(parent_id, Box::new(child), None);
+/// owner.defer_insert_box(parent_id, Box::new(child), None, None);
 /// ```
 #[derive(Debug, Default)]
 pub struct DeferredMutations {
@@ -184,30 +203,51 @@ impl DeferredMutations {
     }
 
     /// Enqueues a Box insert mutation.
+    ///
+    /// `logical_index`: if `Some(li)`, the pipeline will stamp `li` into the
+    /// inserted child's parent-data (if the parent-data type implements
+    /// [`crate::parent_data::LogicalIndexParentData`]) after insertion. Pass
+    /// `None` for legacy / non-lazy inserts.
+    ///
+    /// `initial_parent_data`: pre-built parent-data box to install on the fresh
+    /// node immediately after insertion.  Used by the lazy-sliver build contract
+    /// so that `apply_deferred_mutation` can set parent-data even when the
+    /// freshly-created `RenderNode` starts with `parent_data = None`.
     pub fn insert_box(
         &mut self,
         parent_id: RenderId,
         render_object: Box<dyn crate::protocol::RenderObject<BoxProtocol>>,
         index: Option<usize>,
+        logical_index: Option<usize>,
+        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
     ) {
         self.mutations.push(DeferredMutation::Insert {
             parent_id,
             render_object: DeferredRenderObject::Box(render_object),
             index,
+            logical_index,
+            initial_parent_data,
         });
     }
 
     /// Enqueues a Sliver insert mutation.
+    ///
+    /// `logical_index` and `initial_parent_data`: same semantics as the
+    /// corresponding parameters of [`Self::insert_box`].
     pub fn insert_sliver(
         &mut self,
         parent_id: RenderId,
         render_object: Box<dyn crate::protocol::RenderObject<SliverProtocol>>,
         index: Option<usize>,
+        logical_index: Option<usize>,
+        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
     ) {
         self.mutations.push(DeferredMutation::Insert {
             parent_id,
             render_object: DeferredRenderObject::Sliver(render_object),
             index,
+            logical_index,
+            initial_parent_data,
         });
     }
 
