@@ -117,8 +117,6 @@ pub use capabilities::{
     ProtocolConstraints,
     ProtocolGeometry,
     ProtocolHitResult,
-    ProtocolHitTestCtx,
-    ProtocolLayoutCtx,
     ProtocolPosition,
 };
 // ============================================================================
@@ -131,7 +129,6 @@ pub use protocol::{
     // Protocol trait
     Protocol,
     ProtocolCompatible,
-    ProtocolRenderObject,
     // Usage by parent
     UsageByParent,
 };
@@ -194,10 +191,7 @@ pub mod prelude {
         ProtocolConstraints,
         ProtocolGeometry,
         ProtocolHitResult,
-        ProtocolHitTestCtx,
-        ProtocolLayoutCtx,
         ProtocolPosition,
-        ProtocolRenderObject,
         SliverHitTest,
         SliverLayout,
         SliverProtocol,

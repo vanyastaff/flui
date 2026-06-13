@@ -6,11 +6,7 @@
 
 use std::fmt::Debug;
 
-use flui_tree::Arity;
-
-use super::capabilities::{
-    HitTestCapability, LayoutCapability, ProtocolGeometry, ProtocolHitTestCtx, ProtocolLayoutCtx,
-};
+use super::capabilities::{HitTestCapability, LayoutCapability};
 use crate::parent_data::ParentData;
 
 // ============================================================================
@@ -259,40 +255,10 @@ pub trait ProtocolCompatible<Other: Protocol>: Protocol {
     }
 }
 
-// ============================================================================
-// RENDER OBJECT TRAIT
-// ============================================================================
-
-/// Render object that works with protocols.
-///
-/// This trait is parameterized by:
-/// - `P`: The protocol (BoxProtocol, SliverProtocol)
-/// - `A`: The arity (Leaf, Single, Optional, Variable)
-/// - `PD`: The parent data type (defaults to protocol's DefaultParentData)
-pub trait ProtocolRenderObject<
-    P: Protocol,
-    A: Arity,
-    PD: ParentData + Default = <P as Protocol>::DefaultParentData,
->: Send + Sync
-{
-    /// Perform layout with the given context.
-    fn perform_layout(&mut self, ctx: &mut ProtocolLayoutCtx<'_, P, A, PD>);
-
-    /// Hit test at the given position.
-    fn hit_test(&self, ctx: &mut ProtocolHitTestCtx<'_, P, A, PD>) -> bool;
-
-    /// Get the current geometry (after layout).
-    fn geometry(&self) -> &ProtocolGeometry<P>;
-
-    /// Check if layout is needed.
-    fn needs_layout(&self) -> bool;
-
-    /// Check if paint is needed.
-    fn needs_paint(&self) -> bool;
-
-    /// Mark as needing layout.
-    fn mark_needs_layout(&mut self);
-
-    /// Mark as needing paint.
-    fn mark_needs_paint(&mut self);
-}
+// 2B / honest-foundation cleanup: the `ProtocolRenderObject<P, A, PD>` trait
+// was deleted. It had ZERO implementors and zero callers (cross-crate
+// verified) — a pre-blanket-impl design that `RenderObject<P>` (with its
+// `RenderBox`/`RenderSliver` blanket impls) superseded. Not part of the
+// `hidden-river` plan (its §5.2 `ProtocolParent` is a different
+// compile-time-safety trait). Its exclusive ctx aliases
+// `ProtocolLayoutCtx` / `ProtocolHitTestCtx` were removed with it.

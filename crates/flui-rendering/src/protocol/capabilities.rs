@@ -206,11 +206,7 @@ pub type ProtocolPosition<P> = <<P as Protocol>::HitTest as HitTestCapability>::
 /// Hit test result type for a protocol.
 pub type ProtocolHitResult<P> = <<P as Protocol>::HitTest as HitTestCapability>::Result;
 
-/// Layout context type for a protocol.
-/// Note: PD requires Default bound since LayoutCapability::Context requires it.
-pub type ProtocolLayoutCtx<'ctx, P, A, PD> =
-    <<P as Protocol>::Layout as LayoutCapability>::Context<'ctx, A, PD>;
-
-/// Hit test context type for a protocol.
-pub type ProtocolHitTestCtx<'ctx, P, A, PD> =
-    <<P as Protocol>::HitTest as HitTestCapability>::Context<'ctx, A, PD>;
+// `ProtocolLayoutCtx` / `ProtocolHitTestCtx` aliases were removed with the
+// dead `ProtocolRenderObject` trait (their only user). The live layout /
+// hit-test path uses the erased `LayoutCtxErased` GAT and the ergonomic
+// `BoxLayoutContext` / `SliverLayoutContext` wrappers, not these raw aliases.

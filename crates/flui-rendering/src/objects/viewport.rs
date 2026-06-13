@@ -540,10 +540,24 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 break;
             }
         }
-        debug_assert!(
-            accepted,
-            "RenderViewport exceeded its bounded layout correction loop"
-        );
+        if !accepted {
+            // Pathological non-convergence: a sliver child kept requesting
+            // scroll corrections past the bounded budget. The scroll offset
+            // is already clamped to a valid range by the loop's
+            // `apply_content_dimensions`, so the committed geometry is sound
+            // — only child positions reflect the last attempted offset and
+            // self-correct on the next frame. Surface it in RELEASE: the
+            // prior `debug_assert!` was silent in release (shipped the
+            // non-converged frame unobserved) and crashed the app in debug on
+            // a third-party widget bug. A warn is the right level — this is a
+            // content bug, not a framework-invariant violation.
+            tracing::warn!(
+                child_count = ctx.child_count(),
+                max_layout_cycles,
+                "RenderViewport exceeded its bounded layout correction loop; \
+                 committed the clamped offset, children self-correct next frame"
+            );
+        }
 
         size
     }
