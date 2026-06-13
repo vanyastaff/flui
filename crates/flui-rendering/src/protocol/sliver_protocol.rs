@@ -18,11 +18,37 @@ use crate::{
     parent_data::{ParentData, SliverParentData},
     protocol::{
         box_protocol::BoxProtocol,
-        capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
+        capabilities::{
+            ChildLayout, HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi,
+        },
         protocol::{Protocol, ProtocolCompatible, sealed},
     },
     storage::IntrinsicDimension,
+    traits::RenderObject,
 };
+
+/// A handle to a Box child materialized by the re-entrant build contract
+/// ([`SliverLayoutCtxErased::build_and_layout_box_child`]): the child's tree
+/// identity plus the [`Size`] it laid out to.
+///
+/// The consumer projects `size` onto the scroll axis to feed
+/// `Virtualizer::set_measured`, and keeps `id` so it can position, re-measure, or
+/// dispose the child on a later pass. Returning identity here (rather than bare
+/// geometry) is what lets a future true-mid-pass backend and dispose-on-scroll-off
+/// slot in without a breaking change to the contract.
+///
+/// `#[non_exhaustive]`: the handle may grow (e.g. a baseline or cross-axis offset
+/// a grid needs) without a breaking change — same forward-compat intent as
+/// [`ChildLayout`]. Built only inside this crate (by the build backend); external
+/// consumers read its public fields.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct BoxChildRef {
+    /// Tree identity of the materialized child.
+    pub id: RenderId,
+    /// The size the child laid out to under the supplied `BoxConstraints`.
+    pub size: Size,
+}
 
 // ============================================================================
 // SLIVER PROTOCOL
@@ -625,6 +651,35 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     /// Performs synchronous Box layout on child at `index`.
     fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
 
+    /// On-demand build + layout of a Box child at `index`, materializing it via
+    /// `build` when the child does not yet exist. The re-entrant build contract
+    /// (ADR-0003 Decision 2): the lazy sibling of [`Self::layout_box_child`], for
+    /// children created during the parent's own layout (e.g. a lazy `SliverList`
+    /// building only the visible-plus-cache band).
+    ///
+    /// Returns a [`ChildLayout<BoxChildRef>`]: `Ready(handle)` when the child is
+    /// laid out in this pass (the handle carries the child's id + size, so it can
+    /// be re-measured or disposed later — a future true-mid-pass backend),
+    /// `Scheduled` when it was queued to be built before a later pass (the v1
+    /// next-frame backend), `NoChild` when `build` declines (end of an
+    /// unknown-length source), or `Unwired` when no backend is wired (the default).
+    ///
+    /// `build(index)` is invoked **at most once**, only when a child must be
+    /// created, and may return `None` to signal "no item at this index". A backend
+    /// that finds the child already present lays it out without calling `build`.
+    /// Borrow-safe by construction: this never mutates the render tree directly —
+    /// the layout walk's borrows are frozen mid-pass, so a scheduling backend
+    /// records the request for the pipeline to apply once the walk releases them.
+    fn build_and_layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+        build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
+    ) -> ChildLayout<BoxChildRef> {
+        let _ = (index, constraints, build);
+        ChildLayout::Unwired
+    }
+
     /// Performs a synchronous Box intrinsic query on child at `index`.
     fn box_child_intrinsic(
         &mut self,
@@ -679,6 +734,29 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     #[inline]
     fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
         SliverLayoutCtx::layout_box_child(self, index, constraints)
+    }
+
+    #[inline]
+    fn build_and_layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+        build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
+    ) -> ChildLayout<BoxChildRef> {
+        match &mut self.storage {
+            // Direct storage carries no build backend yet — the production
+            // next-frame scheduler lands with its consumer (the lazy
+            // `SliverList`, U3), at which point a build callback joins the other
+            // Direct-storage layout callbacks. Until then there is nothing to
+            // materialize: honestly `Unwired` (a bug if a production consumer
+            // ever sees it) rather than a silent no-op masquerading as end-of-data.
+            SliverLayoutCtxStorage::Direct { .. } => ChildLayout::Unwired,
+            // Proxy forwards to the pipeline-built context underneath, so a
+            // backend wired there (U3) is reached through this wrapper unchanged.
+            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.build_and_layout_box_child(index, constraints, build)
+            }
+        }
     }
 
     #[inline]
@@ -1076,6 +1154,74 @@ mod tests {
     fn test_sliver_layout_default_geometry() {
         let geometry = SliverLayout::default_geometry();
         assert_eq!(geometry, SliverGeometry::ZERO);
+    }
+
+    /// The re-entrant build contract is mid-pass-shaped: a consumer folds every
+    /// `ChildLayout` state to a distinct response — real extent on `Ready`
+    /// (mid-pass), estimate on `Scheduled` (v1 next-frame), stop on `NoChild`
+    /// (end of data), and "bug" on `Unwired` (a wired consumer must never see it).
+    /// Swapping the v1 next-frame backend for a future true-mid-pass backend only
+    /// changes which arm fires, never this call site — the forward-compat property.
+    #[test]
+    fn child_layout_consumer_handles_all_states() {
+        #[derive(Debug, PartialEq)]
+        enum Step {
+            Use(f32),
+            Estimate(f32),
+            Stop,
+            Bug,
+        }
+        fn classify(outcome: ChildLayout<f32>, estimate: f32) -> Step {
+            match outcome {
+                ChildLayout::Ready(extent) => Step::Use(extent),
+                ChildLayout::Scheduled => Step::Estimate(estimate),
+                ChildLayout::NoChild => Step::Stop,
+                ChildLayout::Unwired => Step::Bug,
+            }
+        }
+        assert_eq!(classify(ChildLayout::Ready(42.0), 10.0), Step::Use(42.0));
+        assert_eq!(classify(ChildLayout::Scheduled, 10.0), Step::Estimate(10.0));
+        assert_eq!(classify(ChildLayout::<f32>::NoChild, 10.0), Step::Stop);
+        assert_eq!(classify(ChildLayout::<f32>::Unwired, 10.0), Step::Bug);
+    }
+
+    /// A `Direct`-storage context has no build backend wired (the production
+    /// next-frame scheduler lands with its consumer, the lazy `SliverList`), so
+    /// the contract returns `Unwired` — distinct from `NoChild`/end-of-data — and
+    /// must NOT invoke the builder, since there is nowhere to put what it creates.
+    #[test]
+    fn build_and_layout_box_child_unwired_without_backend_never_builds() {
+        use flui_types::layout::AxisDirection;
+
+        use crate::{constraints::GrowthDirection, view::ScrollDirection};
+
+        let constraints = SliverConstraints::new(
+            AxisDirection::TopToBottom,
+            GrowthDirection::Forward,
+            ScrollDirection::Idle,
+            0.0,
+            0.0,
+            0.0,
+            600.0,
+            400.0,
+            AxisDirection::LeftToRight,
+            600.0,
+            600.0,
+            0.0,
+        );
+        let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(constraints);
+
+        // The builder panics if called: `Unwired` must be reached without building.
+        let mut build = |_index: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> {
+            panic!("build must not run when the context has no build backend wired")
+        };
+        let outcome = SliverLayoutCtxErased::build_and_layout_box_child(
+            &mut ctx,
+            0,
+            BoxConstraints::tight(Size::new(px(100.0), px(20.0))),
+            &mut build,
+        );
+        assert_eq!(outcome, ChildLayout::Unwired);
     }
 
     #[test]

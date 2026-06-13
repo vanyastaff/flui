@@ -211,11 +211,14 @@ pub use pipeline::PipelineOwner;
 pub use protocol::{
     // Marker traits
     BidirectionalProtocol,
+    // Re-entrant build contract (ADR-0003 Decision 2): child handle + outcome
+    BoxChildRef,
     // Concrete capabilities
     BoxHitTest,
     BoxLayout,
     // Core protocol trait and implementations
     BoxProtocol,
+    ChildLayout,
     // Capability traits
     HitTestCapability,
     HitTestContextApi,

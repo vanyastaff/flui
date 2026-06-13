@@ -36,8 +36,9 @@ use flui_types::{Pixels, Size, geometry::Offset};
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
-    protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol},
+    protocol::{BoxChildRef, BoxLayout, ChildLayout, LayoutCapability, LayoutContextApi, Protocol},
     storage::IntrinsicDimension,
+    traits::RenderObject,
 };
 
 // ============================================================================
@@ -394,6 +395,32 @@ where
             &mut self.inner,
             index,
             constraints,
+        )
+    }
+
+    /// On-demand build + layout of a **Box** child at `index`, materializing it
+    /// via `build` when it does not yet exist — the re-entrant build contract
+    /// (ADR-0003 Decision 2). A lazy sliver (e.g. a virtualized `SliverList`)
+    /// drives this during its own layout to build only the visible-plus-cache
+    /// band rather than every child up front.
+    ///
+    /// Returns a [`ChildLayout<BoxChildRef>`]: `Ready(handle)` when the child is
+    /// laid out in this pass (the handle carries its id + size), `Scheduled` when
+    /// queued for a later pass (the v1 next-frame backend), `NoChild` when `build`
+    /// declines (end of an unknown-length source), or `Unwired` when this context
+    /// has no build backend. `build(index)` is called at most once, only when a
+    /// child must be created, and may return `None` to decline.
+    pub fn build_and_layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+        build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
+    ) -> ChildLayout<BoxChildRef> {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::build_and_layout_box_child(
+            &mut self.inner,
+            index,
+            constraints,
+            build,
         )
     }
 

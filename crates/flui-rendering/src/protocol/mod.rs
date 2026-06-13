@@ -108,6 +108,8 @@ pub use box_protocol::{
 // CAPABILITY EXPORTS
 // ============================================================================
 pub use capabilities::{
+    // Re-entrant build contract return type (ADR-0003 Decision 2)
+    ChildLayout,
     // Capability traits
     HitTestCapability,
     HitTestContextApi,
@@ -136,6 +138,8 @@ pub use protocol::{
 // SLIVER PROTOCOL EXPORTS
 // ============================================================================
 pub use sliver_protocol::{
+    // Re-entrant build contract handle (ADR-0003 Decision 2)
+    BoxChildRef,
     // Layout
     ErasedSliverChildState,
     ErasedSliverLayoutCtx,

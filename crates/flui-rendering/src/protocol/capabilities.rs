@@ -69,6 +69,55 @@ pub trait LayoutCapability: Send + Sync + 'static {
     }
 }
 
+/// Outcome of an on-demand child build-and-layout request (the re-entrant build
+/// contract — see `build_and_layout_box_child` on the sliver layout context).
+///
+/// **Mid-pass-shaped**: the states let the *same* contract be served by either
+/// backend without a breaking change — the whole point of locking the shape now.
+/// `Ready` carries a **handle** (identity *and* geometry), not bare geometry, so a
+/// consumer can position, re-measure, reconcile, or dispose the child it built; a
+/// `Ready(geometry-only)` would have forced a breaking signature change the moment
+/// a true mid-pass backend or dispose-on-scroll-off needed the child's identity.
+///
+/// - [`Ready`](ChildLayout::Ready) — the child exists and was laid out **in this
+///   pass**; the handle `G` carries its identity + geometry. A true mid-pass
+///   backend (build → measure → decide-next, Compose `SubcomposeLayout`-style)
+///   returns this; the consumer feeds the real extent back (e.g. to
+///   `Virtualizer::set_measured`) and records the handle for later disposal.
+/// - [`Scheduled`](ChildLayout::Scheduled) — the child did not exist and was
+///   **queued to be built before a later pass** (the v1 next-frame backend: the
+///   layout walk's borrows are frozen mid-pass, so a freshly-built child cannot be
+///   inserted synchronously and its identity is unknown until the insert applies).
+///   The consumer uses the item's *estimate* this pass; the handle + real geometry
+///   arrive when a later pass returns `Ready`.
+/// - [`NoChild`](ChildLayout::NoChild) — the builder declined (no item at this
+///   index): the end of an unknown-length data source. The consumer stops.
+/// - [`Unwired`](ChildLayout::Unwired) — this context has no build backend (a
+///   leaf/test context, or a not-yet-wired path). **Distinct from `NoChild` on
+///   purpose**: a production consumer treats `Unwired` as a bug, because folding
+///   it into "end of data" is exactly how a wiring regression silently renders an
+///   empty list.
+///
+/// A consumer that handles `Ready` and `Scheduled` identically-modulo-estimate is
+/// **forward-compatible**: swapping the v1 next-frame backend for a future true
+/// mid-pass backend only changes which arm fires, never the call site.
+///
+/// `#[non_exhaustive]` — the backend taxonomy may yet gain a state (e.g. a
+/// partial/retry result); a contract whose reason to exist is "do not ossify"
+/// must not foreclose that with an exhaustive enum.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum ChildLayout<G> {
+    /// Built and laid out this pass; the handle `G` carries identity + geometry.
+    Ready(G),
+    /// Queued to be built before a later pass (v1 next-frame backend).
+    Scheduled,
+    /// The builder declined — no item at this index (end of the data source).
+    NoChild,
+    /// No build backend is wired in this context (a bug if reached in production).
+    Unwired,
+}
+
 /// API for layout context operations.
 pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: ParentData>:
     Send + Sync
