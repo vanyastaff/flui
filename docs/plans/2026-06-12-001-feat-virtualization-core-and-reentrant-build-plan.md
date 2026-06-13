@@ -10,7 +10,7 @@ adr: docs/adr/ADR-0003-virtualization-core-and-reentrant-build.md
 
 ## Summary
 
-Stand up a new **protocol-agnostic `virtualization` module *inside* `flui-rendering`** that owns windowing math (visible-range query, estimate-for-unmeasured, anchor correction on measured-extent change), reorganize the correct-but-uncalled `FenwickExtents` into it (it stays in `flui-rendering` — no cross-crate move), then have `flui-rendering` *consume* it: a `SliverConstraints → ScrollWindow` adapter (outside the agnostic module), a **mid-pass-capable on-demand child-build contract** on `LayoutContextApi`, and a lazy `SliverList` that builds/lays-out only the visible-plus-cache children. A standalone `flui-virtualization` crate is **not** created now — the module is kept gate-enforced agnostic so it can be extracted later, cheaply and non-breakingly, once a 2nd *direct* consumer appears. Binding architecture: [`docs/adr/ADR-0003-virtualization-core-and-reentrant-build.md`](../adr/ADR-0003-virtualization-core-and-reentrant-build.md).
+Stand up a new **protocol-agnostic `virtualization` module *inside* `flui-rendering`** that owns windowing math (dual visible/cache-range query, estimate-for-unmeasured, item-identity anchor correction on measured-extent change), backed by a **focused augmented B+-tree (SumTree-style)** — `O(log n)` seek both directions **and** `O(log n)` insert/delete — **deleting the correct-but-structurally-wrong `FenwickExtents`** (a flat-array BIT, `O(n)` mid-list insert, zero callers). Then have `flui-rendering` *consume* it: a `SliverConstraints → ScrollWindow` adapter (outside the agnostic module), a **mid-pass-capable on-demand child-build contract** on `LayoutContextApi`, and a lazy `SliverList` that builds/lays-out only the visible-plus-cache children. A standalone `flui-virtualization` crate is **not** created now — the module is kept gate-enforced agnostic so it can be extracted later, cheaply and non-breakingly, once a 2nd *direct* consumer appears. Binding architecture: [`docs/adr/ADR-0003-virtualization-core-and-reentrant-build.md`](../adr/ADR-0003-virtualization-core-and-reentrant-build.md).
 
 Delivered as **4 units** (U1 → U2 → U3, plus U4 recorded-future). The two load-bearing invariants the ADR locks in — **(1)** the core is agnostic (no render/sliver/protocol type), and **(2)** the build contract is mid-pass-capable from day one (true mid-pass never locked out, even if v1 ships a next-frame backend) — are the gates this plan must not silently relax.
 
@@ -20,7 +20,7 @@ Delivered as **4 units** (U1 → U2 → U3, plus U4 recorded-future). The two lo
 
 flui's virtualization substrate is half-present and mis-shaped (verified via scout, 2026-06-12):
 
-- `FenwickExtents` (`crates/flui-rendering/src/slivers/fenwick.rs`) — the hard, correct, ASM-verified `O(log n)` prefix-sum backbone — is **self-contained (`Vec<f32>`-only) but has zero callers** and sits under `slivers/` rather than in a neutral windowing module (it is in the right crate, just the wrong module).
+- `FenwickExtents` (`crates/flui-rendering/src/slivers/fenwick.rs`) — a correct, ASM-verified, self-contained (`Vec<f32>`-only) BIT with **zero callers** — is the **structurally wrong tool for a dynamic list**: a Fenwick/BIT is a flat array, so mid-list **insert/delete is `O(n)`**. It is to be **DELETED** (not relocated) and replaced by a SumTree/augmented-B+-tree (`O(log n)` structural edits). Web research, 2026-06-12 (GPUI/Zed `list.rs`, TanStack, Flutter #97676, Compose) produced this decisive backbone verdict — see the ADR's Competitive landscape and References.
 - `SliverConstraints` / `SliverGeometry` are tightly bound to `SliverProtocol` and the viewport walk — *not* a neutral windowing value type.
 - The deferred-mutation queue (`crates/flui-rendering/src/pipeline/deferred.rs` + `PipelineOwner::apply_deferred_mutation` at `crates/flui-rendering/src/pipeline/owner.rs:2021`, drained at end of `run_layout`) is fully wired but is **next-frame** materialization, not mid-pass re-entrancy.
 - Existing sliver lists (`crates/flui-rendering/src/objects/sliver_fixed_extent_list.rs`, `.../sliver_fill_viewport.rs`) lay out **all** children eagerly `O(n)`.
@@ -36,7 +36,7 @@ The risk this plan defends against: building the core on `SliverConstraints` (co
 - **`LayoutContextApi` (all `RenderObject` authors)** — a breaking **addition** (the re-entrant build hook). Surface widens; gated by ARCH-GATE so a future session cannot silently reshape it away from mid-pass-capable.
 - **`flui-view` lazy widgets (future)** — downstream consumer of the lazy render objects; they reach the core *through* `flui-rendering`'s slivers, not directly; out of scope here, recorded in U4.
 - **General windowed UIs (future)** — virtualized text, data grid, table, timeline — the reason the core is kept agnostic; they are sliver-based and consume the core *through* `flui-rendering`'s slivers. A 2nd *direct* consumer of the core is the trigger to extract a `flui-virtualization` crate (recorded in U4).
-- **Workspace** — **no new crate**; a new agnostic `virtualization` module is added inside `flui-rendering`, and `FenwickExtents` is reorganized into it (intra-crate, zero callers — no other crate's import path changes). `[workspace.members]` / `default-members` are unchanged.
+- **Workspace** — **no new crate**; a new agnostic `virtualization` module is added inside `flui-rendering`, and `FenwickExtents` is **deleted** (zero callers — no other crate's import path changes), replaced by an in-module SumTree/augmented-B+-tree. `[workspace.members]` / `default-members` are unchanged (unless the U1 sub-decision sources the tree from an external crate — default is in-house, zero-dep).
 
 ---
 
@@ -46,11 +46,18 @@ The risk this plan defends against: building the core on `SliverConstraints` (co
 
 ### The agnostic core (U1)
 
-The `virtualization` module in `flui-rendering` is generic over a plain `ScrollWindow { offset, main_extent, cache_before, cache_after }` value type plus `f32` extents, and its **public surface names no render/sliver/protocol type** (so it stays extractable into a standalone crate later that would depend on `flui-types` / `flui-foundation` / `flui-geometry` only). The `Virtualizer` answers two questions and nothing else:
+The `virtualization` module in `flui-rendering` is generic over a plain `ScrollWindow { offset, main_extent, cache_before, cache_after }` value type plus `f32` extents, and its **public surface names no render/sliver/protocol type** (so it stays extractable into a standalone crate later that would depend on `flui-types` / `flui-foundation` / `flui-geometry` only). Its backbone is a **focused augmented B+-tree (SumTree-style)**: each item is type-level `Unmeasured { hint: f32 } | Measured { extent: f32 }` (GPUI pattern — illegal states unrepresentable, not a side boolean); every internal node carries a `{ count, total_extent }` summary, giving `O(log n)` seek in **both** directions and `O(log n)` insert/delete. The `Virtualizer` surface (authoritative shape fixed at API-GATE):
 
-- `window_query(window: ScrollWindow) -> VisibleRange` — given the scroll window and the current extents (Fenwick prefix-sum of measured extents, falling back to an estimate for unmeasured indices), return the `[first, last]` item band covering visible + `cache_before`/`cache_after`, plus the leading edge of `first`. `O(log n)` offset↔index via the relocated `FenwickExtents`.
-- `update_measured(index, extent) -> AnchorCorrection` — record a newly-measured item extent; if it differs from the estimate previously used at or before the anchor, return the `delta` the consumer applies to the scroll offset so on-screen content does not jump.
-- estimate-for-unmeasured: a single average/seed extent used for indices not yet measured, so total scroll extent and the scrollbar are stable before every item is laid out (TanStack-style estimate-then-correct).
+- `new(item_count, default_estimate)`, `len`, `is_empty`.
+- `set_count(n)` — insert/remove items, `O(log n)` via the tree (not an array shift — this is the capability Fenwick could not give).
+- `set_measured(index, extent, anchor: (usize, f32)) -> Option<AnchorCorrection>` — replace an estimate with the real extent; returns a correction **iff** the change shifts content above the anchor item. Anchor is **item-identity** `(index, sub_offset)`, not raw pixel.
+- `query(&ScrollWindow) -> VisibleRange` — `O(log n)`; returns the **dual** range (tight visible `[first, last)` + cache `[cache_first, cache_last)`) plus `leading_offset` (first item's offset minus `window.offset`, `≤ 0`), so callers prioritize render vs measure.
+- `offset_of(index) -> f32`, `is_measured(index) -> bool`.
+- `invalidate_from(index)` — watermark; extents after a structural change recompute lazily, `O(log n)` in the tree.
+- `anchor_item() -> (usize, f32)` — getter so the consumer restores position after a layout invalidation.
+- `total_extent() -> Extent` (`Extent = Exact(f32) | Estimated(f32)`), `measured_count()` / `estimated_count()` — scrollbar stability (Flutter #97676 = the average-based-jumpiness cautionary tale).
+- `scroll_to_item(index, alignment)` — note the fixpoint-measure caveat when the target is unmeasured.
+- estimate-for-unmeasured: the `Unmeasured { hint }` seed keeps total scroll extent and the scrollbar stable before every item is laid out (TanStack-style estimate-then-correct).
 
 The core is **build-agnostic** — it never builds, lays out, or names a child render object. It is pure windowing arithmetic over indices and extents.
 
@@ -64,7 +71,7 @@ A new `LayoutContextApi` capability lets a lazy sliver, **during its own layout*
 
 ### The lazy `SliverList` consumer (U3)
 
-Adapts `SliverConstraints → ScrollWindow`, asks the `Virtualizer` for the `VisibleRange`, builds/lays-out **only** visible-plus-cache children (via the U2 contract), feeds measured extents back via `update_measured`, applies any `AnchorCorrection`, and **disposes children that leave the band** (Decision 3, behind a pluggable hook). Contrast with the eager `sliver_fixed_extent_list` / `sliver_fill_viewport` which lay out all `n`.
+Adapts `SliverConstraints → ScrollWindow`, asks the `Virtualizer` for the `VisibleRange` (dual visible/cache band), builds/lays-out **only** visible-plus-cache children (via the U2 contract), feeds measured extents back via `set_measured`, **accumulates** the signed `AnchorCorrection` and applies it, and **disposes children that leave the band** (Decision 3, behind a pluggable hook). **Correction policy lives here, not in the core:** suppress anchor correction while scrolling *backward* (the canonical "items jump while scrolling up" bug) and reset the correction accumulator on user-initiated scroll. Contrast with the eager `sliver_fixed_extent_list` / `sliver_fill_viewport` which lay out all `n`.
 
 ---
 
@@ -76,16 +83,16 @@ New files / directories created during this work:
 crates/flui-rendering/
 ├── src/
 │   ├── virtualization/                    (NEW module: U1 — protocol-agnostic windowing math)
-│   │   ├── mod.rs                         (ScrollWindow, VisibleRange, AnchorCorrection, Virtualizer)
-│   │   └── fenwick.rs                     (REORGANIZED from src/slivers/fenwick.rs — stays in flui-rendering)
+│   │   ├── mod.rs                         (ScrollWindow, VisibleRange, AnchorCorrection, Extent, Virtualizer)
+│   │   └── sumtree.rs                     (NEW: U1 — focused augmented B+-tree over Unmeasured|Measured extents)
 │   ├── slivers/
 │   │   ├── mod.rs                         (MODIFY: U1 — drop the `fenwick` module decl/re-export)
-│   │   └── fenwick.rs                     (REMOVED from here — relocated to src/virtualization/, intra-crate)
+│   │   └── fenwick.rs                     (DELETED — flat-array BIT, O(n) mid-list insert, zero callers)
 │   ├── objects/
 │   │   └── sliver_list_lazy.rs            (NEW: U3 — lazy, virtualized SliverList consumer)
 │   └── (LayoutContextApi surface)         (MODIFY: U2 — mid-pass-capable build hook)
 ├── benches/
-│   └── virtualizer.rs                     (NEW: U1 — criterion: O(log n) offset↔index, anchor-correction)
+│   └── virtualizer.rs                     (NEW: U1 — criterion: O(log n) seek both ways + insert/delete vs naive O(n))
 └── (render_viewport integration harness)  (MODIFY: U3 — synthetic-children + real-frame bench)
 ```
 
@@ -99,29 +106,31 @@ Per-unit `**Files:**` sections below are authoritative for what each unit create
 
 > Each U-ID is stable; reordering or splitting does not renumber. Serial dependency: U1 → U2 → U3; U4 is recorded-future. Each unit ships as atomic commit(s) and must pass `cargo fmt` + `cargo clippy --all-targets --all-features -- -D warnings` + its stated tests before the next unit starts.
 
-### U1 — `virtualization` module in `flui-rendering` + protocol-agnostic `Virtualizer` core
+### U1 — `virtualization` module in `flui-rendering` + SumTree/B+-tree-backed `Virtualizer` core (delete `FenwickExtents`)
 
-- **Goal**: organize a new protocol-agnostic `virtualization` module **inside `flui-rendering`**, reorganize `FenwickExtents` into it (it **stays in `flui-rendering`** — no new crate), and build the agnostic `Virtualizer` (`ScrollWindow`, `VisibleRange`, `window_query`; `update_measured → AnchorCorrection`; estimate-for-unmeasured). Verify in isolation.
+- **Goal**: create a new protocol-agnostic `virtualization` module **inside `flui-rendering`**, **DELETE `FenwickExtents`** (zero callers; flat-array BIT, `O(n)` mid-list insert — the structurally wrong tool), and build the agnostic `Virtualizer` over a **focused augmented B+-tree (SumTree-style)**: `O(log n)` seek both directions **and** `O(log n)` insert/delete, with type-level `Unmeasured | Measured` extents and item-identity anchoring. Verify in isolation.
 - **Depends on**: none.
 - **Files**:
-  - `crates/flui-rendering/src/virtualization/mod.rs` (NEW — `ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Virtualizer` + `window_query` / `update_measured`; public surface names no render/sliver/protocol type).
-  - `crates/flui-rendering/src/virtualization/fenwick.rs` (NEW — `git mv` of `crates/flui-rendering/src/slivers/fenwick.rs`; intra-crate relocation; update internal `use crate::` paths if any; preserve the existing ASM-verified Fenwick tests).
-  - `crates/flui-rendering/src/slivers/fenwick.rs` (REMOVED — relocated into the `virtualization` module, intra-crate).
+  - `crates/flui-rendering/src/virtualization/mod.rs` (NEW — `ScrollWindow`, `VisibleRange` (dual visible+cache range + `leading_offset`), `AnchorCorrection` (signed delta), `Extent` (`Exact | Estimated`), `Virtualizer` with the full method set; public surface names no render/sliver/protocol type).
+  - `crates/flui-rendering/src/virtualization/sumtree.rs` (NEW — the focused augmented B+-tree: `Unmeasured { hint } | Measured { extent }` items, `{ count, total_extent }` node summary, `O(log n)` seek-both-ways + `O(log n)` insert/delete; this is the deleted Fenwick's replacement and the bulk of the work). *Filename is illustrative; collapse into `mod.rs` or rename if the implementation prefers.*
+  - `crates/flui-rendering/src/slivers/fenwick.rs` (**DELETED** — not relocated; structurally wrong, zero callers).
   - `crates/flui-rendering/src/slivers/mod.rs` (MODIFY — drop the `fenwick` module declaration/re-export; verify zero callers so nothing else breaks).
   - `crates/flui-rendering/src/lib.rs` (MODIFY — declare the new `virtualization` module).
   - `crates/flui-rendering/benches/virtualizer.rs` (NEW — criterion).
-  - **No `Cargo.toml` / `[workspace.members]` change** — no new crate is created.
-- **Approach**: `git mv` the Fenwick file *within* `flui-rendering` to preserve history; the relocation is intra-crate and has **zero callers**, so it is fully contained — no other crate's imports change. Build the `Virtualizer` on top of the relocated Fenwick as the prefix-sum backbone. Keep the surface generic over `ScrollWindow` + `f32` extents — it must not name any render, sliver, or protocol type (this is what keeps the module cheaply extractable to a `flui-virtualization` crate later).
-- **Patterns to follow**: an existing self-contained `flui-rendering` module for module shape; the existing Fenwick tests for the `O(log n)` assertions.
+  - **No `Cargo.toml` / `[workspace.members]` change** — no new crate is created. (**U1 sub-decision:** if the SumTree/B+-tree is sourced from an existing crate rather than built in-house, that *would* touch `Cargo.toml` — see Approach; default is in-house, zero-dep.)
+- **Approach**: **delete** the Fenwick file (it has **zero callers**, so the deletion is fully contained — no other crate's imports change). Build the `Virtualizer` on a **focused augmented B+-tree** as the backbone: a `{ count, total_extent }` summary at each node gives `O(log n)` offset→index and index→offset seek *and* `O(log n)` `set_count` insert/delete (the capability a flat-array Fenwick could not provide). Keep the tree *focused* (count + total-extent summaries), not a fully-generic `SumTree<T, Summary>` — generality lives at the `Virtualizer`'s public boundary, internals stay a deep module. **U1 sub-decision (record in the commit): build the tree in-house (lean — control + zero-dep) OR vet an existing crate via `/add-dep`** (RUSTSEC/license/MSRV/features pipeline) — default to in-house. Keep the public surface generic over `ScrollWindow` + `f32` extents — it must not name any render, sliver, or protocol type (this keeps the module cheaply extractable to a `flui-virtualization` crate later).
+- **Patterns to follow**: GPUI/Zed `list.rs` (`SumTree<ListItem>`, `Unmeasured | Measured`, `{count, height}` summary, `ListOffset` item-identity anchor) for the structure; an existing self-contained `flui-rendering` module for module shape.
 - **Test scenarios**:
-  - Happy path: `window_query` returns the correct `[first, last]` band for a known extents vector + window, including the cache buffer.
-  - `O(log n)` offset↔index proven (criterion bench + a test asserting seek cost scales sub-linearly / matches the Fenwick contract).
-  - Anchor-correction: feeding a measured extent that differs from its estimate produces the `AnchorCorrection.delta` that keeps the anchored item stationary; a measure *equal* to the estimate produces zero delta.
+  - Happy path: `query` returns the correct dual band (tight visible `[first, last)` + cache `[cache_first, cache_last)`) and `leading_offset` for a known extents vector + window.
+  - **`O(log n)` seek BOTH directions** proven: offset→index (`query`) and index→offset (`offset_of`) (criterion bench + a test asserting sub-linear scaling).
+  - **`O(log n)` insert/delete** proven: `set_count` inserting/removing items *mid-list* updates summaries in `O(log n)` (criterion bench vs a naive O(n) flat-array baseline — the explicit reason Fenwick was rejected).
+  - Anchor-correction: `set_measured` with an extent differing from the estimate, for an item **above the anchor**, returns the signed `AnchorCorrection.delta` that keeps the anchored item stationary; a measure *equal* to the estimate, or a change *below* the anchor, returns `None`/zero.
+  - Estimated→Exact transition: `total_extent()` reports `Estimated` while a prefix is unmeasured and flips to `Exact` once all items are `Measured`; `measured_count()`/`estimated_count()` track it.
   - Estimate-for-unmeasured: total scroll extent is stable and well-defined when only a prefix of items has been measured.
-- **Verification**: `cargo build -p flui-rendering` exits 0 (incl. the new `virtualization` module and after the intra-crate Fenwick relocation — proves zero-caller claim); `cargo test -p flui-rendering` (incl. the relocated Fenwick + new `Virtualizer` tests) exits 0; `cargo clippy -p flui-rendering --all-targets --all-features -- -D warnings` exits 0.
+- **Verification**: `cargo build -p flui-rendering` exits 0 (incl. the new `virtualization` module and after the Fenwick deletion — proves zero-caller claim); `cargo test -p flui-rendering` (incl. the new `Virtualizer` + SumTree tests) exits 0; `cargo clippy -p flui-rendering --all-targets --all-features -- -D warnings` exits 0.
 - **Gates**:
-  - **API-GATE** — the **module's** public surface (`ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Virtualizer` method signatures) is reviewed and fixed here. Invariant to enforce: **no render / sliver / protocol type appears in the module's public API** (keeps the core agnostic, keeps it cheaply crate-extractable later, and keeps the future crate-extraction acyclic).
-- **Acceptance**: `O(log n)` offset↔index proven; anchor-correction on extent change tested; the `virtualization` module's public surface is agnostic (no render/sliver/protocol type) — no new crate is created.
+  - **API-GATE** — the **module's** public surface (`ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Extent`, `Virtualizer` method signatures) is reviewed and fixed here. Invariant to enforce: **no render / sliver / protocol type appears in the module's public API** (keeps the core agnostic, keeps it cheaply crate-extractable later, and keeps the future crate-extraction acyclic).
+- **Acceptance**: `O(log n)` seek **both directions** proven; `O(log n)` insert/delete (`set_count` mid-list) proven against a naive O(n) baseline; anchor-correction keeps content stationary when an above-anchor estimate is corrected; Estimated→Exact transition tested; `FenwickExtents` deleted; the `virtualization` module's public surface is agnostic (no render/sliver/protocol type) — no new crate is created.
 
 ### U2 — Mid-pass-capable re-entrant build contract on `LayoutContextApi`
 
@@ -150,17 +159,18 @@ Per-unit `**Files:**` sections below are authoritative for what each unit create
   - `crates/flui-rendering/src/objects/mod.rs` (MODIFY — declare/export the new object).
   - `crates/flui-rendering/src/objects/viewport.rs` (MODIFY only if a "skip this child" hook is needed on `layout_child_sequence` / `try_cached_sliver_geometry` to let the lazy list lay out a sub-range — see `:325` / `:612`).
   - `render_viewport` integration harness (MODIFY — synthetic children fixture + a real-frame criterion bench vs the eager `sliver_fixed_extent_list` / `sliver_fill_viewport`).
-- **Approach**: build the adapter, drive the `Virtualizer`, materialize only the visible+cache band through the U2 contract, feed measured extents back via `update_measured`, apply `AnchorCorrection`, and dispose on scroll-off via the pluggable hook (Decision 3 — **not** a two-level pool). Keep the eager lists in place; this unit *adds* the lazy one and proves it.
+- **Approach**: build the adapter, drive the `Virtualizer`, materialize only the visible+cache band through the U2 contract, feed measured extents back via `set_measured`, **accumulate and apply the signed `AnchorCorrection`**, and dispose on scroll-off via the pluggable hook (Decision 3 — **not** a two-level pool). **Correction policy is the consumer's job (the core only emits the signed delta):** *suppress anchor correction while scrolling backward* — applying corrections during an upward scroll is the canonical "items jump while scrolling up" bug — and *reset the correction accumulator on user-initiated scroll*. Keep the eager lists in place; this unit *adds* the lazy one and proves it.
 - **Patterns to follow**: the eager `sliver_fixed_extent_list.rs` / `sliver_fill_viewport.rs` for the sliver-object scaffolding; `viewport.rs` `layout_child_sequence` for the child-driving shape it replaces with a windowed sub-range.
 - **Test scenarios**:
   - Happy path (harness): with N synthetic children and a viewport showing K, only K + cache children are built/laid-out (assert built-count ≪ N).
   - Scroll: scrolling shifts the built band; children leaving the band are disposed (pluggable hook fires); newly-visible children materialize.
   - Anchor on resize: a child whose measured extent differs from its estimate triggers an `AnchorCorrection` that keeps on-screen content stationary (the Flutter `RenderSliverList` weakness being beaten).
+  - Backward-scroll suppression: while scrolling *up*, an above-viewport re-measure does **not** apply a correction (content does not jump up — the canonical bug); the accumulator resets on a user-initiated scroll.
   - Bench: real-frame criterion vs the eager list shows the virtualized list does asymptotically less work as N grows.
 - **Verification**: `cargo build -p flui-rendering` exits 0; `cargo test -p flui-rendering` (incl. the `render_viewport` harness) exits 0; `cargo clippy -p flui-rendering --all-targets --all-features -- -D warnings` exits 0; the real-frame bench runs and reports built-count + timing vs eager.
 - **Gates**:
   - **QA (via the harness)** — correctness is demonstrated through the existing `render_viewport` integration harness with synthetic children **plus** the real-frame bench against the eager list. **No `flui-view` consumer required.** Honest labeling: the bench reports the actual backend (next-frame vs mid-pass) and must not overstate the win.
-- **Acceptance**: only visible-plus-cache children are built/laid-out; dispose-on-scroll-off works behind the pluggable hook; anchor correction keeps content stationary on extent change; the real-frame bench shows a win over the eager list.
+- **Acceptance**: only visible-plus-cache children are built/laid-out; dispose-on-scroll-off works behind the pluggable hook; anchor correction keeps content stationary on extent change; backward-scroll correction is suppressed and the accumulator resets on user-initiated scroll; the real-frame bench shows a win over the eager list.
 
 ### U4 — Future, recorded (not in this delivery)
 
@@ -185,7 +195,7 @@ Recorded so a future session continues the exact arc rather than re-litigating i
 
 ## Definition of Done (this delivery: U1–U3)
 
-- The agnostic `virtualization` module exists **inside `flui-rendering`** (no new crate), hosts the reorganized `FenwickExtents` (relocated intra-crate, zero callers), keeps its public surface free of render/sliver/protocol types, and its `Virtualizer` proves `O(log n)` offset↔index + anchor correction in isolation (U1, API-GATE passed).
+- The agnostic `virtualization` module exists **inside `flui-rendering`** (no new crate), is backed by a focused SumTree/augmented-B+-tree (`FenwickExtents` deleted, zero callers), keeps its public surface free of render/sliver/protocol types, and its `Virtualizer` proves `O(log n)` seek both directions + `O(log n)` insert/delete + anchor correction in isolation (U1, API-GATE passed).
 - `LayoutContextApi` carries a mid-pass-capable on-demand build hook; the v1 backend is implemented and honestly labeled; borrow-safety holds (U2, ARCH-GATE passed).
 - A lazy `SliverList` builds only visible-plus-cache children, disposes on scroll-off behind a pluggable hook, corrects the anchor on extent change, and beats the eager list on a real-frame bench via the `render_viewport` harness — no `flui-view` consumer required (U3, QA passed).
 - `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and the per-unit tests are green across `flui-rendering` (which now hosts the `virtualization` module).
