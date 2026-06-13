@@ -60,32 +60,13 @@ use crate::{
 pub struct RenderSliverPadding {
     /// Padding to inflate around the child sliver.
     padding: EdgeInsets,
-    /// Last-applied constraints, cached for the `&self`-only child
-    /// positioning helpers.
-    ///
-    /// 2B field dedup removes per-object geometry/constraints caches
-    /// where the paint/hit-test context can supply them. This sliver is
-    /// an exception: `child_main_axis_position` / `child_cross_axis_position`
-    /// / `child_scroll_offset` are `&self`-only [`RenderSliver`] hooks the
-    /// viewport calls with no constraints argument, and they need the
-    /// incoming constraints to resolve the leading-padding offset. Until
-    /// those hooks gain a constraints parameter, the value is cached here.
-    constraints: SliverConstraints,
-    /// Computed geometry from the most recent [`Self::perform_layout`],
-    /// cached for the geometry-gated [`RenderSliver::hit_test`] (the
-    /// sliver hit-test context does not expose committed geometry).
-    geometry: SliverGeometry,
 }
 
 impl RenderSliverPadding {
     /// Creates a sliver-padding render object with the given insets.
     #[must_use]
     pub const fn new(padding: EdgeInsets) -> Self {
-        Self {
-            padding,
-            constraints: empty_sliver_constraints(),
-            geometry: SliverGeometry::ZERO,
-        }
+        Self { padding }
     }
 
     /// Creates a sliver-padding render object with all sides equal.
@@ -355,14 +336,11 @@ impl RenderSliver for RenderSliverPadding {
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
-        self.constraints = constraints;
 
         // No-child fast path — sliver still consumes its own padded
         // scroll extent so subsequent slivers compose correctly.
         if ctx.child_count() == 0 {
-            let geometry = self.empty_geometry(&constraints);
-            self.geometry = geometry;
-            return geometry;
+            return self.empty_geometry(&constraints);
         }
 
         let child_constraints = self.child_constraints(&constraints);
@@ -371,9 +349,7 @@ impl RenderSliver for RenderSliverPadding {
         // Scroll-offset correction propagates upward unchanged — the
         // viewport reruns layout next frame with the corrected offset.
         if let Some(correction) = child_geometry.scroll_offset_correction {
-            let geometry = SliverGeometry::scroll_offset_correction(correction);
-            self.geometry = geometry;
-            return geometry;
+            return SliverGeometry::scroll_offset_correction(correction);
         }
 
         let (geometry, child_paint_offset) = self.padded_geometry(&constraints, &child_geometry);
@@ -382,27 +358,28 @@ impl RenderSliver for RenderSliverPadding {
         // layout walk commits this into the child's RenderState so
         // later paint and hit-test phases use the same placement.
         ctx.position_child(0, child_paint_offset);
-        self.geometry = geometry;
         geometry
     }
 
     fn child_main_axis_position(
         &self,
+        constraints: &SliverConstraints,
         _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
     ) -> f32 {
-        let (before, _, _, _) = self.resolve(&self.constraints);
-        Self::paint_offset(&self.constraints, 0.0, before)
+        let (before, _, _, _) = self.resolve(constraints);
+        Self::paint_offset(constraints, 0.0, before)
     }
 
     fn child_cross_axis_position(
         &self,
+        constraints: &SliverConstraints,
         _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
     ) -> f32 {
         // TODO(Wave 3.3+): resolve cross-axis start from `TextDirection` /
         // `cross_axis_direction` when FLUI lands RTL sliver layout. Flutter's
         // `RenderSliverPadding.childCrossAxisPosition` uses text direction;
         // this LTR assumption matches today's cross-axis posture.
-        match self.constraints.axis() {
+        match constraints.axis() {
             Axis::Vertical => self.padding.left.get(),
             Axis::Horizontal => self.padding.top.get(),
         }
@@ -410,9 +387,10 @@ impl RenderSliver for RenderSliverPadding {
 
     fn child_scroll_offset(
         &self,
+        constraints: &SliverConstraints,
         _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
     ) -> Option<f32> {
-        let (before, _, _, _) = self.resolve(&self.constraints);
+        let (before, _, _, _) = self.resolve(constraints);
         Some(before)
     }
 
@@ -420,9 +398,6 @@ impl RenderSliver for RenderSliverPadding {
         &self,
         ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
     ) -> bool {
-        if self.geometry.hit_test_extent <= 0.0 {
-            return false;
-        }
         ctx.hit_test_child_at_layout_offset(0)
     }
 }
@@ -431,33 +406,6 @@ impl RenderSliver for RenderSliverPadding {
 impl PaintEffectsCapability for RenderSliverPadding {}
 impl SemanticsCapability for RenderSliverPadding {}
 impl HotReloadCapability for RenderSliverPadding {}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// `SliverConstraints` constant used to initialise the cached
-/// constraints field; `SliverConstraints::default()` is not `const`.
-const fn empty_sliver_constraints() -> SliverConstraints {
-    use flui_types::layout::AxisDirection;
-
-    use crate::{constraints::GrowthDirection, view::ScrollDirection};
-
-    SliverConstraints::new(
-        AxisDirection::TopToBottom,
-        GrowthDirection::Forward,
-        ScrollDirection::Idle,
-        0.0, // scroll_offset
-        0.0, // preceding_scroll_extent
-        0.0, // overlap
-        0.0, // remaining_paint_extent
-        0.0, // cross_axis_extent
-        AxisDirection::LeftToRight,
-        0.0, // viewport_main_axis_extent
-        0.0, // remaining_cache_extent
-        0.0, // cache_origin
-    )
-}
 
 // ============================================================================
 // Tests
@@ -501,17 +449,6 @@ mod tests {
             remaining_cache_extent,
             0.0, // cache_origin
         )
-    }
-
-    /// Attaches constraints to a padding node for trait-helper unit tests.
-    fn padding_with_constraints(
-        padding: RenderSliverPadding,
-        constraints: SliverConstraints,
-    ) -> RenderSliverPadding {
-        RenderSliverPadding {
-            constraints,
-            ..padding
-        }
     }
 
     /// Builds a child sliver geometry with explicit fields for the
@@ -934,29 +871,28 @@ mod tests {
         use crate::test_support::NoopSliver;
         use crate::traits::{RenderObject, RenderSliver};
 
-        let padding = RenderSliverPadding::new(EdgeInsets {
+        let p = RenderSliverPadding::new(EdgeInsets {
             top: px(10.0),
             right: px(0.0),
             bottom: px(20.0),
             left: px(3.0),
         });
         let constraints = vertical_constraints(5.0, 200.0, 200.0, 300.0);
-        let p = padding_with_constraints(padding, constraints);
         let child = NoopSliver;
         let child_ref: &dyn RenderObject<SliverProtocol> = &child;
 
         assert_eq!(
-            p.child_main_axis_position(child_ref),
+            p.child_main_axis_position(&constraints, child_ref),
             5.0,
             "forward growth: child main-axis position matches visible leading padding",
         );
         assert_eq!(
-            p.child_scroll_offset(child_ref),
+            p.child_scroll_offset(&constraints, child_ref),
             Some(10.0),
             "forward growth: child scroll offset uses top leading padding",
         );
         assert_eq!(
-            p.child_cross_axis_position(child_ref),
+            p.child_cross_axis_position(&constraints, child_ref),
             3.0,
             "cross-axis position uses left inset under LTR assumptions",
         );
@@ -968,7 +904,7 @@ mod tests {
         use crate::test_support::NoopSliver;
         use crate::traits::{RenderObject, RenderSliver};
 
-        let padding = RenderSliverPadding::new(EdgeInsets {
+        let p = RenderSliverPadding::new(EdgeInsets {
             top: px(10.0),
             right: px(0.0),
             bottom: px(20.0),
@@ -976,22 +912,21 @@ mod tests {
         });
         let mut constraints = vertical_constraints(5.0, 200.0, 200.0, 300.0);
         constraints.growth_direction = GrowthDirection::Reverse;
-        let p = padding_with_constraints(padding, constraints);
         let child = NoopSliver;
         let child_ref: &dyn RenderObject<SliverProtocol> = &child;
 
         assert_eq!(
-            p.child_main_axis_position(child_ref),
+            p.child_main_axis_position(&constraints, child_ref),
             15.0,
             "reverse growth: child main-axis position uses bottom leading padding",
         );
         assert_eq!(
-            p.child_scroll_offset(child_ref),
+            p.child_scroll_offset(&constraints, child_ref),
             Some(20.0),
             "reverse growth: child scroll offset uses bottom leading padding",
         );
         assert_eq!(
-            p.child_cross_axis_position(child_ref),
+            p.child_cross_axis_position(&constraints, child_ref),
             3.0,
             "cross-axis position is unchanged by growth direction",
         );

@@ -148,13 +148,15 @@ fn mixed_flex_padding_transform_clip_frame() {
     // Effect/clip layers anchor at the NODE origin (Flutter pushTransform:
     // T(o)·M·T(−o); pushClipRect: clipRect.shift(offset)).
     let tree = run.layer_tree().expect("frame paints");
-    let local = run
-        .owner()
-        .render_tree()
-        .get(scaler)
-        .expect("scaler node")
+    let owner = run.owner();
+    let scaler_node = owner.render_tree().get(scaler).expect("scaler node");
+    // The production paint walk feeds the laid-out size (from RenderState)
+    // into paint_transform so the alignment origin resolves; mirror that
+    // here instead of reading a cached object field.
+    let scaler_size = scaler_node.size().unwrap_or(flui_types::Size::ZERO);
+    let local = scaler_node
         .box_render_object()
-        .paint_transform()
+        .paint_transform(scaler_size)
         .expect("scale(2,2) reports a paint transform");
     let expected =
         Matrix4::translation(50.0, 0.0, 0.0) * local * Matrix4::translation(-50.0, 0.0, 0.0);

@@ -579,11 +579,24 @@ impl RenderNode {
     }
 
     /// Optional paint transform effect for this render object.
+    ///
+    /// The laid-out size is resolved from
+    /// [`RenderState`](crate::storage::RenderState) (geometry's sole
+    /// owner) and threaded in so an alignment-relative transform reads it
+    /// instead of caching its own size (channel for the `&self`
+    /// `paint_transform` hook). Box → committed `Size`; sliver → absolute
+    /// paint size.
     #[inline]
     pub fn paint_transform(&self) -> Option<flui_types::Matrix4> {
         match self {
-            Self::Box(entry) => entry.render_object().paint_transform(),
-            Self::Sliver(entry) => entry.render_object().paint_transform(),
+            Self::Box(entry) => {
+                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+                entry.render_object().paint_transform(size)
+            }
+            Self::Sliver(entry) => {
+                let size = entry.state().absolute_paint_size();
+                entry.render_object().paint_transform(size)
+            }
         }
     }
 

@@ -71,7 +71,13 @@ pub trait PaintEffectsCapability {
     /// If `Some(matrix)`, the painting pipeline wraps children in a
     /// TransformLayer. Used by `RenderTransform` to implement transform
     /// animations. Default: `None` (no transform effect).
-    fn paint_transform(&self) -> Option<flui_types::Matrix4> {
+    ///
+    /// `size` is the node's laid-out size, resolved by the driver from
+    /// [`RenderState`](crate::storage::RenderState) (2B field dedup) —
+    /// transform objects pivoting around an alignment-relative origin read
+    /// it instead of caching their own size.
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
         None
     }
 
@@ -85,8 +91,10 @@ pub trait PaintEffectsCapability {
     /// Typically the same as [`paint_transform`](Self::paint_transform).
     /// Render objects that apply transforms for painting but not for
     /// hit testing (e.g. decorative-only transforms) can override this
-    /// to return `None`.
-    fn hit_test_transform(&self) -> Option<flui_types::Matrix4> {
+    /// to return `None`. `size` is the laid-out size from `RenderState`
+    /// (same channel as `paint_transform`).
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
         None
     }
 }

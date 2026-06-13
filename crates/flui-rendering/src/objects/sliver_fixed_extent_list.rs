@@ -18,14 +18,14 @@ use crate::{
 /// remain deferred to the future multi-box-adaptor layer; attached children are
 /// laid out eagerly with fixed extents.
 ///
-/// 2B field dedup: incoming constraints live only in `perform_layout` (no
-/// per-object cache); the committed `geometry` is retained solely for the
-/// `&self`-only `paint` visibility gate (the sliver paint context does not
-/// expose the `visible` flag).
+/// 2B field dedup: incoming constraints live only in `perform_layout` and
+/// the committed `geometry` lives solely on `RenderState<SliverProtocol>`;
+/// `perform_layout` returns its geometry directly and the visibility cull
+/// is owned by the pipeline paint driver. `child_count` is retained because
+/// the `&self`-only `hit_test` walks the attached children in reverse.
 #[derive(Debug, Clone)]
 pub struct RenderSliverFixedExtentList {
     item_extent: f32,
-    geometry: SliverGeometry,
     child_count: usize,
 }
 
@@ -45,7 +45,6 @@ impl RenderSliverFixedExtentList {
         );
         Self {
             item_extent,
-            geometry: SliverGeometry::ZERO,
             child_count: 0,
         }
     }
@@ -129,14 +128,11 @@ impl RenderSliver for RenderSliverFixedExtentList {
             );
         }
 
-        self.geometry = geometry;
         geometry
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        if self.geometry.visible {
-            ctx.paint_children();
-        }
+        ctx.paint_children();
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {

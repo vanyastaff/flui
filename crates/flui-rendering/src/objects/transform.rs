@@ -40,18 +40,6 @@ pub struct RenderTransform {
     alignment: Alignment,
     /// Explicit origin offset (overrides alignment if set).
     origin: Option<Offset>,
-    /// Laid-out size, cached from `perform_layout`.
-    ///
-    /// 2B field dedup removes the per-object size cache from objects
-    /// that can read it from the paint/hit-test context. `RenderTransform`
-    /// is the exception: its effective matrix depends on the alignment
-    /// origin (a fraction of the laid-out size), and that matrix is read
-    /// back through the `&self`-only [`PaintEffectsCapability::paint_transform`]
-    /// / [`PaintEffectsCapability::hit_test_transform`] hooks — which the
-    /// pipeline calls with no size argument. Until those capability hooks
-    /// gain a size parameter, the laid-out size is cached here so the
-    /// origin can be resolved off the live tree.
-    size: Size,
     /// Whether we have a child.
     has_child: bool,
     /// Whether to use compositing layers.
@@ -65,7 +53,6 @@ impl RenderTransform {
             transform,
             alignment: Alignment::CENTER,
             origin: None,
-            size: Size::ZERO,
             has_child: false,
             needs_compositing: true,
         }
@@ -146,21 +133,23 @@ impl RenderTransform {
         self.origin
     }
 
-    /// Computes the effective origin offset based on alignment and size.
-    fn compute_origin(&self) -> Offset {
+    /// Computes the effective origin offset based on alignment and the
+    /// laid-out `size` (supplied by the driver from `RenderState`).
+    fn compute_origin(&self, size: Size) -> Offset {
         if let Some(origin) = self.origin {
             origin
         } else {
             // Compute from alignment
-            let x = self.size.width * ((self.alignment.x + 1.0) / 2.0);
-            let y = self.size.height * ((self.alignment.y + 1.0) / 2.0);
+            let x = size.width * ((self.alignment.x + 1.0) / 2.0);
+            let y = size.height * ((self.alignment.y + 1.0) / 2.0);
             Offset::new(x, y)
         }
     }
 
-    /// Computes the effective transform matrix with origin applied.
-    fn effective_transform(&self) -> Matrix4 {
-        let origin = self.compute_origin();
+    /// Computes the effective transform matrix with origin applied, using
+    /// the laid-out `size` for an alignment-relative origin.
+    fn effective_transform(&self, size: Size) -> Matrix4 {
+        let origin = self.compute_origin(size);
 
         // Translate to origin, apply transform, translate back
         let to_origin = Matrix4::translation((-origin.dx).into(), (-origin.dy).into(), 0.0);
@@ -190,18 +179,17 @@ impl RenderBox for RenderTransform {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
-        // Cache the laid-out size for the `&self`-only transform-origin
-        // hooks (`paint_transform` / `hit_test_transform`); also return
-        // it so `RenderState` is the source of truth for everything else.
-        self.size = if ctx.child_count() > 0 {
+        // A transform takes its child's size (or the smallest size when
+        // childless). The committed size lands on `RenderState`; the
+        // transform-origin hooks read it back via their `size` argument.
+        if ctx.child_count() > 0 {
             self.has_child = true;
             // Layout child with same constraints
             ctx.layout_child(0, constraints)
         } else {
             self.has_child = false;
             constraints.smallest()
-        };
-        self.size
+        }
     }
 
     crate::forward_single_child_box_queries!();
@@ -218,7 +206,7 @@ impl RenderBox for RenderTransform {
         if !self.has_child {
             return false;
         }
-        let Some(inverse) = self.effective_transform().try_inverse() else {
+        let Some(inverse) = self.effective_transform(ctx.own_size()).try_inverse() else {
             // A degenerate (non-invertible) matrix collapses the subtree
             // to zero visual area: nothing is visible, nothing is hit.
             return false;
@@ -242,13 +230,14 @@ impl RenderBox for RenderTransform {
 // Mythos Step 11: PaintEffectsCapability override -- the whole point of
 // RenderTransform.
 impl PaintEffectsCapability for RenderTransform {
-    fn paint_transform(&self) -> Option<Matrix4> {
-        // Return the effective transform so paint_node_recursive can apply it
-        Some(self.effective_transform())
+    fn paint_transform(&self, size: Size) -> Option<Matrix4> {
+        // Return the effective transform so the paint walk can apply it.
+        // `size` is the laid-out size from RenderState (origin pivot).
+        Some(self.effective_transform(size))
     }
 
-    fn hit_test_transform(&self) -> Option<Matrix4> {
-        Some(self.effective_transform())
+    fn hit_test_transform(&self, size: Size) -> Option<Matrix4> {
+        Some(self.effective_transform(size))
     }
 }
 
@@ -265,10 +254,16 @@ mod tests {
     fn paint_and_hit_test_share_one_transform() {
         let mut node = RenderTransform::scale(2.0, 2.0);
         node.has_child = true;
-        assert_eq!(node.paint_transform(), Some(node.effective_transform()));
+        // size ZERO ⇒ CENTER-alignment origin is (0,0), so the effective
+        // matrix is the pure scale; both hooks return that same matrix.
+        let size = Size::ZERO;
+        assert_eq!(
+            node.paint_transform(size),
+            Some(node.effective_transform(size))
+        );
 
         let inverse = node
-            .effective_transform()
+            .effective_transform(size)
             .try_inverse()
             .expect("scale(2,2) is invertible");
         let (tx, ty) = inverse.transform_point(

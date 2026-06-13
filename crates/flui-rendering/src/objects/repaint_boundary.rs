@@ -285,6 +285,6 @@ mod tests {
     fn test_paint_effects_none() {
         let rb = RenderRepaintBoundary::new();
         assert!(rb.paint_alpha().is_none());
-        assert!(rb.paint_transform().is_none());
+        assert!(rb.paint_transform(flui_types::Size::ZERO).is_none());
     }
 }

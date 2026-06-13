@@ -159,15 +159,25 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 
     /// Returns the position of a child along the main axis.
     ///
+    /// `constraints` are this sliver's layout constraints, supplied by the
+    /// caller from [`RenderState`](crate::storage::RenderState) — these
+    /// positioning hooks take it as an argument rather than caching it on
+    /// the object (2B field dedup).
+    ///
     /// # Arguments
     ///
+    /// * `constraints` - This sliver's layout constraints
     /// * `child` - The child to query
     ///
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childMainAxisPosition` in Flutter.
-    fn child_main_axis_position(&self, child: &dyn RenderObject<SliverProtocol>) -> f32 {
-        let _ = child;
+    fn child_main_axis_position(
+        &self,
+        constraints: &SliverConstraints,
+        child: &dyn RenderObject<SliverProtocol>,
+    ) -> f32 {
+        let _ = (constraints, child);
         0.0
     }
 
@@ -175,13 +185,18 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     ///
     /// # Arguments
     ///
+    /// * `constraints` - This sliver's layout constraints
     /// * `child` - The child to query
     ///
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childCrossAxisPosition` in Flutter.
-    fn child_cross_axis_position(&self, child: &dyn RenderObject<SliverProtocol>) -> f32 {
-        let _ = child;
+    fn child_cross_axis_position(
+        &self,
+        constraints: &SliverConstraints,
+        child: &dyn RenderObject<SliverProtocol>,
+    ) -> f32 {
+        let _ = (constraints, child);
         0.0
     }
 
@@ -192,13 +207,18 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     ///
     /// # Arguments
     ///
+    /// * `constraints` - This sliver's layout constraints
     /// * `child` - The child to query
     ///
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childScrollOffset` in Flutter.
-    fn child_scroll_offset(&self, child: &dyn RenderObject<SliverProtocol>) -> Option<f32> {
-        let _ = child;
+    fn child_scroll_offset(
+        &self,
+        constraints: &SliverConstraints,
+        child: &dyn RenderObject<SliverProtocol>,
+    ) -> Option<f32> {
+        let _ = (constraints, child);
         None
     }
 

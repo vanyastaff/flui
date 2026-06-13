@@ -753,9 +753,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // stack BEFORE recursing, so child entries captured during
         // hit_test_raw see the correct accumulated transform. The
         // transform stays on the stack until after the parent entry
-        // is added (Flutter parity: pushTransform in hitTest).
-        let has_transform = render_object.hit_test_transform().is_some();
-        if let Some(t) = render_object.hit_test_transform() {
+        // is added (Flutter parity: pushTransform in hitTest). The hook
+        // gets `own_size` from RenderState for alignment-relative origins.
+        let hit_transform = render_object.hit_test_transform(own_size);
+        let has_transform = hit_transform.is_some();
+        if let Some(t) = hit_transform {
             result.push_transform(t);
         }
 
@@ -3763,6 +3765,18 @@ impl PipelineOwner<PaintPhase> {
         // pipeline, so this guards descendant-error and partial-frame
         // paths where a poisoned layout left the flag set.
         if render_node.needs_layout() {
+            return Ok(());
+        }
+
+        // Sliver visibility cull: a sliver with zero paint extent
+        // (`!visible`) paints nothing and splices no children (Flutter:
+        // the viewport skips invisible slivers). The gate lives here, in
+        // the driver — next to the sliver hit-test extent gate — so sliver
+        // objects no longer cache `geometry` just to short-circuit their
+        // own `paint`. Box nodes (`geometry_sliver() == None`) are never
+        // culled here. Same dirty-residue handling as the `alpha == 0`
+        // skip above.
+        if render_node.geometry_sliver().is_some_and(|g| !g.visible) {
             return Ok(());
         }
 

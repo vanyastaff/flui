@@ -339,9 +339,9 @@ impl RenderBox for RenderFittedBox {
         }
         // Honour clip-on-overflow at the gesture level too: when the
         // user opted into clipping AND the destination overflows, hits
-        // outside `self.size` are unreachable (the visible region is
-        // only `self.size`). The early-return above already filters
-        // those; nothing to add here.
+        // outside the laid-out size are unreachable (the visible region
+        // is only `ctx.own_size()`). The early-return above already
+        // filters those; nothing to add here.
         //
         // Transform symmetry: hit-test through the INVERSE of the same
         // matrix `paint_transform` hands the pipeline (one accessor,
@@ -362,11 +362,11 @@ impl RenderBox for RenderFittedBox {
 // Mythos Step 11: PaintEffectsCapability override.
 //
 // `paint_transform` returns the composed translate-then-scale matrix
-// the pipeline applies via its `TransformLayer` wrapper. Layout
-// caches the scale factors and alignment offset, so this method is a
-// pure read.
+// the pipeline applies via its `TransformLayer` wrapper. Layout caches
+// the scale factors and alignment offset, so this method is a pure read
+// and does not need the driver-supplied `size`.
 impl PaintEffectsCapability for RenderFittedBox {
-    fn paint_transform(&self) -> Option<Matrix4> {
+    fn paint_transform(&self, _size: Size) -> Option<Matrix4> {
         if !self.has_child {
             return None;
         }
@@ -450,7 +450,7 @@ mod tests {
         };
 
         assert_eq!(
-            node.paint_transform(),
+            node.paint_transform(Size::ZERO),
             Some(node.effective_transform()),
             "paint must hand the pipeline the SAME matrix hit-test inverts",
         );
@@ -470,7 +470,7 @@ mod tests {
     fn paint_transform_is_none_without_child() {
         let node = RenderFittedBox::default();
         // No child, no transform.
-        assert!(node.paint_transform().is_none());
+        assert!(node.paint_transform(Size::ZERO).is_none());
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
         // a size that already matches the child — see e.g.
         // `fitted_box_layout_*` tests.
         let node = RenderFittedBox::default();
-        assert!(node.paint_transform().is_none());
+        assert!(node.paint_transform(Size::ZERO).is_none());
     }
 
     #[test]

@@ -562,6 +562,11 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
         .expect("second sliver");
 
     let owner = laid_out(owner, root_id);
+    let laid_out_size = owner
+        .render_tree()
+        .get(root_id)
+        .and_then(|node| node.geometry_box())
+        .expect("root viewport has committed box geometry");
     let viewport = owner
         .render_tree()
         .get(root_id)
@@ -573,7 +578,7 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
         })
         .expect("root is RenderViewport");
 
-    assert_eq!(viewport.size(), &Size::new(px(100.0), px(100.0)));
+    assert_eq!(laid_out_size, Size::new(px(100.0), px(100.0)));
     assert_eq!(viewport.offset().viewport_dimension(), 100.0);
     assert_eq!(viewport.offset().max_scroll_extent(), 60.0);
     assert_eq!(viewport.offset().pixels(), 40.0);
