@@ -373,8 +373,6 @@ pub struct RenderClip<S: ClipGeometry> {
     clip_behavior: Clip,
     /// Optional custom clipper closure (`None` = use `S::default_for_size`).
     clipper: Option<CustomClipper<S>>,
-    /// Final size after layout.
-    size: Size,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
 }
@@ -386,7 +384,6 @@ impl<S: ClipGeometry> RenderClip<S> {
         Self {
             clip_behavior,
             clipper: None,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -443,16 +440,17 @@ impl<S: ClipGeometry> RenderClip<S> {
         new_some != old_some
     }
 
-    /// Computes the clip shape for the current size.
+    /// Computes the clip shape for the given laid-out `size`.
     ///
     /// Called from both `paint()` and `hit_test()`, which both take
-    /// `&self`. The cost is one closure call (or one `default_for_size`
-    /// dispatch) per paint/hit-test, which is negligible relative to
-    /// the canvas / hit-test work that follows.
-    fn resolve_clip(&self) -> S {
+    /// `&self`; the size is supplied by the driver (`ctx.size()` /
+    /// `ctx.own_size()`). The cost is one closure call (or one
+    /// `default_for_size` dispatch) per paint/hit-test, which is
+    /// negligible relative to the canvas / hit-test work that follows.
+    fn resolve_clip(&self, size: Size) -> S {
         match &self.clipper {
-            Some(c) => (c)(self.size),
-            None => S::default_for_size(self.size),
+            Some(c) => (c)(size),
+            None => S::default_for_size(size),
         }
     }
 }
@@ -463,7 +461,6 @@ impl<S: ClipGeometry> Clone for RenderClip<S> {
         Self {
             clip_behavior: self.clip_behavior,
             clipper: self.clipper.clone(),
-            size: self.size,
             has_child: self.has_child,
         }
     }
@@ -474,7 +471,6 @@ impl<S: ClipGeometry> fmt::Debug for RenderClip<S> {
         f.debug_struct("RenderClip")
             .field("clip_behavior", &self.clip_behavior)
             .field("has_custom_clipper", &self.clipper.is_some())
-            .field("size", &self.size)
             .field("has_child", &self.has_child)
             .finish()
     }
@@ -516,21 +512,11 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
             self.has_child = true;
             let child_size = ctx.layout_child(0, constraints);
             ctx.position_child(0, Offset::ZERO);
-            self.size = child_size;
+            child_size
         } else {
             self.has_child = false;
-            self.size = constraints.smallest();
+            constraints.smallest()
         }
-
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
@@ -539,18 +525,19 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         // The clip is a LAYER scope so it covers the child subtree —
         // canvas clips are run-local in the fragment paint model and
         // would never reach the child's commands.
-        self.resolve_clip()
+        let size = ctx.size();
+        self.resolve_clip(size)
             .with_clip_scope(ctx, self.clip_behavior, |ctx| ctx.paint_child());
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         // Honour the clip: a hit outside the clip shape doesn't reach
         // the child. Flutter parity.
         let position = Point::new(ctx.x(), ctx.y());
-        if !self.resolve_clip().contains(position) {
+        if !self.resolve_clip(ctx.own_size()).contains(position) {
             return false;
         }
         if self.has_child {
@@ -558,10 +545,6 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect<Pixels> {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 

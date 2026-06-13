@@ -1,7 +1,7 @@
 //! RenderCenter - centers a single child within available space.
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -31,8 +31,6 @@ pub struct RenderCenter {
     /// Height factor (0.0-1.0) to shrink available height, None for full
     /// height.
     height_factor: Option<f32>,
-    /// Size after layout.
-    size: Size,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
     /// Child offset for hit testing.
@@ -126,38 +124,30 @@ impl RenderBox for RenderCenter {
                 constraints.max_height
             };
 
-            self.size = constraints.constrain(Size::new(width, height));
+            let size = constraints.constrain(Size::new(width, height));
 
             // Center the child
             self.child_offset = Offset::new(
-                (self.size.width - child_size.width) / 2.0,
-                (self.size.height - child_size.height) / 2.0,
+                (size.width - child_size.width) / 2.0,
+                (size.height - child_size.height) / 2.0,
             );
 
             tracing::debug!(
                 "RenderCenter: my_size={:?}, child_offset=({}, {})",
-                self.size,
+                size,
                 self.child_offset.dx,
                 self.child_offset.dy
             );
 
             ctx.position_child(0, self.child_offset);
+            size
         } else {
             self.has_child = false;
             // No child - expand to fill
-            self.size = constraints.biggest();
-            tracing::debug!("RenderCenter: no child, size={:?}", self.size);
+            let size = constraints.biggest();
+            tracing::debug!("RenderCenter: no child, size={:?}", size);
+            size
         }
-
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     fn compute_min_intrinsic_width(
@@ -240,7 +230,7 @@ impl RenderBox for RenderCenter {
     // paint() uses default no-op - Center just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
 
@@ -249,10 +239,6 @@ impl RenderBox for RenderCenter {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 

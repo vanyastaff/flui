@@ -45,7 +45,7 @@ use std::marker::PhantomData;
 
 use flui_painting::{Canvas, DisplayList, DisplayListCore};
 use flui_tree::{Arity, Optional, Single, Variable};
-use flui_types::{Offset, Pixels, Rect, painting::Clip};
+use flui_types::{Offset, Pixels, Rect, Size, painting::Clip};
 
 // ============================================================================
 // Fragment ops
@@ -230,15 +230,16 @@ impl FragmentRecorder {
 /// ```compile_fail
 /// use flui_rendering::context::{FragmentRecorder, PaintCx};
 /// use flui_tree::Leaf;
-/// use flui_types::Offset;
+/// use flui_types::{Offset, Size};
 ///
 /// let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-/// let mut cx = PaintCx::<Leaf>::new(&mut rec, 0);
+/// let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
 /// cx.paint_child(); // Leaf has no children to paint
 /// ```
 pub struct PaintCx<'a, A: Arity> {
     rec: &'a mut FragmentRecorder,
     child_count: usize,
+    size: Size,
     _arity: PhantomData<fn() -> A>,
 }
 
@@ -246,11 +247,15 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// Creates a typed context over a recorder.
     ///
     /// Called by the protocol blanket impl (`paint_raw`); render
-    /// objects never construct their own context.
-    pub fn new(rec: &'a mut FragmentRecorder, child_count: usize) -> Self {
+    /// objects never construct their own context. `size` is the node's
+    /// laid-out paint size, resolved by the pipeline from
+    /// [`RenderState`](crate::storage::RenderState) (geometry's sole
+    /// owner) — paint code reads it via [`Self::size`].
+    pub fn new(rec: &'a mut FragmentRecorder, child_count: usize, size: Size) -> Self {
         Self {
             rec,
             child_count,
+            size,
             _arity: PhantomData,
         }
     }
@@ -273,6 +278,17 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// Number of children attached to this node.
     pub fn child_count(&self) -> usize {
         self.child_count
+    }
+
+    /// The node's laid-out paint size in local pixels.
+    ///
+    /// Resolved by the pipeline from [`RenderState`](crate::storage::RenderState)
+    /// — the sole owner of geometry — so paint code draws against its
+    /// committed size without caching a per-object `size` field
+    /// (2B field dedup). For the box protocol this is the box `Size`; for
+    /// slivers it is the absolute paint size.
+    pub fn size(&self) -> Size {
+        self.size
     }
 
     /// Records child markers for every child in tree order.
@@ -420,7 +436,7 @@ mod tests {
     #[test]
     fn draws_between_child_markers_split_into_ordered_runs() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut cx = PaintCx::<Variable>::new(&mut rec, 2);
+        let mut cx = PaintCx::<Variable>::new(&mut rec, 2, Size::ZERO);
 
         cx.canvas().draw_rect(rect(10.0, 10.0), &fill()); // background
         cx.paint_child(0);
@@ -458,7 +474,7 @@ mod tests {
     #[test]
     fn origin_is_baked_into_run_transforms() {
         let mut rec = FragmentRecorder::new(Offset::new(px(7.0), px(3.0)), 1.0);
-        let mut cx = PaintCx::<Leaf>::new(&mut rec, 0);
+        let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
         cx.canvas().draw_rect(rect(10.0, 10.0), &fill());
 
         let frag = rec.finish();
@@ -477,7 +493,7 @@ mod tests {
     #[test]
     fn clip_scope_brackets_children_and_balances() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut cx = PaintCx::<Variable>::new(&mut rec, 2);
+        let mut cx = PaintCx::<Variable>::new(&mut rec, 2, Size::ZERO);
 
         cx.with_clip_rect(rect(50.0, 50.0), Clip::HardEdge, |cx| {
             cx.canvas().draw_rect(rect(10.0, 10.0), &fill());
@@ -508,7 +524,7 @@ mod tests {
     #[test]
     fn paint_child_at_records_offset_override() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut cx = PaintCx::<Single>::new(&mut rec, 1);
+        let mut cx = PaintCx::<Single>::new(&mut rec, 1, Size::ZERO);
         cx.paint_child_at(Offset::new(px(4.0), px(6.0)));
 
         let frag = rec.finish();
@@ -524,9 +540,9 @@ mod tests {
     #[test]
     fn out_of_range_child_indices_record_nothing() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut cx = PaintCx::<Variable>::new(&mut rec, 1);
+        let mut cx = PaintCx::<Variable>::new(&mut rec, 1, Size::ZERO);
         cx.paint_child(5);
-        let mut cx0 = PaintCx::<Single>::new(&mut rec, 0);
+        let mut cx0 = PaintCx::<Single>::new(&mut rec, 0, Size::ZERO);
         cx0.paint_child();
 
         let frag = rec.finish();
@@ -536,7 +552,7 @@ mod tests {
     #[test]
     fn default_passthrough_records_all_children_in_order() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut cx = PaintCx::<Variable>::new(&mut rec, 3);
+        let mut cx = PaintCx::<Variable>::new(&mut rec, 3, Size::ZERO);
         cx.paint_children_in_order();
 
         let frag = rec.finish();

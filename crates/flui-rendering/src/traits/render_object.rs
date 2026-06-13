@@ -35,7 +35,6 @@
 
 use downcast_rs::{DowncastSync, impl_downcast};
 use flui_foundation::Diagnosticable;
-use flui_types::Rect;
 
 use crate::{
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
@@ -235,7 +234,21 @@ pub trait RenderObject<P: Protocol>:
     /// [`RenderBox::paint`](crate::traits::RenderBox::paint)). The
     /// recorded fragment is replayed into the layer tree by the
     /// pipeline owner — paint never touches the live tree (sans-IO).
-    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize);
+    ///
+    /// `size` is the node's laid-out paint size in local pixels — for
+    /// the box protocol it is `RenderState::geometry` (the box's
+    /// `Size`); for the sliver protocol it is the absolute paint size
+    /// (`get_absolute_size(paint_extent)`). The pipeline resolves it
+    /// from [`RenderState`](crate::storage::RenderState) — the **sole**
+    /// owner of geometry — and hands it in, so paint code reads
+    /// `ctx.size()` instead of a per-object `size` field (2B field
+    /// dedup: render objects no longer cache their own geometry).
+    fn paint_raw(
+        &self,
+        recorder: &mut crate::context::FragmentRecorder,
+        child_count: usize,
+        size: flui_types::Size,
+    );
 
     /// Hit tests this render object with raw protocol types.
     ///
@@ -250,10 +263,18 @@ pub trait RenderObject<P: Protocol>:
     /// **Users don't implement this directly.** Protocol traits provide
     /// blanket implementations that create typed contexts and call the
     /// protocol-level `hit_test` (e.g. `RenderBox::hit_test`).
+    ///
+    /// `size` is the node's laid-out size in local pixels, resolved by
+    /// the driver from [`RenderState`](crate::storage::RenderState)
+    /// (geometry's sole owner). The box protocol uses it for the default
+    /// bounds gate (`ctx.is_within_own_size()`); the sliver protocol
+    /// ignores it (the driver owns the geometry/cross-axis gate). Render
+    /// objects no longer cache their own size (2B field dedup).
     fn hit_test_raw(
         &self,
         position: ProtocolPosition<P>,
         child_count: usize,
+        size: flui_types::Size,
         hit_child: &mut (dyn FnMut(usize, Option<ProtocolPosition<P>>) -> bool + Send + Sync),
     ) -> bool;
 
@@ -394,15 +415,14 @@ pub trait RenderObject<P: Protocol>:
     // ========================================================================
     // Geometry Access
     // ========================================================================
-
-    /// Returns the current geometry after layout.
-    ///
-    /// For Box protocol: `Size`
-    /// For Sliver protocol: `SliverGeometry`
-    fn geometry(&self) -> &ProtocolGeometry<P>;
-
-    /// Sets the geometry (called by storage layer after layout).
-    fn set_geometry(&mut self, geometry: ProtocolGeometry<P>);
+    //
+    // 2B field dedup: geometry lives **only** on
+    // `RenderState<P>` (geometry's sole owner). The former
+    // `geometry()` / `set_geometry()` / `paint_bounds()` trait methods —
+    // which forced every render object to cache its own size and risked
+    // desync with the committed `RenderState` value — are gone. The
+    // pipeline reads `entry.state().geometry()` directly; paint / hit_test
+    // receive the resolved `size` as a method argument instead.
 
     // ========================================================================
     // Effect Layers
@@ -413,16 +433,6 @@ pub trait RenderObject<P: Protocol>:
     // through `&dyn RenderObject<P>` because PaintEffectsCapability is a
     // supertrait, but a render object that doesn't apply any effect
     // layers no longer has to carry the default impls on the core trait.
-
-    // ========================================================================
-    // Paint Bounds
-    // ========================================================================
-
-    /// Returns the bounds within which this object paints.
-    ///
-    /// Used for clipping and culling. Should include all pixels this
-    /// render object might paint, including effects like shadows.
-    fn paint_bounds(&self) -> Rect;
 
     // ========================================================================
     // Semantics / Hot Reload

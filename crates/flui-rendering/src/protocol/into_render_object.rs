@@ -186,7 +186,7 @@ where
 #[cfg(test)]
 mod tests {
     use flui_tree::Leaf;
-    use flui_types::{Size, geometry::px};
+    use flui_types::Size;
 
     use super::*;
     use crate::{
@@ -195,9 +195,7 @@ mod tests {
     };
 
     #[derive(Debug)]
-    struct TestBox {
-        size: Size,
-    }
+    struct TestBox;
 
     impl flui_foundation::Diagnosticable for TestBox {}
 
@@ -218,31 +216,17 @@ mod tests {
         fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
             false
         }
-
-        fn size(&self) -> &Size {
-            &self.size
-        }
-
-        fn size_mut(&mut self) -> &mut Size {
-            &mut self.size
-        }
     }
 
     #[test]
     fn test_into_render_entry() {
-        let test_box = TestBox {
-            size: Size::new(px(100.0), px(50.0)),
-        };
-        let _entry: RenderEntry<BoxProtocol> = test_box.into_render_entry();
+        let _entry: RenderEntry<BoxProtocol> = TestBox.into_render_entry();
         // Entry created successfully
     }
 
     #[test]
     fn test_into_render_node() {
-        let test_box = TestBox {
-            size: Size::new(px(100.0), px(50.0)),
-        };
-        let node = test_box.into_render_node();
+        let node = TestBox.into_render_node();
         assert!(node.is_box());
         assert!(!node.is_sliver());
     }

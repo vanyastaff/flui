@@ -329,15 +329,12 @@ fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
         traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
     };
     use flui_tree::Single;
-    use flui_types::{Point, Rect};
 
     /// A non-leaf user widget that panics inside `perform_layout`.
     /// Single arity so it requires a child (i.e., goes through the
     /// NON-leaf path of `layout_subtree_raw`).
     #[derive(Debug, Default)]
-    struct PanickingNonLeaf {
-        size: Size,
-    }
+    struct PanickingNonLeaf;
 
     impl Diagnosticable for PanickingNonLeaf {}
     impl PaintEffectsCapability for PanickingNonLeaf {}
@@ -355,27 +352,18 @@ fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
             panic!("PanickingNonLeaf intentionally panics");
         }
 
-        fn size(&self) -> &Size {
-            &self.size
-        }
-        fn size_mut(&mut self) -> &mut Size {
-            &mut self.size
-        }
         fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, Self::ParentData>) -> bool {
             false
         }
         fn hit_test_behavior(&self) -> HitTestBehavior {
             HitTestBehavior::Opaque
         }
-        fn box_paint_bounds(&self) -> Rect {
-            Rect::from_origin_size(Point::ZERO, self.size)
-        }
     }
 
     let mut pipeline = fresh_layout_pipeline();
 
     // Parent (panics) with a benign child so the walk takes the non-leaf path.
-    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(PanickingNonLeaf::default());
+    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(PanickingNonLeaf);
     let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
     let _child_id = pipeline
         .render_tree_mut()
@@ -500,22 +488,18 @@ fn u20_descendant_err_preserves_parent_needs_layout() {
 #[test]
 fn u20_sliver_node_surfaces_as_protocol_mismatch() {
     use flui_rendering::{
-        constraints::{SliverConstraints, SliverGeometry},
+        constraints::SliverGeometry,
         context::{SliverHitTestContext, SliverLayoutContext},
         protocol::SliverProtocol,
         traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
     };
     use flui_tree::Leaf;
-    use flui_types::{Point, Rect};
 
     /// Minimal sliver render-object stub for the test fixture — never
     /// laid out (the test triggers the protocol-mismatch error path
     /// before reaching perform_layout).
     #[derive(Debug, Default)]
-    struct StubSliver {
-        constraints: SliverConstraints,
-        geometry: SliverGeometry,
-    }
+    struct StubSliver;
 
     impl flui_foundation::Diagnosticable for StubSliver {}
     impl PaintEffectsCapability for StubSliver {}
@@ -535,31 +519,15 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
             SliverGeometry::ZERO
         }
 
-        fn constraints(&self) -> &SliverConstraints {
-            &self.constraints
-        }
-
-        fn geometry(&self) -> &SliverGeometry {
-            &self.geometry
-        }
-
-        fn set_geometry(&mut self, geometry: SliverGeometry) {
-            self.geometry = geometry;
-        }
-
         fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
             false
-        }
-
-        fn sliver_paint_bounds(&self) -> Rect {
-            Rect::from_origin_size(Point::ZERO, Size::ZERO)
         }
     }
 
     let mut pipeline = fresh_layout_pipeline();
 
     let sliver_obj: Box<dyn flui_rendering::traits::RenderObject<SliverProtocol>> =
-        Box::new(StubSliver::default());
+        Box::new(StubSliver);
     let sliver_id = pipeline.render_tree_mut().insert_sliver(sliver_obj);
 
     let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));

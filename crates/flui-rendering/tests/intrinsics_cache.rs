@@ -37,7 +37,6 @@ type BoxedRenderObject =
 /// call bumps a shared counter so cache hits are observable.
 #[derive(Debug)]
 struct CountingLeaf {
-    size: Size,
     intrinsic_runs: Arc<AtomicUsize>,
     dry_runs: Arc<AtomicUsize>,
 }
@@ -45,7 +44,6 @@ struct CountingLeaf {
 impl CountingLeaf {
     fn new(intrinsic_runs: Arc<AtomicUsize>, dry_runs: Arc<AtomicUsize>) -> Self {
         Self {
-            size: Size::ZERO,
             intrinsic_runs,
             dry_runs,
         }
@@ -62,16 +60,7 @@ impl RenderBox for CountingLeaf {
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        self.size = constraints.constrain(Size::new(px(40.0), px(40.0)));
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        ctx.constraints().constrain(Size::new(px(40.0), px(40.0)))
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -98,16 +87,12 @@ impl RenderBox for CountingLeaf {
 /// perform_layout calls so dirty-walk escalation is observable.
 #[derive(Debug)]
 struct CountingRoot {
-    size: Size,
     layout_runs: Arc<AtomicUsize>,
 }
 
 impl CountingRoot {
     fn new(layout_runs: Arc<AtomicUsize>) -> Self {
-        Self {
-            size: Size::ZERO,
-            layout_runs,
-        }
+        Self { layout_runs }
     }
 }
 
@@ -129,15 +114,7 @@ impl RenderBox for CountingRoot {
         for i in 0..ctx.child_count() {
             ctx.layout_child(i, constraints.loosen());
         }
-        self.size = constraints.biggest();
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        constraints.biggest()
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {

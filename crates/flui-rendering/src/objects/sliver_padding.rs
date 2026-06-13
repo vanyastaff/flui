@@ -36,7 +36,7 @@
 //!   remain test-friendly.
 
 use flui_tree::Single;
-use flui_types::{Axis, EdgeInsets, Offset, Pixels, Rect, geometry::px, layout::AxisDirection};
+use flui_types::{Axis, EdgeInsets, Offset, Pixels, geometry::px, layout::AxisDirection};
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -60,11 +60,20 @@ use crate::{
 pub struct RenderSliverPadding {
     /// Padding to inflate around the child sliver.
     padding: EdgeInsets,
-    /// Last-applied constraints (required by the [`RenderSliver`]
-    /// trait — the framework reads it back for child positioning /
-    /// debug introspection).
+    /// Last-applied constraints, cached for the `&self`-only child
+    /// positioning helpers.
+    ///
+    /// 2B field dedup removes per-object geometry/constraints caches
+    /// where the paint/hit-test context can supply them. This sliver is
+    /// an exception: `child_main_axis_position` / `child_cross_axis_position`
+    /// / `child_scroll_offset` are `&self`-only [`RenderSliver`] hooks the
+    /// viewport calls with no constraints argument, and they need the
+    /// incoming constraints to resolve the leading-padding offset. Until
+    /// those hooks gain a constraints parameter, the value is cached here.
     constraints: SliverConstraints,
-    /// Computed geometry from the most recent [`Self::perform_layout`].
+    /// Computed geometry from the most recent [`Self::perform_layout`],
+    /// cached for the geometry-gated [`RenderSliver::hit_test`] (the
+    /// sliver hit-test context does not expose committed geometry).
     geometry: SliverGeometry,
 }
 
@@ -377,18 +386,6 @@ impl RenderSliver for RenderSliverPadding {
         geometry
     }
 
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
-    }
-
     fn child_main_axis_position(
         &self,
         _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
@@ -427,11 +424,6 @@ impl RenderSliver for RenderSliverPadding {
             return false;
         }
         ctx.hit_test_child_at_layout_offset(0)
-    }
-
-    fn sliver_paint_bounds(&self) -> Rect {
-        let size = self.get_absolute_size(self.geometry.paint_extent);
-        Rect::from_origin_size(flui_types::Point::ZERO, size)
     }
 }
 

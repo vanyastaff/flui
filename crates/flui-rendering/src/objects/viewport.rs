@@ -68,6 +68,13 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// When set, children before this index use forward growth; from this index
     /// onward use reverse growth (Flutter `center` sliver partition, W3.2 slice).
     center_sliver_index: Option<usize>,
+    /// Viewport size, computed at the top of `perform_layout` from the
+    /// incoming constraints and consumed by the layout-internal geometry
+    /// helpers (`main_axis_extent`, `cross_axis_extent`,
+    /// `compute_absolute_paint_offset`) during that same pass. This is a
+    /// within-layout working value, not a committed-geometry mirror: paint
+    /// and hit_test read the laid-out size from the context (2B field dedup),
+    /// and `RenderState` remains geometry's sole owner.
     size: Size,
     child_count: usize,
     min_scroll_extent: f32,
@@ -470,10 +477,6 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             ),
         }
     }
-
-    fn viewport_rect(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
-    }
 }
 
 impl Default for RenderViewport<ScrollableViewportOffset> {
@@ -555,14 +558,6 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         self.size
     }
 
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
-    }
-
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
         let paint_children = |ctx: &mut PaintCx<'_, Variable>| match self.paint_order {
             SliverPaintOrder::FirstIsTop => ctx.paint_children_reverse(),
@@ -570,14 +565,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         };
 
         if self.has_visual_overflow {
-            ctx.with_clip_rect(self.viewport_rect(), Clip::HardEdge, paint_children);
+            let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+            ctx.with_clip_rect(clip_rect, Clip::HardEdge, paint_children);
         } else {
             paint_children(ctx);
         }
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
 

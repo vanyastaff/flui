@@ -16,7 +16,6 @@ use crate::{
 pub struct RenderColoredBox {
     color: [f32; 4],
     preferred_size: Size,
-    size: Size,
 }
 
 impl RenderColoredBox {
@@ -25,7 +24,6 @@ impl RenderColoredBox {
         Self {
             color,
             preferred_size,
-            size: Size::ZERO,
         }
     }
 
@@ -84,20 +82,12 @@ impl RenderBox for RenderColoredBox {
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constrained = ctx.constrain(self.preferred_size);
-        self.size = constrained;
         tracing::debug!(
             "RenderColoredBox::perform_layout: preferred={:?}, constrained={:?}",
             self.preferred_size,
             constrained
         );
         constrained
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     fn compute_min_intrinsic_width(
@@ -142,14 +132,10 @@ impl RenderBox for RenderColoredBox {
 
     fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Leaf>) {
         // Local coordinates — the recorder pre-translates to this
-        // node's origin.
-        let rect = Rect::from_origin_size(Point::ZERO, self.size);
+        // node's origin. Size comes from RenderState via `ctx.size()`.
+        let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
         let color = Color::from_rgba_f32_array(self.color);
         ctx.canvas().draw_rect(rect, &Paint::fill(color));
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 
@@ -167,9 +153,9 @@ mod tests {
     #[test]
     fn test_colored_box_creation() {
         let box_obj = RenderColoredBox::red(100.0, 50.0);
-        // Size starts at ZERO before layout, preferred_size is set
+        // The committed size lives on RenderState after layout; the object
+        // only carries its preferred size as config.
         assert_eq!(box_obj.preferred_size(), Size::new(px(100.0), px(50.0)));
-        assert_eq!(*box_obj.size(), Size::ZERO);
     }
 
     #[test]

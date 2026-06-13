@@ -19,7 +19,7 @@
 //!   `isFinite` checks on raw doubles.
 
 use flui_tree::Single;
-use flui_types::{Offset, Pixels, Point, Rect, Size, geometry::px};
+use flui_types::{Offset, Pixels, Size, geometry::px};
 
 use crate::{
     constraints::{BoxConstraints, Constraints},
@@ -150,7 +150,6 @@ impl From<AspectRatio> for f32 {
 #[derive(Debug, Clone)]
 pub struct RenderAspectRatio {
     aspect_ratio: AspectRatio,
-    size: Size,
     has_child: bool,
 }
 
@@ -159,7 +158,6 @@ impl RenderAspectRatio {
     pub fn new(aspect_ratio: AspectRatio) -> Self {
         Self {
             aspect_ratio,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -257,20 +255,11 @@ impl RenderBox for RenderAspectRatio {
             self.has_child = false;
         }
 
-        self.size = target_size;
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        target_size
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
@@ -278,10 +267,6 @@ impl RenderBox for RenderAspectRatio {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 
     // ---- intrinsic dimensions ------------------------------------------

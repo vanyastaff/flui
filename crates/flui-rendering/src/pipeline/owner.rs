@@ -744,6 +744,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
+        // Box bounds gate size, resolved from RenderState (geometry's
+        // sole owner — 2B field dedup); threaded into hit_test_raw so the
+        // default gate reads `ctx.is_within_own_size()`.
+        let own_size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
 
         // Push the node's hit-test transform onto the HitTestResult
         // stack BEFORE recursing, so child entries captured during
@@ -797,7 +801,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         };
 
-        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit {
             // Leaf-first path: children pushed their entries during
             // the callback above; the ancestor follows. The transform
@@ -1005,6 +1009,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
+        // Absolute paint size from RenderState — threaded into
+        // hit_test_raw for signature uniformity; the sliver hit gate is
+        // driver-owned (checked above), so the sliver context ignores it.
+        let own_size = entry.state().absolute_paint_size();
 
         let mut hit_child = |index: usize, override_pos: Option<MainAxisPosition>| -> bool {
             let Some(&child_id) = children.get(index) else {
@@ -1044,7 +1052,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         };
 
-        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit {
             result.add(crate::hit_testing::HitTestEntry::new(id));
         }
@@ -4857,7 +4865,12 @@ mod tests {
             Ok(self.size)
         }
 
-        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: flui_types::Size,
+        ) {
             panic!("PanickingPaintBox::paint_raw -- intentional test panic");
         }
 
@@ -4865,6 +4878,7 @@ mod tests {
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
+            _size: flui_types::Size,
             _hit_child: &mut (
                      dyn FnMut(
                 usize,
@@ -4876,36 +4890,17 @@ mod tests {
         ) -> bool {
             false
         }
-
-        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            &self.size
-        }
-
-        fn set_geometry(
-            &mut self,
-            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        ) {
-            self.size = geometry;
-        }
-
-        fn paint_bounds(&self) -> flui_types::Rect {
-            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
-        }
     }
 
     /// Direct (non-RenderBox) RenderObject<BoxProtocol> impl whose
     /// `perform_layout_raw` panics. Used to test catch_unwind on the
     /// layout phase through `RenderEntry::layout`.
     #[derive(Debug)]
-    struct PanickingLayoutBox {
-        size: flui_types::Size,
-    }
+    struct PanickingLayoutBox;
 
     impl PanickingLayoutBox {
         fn new() -> Self {
-            Self {
-                size: flui_types::Size::ZERO,
-            }
+            Self
         }
     }
 
@@ -4935,13 +4930,19 @@ mod tests {
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }
 
-        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: flui_types::Size,
+        ) {
         }
 
         fn hit_test_raw(
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
+            _size: flui_types::Size,
             _hit_child: &mut (
                      dyn FnMut(
                 usize,
@@ -4952,21 +4953,6 @@ mod tests {
                  ),
         ) -> bool {
             false
-        }
-
-        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            &self.size
-        }
-
-        fn set_geometry(
-            &mut self,
-            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        ) {
-            self.size = geometry;
-        }
-
-        fn paint_bounds(&self) -> flui_types::Rect {
-            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
         }
     }
 
@@ -5344,13 +5330,19 @@ mod tests {
             Ok(self.size)
         }
 
-        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: flui_types::Size,
+        ) {
         }
 
         fn hit_test_raw(
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
+            _size: flui_types::Size,
             _hit_child: &mut (
                      dyn FnMut(
                 usize,
@@ -5361,21 +5353,6 @@ mod tests {
                  ),
         ) -> bool {
             false
-        }
-
-        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            &self.size
-        }
-
-        fn set_geometry(
-            &mut self,
-            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        ) {
-            self.size = geometry;
-        }
-
-        fn paint_bounds(&self) -> flui_types::Rect {
-            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
         }
     }
 

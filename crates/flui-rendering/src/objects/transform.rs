@@ -1,7 +1,7 @@
 //! RenderTransform - applies a transformation matrix to a single child.
 
 use flui_tree::Single;
-use flui_types::{Alignment, Matrix4, Offset, Pixels, Point, Rect, Size};
+use flui_types::{Alignment, Matrix4, Offset, Size};
 
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -40,7 +40,17 @@ pub struct RenderTransform {
     alignment: Alignment,
     /// Explicit origin offset (overrides alignment if set).
     origin: Option<Offset>,
-    /// Size after layout.
+    /// Laid-out size, cached from `perform_layout`.
+    ///
+    /// 2B field dedup removes the per-object size cache from objects
+    /// that can read it from the paint/hit-test context. `RenderTransform`
+    /// is the exception: its effective matrix depends on the alignment
+    /// origin (a fraction of the laid-out size), and that matrix is read
+    /// back through the `&self`-only [`PaintEffectsCapability::paint_transform`]
+    /// / [`PaintEffectsCapability::hit_test_transform`] hooks — which the
+    /// pipeline calls with no size argument. Until those capability hooks
+    /// gain a size parameter, the laid-out size is cached here so the
+    /// origin can be resolved off the live tree.
     size: Size,
     /// Whether we have a child.
     has_child: bool,
@@ -180,25 +190,18 @@ impl RenderBox for RenderTransform {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
-        if ctx.child_count() > 0 {
+        // Cache the laid-out size for the `&self`-only transform-origin
+        // hooks (`paint_transform` / `hit_test_transform`); also return
+        // it so `RenderState` is the source of truth for everything else.
+        self.size = if ctx.child_count() > 0 {
             self.has_child = true;
-
             // Layout child with same constraints
-            let child_size = ctx.layout_child(0, constraints);
-            self.size = child_size;
+            ctx.layout_child(0, constraints)
         } else {
             self.has_child = false;
-            self.size = constraints.smallest();
-        }
+            constraints.smallest()
+        };
         self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
@@ -233,44 +236,6 @@ impl RenderBox for RenderTransform {
         // child entries capture the correct accumulated transform.
         // No push/pop needed here.
         ctx.hit_test_child(0, Offset::new(tx, ty))
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        // Transform the bounds
-        let bounds = Rect::from_origin_size(Point::ZERO, self.size);
-        let effective = self.effective_transform();
-
-        // Transform all four corners and compute bounding box
-        let corners = [
-            Point::new(bounds.min.x, bounds.min.y),
-            Point::new(bounds.max.x, bounds.min.y),
-            Point::new(bounds.max.x, bounds.max.y),
-            Point::new(bounds.min.x, bounds.max.y),
-        ];
-
-        let transformed: Vec<(Pixels, Pixels)> = corners
-            .iter()
-            .map(|p| effective.transform_point(p.x, p.y))
-            .collect();
-
-        let min_x = transformed
-            .iter()
-            .map(|(x, _)| *x)
-            .fold(Pixels::INFINITY, Pixels::min);
-        let min_y = transformed
-            .iter()
-            .map(|(_, y)| *y)
-            .fold(Pixels::INFINITY, Pixels::min);
-        let max_x = transformed
-            .iter()
-            .map(|(x, _)| *x)
-            .fold(Pixels::NEG_INFINITY, Pixels::max);
-        let max_y = transformed
-            .iter()
-            .map(|(_, y)| *y)
-            .fold(Pixels::NEG_INFINITY, Pixels::max);
-
-        Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 }
 

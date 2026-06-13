@@ -17,7 +17,7 @@
 //! `Pixels` boundary in `BoxConstraints` itself eliminates the rest).
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -60,8 +60,6 @@ use crate::{
 pub struct RenderConstrainedBox {
     /// Constraints to combine with the incoming constraints from the parent.
     additional_constraints: BoxConstraints,
-    /// Final size after layout.
-    size: Size,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
 }
@@ -75,7 +73,6 @@ impl RenderConstrainedBox {
     pub fn new(additional_constraints: BoxConstraints) -> Self {
         Self {
             additional_constraints: additional_constraints.normalize(),
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -122,26 +119,16 @@ impl RenderBox for RenderConstrainedBox {
             // Our size = child size, but it MUST satisfy the incoming
             // constraints (Flutter parity: the parent ultimately decides
             // the box bounds).
-            self.size = incoming.constrain(child_size);
+            incoming.constrain(child_size)
         } else {
             self.has_child = false;
             // Choose the smallest size that satisfies both constraint sets.
-            self.size = incoming.constrain(combined.smallest());
+            incoming.constrain(combined.smallest())
         }
-
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
@@ -149,10 +136,6 @@ impl RenderBox for RenderConstrainedBox {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 
     // ----- Intrinsic dimensions (Flutter parity) --------------------------

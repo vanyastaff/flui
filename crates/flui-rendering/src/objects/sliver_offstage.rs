@@ -24,10 +24,9 @@
 //!   passthrough.
 
 use flui_tree::Single;
-use flui_types::Rect;
 
 use crate::{
-    constraints::{SliverConstraints, SliverGeometry},
+    constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -49,10 +48,6 @@ use crate::{
 pub struct RenderSliverOffstage {
     /// When `true`, this sliver reports zero geometry and is hidden.
     offstage: bool,
-    /// Last-applied constraints (required by [`RenderSliver`]).
-    constraints: SliverConstraints,
-    /// Computed geometry from the most recent [`Self::perform_layout`].
-    geometry: SliverGeometry,
 }
 
 impl RenderSliverOffstage {
@@ -60,11 +55,7 @@ impl RenderSliverOffstage {
     /// Flutter: `offstage = true`.
     #[must_use]
     pub const fn new(offstage: bool) -> Self {
-        Self {
-            offstage,
-            constraints: empty_sliver_constraints(),
-            geometry: SliverGeometry::ZERO,
-        }
+        Self { offstage }
     }
 
     /// Creates an offstage sliver render object that is currently hidden.
@@ -117,7 +108,6 @@ impl RenderSliver for RenderSliverOffstage {
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
-        self.constraints = constraints;
 
         if self.offstage {
             // Flutter parity: the child must still be laid out so any
@@ -126,36 +116,18 @@ impl RenderSliver for RenderSliverOffstage {
             if ctx.child_count() > 0 {
                 let child_geometry = ctx.layout_child(0, constraints);
                 if let Some(correction) = child_geometry.scroll_offset_correction {
-                    let geometry = SliverGeometry::scroll_offset_correction(correction);
-                    self.geometry = geometry;
-                    return geometry;
+                    return SliverGeometry::scroll_offset_correction(correction);
                 }
             }
-            self.geometry = SliverGeometry::ZERO;
             return SliverGeometry::ZERO;
         }
 
         // Transparent passthrough.
-        let geometry = if ctx.child_count() > 0 {
+        if ctx.child_count() > 0 {
             ctx.layout_child(0, constraints)
         } else {
             SliverGeometry::ZERO
-        };
-
-        self.geometry = geometry;
-        geometry
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test(
@@ -174,44 +146,12 @@ impl RenderSliver for RenderSliverOffstage {
         let position = ctx.main_axis_position();
         ctx.hit_test_child(0, position)
     }
-
-    fn sliver_paint_bounds(&self) -> Rect {
-        let size = self.get_absolute_size(self.geometry.paint_extent);
-        Rect::from_origin_size(flui_types::Point::ZERO, size)
-    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.
 impl PaintEffectsCapability for RenderSliverOffstage {}
 impl SemanticsCapability for RenderSliverOffstage {}
 impl HotReloadCapability for RenderSliverOffstage {}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// `SliverConstraints` constant used to initialise the cached
-/// constraints field; `SliverConstraints::default()` is not `const`.
-const fn empty_sliver_constraints() -> SliverConstraints {
-    use flui_types::layout::AxisDirection;
-
-    use crate::{constraints::GrowthDirection, view::ScrollDirection};
-
-    SliverConstraints::new(
-        AxisDirection::TopToBottom,
-        GrowthDirection::Forward,
-        ScrollDirection::Idle,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        AxisDirection::LeftToRight,
-        0.0,
-        0.0,
-        0.0,
-    )
-}
 
 // ============================================================================
 // Tests
@@ -241,13 +181,6 @@ mod tests {
         assert!(node.set_offstage(true));
         assert!(!node.set_offstage(true)); // no-op
         assert!(node.set_offstage(false));
-    }
-
-    #[test]
-    fn initial_geometry_is_zero() {
-        let node = RenderSliverOffstage::visible();
-        assert_eq!(node.geometry().scroll_extent, 0.0);
-        assert_eq!(node.geometry().paint_extent, 0.0);
     }
 
     #[test]

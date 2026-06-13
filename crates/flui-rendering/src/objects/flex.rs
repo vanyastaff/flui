@@ -1,7 +1,7 @@
 //! RenderFlex - lays out children in a row or column.
 
 use flui_tree::Variable;
-use flui_types::{Offset, Pixels, Point, Rect, Size, geometry::px};
+use flui_types::{Offset, Pixels, Size, geometry::px};
 
 use crate::{
     constraints::BoxConstraints,
@@ -95,8 +95,6 @@ pub struct RenderFlex {
     text_baseline: TextBaseline,
     /// Spacing between children.
     spacing: f32,
-    /// Size after layout.
-    size: Size,
     /// Number of children (tracked for hit testing).
     child_count: usize,
 }
@@ -110,7 +108,6 @@ impl Default for RenderFlex {
             cross_axis_alignment: CrossAxisAlignment::Start,
             text_baseline: TextBaseline::Alphabetic,
             spacing: 0.0,
-            size: Size::ZERO,
             child_count: 0,
         }
     }
@@ -290,8 +287,7 @@ impl RenderBox for RenderFlex {
 
         if child_count == 0 {
             // No children - use minimum size
-            self.size = constraints.smallest();
-            return self.size;
+            return constraints.smallest();
         }
 
         // ====================================================================
@@ -462,7 +458,7 @@ impl RenderBox for RenderFlex {
             FlexDirection::Vertical => constraints.constrain_width(max_cross),
         };
 
-        self.size = self.size_from_main_cross(main_extent, cross_extent);
+        let size = self.size_from_main_cross(main_extent, cross_extent);
 
         // Flutter flex.dart:1339 - clamp: an overflowing row must not
         // shift children by NEGATIVE space under End/Center/Space*.
@@ -534,15 +530,7 @@ impl RenderBox for RenderFlex {
             main_offset += self.main_size(child_size) + px(self.spacing) + between_space;
         }
 
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        size
     }
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
@@ -596,7 +584,7 @@ impl RenderBox for RenderFlex {
     // paint() uses default no-op - Flex just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, FlexParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
 
@@ -608,10 +596,6 @@ impl RenderBox for RenderFlex {
         }
 
         false
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 

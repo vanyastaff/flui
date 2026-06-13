@@ -16,6 +16,13 @@ use crate::{
 };
 
 /// A Sliver-protocol adapter that lays out one Box-protocol child.
+///
+/// 2B field dedup keeps `constraints` and `geometry` cached here (rather
+/// than reading them from the paint/hit-test context) because the
+/// `&self`-only [`RenderSliver::child_main_axis_position`] hook needs the
+/// incoming `scroll_offset`, and `paint` gates child splicing on the
+/// committed `geometry.visible` flag — neither is available from the
+/// sliver paint/hit-test context.
 #[derive(Debug, Clone)]
 pub struct RenderSliverToBoxAdapter {
     constraints: SliverConstraints,
@@ -87,18 +94,6 @@ impl RenderSliver for RenderSliverToBoxAdapter {
         ctx.position_child(0, child_paint_offset);
         self.geometry = geometry;
         geometry
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
     }
 
     fn child_main_axis_position(

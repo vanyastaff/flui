@@ -21,6 +21,13 @@ use crate::{
 /// A Sliver-protocol adapter that sizes one non-scrollable Box child to fill
 /// the remaining viewport space, but expands to the child's intrinsic extent
 /// when the child is larger.
+///
+/// 2B field dedup keeps `constraints` and `geometry` cached on every
+/// fill-remaining variant in this module (rather than reading them from the
+/// paint/hit-test context): the `&self`-only [`RenderSliver::child_main_axis_position`]
+/// hook needs the incoming `scroll_offset`, and `paint` gates child splicing on
+/// the committed `geometry.visible` flag — neither is exposed by the sliver
+/// paint/hit-test context.
 #[derive(Debug, Clone)]
 pub struct RenderSliverFillRemaining {
     constraints: SliverConstraints,
@@ -90,18 +97,6 @@ impl RenderSliver for RenderSliverFillRemaining {
         }
         self.geometry = geometry;
         geometry
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
     }
 
     fn child_main_axis_position(
@@ -206,18 +201,6 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
         geometry
     }
 
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
-    }
-
     fn child_main_axis_position(
         &self,
         _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
@@ -315,18 +298,6 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
         }
         self.geometry = geometry;
         geometry
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
     }
 
     fn child_main_axis_position(

@@ -1,7 +1,7 @@
 //! RenderSliver trait for scrollable content layout.
 
 use flui_tree::Arity;
-use flui_types::{Pixels, Rect, Size, geometry::px, prelude::AxisDirection};
+use flui_types::{Size, geometry::px, prelude::AxisDirection};
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -79,20 +79,14 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
         ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
     ) -> SliverGeometry;
 
-    /// Returns the current geometry of this sliver.
-    ///
-    /// Only valid after `perform_layout` has been called.
-    fn geometry(&self) -> &SliverGeometry;
-
-    /// Returns the constraints this sliver was laid out with.
-    ///
-    /// Only valid after `perform_layout` has been called.
-    fn constraints(&self) -> &SliverConstraints;
-
-    /// Sets the geometry for this sliver.
-    ///
-    /// Called during `perform_layout` to report the computed geometry.
-    fn set_geometry(&mut self, geometry: SliverGeometry);
+    // 2B field dedup: `SliverGeometry` and `SliverConstraints` live
+    // **only** on `RenderState<SliverProtocol>` (committed from the
+    // `perform_layout` return value and the layout pass). The former
+    // `geometry()` / `constraints()` / `set_geometry()` accessors — which
+    // forced every sliver to mirror committed state in fields and risked
+    // desync — are gone. `perform_layout` returns its geometry directly;
+    // positioning / size helpers take `&SliverConstraints` as an argument
+    // (the layout/paint driver supplies it from `RenderState`).
 
     // ========================================================================
     // Positioning
@@ -224,8 +218,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.getAbsoluteSize` in Flutter.
-    fn get_absolute_size(&self, paint_extent: f32) -> Size {
-        let constraints = self.constraints();
+    fn get_absolute_size(&self, constraints: &SliverConstraints, paint_extent: f32) -> Size {
         let cross_axis_extent = constraints.cross_axis_extent;
 
         match constraints.axis_direction {
@@ -252,9 +245,11 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     ///
     /// Corresponds to `RenderSliver.getAbsoluteSizeRelativeToOrigin` in
     /// Flutter.
-    fn get_absolute_size_relative_to_origin(&self, paint_extent: f32) -> Size {
-        let constraints = self.constraints();
-
+    fn get_absolute_size_relative_to_origin(
+        &self,
+        constraints: &SliverConstraints,
+        paint_extent: f32,
+    ) -> Size {
         match constraints
             .growth_direction
             .apply_to_axis_direction(constraints.axis_direction)
@@ -328,17 +323,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     }
 
     // ========================================================================
-    // Paint Bounds
-    // ========================================================================
-
-    /// Returns the paint bounds of this render sliver.
-    fn sliver_paint_bounds(&self) -> Rect {
-        let geometry = RenderSliver::geometry(self);
-        let size = self.get_absolute_size(geometry.paint_extent);
-        Rect::new(Pixels::ZERO, Pixels::ZERO, size.width, size.height)
-    }
-
-    // ========================================================================
     // Parent Data
     // ========================================================================
 
@@ -397,11 +381,18 @@ where
         Ok(T::perform_layout(self, &mut layout_ctx))
     }
 
-    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+    fn paint_raw(
+        &self,
+        recorder: &mut crate::context::FragmentRecorder,
+        child_count: usize,
+        size: flui_types::Size,
+    ) {
         // Same paint bridge shape as the BoxProtocol blanket: wrap the
         // recorder in the typed PaintCx<T::Arity> and call the user's
-        // RenderSliver::paint.
-        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count);
+        // RenderSliver::paint. `size` is the sliver's absolute paint size
+        // (`get_absolute_size(paint_extent)`), resolved by the driver
+        // from `RenderState` so paint reads `ctx.size()` (2B field dedup).
+        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
         T::paint(self, &mut cx);
     }
 
@@ -409,30 +400,22 @@ where
         &self,
         position: crate::protocol::ProtocolPosition<SliverProtocol>,
         _child_count: usize,
+        size: flui_types::Size,
         hit_child: &mut (
                  dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<SliverProtocol>>) -> bool
                      + Send
                      + Sync
              ),
     ) -> bool {
+        // The sliver hit gate is driver-owned (geometry / cross-axis
+        // range), so `size` is threaded for signature uniformity but the
+        // sliver context does not read it.
         let inner =
             crate::protocol::SliverHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
                 position, hit_child,
             );
-        let mut ctx = crate::context::SliverHitTestContext::new(inner);
+        let mut ctx = crate::context::SliverHitTestContext::new(inner, size);
         T::hit_test(self, &mut ctx)
-    }
-
-    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<SliverProtocol> {
-        RenderSliver::geometry(self)
-    }
-
-    fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<SliverProtocol>) {
-        self.set_geometry(geometry);
-    }
-
-    fn paint_bounds(&self) -> Rect {
-        self.sliver_paint_bounds()
     }
 }
 
@@ -540,8 +523,6 @@ mod tests {
 
     struct FixedHeightSliver {
         item_height: f32,
-        constraints: SliverConstraints,
-        geometry: SliverGeometry,
     }
 
     impl std::fmt::Debug for FixedHeightSliver {
@@ -554,11 +535,7 @@ mod tests {
 
     impl FixedHeightSliver {
         fn new(item_height: f32) -> Self {
-            Self {
-                item_height,
-                constraints: vertical_constraints(0.0, 0.0),
-                geometry: SliverGeometry::ZERO,
-            }
+            Self { item_height }
         }
     }
 
@@ -578,29 +555,13 @@ mod tests {
             ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
         ) -> SliverGeometry {
             let c = *ctx.constraints();
-            self.constraints = c;
-
             let visible_height = (self.item_height - c.scroll_offset).max(0.0);
             let paint_extent = visible_height.min(c.remaining_paint_extent);
-            let geom = SliverGeometry::new(
+            SliverGeometry::new(
                 self.item_height, // scroll_extent — full item height
                 paint_extent,
                 0.0, // paint_origin
-            );
-            self.geometry = geom;
-            geom
-        }
-
-        fn geometry(&self) -> &SliverGeometry {
-            &self.geometry
-        }
-
-        fn constraints(&self) -> &SliverConstraints {
-            &self.constraints
-        }
-
-        fn set_geometry(&mut self, geometry: SliverGeometry) {
-            self.geometry = geometry;
+            )
         }
 
         fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -728,11 +689,11 @@ mod tests {
         ];
 
         for (axis_direction, growth_direction, expected) in cases {
-            let mut sliver = FixedHeightSliver::new(200.0);
-            sliver.constraints = directional_constraints(axis_direction, growth_direction);
+            let sliver = FixedHeightSliver::new(200.0);
+            let constraints = directional_constraints(axis_direction, growth_direction);
 
             assert_eq!(
-                sliver.get_absolute_size_relative_to_origin(25.0),
+                sliver.get_absolute_size_relative_to_origin(&constraints, 25.0),
                 expected,
                 "axis_direction={axis_direction:?}, growth_direction={growth_direction:?}",
             );
@@ -759,10 +720,7 @@ mod tests {
     // the same erased bridge as leaf slivers.
     // ────────────────────────────────────────────────────────────────────────
 
-    struct SingleAritySliver {
-        constraints: SliverConstraints,
-        geometry: SliverGeometry,
-    }
+    struct SingleAritySliver;
 
     impl std::fmt::Debug for SingleAritySliver {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -788,22 +746,7 @@ mod tests {
             // A well-behaved body — proves the bridge rejects on arity
             // *before* running it, not because of a missing return.
             let c = *ctx.constraints();
-            self.constraints = c;
-            let geom = SliverGeometry::new(c.remaining_paint_extent, c.remaining_paint_extent, 0.0);
-            self.geometry = geom;
-            geom
-        }
-
-        fn geometry(&self) -> &SliverGeometry {
-            &self.geometry
-        }
-
-        fn constraints(&self) -> &SliverConstraints {
-            &self.constraints
-        }
-
-        fn set_geometry(&mut self, geometry: SliverGeometry) {
-            self.geometry = geometry;
+            SliverGeometry::new(c.remaining_paint_extent, c.remaining_paint_extent, 0.0)
         }
 
         fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Single, Self::ParentData>) -> bool {
@@ -816,10 +759,7 @@ mod tests {
     #[test]
     fn sliver_non_leaf_bridge_completing_succeeds() {
         let constraints = vertical_constraints(0.0, 600.0);
-        let mut sliver = SingleAritySliver {
-            constraints,
-            geometry: SliverGeometry::ZERO,
-        };
+        let mut sliver = SingleAritySliver;
 
         let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
             use crate::protocol::RenderObject;

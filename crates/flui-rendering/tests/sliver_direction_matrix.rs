@@ -62,18 +62,6 @@ impl RenderSliver for DirectionProbe {
         flui_rendering::constraints::SliverGeometry::ZERO
     }
 
-    fn geometry(&self) -> &flui_rendering::constraints::SliverGeometry {
-        static ZERO: flui_rendering::constraints::SliverGeometry =
-            flui_rendering::constraints::SliverGeometry::ZERO;
-        &ZERO
-    }
-
-    fn constraints(&self) -> &flui_rendering::constraints::SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, _: flui_rendering::constraints::SliverGeometry) {}
-
     fn hit_test(
         &self,
         _: &mut flui_rendering::context::SliverHitTestContext<'_, Self::Arity, Self::ParentData>,
@@ -154,7 +142,7 @@ fn sliver_direction_matrix_eight_by_three() {
             "effective axis: axis={axis:?}, growth={growth:?}",
         );
         assert_eq!(
-            probe.get_absolute_size_relative_to_origin(25.0),
+            probe.get_absolute_size_relative_to_origin(&probe.constraints, 25.0),
             expected_size,
             "absolute size: axis={axis:?}, growth={growth:?}",
         );

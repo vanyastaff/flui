@@ -21,7 +21,7 @@
 //!   math consistent with `RenderTransform` / `RenderCenter`.
 
 use flui_tree::Single;
-use flui_types::{Alignment, Offset, Pixels, Point, Rect, Size, geometry::px};
+use flui_types::{Alignment, Offset, Pixels, Size, geometry::px};
 
 use crate::{
     constraints::BoxConstraints,
@@ -116,8 +116,6 @@ pub struct RenderFractionallySizedBox {
     height_factor: Option<FractionFactor>,
     /// Alignment of the child within the parent box.
     alignment: Alignment,
-    /// Final size after layout.
-    size: Size,
     /// Cached child offset.
     child_offset: Offset,
     /// Whether we have a child (tracked for hit testing).
@@ -132,7 +130,6 @@ impl RenderFractionallySizedBox {
             width_factor: None,
             height_factor: None,
             alignment: Alignment::CENTER,
-            size: Size::ZERO,
             child_offset: Offset::ZERO,
             has_child: false,
         }
@@ -302,30 +299,21 @@ impl RenderBox for RenderFractionallySizedBox {
             // Our box = the parent's tightest acceptable size that wraps
             // the child. With factors set, the child IS that size; without
             // factors, we use the child as-is.
-            self.size = incoming.constrain(child_size);
-            self.child_offset = self.align_child(self.size, child_size);
+            let size = incoming.constrain(child_size);
+            self.child_offset = self.align_child(size, child_size);
             ctx.position_child(0, self.child_offset);
+            size
         } else {
             self.has_child = false;
             // Without a child, our size is determined by the factors alone.
             let computed = self.child_constraints(incoming);
-            self.size = incoming.constrain(Size::new(computed.min_width, computed.min_height));
             self.child_offset = Offset::ZERO;
+            incoming.constrain(Size::new(computed.min_width, computed.min_height))
         }
-
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
@@ -333,10 +321,6 @@ impl RenderBox for RenderFractionallySizedBox {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 
     fn compute_dry_layout(

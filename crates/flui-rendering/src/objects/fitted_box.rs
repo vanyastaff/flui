@@ -34,7 +34,7 @@
 
 use flui_tree::Single;
 use flui_types::{
-    Alignment, Matrix4, Offset, Point, Rect, Size,
+    Alignment, Matrix4, Offset, Size,
     geometry::px,
     layout::{BoxFit, FittedSizes},
     painting::Clip,
@@ -59,7 +59,6 @@ pub struct RenderFittedBox {
     fit: BoxFit,
     alignment: Alignment,
     clip_behavior: Clip,
-    size: Size,
     has_child: bool,
     /// Cached scale factors derived in layout, consumed by
     /// [`PaintEffectsCapability::paint_transform`].
@@ -78,7 +77,6 @@ impl RenderFittedBox {
             fit,
             alignment,
             clip_behavior,
-            size: Size::ZERO,
             has_child: false,
             scale_x: 1.0,
             scale_y: 1.0,
@@ -231,9 +229,8 @@ impl RenderBox for RenderFittedBox {
         // (1) No child → smallest size, identity transform.
         if ctx.child_count() == 0 {
             self.has_child = false;
-            self.size = incoming.smallest();
             self.reset_transform_cache();
-            return self.size;
+            return incoming.smallest();
         }
 
         // (2) Lay out the child unconstrained so it picks its intrinsic size.
@@ -243,20 +240,19 @@ impl RenderBox for RenderFittedBox {
 
         // (3) Degenerate child → smallest size, identity transform.
         if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
-            self.size = incoming.smallest();
             self.reset_transform_cache();
-            return self.size;
+            return incoming.smallest();
         }
 
         // (4) Our size = constrain(child_size) — we honour the parent
         //     constraints even though the child was given unconstrained.
-        self.size = incoming.constrain(child_size);
+        let size = incoming.constrain(child_size);
 
         // (5) Resolve the fit math via the typed BoxFit helper.
         let FittedSizes {
             source,
             destination,
-        } = self.fit.apply(child_size, self.size);
+        } = self.fit.apply(child_size, size);
 
         // (6) Scale factors take the child's intrinsic size onto the
         //     fitted destination region.
@@ -274,8 +270,8 @@ impl RenderBox for RenderFittedBox {
         };
 
         // (7) Alignment offset of the destination region inside `size`.
-        let free_w = self.size.width.get() - destination.width.get();
-        let free_h = self.size.height.get() - destination.height.get();
+        let free_w = size.width.get() - destination.width.get();
+        let free_h = size.height.get() - destination.height.get();
         self.align_offset = Offset::new(
             px(Self::align_axis(self.alignment.x, free_w)),
             px(Self::align_axis(self.alignment.y, free_h)),
@@ -283,18 +279,10 @@ impl RenderBox for RenderFittedBox {
 
         // (8) Overflow flag — the scaled destination may exceed `size`
         //     for `Cover` / `FitWidth` / `FitHeight` / `None`.
-        self.has_visual_overflow = destination.width.get() > self.size.width.get()
-            || destination.height.get() > self.size.height.get();
+        self.has_visual_overflow = destination.width.get() > size.width.get()
+            || destination.height.get() > size.height.get();
 
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        size
     }
 
     crate::forward_single_child_intrinsics!();
@@ -343,7 +331,7 @@ impl RenderBox for RenderFittedBox {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if !self.has_child {
@@ -368,10 +356,6 @@ impl RenderBox for RenderFittedBox {
         let pos = ctx.offset();
         let (tx, ty) = inverse.transform_point(pos.dx, pos.dy);
         ctx.hit_test_child(0, Offset::new(tx, ty))
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 
@@ -501,15 +485,6 @@ mod tests {
         // `fitted_box_layout_*` tests.
         let node = RenderFittedBox::default();
         assert!(node.paint_transform().is_none());
-    }
-
-    #[test]
-    fn box_paint_bounds_matches_size() {
-        let mut node = RenderFittedBox::default();
-        *node.size_mut() = Size::new(px(160.0), px(90.0));
-        let r = node.box_paint_bounds();
-        assert_eq!(r.width(), px(160.0));
-        assert_eq!(r.height(), px(90.0));
     }
 
     #[test]

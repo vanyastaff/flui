@@ -21,10 +21,9 @@
 //!   pointer-side toggle is a self-contained boolean here.
 
 use flui_tree::Single;
-use flui_types::Rect;
 
 use crate::{
-    constraints::{SliverConstraints, SliverGeometry},
+    constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -43,21 +42,13 @@ use crate::{
 pub struct RenderSliverIgnorePointer {
     /// When `true`, hit-testing returns `false` unconditionally.
     ignoring: bool,
-    /// Last-applied constraints (required by [`RenderSliver`]).
-    constraints: SliverConstraints,
-    /// Computed geometry from the most recent [`Self::perform_layout`].
-    geometry: SliverGeometry,
 }
 
 impl RenderSliverIgnorePointer {
     /// Creates an ignore-pointer sliver render object with the given flag.
     #[must_use]
     pub const fn new(ignoring: bool) -> Self {
-        Self {
-            ignoring,
-            constraints: empty_sliver_constraints(),
-            geometry: SliverGeometry::ZERO,
-        }
+        Self { ignoring }
     }
 
     /// Returns whether pointer events are currently ignored.
@@ -98,28 +89,12 @@ impl RenderSliver for RenderSliverIgnorePointer {
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
-        self.constraints = constraints;
 
-        let geometry = if ctx.child_count() > 0 {
+        if ctx.child_count() > 0 {
             ctx.layout_child(0, constraints)
         } else {
             SliverGeometry::ZERO
-        };
-
-        self.geometry = geometry;
-        geometry
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test(
@@ -134,44 +109,12 @@ impl RenderSliver for RenderSliverIgnorePointer {
         // Defer to the child at its committed sliver paint offset.
         ctx.hit_test_child_at_layout_offset(0)
     }
-
-    fn sliver_paint_bounds(&self) -> Rect {
-        let size = self.get_absolute_size(self.geometry.paint_extent);
-        Rect::from_origin_size(flui_types::Point::ZERO, size)
-    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.
 impl PaintEffectsCapability for RenderSliverIgnorePointer {}
 impl SemanticsCapability for RenderSliverIgnorePointer {}
 impl HotReloadCapability for RenderSliverIgnorePointer {}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// `SliverConstraints` constant used to initialise the cached
-/// constraints field; `SliverConstraints::default()` is not `const`.
-const fn empty_sliver_constraints() -> SliverConstraints {
-    use flui_types::layout::AxisDirection;
-
-    use crate::{constraints::GrowthDirection, view::ScrollDirection};
-
-    SliverConstraints::new(
-        AxisDirection::TopToBottom,
-        GrowthDirection::Forward,
-        ScrollDirection::Idle,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        AxisDirection::LeftToRight,
-        0.0,
-        0.0,
-        0.0,
-    )
-}
 
 // ============================================================================
 // Tests
@@ -199,13 +142,6 @@ mod tests {
         assert!(node.set_ignoring(true));
         assert!(!node.set_ignoring(true)); // no-op
         assert!(node.set_ignoring(false));
-    }
-
-    #[test]
-    fn initial_geometry_is_zero() {
-        let node = RenderSliverIgnorePointer::default();
-        assert_eq!(node.geometry().scroll_extent, 0.0);
-        assert_eq!(node.geometry().paint_extent, 0.0);
     }
 
     #[test]

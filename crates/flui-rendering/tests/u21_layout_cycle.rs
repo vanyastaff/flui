@@ -167,13 +167,10 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
         traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
     };
     use flui_tree::Single;
-    use flui_types::{Point, Rect};
-
     /// Single-arity user widget that panics on the FIRST perform_layout
     /// call and succeeds on subsequent calls (state-tracked panic).
     #[derive(Debug, Default)]
     struct PanicOnceWidget {
-        size: Size,
         already_panicked: bool,
     }
 
@@ -195,25 +192,14 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
                 panic!("PanicOnceWidget intentional first-call panic");
             }
             let constraints = *ctx.constraints();
-            let child_size = ctx.layout_child(0, constraints);
-            self.size = child_size;
-            self.size
+            ctx.layout_child(0, constraints)
         }
 
-        fn size(&self) -> &Size {
-            &self.size
-        }
-        fn size_mut(&mut self) -> &mut Size {
-            &mut self.size
-        }
         fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
             false
         }
         fn hit_test_behavior(&self) -> HitTestBehavior {
             HitTestBehavior::Opaque
-        }
-        fn box_paint_bounds(&self) -> Rect {
-            Rect::from_origin_size(Point::ZERO, self.size)
         }
     }
 

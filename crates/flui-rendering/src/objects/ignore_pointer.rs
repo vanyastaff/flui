@@ -20,7 +20,7 @@
 //!   here, nothing below sees it") lives entirely in `hit_test`.
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -36,7 +36,6 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RenderIgnorePointer {
     ignoring: bool,
-    size: Size,
     has_child: bool,
 }
 
@@ -45,7 +44,6 @@ impl RenderIgnorePointer {
     pub const fn new(ignoring: bool) -> Self {
         Self {
             ignoring,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -89,20 +87,11 @@ impl RenderBox for RenderIgnorePointer {
             self.has_child = true;
             let child_size = ctx.layout_child(0, constraints);
             ctx.position_child(0, Offset::ZERO);
-            self.size = child_size;
+            child_size
         } else {
             self.has_child = false;
-            self.size = constraints.smallest();
+            constraints.smallest()
         }
-        self.size
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
@@ -114,7 +103,7 @@ impl RenderBox for RenderIgnorePointer {
             // Pointer events pass straight through to siblings below.
             return false;
         }
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
@@ -122,10 +111,6 @@ impl RenderBox for RenderIgnorePointer {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 
@@ -140,8 +125,6 @@ impl HotReloadCapability for RenderIgnorePointer {}
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
-
     use super::*;
 
     #[test]
@@ -162,15 +145,6 @@ mod tests {
         assert!(node.set_ignoring(true));
         assert!(!node.set_ignoring(true));
         assert!(node.set_ignoring(false));
-    }
-
-    #[test]
-    fn box_paint_bounds_matches_size() {
-        let mut node = RenderIgnorePointer::new(false);
-        *node.size_mut() = Size::new(px(80.0), px(40.0));
-        let r = node.box_paint_bounds();
-        assert_eq!(r.width(), px(80.0));
-        assert_eq!(r.height(), px(40.0));
     }
 
     #[test]
