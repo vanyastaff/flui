@@ -245,6 +245,16 @@ impl RenderNode {
         self.links_mut().add_child(child);
     }
 
+    /// Inserts a child at `index`, shifting later siblings right.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index > self.child_count()`.
+    #[inline]
+    pub fn insert_child(&mut self, index: usize, child: RenderId) {
+        self.links_mut().insert_child(index, child);
+    }
+
     /// Removes a child.
     #[inline]
     pub fn remove_child(&mut self, child: RenderId) -> bool {

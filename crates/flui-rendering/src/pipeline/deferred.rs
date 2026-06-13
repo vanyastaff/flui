@@ -225,10 +225,8 @@ impl DeferredMutations {
         target_id: RenderId,
         updater: Box<dyn FnOnce(&mut dyn std::any::Any) + Send + Sync>,
     ) {
-        self.mutations.push(DeferredMutation::Update {
-            target_id,
-            updater,
-        });
+        self.mutations
+            .push(DeferredMutation::Update { target_id, updater });
     }
 
     /// Drains all queued mutations, returning them in order.
@@ -389,8 +387,12 @@ mod tests {
         let mutations = dm.drain();
         assert_eq!(mutations.len(), 2);
         // Both removes are present — no conflict between them
-        assert!(matches!(mutations[0], DeferredMutation::Remove { child_id, .. } if child_id == RenderId::new(2)));
-        assert!(matches!(mutations[1], DeferredMutation::Remove { child_id, .. } if child_id == RenderId::new(3)));
+        assert!(
+            matches!(mutations[0], DeferredMutation::Remove { child_id, .. } if child_id == RenderId::new(2))
+        );
+        assert!(
+            matches!(mutations[1], DeferredMutation::Remove { child_id, .. } if child_id == RenderId::new(3))
+        );
     }
 
     #[test]

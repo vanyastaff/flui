@@ -2014,47 +2014,80 @@ impl PipelineOwner<Layout> {
             DeferredMutation::Insert {
                 parent_id,
                 render_object,
-                index: _,
+                index,
             } => {
-                match render_object {
+                // A deferred insert must schedule the new child (and re-dirty
+                // its parent) for layout and paint — mirroring
+                // `insert_child_render_object`. Without this the fresh node
+                // carries NEEDS_LAYOUT but is absent from every dirty queue,
+                // so it is laid out never and painted never (invisible child).
+                let Some(parent_depth) = self.render_tree.depth(parent_id) else {
+                    tracing::warn!(
+                        ?parent_id,
+                        "apply_deferred_mutation: Insert parent does not exist; mutation dropped"
+                    );
+                    return;
+                };
+                let child_depth = (parent_depth + 1) as usize;
+                let inserted = match render_object {
                     DeferredRenderObject::Box(obj) => {
-                        if let Some(child_id) =
-                            self.render_tree.insert_box_child(parent_id, obj)
-                        {
-                            tracing::trace!(
-                                ?parent_id,
-                                ?child_id,
-                                "apply_deferred_mutation: inserted Box child"
-                            );
-                        }
+                        self.render_tree.insert_box_child(parent_id, obj)
                     }
                     DeferredRenderObject::Sliver(obj) => {
-                        if let Some(child_id) =
-                            self.render_tree.insert_sliver_child(parent_id, obj)
-                        {
-                            tracing::trace!(
-                                ?parent_id,
-                                ?child_id,
-                                "apply_deferred_mutation: inserted Sliver child"
-                            );
-                        }
+                        self.render_tree.insert_sliver_child(parent_id, obj)
                     }
+                };
+                let Some(child_id) = inserted else { return };
+
+                // `insert_*_child` appends; honor an explicit position by
+                // moving the freshly appended child into place. Clamp so an
+                // out-of-range index lands at the end rather than panicking.
+                if let Some(i) = index
+                    && let Some(parent) = self.render_tree.get_mut(parent_id)
+                {
+                    parent.remove_child(child_id);
+                    let clamped = i.min(parent.child_count());
+                    parent.insert_child(clamped, child_id);
                 }
-            }
-            DeferredMutation::Remove {
-                parent_id: _,
-                child_id,
-            } => {
-                self.render_tree.remove_shallow(child_id);
+
+                self.bootstrap_repaint_boundary_flag(child_id);
+                self.add_node_needing_layout(child_id, child_depth);
+                self.add_node_needing_paint(child_id, child_depth);
+                // `mark_needs_layout` (not `add_node_needing_layout`) so the
+                // parent's NEEDS_LAYOUT flag is actually set and its relayout
+                // boundary is enqueued — the dirty-root walk skips queued
+                // entries whose flag is clear, so a flagless enqueue would
+                // leave the new child unpositioned at the origin.
+                self.mark_needs_layout(parent_id);
                 tracing::trace!(
+                    ?parent_id,
                     ?child_id,
-                    "apply_deferred_mutation: removed child"
+                    "apply_deferred_mutation: inserted child and scheduled layout + paint"
                 );
             }
-            DeferredMutation::Update {
-                target_id,
-                updater,
+            DeferredMutation::Remove {
+                parent_id,
+                child_id,
             } => {
+                // Cascade-dispose: `remove_render_object` evicts the whole
+                // subtree from every dirty queue and frees it recursively
+                // (the old `remove_shallow` orphaned + leaked descendants and
+                // left stale dirty entries). Then re-dirty the parent so it
+                // reflows without the removed child.
+                let removed = self.remove_render_object(child_id);
+                if removed > 0 {
+                    // Re-dirty the parent (flag-setting walk, not a flagless
+                    // enqueue) so it reflows without the removed child.
+                    self.mark_needs_layout(parent_id);
+                }
+                tracing::trace!(
+                    ?parent_id,
+                    ?child_id,
+                    removed,
+                    "apply_deferred_mutation: removed subtree and re-dirtied parent"
+                );
+            }
+            DeferredMutation::Update { target_id, updater } => {
                 if let Some(node) = self.render_tree.get_mut(target_id) {
                     match node {
                         crate::storage::RenderNode::Box(entry) => {
@@ -2064,10 +2097,7 @@ impl PipelineOwner<Layout> {
                             updater(entry.render_object_mut() as &mut dyn std::any::Any);
                         }
                     }
-                    tracing::trace!(
-                        ?target_id,
-                        "apply_deferred_mutation: updated render object"
-                    );
+                    tracing::trace!(?target_id, "apply_deferred_mutation: updated render object");
                 }
             }
         }
@@ -2734,9 +2764,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             // Seed parent data from the child's persistent RenderState.
             // This replaces the old behavior where parent_data was always
             // None on the read path (rebuilt every frame).
-            cs.parent_data = child_node
-                .parent_data()
-                .map(|d| dyn_clone::clone_box(d));
+            cs.parent_data = child_node.parent_data().map(dyn_clone::clone_box);
             if let Some(sliver_entry) = child_node.as_sliver() {
                 cs.sliver_constraints = sliver_entry.state().constraints().copied();
                 cs.sliver_geometry = sliver_entry.state().geometry();
@@ -2922,7 +2950,11 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // path since we routed through as_box_mut).
     let has_parent = entry.links().parent().is_some();
     let sized_by_parent = entry.render_object().sized_by_parent();
-    <BoxProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), sized_by_parent, has_parent);
+    <BoxProtocol as Protocol>::bootstrap_relayout_boundary(
+        entry.state(),
+        sized_by_parent,
+        has_parent,
+    );
 
     // Only clear NEEDS_LAYOUT if the recursive callback observed no
     // descendant failure. Preserves retry-next-frame semantics.
@@ -3389,19 +3421,15 @@ impl PipelineOwner<Compositing> {
         // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
         self.dirty.needs_compositing.sort_shallow_first();
 
-        // Iterate by index over the dirty list so the loop body can
-        // call `&self` recursion without holding the iterator's
-        // borrow across the call (the `update_subtree_compositing_bits`
-        // method takes `&self`, which conflicts with the iter's
-        // simultaneous `&self.dirty.needs_compositing` borrow under
-        // some borrow-checker versions). Pre-fix this snapshotted
-        // the ids into a fresh `Vec<RenderId>` per frame
-        // (PR-A2 Copilot #3294557191).
+        // Iterate the dirty list by shared reference: the recursion takes
+        // `&self`, which coexists with the slice's shared borrow of
+        // `self.dirty.needs_compositing` (both shared). Queue mutations are
+        // deferred into `actions` and applied after the walk, so nothing
+        // mutates the list mid-iteration.
         let mut actions = CompositingWalkActions::default();
         let compositing_slice = self.dirty.needs_compositing.as_slice();
-        for i in 0..compositing_slice.len() {
-            let id = compositing_slice[i].id;
-            self.update_subtree_compositing_bits(id, &mut actions);
+        for node in compositing_slice {
+            self.update_subtree_compositing_bits(node.id, &mut actions);
         }
 
         // Apply paint-queue mutations after the walk completes (under
@@ -3584,15 +3612,10 @@ impl PipelineOwner<PaintPhase> {
             // Build a set of dirty node IDs for O(1) lookup during the
             // paint walk. This enables paint retention: clean repaint
             // boundaries skip their entire subtree.
-            let dirty_ids: rustc_hash::FxHashSet<RenderId> = self
-                .dirty
-                .needs_paint
-                .iter()
-                .map(|d| d.id)
-                .collect();
+            let dirty_ids: rustc_hash::FxHashSet<RenderId> =
+                self.dirty.needs_paint.iter().map(|d| d.id).collect();
 
-            let painted_boundaries =
-                std::cell::RefCell::new(rustc_hash::FxHashSet::default());
+            let painted_boundaries = std::cell::RefCell::new(rustc_hash::FxHashSet::default());
 
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
             match self.paint_subtree(
@@ -3611,7 +3634,8 @@ impl PipelineOwner<PaintPhase> {
                     // retained. On the next frame, clean boundaries
                     // with retained subtrees will be skipped entirely.
                     for boundary_id in painted_boundaries.borrow().iter() {
-                        self.retained_subtrees.insert(*boundary_id, LayerTree::new());
+                        self.retained_subtrees
+                            .insert(*boundary_id, LayerTree::new());
                     }
                 }
                 Err(e) => {
@@ -3669,7 +3693,9 @@ impl PipelineOwner<PaintPhase> {
         dirty_set: &rustc_hash::FxHashSet<RenderId>,
         painted_boundaries: &std::cell::RefCell<rustc_hash::FxHashSet<RenderId>>,
     ) -> crate::error::RenderResult<()> {
-        ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin, dirty_set, painted_boundaries))
+        ensure_stack(|| {
+            self.paint_subtree_impl(composer, node_id, origin, dirty_set, painted_boundaries)
+        })
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
@@ -3827,12 +3853,24 @@ impl PipelineOwner<PaintPhase> {
                         // own OffsetLayer so a future offset-only move
                         // is a layer-property update, not a repaint.
                         composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                        self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set, painted_boundaries)?;
+                        self.paint_subtree(
+                            composer,
+                            child_id,
+                            Offset::ZERO,
+                            dirty_set,
+                            painted_boundaries,
+                        )?;
                         composer.pop_layer();
                     } else {
                         // Inline children bake into the shared picture
                         // space — runs merge, no extra layer.
-                        self.paint_subtree(composer, child_id, origin + child_offset, dirty_set, painted_boundaries)?;
+                        self.paint_subtree(
+                            composer,
+                            child_id,
+                            origin + child_offset,
+                            dirty_set,
+                            painted_boundaries,
+                        )?;
                     }
                 }
             }
@@ -3858,10 +3896,22 @@ impl PipelineOwner<PaintPhase> {
 
                 if child_is_boundary {
                     composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                    self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set, painted_boundaries)?;
+                    self.paint_subtree(
+                        composer,
+                        child_id,
+                        Offset::ZERO,
+                        dirty_set,
+                        painted_boundaries,
+                    )?;
                     composer.pop_layer();
                 } else {
-                    self.paint_subtree(composer, child_id, origin + child_offset, dirty_set, painted_boundaries)?;
+                    self.paint_subtree(
+                        composer,
+                        child_id,
+                        origin + child_offset,
+                        dirty_set,
+                        painted_boundaries,
+                    )?;
                 }
             }
         }

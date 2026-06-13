@@ -149,10 +149,7 @@ impl FenwickExtents {
     /// - `index_to_offset(n)` = total extent of items 0..n
     #[inline]
     pub fn index_to_offset(&self, index: usize) -> f32 {
-        self.prefix_sums
-            .get(index)
-            .copied()
-            .unwrap_or(self.total())
+        self.prefix_sums.get(index).copied().unwrap_or(self.total())
     }
 
     /// Returns the index of the item at the given `offset`, and the
@@ -189,7 +186,7 @@ impl FenwickExtents {
         let mut lo = 0usize;
         let mut hi = count; // prefix_sums has count+1 entries, search [0, count]
         while lo < hi {
-            let mid = lo + (hi - lo + 1) / 2; // upper mid to avoid infinite loop
+            let mid = lo + (hi - lo).div_ceil(2); // upper mid to avoid infinite loop
             if self.prefix_sums[mid] <= offset {
                 lo = mid;
             } else {
@@ -391,7 +388,10 @@ mod tests {
             let offset = ft.index_to_offset(i);
             let (idx, within) = ft.offset_to_index(offset);
             assert_eq!(idx, i, "roundtrip failed for index {i}");
-            assert!(approx_eq(within, 0.0), "roundtrip offset mismatch for index {i}");
+            assert!(
+                approx_eq(within, 0.0),
+                "roundtrip offset mismatch for index {i}"
+            );
         }
     }
 
