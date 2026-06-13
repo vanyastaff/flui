@@ -35,7 +35,8 @@ use glyphon::{
 /// sized parent shapes bold at the parent's size.
 ///
 /// `scale` is baked into every effective font size here — the shaper sees
-/// final pixel sizes.  Placeholder spans contribute no text.
+/// final pixel sizes. Placeholder spans are emitted as `\u{FFFC}` (Unicode
+/// Object Replacement Character) with the inherited style.
 ///
 /// Average and worst case O(total spans + text bytes): one pre-order walk.
 pub(super) fn collect_styled_spans(
@@ -73,7 +74,12 @@ pub(super) fn collect_styled_spans(
     let mut out = Vec::new();
     match span {
         InlineSpan::Text(root) => walk(root, None, scale, &mut out),
-        InlineSpan::Placeholder(_) => {}
+        InlineSpan::Placeholder(_placeholder) => {
+            // Emit a Unicode Object Replacement Character (\u{FFFC})
+            // as a placeholder. The shaper gives it a glyph; the
+            // caller tracks placeholder positions separately.
+            out.push(("\u{FFFC}".to_string(), None));
+        }
     }
     out
 }
@@ -515,6 +521,7 @@ impl TextRenderer {
         position: Point<Pixels>,
         base_font_size: f32,
         base_color: Color,
+        wrap_width: Option<f32>,
     ) {
         if runs.is_empty() {
             return;
@@ -525,6 +532,7 @@ impl TextRenderer {
             ?position,
             base_font_size,
             ?base_color,
+            ?wrap_width,
             "TextRenderer::add_rich_text"
         );
 
@@ -540,8 +548,11 @@ impl TextRenderer {
                     &mut self.font_system,
                     Metrics::new(base_font_size, line_height),
                 );
-                // Unbounded width — wrap-width matching is a follow-up (paint seam).
-                buffer.set_size(&mut self.font_system, Some(f32::MAX), None);
+                // Use wrap_width from the layout constraint so glyphon
+                // respects the same line-breaking as cosmic-text.
+                // None = unbounded (no wrapping); Some(w) = wrap at w pixels.
+                let buffer_width = wrap_width.unwrap_or(f32::MAX);
+                buffer.set_size(&mut self.font_system, Some(buffer_width), None);
 
                 // Build per-run AttrsOwned; the iterator borrows from the vec
                 // of owned values, satisfying set_rich_text's lifetime.
@@ -881,9 +892,10 @@ mod tests {
         );
     }
 
-    /// A placeholder span at the root contributes zero runs.
+    /// A placeholder span at the root contributes one run with the
+    /// Unicode Object Replacement Character (\u{FFFC}).
     #[test]
-    fn collect_styled_spans_placeholder_yields_no_runs() {
+    fn collect_styled_spans_placeholder_yields_one_run() {
         use flui_types::typography::{PlaceholderAlignment, PlaceholderSpan};
         let span = InlineSpan::Placeholder(PlaceholderSpan::new(
             32.0,
@@ -891,7 +903,8 @@ mod tests {
             PlaceholderAlignment::Baseline,
         ));
         let runs = collect_styled_spans(&span, 1.0);
-        assert!(runs.is_empty(), "placeholder span must produce no runs");
+        assert_eq!(runs.len(), 1, "placeholder span must produce one run");
+        assert_eq!(runs[0].0, "\u{FFFC}", "placeholder must be ORC character");
     }
 
     /// An empty text node is skipped; only non-empty nodes appear in output.

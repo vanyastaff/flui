@@ -97,9 +97,10 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
             span,
             offset,
             text_scale_factor,
+            wrap_width,
             transform,
         } => {
-            renderer.render_text_span(span, *offset, *text_scale_factor, transform);
+            renderer.render_text_span(span, *offset, *text_scale_factor, *wrap_width, transform);
         }
         DrawCommand::DrawImage {
             image,

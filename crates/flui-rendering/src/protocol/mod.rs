@@ -132,6 +132,8 @@ pub use protocol::{
     Protocol,
     ProtocolCompatible,
     ProtocolRenderObject,
+    // Usage by parent
+    UsageByParent,
 };
 // ============================================================================
 // SLIVER PROTOCOL EXPORTS

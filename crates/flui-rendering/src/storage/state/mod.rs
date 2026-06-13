@@ -204,6 +204,22 @@ pub struct RenderState<P: Protocol> {
     /// invalidation past relayout boundaries (box.dart:2840).
     layout_cache: P::LayoutCache,
 
+    /// Persistent parent data for this node, set by the parent during
+    /// layout. Survives across frames — the parent writes it once, and
+    /// subsequent reads return the cached value.
+    ///
+    /// This replaces the transient `Option<Box<dyn ParentData>>` in
+    /// `ErasedChildState` which was rebuilt every frame with `None`.
+    ///
+    /// # Type erasure
+    ///
+    /// The parent data type is determined by the PARENT's
+    /// `RenderBox::ParentData` associated type, not this node's protocol.
+    /// We store it as `Option<Box<dyn ParentData>>` (type-erased) because
+    /// `RenderState<P>` cannot name the parent's concrete type.
+    /// The parent downcasts via `downcast_ref::<T>()` when reading.
+    parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
+
     /// Protocol marker (zero-sized).
     _phantom: PhantomData<P>,
 }
@@ -235,6 +251,7 @@ impl<P: Protocol> RenderState<P> {
             constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
             layout_cache: P::LayoutCache::default(),
+            parent_data: None,
             _phantom: PhantomData,
         }
     }
@@ -258,8 +275,60 @@ impl<P: Protocol> RenderState<P> {
             constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
             layout_cache: P::LayoutCache::default(),
+            parent_data: None,
             _phantom: PhantomData,
         }
+    }
+}
+
+// ============================================================================
+// PARENT DATA ACCESS
+// ============================================================================
+
+impl<P: Protocol> RenderState<P> {
+    /// Returns a reference to the persistent parent data, if set.
+    ///
+    /// Parent data is set by the parent during layout and survives
+    /// across frames. Returns `None` if no parent data has been set yet.
+    #[inline]
+    pub fn parent_data(&self) -> Option<&dyn crate::parent_data::ParentData> {
+        self.parent_data.as_deref()
+    }
+
+    /// Returns a mutable reference to the persistent parent data, if set.
+    #[inline]
+    pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::parent_data::ParentData> {
+        self.parent_data.as_deref_mut()
+    }
+
+    /// Sets (or replaces) the persistent parent data.
+    ///
+    /// Called by the parent during layout to store metadata about this
+    /// child (flex factor, stack position, etc.). The data persists
+    /// across frames until the parent replaces it.
+    #[inline]
+    pub fn set_parent_data(&mut self, data: Box<dyn crate::parent_data::ParentData>) {
+        self.parent_data = Some(data);
+    }
+
+    /// Returns a downcasted reference to the parent data, if the type matches.
+    ///
+    /// This is the typed read path — the parent calls this with its
+    /// concrete `ParentData` type to recover the typed data without
+    /// `dyn` dispatch on subsequent reads.
+    #[inline]
+    pub fn parent_data_as<T: crate::parent_data::ParentData>(&self) -> Option<&T> {
+        self.parent_data
+            .as_ref()
+            .and_then(|d| d.downcast_ref::<T>())
+    }
+
+    /// Returns a downcasted mutable reference to the parent data, if the type matches.
+    #[inline]
+    pub fn parent_data_as_mut<T: crate::parent_data::ParentData>(&mut self) -> Option<&mut T> {
+        self.parent_data
+            .as_mut()
+            .and_then(|d| d.downcast_mut::<T>())
     }
 }
 
@@ -311,6 +380,7 @@ where
             offset: AtomicOffset::new(self.offset.load()),
             // Memoized results are node-local; a cloned state starts cold.
             layout_cache: P::LayoutCache::default(),
+            parent_data: self.parent_data.clone(),
             _phantom: PhantomData,
         }
     }

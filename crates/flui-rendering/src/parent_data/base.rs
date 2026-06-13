@@ -19,6 +19,14 @@ use downcast_rs::{DowncastSync, impl_downcast};
 /// Use `downcast_ref::<T>()` and `downcast_mut::<T>()` to access
 /// concrete parent data types.
 ///
+/// # Cloning
+///
+/// `ParentData` requires `DynClone` from the `dyn_clone` crate. All types
+/// that implement `Clone` automatically satisfy this bound. This enables
+/// `dyn_clone::clone_box(&*data)` to clone `&dyn ParentData` into
+/// `Box<dyn ParentData>`, used to seed `ErasedChildState` from the
+/// child's persistent `RenderState.parent_data`.
+///
 /// # Example
 ///
 /// ```ignore
@@ -34,18 +42,14 @@ use downcast_rs::{DowncastSync, impl_downcast};
 /// # Implementation
 ///
 /// ```ignore
-/// #[derive(Debug, Default)]
+/// #[derive(Debug, Clone, Default)]
 /// struct CustomParentData {
 ///     custom_field: f32,
 /// }
 ///
-/// impl ParentData for CustomParentData {
-///     fn detach(&mut self) {
-///         // Optional: cleanup resources
-///     }
-/// }
+/// impl ParentData for CustomParentData {}
 /// ```
-pub trait ParentData: Debug + DowncastSync {
+pub trait ParentData: Debug + DowncastSync + dyn_clone::DynClone {
     /// Called when render object is removed from tree.
     ///
     /// Override to clean up resources (listeners, subscriptions, etc).
@@ -56,6 +60,10 @@ pub trait ParentData: Debug + DowncastSync {
 // Enable downcasting for ParentData trait objects
 impl_downcast!(sync ParentData);
 
+// Enable `Box<dyn ParentData>::clone()` — all concrete types that
+// derive `Clone` automatically satisfy the `DynClone` bound.
+dyn_clone::clone_trait_object!(ParentData);
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -64,7 +72,7 @@ impl_downcast!(sync ParentData);
 mod tests {
     use super::*;
 
-    #[derive(Debug, Default)]
+    #[derive(Debug, Clone, Default)]
     struct TestParentData {
         value: i32,
     }
@@ -85,5 +93,15 @@ mod tests {
     fn test_detach_default() {
         let mut data = TestParentData { value: 10 };
         data.detach(); // Should not panic
+    }
+
+    #[test]
+    fn test_clone_box_dyn() {
+        let data = TestParentData { value: 42 };
+        let boxed: &dyn ParentData = &data;
+        let cloned: Box<dyn ParentData> = dyn_clone::clone_box(boxed);
+        let downcasted = cloned.downcast_ref::<TestParentData>();
+        assert!(downcasted.is_some());
+        assert_eq!(downcasted.unwrap().value, 42);
     }
 }

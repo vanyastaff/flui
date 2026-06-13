@@ -6,6 +6,7 @@
 //! 3. Paint - generate display lists
 //! 4. Semantics - build accessibility tree
 
+mod deferred;
 mod dirty;
 mod handle;
 mod notifier;
@@ -19,6 +20,7 @@ pub use flui_types::painting::Clip;
 // Re-export additional types from flui_types::painting for convenience
 pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
 // Re-export canvas types from flui_types
+pub use deferred::{DeferredMutation, DeferredMutations, DeferredRenderObject};
 pub use dirty::{DirtyNode, DirtySets};
 pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
 pub use handle::{

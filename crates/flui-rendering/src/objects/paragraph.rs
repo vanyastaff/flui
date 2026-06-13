@@ -13,7 +13,7 @@
 //! clip/fade `TextOverflow` policies (only `ellipsis` is wired here).
 
 use flui_foundation::Diagnosticable;
-use flui_painting::{TextBaseline as PainterBaseline, TextPainter};
+use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
 use flui_tree::Leaf;
 use flui_types::{
     Offset, Point, Rect, Size,
@@ -91,10 +91,15 @@ impl RenderParagraph {
         self
     }
 
-    /// Replaces the text span. The caller is responsible for marking the node
-    /// layout-dirty.
-    pub fn set_text(&mut self, text: impl Into<InlineSpan>) {
-        self.painter.set_text(Some(text.into()));
+    /// Replaces the text span and returns the invalidation level.
+    ///
+    /// - [`Invalidation::Layout`] — text content changed; caller must
+    ///   mark the node layout-dirty.
+    /// - [`Invalidation::Paint`] — only paint attributes changed (color,
+    ///   shadow); caller can mark paint-dirty only (cheaper).
+    /// - [`Invalidation::None`] — no observable change.
+    pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> Invalidation {
+        self.painter.set_text(Some(text.into()))
     }
 
     /// Sets the text alignment. The caller is responsible for marking the node

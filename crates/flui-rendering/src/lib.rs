@@ -83,6 +83,7 @@ pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
 pub use flui_semantics as semantics;
 pub mod objects;
+pub mod slivers;
 pub mod storage;
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -121,8 +121,12 @@ impl Protocol for BoxProtocol {
     /// requires per-render-object trait methods that report their layout
     /// dependency shape; deferred to Core.2 alongside the intrinsic-
     /// dimension protocol.
-    fn bootstrap_relayout_boundary(state: &crate::storage::RenderState<Self>, has_parent: bool) {
-        state.compute_relayout_boundary(true, false, has_parent);
+    fn bootstrap_relayout_boundary(
+        state: &crate::storage::RenderState<Self>,
+        sized_by_parent: bool,
+        has_parent: bool,
+    ) {
+        state.compute_relayout_boundary(true, sized_by_parent, has_parent);
     }
 
     /// Flutter's `debugAssertDoesMeetConstraints` (`box.dart`): a node's own

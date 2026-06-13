@@ -65,6 +65,14 @@ pub enum EngineError {
     #[error("Surface was lost")]
     SurfaceLost,
 
+    /// GPU device was lost and cannot be recovered by surface reconfiguration.
+    ///
+    /// This happens on TDR (Timeout Detection and Recovery), driver crashes,
+    /// or GPU hardware failures. The caller must recreate the entire renderer
+    /// to recover.
+    #[error("GPU device lost")]
+    DeviceLost,
+
     /// Surface acquisition timed out
     ///
     /// The GPU took too long to provide a new frame buffer.
@@ -270,6 +278,7 @@ impl EngineError {
                 | EngineError::DeviceCreation(_)
                 | EngineError::SurfaceCreation(_)
                 | EngineError::NotInitialized
+                | EngineError::DeviceLost
         )
     }
 }

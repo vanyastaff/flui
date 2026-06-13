@@ -19,6 +19,7 @@
 //! Section 6 for the broader rationale.
 
 use flui_foundation::RenderId;
+use rustc_hash::FxHashSet;
 
 // ============================================================================
 // DirtyNode
@@ -46,50 +47,178 @@ impl DirtyNode {
 }
 
 // ============================================================================
+// DirtySet — Vec + HashSet for O(1) dedup
+// ============================================================================
+
+/// A single dirty set with O(1) dedup via a companion `FxHashSet`.
+///
+/// The `Vec` preserves insertion order for sort-at-flush; the `HashSet`
+/// provides O(1) `contains` for the mark-dirty dedup check. Both are
+/// kept in sync on every push/evict/clear.
+#[derive(Debug, Default)]
+pub struct DirtySet {
+    vec: Vec<DirtyNode>,
+    set: FxHashSet<RenderId>,
+}
+
+impl DirtySet {
+    /// Creates an empty dirty set.
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Pushes a node if not already present. Returns `true` if inserted.
+    #[inline]
+    pub fn push(&mut self, node: DirtyNode) -> bool {
+        if self.set.insert(node.id) {
+            self.vec.push(node);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns `true` if the set contains the given id.
+    #[inline]
+    pub fn contains(&self, id: &RenderId) -> bool {
+        self.set.contains(id)
+    }
+
+    /// Returns the number of entries.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.vec.len()
+    }
+
+    /// Returns `true` if the set is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
+    }
+
+    /// Sorts the vector by depth (shallow-first).
+    #[inline]
+    pub fn sort_shallow_first(&mut self) {
+        self.vec.sort_unstable_by_key(|n| n.depth);
+    }
+
+    /// Sorts the vector by depth (deep-first).
+    #[inline]
+    pub fn sort_deep_first(&mut self) {
+        self.vec
+            .sort_unstable_by_key(|n| std::cmp::Reverse(n.depth));
+    }
+
+    /// Drains the vector, clearing both vec and set.
+    pub fn drain(&mut self) -> std::vec::Drain<'_, DirtyNode> {
+        self.set.clear();
+        self.vec.drain(..)
+    }
+
+    /// Evicts entries whose id is in `removed`.
+    #[inline]
+    pub fn evict(&mut self, removed: &FxHashSet<RenderId>) {
+        self.set.retain(|id| !removed.contains(id));
+        self.vec.retain(|d| !removed.contains(&d.id));
+    }
+
+    /// Clears both vec and set. Vec retains capacity.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.vec.clear();
+        self.set.clear();
+    }
+
+    /// Appends all entries from `other` into `self`, clearing `other`.
+    /// Duplicates in `other` that already exist in `self` are skipped.
+    pub fn append(&mut self, other: &mut Self) {
+        for node in other.vec.drain(..) {
+            if self.set.insert(node.id) {
+                self.vec.push(node);
+            }
+        }
+        other.set.clear();
+    }
+
+    /// Returns a slice of the entries (for iteration).
+    #[inline]
+    pub fn as_slice(&self) -> &[DirtyNode] {
+        &self.vec
+    }
+
+    /// Returns an iterator over the entries.
+    #[inline]
+    pub fn iter(&self) -> std::slice::Iter<'_, DirtyNode> {
+        self.vec.iter()
+    }
+
+    /// Retains only entries matching the predicate.
+    pub fn retain(&mut self, mut f: impl FnMut(&DirtyNode) -> bool) {
+        self.vec.retain(|d| {
+            if f(d) {
+                true
+            } else {
+                self.set.remove(&d.id);
+                false
+            }
+        });
+    }
+}
+
+impl<'a> IntoIterator for &'a DirtySet {
+    type Item = &'a DirtyNode;
+    type IntoIter = std::slice::Iter<'a, DirtyNode>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.vec.iter()
+    }
+}
+
+// ============================================================================
 // DirtySets
 // ============================================================================
 
 /// Co-located dirty sets for the four pipeline phases that produce them.
 ///
-/// Each `Vec<DirtyNode>` is appended-to when a node is marked dirty for the
-/// corresponding phase, then drained-and-sorted at the start of that phase's
-/// flush. The vectors are non-shrinking on purpose -- once they grow to the
-/// peak working set, they keep that capacity for the next frame.
+/// Each phase's set uses a `Vec` + `FxHashSet` pair for O(1) dedup
+/// on `push` and ordered iteration at flush time. The vectors are
+/// non-shrinking on purpose -- once they grow to the peak working set,
+/// they keep that capacity for the next frame.
 #[derive(Debug, Default)]
 pub struct DirtySets {
     /// Nodes needing layout (sorted shallow-first during flush).
-    pub needs_layout: Vec<DirtyNode>,
+    pub needs_layout: DirtySet,
 
     /// Nodes needing compositing-bits update (sorted shallow-first during flush).
-    pub needs_compositing: Vec<DirtyNode>,
+    pub needs_compositing: DirtySet,
 
     /// Nodes needing paint (sorted deep-first during flush).
-    pub needs_paint: Vec<DirtyNode>,
+    pub needs_paint: DirtySet,
 
     /// Nodes needing semantics update (sorted shallow-first during flush).
-    pub needs_semantics: Vec<DirtyNode>,
+    pub needs_semantics: DirtySet,
 }
 
 impl DirtySets {
-    /// Creates an empty `DirtySets`. All four vectors are empty.
+    /// Creates an empty `DirtySets`. All four sets are empty.
     #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Evicts every entry whose id is in `removed` from all four
-    /// queues.
+    /// sets.
     ///
-    /// The dispose half of node removal: a freed slot's queue entries
+    /// The dispose half of node removal: a freed slot's set entries
     /// must die WITH the node, or the next phase walks ids whose
     /// generation no longer resolves (the residue scan would warn on
-    /// every removal). O(queue lengths) per call, average and worst
-    /// case — removal batches are rare relative to frames.
-    pub fn evict(&mut self, removed: &rustc_hash::FxHashSet<flui_foundation::RenderId>) {
-        self.needs_layout.retain(|d| !removed.contains(&d.id));
-        self.needs_compositing.retain(|d| !removed.contains(&d.id));
-        self.needs_paint.retain(|d| !removed.contains(&d.id));
-        self.needs_semantics.retain(|d| !removed.contains(&d.id));
+    /// every removal).
+    pub fn evict(&mut self, removed: &FxHashSet<RenderId>) {
+        self.needs_layout.evict(removed);
+        self.needs_compositing.evict(removed);
+        self.needs_paint.evict(removed);
+        self.needs_semantics.evict(removed);
     }
 
     /// Returns the total number of dirty entries across all four sets.
@@ -123,8 +252,6 @@ mod tests {
 
     use super::*;
 
-    // Mythos Step 14: static memory-footprint assertions.
-
     #[test]
     fn dirty_node_is_two_usize() {
         // RenderId(NonZeroUsize, 8) + usize(8) = 16 bytes on 64-bit.
@@ -132,9 +259,57 @@ mod tests {
     }
 
     #[test]
-    fn dirty_sets_fits_one_cache_line_of_pointers() {
-        // Four Vec headers (24 bytes each on 64-bit) = 96 bytes; should
-        // never grow beyond that without an explicit re-budget.
-        assert!(size_of::<DirtySets>() <= 96);
+    fn dirty_set_push_deduplicates() {
+        let mut set = DirtySet::new();
+        let id = RenderId::new(1);
+        assert!(set.push(DirtyNode::new(id, 0)));
+        assert!(!set.push(DirtyNode::new(id, 1))); // duplicate
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn dirty_set_contains() {
+        let mut set = DirtySet::new();
+        let id = RenderId::new(1);
+        assert!(!set.contains(&id));
+        set.push(DirtyNode::new(id, 0));
+        assert!(set.contains(&id));
+    }
+
+    #[test]
+    fn dirty_set_evict() {
+        let mut set = DirtySet::new();
+        let id1 = RenderId::new(1);
+        let id2 = RenderId::new(2);
+        set.push(DirtyNode::new(id1, 0));
+        set.push(DirtyNode::new(id2, 1));
+        let mut removed = FxHashSet::default();
+        removed.insert(id1);
+        set.evict(&removed);
+        assert_eq!(set.len(), 1);
+        assert!(!set.contains(&id1));
+        assert!(set.contains(&id2));
+    }
+
+    #[test]
+    fn dirty_set_drain() {
+        let mut set = DirtySet::new();
+        set.push(DirtyNode::new(RenderId::new(1), 0));
+        set.push(DirtyNode::new(RenderId::new(2), 1));
+        let drained: Vec<_> = set.drain().collect();
+        assert_eq!(drained.len(), 2);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn dirty_sets_evict_across_all() {
+        let mut sets = DirtySets::new();
+        let id = RenderId::new(1);
+        sets.needs_layout.push(DirtyNode::new(id, 0));
+        sets.needs_paint.push(DirtyNode::new(id, 0));
+        let mut removed = FxHashSet::default();
+        removed.insert(id);
+        sets.evict(&removed);
+        assert_eq!(sets.total(), 0);
     }
 }

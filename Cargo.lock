@@ -1345,6 +1345,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "downcast-rs 2.0.2",
+ "dyn-clone",
  "flui-animation",
  "flui-foundation",
  "flui-interaction",

@@ -536,6 +536,46 @@ impl LayerTree {
         self.root = None;
     }
 
+    /// Clones a subtree starting from `root_id` into a new `LayerTree`.
+    ///
+    /// The cloned tree has the same structure as the subtree rooted at
+    /// `root_id`, with freshly allocated `LayerId`s. Each `Layer` is
+    /// cloned (cheap for most layers — `PictureLayer` uses `Arc`-backed
+    /// `DisplayList`, `OffsetLayer`/`TransformLayer` are `Copy`).
+    ///
+    /// Returns `None` if `root_id` does not exist.
+    ///
+    /// # Performance
+    ///
+    /// O(subtree size) in time and memory. Layer cloning is cheap for
+    /// most variants (f32 fields, Matrix4, Arc-backed data).
+    pub fn clone_subtree(&self, root_id: LayerId) -> Option<Self> {
+        let root_node = self.get(root_id)?;
+        let mut new_tree = Self::new();
+        let new_root = self.clone_subtree_into(&mut new_tree, root_id)?;
+        new_tree.set_root(Some(new_root));
+        Some(new_tree)
+    }
+
+    /// Recursively clones a subtree into `target` tree.
+    ///
+    /// Returns the new root `LayerId` in the target tree, or `None`
+    /// if the source node doesn't exist.
+    fn clone_subtree_into(&self, target: &mut Self, source_id: LayerId) -> Option<LayerId> {
+        let source_node = self.get(source_id)?;
+        let cloned_layer = source_node.layer().clone();
+        let new_id = target.insert(cloned_layer);
+
+        // Clone children recursively
+        for &child_id in source_node.children() {
+            if let Some(new_child_id) = self.clone_subtree_into(target, child_id) {
+                target.add_child(new_id, new_child_id);
+            }
+        }
+
+        Some(new_id)
+    }
+
     // ========== Tree Operations ==========
 
     /// Adds `child_id` as a child of `parent_id`.

@@ -2491,17 +2491,19 @@ impl WgpuPainter {
         position: Point<Pixels>,
         base_font_size: f32,
         base_color: flui_types::styling::Color,
+        wrap_width: Option<f32>,
     ) {
         tracing::trace!(
             run_count = runs.len(),
             ?position,
             base_font_size,
             ?base_color,
+            ?wrap_width,
             "WgpuPainter::rich_text"
         );
         let transformed_position = self.apply_transform(position);
         self.text_renderer
-            .add_rich_text(runs, transformed_position, base_font_size, base_color);
+            .add_rich_text(runs, transformed_position, base_font_size, base_color, wrap_width);
     }
 
     pub fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {

@@ -403,7 +403,12 @@ impl<P: Protocol> RenderEntry<P> {
         // Pre-bootstrap, `PipelineOwner::mark_needs_layout` (U15) treats
         // every node as non-boundary and walks to root.
         let has_parent = self.links.parent().is_some();
-        <P as crate::protocol::Protocol>::bootstrap_relayout_boundary(&self.state, has_parent);
+        let sized_by_parent = self.render_object.sized_by_parent();
+        <P as crate::protocol::Protocol>::bootstrap_relayout_boundary(
+            &self.state,
+            sized_by_parent,
+            has_parent,
+        );
 
         self.state.clear_needs_layout();
 

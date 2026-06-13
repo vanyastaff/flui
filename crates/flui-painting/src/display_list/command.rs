@@ -194,6 +194,10 @@ pub enum DrawCommand {
         offset: Offset<Pixels>,
         /// Text scale factor for accessibility.
         text_scale_factor: f64,
+        /// Wrap width for line breaking. `None` = unbounded (no wrapping).
+        /// Passed to the GPU text renderer so glyphon respects the same
+        /// line-breaking constraints as the cosmic-text layout cache.
+        wrap_width: Option<f32>,
         /// Transform at recording time.
         transform: Matrix4,
     },

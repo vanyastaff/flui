@@ -148,6 +148,9 @@ pub struct Renderer {
     offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
     /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
     supports_copy_src: bool,
+    /// Set by the device-lost callback; checked at frame start to trigger
+    /// device recreation. `Arc<AtomicBool>` because the callback is `'static`.
+    device_lost: Arc<std::sync::atomic::AtomicBool>,
     /// Tracks dirty regions for incremental rendering (skip frames with no damage)
     damage_tracker: flui_layer::damage::DamageTracker,
     /// Tracks opaque regions to skip fully-occluded layers during traversal
@@ -253,7 +256,8 @@ impl Renderer {
             .await
             .map_err(EngineError::device_creation)?;
 
-        Self::install_device_diagnostics(&device);
+        let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        Self::install_device_diagnostics(&device, Arc::clone(&device_lost));
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
@@ -316,6 +320,7 @@ impl Renderer {
             painter: Some(painter),
             offscreen,
             supports_copy_src,
+            device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
             occlusion: OcclusionTracker::new(),
         })
@@ -355,7 +360,8 @@ impl Renderer {
             .await
             .map_err(EngineError::device_creation)?;
 
-        Self::install_device_diagnostics(&device);
+        let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        Self::install_device_diagnostics(&device, Arc::clone(&device_lost));
 
         Ok(Self {
             instance,
@@ -368,6 +374,7 @@ impl Renderer {
             painter: None,
             offscreen: None,
             supports_copy_src: false,
+            device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
             occlusion: OcclusionTracker::new(),
         })
@@ -433,20 +440,24 @@ impl Renderer {
     /// Both callbacks route the fault through `tracing` so it is logged and
     /// diagnosable instead of aborting the process or spinning the render
     /// loop blind.
-    fn install_device_diagnostics(device: &wgpu::Device) {
+    fn install_device_diagnostics(
+        device: &wgpu::Device,
+        device_lost_flag: Arc<std::sync::atomic::AtomicBool>,
+    ) {
         device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
             tracing::error!(
                 %error,
                 "wgpu uncaptured error (validation / out-of-memory / internal)",
             );
         }));
-        device.set_device_lost_callback(|reason, message| {
+        device.set_device_lost_callback(move |reason, message| {
             tracing::error!(
                 ?reason,
                 %message,
-                "wgpu device lost — the GPU context is gone; the renderer must \
-                 recreate the device to recover",
+                "wgpu device lost — the GPU context is gone; the renderer will \
+                 attempt device recreation on the next frame",
             );
+            device_lost_flag.store(true, std::sync::atomic::Ordering::Release);
         });
     }
 
@@ -637,6 +648,16 @@ impl Renderer {
 
         // wgpu 28+: get_current_texture() returns CurrentSurfaceTexture enum
         // instead of Result<SurfaceTexture, SurfaceError>.
+
+        // Check for device-lost flag (set by the device-lost callback) before
+        // attempting to acquire a surface texture. If the device is gone, we
+        // cannot proceed with the current device — return an error that the
+        // caller can handle by recreating the renderer.
+        if self.device_lost.load(std::sync::atomic::Ordering::Acquire) {
+            tracing::warn!("Device lost detected; returning DeviceLost error");
+            return Err(EngineError::DeviceLost);
+        }
+
         let output = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -655,7 +676,18 @@ impl Renderer {
                 }
             }
             wgpu::CurrentSurfaceTexture::Timeout => return Err(EngineError::Timeout),
-            _ => return Err(EngineError::SurfaceLost),
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                // Window is minimized or fully occluded — skip this frame
+                // entirely rather than producing garbage frames.
+                tracing::trace!("Surface occluded; skipping frame");
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                // Validation error — the surface texture could not be produced
+                // due to a validation failure. Log and return error.
+                tracing::error!("Surface texture validation error");
+                return Err(EngineError::SurfaceLost);
+            }
         };
 
         let view = output

@@ -75,6 +75,21 @@ pub trait PaintEffectsCapability {
     fn paint_transform(&self) -> Option<flui_types::Matrix4> {
         None
     }
+
+    /// Returns the transform matrix for hit testing.
+    ///
+    /// If `Some(matrix)`, the hit-test pipeline pushes this transform
+    /// onto the `HitTestResult` stack before recursing into children,
+    /// so child entries capture the correct accumulated transform.
+    /// Default: `None` (no transform — uses identity).
+    ///
+    /// Typically the same as [`paint_transform`](Self::paint_transform).
+    /// Render objects that apply transforms for painting but not for
+    /// hit testing (e.g. decorative-only transforms) can override this
+    /// to return `None`.
+    fn hit_test_transform(&self) -> Option<flui_types::Matrix4> {
+        None
+    }
 }
 
 /// Optional semantics-tree contribution.

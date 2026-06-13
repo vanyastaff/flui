@@ -127,11 +127,14 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     ///
     /// [`RenderState::<BoxProtocol>::compute_relayout_boundary`]: crate::storage::RenderState::compute_relayout_boundary
     /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::PipelineOwner::mark_needs_layout
-    fn bootstrap_relayout_boundary(state: &crate::storage::RenderState<Self>, has_parent: bool)
-    where
+    fn bootstrap_relayout_boundary(
+        state: &crate::storage::RenderState<Self>,
+        sized_by_parent: bool,
+        has_parent: bool,
+    ) where
         Self: Sized,
     {
-        let _ = (state, has_parent);
+        let _ = (state, sized_by_parent, has_parent);
     }
 
     /// Debug-only check that a freshly computed layout result is well-formed:
@@ -191,6 +194,55 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     ) -> R
     where
         Self: Sized;
+}
+
+// ============================================================================
+// USAGE BY PARENT (Compose-inspired 3-state)
+// ============================================================================
+
+/// How a parent uses a child's geometry during layout.
+///
+/// This replaces Flutter's boolean `parentUsesSize` with a 3-state enum
+/// inspired by Jetpack Compose's `UsageByParent`:
+///
+/// - `NotUsed` — parent doesn't depend on child's size at all
+/// - `InLayout` — parent reads child's geometry during its own layout
+/// - `InPlacement` — parent only positions the child (scroll viewport)
+///
+/// The relayout boundary formula uses this:
+/// ```text
+/// is_boundary = matches!(usage, NotUsed | InPlacement)
+///     || sized_by_parent
+///     || constraints.is_tight()
+///     || !has_parent
+/// ```
+///
+/// # Why 3 states instead of Flutter's boolean
+///
+/// Flutter's `parentUsesSize = false` makes `!false = true` ⇒ every node
+/// is a boundary. `InPlacement` is the middle ground: the parent uses the
+/// child's size for positioning (scroll offset) but not for its own size
+/// computation. This is the common case for viewport → sliver children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UsageByParent {
+    /// Parent doesn't depend on this child's geometry at all.
+    /// Changes to this child's size don't affect the parent's layout.
+    NotUsed,
+
+    /// Parent reads this child's geometry during its own layout pass.
+    /// Changes to this child's size may require the parent to re-layout.
+    InLayout,
+
+    /// Parent only positions this child (e.g., scroll viewport placing
+    /// sliver children). The parent's own size doesn't depend on this
+    /// child's geometry — only the child's position within the parent.
+    InPlacement,
+}
+
+impl Default for UsageByParent {
+    fn default() -> Self {
+        Self::InLayout
+    }
 }
 
 // ============================================================================

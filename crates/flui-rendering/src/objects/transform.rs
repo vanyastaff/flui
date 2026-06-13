@@ -230,11 +230,11 @@ impl RenderBox for RenderTransform {
         // position; the inverse was used only for a bounds gate, so any
         // scaled/rotated child hit-tested at the wrong local point.)
 
-        // Record the forward transform for hit entries (R-24 stack composition).
-        ctx.push_transform(self.effective_transform());
-        let hit = ctx.hit_test_child(0, Offset::new(tx, ty));
-        ctx.pop_transform();
-        hit
+        // The pipeline pushes the forward transform onto HitTestResult
+        // via hit_test_transform() before calling hit_test_raw, so
+        // child entries capture the correct accumulated transform.
+        // No push/pop needed here.
+        ctx.hit_test_child(0, Offset::new(tx, ty))
     }
 
     fn box_paint_bounds(&self) -> Rect {
@@ -281,6 +281,10 @@ impl RenderBox for RenderTransform {
 impl PaintEffectsCapability for RenderTransform {
     fn paint_transform(&self) -> Option<Matrix4> {
         // Return the effective transform so paint_node_recursive can apply it
+        Some(self.effective_transform())
+    }
+
+    fn hit_test_transform(&self) -> Option<Matrix4> {
         Some(self.effective_transform())
     }
 }

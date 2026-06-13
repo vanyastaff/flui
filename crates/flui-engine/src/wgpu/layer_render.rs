@@ -686,6 +686,7 @@ mod tests {
             _span: &flui_types::typography::InlineSpan,
             _offset: Offset<Pixels>,
             _text_scale_factor: f64,
+            _wrap_width: Option<f32>,
             _transform: &Matrix4,
         ) {
         }

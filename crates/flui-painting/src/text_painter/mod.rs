@@ -138,6 +138,13 @@ pub(super) struct TextLayoutCache {
     pub(super) paint_offset: Offset<Pixels>,
     /// The underlying text layout for cursor/hit testing.
     pub(super) layout: TextLayout,
+    /// Precomputed min intrinsic width (narrowest unbreakable run).
+    /// Computed once during `layout()` — O(1) access for intrinsics queries.
+    /// Parley-inspired: shape-once, query-many.
+    pub(super) min_intrinsic_width: f32,
+    /// Precomputed max intrinsic width (single-line width).
+    /// Computed once during `layout()` — O(1) access for intrinsics queries.
+    pub(super) max_intrinsic_width: f32,
 }
 
 /// Intermediate layout metrics returned by `compute_layout_metrics`.

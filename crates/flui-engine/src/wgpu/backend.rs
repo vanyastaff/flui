@@ -466,6 +466,7 @@ impl CommandRenderer for Backend<'_> {
         span: &flui_types::typography::InlineSpan,
         offset: Offset<Pixels>,
         text_scale_factor: f64,
+        wrap_width: Option<f32>,
         transform: &Matrix4,
     ) {
         // Resolve the buffer-level defaults from the root span's style.
@@ -488,11 +489,9 @@ impl CommandRenderer for Backend<'_> {
             return;
         }
 
-        // Paint wrap-width matching (buffer width = layout constraint) is a
-        // follow-up; the rich buffer is currently unbounded on the x-axis.
         let position = Point::new(offset.dx, offset.dy);
         self.with_transform(transform, |painter| {
-            painter.rich_text(&runs, position, scaled_font_size, base_color);
+            painter.rich_text(&runs, position, scaled_font_size, base_color, wrap_width);
         });
     }
 

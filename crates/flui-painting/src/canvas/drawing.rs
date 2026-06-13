@@ -147,11 +147,13 @@ impl Canvas {
         span: &InlineSpan,
         offset: Offset<Pixels>,
         text_scale_factor: f64,
+        wrap_width: Option<f32>,
     ) {
         self.display_list.push(DrawCommand::DrawTextSpan {
             span: span.clone(),
             offset,
             text_scale_factor,
+            wrap_width,
             transform: self.transform,
         });
     }

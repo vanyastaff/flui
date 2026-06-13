@@ -48,6 +48,12 @@ impl TextPainter {
 
         let (metrics, layout) = self.compute_layout_metrics(text, min_width, max_width);
 
+        // Precompute intrinsic widths (Parley-inspired: shape-once, query-many).
+        // min_intrinsic = width at max_width=0 (widest unbreakable run)
+        // max_intrinsic = width at max_width=∞ (single-line width)
+        let (min_metrics, _) = self.compute_layout_metrics(text, 0.0, 0.0);
+        let (max_metrics, _) = self.compute_layout_metrics(text, 0.0, f32::INFINITY);
+
         self.layout_cache = Some(TextLayoutCache {
             min_width,
             max_width,
@@ -57,6 +63,8 @@ impl TextPainter {
             did_exceed_max_lines: metrics.did_exceed_max_lines,
             paint_offset: metrics.paint_offset,
             layout,
+            min_intrinsic_width: min_metrics.size.width.0,
+            max_intrinsic_width: max_metrics.size.width.0,
         });
     }
 
@@ -234,8 +242,15 @@ impl TextPainter {
 
     /// The width the text wants with no line wrapping — its single-line
     /// width (Flutter `RenderParagraph.computeMaxIntrinsicWidth`).
+    ///
+    /// Returns the precomputed value from the layout cache when available
+    /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
+    /// when called before `layout()`.
     #[must_use]
     pub fn max_intrinsic_width(&self) -> f32 {
+        if let Some(cache) = &self.layout_cache {
+            return cache.max_intrinsic_width;
+        }
         let Some(text) = self.text.as_ref() else {
             return 0.0;
         };
@@ -246,8 +261,15 @@ impl TextPainter {
     /// The narrowest width the text can take without overflowing — the
     /// width of its widest unbreakable run, found by wrapping at every
     /// opportunity (Flutter `RenderParagraph.computeMinIntrinsicWidth`).
+    ///
+    /// Returns the precomputed value from the layout cache when available
+    /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
+    /// when called before `layout()`.
     #[must_use]
     pub fn min_intrinsic_width(&self) -> f32 {
+        if let Some(cache) = &self.layout_cache {
+            return cache.min_intrinsic_width;
+        }
         let Some(text) = self.text.as_ref() else {
             return 0.0;
         };
@@ -309,13 +331,19 @@ impl TextPainter {
 /// child of a sized parent shapes bold at the parent's size.
 ///
 /// The text scale factor is baked into every effective font size here
-/// — the shaper sees final pixel sizes. Placeholder spans contribute no
-/// text (their geometry enters layout as placeholder dimensions, not
-/// glyphs).
+/// — the shaper sees final pixel sizes.
+///
+/// **Placeholder spans** are emitted as `\u{FFFC}` (Unicode Object
+/// Replacement Character) with the inherited style. The shaper gives
+/// it a glyph; the caller tracks placeholder positions separately for
+/// widget rendering.
 ///
 /// Average and worst case O(total spans + text bytes): one pre-order
 /// walk.
-fn collect_styled_spans(span: &InlineSpan, scale: f32) -> Vec<(String, Option<TextStyle>)> {
+pub(crate) fn collect_styled_spans(
+    span: &InlineSpan,
+    scale: f32,
+) -> Vec<(String, Option<TextStyle>)> {
     fn walk(
         span: &flui_types::typography::TextSpan,
         inherited: Option<&TextStyle>,
@@ -347,7 +375,12 @@ fn collect_styled_spans(span: &InlineSpan, scale: f32) -> Vec<(String, Option<Te
     let mut out = Vec::new();
     match span {
         InlineSpan::Text(root) => walk(root, None, scale, &mut out),
-        InlineSpan::Placeholder(_) => {}
+        InlineSpan::Placeholder(_placeholder) => {
+            // Emit a Unicode Object Replacement Character (\u{FFFC})
+            // as a placeholder. The shaper gives it a glyph; we track
+            // its position separately for widget rendering.
+            out.push(("\u{FFFC}".to_string(), None));
+        }
     }
     out
 }

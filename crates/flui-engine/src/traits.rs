@@ -122,6 +122,7 @@ pub trait CommandRenderer {
         span: &flui_types::typography::InlineSpan,
         offset: Offset<Pixels>,
         text_scale_factor: f64,
+        wrap_width: Option<f32>,
         transform: &Matrix4,
     );
 

@@ -912,6 +912,79 @@ impl DiagnosticsNode {
     pub fn to_string_deep_at_level(&self, min_level: DiagnosticLevel) -> String {
         self.format_deep_filtered(0, min_level)
     }
+
+    /// Exports this diagnostics tree as a JSON string.
+    ///
+    /// Produces a structured JSON representation suitable for devtools
+    /// consumption. Each node has `name`, `properties`, `children`,
+    /// and `level` fields.
+    ///
+    /// # Example output
+    ///
+    /// ```json
+    /// {
+    ///   "name": "RenderPadding",
+    ///   "level": "info",
+    ///   "properties": {"padding": "16px"},
+    ///   "children": []
+    /// }
+    /// ```
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        fn write_json(node: &DiagnosticsNode, buf: &mut String, indent: usize) {
+            let pad = " ".repeat(indent);
+            buf.push_str(&format!("{pad}{{\n"));
+            buf.push_str(&format!(
+                "{pad}  \"name\": \"{}\",\n",
+                escape_json(node.name().unwrap_or(""))
+            ));
+            buf.push_str(&format!(
+                "{pad}  \"level\": \"{}\",\n",
+                node.level.as_str()
+            ));
+
+            // Properties
+            buf.push_str(&format!("{pad}  \"properties\": {{"));
+            let props = node.properties();
+            for (i, prop) in props.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                buf.push('\n');
+                buf.push_str(&format!(
+                    "{pad}    \"{}\": \"{}\"",
+                    escape_json(prop.name()),
+                    escape_json(prop.value())
+                ));
+            }
+            if !props.is_empty() {
+                buf.push('\n');
+                buf.push_str(&format!("{pad}  "));
+            }
+            buf.push_str("},\n");
+
+            // Children
+            buf.push_str(&format!("{pad}  \"children\": ["));
+            let children = node.children();
+            for (i, child) in children.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                buf.push('\n');
+                write_json(child, buf, indent + 4);
+            }
+            if !children.is_empty() {
+                buf.push('\n');
+                buf.push_str(&format!("{pad}  "));
+            }
+            buf.push_str("]\n");
+            buf.push_str(&format!("{pad}}}"));
+        }
+
+        let mut buf = String::with_capacity(256);
+        write_json(self, &mut buf, 0);
+        buf
+    }
 }
 
 impl Default for DiagnosticsNode {
@@ -919,6 +992,22 @@ impl Default for DiagnosticsNode {
     fn default() -> Self {
         Self::anonymous()
     }
+}
+
+/// Escapes a string for JSON embedding.
+fn escape_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 impl fmt::Display for DiagnosticsNode {
@@ -1593,5 +1682,98 @@ mod tests {
         let column = &tree.children()[1];
         assert_eq!(column.name().unwrap(), "Column");
         assert_eq!(column.children().len(), 1);
+    }
+}
+
+// ============================================================================
+// DEBUG PAINT CONFIGURATION
+// ============================================================================
+
+/// Configuration for visual debug overlays during painting.
+///
+/// When enabled, the paint pipeline draws additional visual indicators
+/// to help debug layout and hit-testing issues:
+///
+/// - **Paint bounds**: a colored rectangle around each render object
+/// - **Baseline indicators**: horizontal lines at baseline positions
+/// - **Overflow indicators**: yellow/black stripes for overflowing content
+/// - **Hit-test areas**: semi-transparent overlays for hittable regions
+///
+/// # Usage
+///
+/// ```ignore
+/// use flui_foundation::DebugPaintConfig;
+///
+/// let config = DebugPaintConfig::all_enabled();
+/// if config.show_paint_bounds {
+///     // Draw paint bounds rectangle
+/// }
+/// ```
+///
+/// # Feature Gate
+///
+/// Debug paint overlays are only active when the `debug-paint` feature
+/// is enabled on `flui-foundation`. In release builds without the
+/// feature, all fields are `false` and the config is a zero-cost
+/// no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DebugPaintConfig {
+    /// Draw a colored rectangle around each render object's paint bounds.
+    pub show_paint_bounds: bool,
+    /// Draw horizontal lines at baseline positions.
+    pub show_baselines: bool,
+    /// Draw yellow/black stripes for overflowing content.
+    pub show_overflow: bool,
+    /// Draw semi-transparent overlays for hittable regions.
+    pub show_hit_test_areas: bool,
+}
+
+impl DebugPaintConfig {
+    /// All overlays disabled (default for release builds).
+    pub const NONE: Self = Self {
+        show_paint_bounds: false,
+        show_baselines: false,
+        show_overflow: false,
+        show_hit_test_areas: false,
+    };
+
+    /// All overlays enabled (typical for debug builds).
+    pub const ALL: Self = Self {
+        show_paint_bounds: true,
+        show_baselines: true,
+        show_overflow: true,
+        show_hit_test_areas: true,
+    };
+
+    /// Creates a config with all overlays enabled.
+    #[must_use]
+    pub const fn all_enabled() -> Self {
+        Self::ALL
+    }
+
+    /// Creates a config with all overlays disabled.
+    #[must_use]
+    pub const fn all_disabled() -> Self {
+        Self::NONE
+    }
+
+    /// Returns `true` if any overlay is enabled.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.show_paint_bounds || self.show_baselines || self.show_overflow || self.show_hit_test_areas
+    }
+}
+
+impl Default for DebugPaintConfig {
+    fn default() -> Self {
+        // Default to enabled in debug builds, disabled in release.
+        #[cfg(debug_assertions)]
+        {
+            Self::ALL
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Self::NONE
+        }
     }
 }

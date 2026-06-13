@@ -172,11 +172,39 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
+    /// Retained layer subtrees per repaint boundary.
+    ///
+    /// When a repaint boundary is clean (not dirty), its subtree is
+    /// reused from this map instead of being repainted. When dirty,
+    /// the subtree is repainted and the new result is stored here.
+    ///
+    /// This is the core of incremental paint retention — only dirty
+    /// boundaries are repainted, clean boundaries reuse their retained
+    /// subtree with an updated offset.
+    retained_subtrees: rustc_hash::FxHashMap<RenderId, LayerTree>,
+
+    /// Mapping from RenderId (repaint boundary) to the LayerId of its
+    /// root layer in the PREVIOUS frame's LayerTree. Used for structural
+    /// sharing: clean boundaries clone their subtree from the previous
+    /// tree using this mapping.
+    retained_layer_ids: rustc_hash::FxHashMap<RenderId, flui_foundation::LayerId>,
+
     /// Device pixel ratio threaded into every paint pass (text shaping
     /// and hairline snapping are DPR-dependent). Set by the platform
     /// binding on surface creation / DPI change; defaults to 1.0 for
     /// headless tests.
     device_pixel_ratio: f32,
+
+    /// Deferred mutation queue for re-entrant layout.
+    ///
+    /// During layout, render objects may enqueue child insertions,
+    /// removals, or property updates. These are applied after the
+    /// layout pass completes, outside the `&mut` borrow scope of
+    /// the layout walk.
+    ///
+    /// This is the Rust-native alternative to Flutter's
+    /// `invokeLayoutCallback` which uses unsafe re-entrant mutation.
+    deferred_mutations: super::deferred::DeferredMutations,
 
     /// Prototype handle held by the owner so `handle()` can clone it for
     /// each caller without re-allocating the channel. See
@@ -256,7 +284,10 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            retained_subtrees: rustc_hash::FxHashMap::default(),
+            retained_layer_ids: rustc_hash::FxHashMap::default(),
             device_pixel_ratio: 1.0,
+            deferred_mutations: super::deferred::DeferredMutations::new(),
             handle,
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
@@ -313,7 +344,10 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            retained_subtrees: rustc_hash::FxHashMap::default(),
+            retained_layer_ids: rustc_hash::FxHashMap::default(),
             device_pixel_ratio: 1.0,
+            deferred_mutations: super::deferred::DeferredMutations::new(),
             handle,
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
@@ -711,6 +745,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
 
+        // Push the node's hit-test transform onto the HitTestResult
+        // stack BEFORE recursing, so child entries captured during
+        // hit_test_raw see the correct accumulated transform. The
+        // transform stays on the stack until after the parent entry
+        // is added (Flutter parity: pushTransform in hitTest).
+        let has_transform = render_object.hit_test_transform().is_some();
+        if let Some(t) = render_object.hit_test_transform() {
+            result.push_transform(t);
+        }
+
         let mut hit_child = |index: usize, override_pos: Option<Offset>| -> bool {
             let Some(&child_id) = children.get(index) else {
                 return false;
@@ -756,9 +800,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
         if hit {
             // Leaf-first path: children pushed their entries during
-            // the callback above; the ancestor follows.
+            // the callback above; the ancestor follows. The transform
+            // is still on the stack, so this entry captures it.
             result.add(crate::hit_testing::HitTestEntry::new(id));
         }
+
+        if has_transform {
+            result.pop_transform();
+        }
+
         hit
     }
 
@@ -1196,13 +1246,75 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     // Dirty Node Access (Flutter API)
     // ========================================================================
 
+    // ========================================================================
+    // Deferred Mutations (re-entrant layout)
+    // ========================================================================
+
+    /// Enqueues a deferred mutation to be applied after the layout pass.
+    ///
+    /// During layout, render objects may need to add, remove, or update
+    /// children. But the layout walk holds `&mut` on the subtree, making
+    /// direct mutation impossible. This method collects mutations in a
+    /// queue that is drained after the pass completes.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // During layout:
+    /// owner.defer_insert_box(parent_id, Box::new(new_child), None);
+    /// owner.defer_remove(parent_id, child_id);
+    /// owner.defer_update(target_id, Box::new(|obj| { /* mutate */ }));
+    /// ```
+    pub fn defer_insert_box(
+        &mut self,
+        parent_id: RenderId,
+        render_object: Box<dyn crate::protocol::RenderObject<BoxProtocol>>,
+        index: Option<usize>,
+    ) {
+        self.deferred_mutations
+            .insert_box(parent_id, render_object, index);
+    }
+
+    /// Enqueues a deferred Sliver child insertion.
+    pub fn defer_insert_sliver(
+        &mut self,
+        parent_id: RenderId,
+        render_object: Box<dyn crate::protocol::RenderObject<SliverProtocol>>,
+        index: Option<usize>,
+    ) {
+        self.deferred_mutations
+            .insert_sliver(parent_id, render_object, index);
+    }
+
+    /// Enqueues a deferred removal.
+    pub fn defer_remove(&mut self, parent_id: RenderId, child_id: RenderId) {
+        self.deferred_mutations.remove(parent_id, child_id);
+    }
+
+    /// Enqueues a deferred update (e.g., animation driving properties).
+    ///
+    /// The updater receives `&mut dyn Any` — the caller downcasts to
+    /// the concrete render object type.
+    pub fn defer_update(
+        &mut self,
+        target_id: RenderId,
+        updater: Box<dyn FnOnce(&mut dyn std::any::Any) + Send + Sync>,
+    ) {
+        self.deferred_mutations.update(target_id, updater);
+    }
+
+    /// Returns the number of pending deferred mutations.
+    pub fn deferred_mutation_count(&self) -> usize {
+        self.deferred_mutations.len()
+    }
+
     /// Returns the nodes needing layout.
     ///
     /// These are relayout boundaries that need to be laid out in the next
     /// layout phase.
     #[inline]
     pub fn nodes_needing_layout(&self) -> &[DirtyNode] {
-        &self.dirty.needs_layout
+        self.dirty.needs_layout.as_slice()
     }
 
     /// Returns the nodes needing paint.
@@ -1211,19 +1323,19 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// paint phase.
     #[inline]
     pub fn nodes_needing_paint(&self) -> &[DirtyNode] {
-        &self.dirty.needs_paint
+        self.dirty.needs_paint.as_slice()
     }
 
     /// Returns the nodes needing compositing bits update.
     #[inline]
     pub fn nodes_needing_compositing_bits_update(&self) -> &[DirtyNode] {
-        &self.dirty.needs_compositing
+        self.dirty.needs_compositing.as_slice()
     }
 
     /// Returns the nodes needing semantics update.
     #[inline]
     pub fn nodes_needing_semantics(&self) -> &[DirtyNode] {
-        &self.dirty.needs_semantics
+        self.dirty.needs_semantics.as_slice()
     }
 
     /// Adds a node to the layout dirty list.
@@ -1259,10 +1371,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         } else {
             &mut self.dirty.needs_layout
         };
-        if target.iter().any(|d| d.id == node_id) {
-            return;
+        if !target.push(DirtyNode::new(node_id, depth)) {
+            return; // already in set
         }
-        target.push(DirtyNode::new(node_id, depth));
         // New work was scheduled — wake the platform so an idle event
         // loop produces the frame (Flutter parity: markNeedsLayout →
         // owner.requestVisualUpdate()). Fired only on a NEW queue entry:
@@ -1354,8 +1465,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // on already-marked nodes WITHOUT pushing — which silently
                 // dropped subsequent invalidations once the broken pipeline
                 // had drained the dirty queue but not cleared the flag.
-                if !self.dirty.needs_layout.iter().any(|d| d.id == current) {
-                    self.dirty.needs_layout.push(DirtyNode::new(current, depth));
+                if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) {
                     // Wake the platform: an idle event loop must produce
                     // a frame for this invalidation (Flutter parity:
                     // markNeedsLayout → owner.requestVisualUpdate()).
@@ -1500,10 +1610,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         } else {
             &mut self.dirty.needs_paint
         };
-        if target.iter().any(|d| d.id == node_id) {
-            return;
+        if !target.push(DirtyNode::new(node_id, depth)) {
+            return; // already in set
         }
-        target.push(DirtyNode::new(node_id, depth));
         // Wake the platform for the (next) frame. Mid-paint marks are
         // drained into next-frame work at the end of run_paint — without
         // this wake an idle app would never paint them (the "GIF frozen
@@ -1546,9 +1655,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         } else {
             &mut self.dirty.needs_compositing
         };
-        if target.iter().any(|d| d.id == node_id) {
-            return;
-        }
         target.push(DirtyNode::new(node_id, depth));
     }
 
@@ -1569,9 +1675,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         } else {
             &mut self.dirty.needs_semantics
         };
-        if target.iter().any(|d| d.id == node_id) {
-            return;
-        }
         target.push(DirtyNode::new(node_id, depth));
     }
 
@@ -1732,15 +1835,12 @@ impl PipelineOwner<Layout> {
         while !self.dirty.needs_layout.is_empty() {
             self.debug_doing_layout = true;
 
-            // Take the dirty nodes and replace with empty vec
+            // Take the dirty nodes and replace with empty set
             // This allows new nodes to be added during layout (routed
             // to mid_layout_marks per U22; drained back at end of
             // iteration below).
-            let mut dirty_nodes = std::mem::take(&mut self.dirty.needs_layout);
-
-            // Sort by depth (shallow first) - parents before children
-            // Flutter: dirtyNodes.sort((a, b) => a.depth - b.depth)
-            dirty_nodes.sort_unstable_by_key(|node| node.depth);
+            self.dirty.needs_layout.sort_shallow_first();
+            let dirty_nodes: Vec<_> = self.dirty.needs_layout.drain().collect();
 
             tracing::debug!(
                 "run_layout: sorted order (shallow-first) = {:?}",
@@ -1841,7 +1941,136 @@ impl PipelineOwner<Layout> {
             // window.
             self.drain_mid_layout_marks();
         }
+
+        // Drain deferred mutations: render objects may have enqueued
+        // child insertions, removals, or updates during layout. Apply
+        // them now, outside the `&mut` borrow scope of the layout walk.
+        // This is the Rust-native alternative to Flutter's
+        // `invokeLayoutCallback`.
+        //
+        // Ordering: Remove before Insert before Update. This ensures:
+        // - Removed nodes don't get updated (conflict detected)
+        // - Inserted nodes can be updated in the same pass
+        // - Update targets are guaranteed to exist
+        if !self.deferred_mutations.is_empty() {
+            let mutations = self.deferred_mutations.drain();
+
+            // Phase 1: collect removed IDs for conflict detection
+            let removed_ids: rustc_hash::FxHashSet<RenderId> = mutations
+                .iter()
+                .filter_map(|m| match m {
+                    super::deferred::DeferredMutation::Remove { child_id, .. } => Some(*child_id),
+                    _ => None,
+                })
+                .collect();
+
+            tracing::trace!(
+                "run_layout: applying {} deferred mutations ({} removals)",
+                mutations.len(),
+                removed_ids.len()
+            );
+
+            // Phase 2: apply in order, detect conflicts
+            let mut applied = 0usize;
+            let mut skipped = 0usize;
+            for mutation in mutations {
+                match &mutation {
+                    super::deferred::DeferredMutation::Update { target_id, .. }
+                        if removed_ids.contains(target_id) =>
+                    {
+                        tracing::warn!(
+                            ?target_id,
+                            "apply_deferred_mutation: skipping update — target was \
+                             removed in the same layout pass"
+                        );
+                        skipped += 1;
+                    }
+                    _ => {
+                        self.apply_deferred_mutation(mutation);
+                        applied += 1;
+                    }
+                }
+            }
+
+            if skipped > 0 {
+                tracing::warn!(
+                    "run_layout: {skipped} deferred mutations skipped due to \
+                     remove-update conflicts ({applied} applied)"
+                );
+            }
+        }
+
         Ok(())
+    }
+
+    /// Applies a single deferred mutation.
+    ///
+    /// Called after the layout pass completes. The mutation queue was
+    /// populated during layout by render objects that needed to modify
+    /// the tree structure (e.g., `LayoutBuilder`, `OverlayPortal`).
+    fn apply_deferred_mutation(&mut self, mutation: super::deferred::DeferredMutation) {
+        use super::deferred::{DeferredMutation, DeferredRenderObject};
+        match mutation {
+            DeferredMutation::Insert {
+                parent_id,
+                render_object,
+                index: _,
+            } => {
+                match render_object {
+                    DeferredRenderObject::Box(obj) => {
+                        if let Some(child_id) =
+                            self.render_tree.insert_box_child(parent_id, obj)
+                        {
+                            tracing::trace!(
+                                ?parent_id,
+                                ?child_id,
+                                "apply_deferred_mutation: inserted Box child"
+                            );
+                        }
+                    }
+                    DeferredRenderObject::Sliver(obj) => {
+                        if let Some(child_id) =
+                            self.render_tree.insert_sliver_child(parent_id, obj)
+                        {
+                            tracing::trace!(
+                                ?parent_id,
+                                ?child_id,
+                                "apply_deferred_mutation: inserted Sliver child"
+                            );
+                        }
+                    }
+                }
+            }
+            DeferredMutation::Remove {
+                parent_id: _,
+                child_id,
+            } => {
+                self.render_tree.remove_shallow(child_id);
+                tracing::trace!(
+                    ?child_id,
+                    "apply_deferred_mutation: removed child"
+                );
+            }
+            DeferredMutation::Update {
+                target_id,
+                updater,
+            } => {
+                if let Some(node) = self.render_tree.get_mut(target_id) {
+                    match node {
+                        crate::storage::RenderNode::Box(entry) => {
+                            updater(entry.render_object_mut() as &mut dyn std::any::Any);
+                        }
+                        crate::storage::RenderNode::Sliver(entry) => {
+                            updater(entry.render_object_mut() as &mut dyn std::any::Any);
+                        }
+                    }
+                    tracing::trace!(
+                        ?target_id,
+                        "apply_deferred_mutation: updated render object"
+                    );
+                }
+            }
+        }
     }
 
     /// Returns the constraints to apply when laying out `id` as a
@@ -2502,6 +2731,12 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             let child_node: &RenderNode = unsafe { &*child_ptr.0 };
             cs.offset = child_node.offset();
             cs.needs_layout = child_node.needs_layout();
+            // Seed parent data from the child's persistent RenderState.
+            // This replaces the old behavior where parent_data was always
+            // None on the read path (rebuilt every frame).
+            cs.parent_data = child_node
+                .parent_data()
+                .map(|d| dyn_clone::clone_box(d));
             if let Some(sliver_entry) = child_node.as_sliver() {
                 cs.sliver_constraints = sliver_entry.state().constraints().copied();
                 cs.sliver_geometry = sliver_entry.state().geometry();
@@ -2686,7 +2921,8 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // formula; SliverProtocol would be a no-op (not reachable on this
     // path since we routed through as_box_mut).
     let has_parent = entry.links().parent().is_some();
-    <BoxProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), has_parent);
+    let sized_by_parent = entry.render_object().sized_by_parent();
+    <BoxProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), sized_by_parent, has_parent);
 
     // Only clear NEEDS_LAYOUT if the recursive callback observed no
     // descendant failure. Preserves retry-next-frame semantics.
@@ -3067,7 +3303,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     }
 
     let has_parent = entry.links().parent().is_some();
-    <SliverProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), has_parent);
+    let sized_by_parent = entry.render_object().sized_by_parent();
+    <SliverProtocol as Protocol>::bootstrap_relayout_boundary(
+        entry.state(),
+        sized_by_parent,
+        has_parent,
+    );
 
     if !descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
         entry.clear_needs_layout();
@@ -3146,9 +3387,7 @@ impl PipelineOwner<Compositing> {
 
         // Sort shallow-first per Flutter
         // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
-        self.dirty
-            .needs_compositing
-            .sort_unstable_by_key(|node| node.depth);
+        self.dirty.needs_compositing.sort_shallow_first();
 
         // Iterate by index over the dirty list so the loop body can
         // call `&self` recursion without holding the iterator's
@@ -3159,8 +3398,9 @@ impl PipelineOwner<Compositing> {
         // the ids into a fresh `Vec<RenderId>` per frame
         // (PR-A2 Copilot #3294557191).
         let mut actions = CompositingWalkActions::default();
-        for i in 0..self.dirty.needs_compositing.len() {
-            let id = self.dirty.needs_compositing[i].id;
+        let compositing_slice = self.dirty.needs_compositing.as_slice();
+        for i in 0..compositing_slice.len() {
+            let id = compositing_slice[i].id;
             self.update_subtree_compositing_bits(id, &mut actions);
         }
 
@@ -3336,19 +3576,43 @@ impl PipelineOwner<PaintPhase> {
         // dirty-driven repaints will rely on this order once retention
         // lands, and keeping it now means the dirty-list semantics
         // don't shift under that change.
-        self.dirty
-            .needs_paint
-            .sort_unstable_by_key(|n| std::cmp::Reverse(n.depth));
+        self.dirty.needs_paint.sort_deep_first();
 
         if let Some(root_id) = self.root_id
             && self.render_tree.get(root_id).is_some()
         {
+            // Build a set of dirty node IDs for O(1) lookup during the
+            // paint walk. This enables paint retention: clean repaint
+            // boundaries skip their entire subtree.
+            let dirty_ids: rustc_hash::FxHashSet<RenderId> = self
+                .dirty
+                .needs_paint
+                .iter()
+                .map(|d| d.id)
+                .collect();
+
+            let painted_boundaries =
+                std::cell::RefCell::new(rustc_hash::FxHashSet::default());
+
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
-            match self.paint_subtree(&mut composer, root_id, Offset::ZERO) {
+            match self.paint_subtree(
+                &mut composer,
+                root_id,
+                Offset::ZERO,
+                &dirty_ids,
+                &painted_boundaries,
+            ) {
                 Ok(()) => {
                     let layer_tree = composer.finish();
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
                     self.last_layer_tree = Some(layer_tree);
+
+                    // Paint retention: mark all painted boundaries as
+                    // retained. On the next frame, clean boundaries
+                    // with retained subtrees will be skipped entirely.
+                    for boundary_id in painted_boundaries.borrow().iter() {
+                        self.retained_subtrees.insert(*boundary_id, LayerTree::new());
+                    }
                 }
                 Err(e) => {
                     // Restore the debug invariant before propagating so
@@ -3363,7 +3627,7 @@ impl PipelineOwner<PaintPhase> {
         // AFTER the root descent was not reached by it (multi-root or
         // detached subtree). Warn + clear so the bug is visible AND the
         // dirty list doesn't accumulate across frames.
-        for dirty_node in &self.dirty.needs_paint {
+        for dirty_node in self.dirty.needs_paint.iter() {
             if let Some(render_node) = self.render_tree.get(dirty_node.id)
                 && render_node.needs_paint()
             {
@@ -3402,8 +3666,10 @@ impl PipelineOwner<PaintPhase> {
         composer: &mut FragmentComposer,
         node_id: RenderId,
         origin: Offset,
+        dirty_set: &rustc_hash::FxHashSet<RenderId>,
+        painted_boundaries: &std::cell::RefCell<rustc_hash::FxHashSet<RenderId>>,
     ) -> crate::error::RenderResult<()> {
-        ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin))
+        ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin, dirty_set, painted_boundaries))
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
@@ -3413,12 +3679,30 @@ impl PipelineOwner<PaintPhase> {
         composer: &mut FragmentComposer,
         node_id: RenderId,
         origin: Offset,
+        dirty_set: &rustc_hash::FxHashSet<RenderId>,
+        painted_boundaries: &std::cell::RefCell<rustc_hash::FxHashSet<RenderId>>,
     ) -> crate::error::RenderResult<()> {
         let Some(render_node) = self.render_tree.get(node_id) else {
             return Ok(());
         };
 
         let is_repaint_boundary = render_node.is_repaint_boundary();
+
+        // Paint retention check: if this is a repaint boundary with a
+        // retained subtree from a previous frame and it's NOT dirty,
+        // skip the ENTIRE subtree (including children). The previous
+        // frame's layer tree is kept alive for the engine to reference.
+        // This is structural sharing: clean boundaries reuse their
+        // layer subtree without any recomputation.
+        let is_retained = is_repaint_boundary
+            && !dirty_set.contains(&node_id)
+            && self.retained_subtrees.contains_key(&node_id);
+
+        // Track that this boundary was painted (for retention on next frame).
+        if is_repaint_boundary && !is_retained {
+            painted_boundaries.borrow_mut().insert(node_id);
+        }
+
         let alpha = render_node.paint_alpha();
         let transform = render_node.paint_transform();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
@@ -3450,12 +3734,16 @@ impl PipelineOwner<PaintPhase> {
 
         // Record the node's fragment. paint_raw sees ONLY the recorder
         // (sans-IO): no tree access, no layer access, no recursion.
+        // For retained nodes, skip the paint_raw call — the previous
+        // frame's paint is still valid.
         let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_node.paint_raw(&mut recorder, child_ids.len());
-        }))
-        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
+        if !is_retained {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                render_node.paint_raw(&mut recorder, child_ids.len());
+            }))
+            .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
+        }
         let fragment = recorder.finish();
 
         debug_assert!(
@@ -3539,13 +3827,41 @@ impl PipelineOwner<PaintPhase> {
                         // own OffsetLayer so a future offset-only move
                         // is a layer-property update, not a repaint.
                         composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                        self.paint_subtree(composer, child_id, Offset::ZERO)?;
+                        self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set, painted_boundaries)?;
                         composer.pop_layer();
                     } else {
                         // Inline children bake into the shared picture
                         // space — runs merge, no extra layer.
-                        self.paint_subtree(composer, child_id, origin + child_offset)?;
+                        self.paint_subtree(composer, child_id, origin + child_offset, dirty_set, painted_boundaries)?;
                     }
+                }
+            }
+        }
+
+        // For retained nodes, the fragment is empty (paint_raw was
+        // skipped), so no Child markers were recorded. We still need
+        // to recurse into children to build the layer tree structure.
+        if is_retained {
+            for &child_id in child_ids.iter() {
+                let Some(child_node) = self.render_tree.get(child_id) else {
+                    continue;
+                };
+                if child_node
+                    .as_sliver()
+                    .and_then(|entry| entry.state().geometry())
+                    .is_some_and(|geometry| !geometry.visible)
+                {
+                    continue;
+                }
+                let child_offset = child_node.offset();
+                let child_is_boundary = child_node.is_repaint_boundary();
+
+                if child_is_boundary {
+                    composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
+                    self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set, painted_boundaries)?;
+                    composer.pop_layer();
+                } else {
+                    self.paint_subtree(composer, child_id, origin + child_offset, dirty_set, painted_boundaries)?;
                 }
             }
         }
@@ -3736,7 +4052,7 @@ impl PipelineOwner<Semantics> {
         // Sort shallow-first matching Flutter's flushSemantics. Roots
         // dispatch before their descendants so a parent's config is
         // assembled before children fold into it.
-        self.dirty.needs_semantics.sort_unstable_by_key(|n| n.depth);
+        self.dirty.needs_semantics.sort_shallow_first();
 
         // Cycle 4 R-1: pre-cycle the path panicked with
         // `unimplemented!()` once any node was queued — a Constitution
@@ -3754,7 +4070,7 @@ impl PipelineOwner<Semantics> {
         // and `self.render_tree` are disjoint fields under Rust 2024
         // disjoint capture, so the loop compiles without a temporary
         // clone.
-        for dirty_node in &self.dirty.needs_semantics {
+        for dirty_node in self.dirty.needs_semantics.iter() {
             if self.render_tree.contains(dirty_node.id) {
                 tracing::warn!(
                     id = ?dirty_node.id,
@@ -3804,7 +4120,10 @@ where
         debug_doing_semantics: from.debug_doing_semantics,
         semantics_enabled: from.semantics_enabled,
         last_layer_tree: from.last_layer_tree,
+        retained_subtrees: from.retained_subtrees,
+        retained_layer_ids: from.retained_layer_ids,
         device_pixel_ratio: from.device_pixel_ratio,
+        deferred_mutations: from.deferred_mutations,
         handle: from.handle,
         dirty_rx: from.dirty_rx,
         #[cfg(any(test, feature = "testing"))]

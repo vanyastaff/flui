@@ -31,7 +31,7 @@ use flui_types::geometry::{Pixels, Rect};
 /// // Or create empty
 /// let empty_layer = CanvasLayer::new();
 /// ```
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CanvasLayer {
     canvas: Canvas,
 }

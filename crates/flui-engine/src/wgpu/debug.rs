@@ -136,11 +136,12 @@ impl CommandRenderer for DebugBackend {
         _span: &flui_types::typography::InlineSpan,
         offset: Offset<Pixels>,
         text_scale_factor: f64,
+        wrap_width: Option<f32>,
         _transform: &Matrix4,
     ) {
         self.log_command(
             "render_text_span",
-            &format!("offset={offset:?}, scale={text_scale_factor}"),
+            &format!("offset={offset:?}, scale={text_scale_factor}, wrap={wrap_width:?}"),
         );
     }
 

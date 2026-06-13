@@ -138,6 +138,15 @@ impl TextPainter {
 
         let paint_offset = offset + cache.paint_offset;
 
-        canvas.draw_text_span(text, paint_offset, self.text_scale_factor as f64);
+        // Pass wrap-width to the GPU text renderer so glyphon respects
+        // the same line-breaking constraints as the cosmic-text layout cache.
+        // None = unbounded (no wrapping); Some(w) = wrap at w pixels.
+        let wrap_width = if cache.max_width.is_finite() && cache.max_width > 0.0 {
+            Some(cache.max_width)
+        } else {
+            None
+        };
+
+        canvas.draw_text_span(text, paint_offset, self.text_scale_factor as f64, wrap_width);
     }
 }

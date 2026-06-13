@@ -454,16 +454,18 @@ impl RenderTree {
         parent_id: RenderId,
         render_object: Box<dyn RenderObject<BoxProtocol>>,
     ) -> Option<RenderId> {
-        // Get parent depth
         let parent_depth = self.get(parent_id)?.depth();
 
-        // Create child node
+        // Protocol compatibility: Box children can go under both Box and
+        // Sliver parents. Under Sliver parents, the child should be
+        // wrapped in SliverToBoxAdapter at the widget layer — the render
+        // tree accepts it directly because the sliver layout bridge
+        // handles the cross-protocol dispatch.
         let child_node =
             RenderNode::new_box_with_parent(render_object, parent_id, parent_depth + 1);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = self.mint(child_slab_index);
 
-        // Add child to parent's tree structure
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
         }
@@ -472,6 +474,9 @@ impl RenderTree {
     }
 
     /// Inserts a Sliver protocol render object as a child of the given parent.
+    ///
+    /// Sliver children under Box parents are the Viewport pattern — the
+    /// box parent drives sliver layout through the cross-protocol bridge.
     pub fn insert_sliver_child(
         &mut self,
         parent_id: RenderId,

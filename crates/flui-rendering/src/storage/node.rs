@@ -528,6 +528,18 @@ impl RenderNode {
         }
     }
 
+    /// Returns the persistent parent data for this node, if set.
+    ///
+    /// Parent data is stored on the child's `RenderState` and persists
+    /// across frames. Returns `None` if no parent data has been set yet.
+    #[inline]
+    pub fn parent_data(&self) -> Option<&dyn crate::parent_data::ParentData> {
+        match self {
+            Self::Box(entry) => entry.state().parent_data(),
+            Self::Sliver(entry) => entry.state().parent_data(),
+        }
+    }
+
     /// Returns the paint bounds for this render object.
     pub fn paint_bounds(&self) -> flui_types::Rect {
         match self {

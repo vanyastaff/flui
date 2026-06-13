@@ -472,3 +472,85 @@ fn repeated_churn_cycles_stay_clean_and_generations_protect_every_round() {
     assert!(run.owner().render_tree().get(current).is_some());
     assert_eq!(run.hit(20.0, 20.0).first().copied(), Some(current));
 }
+
+// ====================================================================
+// Deferred mutations integration tests
+// ====================================================================
+
+#[test]
+fn deferred_remove_during_layout_removes_child_after_pass() {
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0)).child(
+            box_node(RenderColoredBox::red(40.0, 40.0)).label("child"),
+        ),
+    )
+    .with_constraints(loose(200.0, 200.0))
+    .run_frame();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert!(run.owner().render_tree().get(child).is_some());
+
+    // Enqueue deferred remove during "layout" (simulated)
+    run.owner_mut().defer_remove(root, child);
+    assert_eq!(run.owner().deferred_mutation_count(), 1);
+
+    // Pump triggers layout → drain → apply
+    run.owner_mut().mark_needs_layout(root);
+    run.pump();
+
+    // Child should be removed
+    assert!(
+        run.owner().render_tree().get(child).is_none(),
+        "deferred remove should have removed the child after layout pass"
+    );
+    assert_eq!(run.owner().deferred_mutation_count(), 0);
+}
+
+#[test]
+fn deferred_update_on_nonexistent_target_is_silent_noop() {
+    // Update targeting a non-existent RenderId should not panic
+    let mut run = RenderTester::mount(
+        box_node(RenderColoredBox::red(40.0, 40.0)),
+    )
+    .with_constraints(loose(200.0, 200.0))
+    .run_frame();
+
+    let fake_id = flui_foundation::RenderId::new(9999);
+    run.owner_mut().defer_update(
+        fake_id,
+        Box::new(|_obj: &mut dyn std::any::Any| {
+            panic!("should not be called for non-existent target");
+        }),
+    );
+
+    let root = run.root();
+    run.owner_mut().mark_needs_layout(root);
+    run.pump(); // should not panic
+}
+
+#[test]
+fn deferred_mutations_preserved_across_drain() {
+    // After drain, new mutations can be enqueued
+    let mut run = RenderTester::mount(
+        box_node(RenderColoredBox::red(40.0, 40.0)),
+    )
+    .with_constraints(loose(200.0, 200.0))
+    .run_frame();
+
+    let root = run.root();
+    let fake = flui_foundation::RenderId::new(9999);
+
+    // First batch
+    run.owner_mut().defer_remove(root, fake);
+    assert_eq!(run.owner().deferred_mutation_count(), 1);
+
+    // Drain via pump
+    run.owner_mut().mark_needs_layout(root);
+    run.pump();
+    assert_eq!(run.owner().deferred_mutation_count(), 0);
+
+    // Second batch — reuse is fine
+    run.owner_mut().defer_remove(root, fake);
+    assert_eq!(run.owner().deferred_mutation_count(), 1);
+}

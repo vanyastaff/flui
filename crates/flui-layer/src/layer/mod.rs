@@ -183,7 +183,7 @@ pub use transform::TransformLayer;
 /// // Effect layer
 /// let opacity_layer = Layer::Opacity(OpacityLayer::new(0.5));
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Layer {
     // ========== Leaf Layers ==========
     /// Canvas layer — standard drawing commands (mutable).
