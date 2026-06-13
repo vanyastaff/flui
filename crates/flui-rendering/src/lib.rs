@@ -87,6 +87,11 @@ pub mod slivers;
 pub mod storage;
 #[cfg(test)]
 pub(crate) mod test_support;
+// Protocol-agnostic windowing math (ADR-0003). Its public surface names no
+// render/sliver/protocol type, so it stays a general-purpose abstraction and is
+// cheaply extractable into a standalone crate once a 2nd direct consumer
+// appears. The `SliverConstraints -> ScrollWindow` adapter lives outside it.
+pub mod virtualization;
 // Render-object test harness. Compiled only for this crate's own tests
 // (`cfg(test)`) or when a consumer enables the `testing` feature. Builds
 // real `PipelineOwner` trees through the production pipeline and exposes a
