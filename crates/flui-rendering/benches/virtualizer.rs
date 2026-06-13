@@ -9,10 +9,16 @@
 //! - **index → offset** (prefix sum): tree is `O(log n)`, the naive sum is
 //!   `O(n)`.
 //! - **structural growth** (dynamic-list build): the tree grows by `O(log n)`
-//!   inserts (`O(n log n)` total); the flat array shifts every later element on
-//!   each non-tail insert (`O(n)` per op, `O(n²)` total). This is the decisive
-//!   reason for a tree over a Fenwick/BIT, which is *also* `O(n)` per structural
-//!   edit.
+//!   inserts (`O(n log n)` total); a Fenwick/BIT cannot insert mid-list at all —
+//!   a structural edit shifts indices, forcing an `O(n)` rebuild of the
+//!   cumulative structure (`O(n²)` total). This is the decisive reason the ADR
+//!   rejected a Fenwick/BIT for a *dynamic* list, and what this bench isolates.
+//!
+//!   NB: the baseline here is the **Fenwick rebuild cost** (an `O(n)` arithmetic
+//!   pass), *not* a plain `Vec::insert` shift. A `Vec::insert` is a single
+//!   `memmove` of 4-byte floats — a SIMD/cache-optimal constant so small it
+//!   *beats* the tree until ~5k items, which would understate the tree's win and
+//!   measure the wrong alternative (a flat array is not the rejected Fenwick).
 //!
 //! Run with:
 //!   cargo bench -p flui-rendering --bench virtualizer
@@ -63,13 +69,47 @@ impl NaiveExtents {
         self.extents.len().saturating_sub(1)
     }
 
-    /// `O(n)` mid-list insert (tail shift).
-    fn insert(&mut self, index: usize, extent: f32) {
+    fn total(&self) -> f32 {
+        self.extents.iter().sum()
+    }
+}
+
+/// The ADR's rejected alternative: a Fenwick/BIT (modeled by a cumulative-sum
+/// cache). It seeks in `O(log n)` — competitive with the tree — but **cannot
+/// insert mid-list**: a structural edit shifts indices, so the cumulative
+/// structure must be rebuilt in an `O(n)` arithmetic pass. That per-edit `O(n)`
+/// (not the `O(log n)` of a tree rebalance) is exactly why a Fenwick is the
+/// wrong tool for a *dynamic* list, and the cost this baseline isolates.
+struct FenwickRebuildBaseline {
+    extents: Vec<f32>,
+    /// `cumulative[i] = sum(extents[0..=i])`; rebuilt `O(n)` after every edit.
+    cumulative: Vec<f32>,
+}
+
+impl FenwickRebuildBaseline {
+    fn new() -> Self {
+        Self {
+            extents: Vec::new(),
+            cumulative: Vec::new(),
+        }
+    }
+
+    /// Insert one item, then rebuild the cumulative array — an `O(n)` arithmetic
+    /// pass, the structural-edit cost a Fenwick/BIT pays (it has no `O(log n)`
+    /// insert; index shift invalidates the whole prefix structure).
+    fn insert_and_rebuild(&mut self, index: usize, extent: f32) {
         self.extents.insert(index, extent);
+        self.cumulative.clear();
+        self.cumulative.reserve(self.extents.len());
+        let mut acc = 0.0;
+        for &e in &self.extents {
+            acc += e;
+            self.cumulative.push(acc);
+        }
     }
 
     fn total(&self) -> f32 {
-        self.extents.iter().sum()
+        self.cumulative.last().copied().unwrap_or(0.0)
     }
 }
 
@@ -135,21 +175,23 @@ fn bench_seek_index_to_offset(c: &mut Criterion) {
 //
 // The decisive structural difference is not a single edit but *repeated*
 // structural edits at a non-tail position — the dynamic-list workload (inserts,
-// reorders, infinite feeds) the ADR rejected a flat-array Fenwick/BIT for. We
-// build a list of `n` items by inserting one at a time at the *front*:
+// reorders, infinite feeds) the ADR rejected a Fenwick/BIT for. We build a list
+// of `n` items by inserting one at a time at the *front*:
 //
 // - **tree**: each insert is `O(log n)`; building the list is `O(n log n)`.
 //   (Driven through the public `set_count`, whose growth path is the same
 //   `O(log n)` tree insert — the backing tree never shifts, it rebalances.)
-// - **naive**: each `Vec::insert(0, _)` shifts every existing element, so it is
-//   `O(n)`; building the list is `O(n²)` — exactly the cost a Fenwick/BIT also
-//   pays on a structural edit.
+// - **Fenwick rebuild**: each insert shifts indices and forces an `O(n)`
+//   arithmetic rebuild of the cumulative structure, so building the list is
+//   `O(n²)` — the structural-edit cost that disqualified a Fenwick/BIT. (A plain
+//   `Vec::insert` memmove would be the wrong baseline: its constant is so small
+//   it beats the tree until ~5k items and it isn't the rejected alternative.)
 //
-// Sizes are smaller here than the seek benches because the naive baseline is
-// quadratic; even so the asymptotic separation is unmistakable.
+// Sizes are kept modest because the Fenwick baseline is `O(n²)`; the asymptotic
+// separation is visible from the smallest size up.
 
-/// Sizes for the quadratic-baseline structural bench (kept modest so the naive
-/// `O(n²)` build stays in a measurable range).
+/// Sizes for the `O(n²)` Fenwick-rebuild structural bench (kept modest so the
+/// quadratic baseline stays in a measurable range).
 const GROWTH_SIZES: &[usize] = &[256, 1_024, 4_096];
 
 fn bench_structural_growth(c: &mut Criterion) {
@@ -166,17 +208,16 @@ fn bench_structural_growth(c: &mut Criterion) {
                 black_box(v.len())
             });
         });
-        group.bench_with_input(BenchmarkId::new("naive_quadratic", n), &n, |b, _| {
+        group.bench_with_input(BenchmarkId::new("fenwick_rebuild", n), &n, |b, _| {
             b.iter(|| {
-                // Build the same list by front-insertion; each step shifts the
-                // whole tail, so the build is O(n^2).
-                let mut naive = NaiveExtents {
-                    extents: Vec::new(),
-                };
+                // Build the same list by front-insertion; each step rebuilds the
+                // cumulative array O(n), so the build is O(n^2) — the Fenwick
+                // structural-edit cost.
+                let mut fenwick = FenwickRebuildBaseline::new();
                 for _ in 0..n {
-                    naive.insert(0, black_box(1.0));
+                    fenwick.insert_and_rebuild(0, black_box(1.0));
                 }
-                black_box(naive.total())
+                black_box(fenwick.total())
             });
         });
     }
