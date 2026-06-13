@@ -381,9 +381,11 @@ fn u3c_9a_convergence_logical_indices_reconcile() {
     // All logical indices must be distinct (no two children claim the same item).
     let indices: Vec<usize> = pairs.iter().map(|(idx, _)| *idx).collect();
     let unique_count = {
-        let mut sorted = indices.clone();
-        sorted.dedup();
-        sorted.len()
+        // `indices` is already ascending (collect_child_indices sorts by index),
+        // so consecutive-dedup yields the distinct count.
+        let mut deduped = indices.clone();
+        deduped.dedup();
+        deduped.len()
     };
     assert_eq!(
         unique_count,
@@ -641,5 +643,66 @@ fn p1_dispose_targets_sliver_not_walk_root() {
         final_count < n_items / 5,
         "D2 smoke: final child count {final_count} is too close to N={n_items}. \
          Dispose did not shrink the child list under the lazy sliver.",
+    );
+}
+
+// ============================================================================
+// NoChild: data source shorter than the declared item_count
+// ============================================================================
+
+/// An unknown-length source that declines (`build` returns `None`) at logical
+/// index L makes the lazy list clamp `item_count` to L in-flight (the
+/// `ChildLayout::NoChild` arm) and the Virtualizer converges to L items. Guards
+/// the unknown-length-source path that `build_and_pump` (an always-`Some`
+/// source) never exercises: no child beyond the real length is ever attached.
+#[test]
+fn nochild_clamps_item_count_to_real_source_length() {
+    let item_height = 50.0_f32;
+    let real_len = 3usize;
+    // Declared count is far larger than what the source actually yields.
+    let declared = 100usize;
+
+    let source: ItemSource = Arc::new(move |idx| {
+        (idx < real_len)
+            .then(|| Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
+    });
+
+    let lazy = RenderSliverListLazy::new(declared, item_height, Arc::clone(&source), None);
+
+    let mut owner = PipelineOwner::new();
+    let root_id =
+        owner
+            .insert(Box::new(SliverHost::new(vertical(0.0, 300.0)))
+                as Box<dyn RenderObject<BoxProtocol>>);
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(lazy) as Box<dyn RenderObject<SliverProtocol>>,
+        )
+        .expect("lazy sliver must insert under root host");
+
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(300.0), px(300.0)))));
+
+    let mut owner = owner.into_layout();
+    // The NoChild clamp lands on the first frame that reaches index `real_len`;
+    // a few extra frames let the parked builds settle.
+    for _ in 0..8 {
+        owner.run_layout().expect("layout must succeed");
+    }
+
+    // No child beyond the real source length may be attached, and the attached
+    // count must not exceed it — the declared 100 collapsed to the real 3.
+    let pairs = collect_child_indices(&owner, sliver_id);
+    assert!(
+        pairs.iter().all(|(idx, _)| *idx < real_len),
+        "NoChild: a child has logical index >= source length {real_len}: {:?}",
+        pairs.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+    );
+    assert!(
+        owner.render_tree().children(sliver_id).len() <= real_len,
+        "NoChild: attached child count {} exceeds the real source length {real_len}",
+        owner.render_tree().children(sliver_id).len(),
     );
 }

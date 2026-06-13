@@ -409,10 +409,15 @@ impl RenderSliver for RenderSliverListLazy {
             } else {
                 // Child absent: request it via the build hook.
                 // The append position in the dense list is `dense_count`: deferred
-                // inserts cannot grow the dense count mid-pass. All absent children
-                // in the band park their requests in this single pass; each one is
-                // inserted at the next-available tail slot by the deferred-mutation
-                // drain (consecutive slots, D3 ordering, next frame).
+                // inserts cannot grow the dense count mid-pass, so every absent child
+                // in the band parks its request with the SAME `index = dense_count`
+                // this pass. This is safe — not a collision — because the Insert phase
+                // of the deferred drain applies serially and `apply_deferred_mutation`
+                // appends each new child then clamps its position to
+                // `min(index, parent.child_count())`; `child_count` grows by one per
+                // insert, so the clamp resolves to the current tail every time and the
+                // children land in consecutive slots in request order (D3 keeps Remove
+                // before Insert, so any removed slots are already compacted away).
                 let source = Arc::clone(&self.child_source);
                 let result = ctx.build_and_layout_box_child(
                     dense_count,
