@@ -199,6 +199,10 @@ impl Node {
     /// Boundary rule: an offset exactly at an item's start belongs to that item
     /// (the first item whose *end* is strictly greater than `offset`). `offset`
     /// is clamped to `[0, total]` by the caller; here it is assumed in range.
+    ///
+    /// Scalar reference for the batched [`seek_sorted`](Self::seek_sorted), kept
+    /// test-only (the production windowing path uses `seek_sorted`).
+    #[cfg(test)]
     fn seek_offset(&self, offset: f32) -> (usize, f32) {
         match self {
             Node::Leaf { items } => {
@@ -243,6 +247,87 @@ impl Node {
                 let last = children.last().expect("internal node has >= 1 child");
                 let (local, into) = last.seek_offset(offset - acc);
                 (index_base + local, into)
+            }
+        }
+    }
+
+    // ---- batched offset → index (one shared descent) ----------------------
+
+    /// Seeks a batch of **ascending-sorted** `offsets` in a single descent that
+    /// shares its prefix across them, writing `(global_index, offset_into_item)`
+    /// to `out[k]` for `offsets[k]`. Equivalent to calling [`seek_offset`] on
+    /// each offset individually, but when the offsets cluster (the common
+    /// windowing case: visible + cache band edges) they fall into the same
+    /// children and the root-to-leaf prefix is walked once, not once per offset.
+    ///
+    /// `base_index` / `base_offset` are this subtree's global index/offset origin
+    /// (an offset routed here is `>= base_offset`). Every offset must lie within
+    /// this subtree's span `[base_offset, base_offset + subtree_extent)` — the
+    /// caller's partition guarantees it, so no per-offset clamping happens here
+    /// (the `<= 0` / `>= total` clamps live in [`ExtentTree::seek_sorted`]).
+    ///
+    /// Complexity: `O(log n + k)` when the `k` offsets share a descent (clustered),
+    /// degrading to `O(k · log n)` only if every offset lands in a distinct
+    /// subtree. `seek_offset` ([`ExtentTree::seek_offset`]) docs.
+    fn seek_sorted(
+        &self,
+        offsets: &[f32],
+        base_index: usize,
+        base_offset: f32,
+        out: &mut [(usize, f32)],
+    ) {
+        debug_assert_eq!(offsets.len(), out.len());
+        if offsets.is_empty() {
+            return;
+        }
+        match self {
+            Node::Leaf { items } => {
+                // One forward scan shared across all offsets (they are sorted, so
+                // the item cursor only advances). `last`-clamp mirrors the
+                // single-offset leaf rule, though middle offsets never reach it.
+                let last = items.len() - 1;
+                let mut acc = base_offset;
+                let mut i = 0usize;
+                for (slot, &off) in out.iter_mut().zip(offsets) {
+                    while i < last && acc + items[i].extent() <= off {
+                        acc += items[i].extent();
+                        i += 1;
+                    }
+                    *slot = (base_index + i, off - acc);
+                }
+            }
+            Node::Internal {
+                children,
+                summaries,
+            } => {
+                // Walk children once; each child claims the contiguous run of
+                // offsets that fall in its span, and is recursed into a single
+                // time with that run. The last child is the unconditional sink
+                // for the tail (same float-rounding guard as `seek_offset`).
+                let split = children.len() - 1;
+                let mut acc = base_offset;
+                let mut idx = base_index;
+                let mut start = 0usize;
+                for (child, summ) in children.iter().zip(summaries).take(split) {
+                    if start == offsets.len() {
+                        return;
+                    }
+                    let child_end = acc + summ.total_extent;
+                    let mut run = start;
+                    while run < offsets.len() && offsets[run] < child_end {
+                        run += 1;
+                    }
+                    if run > start {
+                        child.seek_sorted(&offsets[start..run], idx, acc, &mut out[start..run]);
+                        start = run;
+                    }
+                    acc = child_end;
+                    idx += summ.count;
+                }
+                if start < offsets.len() {
+                    let last = children.last().expect("internal node has >= 1 child");
+                    last.seek_sorted(&offsets[start..], idx, acc, &mut out[start..]);
+                }
             }
         }
     }
@@ -821,6 +906,12 @@ impl ExtentTree {
 
     /// Maps `offset` to `(index, offset_into_item)`. `offset` is clamped to
     /// `[0, total_extent()]`. Returns `(0, 0.0)` for an empty tree.
+    ///
+    /// The scalar reference for [`seek_sorted`](Self::seek_sorted): production
+    /// windowing goes through the batched `seek_sorted` (one shared descent),
+    /// and this simple one-offset version is kept as the independent oracle the
+    /// batched path is property-tested against — hence `#[cfg(test)]`.
+    #[cfg(test)]
     pub(super) fn seek_offset(&self, offset: f32) -> (usize, f32) {
         let count = self.len();
         if count == 0 {
@@ -837,6 +928,49 @@ impl ExtentTree {
             return (last, offset - self.offset_of(last));
         }
         self.root.seek_offset(offset)
+    }
+
+    /// Batched [`seek_offset`](Self::seek_offset) for **ascending-sorted**
+    /// `offsets`, writing each result to `out[k]`. The `[0, total]`-interior
+    /// offsets are resolved in **one shared-prefix descent** (see
+    /// [`Node::seek_sorted`]); the `<= 0` prefix and `>= total` suffix are
+    /// clamped exactly as the scalar [`seek_offset`](Self::seek_offset) would,
+    /// so `seek_sorted(&[o0, o1, ..], out)` is observably identical to calling
+    /// `seek_offset(oi)` for each — just cheaper when the offsets cluster.
+    ///
+    /// `offsets.len()` must equal `out.len()`, and `offsets` must be sorted
+    /// ascending (the windowing band edges are sorted by construction).
+    ///
+    /// Complexity: `O(log n + k)` for `k` clustered offsets (the windowing case),
+    /// degrading to `O(k · log n)` only if every offset lands in a distinct leaf.
+    pub(super) fn seek_sorted(&self, offsets: &[f32], out: &mut [(usize, f32)]) {
+        debug_assert_eq!(offsets.len(), out.len(), "offsets/out length mismatch");
+        debug_assert!(
+            offsets.windows(2).all(|w| w[0] <= w[1]),
+            "seek_sorted requires ascending offsets"
+        );
+        let count = self.len();
+        if count == 0 {
+            out.fill((0, 0.0));
+            return;
+        }
+        let total = self.total_extent();
+        let last = count - 1;
+        // Sorted, so the three regions are contiguous: `<= 0` | interior | `>= total`.
+        let lo = offsets.partition_point(|&o| o <= 0.0);
+        let hi = offsets.partition_point(|&o| o < total);
+        let (head, rest) = out.split_at_mut(lo);
+        head.fill((0, 0.0));
+        let (mid, tail) = rest.split_at_mut(hi - lo);
+        if !tail.is_empty() {
+            let last_start = self.offset_of(last);
+            for (slot, &o) in tail.iter_mut().zip(&offsets[hi..]) {
+                *slot = (last, o - last_start);
+            }
+        }
+        if !mid.is_empty() {
+            self.root.seek_sorted(&offsets[lo..hi], 0, 0.0, mid);
+        }
     }
 
     /// Replaces the item at `index`, returning the previous value.

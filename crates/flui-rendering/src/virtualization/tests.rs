@@ -814,6 +814,48 @@ mod tree_edits {
                 }
             }
         }
+
+        /// The batched `seek_sorted` (one shared descent) must agree with calling
+        /// scalar `seek_offset` on each offset. The robust invariant is the
+        /// **absolute position** `offset_of(index) + into`: both methods must
+        /// resolve each offset to the same point. (Comparing `into` directly is
+        /// wrong — at an exact item boundary the two f32 summation orders may
+        /// attribute the point to adjacent items, one as `into≈0` of item `i+1`
+        /// and the other as `into≈extent` of item `i`; same position, different
+        /// reference item.) The index must still agree up to that ±1 boundary
+        /// tie. Offsets span `[-0.1, 1.1]·total` to exercise the `<= 0` clamp,
+        /// the interior shared descent, and the `>= total` clamp together.
+        #[test]
+        fn seek_sorted_agrees_with_scalar_seek(
+            init in proptest::collection::vec(0.1f32..50.0, 1..40),
+            fracs in proptest::collection::vec(0.0f32..1.0, 1..8),
+        ) {
+            let t = ExtentTree::from_fn(init.len(), |i| measured(init[i]));
+            let total = t.total_extent();
+            let mut offs: Vec<f32> =
+                fracs.iter().map(|f| (f * 1.2 - 0.1) * total).collect();
+            offs.sort_by(|a, b| a.partial_cmp(b).expect("finite test offsets sort"));
+
+            let mut out = vec![(0usize, 0.0f32); offs.len()];
+            t.seek_sorted(&offs, &mut out);
+
+            let tol = 1e-2 + 1e-4 * total;
+            for (&o, &(bi, binto)) in offs.iter().zip(&out) {
+                let (si, sinto) = t.seek_offset(o);
+                // Same absolute position resolved by both paths.
+                let bpos = t.offset_of(bi) + binto;
+                let spos = t.offset_of(si) + sinto;
+                prop_assert!(
+                    (bpos - spos).abs() <= tol,
+                    "abs-pos mismatch at {o}: batched ({bi},{binto})->{bpos} \
+                     scalar ({si},{sinto})->{spos}"
+                );
+                // Index agrees, or differs by one only at a shared item boundary.
+                let idx_ok = bi == si
+                    || (bi.abs_diff(si) == 1 && (t.offset_of(bi.max(si)) - o).abs() <= tol);
+                prop_assert!(idx_ok, "seek_sorted idx {bi} vs scalar {si} at offset {o}");
+            }
+        }
     }
 
     /// 200k random point-updates must not let the tree's summarized total drift

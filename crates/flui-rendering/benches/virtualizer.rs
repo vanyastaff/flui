@@ -149,6 +149,56 @@ fn bench_seek_offset_to_index(c: &mut Criterion) {
 }
 
 // ============================================================================
+// Realistic windowed query (the production hot path: dual visible + cache band)
+// ============================================================================
+//
+// The single-point seek above uses a 1px window, collapsing all four band edges
+// to one point — the best case for the shared descent. This models a real
+// viewport instead: an 800px visible band with a 250px cache buffer each side.
+// The four edges (cache/visible start/end) still cluster within ~1300px, tiny
+// against a 100k-item list, so `query`'s `seek_sorted` resolves them in one
+// shared-prefix descent. The naive baseline must linear-scan once per edge.
+
+/// Realistic viewport main-axis extent for the windowed-query bench.
+const VIEWPORT: f32 = 800.0;
+/// Realistic cache buffer kept on each side of the viewport.
+const CACHE_SIDE: f32 = 250.0;
+
+fn bench_query_window(c: &mut Criterion) {
+    let mut group = c.benchmark_group("virtualizer/query_window");
+    for &n in SIZES {
+        let v = build_virtualizer(n);
+        let naive = NaiveExtents::new(n);
+        // Centre the viewport in the content (all SIZES have total >> VIEWPORT).
+        let offset = (naive.total() - VIEWPORT) / 2.0;
+        let window = ScrollWindow {
+            offset,
+            main_extent: VIEWPORT,
+            cache_before: CACHE_SIDE,
+            cache_after: CACHE_SIDE,
+        };
+
+        group.bench_with_input(BenchmarkId::new("tree_shared_descent", n), &n, |b, _| {
+            b.iter(|| {
+                let r = v.query(black_box(&window));
+                black_box((r.first, r.last, r.cache_first, r.cache_last))
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("naive_linear_x4", n), &n, |b, _| {
+            // A flat array has no shared descent: one O(n) scan per band edge.
+            b.iter(|| {
+                let e0 = naive.seek(black_box(offset - CACHE_SIDE));
+                let e1 = naive.seek(black_box(offset));
+                let e2 = naive.seek(black_box(offset + VIEWPORT));
+                let e3 = naive.seek(black_box(offset + VIEWPORT + CACHE_SIDE));
+                black_box((e0, e1, e2, e3))
+            });
+        });
+    }
+    group.finish();
+}
+
+// ============================================================================
 // index -> offset seek
 // ============================================================================
 
@@ -227,6 +277,7 @@ fn bench_structural_growth(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_seek_offset_to_index,
+    bench_query_window,
     bench_seek_index_to_offset,
     bench_structural_growth
 );
