@@ -410,8 +410,10 @@ impl Virtualizer {
     /// Pure read: the returned range is a function of `window` and the current
     /// extents only, so this takes `&self` and never mutates the windowing state.
     ///
-    /// Complexity: `O(log n)` — four boundary seeks, each `O(log n)`. (The
-    /// returned [`VisibleRange`] is itself `#[must_use]`.)
+    /// Complexity: `O(log n)` — exactly four offset→index descents (one per band
+    /// edge: visible start/end, cache start/end), each `O(log n)`. The two band
+    /// starts needed for the empty-band check are recovered from the start seeks,
+    /// not re-descended. (The returned [`VisibleRange`] is itself `#[must_use]`.)
     pub fn query(&self, window: &ScrollWindow) -> VisibleRange {
         let count = self.tree.len();
         if count == 0 {
@@ -419,13 +421,19 @@ impl Virtualizer {
         }
 
         // Visible band: items intersecting [offset, offset + main_extent).
-        let (first, leading_into) = self.tree.seek_offset(window.offset.max(0.0));
+        let visible_start = window.offset.max(0.0);
+        let (first, leading_into) = self.tree.seek_offset(visible_start);
         let leading_offset = -leading_into;
-        let last = self.exclusive_end(window.visible_end(), first);
+        // `offset_of(first)`, recovered from the seek we just did (which returns
+        // `queried_offset - offset_of(idx)`) — no second tree descent.
+        let first_start = visible_start - leading_into;
+        let last = self.exclusive_end(window.visible_end(), first, first_start);
 
         // Cache band: items intersecting [cache_start, cache_end).
-        let (cache_first, _) = self.tree.seek_offset(window.cache_start());
-        let cache_last = self.exclusive_end(window.cache_end(), cache_first);
+        let cache_start = window.cache_start();
+        let (cache_first, cache_into) = self.tree.seek_offset(cache_start);
+        let cache_first_start = cache_start - cache_into;
+        let cache_last = self.exclusive_end(window.cache_end(), cache_first, cache_first_start);
 
         VisibleRange {
             first,
@@ -437,21 +445,23 @@ impl Virtualizer {
     }
 
     /// Computes the exclusive end index for a band whose first item is `first`
-    /// and which ends at pixel `end`.
+    /// and which ends at pixel `end`. `band_start` is `offset_of(first)` — the
+    /// caller already has it from the seek that produced `first` (seek returns
+    /// `queried_offset - offset_of(idx)`), so it is passed in rather than
+    /// re-descended here.
     ///
     /// The end item is the one whose span contains `end`; it is *included* (so
     /// the exclusive end is its index + 1) when `end` falls strictly inside it,
     /// and *excluded* when `end` lands exactly on its leading edge (a half-open
     /// `[start, end)` band touching a boundary does not intersect the next
     /// item). The result is clamped to `[first, count]`, so an empty band
-    /// (`end <= band start`) yields `first` — never an inverted range.
-    fn exclusive_end(&self, end: f32, first: usize) -> usize {
+    /// (`end <= band_start`) yields `first` — never an inverted range.
+    fn exclusive_end(&self, end: f32, first: usize, band_start: f32) -> usize {
         let count = self.tree.len();
         let total = self.tree.total_extent();
         if end >= total {
             return count;
         }
-        let band_start = self.tree.offset_of(first);
         if end <= band_start {
             // Zero-or-negative-width band: empty.
             return first;

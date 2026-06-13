@@ -221,18 +221,28 @@ impl Node {
                 children,
                 summaries,
             } => {
+                // Scan every child but the last, descending into the first whose
+                // running extent reaches past `offset`. The last child is the
+                // unconditional fallback: descending it when no earlier child
+                // matched is what absorbs f32 round-off at the final boundary, so
+                // the loop needs no per-iteration `is-last` test and the tail is
+                // a real descent, not an `unreachable!`. `take(len-1)` and
+                // `last()` keep both accesses bounds-check-free (slice indexing
+                // would reintroduce a check the `zip` elides).
+                let split = children.len() - 1;
                 let mut acc = 0.0;
                 let mut index_base = 0usize;
-                let last = children.len() - 1;
-                for (i, (child, summ)) in children.iter().zip(summaries).enumerate() {
-                    if i == last || acc + summ.total_extent > offset {
+                for (child, summ) in children.iter().zip(summaries).take(split) {
+                    if acc + summ.total_extent > offset {
                         let (local, into) = child.seek_offset(offset - acc);
                         return (index_base + local, into);
                     }
                     acc += summ.total_extent;
                     index_base += summ.count;
                 }
-                unreachable!("internal node always has at least one child")
+                let last = children.last().expect("internal node has >= 1 child");
+                let (local, into) = last.seek_offset(offset - acc);
+                (index_base + local, into)
             }
         }
     }
