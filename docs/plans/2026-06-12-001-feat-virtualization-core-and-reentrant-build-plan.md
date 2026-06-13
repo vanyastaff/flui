@@ -10,7 +10,7 @@ adr: docs/adr/ADR-0003-virtualization-core-and-reentrant-build.md
 
 ## Summary
 
-Stand up a new **protocol-agnostic `flui-virtualization` crate** that owns windowing math (visible-range query, estimate-for-unmeasured, anchor correction on measured-extent change), move the correct-but-uncalled `FenwickExtents` into it, then make `flui-rendering` a *consumer*: a `SliverConstraints → ScrollWindow` adapter, a **mid-pass-capable on-demand child-build contract** on `LayoutContextApi`, and a lazy `SliverList` that builds/lays-out only the visible-plus-cache children. Binding architecture: [`docs/adr/ADR-0003-virtualization-core-and-reentrant-build.md`](../adr/ADR-0003-virtualization-core-and-reentrant-build.md).
+Stand up a new **protocol-agnostic `virtualization` module *inside* `flui-rendering`** that owns windowing math (visible-range query, estimate-for-unmeasured, anchor correction on measured-extent change), reorganize the correct-but-uncalled `FenwickExtents` into it (it stays in `flui-rendering` — no cross-crate move), then have `flui-rendering` *consume* it: a `SliverConstraints → ScrollWindow` adapter (outside the agnostic module), a **mid-pass-capable on-demand child-build contract** on `LayoutContextApi`, and a lazy `SliverList` that builds/lays-out only the visible-plus-cache children. A standalone `flui-virtualization` crate is **not** created now — the module is kept gate-enforced agnostic so it can be extracted later, cheaply and non-breakingly, once a 2nd *direct* consumer appears. Binding architecture: [`docs/adr/ADR-0003-virtualization-core-and-reentrant-build.md`](../adr/ADR-0003-virtualization-core-and-reentrant-build.md).
 
 Delivered as **4 units** (U1 → U2 → U3, plus U4 recorded-future). The two load-bearing invariants the ADR locks in — **(1)** the core is agnostic (no render/sliver/protocol type), and **(2)** the build contract is mid-pass-capable from day one (true mid-pass never locked out, even if v1 ships a next-frame backend) — are the gates this plan must not silently relax.
 
@@ -20,7 +20,7 @@ Delivered as **4 units** (U1 → U2 → U3, plus U4 recorded-future). The two lo
 
 flui's virtualization substrate is half-present and mis-shaped (verified via scout, 2026-06-12):
 
-- `FenwickExtents` (`crates/flui-rendering/src/slivers/fenwick.rs`) — the hard, correct, ASM-verified `O(log n)` prefix-sum backbone — is **self-contained (`Vec<f32>`-only) but has zero callers** and lives in the wrong crate.
+- `FenwickExtents` (`crates/flui-rendering/src/slivers/fenwick.rs`) — the hard, correct, ASM-verified `O(log n)` prefix-sum backbone — is **self-contained (`Vec<f32>`-only) but has zero callers** and sits under `slivers/` rather than in a neutral windowing module (it is in the right crate, just the wrong module).
 - `SliverConstraints` / `SliverGeometry` are tightly bound to `SliverProtocol` and the viewport walk — *not* a neutral windowing value type.
 - The deferred-mutation queue (`crates/flui-rendering/src/pipeline/deferred.rs` + `PipelineOwner::apply_deferred_mutation` at `crates/flui-rendering/src/pipeline/owner.rs:2021`, drained at end of `run_layout`) is fully wired but is **next-frame** materialization, not mid-pass re-entrancy.
 - Existing sliver lists (`crates/flui-rendering/src/objects/sliver_fixed_extent_list.rs`, `.../sliver_fill_viewport.rs`) lay out **all** children eagerly `O(n)`.
@@ -34,9 +34,9 @@ The risk this plan defends against: building the core on `SliverConstraints` (co
 
 - **`flui-rendering` slivers** — direct consumer; gains the adapter, the build contract, and the first lazy `SliverList`. The eager lists stay until the lazy list is benched as a win against them.
 - **`LayoutContextApi` (all `RenderObject` authors)** — a breaking **addition** (the re-entrant build hook). Surface widens; gated by ARCH-GATE so a future session cannot silently reshape it away from mid-pass-capable.
-- **`flui-view` lazy widgets (future)** — downstream consumer of the lazy render objects; out of scope here, recorded in U4.
-- **General windowed UIs (future)** — virtualized text, data grid, table, timeline — the reason the core is agnostic; they consume `flui-virtualization` directly.
-- **Workspace** — one new crate (`flui-virtualization`) added to `[workspace.members]`/`default-members`; one breaking import-path move (`FenwickExtents`, zero callers).
+- **`flui-view` lazy widgets (future)** — downstream consumer of the lazy render objects; they reach the core *through* `flui-rendering`'s slivers, not directly; out of scope here, recorded in U4.
+- **General windowed UIs (future)** — virtualized text, data grid, table, timeline — the reason the core is kept agnostic; they are sliver-based and consume the core *through* `flui-rendering`'s slivers. A 2nd *direct* consumer of the core is the trigger to extract a `flui-virtualization` crate (recorded in U4).
+- **Workspace** — **no new crate**; a new agnostic `virtualization` module is added inside `flui-rendering`, and `FenwickExtents` is reorganized into it (intra-crate, zero callers — no other crate's import path changes). `[workspace.members]` / `default-members` are unchanged.
 
 ---
 
@@ -46,17 +46,17 @@ The risk this plan defends against: building the core on `SliverConstraints` (co
 
 ### The agnostic core (U1)
 
-`flui-virtualization` is generic over a plain `ScrollWindow { offset, main_extent, cache_before, cache_after }` value type plus `f32` extents, and depends on `flui-types` / `flui-foundation` / `flui-geometry` **only**. The `Virtualizer` answers two questions and nothing else:
+The `virtualization` module in `flui-rendering` is generic over a plain `ScrollWindow { offset, main_extent, cache_before, cache_after }` value type plus `f32` extents, and its **public surface names no render/sliver/protocol type** (so it stays extractable into a standalone crate later that would depend on `flui-types` / `flui-foundation` / `flui-geometry` only). The `Virtualizer` answers two questions and nothing else:
 
-- `window_query(window: ScrollWindow) -> VisibleRange` — given the scroll window and the current extents (Fenwick prefix-sum of measured extents, falling back to an estimate for unmeasured indices), return the `[first, last]` item band covering visible + `cache_before`/`cache_after`, plus the leading edge of `first`. `O(log n)` offset↔index via the moved `FenwickExtents`.
+- `window_query(window: ScrollWindow) -> VisibleRange` — given the scroll window and the current extents (Fenwick prefix-sum of measured extents, falling back to an estimate for unmeasured indices), return the `[first, last]` item band covering visible + `cache_before`/`cache_after`, plus the leading edge of `first`. `O(log n)` offset↔index via the relocated `FenwickExtents`.
 - `update_measured(index, extent) -> AnchorCorrection` — record a newly-measured item extent; if it differs from the estimate previously used at or before the anchor, return the `delta` the consumer applies to the scroll offset so on-screen content does not jump.
 - estimate-for-unmeasured: a single average/seed extent used for indices not yet measured, so total scroll extent and the scrollbar are stable before every item is laid out (TanStack-style estimate-then-correct).
 
 The core is **build-agnostic** — it never builds, lays out, or names a child render object. It is pure windowing arithmetic over indices and extents.
 
-### The `SliverConstraints → ScrollWindow` adapter (U3, lives in `flui-rendering`)
+### The `SliverConstraints → ScrollWindow` adapter (U3, lives in `flui-rendering`, outside the agnostic module)
 
-A thin function maps the sliver protocol's scroll/viewport fields onto `ScrollWindow` (offset, main-axis extent, leading/trailing cache). This is the *only* place the sliver protocol meets the core; the dependency arrow points `flui-rendering → flui-virtualization`.
+A thin function maps the sliver protocol's scroll/viewport fields onto `ScrollWindow` (offset, main-axis extent, leading/trailing cache). This is the *only* place the sliver protocol meets the core, and it sits **outside** the `virtualization` module so the module never sees `SliverConstraints`; the consumption arrow is intra-crate (`objects/slivers + adapter → virtualization module`) and would remain a clean downward arrow if the module is later extracted to `flui-virtualization`.
 
 ### The mid-pass-capable build contract (U2, on `LayoutContextApi`)
 
@@ -73,24 +73,23 @@ Adapts `SliverConstraints → ScrollWindow`, asks the `Virtualizer` for the `Vis
 New files / directories created during this work:
 
 ```
-crates/
-└── flui-virtualization/                  (NEW crate: U1)
-    ├── Cargo.toml                         (deps: flui-types, flui-foundation, flui-geometry only)
-    ├── benches/
-    │   └── virtualizer.rs                 (criterion: O(log n) offset↔index, anchor-correction)
-    └── src/
-        ├── lib.rs                         (ScrollWindow, VisibleRange, AnchorCorrection, Virtualizer)
-        └── fenwick.rs                     (MOVED from crates/flui-rendering/src/slivers/fenwick.rs)
-
 crates/flui-rendering/
 ├── src/
+│   ├── virtualization/                    (NEW module: U1 — protocol-agnostic windowing math)
+│   │   ├── mod.rs                         (ScrollWindow, VisibleRange, AnchorCorrection, Virtualizer)
+│   │   └── fenwick.rs                     (REORGANIZED from src/slivers/fenwick.rs — stays in flui-rendering)
 │   ├── slivers/
-│   │   └── fenwick.rs                     (DELETED — moved to flui-virtualization in U1)
+│   │   ├── mod.rs                         (MODIFY: U1 — drop the `fenwick` module decl/re-export)
+│   │   └── fenwick.rs                     (REMOVED from here — relocated to src/virtualization/, intra-crate)
 │   ├── objects/
 │   │   └── sliver_list_lazy.rs            (NEW: U3 — lazy, virtualized SliverList consumer)
 │   └── (LayoutContextApi surface)         (MODIFY: U2 — mid-pass-capable build hook)
+├── benches/
+│   └── virtualizer.rs                     (NEW: U1 — criterion: O(log n) offset↔index, anchor-correction)
 └── (render_viewport integration harness)  (MODIFY: U3 — synthetic-children + real-frame bench)
 ```
+
+> No new workspace crate. A standalone `flui-virtualization` crate is a recorded **future** extraction (U4), triggered by a 2nd *direct* consumer; it is a cheap, non-breaking lift because the module is kept gate-enforced agnostic.
 
 Per-unit `**Files:**` sections below are authoritative for what each unit creates or modifies.
 
@@ -100,29 +99,29 @@ Per-unit `**Files:**` sections below are authoritative for what each unit create
 
 > Each U-ID is stable; reordering or splitting does not renumber. Serial dependency: U1 → U2 → U3; U4 is recorded-future. Each unit ships as atomic commit(s) and must pass `cargo fmt` + `cargo clippy --all-targets --all-features -- -D warnings` + its stated tests before the next unit starts.
 
-### U1 — `flui-virtualization` crate + protocol-agnostic `Virtualizer` core
+### U1 — `virtualization` module in `flui-rendering` + protocol-agnostic `Virtualizer` core
 
-- **Goal**: create the new crate, move `FenwickExtents` into it, and build the agnostic `Virtualizer` (`ScrollWindow`, `VisibleRange`, `window_query`; `update_measured → AnchorCorrection`; estimate-for-unmeasured). Verify in isolation.
+- **Goal**: organize a new protocol-agnostic `virtualization` module **inside `flui-rendering`**, reorganize `FenwickExtents` into it (it **stays in `flui-rendering`** — no new crate), and build the agnostic `Virtualizer` (`ScrollWindow`, `VisibleRange`, `window_query`; `update_measured → AnchorCorrection`; estimate-for-unmeasured). Verify in isolation.
 - **Depends on**: none.
 - **Files**:
-  - `crates/flui-virtualization/Cargo.toml` (NEW — depends on `flui-types`, `flui-foundation`, `flui-geometry` **only**; standard Layer-0/Core.1 metadata + lints mirroring `crates/flui-geometry/Cargo.toml`).
-  - `crates/flui-virtualization/src/lib.rs` (NEW — `ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Virtualizer` + `window_query` / `update_measured`).
-  - `crates/flui-virtualization/src/fenwick.rs` (NEW — `git mv` of `crates/flui-rendering/src/slivers/fenwick.rs`; update internal `use crate::` paths; preserve the existing ASM-verified Fenwick tests).
-  - `crates/flui-rendering/src/slivers/fenwick.rs` (DELETE — moved).
+  - `crates/flui-rendering/src/virtualization/mod.rs` (NEW — `ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Virtualizer` + `window_query` / `update_measured`; public surface names no render/sliver/protocol type).
+  - `crates/flui-rendering/src/virtualization/fenwick.rs` (NEW — `git mv` of `crates/flui-rendering/src/slivers/fenwick.rs`; intra-crate relocation; update internal `use crate::` paths if any; preserve the existing ASM-verified Fenwick tests).
+  - `crates/flui-rendering/src/slivers/fenwick.rs` (REMOVED — relocated into the `virtualization` module, intra-crate).
   - `crates/flui-rendering/src/slivers/mod.rs` (MODIFY — drop the `fenwick` module declaration/re-export; verify zero callers so nothing else breaks).
-  - `crates/flui-virtualization/benches/virtualizer.rs` (NEW — criterion).
-  - `Cargo.toml` (MODIFY — add `"crates/flui-virtualization"` to `[workspace.members]` + `default-members`).
-- **Approach**: `git mv` the Fenwick file to preserve history; the move is breaking but has **zero callers**, so it is contained. Build the `Virtualizer` on top of the moved Fenwick as the prefix-sum backbone. Keep the surface generic over `ScrollWindow` + `f32` extents — it must not name any render, sliver, or protocol type.
-- **Patterns to follow**: `crates/flui-geometry/Cargo.toml` for crate shape (low-level crate, no `flui-rendering` dep); the existing Fenwick tests for the `O(log n)` assertions.
+  - `crates/flui-rendering/src/lib.rs` (MODIFY — declare the new `virtualization` module).
+  - `crates/flui-rendering/benches/virtualizer.rs` (NEW — criterion).
+  - **No `Cargo.toml` / `[workspace.members]` change** — no new crate is created.
+- **Approach**: `git mv` the Fenwick file *within* `flui-rendering` to preserve history; the relocation is intra-crate and has **zero callers**, so it is fully contained — no other crate's imports change. Build the `Virtualizer` on top of the relocated Fenwick as the prefix-sum backbone. Keep the surface generic over `ScrollWindow` + `f32` extents — it must not name any render, sliver, or protocol type (this is what keeps the module cheaply extractable to a `flui-virtualization` crate later).
+- **Patterns to follow**: an existing self-contained `flui-rendering` module for module shape; the existing Fenwick tests for the `O(log n)` assertions.
 - **Test scenarios**:
   - Happy path: `window_query` returns the correct `[first, last]` band for a known extents vector + window, including the cache buffer.
   - `O(log n)` offset↔index proven (criterion bench + a test asserting seek cost scales sub-linearly / matches the Fenwick contract).
   - Anchor-correction: feeding a measured extent that differs from its estimate produces the `AnchorCorrection.delta` that keeps the anchored item stationary; a measure *equal* to the estimate produces zero delta.
   - Estimate-for-unmeasured: total scroll extent is stable and well-defined when only a prefix of items has been measured.
-- **Verification**: `cargo build -p flui-virtualization` exits 0; `cargo test -p flui-virtualization` exits 0; `cargo clippy -p flui-virtualization --all-targets --all-features -- -D warnings` exits 0; `cargo build -p flui-rendering` still exits 0 after the Fenwick move (proves zero-caller claim).
+- **Verification**: `cargo build -p flui-rendering` exits 0 (incl. the new `virtualization` module and after the intra-crate Fenwick relocation — proves zero-caller claim); `cargo test -p flui-rendering` (incl. the relocated Fenwick + new `Virtualizer` tests) exits 0; `cargo clippy -p flui-rendering --all-targets --all-features -- -D warnings` exits 0.
 - **Gates**:
-  - **API-GATE** — the crate's public surface (`ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Virtualizer` method signatures) is reviewed and fixed here. Invariant to enforce: **no render / sliver / protocol type appears in the public API** (keeps the core agnostic + acyclic).
-- **Acceptance**: `O(log n)` offset↔index proven; anchor-correction on extent change tested; crate depends on the three foundation crates only.
+  - **API-GATE** — the **module's** public surface (`ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Virtualizer` method signatures) is reviewed and fixed here. Invariant to enforce: **no render / sliver / protocol type appears in the module's public API** (keeps the core agnostic, keeps it cheaply crate-extractable later, and keeps the future crate-extraction acyclic).
+- **Acceptance**: `O(log n)` offset↔index proven; anchor-correction on extent change tested; the `virtualization` module's public surface is agnostic (no render/sliver/protocol type) — no new crate is created.
 
 ### U2 — Mid-pass-capable re-entrant build contract on `LayoutContextApi`
 
@@ -167,9 +166,9 @@ Per-unit `**Files:**` sections below are authoritative for what each unit create
 
 Recorded so a future session continues the exact arc rather than re-litigating it:
 
-- **Grid / staggered consumers** — additional `flui-rendering` consumers of the same agnostic `Virtualizer` (2-D / variable-span windowing on top of the same core).
-- **`flui-view` lazy widgets** — the widget-layer consumers of the lazy render objects (the third layer in the ADR's layering diagram).
-- **True mid-pass build** — if U2's v1 backend shipped next-frame, the true-mid-pass implementation is finished here (the contract already permits it; only the mechanism changes). **Not abandoned.**
+- **Grid / staggered consumers** — additional `flui-rendering` consumers of the same agnostic `Virtualizer` (2-D / variable-span windowing on top of the same core). These live *in* `flui-rendering`, so they are not a *second crate*-level consumer; they keep the core a single-crate module.
+- **`flui-view` lazy widgets** — the widget-layer consumers of the lazy render objects (the third layer in the ADR's layering diagram). They reach the core *through* `flui-rendering`'s slivers, so they are **not a direct consumer** of the core and do **not** trigger crate-extraction on their own.
+- **Crate-extraction to `flui-virtualization`** — lift the `virtualization` module into a standalone crate **when a 2nd *direct* consumer of the core appears** (a crate other than `flui-rendering` that wants the windowing math directly). This is a **mechanical, non-breaking** lift precisely because the module is gate-enforced agnostic (no render/sliver/protocol type in its `pub` surface): move the files, add the crate metadata + `[workspace.members]` entry, depend on `flui-types` / `flui-foundation` / `flui-geometry`, and re-point `flui-rendering` at the crate. Until that 2nd direct consumer exists, a crate is premature decomposition (one-consumer boundary cost not paid back).
 - **Recycling (pooling/reuse)** — added **only if a real-frame benchmark proves the need**, swapped in behind the U3 pluggable hook. Explicitly **not** RecyclerView's two-level pool by default (justifying constraint absent for a Rust arena + `can_update`).
 - **Gates**: API-GATE for any new public surface; ARCH-GATE if the build contract is touched; QA via the harness (and `flui-view` examples once that layer consumes it).
 
@@ -177,7 +176,7 @@ Recorded so a future session continues the exact arc rather than re-litigating i
 
 ## Risks and Mitigations
 
-- **Risk: the core gets coupled to the sliver protocol.** A `SliverConstraints` (or any render/sliver/protocol type) leaking into `flui-virtualization`'s public surface kills reuse and creates a dependency cycle. **Mitigation:** API-GATE on U1 explicitly rejects any such type in the public API; the adapter lives on the `flui-rendering` side.
+- **Risk: the core gets coupled to the sliver protocol.** A `SliverConstraints` (or any render/sliver/protocol type) leaking into the `virtualization` **module's** public surface kills reuse, blocks the cheap future crate-extraction, and would create a dependency cycle if extracted. **Mitigation:** API-GATE on U1 explicitly rejects any such type in the module's public API; the adapter lives on the `flui-rendering` side, outside the module.
 - **Risk: the build contract ships next-frame-*only*.** That permanently locks out true mid-pass — the ossification trap. **Mitigation:** ARCH-GATE on U2 reviews the contract *shape* (not just the v1 backend) for mid-pass capability; a next-frame-only contract is a gate failure even when the v1 backend is next-frame.
 - **Risk: false performance claims.** Reporting a next-frame backend's bench as if it were mid-pass, or asserting a virtualization win without measuring against the eager baseline. **Mitigation:** honest scaffold-vs-wired labeling is required (ADR Consequences); U3's QA gate mandates the real-frame bench vs eager and accurate backend labeling.
 - **Risk: a borrow-safety hazard in the mid-pass hook.** On-demand build during layout could create overlapping `&mut` to the arena. **Mitigation:** the mechanism reuses the U20/U20.1 disjoint-subtree primitive and the existing mid-pass-marks drain; U2's tests (and Miri where the walk is touched) cover it.
@@ -186,8 +185,8 @@ Recorded so a future session continues the exact arc rather than re-litigating i
 
 ## Definition of Done (this delivery: U1–U3)
 
-- `flui-virtualization` exists, depends on `flui-types` / `flui-foundation` / `flui-geometry` only, hosts the moved `FenwickExtents`, and its `Virtualizer` proves `O(log n)` offset↔index + anchor correction in isolation (U1, API-GATE passed).
+- The agnostic `virtualization` module exists **inside `flui-rendering`** (no new crate), hosts the reorganized `FenwickExtents` (relocated intra-crate, zero callers), keeps its public surface free of render/sliver/protocol types, and its `Virtualizer` proves `O(log n)` offset↔index + anchor correction in isolation (U1, API-GATE passed).
 - `LayoutContextApi` carries a mid-pass-capable on-demand build hook; the v1 backend is implemented and honestly labeled; borrow-safety holds (U2, ARCH-GATE passed).
 - A lazy `SliverList` builds only visible-plus-cache children, disposes on scroll-off behind a pluggable hook, corrects the anchor on extent change, and beats the eager list on a real-frame bench via the `render_viewport` harness — no `flui-view` consumer required (U3, QA passed).
-- `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and the per-unit tests are green across `flui-virtualization` and `flui-rendering`.
+- `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and the per-unit tests are green across `flui-rendering` (which now hosts the `virtualization` module).
 - U4 is recorded for the next session.
