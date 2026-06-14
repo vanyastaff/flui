@@ -164,6 +164,11 @@ criterion = "0.7"
 # that needs deterministic output assertions. Test-only; not compiled in release.
 insta = "1"
 
+# JSON SCHEMA GENERATION - used by the painted-scene introspection & serialization
+# contract (ADR-0004) to derive JsonSchema on IR types. `std` excluded so it can
+# be enabled selectively; `derive` is the only feature we need workspace-wide.
+schemars = { version = "1", default-features = false, features = ["derive"] }
+
 # Workspace-wide lints for consistent code quality (Rust 1.74+)
 [workspace.lints.rust]
 unsafe_code = "warn"
