@@ -45,7 +45,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsValue};
 use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
 
 use super::command::{CommandKind, DrawCommand};
@@ -942,6 +942,41 @@ fn add_rect_prop(builder: &mut DiagnosticsBuilder, name: &'static str, r: Rect<P
     );
 }
 
+/// Populate `builder` with the rect + four corner radii (TL/TR/BR/BL) of an
+/// `RRect`.
+///
+/// The four radii are emitted as individual `f64` properties `r_tl`, `r_tr`,
+/// `r_br`, `r_bl` (the circular x-radius of each corner, matching the stable
+/// fingerprint used by `fmt_rrect`). A regression that drops or changes a
+/// radius diffs the diagnostics output instead of passing silently.
+fn add_rrect_props(
+    builder: &mut DiagnosticsBuilder,
+    name: &'static str,
+    rrect: &flui_types::geometry::RRect,
+) {
+    add_rect_prop(builder, name, rrect.rect);
+    builder.add_f64("r_tl", f64::from(rrect.top_left.x.get()));
+    builder.add_f64("r_tr", f64::from(rrect.top_right.x.get()));
+    builder.add_f64("r_br", f64::from(rrect.bottom_right.x.get()));
+    builder.add_f64("r_bl", f64::from(rrect.bottom_left.x.get()));
+}
+
+/// Emit the recording-time transform as a typed `List` of 16 floats only when
+/// it is non-identity.
+///
+/// Identity transforms are omitted to keep diagnostics output readable and to
+/// match the contract of the stable text serialiser (`maybe_transform`).
+fn add_transform_if_nonidentity(builder: &mut DiagnosticsBuilder, transform: &Matrix4) {
+    if !transform.is_identity() {
+        let items = transform
+            .m
+            .iter()
+            .map(|&v| DiagnosticsValue::Float(f64::from(v)))
+            .collect();
+        builder.add_typed("transform", DiagnosticsValue::List(items));
+    }
+}
+
 impl Diagnosticable for DrawCommand {
     fn debug_fill_properties(&self, p: &mut DiagnosticsBuilder) {
         match self {
@@ -950,66 +985,95 @@ impl Diagnosticable for DrawCommand {
                 rect,
                 clip_op,
                 clip_behavior,
-                ..
+                transform,
             } => {
                 add_rect_prop(p, "rect", *rect);
                 p.add_enum("clip_op", clip_op);
                 p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::ClipRRect {
                 rrect,
                 clip_op,
                 clip_behavior,
-                ..
+                transform,
             } => {
-                add_rect_prop(p, "rect", rrect.rect);
+                // Emit rect + corner radii so a radius change diffs the output.
+                add_rrect_props(p, "rect", rrect);
                 p.add_enum("clip_op", clip_op);
                 p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::ClipRSuperellipse {
                 rsuperellipse,
                 clip_op,
                 clip_behavior,
-                ..
+                transform,
             } => {
                 add_rect_prop(p, "rect", rsuperellipse.outer_rect());
                 p.add_enum("clip_op", clip_op);
                 p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::ClipPath {
+                path,
                 clip_op,
                 clip_behavior,
-                ..
+                transform,
             } => {
+                // Bounds + command count are the stable fingerprint (raw verbs
+                // are too verbose); mirrors `summarize_command` for ClipPath.
+                add_rect_prop(p, "bounds", path.compute_bounds());
+                p.add_i64(
+                    "pt_count",
+                    path.commands().len().try_into().unwrap_or(i64::MAX),
+                );
                 p.add_enum("clip_op", clip_op);
                 p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
             }
 
             // ── Primitive draws ───────────────────────────────────────────────
-            DrawCommand::DrawLine { p1, p2, paint, .. } => {
+            DrawCommand::DrawLine {
+                p1,
+                p2,
+                paint,
+                transform,
+            } => {
                 p.add_offset("p1", f64::from(p1.x.get()), f64::from(p1.y.get()));
                 p.add_offset("p2", f64::from(p2.x.get()), f64::from(p2.y.get()));
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::DrawRect { rect, paint, .. } => {
+            DrawCommand::DrawRect {
+                rect,
+                paint,
+                transform,
+            } => {
                 add_rect_prop(p, "rect", *rect);
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::DrawRRect { rrect, paint, .. } => {
-                add_rect_prop(p, "rect", rrect.rect);
+            DrawCommand::DrawRRect {
+                rrect,
+                paint,
+                transform,
+            } => {
+                add_rrect_props(p, "rect", rrect);
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawCircle {
                 center,
                 radius,
                 paint,
-                ..
+                transform,
             } => {
                 p.add_offset(
                     "center",
@@ -1018,16 +1082,33 @@ impl Diagnosticable for DrawCommand {
                 );
                 p.add_f64("radius", f64::from(radius.get()));
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::DrawOval { rect, paint, .. } => {
+            DrawCommand::DrawOval {
+                rect,
+                paint,
+                transform,
+            } => {
                 add_rect_prop(p, "rect", *rect);
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::DrawPath { paint, .. } => {
-                // Path itself is opaque; emit paint only.
+            DrawCommand::DrawPath {
+                path,
+                paint,
+                transform,
+            } => {
+                // Bounds + command count are the stable fingerprint; raw verbs
+                // are too verbose and unstable. Mirrors `summarize_command`.
+                add_rect_prop(p, "bounds", path.compute_bounds());
+                p.add_i64(
+                    "pt_count",
+                    path.commands().len().try_into().unwrap_or(i64::MAX),
+                );
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             // ── Text ─────────────────────────────────────────────────────────
@@ -1036,6 +1117,7 @@ impl Diagnosticable for DrawCommand {
                 offset,
                 size,
                 paint,
+                transform,
                 ..
             } => {
                 p.add("text", text.as_str());
@@ -1050,50 +1132,80 @@ impl Diagnosticable for DrawCommand {
                     f64::from(size.height.get()),
                 );
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawTextSpan {
+                span,
+                offset,
                 text_scale_factor,
                 wrap_width,
-                ..
+                transform,
             } => {
+                // Plain text is the stable fingerprint; glyph/run details are
+                // not needed and change with shaper versions.
+                p.add("text", span.to_plain_text());
+                p.add_offset(
+                    "offset",
+                    f64::from(offset.dx.get()),
+                    f64::from(offset.dy.get()),
+                );
                 p.add_f64("text_scale_factor", *text_scale_factor);
                 if let Some(w) = wrap_width {
                     p.add_f64("wrap_width", f64::from(*w));
                 }
+                add_transform_if_nonidentity(p, transform);
             }
 
             // ── Image ─────────────────────────────────────────────────────────
-            DrawCommand::DrawImage { dst, paint, .. } => {
+            DrawCommand::DrawImage {
+                dst,
+                paint,
+                transform,
+                ..
+            } => {
                 add_rect_prop(p, "dst", *dst);
                 add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawImageRepeat {
-                dst, repeat, paint, ..
+                dst,
+                repeat,
+                paint,
+                transform,
+                ..
             } => {
                 add_rect_prop(p, "dst", *dst);
                 p.add_enum("repeat", repeat);
                 add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawImageNineSlice {
                 center_slice,
                 dst,
                 paint,
+                transform,
                 ..
             } => {
                 add_rect_prop(p, "dst", *dst);
                 add_rect_prop(p, "center_slice", *center_slice);
                 add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawImageFiltered {
-                dst, filter, paint, ..
+                dst,
+                filter,
+                paint,
+                transform,
+                ..
             } => {
                 add_rect_prop(p, "dst", *dst);
                 p.add_enum("filter", filter);
                 add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
             }
 
             // ── Texture ───────────────────────────────────────────────────────
@@ -1103,7 +1215,7 @@ impl Diagnosticable for DrawCommand {
                 src,
                 filter_quality,
                 opacity,
-                ..
+                transform,
             } => {
                 p.add("texture_id", texture_id.get());
                 add_rect_prop(p, "dst", *dst);
@@ -1112,45 +1224,64 @@ impl Diagnosticable for DrawCommand {
                 }
                 p.add_enum("filter_quality", filter_quality);
                 p.add_f64("opacity", f64::from(*opacity));
+                add_transform_if_nonidentity(p, transform);
             }
 
             // ── Effects ───────────────────────────────────────────────────────
             DrawCommand::DrawShadow {
-                color, elevation, ..
+                path,
+                color,
+                elevation,
+                transform,
             } => {
+                // Path bounds are the stable fingerprint for shadow geometry;
+                // mirrors `summarize_command` for DrawShadow.
+                add_rect_prop(p, "path_bounds", path.compute_bounds());
                 p.add_color_rgba("color", color.r, color.g, color.b, color.a);
                 p.add_f64("elevation", f64::from(*elevation));
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::DrawGradient { rect, shader, .. } => {
+            DrawCommand::DrawGradient {
+                rect,
+                shader,
+                transform,
+            } => {
                 add_rect_prop(p, "rect", *rect);
                 p.add_enum("shader", shader);
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::DrawGradientRRect { rrect, shader, .. } => {
-                add_rect_prop(p, "rect", rrect.rect);
+            DrawCommand::DrawGradientRRect {
+                rrect,
+                shader,
+                transform,
+            } => {
+                add_rrect_props(p, "rect", rrect);
                 p.add_enum("shader", shader);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::ShaderMask {
+                child,
                 shader,
                 bounds,
                 blend_mode,
-                child,
-                ..
+                transform,
             } => {
                 add_rect_prop(p, "bounds", *bounds);
                 p.add_enum("shader", shader);
                 p.add_enum("blend_mode", blend_mode);
                 p.add_i64("child_commands", child.len().try_into().unwrap_or(i64::MAX));
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::BackdropFilter {
+                child,
                 filter,
                 bounds,
                 blend_mode,
-                child,
-                ..
+                transform,
             } => {
                 add_rect_prop(p, "bounds", *bounds);
                 p.add_enum("filter", filter);
@@ -1158,6 +1289,7 @@ impl Diagnosticable for DrawCommand {
                 if let Some(c) = child {
                     p.add_i64("child_commands", c.len().try_into().unwrap_or(i64::MAX));
                 }
+                add_transform_if_nonidentity(p, transform);
             }
 
             // ── Advanced primitives ───────────────────────────────────────────
@@ -1167,35 +1299,40 @@ impl Diagnosticable for DrawCommand {
                 sweep_angle,
                 use_center,
                 paint,
-                ..
+                transform,
             } => {
                 add_rect_prop(p, "rect", *rect);
                 p.add_f64("start_angle", f64::from(*start_angle));
                 p.add_f64("sweep_angle", f64::from(*sweep_angle));
                 p.add_bool("use_center", *use_center);
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawDRRect {
                 outer,
                 inner,
                 paint,
-                ..
+                transform,
             } => {
-                add_rect_prop(p, "outer", outer.rect);
-                add_rect_prop(p, "inner", inner.rect);
+                // Emit rect + radii for both outer and inner so a radius change
+                // on either ring diffs the output; mirrors `fmt_rrect` coverage.
+                add_rrect_props(p, "outer", outer);
+                add_rrect_props(p, "inner", inner);
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawPoints {
                 mode,
                 points,
                 paint,
-                ..
+                transform,
             } => {
                 p.add_enum("mode", mode);
                 p.add_i64("point_count", points.len().try_into().unwrap_or(i64::MAX));
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawVertices {
@@ -1203,6 +1340,7 @@ impl Diagnosticable for DrawCommand {
                 colors,
                 tex_coords,
                 paint,
+                transform,
                 ..
             } => {
                 p.add_i64(
@@ -1212,17 +1350,22 @@ impl Diagnosticable for DrawCommand {
                 p.add_bool("has_colors", colors.is_some());
                 p.add_bool("has_tex_coords", tex_coords.is_some());
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawColor {
-                color, blend_mode, ..
+                color,
+                blend_mode,
+                transform,
             } => {
                 p.add_color_rgba("color", color.r, color.g, color.b, color.a);
                 p.add_enum("blend_mode", blend_mode);
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::DrawPaint { paint, .. } => {
+            DrawCommand::DrawPaint { paint, transform } => {
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
             DrawCommand::DrawAtlas {
@@ -1230,24 +1373,31 @@ impl Diagnosticable for DrawCommand {
                 colors,
                 blend_mode,
                 paint,
+                transform,
                 ..
             } => {
                 p.add_i64("sprite_count", sprites.len().try_into().unwrap_or(i64::MAX));
                 p.add_bool("has_colors", colors.is_some());
                 p.add_enum("blend_mode", blend_mode);
                 add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
             }
 
             // ── Layer ─────────────────────────────────────────────────────────
-            DrawCommand::SaveLayer { bounds, paint, .. } => {
+            DrawCommand::SaveLayer {
+                bounds,
+                paint,
+                transform,
+            } => {
                 if let Some(b) = bounds {
                     add_rect_prop(p, "bounds", *b);
                 }
                 add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
             }
 
-            DrawCommand::RestoreLayer { .. } => {
-                // No visual properties beyond the transform.
+            DrawCommand::RestoreLayer { transform } => {
+                add_transform_if_nonidentity(p, transform);
             }
         }
     }

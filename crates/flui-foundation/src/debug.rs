@@ -394,9 +394,9 @@ impl fmt::Display for DiagnosticsValue {
             Self::Float(v) => write!(f, "{v:.2}"),
             Self::Str(s) => f.write_str(s),
             Self::Color { r, g, b, a } => write!(f, "#{r:02X}{g:02X}{b:02X}{a:02X}"),
-            Self::Rect { x, y, w, h } => write!(f, "({x:.1},{y:.1},{w:.1},{h:.1})"),
-            Self::Offset { x, y } => write!(f, "({x:.1},{y:.1})"),
-            Self::Size { w, h } => write!(f, "{w:.1}×{h:.1}"),
+            Self::Rect { x, y, w, h } => write!(f, "({x:.2},{y:.2},{w:.2},{h:.2})"),
+            Self::Offset { x, y } => write!(f, "({x:.2},{y:.2})"),
+            Self::Size { w, h } => write!(f, "{w:.2}×{h:.2}"),
             Self::List(items) => {
                 write!(f, "[")?;
                 for (i, item) in items.iter().enumerate() {
@@ -1125,6 +1125,52 @@ impl DiagnosticsNode {
     /// ```
     #[must_use]
     pub fn to_json(&self) -> String {
+        fn write_value(val: &DiagnosticsValue, buf: &mut String) -> std::fmt::Result {
+            use std::fmt::Write as _;
+            match val {
+                DiagnosticsValue::Null => buf.push_str("null"),
+                DiagnosticsValue::Bool(b) => write!(buf, "{b}")?,
+                DiagnosticsValue::Int(i) => write!(buf, "{i}")?,
+                // Full precision in JSON; Display normalises to 2 d.p. for text.
+                DiagnosticsValue::Float(v) => write!(buf, "{v:?}")?,
+                DiagnosticsValue::Str(s) => write!(buf, "\"{}\"", escape_json(s))?,
+                DiagnosticsValue::Color { r, g, b, a } => {
+                    write!(buf, "{{\"r\":{r},\"g\":{g},\"b\":{b},\"a\":{a}}}")?;
+                }
+                DiagnosticsValue::Rect { x, y, w, h } => {
+                    write!(buf, "{{\"x\":{x:?},\"y\":{y:?},\"w\":{w:?},\"h\":{h:?}}}")?;
+                }
+                DiagnosticsValue::Offset { x, y } => {
+                    write!(buf, "{{\"x\":{x:?},\"y\":{y:?}}}")?;
+                }
+                DiagnosticsValue::Size { w, h } => {
+                    write!(buf, "{{\"w\":{w:?},\"h\":{h:?}}}")?;
+                }
+                DiagnosticsValue::List(items) => {
+                    buf.push('[');
+                    for (i, item) in items.iter().enumerate() {
+                        if i > 0 {
+                            buf.push(',');
+                        }
+                        write_value(item, buf)?;
+                    }
+                    buf.push(']');
+                }
+                DiagnosticsValue::Nested(props) => {
+                    buf.push('{');
+                    for (i, prop) in props.iter().enumerate() {
+                        if i > 0 {
+                            buf.push(',');
+                        }
+                        write!(buf, "\"{}\":", escape_json(prop.name()))?;
+                        write_value(prop.value_typed(), buf)?;
+                    }
+                    buf.push('}');
+                }
+            }
+            Ok(())
+        }
+
         fn write_json(node: &DiagnosticsNode, buf: &mut String, indent: usize) -> std::fmt::Result {
             use std::fmt::Write as _;
 
@@ -1137,7 +1183,8 @@ impl DiagnosticsNode {
             )?;
             writeln!(buf, "{pad}  \"level\": \"{}\",", node.level.as_str())?;
 
-            // Properties
+            // Properties — values are serialized from typed variants, not Display strings,
+            // so a Rect emits {"x":...} and a Float emits a JSON number (full precision).
             write!(buf, "{pad}  \"properties\": {{")?;
             let props = node.properties();
             for (i, prop) in props.iter().enumerate() {
@@ -1145,12 +1192,8 @@ impl DiagnosticsNode {
                     buf.push(',');
                 }
                 buf.push('\n');
-                write!(
-                    buf,
-                    "{pad}    \"{}\": \"{}\"",
-                    escape_json(prop.name()),
-                    escape_json(&prop.value())
-                )?;
+                write!(buf, "{pad}    \"{}\": ", escape_json(prop.name()))?;
+                write_value(prop.value_typed(), buf)?;
             }
             if !props.is_empty() {
                 buf.push('\n');
@@ -1191,6 +1234,9 @@ impl Default for DiagnosticsNode {
 }
 
 /// Escapes a string for JSON embedding.
+///
+/// Handles all JSON-mandatory escapes: `"`, `\`, the named control chars
+/// `\n`/`\r`/`\t`, and the remaining U+0000–U+001F range as `\u00XX`.
 fn escape_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -1200,6 +1246,12 @@ fn escape_json(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            // Remaining C0 control characters (U+0000–U+001F) must be escaped
+            // per RFC 8259 §7; named forms above cover \n/\r/\t already.
+            c if (c as u32) < 0x0020 => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             _ => out.push(c),
         }
     }
