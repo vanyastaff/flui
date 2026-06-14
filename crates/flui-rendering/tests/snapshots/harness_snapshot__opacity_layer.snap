@@ -1,0 +1,9 @@
+---
+source: crates/flui-rendering/tests/harness_snapshot.rs
+assertion_line: 284
+expression: run.snapshot()
+---
+Offset dx=0.00 dy=0.00
+  Opacity alpha=0.50
+    Picture bounds=(0.00,0.00 50.00x50.00)
+      DrawRect rect=(0.00,0.00 50.00x50.00) fill #FF0000FF
