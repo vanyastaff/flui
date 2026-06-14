@@ -1,4 +1,6 @@
-//! Stable, normalized projection of one [`DrawCommand`] to a single text line.
+//! Stable, normalized projection of one [`DrawCommand`] to a single text line,
+//! plus [`serialize_layer_tree`] / [`serialize_layer_subtree`] /
+//! [`collect_commands`] that walk a [`flui_layer::LayerTree`] to stable text.
 //!
 //! This is the leaf of the snapshot serializer and the unit a predicate sees.
 //! Stability contract: once the line format is chosen (floats 2-dec, color
@@ -6,12 +8,13 @@
 //!
 //! # Task context
 //!
-//! Task 3 will walk the `LayerTree` and call [`summarize_command`] per picture
-//! command. Task 4 exposes it on `FrameRun`. Keep this file focused: just
-//! summary + helpers.
+//! Task 4 will expose `serialize_layer_tree` on `FrameRun::snapshot()`.
+//! Keep this file focused: summary helpers + the tree walk.
 
+use flui_foundation::{LayerId, RenderId};
+use flui_layer::LayerTree;
 use flui_painting::PaintStyle;
-use flui_painting::display_list::{ClipOp, DrawCommand, Paint};
+use flui_painting::display_list::{ClipOp, DisplayList, DrawCommand, Paint};
 use flui_types::{
     geometry::{Matrix4, Pixels, Point, RRect, Rect},
     styling::Color,
@@ -614,6 +617,282 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
     }
 }
 
+// ── LayerTree serialization ──────────────────────────────────────────────────
+
+/// Serialize a `DisplayList`'s commands into `out` at the given indent depth.
+///
+/// Recurses into the child `DisplayList`s embedded in `ShaderMask` and
+/// `BackdropFilter` commands so that masked content appears in the snapshot.
+fn write_display_list(out: &mut String, dl: &DisplayList, depth: usize) {
+    let indent = "  ".repeat(depth);
+    for cmd in dl.iter() {
+        // Recurse into effect-command children before printing the line so that
+        // the child content appears nested under the effect header.
+        match cmd {
+            DrawCommand::ShaderMask { child, .. } => {
+                let summary = summarize_command(cmd);
+                out.push_str(&indent);
+                out.push_str(&summary.line);
+                out.push('\n');
+                write_display_list(out, child, depth + 1);
+            }
+            DrawCommand::BackdropFilter {
+                child: Some(child), ..
+            } => {
+                let summary = summarize_command(cmd);
+                out.push_str(&indent);
+                out.push_str(&summary.line);
+                out.push('\n');
+                write_display_list(out, child, depth + 1);
+            }
+            _ => {
+                let summary = summarize_command(cmd);
+                out.push_str(&indent);
+                out.push_str(&summary.line);
+                out.push('\n');
+            }
+        }
+    }
+}
+
+/// Collect all `DrawCommandSummary` values from a `DisplayList`, recursing
+/// into `ShaderMask` and `BackdropFilter` child lists.
+fn collect_from_display_list(dl: &DisplayList, out: &mut Vec<DrawCommandSummary>) {
+    for cmd in dl.iter() {
+        match cmd {
+            DrawCommand::ShaderMask { child, .. } => {
+                out.push(summarize_command(cmd));
+                collect_from_display_list(child, out);
+            }
+            DrawCommand::BackdropFilter {
+                child: Some(child), ..
+            } => {
+                out.push(summarize_command(cmd));
+                collect_from_display_list(child, out);
+            }
+            _ => {
+                out.push(summarize_command(cmd));
+            }
+        }
+    }
+}
+
+/// Write one layer node (and all its descendants) into `out`.
+///
+/// Each layer gets one header line at `depth*2` spaces of indentation.
+/// `Picture` layers additionally emit their commands at `depth+1`.
+/// Container layers recurse into children in their stored order (deterministic,
+/// no hash iteration).
+fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
+    use flui_layer::Layer;
+
+    let Some(node) = tree.get(id) else {
+        return;
+    };
+    let indent = "  ".repeat(depth);
+
+    // One header line describing this layer with its defining parameter.
+    match node.layer() {
+        Layer::Canvas(_) => {
+            out.push_str(&indent);
+            out.push_str("Canvas\n");
+        }
+        Layer::Picture(p) => {
+            let b = p.bounds();
+            out.push_str(&indent);
+            out.push_str(&format!(
+                "Picture bounds=({},{} {}x{})\n",
+                f(b.left().get()),
+                f(b.top().get()),
+                f(b.width().get()),
+                f(b.height().get()),
+            ));
+            // Emit commands one level deeper.
+            write_display_list(out, p.picture(), depth + 1);
+        }
+        Layer::Texture(_) => {
+            out.push_str(&indent);
+            out.push_str("Texture\n");
+        }
+        Layer::PlatformView(_) => {
+            out.push_str(&indent);
+            out.push_str("PlatformView\n");
+        }
+        Layer::PerformanceOverlay(_) => {
+            out.push_str(&indent);
+            out.push_str("PerformanceOverlay\n");
+        }
+        Layer::ClipRect(c) => {
+            let r = c.clip_rect();
+            out.push_str(&indent);
+            out.push_str(&format!(
+                "ClipRect rect=({},{} {}x{})\n",
+                f(r.left().get()),
+                f(r.top().get()),
+                f(r.width().get()),
+                f(r.height().get()),
+            ));
+        }
+        Layer::ClipRRect(c) => {
+            let r = c.clip_rrect();
+            let outer = r.rect;
+            out.push_str(&indent);
+            out.push_str(&format!(
+                "ClipRRect rect=({},{} {}x{})\n",
+                f(outer.left().get()),
+                f(outer.top().get()),
+                f(outer.width().get()),
+                f(outer.height().get()),
+            ));
+        }
+        Layer::ClipPath(_) => {
+            out.push_str(&indent);
+            out.push_str("ClipPath\n");
+        }
+        Layer::ClipSuperellipse(c) => {
+            let r = c.clip_superellipse().outer_rect();
+            out.push_str(&indent);
+            out.push_str(&format!(
+                "ClipSuperellipse rect=({},{} {}x{})\n",
+                f(r.left().get()),
+                f(r.top().get()),
+                f(r.width().get()),
+                f(r.height().get()),
+            ));
+        }
+        Layer::Offset(o) => {
+            out.push_str(&indent);
+            out.push_str(&format!("Offset dx={} dy={}\n", f(o.dx()), f(o.dy())));
+        }
+        Layer::Transform(_) => {
+            out.push_str(&indent);
+            out.push_str("Transform\n");
+        }
+        Layer::Opacity(o) => {
+            out.push_str(&indent);
+            out.push_str(&format!("Opacity alpha={}\n", f(o.alpha())));
+        }
+        Layer::ColorFilter(_) => {
+            out.push_str(&indent);
+            out.push_str("ColorFilter\n");
+        }
+        Layer::ImageFilter(_) => {
+            out.push_str(&indent);
+            out.push_str("ImageFilter\n");
+        }
+        Layer::ShaderMask(s) => {
+            let r = s.bounds();
+            out.push_str(&indent);
+            out.push_str(&format!(
+                "ShaderMask bounds=({},{} {}x{})\n",
+                f(r.left().get()),
+                f(r.top().get()),
+                f(r.width().get()),
+                f(r.height().get()),
+            ));
+        }
+        Layer::BackdropFilter(b) => {
+            let r = b.bounds();
+            out.push_str(&indent);
+            out.push_str(&format!(
+                "BackdropFilter bounds=({},{} {}x{})\n",
+                f(r.left().get()),
+                f(r.top().get()),
+                f(r.width().get()),
+                f(r.height().get()),
+            ));
+        }
+        Layer::Leader(_) => {
+            out.push_str(&indent);
+            out.push_str("Leader\n");
+        }
+        Layer::Follower(_) => {
+            out.push_str(&indent);
+            out.push_str("Follower\n");
+        }
+        Layer::AnnotatedRegion(_) => {
+            out.push_str(&indent);
+            out.push_str("AnnotatedRegion\n");
+        }
+    }
+    // NOTE: `Layer` is `#[non_exhaustive]` but this crate is in the same
+    // workspace, so the compiler sees all variants and the match is
+    // exhaustive. A new variant in `flui-layer` will produce a compile
+    // error here, which is the desired behaviour.
+
+    // Recurse into children in their stored order (deterministic).
+    for &child_id in node.children() {
+        write_layer(out, tree, child_id, depth + 1);
+    }
+}
+
+/// Serialize the full [`LayerTree`] to a stable indented text form.
+///
+/// # Format
+///
+/// Each layer produces one header line indented by `depth * 2` spaces,
+/// containing the layer kind plus its defining parameter (clip rect, alpha,
+/// offset, …). `Picture` layers additionally list their draw commands one
+/// level deeper (via [`summarize_command`]). `ShaderMask` and
+/// `BackdropFilter` draw commands inside a picture recurse into their
+/// embedded child `DisplayList`s.
+///
+/// The format is stable across runs: floats are 2-decimal, children appear in
+/// their stored (insertion) order, and no hash-map iteration is involved.
+#[must_use]
+pub fn serialize_layer_tree(tree: &LayerTree) -> String {
+    let mut out = String::new();
+    if let Some(root) = tree.root() {
+        write_layer(&mut out, tree, root, 0);
+    }
+    out
+}
+
+/// Serialize the subtree rooted at the layer boundary for `node`.
+///
+/// # Current approximation
+///
+/// `LayerNode` carries an `element_id: Option<ElementId>` cross-tree
+/// reference but **not** a `RenderId`, and `OffsetLayer` (the repaint-boundary
+/// carrier) stores no per-node identity. Because there is no O(1) lookup of
+/// "the layer whose boundary corresponds to render node `node`", this function
+/// currently falls back to [`serialize_layer_tree`] and serializes the whole
+/// tree.
+///
+/// A per-node scoping map (`RenderId → LayerId`) would enable precise subtree
+/// snapshots; tracked as a concern for Task 4 / the `FrameRun` integration.
+#[must_use]
+pub fn serialize_layer_subtree(tree: &LayerTree, _node: RenderId) -> String {
+    // No RenderId→LayerId mapping exists yet; fall back to the whole tree.
+    serialize_layer_tree(tree)
+}
+
+/// Collect every [`DrawCommandSummary`] reachable from all `Picture` layers in
+/// the tree, in pre-order.
+///
+/// `ShaderMask` and `BackdropFilter` commands that embed a child `DisplayList`
+/// are recursed so masked content is included.
+#[must_use]
+pub fn collect_commands(tree: &LayerTree) -> Vec<DrawCommandSummary> {
+    fn walk(tree: &LayerTree, id: LayerId, out: &mut Vec<DrawCommandSummary>) {
+        let Some(node) = tree.get(id) else {
+            return;
+        };
+        if let flui_layer::Layer::Picture(p) = node.layer() {
+            collect_from_display_list(p.picture(), out);
+        }
+        for &child_id in node.children() {
+            walk(tree, child_id, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Some(root) = tree.root() {
+        walk(tree, root, &mut out);
+    }
+    out
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -829,5 +1108,66 @@ mod tests {
         use super::fmt_point;
         let p = Point::new(px(3.5), px(-1.0));
         assert_eq!(fmt_point(p), "(3.50,-1.00)");
+    }
+
+    // ── LayerTree serialization tests ─────────────────────────────────────────
+
+    /// Mounting a `RenderColoredBox::red(40, 40)` and running a frame must
+    /// produce a serialized layer tree containing `"Picture"` and the stable
+    /// `DrawRect` line for the painted rectangle.
+    #[test]
+    fn serialize_simple_box_is_stable() {
+        use flui_types::Size;
+
+        use crate::objects::RenderColoredBox;
+        use crate::testing::{RenderTester, box_node, serialize_layer_tree};
+
+        let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
+            .with_size(Size::new(px(40.0), px(40.0)))
+            .run_frame();
+
+        let tree = run
+            .layer_tree()
+            .expect("RenderColoredBox must produce a layer tree");
+        let s = serialize_layer_tree(tree);
+
+        assert!(
+            s.contains("Picture"),
+            "serialized tree must contain a Picture layer; got:\n{s}"
+        );
+        assert!(
+            s.contains("DrawRect rect=(0.00,0.00 40.00x40.00)"),
+            "serialized tree must contain the DrawRect for the red box; got:\n{s}"
+        );
+    }
+
+    /// `collect_commands` on a `RenderColoredBox` frame must return a non-empty
+    /// `Vec` whose first element has `kind == DrawKind::Rect`.
+    #[test]
+    fn collect_commands_red_box_first_is_rect() {
+        use flui_types::Size;
+
+        use crate::objects::RenderColoredBox;
+        use crate::testing::{RenderTester, box_node, collect_commands};
+
+        let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
+            .with_size(Size::new(px(40.0), px(40.0)))
+            .run_frame();
+
+        let tree = run
+            .layer_tree()
+            .expect("RenderColoredBox must produce a layer tree");
+        let cmds = collect_commands(tree);
+
+        assert!(
+            !cmds.is_empty(),
+            "collect_commands must return at least one command for a painted box"
+        );
+        assert_eq!(
+            cmds[0].kind,
+            DrawKind::Rect,
+            "first command for a colored box must be a Rect, got: {:?}",
+            cmds[0].kind
+        );
     }
 }

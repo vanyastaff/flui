@@ -70,7 +70,10 @@ pub use inspect::Probe;
 pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
 pub use report::FrameReport;
-pub use snapshot::{DrawCommandSummary, DrawKind, summarize_command};
+pub use snapshot::{
+    DrawCommandSummary, DrawKind, collect_commands, serialize_layer_subtree, serialize_layer_tree,
+    summarize_command,
+};
 pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,
 };
