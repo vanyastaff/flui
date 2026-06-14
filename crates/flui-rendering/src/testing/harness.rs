@@ -25,6 +25,7 @@ use flui_types::{Rect, Size, geometry::px};
 
 use crate::{
     constraints::BoxConstraints,
+    error::RenderError,
     pipeline::{Compositing, Idle, Layout, PaintPhase, PipelineOwner, Semantics},
     storage::RenderNode,
     testing::{
@@ -156,10 +157,55 @@ impl RenderTester {
             layer_tree,
         }
     }
+
+    /// Drives the tree through layout only, returning `Err` on any
+    /// [`RenderError`] (e.g. a panicking [`perform_layout_raw`]) instead of
+    /// panicking the test process.
+    ///
+    /// [`perform_layout_raw`]: crate::protocol::RenderObject::perform_layout_raw
+    pub fn try_run_layout(self) -> Result<LayoutRun, RenderError> {
+        let (owner, root_id, registry) = self.build();
+        let mut owner = owner.into_layout();
+        owner.run_layout()?;
+        Ok(LayoutRun {
+            owner,
+            root_id,
+            registry,
+        })
+    }
+
+    /// Drives the tree through a full frame, returning `Err` on any
+    /// [`RenderError`] (e.g. a panicking [`paint_raw`]) instead of panicking
+    /// the test process.
+    ///
+    /// [`paint_raw`]: crate::protocol::RenderObject::paint_raw
+    pub fn try_run_frame(self) -> Result<FrameRun, RenderError> {
+        let (owner, root_id, registry) = self.build();
+        let (owner, result) = owner.run_frame();
+        let layer_tree = result?;
+        Ok(FrameRun {
+            owner,
+            root_id,
+            registry,
+            layer_tree,
+        })
+    }
+
+    /// Drives the tree through layout and asserts it fails, returning the
+    /// [`RenderError`].
+    ///
+    /// Panics if layout succeeds — the invariant being tested is that this
+    /// tree must produce a layout error.
+    #[must_use]
+    pub fn expect_layout_error(self) -> RenderError {
+        self.try_run_layout()
+            .expect_err("tree was expected to fail layout but layout succeeded")
+    }
 }
 
 /// The result of a [`RenderTester::run_layout`]: a pipeline parked in the
 /// `Layout` phase with committed geometry/offsets ready to inspect.
+#[derive(Debug)]
 pub struct LayoutRun {
     owner: PipelineOwner<Layout>,
     root_id: RenderId,
@@ -237,6 +283,7 @@ impl Probe for LayoutRun {
 
 /// The result of a [`RenderTester::run_frame`]: a pipeline returned to
 /// `Idle` plus the layer tree the frame produced.
+#[derive(Debug)]
 pub struct FrameRun {
     owner: PipelineOwner<Idle>,
     root_id: RenderId,
@@ -792,4 +839,41 @@ impl Probe for SemanticsRun {
     fn registry(&self) -> &RenderLabelRegistry {
         &self.registry
     }
+}
+
+// ============================================================================
+// Overflow inspection (Task 6)
+// ============================================================================
+
+/// Returns `true` when the render object at `node` has set its
+/// `has_visual_overflow` flag after layout.
+///
+/// Recognises [`crate::objects::RenderFittedBox`],
+/// [`crate::objects::RenderStack`], and
+/// [`crate::objects::RenderViewport`]. Any other node type, or a stale /
+/// sliver `node`, returns `false`.
+///
+/// Call this on a [`LayoutRun`] or [`FrameRun`] after the layout pass has
+/// committed geometry.
+#[must_use]
+pub fn has_overflow(probe: &impl Probe, node: RenderId) -> bool {
+    use crate::objects::{RenderFittedBox, RenderStack, RenderViewport};
+
+    let Some(render_node) = probe.pipeline().render_tree().get(node) else {
+        return false;
+    };
+    let Some(entry) = render_node.as_box() else {
+        return false;
+    };
+    let obj = entry.render_object();
+    if let Some(fitted) = obj.as_any().downcast_ref::<RenderFittedBox>() {
+        return fitted.has_visual_overflow();
+    }
+    if let Some(stack) = obj.as_any().downcast_ref::<RenderStack>() {
+        return stack.has_visual_overflow();
+    }
+    if let Some(viewport) = obj.as_any().downcast_ref::<RenderViewport>() {
+        return viewport.has_visual_overflow();
+    }
+    false
 }

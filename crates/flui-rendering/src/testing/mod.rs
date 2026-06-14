@@ -65,7 +65,9 @@ pub use assertions::{
     assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
     assert_properties,
 };
-pub use harness::{CompositingRun, FrameRun, LayoutRun, PaintRun, RenderTester, SemanticsRun};
+pub use harness::{
+    CompositingRun, FrameRun, LayoutRun, PaintRun, RenderTester, SemanticsRun, has_overflow,
+};
 pub use inspect::Probe;
 pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
