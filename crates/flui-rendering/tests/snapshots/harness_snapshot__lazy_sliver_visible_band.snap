@@ -1,10 +1,9 @@
 ---
 source: crates/flui-rendering/tests/harness_snapshot.rs
-assertion_line: 365
 expression: snap
 ---
 Offset dx=0.00 dy=0.00
-  ClipRect rect=(0.00,0.00 300.00x200.00)
+  ClipRect rect=(0.00,0.00 300.00x200.00) clip=hard
     Picture bounds=(0.00,0.00 300.00x450.00)
       DrawRect rect=(0.00,0.00 300.00x50.00) fill #FF0000FF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,400.00,0.00,1.00]
       DrawRect rect=(0.00,0.00 300.00x50.00) fill #FF0000FF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,350.00,0.00,1.00]

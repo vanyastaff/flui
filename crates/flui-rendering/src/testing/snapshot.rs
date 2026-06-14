@@ -17,6 +17,7 @@ use flui_painting::PaintStyle;
 use flui_painting::display_list::{ClipOp, DisplayList, DrawCommand, Paint};
 use flui_types::{
     geometry::{Matrix4, Pixels, Point, RRect, Rect},
+    painting::Clip,
     styling::Color,
 };
 
@@ -145,6 +146,20 @@ fn fmt_clip_op(op: ClipOp) -> &'static str {
     }
 }
 
+/// Format a `Clip` behavior as a short lowercase string.
+///
+/// Distinct rendering qualities must serialize distinctly so a regression that
+/// swaps, say, `AntiAlias` for `HardEdge` shows up as a snapshot diff instead
+/// of passing silently.
+fn fmt_clip(behavior: Clip) -> &'static str {
+    match behavior {
+        Clip::None => "none",
+        Clip::HardEdge => "hard",
+        Clip::AntiAlias => "antialias",
+        Clip::AntiAliasWithSaveLayer => "antialias-savelayer",
+    }
+}
+
 /// Append a transform suffix when the matrix is non-identity.
 fn maybe_transform(transform: &Matrix4) -> String {
     if transform.is_identity() {
@@ -178,14 +193,16 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
         DrawCommand::ClipRect {
             rect,
             clip_op,
+            clip_behavior,
             transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipRect rect={} op={}{}",
+                "ClipRect rect={} op={} clip={}{}",
                 fmt_rect(*rect),
                 fmt_clip_op(*clip_op),
+                fmt_clip(*clip_behavior),
                 maybe_transform(transform),
             ),
         },
@@ -193,14 +210,16 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
         DrawCommand::ClipRRect {
             rrect,
             clip_op,
+            clip_behavior,
             transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipRRect rrect={} op={}{}",
+                "ClipRRect rrect={} op={} clip={}{}",
                 fmt_rrect(rrect),
                 fmt_clip_op(*clip_op),
+                fmt_clip(*clip_behavior),
                 maybe_transform(transform),
             ),
         },
@@ -208,14 +227,16 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
         DrawCommand::ClipRSuperellipse {
             rsuperellipse,
             clip_op,
+            clip_behavior,
             transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipRSuperellipse rect={} op={}{}",
+                "ClipRSuperellipse rect={} op={} clip={}{}",
                 fmt_rect(rsuperellipse.outer_rect()),
                 fmt_clip_op(*clip_op),
+                fmt_clip(*clip_behavior),
                 maybe_transform(transform),
             ),
         },
@@ -223,15 +244,17 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
         DrawCommand::ClipPath {
             path,
             clip_op,
+            clip_behavior,
             transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipPath bounds={} pts={} op={}{}",
+                "ClipPath bounds={} pts={} op={} clip={}{}",
                 fmt_rect(path.compute_bounds()),
                 path.commands().len(),
                 fmt_clip_op(*clip_op),
+                fmt_clip(*clip_behavior),
                 maybe_transform(transform),
             ),
         },
@@ -733,38 +756,48 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             let r = c.clip_rect();
             out.push_str(&indent);
             out.push_str(&format!(
-                "ClipRect rect=({},{} {}x{})\n",
+                "ClipRect rect=({},{} {}x{}) clip={}\n",
                 f(r.left().get()),
                 f(r.top().get()),
                 f(r.width().get()),
                 f(r.height().get()),
+                fmt_clip(c.clip_behavior()),
             ));
         }
         Layer::ClipRRect(c) => {
-            let r = c.clip_rrect();
-            let outer = r.rect;
+            // Serialize the full rounded rect (outer bounds + corner radii) so a
+            // regression that drops or changes the radii diffs the snapshot
+            // instead of passing under an identical outer-rect line.
             out.push_str(&indent);
             out.push_str(&format!(
-                "ClipRRect rect=({},{} {}x{})\n",
-                f(outer.left().get()),
-                f(outer.top().get()),
-                f(outer.width().get()),
-                f(outer.height().get()),
+                "ClipRRect rrect={} clip={}\n",
+                fmt_rrect(c.clip_rrect()),
+                fmt_clip(c.clip_behavior()),
             ));
         }
-        Layer::ClipPath(_) => {
+        Layer::ClipPath(c) => {
+            // Mirror the command-path summary: clipping geometry shape (bounds +
+            // point count) and behavior, so the clip is not reduced to a bare
+            // "ClipPath" marker that hides every shape/quality change.
+            let path = c.clip_path();
             out.push_str(&indent);
-            out.push_str("ClipPath\n");
+            out.push_str(&format!(
+                "ClipPath bounds={} pts={} clip={}\n",
+                fmt_rect(path.compute_bounds()),
+                path.commands().len(),
+                fmt_clip(c.clip_behavior()),
+            ));
         }
         Layer::ClipSuperellipse(c) => {
             let r = c.clip_superellipse().outer_rect();
             out.push_str(&indent);
             out.push_str(&format!(
-                "ClipSuperellipse rect=({},{} {}x{})\n",
+                "ClipSuperellipse rect=({},{} {}x{}) clip={}\n",
                 f(r.left().get()),
                 f(r.top().get()),
                 f(r.width().get()),
                 f(r.height().get()),
+                fmt_clip(c.clip_behavior()),
             ));
         }
         Layer::Offset(o) => {
@@ -1111,6 +1144,58 @@ mod tests {
             s.line.contains("op=intersect"),
             "expected op=intersect in: {}",
             s.line
+        );
+        assert!(
+            s.line.contains("clip=hard"),
+            "expected clip=hard in: {}",
+            s.line
+        );
+    }
+
+    /// Clip behavior is part of the summary: the same geometry under `HardEdge`
+    /// vs `AntiAlias` must produce different lines, so a rendering-quality
+    /// regression diffs the snapshot instead of passing silently.
+    #[test]
+    fn clip_behavior_distinguishes_clip_summaries() {
+        use flui_painting::display_list::ClipOp;
+        use flui_types::painting::Clip;
+        let mk = |behavior| {
+            summarize_command(&DrawCommand::ClipRect {
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+                clip_op: ClipOp::Intersect,
+                clip_behavior: behavior,
+                transform: Matrix4::IDENTITY,
+            })
+            .line
+        };
+        let hard = mk(Clip::HardEdge);
+        let aa = mk(Clip::AntiAlias);
+        assert!(hard.contains("clip=hard"), "got: {hard}");
+        assert!(aa.contains("clip=antialias"), "got: {aa}");
+        assert_ne!(hard, aa, "clip behavior must change the summary");
+    }
+
+    /// Rounded-clip radii are part of the summary: the same outer rect with
+    /// different corner radii must produce different lines, so a dropped or
+    /// altered radius diffs the snapshot instead of passing silently.
+    #[test]
+    fn clip_rrect_radii_distinguish_summaries() {
+        use flui_painting::display_list::ClipOp;
+        use flui_types::geometry::RRect;
+        use flui_types::painting::Clip;
+        let mk = |radius: f32| {
+            summarize_command(&DrawCommand::ClipRRect {
+                rrect: RRect::from_rect_circular(rect(0.0, 0.0, 40.0, 40.0), px(radius)),
+                clip_op: ClipOp::Intersect,
+                clip_behavior: Clip::HardEdge,
+                transform: Matrix4::IDENTITY,
+            })
+            .line
+        };
+        assert_ne!(
+            mk(4.0),
+            mk(12.0),
+            "different corner radii must change the summary"
         );
     }
 

@@ -1,9 +1,8 @@
 ---
 source: crates/flui-rendering/tests/harness_snapshot.rs
-assertion_line: 261
 expression: run.snapshot()
 ---
 Offset dx=0.00 dy=0.00
-  ClipRect rect=(0.00,0.00 40.00x40.00)
+  ClipRect rect=(0.00,0.00 40.00x40.00) clip=antialias
     Picture bounds=(0.00,0.00 40.00x40.00)
       DrawRect rect=(0.00,0.00 40.00x40.00) fill #0000FFFF
