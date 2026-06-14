@@ -7,7 +7,9 @@ fn insta_tooling_smoke() {
 }
 
 use flui_rendering::objects::RenderColoredBox;
-use flui_rendering::testing::{DrawKind, RenderTester, box_node};
+use flui_rendering::testing::{
+    RenderTester, box_node, is_draw_command_with_rect, is_draw_command_with_shadow,
+};
 use flui_types::{Size, geometry::px};
 
 #[test]
@@ -16,16 +18,16 @@ fn frame_snapshot_and_predicate() {
         .with_size(Size::new(px(40.0), px(40.0)))
         .run_frame();
     insta::assert_snapshot!("colored_box", run.snapshot());
-    run.assert_paints_any(|c| c.kind == DrawKind::Rect);
+    run.assert_paints_any(is_draw_command_with_rect);
 }
 
 #[test]
-#[should_panic(expected = "no painted command matched")]
+#[should_panic(expected = "no painted node matched")]
 fn assert_paints_any_fails_on_absent_op() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
         .with_size(Size::new(px(40.0), px(40.0)))
         .run_frame();
-    run.assert_paints_any(|c| c.kind == DrawKind::Shadow);
+    run.assert_paints_any(is_draw_command_with_shadow);
 }
 
 #[test]
@@ -37,7 +39,7 @@ fn run_to_paint_exposes_layer_tree() {
         run.layer_tree().is_some(),
         "PaintRun must hold the painted layer tree"
     );
-    run.assert_paints_any(|c| c.kind == DrawKind::Rect);
+    run.assert_paints_any(is_draw_command_with_rect);
 }
 
 #[test]
@@ -344,9 +346,20 @@ fn snapshot_lazy_sliver_visible_band() {
 
     let snap = run.snapshot();
 
-    // Each painted sliver child emits exactly one DrawRect line (one per
-    // RenderColoredBox).  Count DrawRect lines to get the painted child count.
-    let painted_children = snap.lines().filter(|l| l.contains("DrawRect")).count();
+    // Each painted sliver child emits exactly one DrawCommand node with a `rect`
+    // property (one per RenderColoredBox).  Count those nodes via the DiagnosticsNode
+    // tree rather than string-matching the old "DrawRect" line format.
+    let diag = flui_rendering::testing::scene_diagnostics_tree(run.layer_tree());
+    fn count_rect_commands(node: &flui_foundation::DiagnosticsNode) -> usize {
+        let self_count = usize::from(flui_rendering::testing::is_draw_command_with_rect(node));
+        self_count
+            + node
+                .children()
+                .iter()
+                .map(count_rect_commands)
+                .sum::<usize>()
+    }
+    let painted_children = count_rect_commands(&diag);
 
     assert!(
         painted_children > 0,

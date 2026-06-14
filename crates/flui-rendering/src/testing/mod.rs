@@ -72,10 +72,18 @@ pub use inspect::Probe;
 pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
 pub use report::FrameReport;
+// Primary snapshot API.
 pub use snapshot::{
-    DrawCommandSummary, DrawKind, assert_any, collect_commands, commands_of,
+    SnapshotStrategy, assert_paints_node, is_draw_command_with_rect, is_draw_command_with_shadow,
+    scene_diagnostics, scene_diagnostics_tree,
+};
+// Deprecated shims kept for one release cycle so external callers compile.
+// The allow-deprecated suppresses the use-of-deprecated lint at the re-export
+// site; consumers that import these names will still receive the deprecation
+// warning in their own crate.
+#[allow(deprecated)]
+pub use snapshot::{
     serialize_layer_subtree, serialize_layer_tree, snapshot_subtree, snapshot_tree,
-    summarize_command,
 };
 pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,
