@@ -25,7 +25,7 @@ use flui_types::{Rect, Size, geometry::px};
 
 use crate::{
     constraints::BoxConstraints,
-    pipeline::{Idle, Layout, PipelineOwner},
+    pipeline::{Compositing, Idle, Layout, PaintPhase, PipelineOwner, Semantics},
     storage::RenderNode,
     testing::{
         inspect::{self, Probe},
@@ -511,6 +511,281 @@ impl Probe for FrameRun {
     type Phase = Idle;
 
     fn pipeline(&self) -> &PipelineOwner<Idle> {
+        &self.owner
+    }
+
+    fn registry(&self) -> &RenderLabelRegistry {
+        &self.registry
+    }
+}
+
+// ============================================================================
+// Phase-tagged intermediate run handles (Task 5)
+// ============================================================================
+
+impl RenderTester {
+    /// Drives the tree through layout → compositing → paint, then stops,
+    /// returning a [`PaintRun`] parked in the `PaintPhase`.
+    ///
+    /// Use this when a test needs only the painted [`LayerTree`] and does not
+    /// require a full round-trip back to `Idle`. The snapshot and predicate
+    /// helpers on [`PaintRun`] are identical to those on [`FrameRun`], so
+    /// tests can be promoted to `run_frame` without changing their assertions.
+    ///
+    /// `LayoutRun` deliberately has no `snapshot` method — that method lives
+    /// exclusively on paint-phase handles. The compile-time proof:
+    ///
+    /// ```compile_fail
+    /// # use flui_rendering::objects::RenderColoredBox;
+    /// # use flui_rendering::testing::{box_node, RenderTester};
+    /// let run = RenderTester::mount(box_node(RenderColoredBox::red(1.0, 1.0))).run_layout();
+    /// let _ = run.snapshot(); // error: no method `snapshot` found for `LayoutRun`
+    /// ```
+    #[must_use]
+    pub fn run_to_paint(self) -> PaintRun {
+        let (owner, root_id, registry) = self.build();
+        let mut owner = owner.into_layout();
+        owner
+            .run_layout()
+            .expect("run_layout must succeed for a well-formed test tree");
+        let mut owner = owner.into_compositing();
+        owner
+            .run_compositing()
+            .expect("run_compositing must succeed for a well-formed test tree");
+        let mut owner = owner.into_paint();
+        owner
+            .run_paint()
+            .expect("run_paint must succeed for a well-formed test tree");
+        // take_layer_tree() is on impl<Phase: PipelinePhase> PipelineOwner<Phase>
+        // so it is reachable here on PipelineOwner<PaintPhase>.
+        let layer_tree = owner.take_layer_tree();
+        PaintRun {
+            owner,
+            root_id,
+            registry,
+            layer_tree,
+        }
+    }
+
+    /// Drives the tree through layout → compositing, then stops, returning a
+    /// [`CompositingRun`] parked in the `Compositing` phase.
+    ///
+    /// The compositing pass updates each node's compositing-bits flags but
+    /// produces no layer tree. Use [`run_to_paint`](Self::run_to_paint) or
+    /// [`run_frame`](Self::run_frame) when you need the painted output.
+    #[must_use]
+    pub fn run_to_compositing(self) -> CompositingRun {
+        let (owner, root_id, registry) = self.build();
+        let mut owner = owner.into_layout();
+        owner
+            .run_layout()
+            .expect("run_layout must succeed for a well-formed test tree");
+        let mut owner = owner.into_compositing();
+        owner
+            .run_compositing()
+            .expect("run_compositing must succeed for a well-formed test tree");
+        CompositingRun {
+            owner,
+            root_id,
+            registry,
+        }
+    }
+
+    /// Drives the tree through all four phases (layout → compositing → paint →
+    /// semantics), then stops, returning a [`SemanticsRun`] parked in the
+    /// `Semantics` phase.
+    ///
+    /// The semantics pass is a stub in the current implementation; this handle
+    /// exists so semantics-aware tests can be authored now and will gain
+    /// real assertions once the semantics owner is wired.
+    #[must_use]
+    pub fn run_to_semantics(self) -> SemanticsRun {
+        let (owner, root_id, registry) = self.build();
+        let mut owner = owner.into_layout();
+        owner
+            .run_layout()
+            .expect("run_layout must succeed for a well-formed test tree");
+        let mut owner = owner.into_compositing();
+        owner
+            .run_compositing()
+            .expect("run_compositing must succeed for a well-formed test tree");
+        let mut owner = owner.into_paint();
+        owner
+            .run_paint()
+            .expect("run_paint must succeed for a well-formed test tree");
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("run_semantics must succeed for a well-formed test tree");
+        SemanticsRun {
+            owner,
+            root_id,
+            registry,
+        }
+    }
+}
+
+// ============================================================================
+// PaintRun
+// ============================================================================
+
+/// The result of [`RenderTester::run_to_paint`]: a pipeline parked in the
+/// `PaintPhase` with the painted [`LayerTree`] ready for snapshot assertions.
+///
+/// Snapshot and predicate helpers delegate to the shared free functions in
+/// [`super::snapshot`], keeping the implementation DRY with [`FrameRun`].
+///
+/// `LayoutRun` deliberately has no `snapshot` method — that method lives
+/// exclusively on paint-phase handles. The compile-time proof:
+///
+/// ```compile_fail
+/// # use flui_rendering::objects::RenderColoredBox;
+/// # use flui_rendering::testing::{box_node, RenderTester};
+/// let run = RenderTester::mount(box_node(RenderColoredBox::red(1.0, 1.0))).run_layout();
+/// let _ = run.snapshot(); // error: no method `snapshot` found for `LayoutRun`
+/// ```
+#[derive(Debug)]
+pub struct PaintRun {
+    owner: PipelineOwner<PaintPhase>,
+    root_id: RenderId,
+    registry: RenderLabelRegistry,
+    /// The layer tree produced by `run_paint`, extracted with `take_layer_tree`
+    /// immediately after the paint pass so the owner can be stored without
+    /// holding a borrow.
+    layer_tree: Option<LayerTree>,
+}
+
+impl PaintRun {
+    /// The root node's id.
+    #[must_use]
+    pub fn root(&self) -> RenderId {
+        self.root_id
+    }
+
+    /// The layer tree produced by the paint pass, if anything was painted.
+    ///
+    /// Returns `None` only when no root is set or the root has no paint work —
+    /// the common case for a well-formed test tree is `Some`.
+    #[must_use]
+    pub fn layer_tree(&self) -> Option<&LayerTree> {
+        self.layer_tree.as_ref()
+    }
+
+    /// Serializes the painted layer tree to a stable indented text form, or
+    /// returns `"<no layer tree>"` when nothing was painted.
+    ///
+    /// Use with `insta::assert_snapshot!` to pin layer structure over time.
+    #[must_use]
+    pub fn snapshot(&self) -> String {
+        super::snapshot::snapshot_tree(self.layer_tree.as_ref())
+    }
+
+    /// Serializes the subtree at the layer boundary for `node`.
+    ///
+    /// Falls back to the full tree until a `RenderId → LayerId` mapping is
+    /// available; see [`super::snapshot::snapshot_subtree`] for details.
+    #[must_use]
+    pub fn snapshot_of(&self, node: RenderId) -> String {
+        super::snapshot::snapshot_subtree(self.layer_tree.as_ref(), node)
+    }
+
+    /// Returns every [`DrawCommandSummary`] reachable from the painted layer
+    /// tree in pre-order, or an empty `Vec` when nothing was painted.
+    ///
+    /// [`DrawCommandSummary`]: super::snapshot::DrawCommandSummary
+    #[must_use]
+    pub fn display_commands(&self) -> Vec<super::snapshot::DrawCommandSummary> {
+        super::snapshot::commands_of(self.layer_tree.as_ref())
+    }
+
+    /// Panics unless at least one painted command satisfies `pred`.
+    ///
+    /// The panic message includes the full snapshot so the failure is
+    /// self-describing.
+    pub fn assert_paints_any(&self, pred: impl Fn(&super::snapshot::DrawCommandSummary) -> bool) {
+        super::snapshot::assert_any(self.layer_tree.as_ref(), pred);
+    }
+}
+
+impl Probe for PaintRun {
+    type Phase = PaintPhase;
+
+    fn pipeline(&self) -> &PipelineOwner<PaintPhase> {
+        &self.owner
+    }
+
+    fn registry(&self) -> &RenderLabelRegistry {
+        &self.registry
+    }
+}
+
+// ============================================================================
+// CompositingRun
+// ============================================================================
+
+/// The result of [`RenderTester::run_to_compositing`]: a pipeline parked in
+/// the `Compositing` phase after compositing-bits have been updated but before
+/// any paint or layer-tree work.
+///
+/// No snapshot helpers are provided because the compositing pass produces no
+/// layer tree. Use [`run_to_paint`](RenderTester::run_to_paint) or
+/// [`run_frame`](RenderTester::run_frame) when you need painted output.
+#[derive(Debug)]
+pub struct CompositingRun {
+    owner: PipelineOwner<Compositing>,
+    root_id: RenderId,
+    registry: RenderLabelRegistry,
+}
+
+impl CompositingRun {
+    /// The root node's id.
+    #[must_use]
+    pub fn root(&self) -> RenderId {
+        self.root_id
+    }
+}
+
+impl Probe for CompositingRun {
+    type Phase = Compositing;
+
+    fn pipeline(&self) -> &PipelineOwner<Compositing> {
+        &self.owner
+    }
+
+    fn registry(&self) -> &RenderLabelRegistry {
+        &self.registry
+    }
+}
+
+// ============================================================================
+// SemanticsRun
+// ============================================================================
+
+/// The result of [`RenderTester::run_to_semantics`]: a pipeline parked in the
+/// `Semantics` phase after all four pipeline phases have executed.
+///
+/// The semantics pass is a stub in the current implementation; raw owner
+/// access via [`Probe::pipeline`] is the primary inspection surface until the
+/// semantics owner is wired.
+#[derive(Debug)]
+pub struct SemanticsRun {
+    owner: PipelineOwner<Semantics>,
+    root_id: RenderId,
+    registry: RenderLabelRegistry,
+}
+
+impl SemanticsRun {
+    /// The root node's id.
+    #[must_use]
+    pub fn root(&self) -> RenderId {
+        self.root_id
+    }
+}
+
+impl Probe for SemanticsRun {
+    type Phase = Semantics;
+
+    fn pipeline(&self) -> &PipelineOwner<Semantics> {
         &self.owner
     }
 
