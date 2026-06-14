@@ -1125,103 +1125,9 @@ impl DiagnosticsNode {
     /// ```
     #[must_use]
     pub fn to_json(&self) -> String {
-        fn write_value(val: &DiagnosticsValue, buf: &mut String) -> std::fmt::Result {
-            use std::fmt::Write as _;
-            match val {
-                DiagnosticsValue::Null => buf.push_str("null"),
-                DiagnosticsValue::Bool(b) => write!(buf, "{b}")?,
-                DiagnosticsValue::Int(i) => write!(buf, "{i}")?,
-                // Full precision in JSON; Display normalises to 2 d.p. for text.
-                DiagnosticsValue::Float(v) => write!(buf, "{v:?}")?,
-                DiagnosticsValue::Str(s) => write!(buf, "\"{}\"", escape_json(s))?,
-                DiagnosticsValue::Color { r, g, b, a } => {
-                    write!(buf, "{{\"r\":{r},\"g\":{g},\"b\":{b},\"a\":{a}}}")?;
-                }
-                DiagnosticsValue::Rect { x, y, w, h } => {
-                    write!(buf, "{{\"x\":{x:?},\"y\":{y:?},\"w\":{w:?},\"h\":{h:?}}}")?;
-                }
-                DiagnosticsValue::Offset { x, y } => {
-                    write!(buf, "{{\"x\":{x:?},\"y\":{y:?}}}")?;
-                }
-                DiagnosticsValue::Size { w, h } => {
-                    write!(buf, "{{\"w\":{w:?},\"h\":{h:?}}}")?;
-                }
-                DiagnosticsValue::List(items) => {
-                    buf.push('[');
-                    for (i, item) in items.iter().enumerate() {
-                        if i > 0 {
-                            buf.push(',');
-                        }
-                        write_value(item, buf)?;
-                    }
-                    buf.push(']');
-                }
-                DiagnosticsValue::Nested(props) => {
-                    buf.push('{');
-                    for (i, prop) in props.iter().enumerate() {
-                        if i > 0 {
-                            buf.push(',');
-                        }
-                        write!(buf, "\"{}\":", escape_json(prop.name()))?;
-                        write_value(prop.value_typed(), buf)?;
-                    }
-                    buf.push('}');
-                }
-            }
-            Ok(())
-        }
-
-        fn write_json(node: &DiagnosticsNode, buf: &mut String, indent: usize) -> std::fmt::Result {
-            use std::fmt::Write as _;
-
-            let pad = " ".repeat(indent);
-            writeln!(buf, "{pad}{{")?;
-            writeln!(
-                buf,
-                "{pad}  \"name\": \"{}\",",
-                escape_json(node.name().unwrap_or(""))
-            )?;
-            writeln!(buf, "{pad}  \"level\": \"{}\",", node.level.as_str())?;
-
-            // Properties — values are serialized from typed variants, not Display strings,
-            // so a Rect emits {"x":...} and a Float emits a JSON number (full precision).
-            write!(buf, "{pad}  \"properties\": {{")?;
-            let props = node.properties();
-            for (i, prop) in props.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                buf.push('\n');
-                write!(buf, "{pad}    \"{}\": ", escape_json(prop.name()))?;
-                write_value(prop.value_typed(), buf)?;
-            }
-            if !props.is_empty() {
-                buf.push('\n');
-                write!(buf, "{pad}  ")?;
-            }
-            buf.push_str("},\n");
-
-            // Children
-            write!(buf, "{pad}  \"children\": [")?;
-            let children = node.children();
-            for (i, child) in children.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                buf.push('\n');
-                write_json(child, buf, indent + 4)?;
-            }
-            if !children.is_empty() {
-                buf.push('\n');
-                write!(buf, "{pad}  ")?;
-            }
-            buf.push_str("]\n");
-            write!(buf, "{pad}}}")
-        }
-
         let mut buf = String::with_capacity(256);
         // Writing to a `String` through `fmt::Write` is infallible.
-        let _ = write_json(self, &mut buf, 0);
+        let _ = write_json_node(self, &mut buf, 0);
         buf
     }
 }
@@ -1231,6 +1137,141 @@ impl Default for DiagnosticsNode {
     fn default() -> Self {
         Self::anonymous()
     }
+}
+
+/// Emit a finite f64 as a JSON number, or `null` for non-finite values.
+///
+/// NaN and ±inf are not valid JSON (RFC 8259 §6). Emitting `null` matches
+/// what `serde_json` does via its `null_floats` convention, so both JSON
+/// paths produce consistent output.
+fn write_json_f64(buf: &mut String, v: f64) -> std::fmt::Result {
+    use std::fmt::Write as _;
+    if v.is_finite() {
+        write!(buf, "{v}")
+    } else {
+        buf.push_str("null");
+        Ok(())
+    }
+}
+
+/// Serialize a [`DiagnosticsValue`] into `buf` as a JSON fragment.
+///
+/// Typed variants produce faithful JSON (numbers, objects, arrays); the
+/// back-compat `Str` variant produces a JSON string. Non-finite f64 fields
+/// are emitted as `null` per RFC 8259 §6.
+fn write_json_value(val: &DiagnosticsValue, buf: &mut String) -> std::fmt::Result {
+    use std::fmt::Write as _;
+    match val {
+        DiagnosticsValue::Null => buf.push_str("null"),
+        DiagnosticsValue::Bool(b) => write!(buf, "{b}")?,
+        DiagnosticsValue::Int(i) => write!(buf, "{i}")?,
+        // Full precision in JSON; Display normalises to 2 d.p. for text.
+        // Non-finite values become `null` (RFC 8259 §6 forbids NaN/inf).
+        DiagnosticsValue::Float(v) => write_json_f64(buf, *v)?,
+        DiagnosticsValue::Str(s) => write!(buf, "\"{}\"", escape_json(s))?,
+        DiagnosticsValue::Color { r, g, b, a } => {
+            write!(buf, "{{\"r\":{r},\"g\":{g},\"b\":{b},\"a\":{a}}}")?;
+        }
+        DiagnosticsValue::Rect { x, y, w, h } => {
+            buf.push_str("{\"x\":");
+            write_json_f64(buf, *x)?;
+            buf.push_str(",\"y\":");
+            write_json_f64(buf, *y)?;
+            buf.push_str(",\"w\":");
+            write_json_f64(buf, *w)?;
+            buf.push_str(",\"h\":");
+            write_json_f64(buf, *h)?;
+            buf.push('}');
+        }
+        DiagnosticsValue::Offset { x, y } => {
+            buf.push_str("{\"x\":");
+            write_json_f64(buf, *x)?;
+            buf.push_str(",\"y\":");
+            write_json_f64(buf, *y)?;
+            buf.push('}');
+        }
+        DiagnosticsValue::Size { w, h } => {
+            buf.push_str("{\"w\":");
+            write_json_f64(buf, *w)?;
+            buf.push_str(",\"h\":");
+            write_json_f64(buf, *h)?;
+            buf.push('}');
+        }
+        DiagnosticsValue::List(items) => {
+            buf.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                write_json_value(item, buf)?;
+            }
+            buf.push(']');
+        }
+        DiagnosticsValue::Nested(props) => {
+            buf.push('{');
+            for (i, prop) in props.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                write!(buf, "\"{}\":", escape_json(prop.name()))?;
+                write_json_value(prop.value_typed(), buf)?;
+            }
+            buf.push('}');
+        }
+    }
+    Ok(())
+}
+
+/// Recursively serialize a [`DiagnosticsNode`] into `buf` as indented JSON.
+///
+/// Properties are serialized via [`write_json_value`] (typed, not Display
+/// strings). Children recurse with `indent + 4`.
+fn write_json_node(node: &DiagnosticsNode, buf: &mut String, indent: usize) -> std::fmt::Result {
+    use std::fmt::Write as _;
+
+    let pad = " ".repeat(indent);
+    writeln!(buf, "{pad}{{")?;
+    writeln!(
+        buf,
+        "{pad}  \"name\": \"{}\",",
+        escape_json(node.name().unwrap_or(""))
+    )?;
+    writeln!(buf, "{pad}  \"level\": \"{}\",", node.level.as_str())?;
+
+    // Properties — values come from typed variants, not Display strings,
+    // so a Rect emits {"x":...} and a Float emits a JSON number.
+    write!(buf, "{pad}  \"properties\": {{")?;
+    let props = node.properties();
+    for (i, prop) in props.iter().enumerate() {
+        if i > 0 {
+            buf.push(',');
+        }
+        buf.push('\n');
+        write!(buf, "{pad}    \"{}\": ", escape_json(prop.name()))?;
+        write_json_value(prop.value_typed(), buf)?;
+    }
+    if !props.is_empty() {
+        buf.push('\n');
+        write!(buf, "{pad}  ")?;
+    }
+    buf.push_str("},\n");
+
+    // Children
+    write!(buf, "{pad}  \"children\": [")?;
+    let children = node.children();
+    for (i, child) in children.iter().enumerate() {
+        if i > 0 {
+            buf.push(',');
+        }
+        buf.push('\n');
+        write_json_node(child, buf, indent + 4)?;
+    }
+    if !children.is_empty() {
+        buf.push('\n');
+        write!(buf, "{pad}  ")?;
+    }
+    buf.push_str("]\n");
+    write!(buf, "{pad}}}")
 }
 
 /// Escapes a string for JSON embedding.
@@ -2036,6 +2077,52 @@ mod tests {
         );
         // Display shows 2 decimal places
         assert_eq!(val.to_string(), "0.33");
+    }
+
+    /// Non-finite f64 values (NaN, ±inf) are not valid JSON (RFC 8259 §6).
+    /// `to_json` must emit `null` for them, matching what `serde_json` does
+    /// via its `null_floats` convention so both JSON paths agree.
+    #[test]
+    fn to_json_non_finite_f64_emits_null() {
+        for (label, val) in [
+            ("NaN", f64::NAN),
+            ("+inf", f64::INFINITY),
+            ("-inf", f64::NEG_INFINITY),
+        ] {
+            let node = DiagnosticsNode::new("Test").with_property(DiagnosticsProperty::new_typed(
+                "v",
+                DiagnosticsValue::Float(val),
+            ));
+            let json = node.to_json();
+            assert!(
+                json.contains("\"v\": null"),
+                "{label}: expected `\"v\": null` in JSON, got:\n{json}",
+            );
+        }
+    }
+
+    /// A `DiagnosticsValue::Rect` with finite coordinates must serialize as a
+    /// JSON object `{"x":...,"y":...,"w":...,"h":...}`, not a display string.
+    #[test]
+    fn to_json_rect_is_json_object_not_display_string() {
+        let node = DiagnosticsNode::new("Test").with_property(DiagnosticsProperty::new_typed(
+            "bounds",
+            DiagnosticsValue::Rect {
+                x: 1.0,
+                y: 2.0,
+                w: 3.0,
+                h: 4.0,
+            },
+        ));
+        let json = node.to_json();
+        assert!(
+            json.contains("{\"x\":1"),
+            "Rect must serialize as a JSON object, got:\n{json}",
+        );
+        assert!(
+            !json.contains("(1"),
+            "Rect must NOT use display-string form `(x,y,w,h)`, got:\n{json}",
+        );
     }
 
     #[test]

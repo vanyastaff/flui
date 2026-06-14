@@ -945,20 +945,35 @@ fn add_rect_prop(builder: &mut DiagnosticsBuilder, name: &'static str, r: Rect<P
 /// Populate `builder` with the rect + four corner radii (TL/TR/BR/BL) of an
 /// `RRect`.
 ///
-/// The four radii are emitted as individual `f64` properties `r_tl`, `r_tr`,
-/// `r_br`, `r_bl` (the circular x-radius of each corner, matching the stable
-/// fingerprint used by `fmt_rrect`). A regression that drops or changes a
-/// radius diffs the diagnostics output instead of passing silently.
+/// The four radii are emitted as individual `f64` properties prefixed with
+/// `name`: `"{name}_r_tl"`, `"{name}_r_tr"`, `"{name}_r_br"`, `"{name}_r_bl"`.
+/// This prefix avoids property-name collisions when two rrects are emitted on
+/// the same node (e.g. `DrawDRRect` emits both `"outer"` and `"inner"`), so
+/// each radius remains reachable via `find_property`. Mirrors the stable
+/// fingerprint used by `fmt_rrect`.
 fn add_rrect_props(
     builder: &mut DiagnosticsBuilder,
-    name: &'static str,
+    name: &str,
     rrect: &flui_types::geometry::RRect,
 ) {
-    add_rect_prop(builder, name, rrect.rect);
-    builder.add_f64("r_tl", f64::from(rrect.top_left.x.get()));
-    builder.add_f64("r_tr", f64::from(rrect.top_right.x.get()));
-    builder.add_f64("r_br", f64::from(rrect.bottom_right.x.get()));
-    builder.add_f64("r_bl", f64::from(rrect.bottom_left.x.get()));
+    // The rect bounds are stored under `name` (e.g. "outer", "inner", "rect").
+    // Corner radii are prefixed with `name` so that a node carrying two rrects
+    // (DrawDRRect) has no duplicate property names and each radius is reachable
+    // via `find_property`.
+    builder.add_rect(
+        name,
+        f64::from(rrect.rect.min.x.get()),
+        f64::from(rrect.rect.min.y.get()),
+        f64::from(rrect.rect.width().get()),
+        f64::from(rrect.rect.height().get()),
+    );
+    builder.add_f64(format!("{name}_r_tl"), f64::from(rrect.top_left.x.get()));
+    builder.add_f64(format!("{name}_r_tr"), f64::from(rrect.top_right.x.get()));
+    builder.add_f64(
+        format!("{name}_r_br"),
+        f64::from(rrect.bottom_right.x.get()),
+    );
+    builder.add_f64(format!("{name}_r_bl"), f64::from(rrect.bottom_left.x.get()));
 }
 
 /// Emit the recording-time transform as a typed `List` of 16 floats only when
@@ -1480,6 +1495,85 @@ mod tests {
             ),
             "color property must be typed Color {{r,g,b,a}}, got: {:?}",
             prop.value_typed(),
+        );
+    }
+
+    /// `DrawDRRect` emits outer and inner rrects with scoped property names so
+    /// both rings are reachable via `find_property` without shadowing.
+    ///
+    /// The flat names `r_tl`/`r_tr`/`r_br`/`r_bl` previously collided when two
+    /// rrects were emitted on the same node — the inner radii were unreachable.
+    /// Now they are prefixed (`outer_r_tl`, `inner_r_tl`, …).
+    #[test]
+    fn draw_drrect_outer_and_inner_radii_have_distinct_names() {
+        use flui_types::geometry::{Matrix4, RRect, Radius, Rect, px};
+
+        let outer = RRect::from_rect_circular(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(12.0),
+        );
+        let inner = RRect::from_rect_and_radius(
+            Rect::from_ltrb(px(10.0), px(10.0), px(90.0), px(90.0)),
+            Radius::circular(px(4.0)),
+        );
+        let cmd = DrawCommand::DrawDRRect {
+            outer,
+            inner,
+            paint: Arc::new(Paint::fill(Color::RED)),
+            transform: Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+
+        // Both the outer and inner rect bounds must be reachable.
+        assert!(
+            node.find_property("outer").is_some(),
+            "outer rect bounds must be present"
+        );
+        assert!(
+            node.find_property("inner").is_some(),
+            "inner rect bounds must be present"
+        );
+
+        // Outer radii must be reachable under their scoped names.
+        let outer_r_tl = node
+            .find_property("outer_r_tl")
+            .expect("outer_r_tl must be present and distinct from inner_r_tl");
+        assert!(
+            matches!(
+                outer_r_tl.value_typed(),
+                flui_foundation::DiagnosticsValue::Float(v) if (*v - 12.0_f64).abs() < 0.01
+            ),
+            "outer_r_tl must be ~12.0, got: {:?}",
+            outer_r_tl.value_typed(),
+        );
+
+        // Inner radii must be reachable under their scoped names.
+        let inner_r_tl = node
+            .find_property("inner_r_tl")
+            .expect("inner_r_tl must be present and distinct from outer_r_tl");
+        assert!(
+            matches!(
+                inner_r_tl.value_typed(),
+                flui_foundation::DiagnosticsValue::Float(v) if (*v - 4.0_f64).abs() < 0.01
+            ),
+            "inner_r_tl must be ~4.0, got: {:?}",
+            inner_r_tl.value_typed(),
+        );
+
+        // There must be no duplicate property names (the old collision).
+        let all_names: Vec<&str> = node
+            .properties()
+            .iter()
+            .map(flui_foundation::DiagnosticsProperty::name)
+            .collect();
+        let mut deduped = all_names.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(
+            all_names.len(),
+            deduped.len(),
+            "DrawDRRect node has duplicate property names: {all_names:?}",
         );
     }
 
