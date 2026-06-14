@@ -58,6 +58,7 @@ pub mod parent_data;
 pub mod queries;
 mod report;
 pub mod sliver;
+pub mod snapshot;
 pub mod tree;
 
 pub use assertions::{
@@ -69,6 +70,7 @@ pub use inspect::Probe;
 pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
 pub use report::FrameReport;
+pub use snapshot::{DrawCommandSummary, DrawKind, summarize_command};
 pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,
 };
