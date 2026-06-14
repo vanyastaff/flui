@@ -202,7 +202,10 @@ fn structured_diagnostics_queries() {
     let leaf = tree
         .find_descendant("RenderColoredBox")
         .expect("tree has a colored leaf");
-    assert_eq!(leaf.get_property("color"), Some("[1.0, 0.0, 0.0, 1.0]"));
+    assert_eq!(
+        leaf.get_property("color").as_deref(),
+        Some("[1.0, 0.0, 0.0, 1.0]")
+    );
 
     assert_eq!(
         run.descendant_property("RenderFlex", "direction")

@@ -1216,6 +1216,7 @@ dependencies = [
  "android_log-sys",
  "flui-types",
  "parking_lot",
+ "schemars",
  "serde",
  "serde_json",
  "smallvec",

@@ -21,6 +21,7 @@ use std::{fmt, str::FromStr};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DiagnosticLevel {
     /// Hidden diagnostic level.
@@ -148,6 +149,7 @@ impl std::error::Error for ParseDiagnosticLevelError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DiagnosticsTreeStyle {
     /// A style that is appropriate for displaying sparse trees.
@@ -254,6 +256,7 @@ impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DiagnosticsPropertyKind {
     /// A generic property displayed as `{name}: {value:?}`.
@@ -301,6 +304,154 @@ impl Default for DiagnosticsPropertyKind {
     }
 }
 
+/// The typed value of a [`DiagnosticsProperty`].
+///
+/// Carries the structured data so the inspector's JSON serialization is
+/// faithful (full precision, typed shapes) while the text renderer normalises
+/// at the [`fmt::Display`] boundary only (floats → 2 decimal places,
+/// colors → `#RRGGBBAA`, etc.).
+///
+/// The `Str` variant is the back-compat path: [`DiagnosticsProperty::new`]
+/// always constructs it, so all existing `Diagnosticable` impls continue to
+/// compile and behave identically.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_foundation::DiagnosticsValue;
+///
+/// let v = DiagnosticsValue::Float(0.333_333);
+/// assert_eq!(v.to_string(), "0.33");           // normalised for text
+/// assert_eq!(DiagnosticsValue::Str("hello".into()).to_string(), "hello");
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum DiagnosticsValue {
+    /// Absent / null value.
+    Null,
+    /// Boolean value.
+    Bool(bool),
+    /// Signed 64-bit integer.
+    Int(i64),
+    /// 64-bit float — serialised at full precision; displayed at 2 d.p.
+    Float(f64),
+    /// Generic string (the back-compat variant produced by
+    /// [`DiagnosticsProperty::new`]).
+    Str(String),
+    /// RGBA colour, each channel `0–255`.
+    Color {
+        /// Red channel `0–255`.
+        r: u8,
+        /// Green channel `0–255`.
+        g: u8,
+        /// Blue channel `0–255`.
+        b: u8,
+        /// Alpha channel `0–255` (255 = fully opaque).
+        a: u8,
+    },
+    /// Axis-aligned rectangle: origin (`x`, `y`) + extent (`w`, `h`).
+    Rect {
+        /// Left edge (origin x).
+        x: f64,
+        /// Top edge (origin y).
+        y: f64,
+        /// Width.
+        w: f64,
+        /// Height.
+        h: f64,
+    },
+    /// 2-D offset / point.
+    Offset {
+        /// Horizontal component.
+        x: f64,
+        /// Vertical component.
+        y: f64,
+    },
+    /// 2-D size.
+    Size {
+        /// Width.
+        w: f64,
+        /// Height.
+        h: f64,
+    },
+    /// Ordered list of diagnostic values.
+    List(Vec<DiagnosticsValue>),
+    /// Inline nested properties (for sub-objects that don't warrant a full
+    /// child node).
+    Nested(Vec<DiagnosticsProperty>),
+}
+
+impl fmt::Display for DiagnosticsValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => f.write_str("null"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(i) => write!(f, "{i}"),
+            // Two decimal places for human-readable text; JSON gets full precision
+            // via the typed serialisation.
+            Self::Float(v) => write!(f, "{v:.2}"),
+            Self::Str(s) => f.write_str(s),
+            Self::Color { r, g, b, a } => write!(f, "#{r:02X}{g:02X}{b:02X}{a:02X}"),
+            Self::Rect { x, y, w, h } => write!(f, "({x:.1},{y:.1},{w:.1},{h:.1})"),
+            Self::Offset { x, y } => write!(f, "({x:.1},{y:.1})"),
+            Self::Size { w, h } => write!(f, "{w:.1}×{h:.1}"),
+            Self::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                write!(f, "]")
+            }
+            Self::Nested(props) => {
+                write!(f, "{{")?;
+                for (i, prop) in props.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", prop.name())?;
+                    write!(f, ": {}", prop.value())?;
+                }
+                write!(f, "}}")
+            }
+        }
+    }
+}
+
+impl From<&str> for DiagnosticsValue {
+    fn from(s: &str) -> Self {
+        Self::Str(s.to_owned())
+    }
+}
+
+impl From<String> for DiagnosticsValue {
+    fn from(s: String) -> Self {
+        Self::Str(s)
+    }
+}
+
+impl From<f64> for DiagnosticsValue {
+    fn from(v: f64) -> Self {
+        Self::Float(v)
+    }
+}
+
+impl From<i64> for DiagnosticsValue {
+    fn from(v: i64) -> Self {
+        Self::Int(v)
+    }
+}
+
+impl From<bool> for DiagnosticsValue {
+    fn from(b: bool) -> Self {
+        Self::Bool(b)
+    }
+}
+
 /// A diagnostic property
 ///
 /// Similar to Flutter's `DiagnosticsProperty`.
@@ -315,12 +466,13 @@ impl Default for DiagnosticsPropertyKind {
 /// assert_eq!(prop.value(), "100");
 /// assert_eq!(prop.to_string(), "width: 100");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DiagnosticsProperty {
     name: String,
-    value: String,
+    value: DiagnosticsValue,
     #[cfg_attr(feature = "serde", serde(default))]
     level: DiagnosticLevel,
     /// The typed kind of this property, determining how it is displayed.
@@ -333,6 +485,10 @@ pub struct DiagnosticsProperty {
     show_name: bool,
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     show_separator: bool,
+    /// The display string to compare against when checking
+    /// [`DiagnosticsProperty::is_hidden`]. Stored as a plain string so
+    /// callers can pass `"0"` / `"false"` etc. without knowing the typed
+    /// variant.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     default_value: Option<String>,
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
@@ -359,7 +515,7 @@ impl DiagnosticsProperty {
     pub fn new(name: impl Into<String>, value: impl fmt::Display) -> Self {
         Self {
             name: name.into(),
-            value: value.to_string(),
+            value: DiagnosticsValue::Str(value.to_string()),
             level: DiagnosticLevel::Info,
             kind: DiagnosticsPropertyKind::Generic,
             show_name: true,
@@ -369,17 +525,47 @@ impl DiagnosticsProperty {
         }
     }
 
-    /// Returns the property name
+    /// Creates a property with an explicit typed value.
+    ///
+    /// Prefer the typed [`DiagnosticsBuilder`] methods (`add_rect`,
+    /// `add_color_rgba`, etc.) over calling this directly.
+    #[must_use]
+    pub fn new_typed(name: impl Into<String>, value: DiagnosticsValue) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            level: DiagnosticLevel::Info,
+            kind: DiagnosticsPropertyKind::Generic,
+            show_name: true,
+            show_separator: true,
+            default_value: None,
+            tooltip: None,
+        }
+    }
+
+    /// Returns the property name.
     #[must_use]
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Returns the property value as a string
+    /// Returns the property value as a normalised display string.
+    ///
+    /// This is the back-compat accessor: it always returns the same text
+    /// that [`fmt::Display`] would produce for the property line (the
+    /// `name: value` format uses this). For faithful typed access use
+    /// [`value_typed`](Self::value_typed).
     #[must_use]
     #[inline]
-    pub fn value(&self) -> &str {
+    pub fn value(&self) -> String {
+        self.value.to_string()
+    }
+
+    /// Returns the typed value, giving the inspector faithful structured data.
+    #[must_use]
+    #[inline]
+    pub fn value_typed(&self) -> &DiagnosticsValue {
         &self.value
     }
 
@@ -473,13 +659,16 @@ impl DiagnosticsProperty {
         self
     }
 
-    /// Checks if this property is hidden based on its default value
+    /// Checks if this property is hidden based on its default value.
+    ///
+    /// Comparison is against the normalised display string so callers can
+    /// pass `"0"`, `"false"`, etc. without coupling to the typed variant.
     #[must_use]
     #[inline]
     pub fn is_hidden(&self) -> bool {
         self.default_value
             .as_ref()
-            .is_some_and(|default| &self.value == default)
+            .is_some_and(|default| self.value.to_string() == *default)
     }
 
     /// Checks if this property should be displayed at the given level
@@ -505,7 +694,7 @@ impl DiagnosticsProperty {
                         self.name.clone()
                     }
                 } else {
-                    self.value.clone()
+                    self.value()
                 }
             }
             _ => match style {
@@ -517,14 +706,14 @@ impl DiagnosticsProperty {
                             format!("{} {}", self.name, self.value)
                         }
                     } else {
-                        self.value.clone()
+                        self.value()
                     }
                 }
                 _ => {
                     if self.show_name {
                         format!("{}: {}", self.name, self.value)
                     } else {
-                        self.value.clone()
+                        self.value()
                     }
                 }
             },
@@ -596,8 +785,9 @@ impl fmt::Display for DiagnosticsProperty {
 /// assert!(rendered.contains("MyView"));
 /// assert!(rendered.contains("width"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DiagnosticsNode {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
@@ -670,12 +860,14 @@ impl DiagnosticsNode {
         &mut self.children
     }
 
-    /// Returns the value of the first property named `name`, if present.
+    /// Returns the display string of the first property named `name`, if present.
     ///
     /// Convenience for structured assertions over a diagnostics tree
-    /// (instead of substring-matching the rendered dump).
+    /// (instead of substring-matching the rendered dump). For typed access
+    /// use [`find_property`](Self::find_property) and then
+    /// [`value_typed`](DiagnosticsProperty::value_typed).
     #[must_use]
-    pub fn get_property(&self, name: &str) -> Option<&str> {
+    pub fn get_property(&self, name: &str) -> Option<String> {
         self.properties
             .iter()
             .find(|property| property.name() == name)
@@ -957,7 +1149,7 @@ impl DiagnosticsNode {
                     buf,
                     "{pad}    \"{}\": \"{}\"",
                     escape_json(prop.name()),
-                    escape_json(prop.value())
+                    escape_json(&prop.value())
                 )?;
             }
             if !props.is_empty() {
@@ -1239,10 +1431,101 @@ impl DiagnosticsBuilder {
         self
     }
 
-    /// Add a color property (RGBA display).
+    /// Add a color property (RGBA display) from a pre-formatted string.
+    ///
+    /// For a typed RGBA value use [`add_color_rgba`](Self::add_color_rgba).
     pub fn add_color(&mut self, name: impl Into<String>, value: impl fmt::Display) -> &mut Self {
         self.properties
             .push(DiagnosticsProperty::new(name, value).with_kind(DiagnosticsPropertyKind::Color));
+        self
+    }
+
+    // ---- Typed-value additions (ADR-0005 Decision 1) -------------------------
+
+    /// Add a typed `f64` property.
+    pub fn add_f64(&mut self, name: impl Into<String>, value: f64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Float(value))
+                .with_kind(DiagnosticsPropertyKind::Double { unit: None }),
+        );
+        self
+    }
+
+    /// Add a typed `i64` property.
+    pub fn add_i64(&mut self, name: impl Into<String>, value: i64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Int(value))
+                .with_kind(DiagnosticsPropertyKind::Int { unit: None }),
+        );
+        self
+    }
+
+    /// Add a typed `bool` property.
+    pub fn add_bool(&mut self, name: impl Into<String>, value: bool) -> &mut Self {
+        self.properties.push(DiagnosticsProperty::new_typed(
+            name,
+            DiagnosticsValue::Bool(value),
+        ));
+        self
+    }
+
+    /// Add a typed RGBA colour property.
+    pub fn add_color_rgba(
+        &mut self,
+        name: impl Into<String>,
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Color { r, g, b, a })
+                .with_kind(DiagnosticsPropertyKind::Color),
+        );
+        self
+    }
+
+    /// Add a typed axis-aligned rectangle property.
+    pub fn add_rect(
+        &mut self,
+        name: impl Into<String>,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Rect { x, y, w, h })
+                .with_kind(DiagnosticsPropertyKind::Rect),
+        );
+        self
+    }
+
+    /// Add a typed 2-D offset property.
+    pub fn add_offset(&mut self, name: impl Into<String>, x: f64, y: f64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Offset { x, y })
+                .with_kind(DiagnosticsPropertyKind::Offset),
+        );
+        self
+    }
+
+    /// Add a typed 2-D size property.
+    ///
+    /// For a display-string size (e.g. `"100 x 50"`) use
+    /// [`add_size`](Self::add_size).
+    pub fn add_size_f64(&mut self, name: impl Into<String>, w: f64, h: f64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Size { w, h })
+                .with_kind(DiagnosticsPropertyKind::Size),
+        );
+        self
+    }
+
+    /// Add a property with an arbitrary typed [`DiagnosticsValue`].
+    pub fn add_typed(&mut self, name: impl Into<String>, value: DiagnosticsValue) -> &mut Self {
+        self.properties
+            .push(DiagnosticsProperty::new_typed(name, value));
         self
     }
 
@@ -1289,12 +1572,27 @@ fn format_double(value: f32, unit: Option<&str>) -> String {
 
 /// Parses a numeric diagnostics property, stripping a typed unit suffix when
 /// present.
+///
+/// For typed `Float`/`Int` variants the value is read directly rather than
+/// parsing text; for `Str` (back-compat path) text parsing with optional unit
+/// stripping is used.
 fn parse_numeric_property_value(property: &DiagnosticsProperty) -> Option<f64> {
+    // Fast path for floats: avoids display-string formatting + re-parsing.
+    // Integers are not short-circuited: i64→f64 loses precision outside
+    // ±2^53; the display-string parse below is exact for the integer
+    // range that diagnostic properties carry.
+    if let DiagnosticsValue::Float(v) = property.value_typed() {
+        return Some(*v);
+    }
+
+    // Back-compat path: display string with optional unit suffix.
     let raw = property.value();
     let numeric = match property.kind() {
         DiagnosticsPropertyKind::Double { unit } | DiagnosticsPropertyKind::Int { unit } => {
             match unit {
-                Some(suffix) if raw.ends_with(suffix.as_ref()) => &raw[..raw.len() - suffix.len()],
+                Some(suffix) if raw.ends_with(suffix.as_ref()) => {
+                    raw[..raw.len() - suffix.len()].to_owned()
+                }
                 _ => raw,
             }
         }
@@ -1607,7 +1905,10 @@ mod tests {
         );
 
         let flex = tree.find_descendant("RenderFlex").expect("flex");
-        assert_eq!(flex.get_property("direction"), Some("Horizontal"));
+        assert_eq!(
+            flex.get_property("direction").as_deref(),
+            Some("Horizontal")
+        );
         assert!(tree.find_descendant("RenderPadding").is_some());
         assert!(tree.find_descendant("Missing").is_none());
     }
@@ -1643,6 +1944,46 @@ mod tests {
         let [property] = builder.build().try_into().ok().unwrap();
         let node = DiagnosticsNode::new("RenderSliverFixedExtentList").with_property(property);
         assert_eq!(node.get_property_f64("item_extent"), Some(25.0));
+    }
+
+    // ---- Task 3 typed-value tests (TDD: written before implementation) ----
+
+    #[test]
+    fn string_property_back_compat() {
+        let prop = DiagnosticsProperty::new("width", 100);
+        assert_eq!(prop.value(), "100");
+        assert_eq!(prop.to_string(), "width: 100");
+    }
+
+    #[test]
+    fn typed_rect_value_is_structured() {
+        let mut builder = DiagnosticsBuilder::new();
+        builder.add_rect("bounds", 0.0, 0.0, 40.0, 40.0);
+        let props = builder.build();
+        assert_eq!(props.len(), 1);
+        assert_eq!(
+            props[0].value_typed(),
+            &DiagnosticsValue::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0
+            }
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn faithful_vs_display() {
+        let val = DiagnosticsValue::Float(0.333_333);
+        // serde_json serializes with full precision
+        let json = serde_json::to_string(&val).unwrap();
+        assert!(
+            json.contains("0.333333"),
+            "expected full-precision float in JSON, got: {json}"
+        );
+        // Display shows 2 decimal places
+        assert_eq!(val.to_string(), "0.33");
     }
 
     #[test]
