@@ -317,6 +317,7 @@ impl Default for DiagnosticsPropertyKind {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct DiagnosticsProperty {
     name: String,
     value: String,
@@ -597,6 +598,7 @@ impl fmt::Display for DiagnosticsProperty {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct DiagnosticsNode {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     name: Option<String>,
