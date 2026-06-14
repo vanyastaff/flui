@@ -401,8 +401,9 @@ impl Diagnosticable for Layer {
     /// [`DiagnosticsBuilder::add_value`] / [`add_f64`](DiagnosticsBuilder::add_f64) /
     /// [`add_i64`](DiagnosticsBuilder::add_i64).
     ///
-    /// For `Picture` the command stream is descended into: every [`DrawCommand`]
-    /// becomes a child [`DiagnosticsNode`] via [`Diagnosticable::to_diagnostics_node`].
+    /// For `Picture` the command stream is descended into: every
+    /// [`DrawCommand`](flui_painting::display_list::DrawCommand) becomes a child
+    /// [`DiagnosticsNode`] via [`Diagnosticable::to_diagnostics_node`].
     /// Sub-layer children are NOT added here — that walk is performed by the
     /// caller (see `inspect::diagnostics_tree`).
     ///
