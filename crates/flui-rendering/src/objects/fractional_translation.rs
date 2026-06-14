@@ -18,11 +18,12 @@
 //! This port introduces a dedicated [`TranslationFraction`] newtype so
 //! "fraction of child size" is visible in the API surface. Pixels
 //! never appear in the translation slot; the conversion happens once
-//! inside `paint`/`hit_test` against the cached `size`. The intent
-//! collapses into the type system instead of the docstring.
+//! inside `paint`/`hit_test` against the driver-supplied size (from
+//! `RenderState`). The intent collapses into the type system instead of
+//! the docstring.
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size, geometry::px};
+use flui_types::{Offset, Size, geometry::px};
 
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -89,7 +90,6 @@ pub struct RenderFractionalTranslation {
     /// pointers land where the user *sees* the child. Flutter parity:
     /// default true.
     transform_hit_tests: bool,
-    size: Size,
     has_child: bool,
 }
 
@@ -99,7 +99,6 @@ impl RenderFractionalTranslation {
         Self {
             translation,
             transform_hit_tests,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -140,10 +139,10 @@ impl RenderFractionalTranslation {
         true
     }
 
-    /// Resolved pixel offset for the current size.
+    /// Resolved pixel offset for the given laid-out size.
     #[inline]
-    fn pixel_offset(&self) -> Offset {
-        self.translation.resolve(self.size)
+    fn pixel_offset(&self, size: Size) -> Offset {
+        self.translation.resolve(size)
     }
 }
 
@@ -171,26 +170,17 @@ impl RenderBox for RenderFractionalTranslation {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
             let child_size = ctx.layout_child(0, constraints);
             ctx.position_child(0, Offset::ZERO);
-            self.size = child_size;
+            child_size
         } else {
             self.has_child = false;
-            self.size = constraints.smallest();
+            constraints.smallest()
         }
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
@@ -202,11 +192,11 @@ impl RenderBox for RenderFractionalTranslation {
         // `paint_child_at` REPLACES the child's laid-out offset; the
         // child is laid out at the origin here, so the override IS the
         // pixel translation.
-        ctx.paint_child_at(self.pixel_offset());
+        ctx.paint_child_at(self.pixel_offset(ctx.size()));
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if !self.has_child {
@@ -215,7 +205,7 @@ impl RenderBox for RenderFractionalTranslation {
         if self.transform_hit_tests {
             // The visual content is shifted by `pixel_offset()`; record this
             // offset in the transform stack before testing the child.
-            let offset = self.pixel_offset();
+            let offset = self.pixel_offset(ctx.own_size());
             ctx.push_offset(offset);
             let child_position =
                 Offset::new(ctx.position().dx - offset.dx, ctx.position().dy - offset.dy);
@@ -226,10 +216,6 @@ impl RenderBox for RenderFractionalTranslation {
             // No transform: test at child's layout offset only
             ctx.hit_test_child_at_layout_offset(0)
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 
@@ -298,26 +284,25 @@ mod tests {
     }
 
     #[test]
+    fn pixel_offset_multiplies_injected_size_by_fraction() {
+        // The pixel translation resolves the fraction against the
+        // laid-out size the pipeline hands in (RenderState via `ctx.size()`
+        // / `ctx.own_size()`), not a cached field: -0.5 × 200 = -100,
+        // 0.25 × 100 = 25.
+        let node = RenderFractionalTranslation::translated(TranslationFraction::new(-0.5, 0.25));
+        assert_eq!(
+            node.pixel_offset(Size::new(px(200.0), px(100.0))),
+            Offset::new(px(-100.0), px(25.0)),
+        );
+    }
+
+    #[test]
     fn setters_return_change_flag() {
         let mut node = RenderFractionalTranslation::default();
         assert!(node.set_translation(TranslationFraction::new(0.1, 0.2)));
         assert!(!node.set_translation(TranslationFraction::new(0.1, 0.2)));
         assert!(node.set_transform_hit_tests(false));
         assert!(!node.set_transform_hit_tests(false));
-    }
-
-    #[test]
-    fn pixel_offset_multiplies_size_by_fraction() {
-        let mut node = RenderFractionalTranslation::translated(TranslationFraction::new(-0.5, 0.0));
-        *node.size_mut() = Size::new(px(120.0), px(60.0));
-        assert_eq!(node.pixel_offset(), Offset::new(px(-60.0), px(0.0)));
-    }
-
-    #[test]
-    fn box_paint_bounds_matches_size() {
-        let mut node = RenderFractionalTranslation::default();
-        *node.size_mut() = Size::new(px(40.0), px(20.0));
-        assert_eq!(node.box_paint_bounds().width(), px(40.0));
     }
 
     #[test]

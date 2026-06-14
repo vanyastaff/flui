@@ -193,7 +193,6 @@ pub struct RenderStack {
     fit: StackFit,
     alignment: Alignment,
     clip_behavior: Clip,
-    size: Size,
     /// Computed during layout — read by
     /// [`RenderStack::has_visual_overflow`].
     has_visual_overflow: bool,
@@ -209,7 +208,6 @@ impl RenderStack {
             fit: StackFit::Loose,
             alignment: Alignment::TOP_LEFT,
             clip_behavior: Clip::HardEdge,
-            size: Size::ZERO,
             has_visual_overflow: false,
             child_count: 0,
         }
@@ -348,7 +346,10 @@ impl RenderBox for RenderStack {
     type Arity = Variable;
     type ParentData = StackParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
+    ) -> Size {
         let incoming = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
@@ -357,13 +358,11 @@ impl RenderBox for RenderStack {
         // No-child fast path — Flutter parity: take the biggest finite
         // size, otherwise the smallest.
         if child_count == 0 {
-            self.size = if incoming.biggest().is_finite() {
+            return if incoming.biggest().is_finite() {
                 incoming.biggest()
             } else {
                 incoming.smallest()
             };
-            ctx.complete_with_size(self.size);
-            return;
         }
 
         // -----------------------------------------------------------------
@@ -406,7 +405,7 @@ impl RenderBox for RenderStack {
         // -----------------------------------------------------------------
         // Resolve the stack's own size.
         // -----------------------------------------------------------------
-        self.size = if has_non_positioned {
+        let size = if has_non_positioned {
             incoming.constrain(Size::new(content_w, content_h))
         } else if incoming.biggest().is_finite() {
             incoming.biggest()
@@ -429,20 +428,17 @@ impl RenderBox for RenderStack {
                 None => {
                     let child_size = sizes[i];
                     let offset = Offset::new(
-                        alignment_along_axis(self.alignment.x, self.size.width - child_size.width),
-                        alignment_along_axis(
-                            self.alignment.y,
-                            self.size.height - child_size.height,
-                        ),
+                        alignment_along_axis(self.alignment.x, size.width - child_size.width),
+                        alignment_along_axis(self.alignment.y, size.height - child_size.height),
                     );
                     ctx.position_child(i, offset);
                 }
                 Some(spec) => {
-                    let cc = spec.child_constraints(self.size);
+                    let cc = spec.child_constraints(size);
                     let child_size = ctx.layout_child(i, cc);
                     sizes[i] = child_size;
-                    let offset = spec.child_offset(self.size, child_size, self.alignment);
-                    if Self::child_overflows(self.size, offset, child_size) {
+                    let offset = spec.child_offset(size, child_size, self.alignment);
+                    if Self::child_overflows(size, offset, child_size) {
                         self.has_visual_overflow = true;
                     }
                     ctx.position_child(i, offset);
@@ -450,15 +446,7 @@ impl RenderBox for RenderStack {
             }
         }
 
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        size
     }
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
@@ -491,7 +479,7 @@ impl RenderBox for RenderStack {
         // layer scope (canvas clips are run-local and never extend
         // across child markers).
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let bounds = Rect::from_origin_size(Point::ZERO, self.size);
+            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
             ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| {
                 // Paint all children in order (bottom-up = first to last).
                 ctx.paint_children();
@@ -502,7 +490,7 @@ impl RenderBox for RenderStack {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, StackParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         // Test children in reverse order — top-most first.
@@ -512,10 +500,6 @@ impl RenderBox for RenderStack {
             }
         }
         false
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 

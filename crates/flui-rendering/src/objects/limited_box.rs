@@ -16,7 +16,7 @@
 //! treating an infinite cap as a meaningful upper bound.
 
 use flui_tree::Single;
-use flui_types::{Offset, Pixels, Point, Rect, Size};
+use flui_types::{Offset, Pixels, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -56,8 +56,6 @@ pub struct RenderLimitedBox {
     max_width: Option<Pixels>,
     /// Max height to impose when the parent constraint is unbounded.
     max_height: Option<Pixels>,
-    /// Final size after layout.
-    size: Size,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
 }
@@ -77,7 +75,6 @@ impl RenderLimitedBox {
         Self {
             max_width,
             max_height,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -179,7 +176,7 @@ impl RenderBox for RenderLimitedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let incoming = *ctx.constraints();
         let limited = self.limit_constraints(incoming);
 
@@ -187,28 +184,18 @@ impl RenderBox for RenderLimitedBox {
             self.has_child = true;
             let child_size = ctx.layout_child(0, limited);
             ctx.position_child(0, Offset::ZERO);
-            self.size = incoming.constrain(child_size);
+            incoming.constrain(child_size)
         } else {
             self.has_child = false;
             // Match Flutter: if no child, take the minimum of (incoming.min,
             // limited.max) for each axis — i.e. become as small as possible
             // without violating the parent's lower bound.
-            self.size = incoming.constrain(Size::new(limited.min_width, limited.min_height));
+            incoming.constrain(Size::new(limited.min_width, limited.min_height))
         }
-
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
@@ -216,10 +203,6 @@ impl RenderBox for RenderLimitedBox {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 
     crate::forward_single_child_intrinsics!();

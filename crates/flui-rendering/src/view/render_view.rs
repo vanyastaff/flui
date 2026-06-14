@@ -533,10 +533,16 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         Ok(size)
     }
 
-    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+    fn paint_raw(
+        &self,
+        recorder: &mut crate::context::FragmentRecorder,
+        child_count: usize,
+        _size: flui_types::Size,
+    ) {
         // Root pass-through: the view draws nothing itself and splices
-        // every child subtree in order.
-        let mut cx = crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count);
+        // every child subtree in order — its own `_size` is unused.
+        let mut cx =
+            crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count, _size);
         cx.paint_children();
     }
 
@@ -544,6 +550,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         &self,
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
         child_count: usize,
+        _size: flui_types::Size,
         hit_child: &mut (
                  dyn FnMut(
             usize,
@@ -573,27 +580,13 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         true
     }
 
-    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-        // Return reference to view's size field
-        // SAFETY: This is a valid reference to the size field in RenderView
-        &self.view.size
-    }
-
-    fn set_geometry(
-        &mut self,
-        geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-    ) {
-        self.view.size = geometry;
-    }
-
-    fn paint_bounds(&self) -> Rect {
-        Rect::from_ltwh(
-            Pixels::ZERO,
-            Pixels::ZERO,
-            self.view.size.width,
-            self.view.size.height,
-        )
-    }
+    // 2B field dedup: geometry / paint_bounds removed from
+    // RenderObject<P>. The committed root size lives on
+    // `RenderState<BoxProtocol>` (set from `perform_layout_raw`'s
+    // returned `size`). `RenderView::size` is retained as the view's own
+    // window-size input (set from the incoming root constraints), not a
+    // render-state mirror; the engine reads root paint bounds via
+    // `RenderView::physical_paint_bounds`.
 }
 
 // ============================================================================

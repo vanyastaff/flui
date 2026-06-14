@@ -41,6 +41,7 @@
 //! | `RenderSliverFillRemainingAndOverscroll` | `harness_sliver_fill_remaining_and_overscroll_*` | yes | — | — | yes | — |
 //! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes | — |
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderSliverListLazy` | `harness_sliver_list_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | — |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
@@ -104,6 +105,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverFillRemainingAndOverscroll",
     "RenderSliverFillRemainingWithScrollable",
     "RenderSliverIgnorePointer",
+    "RenderSliverListLazy",
     "RenderSliverOffstage",
     "RenderSliverOpacity",
     "RenderViewport",
@@ -1322,6 +1324,23 @@ fn harness_sliver_ignore_pointer_passes_hits_when_inactive() {
     .run_frame();
 
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("item")));
+}
+
+#[test]
+fn harness_sliver_list_lazy_zero_items_reports_zero_geometry() {
+    // Empty source — build closure always returns None, so perform_layout
+    // produces zero scroll_extent and self-describes via diagnostics.
+    let list = RenderSliverListLazy::new(0, 48.0, std::sync::Arc::new(|_| None), None);
+    let run = RenderTester::mount(viewport(sliver_node(list).label("lazy")))
+        .with_size(Size::new(px(300.0), px(400.0)))
+        .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("lazy")).scroll_extent,
+        0.0,
+        "empty RenderSliverListLazy must report zero scroll extent",
+    );
+    assert_descendant_properties(&run.diagnostics(), "RenderSliverListLazy", &["item_count"]);
 }
 
 #[test]

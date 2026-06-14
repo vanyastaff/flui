@@ -46,6 +46,12 @@ harness = false
 name = "paint"
 harness = false
 
+# Virtualization core (ADR-0003 U1): O(log n) offset<->index seek both ways and
+# O(log n) mid-list insert/delete vs a naive O(n) flat-array baseline.
+[[bench]]
+name = "virtualizer"
+harness = false
+
 # Headless render-object inspection runner. Gated on `testing` so the
 # example only builds when the harness module is compiled in. Run with
 # `cargo run -p flui-rendering --example render_inspector --features testing`.
@@ -55,6 +61,11 @@ required-features = ["testing"]
 
 [dev-dependencies]
 criterion.workspace = true
+# Property-based tests for the virtualization B+-tree (ADR-0003 U1): random
+# insert/delete/set_measured/set_count sequences checked against a naive
+# Vec oracle + structural invariants. Test-only; no production dependency.
+# Version matches flui-types / flui-interaction (already resolved in the lockfile).
+proptest = "1.5"
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers).
 flui-animation = { path = "../flui-animation" }

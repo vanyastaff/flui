@@ -2502,8 +2502,13 @@ impl WgpuPainter {
             "WgpuPainter::rich_text"
         );
         let transformed_position = self.apply_transform(position);
-        self.text_renderer
-            .add_rich_text(runs, transformed_position, base_font_size, base_color, wrap_width);
+        self.text_renderer.add_rich_text(
+            runs,
+            transformed_position,
+            base_font_size,
+            base_color,
+            wrap_width,
+        );
     }
 
     pub fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {

@@ -48,8 +48,8 @@
 // being pulled into scope by a glob `use flui_rendering::protocol::*`.
 // PR #141 Copilot review feedback (comment 3293746269): a glob re-export
 // of the erased trait collides with `LayoutContextApi`'s method names
-// (`constraints` / `layout_child` / `position_child` / `complete_layout`
-// overlap by design) and triggers ambiguous-method E0034 in widget
+// (`constraints` / `layout_child` / `position_child` overlap by design)
+// and triggers ambiguous-method E0034 in widget
 // code. The submodule-pub approach surfaces the trait at one explicit
 // path without polluting the common namespace. The most-used surfaces
 // (`BoxLayoutCtx`, `BoxProtocol`, `LayoutContextApi`, …) are still
@@ -92,9 +92,9 @@ pub use box_protocol::{
 // **Deliberately NOT re-exported** at the `protocol::*` level (PR #141
 // Copilot review feedback, comment 3293746269):
 // `BoxLayoutCtxErased::constraints` / `layout_child` / `position_child`
-// / `complete_layout` overlap with `LayoutContextApi`'s method names by
-// design (both view the same operations from different angles); putting
-// the trait into `protocol::*` would force user widget code that does
+// overlap with `LayoutContextApi`'s method names by design (both view
+// the same operations from different angles); putting the trait into
+// `protocol::*` would force user widget code that does
 // `use flui_rendering::protocol::*;` into ambiguous-method E0034 on
 // `ctx.constraints()` etc. The trait stays declared `pub` at its own
 // module path so a future `pub mod box_protocol;` lift (when an
@@ -108,6 +108,8 @@ pub use box_protocol::{
 // CAPABILITY EXPORTS
 // ============================================================================
 pub use capabilities::{
+    // Re-entrant build contract return type (ADR-0003 Decision 2)
+    ChildLayout,
     // Capability traits
     HitTestCapability,
     HitTestContextApi,
@@ -117,8 +119,6 @@ pub use capabilities::{
     ProtocolConstraints,
     ProtocolGeometry,
     ProtocolHitResult,
-    ProtocolHitTestCtx,
-    ProtocolLayoutCtx,
     ProtocolPosition,
 };
 // ============================================================================
@@ -131,7 +131,6 @@ pub use protocol::{
     // Protocol trait
     Protocol,
     ProtocolCompatible,
-    ProtocolRenderObject,
     // Usage by parent
     UsageByParent,
 };
@@ -139,6 +138,8 @@ pub use protocol::{
 // SLIVER PROTOCOL EXPORTS
 // ============================================================================
 pub use sliver_protocol::{
+    // Re-entrant build contract handle (ADR-0003 Decision 2)
+    BoxChildRef,
     // Layout
     ErasedSliverChildState,
     ErasedSliverLayoutCtx,
@@ -194,10 +195,7 @@ pub mod prelude {
         ProtocolConstraints,
         ProtocolGeometry,
         ProtocolHitResult,
-        ProtocolHitTestCtx,
-        ProtocolLayoutCtx,
         ProtocolPosition,
-        ProtocolRenderObject,
         SliverHitTest,
         SliverLayout,
         SliverProtocol,

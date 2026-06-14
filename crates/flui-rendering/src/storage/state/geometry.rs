@@ -302,4 +302,35 @@ impl RenderState<SliverProtocol> {
     pub fn set_sliver_geometry(&mut self, geometry: SliverGeometry) {
         self.set_geometry(geometry);
     }
+
+    /// The sliver's absolute paint size in box pixels.
+    ///
+    /// Maps the main-axis `paint_extent` to width/height per the
+    /// laid-out `axis_direction`, with the cross axis taken from
+    /// `cross_axis_extent` (Flutter `RenderSliver.getAbsoluteSize`).
+    /// Returns `Size::ZERO` before the first layout (no committed
+    /// geometry or constraints).
+    ///
+    /// The paint / hit drivers thread this into the protocol blanket so
+    /// a sliver reads `ctx.size()` instead of caching its own geometry
+    /// (2B field dedup — `RenderState` is geometry's sole owner). O(1).
+    #[inline]
+    pub fn absolute_paint_size(&self) -> flui_types::Size {
+        use flui_types::geometry::px;
+        use flui_types::prelude::AxisDirection;
+
+        let (Some(geometry), Some(constraints)) = (self.geometry(), self.constraints()) else {
+            return flui_types::Size::ZERO;
+        };
+        let cross = constraints.cross_axis_extent;
+        let main = geometry.paint_extent;
+        match constraints.axis_direction {
+            AxisDirection::TopToBottom | AxisDirection::BottomToTop => {
+                flui_types::Size::new(px(cross), px(main))
+            }
+            AxisDirection::LeftToRight | AxisDirection::RightToLeft => {
+                flui_types::Size::new(px(main), px(cross))
+            }
+        }
+    }
 }

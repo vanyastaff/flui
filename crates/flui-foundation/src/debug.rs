@@ -931,58 +931,60 @@ impl DiagnosticsNode {
     /// ```
     #[must_use]
     pub fn to_json(&self) -> String {
-        fn write_json(node: &DiagnosticsNode, buf: &mut String, indent: usize) {
+        fn write_json(node: &DiagnosticsNode, buf: &mut String, indent: usize) -> std::fmt::Result {
+            use std::fmt::Write as _;
+
             let pad = " ".repeat(indent);
-            buf.push_str(&format!("{pad}{{\n"));
-            buf.push_str(&format!(
-                "{pad}  \"name\": \"{}\",\n",
+            writeln!(buf, "{pad}{{")?;
+            writeln!(
+                buf,
+                "{pad}  \"name\": \"{}\",",
                 escape_json(node.name().unwrap_or(""))
-            ));
-            buf.push_str(&format!(
-                "{pad}  \"level\": \"{}\",\n",
-                node.level.as_str()
-            ));
+            )?;
+            writeln!(buf, "{pad}  \"level\": \"{}\",", node.level.as_str())?;
 
             // Properties
-            buf.push_str(&format!("{pad}  \"properties\": {{"));
+            write!(buf, "{pad}  \"properties\": {{")?;
             let props = node.properties();
             for (i, prop) in props.iter().enumerate() {
                 if i > 0 {
                     buf.push(',');
                 }
                 buf.push('\n');
-                buf.push_str(&format!(
+                write!(
+                    buf,
                     "{pad}    \"{}\": \"{}\"",
                     escape_json(prop.name()),
                     escape_json(prop.value())
-                ));
+                )?;
             }
             if !props.is_empty() {
                 buf.push('\n');
-                buf.push_str(&format!("{pad}  "));
+                write!(buf, "{pad}  ")?;
             }
             buf.push_str("},\n");
 
             // Children
-            buf.push_str(&format!("{pad}  \"children\": ["));
+            write!(buf, "{pad}  \"children\": [")?;
             let children = node.children();
             for (i, child) in children.iter().enumerate() {
                 if i > 0 {
                     buf.push(',');
                 }
                 buf.push('\n');
-                write_json(child, buf, indent + 4);
+                write_json(child, buf, indent + 4)?;
             }
             if !children.is_empty() {
                 buf.push('\n');
-                buf.push_str(&format!("{pad}  "));
+                write!(buf, "{pad}  ")?;
             }
             buf.push_str("]\n");
-            buf.push_str(&format!("{pad}}}"));
+            write!(buf, "{pad}}}")
         }
 
         let mut buf = String::with_capacity(256);
-        write_json(self, &mut buf, 0);
+        // Writing to a `String` through `fmt::Write` is infallible.
+        let _ = write_json(self, &mut buf, 0);
         buf
     }
 }
@@ -1716,6 +1718,10 @@ mod tests {
 /// is enabled on `flui-foundation`. In release builds without the
 /// feature, all fields are `false` and the config is a zero-cost
 /// no-op.
+// Four independent debug-overlay toggles, not a state machine — each
+// overlay is orthogonal and combined freely (mirrors Flutter's separate
+// `debugPaint*Enabled` flags). A bitflags/enum would obscure, not clarify.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DebugPaintConfig {
     /// Draw a colored rectangle around each render object's paint bounds.
@@ -1760,7 +1766,10 @@ impl DebugPaintConfig {
     /// Returns `true` if any overlay is enabled.
     #[must_use]
     pub const fn is_active(&self) -> bool {
-        self.show_paint_bounds || self.show_baselines || self.show_overflow || self.show_hit_test_areas
+        self.show_paint_bounds
+            || self.show_baselines
+            || self.show_overflow
+            || self.show_hit_test_areas
     }
 }
 

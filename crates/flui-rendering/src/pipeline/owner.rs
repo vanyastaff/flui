@@ -744,14 +744,20 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
+        // Box bounds gate size, resolved from RenderState (geometry's
+        // sole owner — 2B field dedup); threaded into hit_test_raw so the
+        // default gate reads `ctx.is_within_own_size()`.
+        let own_size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
 
         // Push the node's hit-test transform onto the HitTestResult
         // stack BEFORE recursing, so child entries captured during
         // hit_test_raw see the correct accumulated transform. The
         // transform stays on the stack until after the parent entry
-        // is added (Flutter parity: pushTransform in hitTest).
-        let has_transform = render_object.hit_test_transform().is_some();
-        if let Some(t) = render_object.hit_test_transform() {
+        // is added (Flutter parity: pushTransform in hitTest). The hook
+        // gets `own_size` from RenderState for alignment-relative origins.
+        let hit_transform = render_object.hit_test_transform(own_size);
+        let has_transform = hit_transform.is_some();
+        if let Some(t) = hit_transform {
             result.push_transform(t);
         }
 
@@ -797,7 +803,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         };
 
-        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit {
             // Leaf-first path: children pushed their entries during
             // the callback above; the ancestor follows. The transform
@@ -1005,6 +1011,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
+        // Absolute paint size from RenderState — threaded into
+        // hit_test_raw for signature uniformity; the sliver hit gate is
+        // driver-owned (checked above), so the sliver context ignores it.
+        let own_size = entry.state().absolute_paint_size();
 
         let mut hit_child = |index: usize, override_pos: Option<MainAxisPosition>| -> bool {
             let Some(&child_id) = children.get(index) else {
@@ -1044,7 +1054,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         };
 
-        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit {
             result.add(crate::hit_testing::HitTestEntry::new(id));
         }
@@ -1257,11 +1267,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// direct mutation impossible. This method collects mutations in a
     /// queue that is drained after the pass completes.
     ///
+    /// `logical_index`: if `Some(li)`, the pipeline stamps `li` into the
+    /// inserted child's parent-data after insertion (if the parent-data
+    /// type implements `crate::parent_data::LogicalIndexParentData`).
+    /// Pass `None` for non-lazy inserts.
+    ///
     /// # Example
     ///
     /// ```ignore
     /// // During layout:
-    /// owner.defer_insert_box(parent_id, Box::new(new_child), None);
+    /// owner.defer_insert_box(parent_id, Box::new(new_child), None, None);
     /// owner.defer_remove(parent_id, child_id);
     /// owner.defer_update(target_id, Box::new(|obj| { /* mutate */ }));
     /// ```
@@ -1270,20 +1285,40 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         parent_id: RenderId,
         render_object: Box<dyn crate::protocol::RenderObject<BoxProtocol>>,
         index: Option<usize>,
+        logical_index: Option<usize>,
+        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
     ) {
-        self.deferred_mutations
-            .insert_box(parent_id, render_object, index);
+        self.deferred_mutations.insert_box(
+            parent_id,
+            render_object,
+            index,
+            logical_index,
+            initial_parent_data,
+        );
     }
 
     /// Enqueues a deferred Sliver child insertion.
+    ///
+    /// `logical_index`: if `Some(li)`, stamps `li` into the child's
+    /// parent-data after insertion.  Pass `None` for non-lazy inserts.
+    ///
+    /// `initial_parent_data`: pre-built parent-data to install on the fresh
+    /// node immediately after insertion.  See `DeferredMutation::Insert`.
     pub fn defer_insert_sliver(
         &mut self,
         parent_id: RenderId,
         render_object: Box<dyn crate::protocol::RenderObject<SliverProtocol>>,
         index: Option<usize>,
+        logical_index: Option<usize>,
+        initial_parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
     ) {
-        self.deferred_mutations
-            .insert_sliver(parent_id, render_object, index);
+        self.deferred_mutations.insert_sliver(
+            parent_id,
+            render_object,
+            index,
+            logical_index,
+            initial_parent_data,
+        );
     }
 
     /// Enqueues a deferred removal.
@@ -1948,15 +1983,24 @@ impl PipelineOwner<Layout> {
         // This is the Rust-native alternative to Flutter's
         // `invokeLayoutCallback`.
         //
-        // Ordering: Remove before Insert before Update. This ensures:
-        // - Removed nodes don't get updated (conflict detected)
-        // - Inserted nodes can be updated in the same pass
-        // - Update targets are guaranteed to exist
+        // U3c D3 — true Remove → Insert → Update ordering. Previously the
+        // apply loop was strict FIFO with only a remove-vs-update skip,
+        // which let a frame that enqueues both Remove and Insert apply them
+        // in arbitrary order. Stable-partition into three buckets and apply
+        // each bucket in order. This makes the ordering comment above
+        // factually true rather than aspirational.
         if !self.deferred_mutations.is_empty() {
             let mutations = self.deferred_mutations.drain();
 
-            // Phase 1: collect removed IDs for conflict detection
-            let removed_ids: rustc_hash::FxHashSet<RenderId> = mutations
+            let (mut removes, rest): (Vec<_>, Vec<_>) = mutations
+                .into_iter()
+                .partition(|m| matches!(m, super::deferred::DeferredMutation::Remove { .. }));
+            let (inserts, updates): (Vec<_>, Vec<_>) = rest
+                .into_iter()
+                .partition(|m| matches!(m, super::deferred::DeferredMutation::Insert { .. }));
+
+            // Collect removed IDs for conflict detection (Update on same target).
+            let removed_ids: rustc_hash::FxHashSet<RenderId> = removes
                 .iter()
                 .filter_map(|m| match m {
                     super::deferred::DeferredMutation::Remove { child_id, .. } => Some(*child_id),
@@ -1965,15 +2009,30 @@ impl PipelineOwner<Layout> {
                 .collect();
 
             tracing::trace!(
-                "run_layout: applying {} deferred mutations ({} removals)",
-                mutations.len(),
-                removed_ids.len()
+                "run_layout: applying {} deferred mutations ({} removes, {} inserts, {} updates)",
+                removes.len() + inserts.len() + updates.len(),
+                removes.len(),
+                inserts.len(),
+                updates.len(),
             );
 
-            // Phase 2: apply in order, detect conflicts
             let mut applied = 0usize;
             let mut skipped = 0usize;
-            for mutation in mutations {
+
+            // Phase 1: Removes.
+            for mutation in removes.drain(..) {
+                self.apply_deferred_mutation(mutation);
+                applied += 1;
+            }
+
+            // Phase 2: Inserts.
+            for mutation in inserts {
+                self.apply_deferred_mutation(mutation);
+                applied += 1;
+            }
+
+            // Phase 3: Updates — skip any whose target was removed this batch.
+            for mutation in updates {
                 match &mutation {
                     super::deferred::DeferredMutation::Update { target_id, .. }
                         if removed_ids.contains(target_id) =>
@@ -2014,47 +2073,129 @@ impl PipelineOwner<Layout> {
             DeferredMutation::Insert {
                 parent_id,
                 render_object,
-                index: _,
+                index,
+                logical_index,
+                initial_parent_data,
             } => {
-                match render_object {
+                // A deferred insert must schedule the new child (and re-dirty
+                // its parent) for layout and paint — mirroring
+                // `insert_child_render_object`. Without this the fresh node
+                // carries NEEDS_LAYOUT but is absent from every dirty queue,
+                // so it is laid out never and painted never (invisible child).
+                let Some(parent_depth) = self.render_tree.depth(parent_id) else {
+                    tracing::warn!(
+                        ?parent_id,
+                        "apply_deferred_mutation: Insert parent does not exist; mutation dropped"
+                    );
+                    return;
+                };
+                let child_depth = (parent_depth + 1) as usize;
+                let inserted = match render_object {
                     DeferredRenderObject::Box(obj) => {
-                        if let Some(child_id) =
-                            self.render_tree.insert_box_child(parent_id, obj)
-                        {
-                            tracing::trace!(
-                                ?parent_id,
-                                ?child_id,
-                                "apply_deferred_mutation: inserted Box child"
-                            );
-                        }
+                        self.render_tree.insert_box_child(parent_id, obj)
                     }
                     DeferredRenderObject::Sliver(obj) => {
-                        if let Some(child_id) =
-                            self.render_tree.insert_sliver_child(parent_id, obj)
-                        {
-                            tracing::trace!(
-                                ?parent_id,
-                                ?child_id,
-                                "apply_deferred_mutation: inserted Sliver child"
-                            );
+                        self.render_tree.insert_sliver_child(parent_id, obj)
+                    }
+                };
+                let Some(child_id) = inserted else { return };
+
+                // `insert_*_child` appends; honor an explicit position by
+                // moving the freshly appended child into place. Clamp so an
+                // out-of-range index lands at the end rather than panicking.
+                if let Some(i) = index
+                    && let Some(parent) = self.render_tree.get_mut(parent_id)
+                {
+                    parent.remove_child(child_id);
+                    let clamped = i.min(parent.child_count());
+                    parent.insert_child(clamped, child_id);
+                }
+
+                // D1 (lazy-sliver re-entrant build contract): install the
+                // logical index on the fresh child's parent-data so the lazy
+                // sliver consumer can reconcile it on the next pass.
+                //
+                // Fresh `RenderNode`s start with `parent_data = None`; the
+                // build backend seeds `initial_parent_data` with a pre-built
+                // `SliverMultiBoxAdaptorParentData { index: logical_index }`
+                // for exactly this case.  If parent-data is already present
+                // (e.g. a re-inserted node whose data survived) we stamp the
+                // index field directly instead so we never overwrite unrelated
+                // fields the existing box carries.
+                if (logical_index.is_some() || initial_parent_data.is_some())
+                    && let Some(child_node) = self.render_tree.get_mut(child_id)
+                {
+                    match child_node.parent_data_mut() {
+                        None => {
+                            // Node has no parent-data yet: install the
+                            // pre-built box wholesale.
+                            if let Some(pd) = initial_parent_data {
+                                child_node.set_parent_data(pd);
+                                tracing::trace!(
+                                    ?child_id,
+                                    logical_index,
+                                    "apply_deferred_mutation: installed \
+                                     initial parent-data on fresh child",
+                                );
+                            }
+                        }
+                        Some(pd) => {
+                            // Parent-data already present: stamp only the
+                            // logical-index field so other fields are
+                            // preserved.
+                            if let Some(li) = logical_index
+                                && let Some(lip) = pd.as_logical_index_mut()
+                            {
+                                lip.set_logical_index(li);
+                                tracing::trace!(
+                                    ?child_id,
+                                    logical_index = li,
+                                    "apply_deferred_mutation: stamped \
+                                     logical index into existing parent-data",
+                                );
+                            }
                         }
                     }
                 }
-            }
-            DeferredMutation::Remove {
-                parent_id: _,
-                child_id,
-            } => {
-                self.render_tree.remove_shallow(child_id);
+
+                self.bootstrap_repaint_boundary_flag(child_id);
+                self.add_node_needing_layout(child_id, child_depth);
+                self.add_node_needing_paint(child_id, child_depth);
+                // `mark_needs_layout` (not `add_node_needing_layout`) so the
+                // parent's NEEDS_LAYOUT flag is actually set and its relayout
+                // boundary is enqueued — the dirty-root walk skips queued
+                // entries whose flag is clear, so a flagless enqueue would
+                // leave the new child unpositioned at the origin.
+                self.mark_needs_layout(parent_id);
                 tracing::trace!(
+                    ?parent_id,
                     ?child_id,
-                    "apply_deferred_mutation: removed child"
+                    "apply_deferred_mutation: inserted child and scheduled layout + paint"
                 );
             }
-            DeferredMutation::Update {
-                target_id,
-                updater,
+            DeferredMutation::Remove {
+                parent_id,
+                child_id,
             } => {
+                // Cascade-dispose: `remove_render_object` evicts the whole
+                // subtree from every dirty queue and frees it recursively
+                // (the old `remove_shallow` orphaned + leaked descendants and
+                // left stale dirty entries). Then re-dirty the parent so it
+                // reflows without the removed child.
+                let removed = self.remove_render_object(child_id);
+                if removed > 0 {
+                    // Re-dirty the parent (flag-setting walk, not a flagless
+                    // enqueue) so it reflows without the removed child.
+                    self.mark_needs_layout(parent_id);
+                }
+                tracing::trace!(
+                    ?parent_id,
+                    ?child_id,
+                    removed,
+                    "apply_deferred_mutation: removed subtree and re-dirtied parent"
+                );
+            }
+            DeferredMutation::Update { target_id, updater } => {
                 if let Some(node) = self.render_tree.get_mut(target_id) {
                     match node {
                         crate::storage::RenderNode::Box(entry) => {
@@ -2064,10 +2205,7 @@ impl PipelineOwner<Layout> {
                             updater(entry.render_object_mut() as &mut dyn std::any::Any);
                         }
                     }
-                    tracing::trace!(
-                        ?target_id,
-                        "apply_deferred_mutation: updated render object"
-                    );
+                    tracing::trace!(?target_id, "apply_deferred_mutation: updated render object");
                 }
             }
         }
@@ -2313,7 +2451,43 @@ impl PipelineOwner<Layout> {
         // `layout_subtree_borrowed` call reborrows exactly one slot via
         // its NodePtr; distinct call levels reborrow distinct slots
         // (parent ≠ child in a well-formed tree).
-        unsafe { layout_subtree_borrowed(&borrows, id, constraints) }
+        let result = unsafe { layout_subtree_borrowed(&borrows, id, constraints) };
+
+        // Step 5: drain on-demand child builds AND removals the walk recorded
+        // (the re-entrant build contract's v1 next-frame backend, ADR-0003
+        // Decision 2 + U3c D2). The walk's tree borrows were frozen, so a lazy
+        // sliver that requested a build or removal parked it in the pending sinks
+        // rather than mutating the tree. Take both (owned), then DROP `borrows`
+        // to release the `&mut RenderTree` subtree borrow before touching
+        // `&mut self`.
+        //
+        // D3 ordering: Remove → Insert → Update. Removes are drained first so
+        // that an off-band child evicted this pass does not collide with the
+        // Insert that replaces it in the same batch.
+        let pending_removes = borrows.take_pending_removes();
+        let pending_builds = borrows.take_pending_builds();
+        drop(borrows);
+
+        // Apply removes first (D3 ordering). Each entry is `(parent, child)`:
+        // the parent is the sliver's own node_id (tagged at push time in
+        // ErasedSliverLayoutCtx::dispose_box_child), NOT the walk root `id`.
+        // Using `id` here would misdirect `mark_needs_layout` to the viewport
+        // root instead of the lazy sliver, preventing it from reflowing.
+        for (parent, child_id) in pending_removes {
+            self.defer_remove(parent, child_id);
+        }
+
+        for pending in pending_builds {
+            self.defer_insert_box(
+                pending.parent,
+                pending.object,
+                Some(pending.index),
+                Some(pending.logical_index),
+                pending.initial_parent_data,
+            );
+        }
+
+        result
     }
 }
 
@@ -2398,6 +2572,26 @@ struct SubtreeBorrows<'tree> {
     /// by [`Self::check_thread`], so the Mutex serves only as the
     /// shared-mutability cell, not as actual cross-thread sync.
     currently_laying_out: Mutex<FxHashSet<RenderId>>,
+    /// On-demand child builds requested during this walk that the frozen
+    /// mid-pass borrows could not insert synchronously — the re-entrant build
+    /// contract's v1 next-frame backend (ADR-0003 Decision 2). `layout_dirty_root`
+    /// drains this into the deferred-mutation queue after the walk releases its
+    /// borrows. `Mutex` for the same reason as `currently_laying_out`: the
+    /// layout-child closure requires `&SubtreeBorrows: Send + Sync`. Empty unless
+    /// a lazy sliver requests a not-yet-built child.
+    pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
+    /// Symmetric remove sink (U3c D2): `(parent, child)` pairs of children the
+    /// consumer wants evicted from the tree.  The `parent` is the sliver's own
+    /// `node_id` — **not** the walk root `id` passed to `layout_dirty_root`.
+    /// For a real `viewport → sliver → lazy → child` chain the walk root is the
+    /// viewport, but `defer_remove` / `mark_needs_layout` must target the lazy
+    /// sliver so it reflows after its child list changes.
+    ///
+    /// Drained before `pending_builds` in `layout_dirty_root`
+    /// (Remove → Insert ordering, D3), post-drop of the subtree borrows, so no
+    /// aliased `NodePtr` is live when the `defer_remove` calls touch `&mut self`.
+    /// `Mutex` for the same reason as `pending_builds`.
+    pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: std::marker::PhantomData<&'tree mut ()>,
 }
@@ -2444,6 +2638,8 @@ impl<'tree> SubtreeBorrows<'tree> {
                 ids.len(),
                 Default::default(),
             )),
+            pending_builds: Mutex::new(Vec::new()),
+            pending_removes: Mutex::new(Vec::new()),
             owner_thread,
             _lifetime: std::marker::PhantomData,
         }
@@ -2486,6 +2682,25 @@ impl<'tree> SubtreeBorrows<'tree> {
     fn get(&self, id: RenderId) -> Option<NodePtr> {
         self.check_thread();
         self.by_id.get(&id).copied()
+    }
+
+    /// Takes the on-demand child builds recorded during this walk, leaving the
+    /// sink empty. Called by [`PipelineOwner::layout_dirty_root`] once the walk
+    /// has returned, so the requests can be enqueued on the deferred-mutation
+    /// queue (which needs `&mut PipelineOwner`). Touches only the sink — never a
+    /// [`NodePtr`] — so it does not interact with the raw-pointer aliasing.
+    fn take_pending_builds(&self) -> Vec<crate::protocol::sliver_protocol::PendingBuild> {
+        std::mem::take(&mut *self.pending_builds.lock())
+    }
+
+    /// Takes the deferred child removals recorded during this walk.
+    /// Returns `(parent, child)` pairs — the parent is the sliver's `node_id`,
+    /// not the walk root — so `defer_remove` targets the correct ancestor.
+    /// Symmetric to [`Self::take_pending_builds`]; called in `layout_dirty_root`
+    /// BEFORE `take_pending_builds` (Remove → Insert ordering, D3) and AFTER
+    /// `drop(borrows)` so no `NodePtr` alias is live when the removes are applied.
+    fn take_pending_removes(&self) -> Vec<(flui_foundation::RenderId, flui_foundation::RenderId)> {
+        std::mem::take(&mut *self.pending_removes.lock())
     }
 }
 
@@ -2734,9 +2949,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             // Seed parent data from the child's persistent RenderState.
             // This replaces the old behavior where parent_data was always
             // None on the read path (rebuilt every frame).
-            cs.parent_data = child_node
-                .parent_data()
-                .map(|d| dyn_clone::clone_box(d));
+            cs.parent_data = child_node.parent_data().map(dyn_clone::clone_box);
             if let Some(sliver_entry) = child_node.as_sliver() {
                 cs.sliver_constraints = sliver_entry.state().constraints().copied();
                 cs.sliver_geometry = sliver_entry.state().geometry();
@@ -2922,7 +3135,11 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // path since we routed through as_box_mut).
     let has_parent = entry.links().parent().is_some();
     let sized_by_parent = entry.render_object().sized_by_parent();
-    <BoxProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), sized_by_parent, has_parent);
+    <BoxProtocol as Protocol>::bootstrap_relayout_boundary(
+        entry.state(),
+        sized_by_parent,
+        has_parent,
+    );
 
     // Only clear NEEDS_LAYOUT if the recursive callback observed no
     // descendant failure. Preserves retry-next-frame semantics.
@@ -3143,18 +3360,29 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     };
     let child_ids: Vec<RenderId> = entry.links().children().to_vec();
 
-    if child_ids.is_empty() {
-        return entry.layout_leaf_only(constraints);
-    }
-
+    // No early-return here for the empty case: a lazy sliver (e.g.
+    // `RenderSliverListLazy`) starts with zero attached children and must
+    // call `build_and_layout_box_child` on its first frame to schedule
+    // initial builds via `pending_builds`. The `ErasedSliverLayoutCtx`
+    // path is always taken for slivers so that the context's
+    // `pending_builds` / `pending_removes` sinks are wired in — even when
+    // the current child list is empty.
     let mut child_states: Vec<crate::protocol::ErasedSliverChildState> = child_ids
         .iter()
         .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid))
         .collect();
 
-    // Seed child offsets from persisted RenderState so a sliver parent that
-    // does not call `position_child` on a later pass preserves its child's
-    // previous placement, matching the Box path's offset semantics.
+    // Seed child offsets and parent-data from persisted `RenderNode` state.
+    //
+    // Offset: a sliver parent that does not call `position_child` on a later
+    // pass preserves its child's previous placement, matching Box semantics.
+    //
+    // Parent-data: the transient `ErasedSliverChildState.parent_data` starts
+    // as `None`; seed it from the node's persisted parent-data so that lazy
+    // sliver consumers (e.g. `RenderSliverListLazy`) can read the logical
+    // index installed by `apply_deferred_mutation` on the previous frame.
+    // `ParentData: DynClone` makes this a cheap heap clone (one `Box` per
+    // attached child; K is bounded by viewport/cache band, not by item count).
     for cs in &mut child_states {
         if let Some(child_ptr) = borrows.get(cs.id) {
             // SAFETY: shared reborrow of a DISTINCT child slot
@@ -3163,6 +3391,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             // the current sliver parent slot.
             let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
             cs.offset = child_node.offset();
+            if let Some(pd) = child_node.parent_data() {
+                cs.parent_data = Some(dyn_clone::clone_box(pd));
+            }
         }
         #[cfg(any(test, feature = "testing"))]
         borrows.seed_child_parent_data(cs.id, &mut cs.parent_data);
@@ -3254,6 +3485,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
         cb_ref,
         box_cb_ref,
         box_intrinsic_cb_ref,
+        id,
+        &borrows.pending_builds,
+        &borrows.pending_removes,
     );
     let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 
@@ -3389,19 +3623,15 @@ impl PipelineOwner<Compositing> {
         // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
         self.dirty.needs_compositing.sort_shallow_first();
 
-        // Iterate by index over the dirty list so the loop body can
-        // call `&self` recursion without holding the iterator's
-        // borrow across the call (the `update_subtree_compositing_bits`
-        // method takes `&self`, which conflicts with the iter's
-        // simultaneous `&self.dirty.needs_compositing` borrow under
-        // some borrow-checker versions). Pre-fix this snapshotted
-        // the ids into a fresh `Vec<RenderId>` per frame
-        // (PR-A2 Copilot #3294557191).
+        // Iterate the dirty list by shared reference: the recursion takes
+        // `&self`, which coexists with the slice's shared borrow of
+        // `self.dirty.needs_compositing` (both shared). Queue mutations are
+        // deferred into `actions` and applied after the walk, so nothing
+        // mutates the list mid-iteration.
         let mut actions = CompositingWalkActions::default();
         let compositing_slice = self.dirty.needs_compositing.as_slice();
-        for i in 0..compositing_slice.len() {
-            let id = compositing_slice[i].id;
-            self.update_subtree_compositing_bits(id, &mut actions);
+        for node in compositing_slice {
+            self.update_subtree_compositing_bits(node.id, &mut actions);
         }
 
         // Apply paint-queue mutations after the walk completes (under
@@ -3584,15 +3814,10 @@ impl PipelineOwner<PaintPhase> {
             // Build a set of dirty node IDs for O(1) lookup during the
             // paint walk. This enables paint retention: clean repaint
             // boundaries skip their entire subtree.
-            let dirty_ids: rustc_hash::FxHashSet<RenderId> = self
-                .dirty
-                .needs_paint
-                .iter()
-                .map(|d| d.id)
-                .collect();
+            let dirty_ids: rustc_hash::FxHashSet<RenderId> =
+                self.dirty.needs_paint.iter().map(|d| d.id).collect();
 
-            let painted_boundaries =
-                std::cell::RefCell::new(rustc_hash::FxHashSet::default());
+            let painted_boundaries = std::cell::RefCell::new(rustc_hash::FxHashSet::default());
 
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
             match self.paint_subtree(
@@ -3611,7 +3836,8 @@ impl PipelineOwner<PaintPhase> {
                     // retained. On the next frame, clean boundaries
                     // with retained subtrees will be skipped entirely.
                     for boundary_id in painted_boundaries.borrow().iter() {
-                        self.retained_subtrees.insert(*boundary_id, LayerTree::new());
+                        self.retained_subtrees
+                            .insert(*boundary_id, LayerTree::new());
                     }
                 }
                 Err(e) => {
@@ -3669,7 +3895,9 @@ impl PipelineOwner<PaintPhase> {
         dirty_set: &rustc_hash::FxHashSet<RenderId>,
         painted_boundaries: &std::cell::RefCell<rustc_hash::FxHashSet<RenderId>>,
     ) -> crate::error::RenderResult<()> {
-        ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin, dirty_set, painted_boundaries))
+        ensure_stack(|| {
+            self.paint_subtree_impl(composer, node_id, origin, dirty_set, painted_boundaries)
+        })
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
@@ -3729,6 +3957,18 @@ impl PipelineOwner<PaintPhase> {
         // pipeline, so this guards descendant-error and partial-frame
         // paths where a poisoned layout left the flag set.
         if render_node.needs_layout() {
+            return Ok(());
+        }
+
+        // Sliver visibility cull: a sliver with zero paint extent
+        // (`!visible`) paints nothing and splices no children (Flutter:
+        // the viewport skips invisible slivers). The gate lives here, in
+        // the driver — next to the sliver hit-test extent gate — so sliver
+        // objects no longer cache `geometry` just to short-circuit their
+        // own `paint`. Box nodes (`geometry_sliver() == None`) are never
+        // culled here. Same dirty-residue handling as the `alpha == 0`
+        // skip above.
+        if render_node.geometry_sliver().is_some_and(|g| !g.visible) {
             return Ok(());
         }
 
@@ -3827,12 +4067,24 @@ impl PipelineOwner<PaintPhase> {
                         // own OffsetLayer so a future offset-only move
                         // is a layer-property update, not a repaint.
                         composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                        self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set, painted_boundaries)?;
+                        self.paint_subtree(
+                            composer,
+                            child_id,
+                            Offset::ZERO,
+                            dirty_set,
+                            painted_boundaries,
+                        )?;
                         composer.pop_layer();
                     } else {
                         // Inline children bake into the shared picture
                         // space — runs merge, no extra layer.
-                        self.paint_subtree(composer, child_id, origin + child_offset, dirty_set, painted_boundaries)?;
+                        self.paint_subtree(
+                            composer,
+                            child_id,
+                            origin + child_offset,
+                            dirty_set,
+                            painted_boundaries,
+                        )?;
                     }
                 }
             }
@@ -3858,10 +4110,22 @@ impl PipelineOwner<PaintPhase> {
 
                 if child_is_boundary {
                     composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                    self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set, painted_boundaries)?;
+                    self.paint_subtree(
+                        composer,
+                        child_id,
+                        Offset::ZERO,
+                        dirty_set,
+                        painted_boundaries,
+                    )?;
                     composer.pop_layer();
                 } else {
-                    self.paint_subtree(composer, child_id, origin + child_offset, dirty_set, painted_boundaries)?;
+                    self.paint_subtree(
+                        composer,
+                        child_id,
+                        origin + child_offset,
+                        dirty_set,
+                        painted_boundaries,
+                    )?;
                 }
             }
         }
@@ -4807,7 +5071,12 @@ mod tests {
             Ok(self.size)
         }
 
-        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: flui_types::Size,
+        ) {
             panic!("PanickingPaintBox::paint_raw -- intentional test panic");
         }
 
@@ -4815,6 +5084,7 @@ mod tests {
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
+            _size: flui_types::Size,
             _hit_child: &mut (
                      dyn FnMut(
                 usize,
@@ -4826,36 +5096,17 @@ mod tests {
         ) -> bool {
             false
         }
-
-        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            &self.size
-        }
-
-        fn set_geometry(
-            &mut self,
-            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        ) {
-            self.size = geometry;
-        }
-
-        fn paint_bounds(&self) -> flui_types::Rect {
-            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
-        }
     }
 
     /// Direct (non-RenderBox) RenderObject<BoxProtocol> impl whose
     /// `perform_layout_raw` panics. Used to test catch_unwind on the
     /// layout phase through `RenderEntry::layout`.
     #[derive(Debug)]
-    struct PanickingLayoutBox {
-        size: flui_types::Size,
-    }
+    struct PanickingLayoutBox;
 
     impl PanickingLayoutBox {
         fn new() -> Self {
-            Self {
-                size: flui_types::Size::ZERO,
-            }
+            Self
         }
     }
 
@@ -4885,13 +5136,19 @@ mod tests {
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }
 
-        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: flui_types::Size,
+        ) {
         }
 
         fn hit_test_raw(
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
+            _size: flui_types::Size,
             _hit_child: &mut (
                      dyn FnMut(
                 usize,
@@ -4902,21 +5159,6 @@ mod tests {
                  ),
         ) -> bool {
             false
-        }
-
-        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            &self.size
-        }
-
-        fn set_geometry(
-            &mut self,
-            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        ) {
-            self.size = geometry;
-        }
-
-        fn paint_bounds(&self) -> flui_types::Rect {
-            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
         }
     }
 
@@ -5294,13 +5536,19 @@ mod tests {
             Ok(self.size)
         }
 
-        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: flui_types::Size,
+        ) {
         }
 
         fn hit_test_raw(
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
+            _size: flui_types::Size,
             _hit_child: &mut (
                      dyn FnMut(
                 usize,
@@ -5311,21 +5559,6 @@ mod tests {
                  ),
         ) -> bool {
             false
-        }
-
-        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            &self.size
-        }
-
-        fn set_geometry(
-            &mut self,
-            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        ) {
-            self.size = geometry;
-        }
-
-        fn paint_bounds(&self) -> flui_types::Rect {
-            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
         }
     }
 

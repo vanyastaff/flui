@@ -9,28 +9,28 @@ use flui_tree::Single;
 use flui_types::{geometry::px, layout::AxisDirection::*};
 
 use crate::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry, child_paint_offset},
+    constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
 };
 
 /// A Sliver-protocol adapter that lays out one Box-protocol child.
+///
+/// 2B field dedup: `constraints` and `geometry` live solely on
+/// `RenderState<SliverProtocol>`. `perform_layout` returns its geometry
+/// directly; the `child_main_axis_position` hook receives the incoming
+/// `SliverConstraints` as an argument; the paint/hit gates (visibility and
+/// `hit_test_extent`) are owned by the pipeline driver.
 #[derive(Debug, Clone)]
-pub struct RenderSliverToBoxAdapter {
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
-}
+pub struct RenderSliverToBoxAdapter;
 
 impl RenderSliverToBoxAdapter {
     /// Creates an adapter with no laid-out geometry yet.
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            constraints: empty_sliver_constraints(),
-            geometry: SliverGeometry::ZERO,
-        }
+        Self
     }
 }
 
@@ -51,22 +51,22 @@ impl RenderSliver for RenderSliverToBoxAdapter {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
         if ctx.child_count() == 0 {
-            self.geometry = SliverGeometry::ZERO;
-            ctx.complete(self.geometry);
-            return;
+            return SliverGeometry::ZERO;
         }
 
-        let child_size =
-            ctx.layout_box_child(0, self.constraints.unbounded_main_axis_box_constraints());
-        let child_extent = match self.constraints.axis_direction {
+        let child_size = ctx.layout_box_child(0, constraints.unbounded_main_axis_box_constraints());
+        let child_extent = match constraints.axis_direction {
             LeftToRight | RightToLeft => child_size.width.get(),
             TopToBottom | BottomToTop => child_size.height.get(),
         };
-        let painted_child_size = self.calculate_paint_offset(&self.constraints, 0.0, child_extent);
-        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, child_extent);
+        let painted_child_size = self.calculate_paint_offset(&constraints, 0.0, child_extent);
+        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, child_extent);
 
         let geometry = SliverGeometry {
             scroll_extent: child_extent,
@@ -76,60 +76,29 @@ impl RenderSliver for RenderSliverToBoxAdapter {
             cache_extent,
             hit_test_extent: painted_child_size,
             visible: painted_child_size > 0.0,
-            has_visual_overflow: child_extent > self.constraints.remaining_paint_extent
-                || self.constraints.scroll_offset > 0.0,
+            has_visual_overflow: child_extent > constraints.remaining_paint_extent
+                || constraints.scroll_offset > 0.0,
             ..SliverGeometry::ZERO
         };
         let child_paint_offset =
-            child_paint_offset(&self.constraints, &geometry, px(0.0), px(child_extent));
+            child_paint_offset(&constraints, &geometry, px(0.0), px(child_extent));
         ctx.position_child(0, child_paint_offset);
-        self.geometry = geometry;
-        ctx.complete(geometry);
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        geometry
     }
 
     fn child_main_axis_position(
         &self,
+        constraints: &SliverConstraints,
         _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
     ) -> f32 {
-        -self.constraints.scroll_offset
+        -constraints.scroll_offset
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        if self.geometry.visible {
-            ctx.paint_child();
-        }
+        ctx.paint_child();
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Single, Self::ParentData>) -> bool {
         ctx.hit_test_child_at_layout_offset(0)
-    }
-}
-
-const fn empty_sliver_constraints() -> SliverConstraints {
-    SliverConstraints {
-        axis_direction: TopToBottom,
-        growth_direction: GrowthDirection::Forward,
-        user_scroll_direction: crate::view::ScrollDirection::Idle,
-        scroll_offset: 0.0,
-        preceding_scroll_extent: 0.0,
-        overlap: 0.0,
-        remaining_paint_extent: 0.0,
-        cross_axis_extent: 0.0,
-        cross_axis_direction: LeftToRight,
-        viewport_main_axis_extent: 0.0,
-        remaining_cache_extent: 0.0,
-        cache_origin: 0.0,
     }
 }

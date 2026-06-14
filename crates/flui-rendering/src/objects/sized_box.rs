@@ -1,7 +1,7 @@
 //! RenderSizedBox - forces specific size constraints.
 
 use flui_tree::Leaf;
-use flui_types::{Pixels, Point, Rect, Size};
+use flui_types::{Pixels, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -35,18 +35,12 @@ pub struct RenderSizedBox {
     width: Option<Pixels>,
     /// Fixed height, or None for flexible.
     height: Option<Pixels>,
-    /// Actual size after layout.
-    size: Size,
 }
 
 impl RenderSizedBox {
     /// Creates a sized box with optional fixed dimensions.
     pub fn new(width: Option<Pixels>, height: Option<Pixels>) -> Self {
-        Self {
-            width,
-            height,
-            size: Size::ZERO,
-        }
+        Self { width, height }
     }
 
     /// Creates a sized box with fixed dimensions.
@@ -102,7 +96,7 @@ impl RenderBox for RenderSizedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constraints = ctx.constraints();
 
         // Use fixed dimension or constrain to max
@@ -116,16 +110,7 @@ impl RenderBox for RenderSizedBox {
             .map(|h| h.clamp(constraints.min_height, constraints.max_height))
             .unwrap_or(constraints.max_height);
 
-        self.size = Size::new(width, height);
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        Size::new(width, height)
     }
 
     fn compute_min_intrinsic_width(
@@ -169,10 +154,6 @@ impl RenderBox for RenderSizedBox {
     }
 
     // paint() uses default no-op - SizedBox only affects layout
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
-    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.

@@ -9,7 +9,6 @@
 //! [`is_repaint_boundary`]: crate::traits::RenderObject::is_repaint_boundary
 
 use flui_tree::Single;
-use flui_types::{Point, Rect, Size};
 
 use crate::{
     context::BoxLayoutContext,
@@ -40,19 +39,14 @@ use crate::{
 /// `BoxLayoutCtx::from_erased` path the blanket impl uses.
 #[derive(Debug, Clone)]
 pub struct RenderRepaintBoundary {
-    /// Size after layout.
-    size: Size,
     /// Debug metric: number of times this subtree was repainted.
     paint_count: u32,
 }
 
 impl RenderRepaintBoundary {
-    /// Creates a new repaint boundary with zero size.
+    /// Creates a new repaint boundary.
     pub fn new() -> Self {
-        Self {
-            size: Size::ZERO,
-            paint_count: 0,
-        }
+        Self { paint_count: 0 }
     }
 
     /// Returns the number of times this subtree has been repainted.
@@ -63,11 +57,6 @@ impl RenderRepaintBoundary {
     /// Increments the repaint counter (saturating at `u32::MAX`).
     pub fn increment_paint_count(&mut self) {
         self.paint_count = self.paint_count.saturating_add(1);
-    }
-
-    /// Returns a reference to the current size.
-    pub fn size(&self) -> &Size {
-        &self.size
     }
 }
 
@@ -106,30 +95,27 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
 
         let constraints = *layout_ctx.constraints();
 
-        if layout_ctx.child_count() > 0 {
+        let size = if layout_ctx.child_count() > 0 {
             // Pass-through: layout child with same constraints, adopt child size.
-            let child_size = layout_ctx.layout_child(0, constraints);
-            self.size = child_size;
+            layout_ctx.layout_child(0, constraints)
         } else {
             // No child — take minimum size.
-            self.size = constraints.smallest();
-        }
+            constraints.smallest()
+        };
 
-        layout_ctx.complete_with_size(self.size);
-
-        layout_ctx.inner().geometry().copied().ok_or_else(|| {
-            crate::error::RenderError::contract_violation(
-                self.debug_name(),
-                "RenderRepaintBoundary layout did not complete",
-            )
-        })
+        Ok(size)
     }
 
-    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+    fn paint_raw(
+        &self,
+        recorder: &mut crate::context::FragmentRecorder,
+        child_count: usize,
+        size: flui_types::Size,
+    ) {
         // No visual effect of its own — splice the child in order. The
         // boundary split (OffsetLayer + rebase to ZERO) is the paint
         // walk's job, keyed off `is_repaint_boundary()`.
-        let mut cx = crate::context::PaintCx::<Single>::new(recorder, child_count);
+        let mut cx = crate::context::PaintCx::<Single>::new(recorder, child_count, size);
         cx.paint_child();
     }
 
@@ -137,6 +123,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
         &self,
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
         child_count: usize,
+        _size: flui_types::Size,
         hit_child: &mut (
                  dyn FnMut(
             usize,
@@ -227,23 +214,6 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
         true
     }
 
-    // === Geometry access ====================================================
-
-    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-        &self.size
-    }
-
-    fn set_geometry(
-        &mut self,
-        geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-    ) {
-        self.size = geometry;
-    }
-
-    fn paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
-    }
-
     fn debug_name(&self) -> &'static str {
         "RenderRepaintBoundary"
     }
@@ -260,7 +230,6 @@ mod tests {
     #[test]
     fn test_new_defaults() {
         let rb = RenderRepaintBoundary::new();
-        assert_eq!(*rb.size(), Size::ZERO);
         assert_eq!(rb.paint_count(), 0);
     }
 
@@ -269,7 +238,6 @@ mod tests {
         let a = RenderRepaintBoundary::new();
         let b = RenderRepaintBoundary::default();
         assert_eq!(a.paint_count(), b.paint_count());
-        assert_eq!(*a.size(), *b.size());
     }
 
     #[test]
@@ -317,6 +285,6 @@ mod tests {
     fn test_paint_effects_none() {
         let rb = RenderRepaintBoundary::new();
         assert!(rb.paint_alpha().is_none());
-        assert!(rb.paint_transform().is_none());
+        assert!(rb.paint_transform(flui_types::Size::ZERO).is_none());
     }
 }

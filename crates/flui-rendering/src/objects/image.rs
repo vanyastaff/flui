@@ -116,8 +116,6 @@ pub struct RenderImage {
     fit: ImageFit,
     /// How to align the image within the box. Paint-only, like `fit`.
     alignment: ImageAlignment,
-    /// Cached layout size (set by perform_layout).
-    size: Size,
 }
 
 impl RenderImage {
@@ -132,7 +130,6 @@ impl RenderImage {
             scale: 1.0,
             fit,
             alignment,
-            size: Size::ZERO,
         }
     }
 
@@ -149,7 +146,6 @@ impl RenderImage {
             scale: 1.0,
             fit,
             alignment,
-            size: Size::ZERO,
         }
     }
 
@@ -222,16 +218,6 @@ impl RenderImage {
             self.scale = scale;
         }
         // Caller responsible for marking the node layout-dirty.
-    }
-
-    /// Computes the destination rectangle for the image content within the
-    /// laid-out box, applying the fit mode (scaling) and alignment
-    /// (positioning).
-    ///
-    /// Returns `None` when the intrinsic size is degenerate (zero in either
-    /// dimension), in which case there is nothing to paint.
-    fn compute_paint_rect(&self) -> Option<Rect> {
-        self.paint_rect_in(self.size)
     }
 
     /// Computes the destination rectangle for the image content within a box
@@ -354,22 +340,8 @@ impl RenderBox for RenderImage {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
-        let size = self.compute_size(ctx.constraints());
-        self.size = size;
-        ctx.complete_with_size(size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+        self.compute_size(ctx.constraints())
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
@@ -379,7 +351,8 @@ impl RenderBox for RenderImage {
         };
         // Apply fit + alignment to obtain the destination rect in local
         // coordinates (the recorder pre-translates to this node's origin).
-        if let Some(dst) = self.compute_paint_rect() {
+        // The laid-out box size comes from RenderState via `ctx.size()`.
+        if let Some(dst) = self.paint_rect_in(ctx.size()) {
             ctx.canvas().draw_image(image.clone(), dst, None);
         }
     }
@@ -477,7 +450,6 @@ mod tests {
         assert_eq!(image.intrinsic_size, intrinsic);
         assert_eq!(image.fit, ImageFit::Contain);
         assert_eq!(image.alignment, ImageAlignment::Center);
-        assert_eq!(image.size(), &Size::ZERO);
     }
 
     #[test]
@@ -602,14 +574,15 @@ mod tests {
     fn test_compute_paint_rect_contain_centers() {
         // Intrinsic 2:1 (200x100) in a 100x100 box → contain gives 100x50
         // centered vertically at y=25.
-        let mut image = RenderImage::new(
+        let image = RenderImage::new(
             Size::new(px(200.0), px(100.0)),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
-        image.size = Size::new(px(100.0), px(100.0));
 
-        let rect = image.compute_paint_rect().expect("paint rect");
+        let rect = image
+            .paint_rect_in(Size::new(px(100.0), px(100.0)))
+            .expect("paint rect");
         assert_eq!(rect.size().width, px(100.0));
         assert_eq!(rect.size().height, px(50.0));
         assert_eq!(rect.origin().x, Pixels::ZERO);
@@ -618,14 +591,15 @@ mod tests {
 
     #[test]
     fn test_compute_paint_rect_fill_matches_box() {
-        let mut image = RenderImage::new(
+        let image = RenderImage::new(
             Size::new(px(50.0), px(50.0)),
             ImageFit::Fill,
             ImageAlignment::TopLeft,
         );
-        image.size = Size::new(px(120.0), px(80.0));
 
-        let rect = image.compute_paint_rect().expect("paint rect");
+        let rect = image
+            .paint_rect_in(Size::new(px(120.0), px(80.0)))
+            .expect("paint rect");
         assert_eq!(rect.size().width, px(120.0));
         assert_eq!(rect.size().height, px(80.0));
         assert_eq!(rect.origin().x, Pixels::ZERO);
@@ -636,14 +610,15 @@ mod tests {
     fn test_compute_paint_rect_cover_overflows_box() {
         // Intrinsic 1:2 (100x200) covered into 100x100 box → scale by max
         // (1.0 vs 0.5) = 1.0, painted 100x200, overflowing height (cropped).
-        let mut image = RenderImage::new(
+        let image = RenderImage::new(
             Size::new(px(100.0), px(200.0)),
             ImageFit::Cover,
             ImageAlignment::Center,
         );
-        image.size = Size::new(px(100.0), px(100.0));
 
-        let rect = image.compute_paint_rect().expect("paint rect");
+        let rect = image
+            .paint_rect_in(Size::new(px(100.0), px(100.0)))
+            .expect("paint rect");
         assert_eq!(rect.size().width, px(100.0));
         assert_eq!(rect.size().height, px(200.0));
         // Centered vertically → origin y = (100 - 200)/2 = -50 (crop top/bottom)
@@ -653,27 +628,31 @@ mod tests {
     #[test]
     fn test_compute_paint_rect_scale_down_never_enlarges() {
         // Small 10x10 image in a big 100x100 box → ScaleDown keeps 10x10.
-        let mut image = RenderImage::new(
+        let image = RenderImage::new(
             Size::new(px(10.0), px(10.0)),
             ImageFit::ScaleDown,
             ImageAlignment::TopLeft,
         );
-        image.size = Size::new(px(100.0), px(100.0));
 
-        let rect = image.compute_paint_rect().expect("paint rect");
+        let rect = image
+            .paint_rect_in(Size::new(px(100.0), px(100.0)))
+            .expect("paint rect");
         assert_eq!(rect.size().width, px(10.0));
         assert_eq!(rect.size().height, px(10.0));
     }
 
     #[test]
     fn test_compute_paint_rect_zero_intrinsic_is_none() {
-        let mut image = RenderImage::new(
+        let image = RenderImage::new(
             Size::new(px(0.0), px(50.0)),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
-        image.size = Size::new(px(100.0), px(100.0));
-        assert!(image.compute_paint_rect().is_none());
+        assert!(
+            image
+                .paint_rect_in(Size::new(px(100.0), px(100.0)))
+                .is_none()
+        );
     }
 
     // ===== Paint pipeline integration (drives the real paint() method) =====
@@ -683,11 +662,13 @@ mod tests {
     use flui_types::Offset;
 
     /// Runs `paint()` through a real FragmentRecorder and returns the
-    /// recorded DrawImage commands (image byte_count, dst rect).
-    fn capture_draw_images(image: &RenderImage) -> Vec<(usize, Rect)> {
+    /// recorded DrawImage commands (image byte_count, dst rect). The
+    /// laid-out box size is injected via the paint context (the pipeline
+    /// resolves it from `RenderState`).
+    fn capture_draw_images(image: &RenderImage, box_size: Size) -> Vec<(usize, Rect)> {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
         {
-            let mut cx = PaintCx::<Leaf>::new(&mut rec, 0);
+            let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, box_size);
             image.paint(&mut cx);
         }
         let frag = rec.finish();
@@ -706,14 +687,13 @@ mod tests {
 
     #[test]
     fn test_paint_without_image_records_nothing() {
-        let mut image = RenderImage::new(
+        let image = RenderImage::new(
             Size::new(px(10.0), px(10.0)),
             ImageFit::Fill,
             ImageAlignment::Center,
         );
-        image.size = Size::new(px(100.0), px(100.0));
         // No source image set → paint() should be a no-op.
-        assert!(capture_draw_images(&image).is_empty());
+        assert!(capture_draw_images(&image, Size::new(px(100.0), px(100.0))).is_empty());
     }
 
     #[test]
@@ -721,11 +701,10 @@ mod tests {
         // 2x2 image, Contain into a 100x50 box (intrinsic 2:2 = 1:1).
         // Contain scale = min(100/2, 50/2) = 25 → painted 50x50.
         // Center alignment → origin x = (100-50)/2 = 25, y = (50-50)/2 = 0.
-        let mut image =
+        let image =
             RenderImage::from_image(test_image_2x2(), ImageFit::Contain, ImageAlignment::Center);
-        image.size = Size::new(px(100.0), px(50.0));
 
-        let draws = capture_draw_images(&image);
+        let draws = capture_draw_images(&image, Size::new(px(100.0), px(50.0)));
         assert_eq!(draws.len(), 1, "expected exactly one DrawImage command");
 
         let (byte_count, dst) = draws[0];
@@ -738,11 +717,10 @@ mod tests {
 
     #[test]
     fn test_paint_fill_covers_whole_box() {
-        let mut image =
+        let image =
             RenderImage::from_image(test_image_2x2(), ImageFit::Fill, ImageAlignment::TopLeft);
-        image.size = Size::new(px(120.0), px(80.0));
 
-        let draws = capture_draw_images(&image);
+        let draws = capture_draw_images(&image, Size::new(px(120.0), px(80.0)));
         assert_eq!(draws.len(), 1);
         let (_, dst) = draws[0];
         assert_eq!(dst.origin().x, Pixels::ZERO);

@@ -2,10 +2,10 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Variable;
-use flui_types::{geometry::px, layout::AxisDirection::*};
+use flui_types::geometry::px;
 
 use crate::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry, child_paint_offset},
+    constraints::{SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -17,11 +17,15 @@ use crate::{
 /// `RenderSliverFixedExtentList`. Lazy child creation and garbage collection
 /// remain deferred to the future multi-box-adaptor layer; attached children are
 /// laid out eagerly with fixed extents.
+///
+/// 2B field dedup: incoming constraints live only in `perform_layout` and
+/// the committed `geometry` lives solely on `RenderState<SliverProtocol>`;
+/// `perform_layout` returns its geometry directly and the visibility cull
+/// is owned by the pipeline paint driver. `child_count` is retained because
+/// the `&self`-only `hit_test` walks the attached children in reverse.
 #[derive(Debug, Clone)]
 pub struct RenderSliverFixedExtentList {
     item_extent: f32,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
     child_count: usize,
 }
 
@@ -41,8 +45,6 @@ impl RenderSliverFixedExtentList {
         );
         Self {
             item_extent,
-            constraints: empty_sliver_constraints(),
-            geometry: SliverGeometry::ZERO,
             child_count: 0,
         }
     }
@@ -83,21 +85,23 @@ impl RenderSliver for RenderSliverFixedExtentList {
     type Arity = Variable;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
         self.child_count = ctx.child_count();
 
         for index in 0..self.child_count {
             ctx.layout_box_child(
                 index,
-                self.constraints
-                    .as_box_constraints(self.item_extent, self.item_extent, None),
+                constraints.as_box_constraints(self.item_extent, self.item_extent, None),
             );
         }
 
         let scroll_extent = self.item_extent * self.child_count as f32;
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, scroll_extent);
-        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, scroll_extent);
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, scroll_extent);
         let geometry = SliverGeometry {
             scroll_extent,
             paint_extent,
@@ -106,8 +110,8 @@ impl RenderSliver for RenderSliverFixedExtentList {
             cache_extent,
             hit_test_extent: paint_extent,
             visible: paint_extent > 0.0,
-            has_visual_overflow: scroll_extent > self.constraints.remaining_paint_extent
-                || self.constraints.scroll_offset > 0.0,
+            has_visual_overflow: scroll_extent > constraints.remaining_paint_extent
+                || constraints.scroll_offset > 0.0,
             ..SliverGeometry::ZERO
         };
 
@@ -116,7 +120,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
             ctx.position_child(
                 index,
                 child_paint_offset(
-                    &self.constraints,
+                    &constraints,
                     &geometry,
                     px(layout_offset),
                     px(self.item_extent),
@@ -124,26 +128,11 @@ impl RenderSliver for RenderSliverFixedExtentList {
             );
         }
 
-        self.geometry = geometry;
-        ctx.complete(geometry);
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        geometry
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        if self.geometry.visible {
-            ctx.paint_children();
-        }
+        ctx.paint_children();
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
@@ -153,22 +142,5 @@ impl RenderSliver for RenderSliverFixedExtentList {
             }
         }
         false
-    }
-}
-
-const fn empty_sliver_constraints() -> SliverConstraints {
-    SliverConstraints {
-        axis_direction: TopToBottom,
-        growth_direction: GrowthDirection::Forward,
-        user_scroll_direction: crate::view::ScrollDirection::Idle,
-        scroll_offset: 0.0,
-        preceding_scroll_extent: 0.0,
-        overlap: 0.0,
-        remaining_paint_extent: 0.0,
-        cross_axis_extent: 0.0,
-        cross_axis_direction: LeftToRight,
-        viewport_main_axis_extent: 0.0,
-        remaining_cache_extent: 0.0,
-        cache_origin: 0.0,
     }
 }

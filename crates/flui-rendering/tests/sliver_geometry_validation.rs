@@ -17,7 +17,7 @@ use flui_rendering::{
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
-use flui_types::{Point, Rect, Size, geometry::px, layout::AxisDirection};
+use flui_types::{Size, geometry::px, layout::AxisDirection};
 
 type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
 type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
@@ -64,16 +64,13 @@ fn assert_invalid_geometry(err: RenderError, expected_reason: &'static str) {
 
 #[derive(Debug)]
 struct BadGeometrySliver {
-    constraints: SliverConstraints,
+    /// The deliberately-invalid geometry this test double reports.
     geometry: SliverGeometry,
 }
 
 impl BadGeometrySliver {
     fn new(geometry: SliverGeometry) -> Self {
-        Self {
-            constraints: SliverConstraints::default(),
-            geometry,
-        }
+        Self { geometry }
     }
 }
 
@@ -86,29 +83,15 @@ impl RenderSliver for BadGeometrySliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        self.geometry
     }
 
     fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         false
-    }
-
-    fn sliver_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, Size::ZERO)
     }
 }
 
@@ -116,7 +99,6 @@ impl RenderSliver for BadGeometrySliver {
 struct BoxWithSliverChild {
     sliver_constraints: SliverConstraints,
     captured: Arc<Mutex<Option<SliverGeometry>>>,
-    size: Size,
 }
 
 impl BoxWithSliverChild {
@@ -127,7 +109,6 @@ impl BoxWithSliverChild {
         Self {
             sliver_constraints,
             captured,
-            size: Size::ZERO,
         }
     }
 }
@@ -141,19 +122,13 @@ impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> Size {
         let geometry = ctx.layout_sliver_child(0, self.sliver_constraints);
         *self.captured.lock().unwrap() = Some(geometry);
-        self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        ctx.constraints().biggest()
     }
 }
 

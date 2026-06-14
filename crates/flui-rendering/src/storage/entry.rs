@@ -284,14 +284,13 @@ impl<P: Protocol> RenderEntry<P> {
     /// The `perform_layout_raw` call is wrapped in
     /// [`std::panic::catch_unwind`]; a panic surfaces as
     /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12), and
-    /// `panic_any(RenderError::ContractViolation)` from the
-    /// `RenderObject<BoxProtocol>` blanket impl surfaces as
-    /// [`crate::error::RenderError::ContractViolation`] (review fix
-    /// #5). On the error path the state's geometry is **not** updated
-    /// — the previous geometry (or `None` if this is the first layout)
-    /// remains valid. The `NEEDS_LAYOUT` flag is also left set so the
-    /// pipeline can retry next frame after the offending node has been
-    /// removed or fixed.
+    /// a contract violation returned as `Err(RenderError::ContractViolation)`
+    /// by `perform_layout_raw` propagates via the `Result` chain. On
+    /// the error path the state's geometry is **not** updated — the
+    /// previous geometry (or `None` if this is the first layout) remains
+    /// valid. The `NEEDS_LAYOUT` flag is also left set so the pipeline
+    /// can retry next frame after the offending node has been removed or
+    /// fixed.
     ///
     /// Returns the computed geometry on success.
     pub fn layout_leaf_only(
@@ -326,13 +325,11 @@ impl<P: Protocol> RenderEntry<P> {
         //
         // # Error-handling shape (follow-up to PR #141 #5 Option A)
         //
-        // `perform_layout_raw` now returns
-        // `RenderResult<ProtocolGeometry<P>>` — contract violations
-        // (e.g., bridge-detected missing `complete_with_size`) flow
-        // through the `Err(...)` channel of the inner Result; the
-        // `catch_unwind` boundary remains, but ONLY for genuine
-        // third-party panics (user widget calling `panic!` /
-        // `unwrap()` etc.), which still surface as
+        // `perform_layout_raw` returns `RenderResult<ProtocolGeometry<P>>`
+        // — contract violations flow through the `Err(...)` channel of
+        // the inner Result; the `catch_unwind` boundary remains, but
+        // ONLY for genuine third-party panics (user widget calling
+        // `panic!` / `unwrap()` etc.), which surface as
         // `RenderError::Poisoned`.
         //
         // The two error classes are now distinct at the variant level:

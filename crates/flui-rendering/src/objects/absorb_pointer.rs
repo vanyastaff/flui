@@ -21,7 +21,7 @@
 //!   `hit_test` body is the *only* place the semantic differs.
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -38,7 +38,6 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RenderAbsorbPointer {
     absorbing: bool,
-    size: Size,
     has_child: bool,
 }
 
@@ -47,7 +46,6 @@ impl RenderAbsorbPointer {
     pub const fn new(absorbing: bool) -> Self {
         Self {
             absorbing,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -85,26 +83,17 @@ impl RenderBox for RenderAbsorbPointer {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
             let child_size = ctx.layout_child(0, constraints);
             ctx.position_child(0, Offset::ZERO);
-            self.size = child_size;
+            child_size
         } else {
             self.has_child = false;
-            self.size = constraints.smallest();
+            constraints.smallest()
         }
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
@@ -112,7 +101,7 @@ impl RenderBox for RenderAbsorbPointer {
     // paint: default pass-through (splices the child in order).
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.absorbing {
@@ -128,10 +117,6 @@ impl RenderBox for RenderAbsorbPointer {
             false
         }
     }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
-    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.
@@ -145,8 +130,6 @@ impl HotReloadCapability for RenderAbsorbPointer {}
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
-
     use super::*;
 
     #[test]
@@ -167,15 +150,6 @@ mod tests {
         assert!(node.set_absorbing(true));
         assert!(!node.set_absorbing(true));
         assert!(node.set_absorbing(false));
-    }
-
-    #[test]
-    fn box_paint_bounds_matches_size() {
-        let mut node = RenderAbsorbPointer::new(false);
-        *node.size_mut() = Size::new(px(120.0), px(60.0));
-        let r = node.box_paint_bounds();
-        assert_eq!(r.width(), px(120.0));
-        assert_eq!(r.height(), px(60.0));
     }
 
     #[test]

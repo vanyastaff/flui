@@ -7,7 +7,7 @@
 //! [`RenderSliverOpacity`](https://api.flutter.dev/flutter/rendering/RenderSliverOpacity-class.html)
 //! (`packages/flutter/lib/src/rendering/sliver.dart` — `_RenderSliverOpacity`
 //! / the proxy-sliver variant). Layout is a pure passthrough of the
-//! parent's [`SliverConstraints`] to the child; the alpha is consumed
+//! parent's [`crate::constraints::SliverConstraints`] to the child; the alpha is consumed
 //! by the compositor via the
 //! [`crate::traits::PaintEffectsCapability::paint_alpha`] override.
 //!
@@ -25,10 +25,9 @@
 //!   layer.
 
 use flui_tree::Single;
-use flui_types::Rect;
 
 use crate::{
-    constraints::{SliverConstraints, SliverGeometry},
+    constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -63,10 +62,6 @@ pub struct RenderSliverOpacity {
     /// even when `alpha == 255`. Useful for stable compositing under
     /// animation.
     always_needs_compositing: bool,
-    /// Last-applied constraints (required by [`RenderSliver`]).
-    constraints: SliverConstraints,
-    /// Computed geometry from the most recent [`Self::perform_layout`].
-    geometry: SliverGeometry,
 }
 
 impl RenderSliverOpacity {
@@ -78,8 +73,6 @@ impl RenderSliverOpacity {
             opacity: clamped,
             alpha: Self::opacity_to_alpha(clamped),
             always_needs_compositing: false,
-            constraints: empty_sliver_constraints(),
-            geometry: SliverGeometry::ZERO,
         }
     }
 
@@ -177,31 +170,15 @@ impl RenderSliver for RenderSliverOpacity {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) {
+    ) -> SliverGeometry {
         let constraints = *ctx.constraints();
-        self.constraints = constraints;
 
-        let geometry = if ctx.child_count() > 0 {
+        if ctx.child_count() > 0 {
             // Transparent passthrough — opacity does not affect layout.
             ctx.layout_child(0, constraints)
         } else {
             SliverGeometry::ZERO
-        };
-
-        self.geometry = geometry;
-        ctx.complete(geometry);
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test(
@@ -213,11 +190,6 @@ impl RenderSliver for RenderSliverOpacity {
         // alpha, leaving that to `RenderSliverIgnorePointer`). The
         // opacity object adds no extra hit area.
         ctx.hit_test_child_at_layout_offset(0)
-    }
-
-    fn sliver_paint_bounds(&self) -> Rect {
-        let size = self.get_absolute_size(self.geometry.paint_extent);
-        Rect::from_origin_size(flui_types::Point::ZERO, size)
     }
 }
 
@@ -237,33 +209,6 @@ impl PaintEffectsCapability for RenderSliverOpacity {
 
 impl SemanticsCapability for RenderSliverOpacity {}
 impl HotReloadCapability for RenderSliverOpacity {}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// `SliverConstraints` constant used to initialise the cached
-/// constraints field; `SliverConstraints::default()` is not `const`.
-const fn empty_sliver_constraints() -> SliverConstraints {
-    use flui_types::layout::AxisDirection;
-
-    use crate::{constraints::GrowthDirection, view::ScrollDirection};
-
-    SliverConstraints::new(
-        AxisDirection::TopToBottom,
-        GrowthDirection::Forward,
-        ScrollDirection::Idle,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        AxisDirection::LeftToRight,
-        0.0,
-        0.0,
-        0.0,
-    )
-}
 
 // ============================================================================
 // Tests

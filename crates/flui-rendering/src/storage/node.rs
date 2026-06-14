@@ -245,6 +245,16 @@ impl RenderNode {
         self.links_mut().add_child(child);
     }
 
+    /// Inserts a child at `index`, shifting later siblings right.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index > self.child_count()`.
+    #[inline]
+    pub fn insert_child(&mut self, index: usize, child: RenderId) {
+        self.links_mut().insert_child(index, child);
+    }
+
     /// Removes a child.
     #[inline]
     pub fn remove_child(&mut self, child: RenderId) -> bool {
@@ -540,13 +550,42 @@ impl RenderNode {
         }
     }
 
-    /// Returns the paint bounds for this render object.
-    pub fn paint_bounds(&self) -> flui_types::Rect {
+    /// Mutable access to the persistent parent data for this node.
+    ///
+    /// Returns `None` if no parent data has been set yet.
+    #[inline]
+    pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::parent_data::ParentData> {
         match self {
-            Self::Box(entry) => entry.render_object().paint_bounds(),
-            Self::Sliver(entry) => entry.render_object().paint_bounds(),
+            Self::Box(entry) => entry.state_mut().parent_data_mut(),
+            Self::Sliver(entry) => entry.state_mut().parent_data_mut(),
         }
     }
+
+    /// Installs `data` as this node's parent data, replacing any previously
+    /// stored value.
+    ///
+    /// Used by the deferred-insert path to seed a freshly-inserted node with
+    /// the parent-data box that the build backend pre-built (e.g.
+    /// `SliverMultiBoxAdaptorParentData { index: logical_index }`).  Prefer
+    /// [`Self::parent_data_mut`] when the node already has parent-data and
+    /// only a field needs updating.
+    #[inline]
+    pub fn set_parent_data(&mut self, data: Box<dyn crate::parent_data::ParentData>) {
+        match self {
+            Self::Box(entry) => entry.state_mut().set_parent_data(data),
+            Self::Sliver(entry) => entry.state_mut().set_parent_data(data),
+        }
+    }
+
+    // 2B field dedup: `RenderNode::paint_bounds` was deleted. It had zero
+    // call sites workspace-wide (a dead producer — the paint pipeline does
+    // no bounds-based culling yet) and, once geometry moved to
+    // `RenderState`, derived an *untransformed* rect that silently dropped
+    // `RenderTransform`'s corner-mapped bounds. A future culling consumer
+    // must reintroduce it transform-aware (apply `paint_transform()` to the
+    // committed `RenderState` geometry), not resurrect a half-correct
+    // producer. Root paint bounds for the engine live on
+    // `RenderView::physical_paint_bounds`.
 
     /// Stable debug name for the stored render object.
     #[inline]
@@ -567,20 +606,45 @@ impl RenderNode {
     }
 
     /// Optional paint transform effect for this render object.
+    ///
+    /// The laid-out size is resolved from
+    /// [`RenderState`](crate::storage::RenderState) (geometry's sole
+    /// owner) and threaded in so an alignment-relative transform reads it
+    /// instead of caching its own size (channel for the `&self`
+    /// `paint_transform` hook). Box → committed `Size`; sliver → absolute
+    /// paint size.
     #[inline]
     pub fn paint_transform(&self) -> Option<flui_types::Matrix4> {
         match self {
-            Self::Box(entry) => entry.render_object().paint_transform(),
-            Self::Sliver(entry) => entry.render_object().paint_transform(),
+            Self::Box(entry) => {
+                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+                entry.render_object().paint_transform(size)
+            }
+            Self::Sliver(entry) => {
+                let size = entry.state().absolute_paint_size();
+                entry.render_object().paint_transform(size)
+            }
         }
     }
 
     /// Records this node's paint fragment through the protocol blanket.
+    ///
+    /// The node's laid-out paint size is resolved from
+    /// [`RenderState`](crate::storage::RenderState) (geometry's sole
+    /// owner) and threaded into `paint_raw` so the render object reads
+    /// `ctx.size()` instead of caching its own `size` field (2B field
+    /// dedup). Box → committed `Size`; sliver → absolute paint size.
     #[inline]
     pub fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
         match self {
-            Self::Box(entry) => entry.render_object().paint_raw(recorder, child_count),
-            Self::Sliver(entry) => entry.render_object().paint_raw(recorder, child_count),
+            Self::Box(entry) => {
+                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+                entry.render_object().paint_raw(recorder, child_count, size)
+            }
+            Self::Sliver(entry) => {
+                let size = entry.state().absolute_paint_size();
+                entry.render_object().paint_raw(recorder, child_count, size)
+            }
         }
     }
 

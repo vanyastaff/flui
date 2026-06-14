@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use flui_rendering::{
-    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{BoxConstraints, GrowthDirection, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
     impl_sliver_test_caps,
     objects::RenderViewport,
@@ -18,7 +18,7 @@ use flui_rendering::{
     view::{ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
 use flui_tree::Leaf;
-use flui_types::{Offset, Point, Rect, Size, geometry::px, layout::AxisDirection};
+use flui_types::{Offset, Size, geometry::px, layout::AxisDirection};
 
 type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
 
@@ -117,8 +117,9 @@ struct FixedSliver {
     scroll_extent: f32,
     paint_extent: f32,
     layout_extent: Option<f32>,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
+    /// Cross-axis extent captured at layout, read by the `&self`-only
+    /// `hit_test_self` (the sliver hit-test context does not carry it).
+    cross_axis_extent: f32,
     /// When `Some`, updated each layout with the child's growth direction.
     recorded_growth_direction: Option<GrowthDirection>,
 }
@@ -129,8 +130,7 @@ impl FixedSliver {
             scroll_extent,
             paint_extent: scroll_extent,
             layout_extent: None,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
+            cross_axis_extent: 0.0,
             recorded_growth_direction: None,
         }
     }
@@ -147,8 +147,7 @@ impl FixedSliver {
             scroll_extent,
             paint_extent,
             layout_extent: Some(layout_extent),
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
+            cross_axis_extent: 0.0,
             recorded_growth_direction: None,
         }
     }
@@ -165,15 +164,19 @@ impl RenderSliver for FixedSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
+        self.cross_axis_extent = constraints.cross_axis_extent;
         if self.recorded_growth_direction.is_some() {
-            self.recorded_growth_direction = Some(self.constraints.growth_direction);
+            self.recorded_growth_direction = Some(constraints.growth_direction);
         }
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.paint_extent);
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.paint_extent);
         let layout_extent = self.layout_extent.unwrap_or(paint_extent);
-        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.paint_extent);
-        self.geometry = SliverGeometry {
+        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, self.paint_extent);
+        SliverGeometry {
             scroll_extent: self.scroll_extent,
             paint_extent,
             layout_extent,
@@ -181,23 +184,10 @@ impl RenderSliver for FixedSliver {
             hit_test_extent: paint_extent,
             cache_extent,
             visible: paint_extent > 0.0,
-            has_visual_overflow: self.scroll_extent > self.constraints.remaining_paint_extent
-                || self.constraints.scroll_offset > 0.0,
+            has_visual_overflow: self.scroll_extent > constraints.remaining_paint_extent
+                || constraints.scroll_offset > 0.0,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -205,31 +195,12 @@ impl RenderSliver for FixedSliver {
     }
 
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
-        cross >= 0.0 && cross < self.constraints.cross_axis_extent && main >= 0.0
-    }
-
-    fn sliver_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(
-            Point::ZERO,
-            Size::new(px(100.0), px(self.geometry.paint_extent)),
-        )
+        cross >= 0.0 && cross < self.cross_axis_extent && main >= 0.0
     }
 }
 
-#[derive(Debug)]
-struct InvisibleHitSliver {
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
-}
-
-impl Default for InvisibleHitSliver {
-    fn default() -> Self {
-        Self {
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
-        }
-    }
-}
+#[derive(Debug, Default)]
+struct InvisibleHitSliver;
 
 impl_sliver_test_caps!(InvisibleHitSliver);
 
@@ -237,9 +208,11 @@ impl RenderSliver for InvisibleHitSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        self.geometry = SliverGeometry {
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        SliverGeometry {
             scroll_extent: 0.0,
             paint_extent: 100.0,
             layout_extent: 0.0,
@@ -247,24 +220,12 @@ impl RenderSliver for InvisibleHitSliver {
             hit_test_extent: 100.0,
             visible: false,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
-        main >= 0.0 && main < self.geometry.hit_test_extent && cross >= 0.0
+        // The geometry's hit_test_extent is the fixed 100.0 this double reports.
+        (0.0..100.0).contains(&main) && cross >= 0.0
     }
 }
 
@@ -273,8 +234,9 @@ struct MainAxisBandSliver {
     extent: f32,
     hit_start: f32,
     hit_end: f32,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
+    /// Cross-axis extent captured at layout, read by the `&self`-only
+    /// `hit_test_self` (the sliver hit-test context does not carry it).
+    cross_axis_extent: f32,
 }
 
 impl MainAxisBandSliver {
@@ -283,8 +245,7 @@ impl MainAxisBandSliver {
             extent,
             hit_start,
             hit_end,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
+            cross_axis_extent: 0.0,
         }
     }
 }
@@ -295,39 +256,30 @@ impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.extent);
-        self.geometry = SliverGeometry {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
+        self.cross_axis_extent = constraints.cross_axis_extent;
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
+        SliverGeometry {
             scroll_extent: self.extent,
             paint_extent,
             layout_extent: paint_extent,
             max_paint_extent: self.extent,
             hit_test_extent: paint_extent,
-            cache_extent: self.calculate_cache_offset(&self.constraints, 0.0, self.extent),
+            cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
             visible: paint_extent > 0.0,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
         main >= self.hit_start
             && main < self.hit_end
             && cross >= 0.0
-            && cross < self.constraints.cross_axis_extent
+            && cross < self.cross_axis_extent
     }
 }
 
@@ -338,8 +290,9 @@ struct GeometrySliver {
     paint_extent: f32,
     layout_extent: f32,
     hit_test_extent: f32,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
+    /// Cross-axis extent captured at layout, read by the `&self`-only
+    /// `hit_test_self` (the sliver hit-test context does not carry it).
+    cross_axis_extent: f32,
 }
 
 impl GeometrySliver {
@@ -356,8 +309,7 @@ impl GeometrySliver {
             paint_extent,
             layout_extent,
             hit_test_extent,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
+            cross_axis_extent: 0.0,
         }
     }
 }
@@ -368,9 +320,12 @@ impl RenderSliver for GeometrySliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        self.geometry = SliverGeometry {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        self.cross_axis_extent = ctx.constraints().cross_axis_extent;
+        SliverGeometry {
             scroll_extent: self.scroll_extent,
             paint_origin: self.paint_origin,
             paint_extent: self.paint_extent,
@@ -380,27 +335,11 @@ impl RenderSliver for GeometrySliver {
             cache_extent: self.paint_extent,
             visible: self.paint_extent > 0.0,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
-        main >= 0.0
-            && main < self.geometry.hit_test_extent
-            && cross >= 0.0
-            && cross < self.constraints.cross_axis_extent
+        main >= 0.0 && main < self.hit_test_extent && cross >= 0.0 && cross < self.cross_axis_extent
     }
 }
 
@@ -408,8 +347,6 @@ impl RenderSliver for GeometrySliver {
 struct CorrectingSliver {
     correction: f32,
     corrected: bool,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
 }
 
 impl CorrectingSliver {
@@ -417,8 +354,6 @@ impl CorrectingSliver {
         Self {
             correction,
             corrected: false,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
         }
     }
 }
@@ -429,13 +364,15 @@ impl RenderSliver for CorrectingSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
         if !self.corrected {
             self.corrected = true;
-            self.geometry = SliverGeometry::scroll_offset_correction(self.correction);
+            SliverGeometry::scroll_offset_correction(self.correction)
         } else {
-            self.geometry = SliverGeometry {
+            SliverGeometry {
                 scroll_extent: 80.0,
                 paint_extent: 80.0,
                 layout_extent: 80.0,
@@ -444,21 +381,8 @@ impl RenderSliver for CorrectingSliver {
                 cache_extent: 80.0,
                 visible: true,
                 ..SliverGeometry::ZERO
-            };
+            }
         }
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
     }
 
     fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -470,8 +394,6 @@ impl RenderSliver for CorrectingSliver {
 struct CountingSliver {
     scroll_extent: f32,
     layouts: Arc<AtomicUsize>,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
 }
 
 impl CountingSliver {
@@ -479,8 +401,6 @@ impl CountingSliver {
         Self {
             scroll_extent,
             layouts,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
         }
     }
 }
@@ -491,12 +411,15 @@ impl RenderSliver for CountingSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
         self.layouts.fetch_add(1, Ordering::SeqCst);
-        self.constraints = *ctx.constraints();
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
-        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent);
-        self.geometry = SliverGeometry {
+        let constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, self.scroll_extent);
+        SliverGeometry {
             scroll_extent: self.scroll_extent,
             paint_extent,
             layout_extent: paint_extent,
@@ -504,22 +427,9 @@ impl RenderSliver for CountingSliver {
             hit_test_extent: paint_extent,
             cache_extent,
             visible: paint_extent > 0.0,
-            has_visual_overflow: self.constraints.scroll_offset > 0.0,
+            has_visual_overflow: constraints.scroll_offset > 0.0,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -532,8 +442,6 @@ struct OutOfBandSliver {
     scroll_extent: f32,
     max_scroll_obstruction_extent: f32,
     has_visual_overflow: bool,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
 }
 
 impl OutOfBandSliver {
@@ -546,8 +454,6 @@ impl OutOfBandSliver {
             scroll_extent,
             max_scroll_obstruction_extent,
             has_visual_overflow,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
         }
     }
 }
@@ -558,11 +464,14 @@ impl RenderSliver for OutOfBandSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
-        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent);
-        self.geometry = SliverGeometry {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, self.scroll_extent);
+        SliverGeometry {
             scroll_extent: self.scroll_extent,
             paint_extent,
             layout_extent: paint_extent,
@@ -573,20 +482,7 @@ impl RenderSliver for OutOfBandSliver {
             visible: paint_extent > 0.0,
             has_visual_overflow: self.has_visual_overflow,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 }
 
@@ -595,8 +491,6 @@ struct DynamicOutOfBandSliver {
     scroll_extent: f32,
     max_scroll_obstruction_extent: Arc<AtomicUsize>,
     has_visual_overflow: Arc<AtomicBool>,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
 }
 
 impl DynamicOutOfBandSliver {
@@ -609,8 +503,6 @@ impl DynamicOutOfBandSliver {
             scroll_extent,
             max_scroll_obstruction_extent,
             has_visual_overflow,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
         }
     }
 }
@@ -621,11 +513,14 @@ impl RenderSliver for DynamicOutOfBandSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
-        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent);
-        self.geometry = SliverGeometry {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, self.scroll_extent);
+        SliverGeometry {
             scroll_extent: self.scroll_extent,
             paint_extent,
             layout_extent: paint_extent,
@@ -637,20 +532,7 @@ impl RenderSliver for DynamicOutOfBandSliver {
             visible: paint_extent > 0.0,
             has_visual_overflow: self.has_visual_overflow.load(Ordering::SeqCst),
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 }
 
@@ -680,6 +562,11 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
         .expect("second sliver");
 
     let owner = laid_out(owner, root_id);
+    let laid_out_size = owner
+        .render_tree()
+        .get(root_id)
+        .and_then(|node| node.geometry_box())
+        .expect("root viewport has committed box geometry");
     let viewport = owner
         .render_tree()
         .get(root_id)
@@ -691,7 +578,7 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
         })
         .expect("root is RenderViewport");
 
-    assert_eq!(viewport.size(), &Size::new(px(100.0), px(100.0)));
+    assert_eq!(laid_out_size, Size::new(px(100.0), px(100.0)));
     assert_eq!(viewport.offset().viewport_dimension(), 100.0);
     assert_eq!(viewport.offset().max_scroll_extent(), 60.0);
     assert_eq!(viewport.offset().pixels(), 40.0);
@@ -1275,10 +1162,7 @@ fn viewport_skips_invisible_sliver_children_during_hit_testing() {
     let root_id = owner.insert(Box::new(viewport));
     let invisible_id = owner
         .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(InvisibleHitSliver::default()) as BoxedSliverObject,
-        )
+        .insert_sliver_child(root_id, Box::new(InvisibleHitSliver) as BoxedSliverObject)
         .expect("invisible sliver");
     let visible_id = owner
         .render_tree_mut()

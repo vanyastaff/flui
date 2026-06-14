@@ -129,13 +129,28 @@ impl Default for SliverMultiBoxAdaptorParentData {
     }
 }
 
-impl ParentData for SliverMultiBoxAdaptorParentData {}
-
 impl Hash for SliverMultiBoxAdaptorParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.layout_offset.to_bits().hash(state);
         self.index.hash(state);
         self.keep_alive.hash(state);
+    }
+}
+
+impl crate::parent_data::base::LogicalIndexParentData for SliverMultiBoxAdaptorParentData {
+    fn set_logical_index(&mut self, index: usize) {
+        self.index = index;
+    }
+}
+
+impl crate::parent_data::base::ParentData for SliverMultiBoxAdaptorParentData {
+    // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
+    // this method is pipeline-internal plumbing, not part of the public contract.
+    #[allow(private_interfaces)]
+    fn as_logical_index_mut(
+        &mut self,
+    ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
+        Some(self)
     }
 }
 
@@ -196,14 +211,29 @@ impl Default for SliverGridParentData {
     }
 }
 
-impl ParentData for SliverGridParentData {}
-
 impl Hash for SliverGridParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.layout_offset.to_bits().hash(state);
         self.index.hash(state);
         self.keep_alive.hash(state);
         self.cross_axis_offset.to_bits().hash(state);
+    }
+}
+
+impl crate::parent_data::base::LogicalIndexParentData for SliverGridParentData {
+    fn set_logical_index(&mut self, index: usize) {
+        self.index = index;
+    }
+}
+
+impl crate::parent_data::base::ParentData for SliverGridParentData {
+    // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
+    // this method is pipeline-internal plumbing, not part of the public contract.
+    #[allow(private_interfaces)]
+    fn as_logical_index_mut(
+        &mut self,
+    ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
+        Some(self)
     }
 }
 
@@ -264,14 +294,29 @@ impl Default for TreeSliverNodeParentData {
     }
 }
 
-impl ParentData for TreeSliverNodeParentData {}
-
 impl Hash for TreeSliverNodeParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.layout_offset.to_bits().hash(state);
         self.index.hash(state);
         self.keep_alive.hash(state);
         self.depth.hash(state);
+    }
+}
+
+impl crate::parent_data::base::LogicalIndexParentData for TreeSliverNodeParentData {
+    fn set_logical_index(&mut self, index: usize) {
+        self.index = index;
+    }
+}
+
+impl crate::parent_data::base::ParentData for TreeSliverNodeParentData {
+    // `private_interfaces`: `LogicalIndexParentData` is `pub(crate)` by design;
+    // this method is pipeline-internal plumbing, not part of the public contract.
+    #[allow(private_interfaces)]
+    fn as_logical_index_mut(
+        &mut self,
+    ) -> Option<&mut dyn crate::parent_data::base::LogicalIndexParentData> {
+        Some(self)
     }
 }
 

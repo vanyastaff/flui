@@ -1357,6 +1357,7 @@ dependencies = [
  "flui-tree",
  "flui-types",
  "parking_lot",
+ "proptest",
  "rustc-hash 2.1.2",
  "slab",
  "smallvec",

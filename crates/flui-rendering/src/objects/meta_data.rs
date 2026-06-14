@@ -26,7 +26,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -50,7 +50,6 @@ pub type MetaDataPayload = Arc<dyn Any + Send + Sync + 'static>;
 pub struct RenderMetaData {
     metadata: Option<MetaDataPayload>,
     behavior: HitTestBehavior,
-    size: Size,
     has_child: bool,
 }
 
@@ -61,7 +60,6 @@ impl RenderMetaData {
         Self {
             metadata: None,
             behavior: HitTestBehavior::DeferToChild,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -144,7 +142,6 @@ impl Clone for RenderMetaData {
         Self {
             metadata: self.metadata.clone(),
             behavior: self.behavior,
-            size: self.size,
             has_child: self.has_child,
         }
     }
@@ -155,7 +152,6 @@ impl fmt::Debug for RenderMetaData {
         f.debug_struct("RenderMetaData")
             .field("has_metadata", &self.metadata.is_some())
             .field("behavior", &self.behavior)
-            .field("size", &self.size)
             .field("has_child", &self.has_child)
             .finish()
     }
@@ -172,26 +168,17 @@ impl RenderBox for RenderMetaData {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
             let child_size = ctx.layout_child(0, constraints);
             ctx.position_child(0, Offset::ZERO);
-            self.size = child_size;
+            child_size
         } else {
             self.has_child = false;
-            self.size = constraints.smallest();
+            constraints.smallest()
         }
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
@@ -203,7 +190,7 @@ impl RenderBox for RenderMetaData {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         // Test the child first when the behavior allows deferral.
@@ -228,10 +215,6 @@ impl RenderBox for RenderMetaData {
         // upstream router treats this node as the target.
         self.behavior.registers_self()
     }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
-    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.
@@ -245,8 +228,6 @@ impl HotReloadCapability for RenderMetaData {}
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
-
     use super::*;
 
     #[derive(Debug, PartialEq)]
@@ -315,15 +296,6 @@ mod tests {
         // Trait-level method on RenderBox; verify it returns the
         // stored behavior so the pipeline reads the right value.
         assert_eq!(RenderBox::hit_test_behavior(&node), HitTestBehavior::Opaque);
-    }
-
-    #[test]
-    fn box_paint_bounds_matches_size() {
-        let mut node = RenderMetaData::new();
-        *node.size_mut() = Size::new(px(40.0), px(20.0));
-        let r = node.box_paint_bounds();
-        assert_eq!(r.width(), px(40.0));
-        assert_eq!(r.height(), px(20.0));
     }
 
     #[test]

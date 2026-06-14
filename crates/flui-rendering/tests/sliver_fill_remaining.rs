@@ -82,14 +82,12 @@ fn hits(
 #[derive(Debug)]
 struct FixedHitBox {
     desired: Size,
-    size: Size,
 }
 
 impl FixedHitBox {
     fn new(width: f32, height: f32) -> Self {
         Self {
             desired: Size::new(px(width), px(height)),
-            size: Size::ZERO,
         }
     }
 }
@@ -103,21 +101,15 @@ impl RenderBox for FixedHitBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.size = ctx.constraints().constrain(self.desired);
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
+        ctx.constraints().constrain(self.desired)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-        ctx.is_within_bounds(Rect::from_origin_size(flui_types::Point::ZERO, self.size))
+        ctx.is_within_bounds(Rect::from_origin_size(
+            flui_types::Point::ZERO,
+            ctx.own_size(),
+        ))
     }
 
     fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
@@ -132,14 +124,12 @@ impl RenderBox for FixedHitBox {
 #[derive(Debug)]
 struct ExpandingHitBox {
     intrinsic: Size,
-    size: Size,
 }
 
 impl ExpandingHitBox {
     fn new(width: f32, height: f32) -> Self {
         Self {
             intrinsic: Size::new(px(width), px(height)),
-            size: Size::ZERO,
         }
     }
 }
@@ -153,21 +143,15 @@ impl RenderBox for ExpandingHitBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
+        ctx.constraints().biggest()
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-        ctx.is_within_bounds(Rect::from_origin_size(flui_types::Point::ZERO, self.size))
+        ctx.is_within_bounds(Rect::from_origin_size(
+            flui_types::Point::ZERO,
+            ctx.own_size(),
+        ))
     }
 
     fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
@@ -179,20 +163,8 @@ impl RenderBox for ExpandingHitBox {
     }
 }
 
-#[derive(Debug)]
-struct IntrinsicProbeSliver {
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
-}
-
-impl Default for IntrinsicProbeSliver {
-    fn default() -> Self {
-        Self {
-            constraints: vertical_constraints(0.0, 0.0, 100.0, 0.0),
-            geometry: SliverGeometry::ZERO,
-        }
-    }
-}
+#[derive(Debug, Default)]
+struct IntrinsicProbeSliver;
 
 impl flui_foundation::Diagnosticable for IntrinsicProbeSliver {}
 impl PaintEffectsCapability for IntrinsicProbeSliver {}
@@ -203,51 +175,39 @@ impl RenderSliver for IntrinsicProbeSliver {
     type Arity = flui_tree::Single;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
         let child_extent = ctx.box_child_intrinsic(
             0,
             IntrinsicDimension::MaxHeight,
-            self.constraints.cross_axis_extent,
+            constraints.cross_axis_extent,
         );
         if ctx.child_count() > 0 {
             ctx.layout_box_child(
                 0,
-                self.constraints
-                    .as_box_constraints(child_extent, child_extent, None),
+                constraints.as_box_constraints(child_extent, child_extent, None),
             );
         }
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, child_extent);
-        self.geometry = SliverGeometry {
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, child_extent);
+        SliverGeometry {
             scroll_extent: child_extent,
             paint_extent,
             layout_extent: paint_extent,
             max_paint_extent: paint_extent,
             hit_test_extent: paint_extent,
-            cache_extent: self.calculate_cache_offset(&self.constraints, 0.0, child_extent),
+            cache_extent: self.calculate_cache_offset(&constraints, 0.0, child_extent),
             visible: paint_extent > 0.0,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 }
 
 #[derive(Debug)]
 struct SliverHost {
     constraints: SliverConstraints,
-    size: Size,
 }
 
 impl flui_foundation::Diagnosticable for SliverHost {}
@@ -262,20 +222,11 @@ impl RenderBox for SliverHost {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, flui_tree::Variable, Self::ParentData>,
-    ) {
+    ) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
         }
-        self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        ctx.constraints().biggest()
     }
 
     fn hit_test(
@@ -291,7 +242,6 @@ fn sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent()
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(0.0, 30.0, 70.0, 0.0),
-        size: Size::ZERO,
     }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
@@ -326,7 +276,6 @@ fn sliver_fill_remaining_with_scrollable_includes_negative_overlap_in_child_exte
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(0.0, 0.0, 80.0, -20.0),
-        size: Size::ZERO,
     }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
@@ -362,7 +311,6 @@ fn sliver_fill_remaining_with_scrollable_keeps_zero_extent_child_in_cache_window
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(110.0, 100.0, 0.0, 0.0),
-        size: Size::ZERO,
     }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
@@ -404,14 +352,10 @@ fn sliver_layout_context_queries_box_child_intrinsics() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(0.0, 0.0, 100.0, 0.0),
-        size: Size::ZERO,
     }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(IntrinsicProbeSliver::default()) as BoxedSliverObject,
-        )
+        .insert_sliver_child(root_id, Box::new(IntrinsicProbeSliver) as BoxedSliverObject)
         .expect("probe sliver");
     let child_id = owner
         .render_tree_mut()
@@ -434,7 +378,6 @@ fn sliver_fill_remaining_uses_child_intrinsic_when_larger_than_remaining_viewpor
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(0.0, 30.0, 70.0, 0.0),
-        size: Size::ZERO,
     }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
@@ -467,7 +410,6 @@ fn sliver_fill_remaining_uses_viewport_remainder_when_child_is_smaller() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(0.0, 30.0, 70.0, 0.0),
-        size: Size::ZERO,
     }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
@@ -499,7 +441,6 @@ fn sliver_fill_remaining_overscroll_expands_max_paint_extent() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(0.0, 20.0, 90.0, -30.0),
-        size: Size::ZERO,
     }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
@@ -533,10 +474,7 @@ fn sliver_fill_remaining_overscroll_reverse_axis_positions_actual_child_extent()
     constraints.axis_direction = AxisDirection::BottomToTop;
 
     let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost {
-        constraints,
-        size: Size::ZERO,
-    }) as BoxedRenderObject);
+    let root_id = owner.insert(Box::new(SliverHost { constraints }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
         .insert_sliver_child(

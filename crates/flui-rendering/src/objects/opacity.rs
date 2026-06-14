@@ -1,7 +1,7 @@
 //! RenderOpacity - applies transparency to a single child.
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -34,8 +34,6 @@ pub struct RenderOpacity {
     opacity: f32,
     /// Alpha as u8 (0-255) for efficient layer operations.
     alpha: u8,
-    /// Size after layout.
-    size: Size,
     /// Whether we have a child.
     has_child: bool,
     /// Whether opacity is always needed for compositing.
@@ -56,7 +54,6 @@ impl RenderOpacity {
         Self {
             opacity: clamped,
             alpha: Self::opacity_to_alpha(clamped),
-            size: Size::ZERO,
             has_child: false,
             always_needs_compositing: false,
         }
@@ -139,31 +136,19 @@ impl RenderBox for RenderOpacity {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             self.has_child = true;
 
             // Layout child with same constraints
-            let child_size = ctx.layout_child(0, constraints);
-            self.size = child_size;
-
-            ctx.complete_with_size(self.size);
+            ctx.layout_child(0, constraints)
         } else {
             self.has_child = false;
             // No child - take minimum size
-            self.size = constraints.smallest();
-            ctx.complete_with_size(self.size);
+            constraints.smallest()
         }
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
@@ -172,7 +157,7 @@ impl RenderBox for RenderOpacity {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // Invisible elements can still receive hit tests
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
 
@@ -181,10 +166,6 @@ impl RenderBox for RenderOpacity {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 

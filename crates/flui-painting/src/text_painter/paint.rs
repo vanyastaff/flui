@@ -147,6 +147,11 @@ impl TextPainter {
             None
         };
 
-        canvas.draw_text_span(text, paint_offset, self.text_scale_factor as f64, wrap_width);
+        canvas.draw_text_span(
+            text,
+            paint_offset,
+            self.text_scale_factor as f64,
+            wrap_width,
+        );
     }
 }

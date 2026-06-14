@@ -17,7 +17,7 @@
 //! * Setter returns `bool` for pipeline `mark_needs_layout` short-circuit.
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -41,7 +41,6 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RenderOffstage {
     offstage: bool,
-    size: Size,
     has_child: bool,
 }
 
@@ -51,7 +50,6 @@ impl RenderOffstage {
     pub const fn new(offstage: bool) -> Self {
         Self {
             offstage,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -98,7 +96,7 @@ impl RenderBox for RenderOffstage {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         if self.offstage {
             // Lay out the child at zero size so its layout state stays
             // valid (Flutter parity — the child is still part of the
@@ -111,7 +109,7 @@ impl RenderBox for RenderOffstage {
             } else {
                 self.has_child = false;
             }
-            self.size = Size::ZERO;
+            Size::ZERO
         } else {
             // Transparent proxy.
             let constraints = *ctx.constraints();
@@ -119,22 +117,12 @@ impl RenderBox for RenderOffstage {
                 self.has_child = true;
                 let child_size = ctx.layout_child(0, constraints);
                 ctx.position_child(0, Offset::ZERO);
-                self.size = child_size;
+                child_size
             } else {
                 self.has_child = false;
-                self.size = constraints.smallest();
+                constraints.smallest()
             }
         }
-
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     fn compute_min_intrinsic_width(
@@ -223,7 +211,7 @@ impl RenderBox for RenderOffstage {
             // Unreachable while hidden — Flutter parity.
             return false;
         }
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
@@ -231,10 +219,6 @@ impl RenderBox for RenderOffstage {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 
@@ -249,8 +233,6 @@ impl HotReloadCapability for RenderOffstage {}
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
-
     use super::*;
 
     #[test]
@@ -276,12 +258,6 @@ mod tests {
     }
 
     #[test]
-    fn initial_size_is_zero() {
-        let node = RenderOffstage::new(false);
-        assert_eq!(*node.size(), Size::ZERO);
-    }
-
-    #[test]
     fn debug_fill_properties_lists_state() {
         use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
         let node = RenderOffstage::hidden();
@@ -296,14 +272,5 @@ mod tests {
             names.iter().any(|n| n == "offstage"),
             "missing diagnostic field: offstage"
         );
-    }
-
-    #[test]
-    fn box_paint_bounds_matches_size() {
-        let mut node = RenderOffstage::visible();
-        *node.size_mut() = Size::new(px(100.0), px(50.0));
-        let r = node.box_paint_bounds();
-        assert_eq!(r.width(), px(100.0));
-        assert_eq!(r.height(), px(50.0));
     }
 }

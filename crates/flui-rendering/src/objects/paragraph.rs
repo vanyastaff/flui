@@ -16,7 +16,7 @@ use flui_foundation::Diagnosticable;
 use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
 use flui_tree::Leaf;
 use flui_types::{
-    Offset, Point, Rect, Size,
+    Offset, Size,
     typography::{InlineSpan, TextAlign, TextDirection},
 };
 
@@ -39,8 +39,6 @@ pub struct RenderParagraph {
     /// lays out at unbounded width (single logical line per hard break) and
     /// can overflow — Flutter `RenderParagraph.softWrap`.
     soft_wrap: bool,
-    /// Cached layout size (set by `perform_layout`).
-    size: Size,
 }
 
 impl RenderParagraph {
@@ -51,7 +49,6 @@ impl RenderParagraph {
                 .with_text(text)
                 .with_text_direction(direction),
             soft_wrap: true,
-            size: Size::ZERO,
         }
     }
 
@@ -162,15 +159,13 @@ impl RenderBox for RenderParagraph {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let max_width = self.layout_max_width(&constraints);
         self.painter.layout(constraints.min_width.get(), max_width);
         // The text's own size, then clamped into the box constraints
         // (Flutter `size = constraints.constrain(textPainter.size)`).
-        let size = constraints.constrain(self.painter.size());
-        self.size = size;
-        ctx.complete_with_size(size);
+        constraints.constrain(self.painter.size())
     }
 
     fn compute_dry_layout(
@@ -235,18 +230,6 @@ impl RenderBox for RenderParagraph {
         })
     }
 
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
-    }
-
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
         // The recorder pre-translates the canvas to this node's origin, so the
         // text paints in local coordinates. Skipped before layout (no cache).
@@ -274,9 +257,8 @@ mod tests {
     }
 
     #[test]
-    fn new_starts_zero_sized_and_baseline_is_none_before_layout() {
+    fn baseline_is_none_before_layout() {
         let p = para("hello");
-        assert_eq!(*p.size(), Size::ZERO);
         assert_eq!(
             p.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
             None,

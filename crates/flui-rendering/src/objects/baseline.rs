@@ -3,7 +3,7 @@
 //! Flutter parity: `shifted_box.dart` `RenderBaseline`.
 
 use flui_tree::Single;
-use flui_types::{Offset, Pixels, Point, Rect, Size};
+use flui_types::{Offset, Pixels, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -20,7 +20,6 @@ use crate::{
 pub struct RenderBaseline {
     baseline: TextBaseline,
     baseline_offset: Pixels,
-    size: Size,
     has_child: bool,
     child_offset: Offset,
 }
@@ -31,7 +30,6 @@ impl RenderBaseline {
         Self {
             baseline,
             baseline_offset,
-            size: Size::ZERO,
             has_child: false,
             child_offset: Offset::ZERO,
         }
@@ -72,42 +70,31 @@ impl RenderBox for RenderBaseline {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() == 0 {
             self.has_child = false;
-            self.size = constraints.smallest();
-            ctx.complete_with_size(self.size);
-            return;
+            return constraints.smallest();
         }
 
         self.has_child = true;
         let child_size = ctx.layout_child(0, constraints);
 
-        if let Some(distance) = ctx.child_distance_to_actual_baseline(0, self.baseline) {
+        let size = if let Some(distance) = ctx.child_distance_to_actual_baseline(0, self.baseline) {
             self.child_offset =
                 Offset::new(Pixels::ZERO, self.baseline_offset - Pixels::new(distance));
-            self.size = Size::new(
+            Size::new(
                 child_size.width,
                 child_size.height - Pixels::new(distance) + self.baseline_offset,
-            );
+            )
         } else {
             self.child_offset = Offset::ZERO;
-            self.size = child_size;
-        }
+            child_size
+        };
 
         ctx.position_child(0, self.child_offset);
-        self.size = constraints.constrain(self.size);
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        constraints.constrain(size)
     }
 
     fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
@@ -132,7 +119,7 @@ impl RenderBox for RenderBaseline {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
@@ -140,10 +127,6 @@ impl RenderBox for RenderBaseline {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 

@@ -83,14 +83,12 @@ fn hits(
 #[derive(Debug)]
 struct FixedHitBox {
     desired: Size,
-    size: Size,
 }
 
 impl FixedHitBox {
     fn new(width: f32, height: f32) -> Self {
         Self {
             desired: Size::new(px(width), px(height)),
-            size: Size::ZERO,
         }
     }
 }
@@ -104,28 +102,21 @@ impl RenderBox for FixedHitBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.size = ctx.constraints().constrain(self.desired);
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
+        ctx.constraints().constrain(self.desired)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-        ctx.is_within_bounds(Rect::from_origin_size(flui_types::Point::ZERO, self.size))
+        ctx.is_within_bounds(Rect::from_origin_size(
+            flui_types::Point::ZERO,
+            ctx.own_size(),
+        ))
     }
 }
 
 #[derive(Debug)]
 struct SliverHost {
     constraints: SliverConstraints,
-    size: Size,
 }
 
 impl flui_foundation::Diagnosticable for SliverHost {}
@@ -140,20 +131,11 @@ impl RenderBox for SliverHost {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, flui_tree::Variable, Self::ParentData>,
-    ) {
+    ) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
         }
-        self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        ctx.constraints().biggest()
     }
 
     fn hit_test(
@@ -175,10 +157,7 @@ fn fill_viewport_tree(
     Vec<flui_foundation::RenderId>,
 ) {
     let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost {
-        constraints,
-        size: Size::ZERO,
-    }) as BoxedRenderObject);
+    let root_id = owner.insert(Box::new(SliverHost { constraints }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()
         .insert_sliver_child(

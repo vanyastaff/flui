@@ -36,8 +36,6 @@ pub struct RenderDecoratedBox {
     decoration: BoxDecoration<Pixels>,
     /// Behind or in front of the child.
     position: DecorationPosition,
-    /// Size after layout.
-    size: Size,
     /// Whether we have a child.
     has_child: bool,
 }
@@ -48,7 +46,6 @@ impl RenderDecoratedBox {
         Self {
             decoration,
             position: DecorationPosition::Background,
-            size: Size::ZERO,
             has_child: false,
         }
     }
@@ -82,8 +79,8 @@ impl RenderDecoratedBox {
         self.position = position;
     }
 
-    fn paint_rect(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
+    fn paint_rect(&self, size: Size) -> Rect {
+        Rect::from_origin_size(Point::ZERO, size)
     }
 }
 
@@ -98,31 +95,23 @@ impl RenderBox for RenderDecoratedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>) -> Size {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
             let child_size = ctx.layout_child(0, constraints);
             ctx.position_child(0, Offset::ZERO);
-            self.size = child_size;
+            child_size
         } else {
             self.has_child = false;
-            self.size = constraints.smallest();
+            constraints.smallest()
         }
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
     }
 
     crate::forward_single_child_box_queries!();
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        let rect = self.paint_rect();
+        let rect = self.paint_rect(ctx.size());
         if self.position == DecorationPosition::Background {
             paint_box_decoration(ctx.canvas(), rect, &self.decoration);
         }
@@ -139,7 +128,7 @@ impl RenderBox for RenderDecoratedBox {
         // the bounding rect's corners — Flutter `BoxDecoration.hitTest`
         // via `RenderDecoratedBox.hitTestSelf`).
         let position = *ctx.position();
-        if !box_decoration_hit_test(self.paint_rect(), &self.decoration, position) {
+        if !box_decoration_hit_test(self.paint_rect(ctx.own_size()), &self.decoration, position) {
             return false;
         }
         if self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO) {
@@ -148,10 +137,6 @@ impl RenderBox for RenderDecoratedBox {
         // The decorated area itself is hit-opaque (a Container with a
         // color absorbs taps).
         true
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        self.paint_rect()
     }
 }
 

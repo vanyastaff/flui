@@ -281,10 +281,9 @@ pub enum RenderError {
     ///
     /// **D-block PR-A1b U19 review fix #5 (Option B, PR #141):**
     /// introduced so the `RenderObject<BoxProtocol>` blanket impl on
-    /// [`crate::traits::RenderBox`] can signal "user's
-    /// [`RenderBox::perform_layout`](crate::traits::RenderBox::perform_layout)
-    /// returned without calling `ctx.complete_with_size`" as a typed
-    /// error rather than an opaque panic. The original landing used
+    /// [`crate::traits::RenderBox`] can signal that a render object
+    /// violated its layout contract as a typed error rather than an
+    /// opaque panic. The original landing used
     /// `std::panic::panic_any(RenderError::ContractViolation { ... })`
     /// caught by `catch_unwind` in
     /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
@@ -387,10 +386,8 @@ impl RenderError {
     /// **D-block PR-A1b U19 review fix #5 (Option A follow-up):**
     /// returned as `Err(...)` by the
     /// [`RenderObject<BoxProtocol>`](crate::traits::RenderObject)
-    /// blanket impl when the user's
-    /// [`RenderBox::perform_layout`](crate::traits::RenderBox::perform_layout)
-    /// returns without calling `ctx.complete_with_size`. Propagates
-    /// through the `RenderResult<ProtocolGeometry<P>>` channel of
+    /// blanket impl when a render object violates its layout contract.
+    /// Propagates through the `RenderResult<ProtocolGeometry<P>>` channel of
     /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     pub fn contract_violation(render_object: &'static str, what: &'static str) -> Self {
         Self::ContractViolation {

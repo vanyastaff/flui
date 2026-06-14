@@ -1,7 +1,7 @@
 //! RenderPadding - adds padding around a single child.
 
 use flui_tree::Single;
-use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size, geometry::px};
+use flui_types::{EdgeInsets, Offset, Pixels, Size, geometry::px};
 
 use crate::{
     constraints::BoxConstraints,
@@ -23,8 +23,6 @@ use crate::{
 pub struct RenderPadding {
     /// The padding to apply.
     padding: EdgeInsets,
-    /// Size after layout.
-    size: Size,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
     /// Child offset for hit testing.
@@ -36,7 +34,6 @@ impl RenderPadding {
     pub fn new(padding: EdgeInsets) -> Self {
         Self {
             padding,
-            size: Size::ZERO,
             has_child: false,
             child_offset: Offset::ZERO,
         }
@@ -85,10 +82,10 @@ impl RenderBox for RenderPadding {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
-        if ctx.child_count() > 0 {
+        let size = if ctx.child_count() > 0 {
             self.has_child = true;
 
             // Deflate constraints for child
@@ -100,30 +97,21 @@ impl RenderBox for RenderPadding {
             ctx.position_child(0, self.child_offset);
 
             // Our size is child size + padding
-            self.size = Size::new(
+            Size::new(
                 child_size.width + self.padding.horizontal_total(),
                 child_size.height + self.padding.vertical_total(),
-            );
+            )
         } else {
             self.has_child = false;
             // No child - just the padding itself
-            self.size = Size::new(
+            Size::new(
                 self.padding.horizontal_total(),
                 self.padding.vertical_total(),
-            );
-        }
+            )
+        };
 
         // Constrain to parent's constraints
-        self.size = constraints.constrain(self.size);
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        constraints.constrain(size)
     }
 
     fn compute_min_intrinsic_width(
@@ -210,7 +198,7 @@ impl RenderBox for RenderPadding {
     // paint() uses default no-op - Padding just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
 
@@ -219,10 +207,6 @@ impl RenderBox for RenderPadding {
         } else {
             false
         }
-    }
-
-    fn box_paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 

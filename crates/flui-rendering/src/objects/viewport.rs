@@ -36,6 +36,7 @@ struct LayoutChildSequenceParams {
     remaining_paint_extent: f32,
     main_axis_extent: f32,
     cross_axis_extent: f32,
+    size: Size,
     growth_direction: GrowthDirection,
     remaining_cache_extent: f32,
     cache_origin: f32,
@@ -68,7 +69,6 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// When set, children before this index use forward growth; from this index
     /// onward use reverse growth (Flutter `center` sliver partition, W3.2 slice).
     center_sliver_index: Option<usize>,
-    size: Size,
     child_count: usize,
     min_scroll_extent: f32,
     max_scroll_extent: f32,
@@ -107,7 +107,6 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             cache_extent_style: CacheExtentStyle::Pixel,
             paint_order: SliverPaintOrder::FirstIsTop,
             center_sliver_index: None,
-            size: Size::ZERO,
             child_count: 0,
             min_scroll_extent: 0.0,
             max_scroll_extent: 0.0,
@@ -115,13 +114,6 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             sliver_obstruction_extents: Vec::new(),
             has_visual_overflow: false,
         }
-    }
-
-    /// Last laid-out viewport size.
-    #[inline]
-    #[must_use]
-    pub const fn size(&self) -> &Size {
-        &self.size
     }
 
     /// Returns the viewport offset object.
@@ -222,17 +214,17 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         }
     }
 
-    fn main_axis_extent(&self) -> f32 {
+    fn main_axis_extent(&self, size: Size) -> f32 {
         match self.axis_direction.axis() {
-            Axis::Horizontal => self.size.width.get(),
-            Axis::Vertical => self.size.height.get(),
+            Axis::Horizontal => size.width.get(),
+            Axis::Vertical => size.height.get(),
         }
     }
 
-    fn cross_axis_extent(&self) -> f32 {
+    fn cross_axis_extent(&self, size: Size) -> f32 {
         match self.axis_direction.axis() {
-            Axis::Horizontal => self.size.height.get(),
-            Axis::Vertical => self.size.width.get(),
+            Axis::Horizontal => size.height.get(),
+            Axis::Vertical => size.width.get(),
         }
     }
 
@@ -265,6 +257,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         main_axis_extent: f32,
         cross_axis_extent: f32,
         corrected_offset: f32,
+        size: Size,
     ) -> f32 {
         self.min_scroll_extent = 0.0;
         self.max_scroll_extent = 0.0;
@@ -298,6 +291,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             remaining_paint_extent: main_axis_extent,
             main_axis_extent,
             cross_axis_extent,
+            size,
             growth_direction: GrowthDirection::Forward,
             remaining_cache_extent,
             cache_origin: center_offset.clamp(-cache_extent, 0.0),
@@ -340,6 +334,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             remaining_paint_extent,
             main_axis_extent,
             cross_axis_extent,
+            size,
             growth_direction,
             mut remaining_cache_extent,
             mut cache_origin,
@@ -408,6 +403,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                     px(child_layout_offset),
                     growth_direction,
                     px(geometry.paint_extent),
+                    size,
                 ),
             );
 
@@ -454,6 +450,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         layout_offset: Pixels,
         growth_direction: GrowthDirection,
         paint_extent: Pixels,
+        size: Size,
     ) -> Offset {
         let layout_offset = layout_offset.get();
         let paint_extent = paint_extent.get();
@@ -461,18 +458,13 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             TopToBottom => Offset::new(px(0.0), px(layout_offset)),
             BottomToTop => Offset::new(
                 px(0.0),
-                px(self.size.height.get() - layout_offset - paint_extent),
+                px(size.height.get() - layout_offset - paint_extent),
             ),
             LeftToRight => Offset::new(px(layout_offset), px(0.0)),
-            RightToLeft => Offset::new(
-                px(self.size.width.get() - layout_offset - paint_extent),
-                px(0.0),
-            ),
+            RightToLeft => {
+                Offset::new(px(size.width.get() - layout_offset - paint_extent), px(0.0))
+            }
         }
-    }
-
-    fn viewport_rect(&self) -> Rect {
-        Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
 
@@ -503,10 +495,13 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>) {
-        self.size = ctx.constraints().biggest();
-        let main_axis_extent = self.main_axis_extent();
-        let cross_axis_extent = self.cross_axis_extent();
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> Size {
+        let size = ctx.constraints().biggest();
+        let main_axis_extent = self.main_axis_extent(size);
+        let cross_axis_extent = self.cross_axis_extent(size);
         self.child_count = ctx.child_count();
         let _ = self.offset.apply_viewport_dimension(main_axis_extent);
 
@@ -517,8 +512,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             self.sliver_obstruction_extents.clear();
             self.has_visual_overflow = false;
             let _ = self.offset.apply_content_dimensions(0.0, 0.0);
-            ctx.complete_with_size(self.size);
-            return;
+            return size;
         }
 
         let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
@@ -529,6 +523,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 main_axis_extent,
                 cross_axis_extent,
                 self.offset.pixels(),
+                size,
             );
             if correction != 0.0 {
                 self.offset.correct_by(correction);
@@ -545,20 +540,26 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 break;
             }
         }
-        debug_assert!(
-            accepted,
-            "RenderViewport exceeded its bounded layout correction loop"
-        );
+        if !accepted {
+            // Pathological non-convergence: a sliver child kept requesting
+            // scroll corrections past the bounded budget. The scroll offset
+            // is already clamped to a valid range by the loop's
+            // `apply_content_dimensions`, so the committed geometry is sound
+            // — only child positions reflect the last attempted offset and
+            // self-correct on the next frame. Surface it in RELEASE: the
+            // prior `debug_assert!` was silent in release (shipped the
+            // non-converged frame unobserved) and crashed the app in debug on
+            // a third-party widget bug. A warn is the right level — this is a
+            // content bug, not a framework-invariant violation.
+            tracing::warn!(
+                child_count = ctx.child_count(),
+                max_layout_cycles,
+                "RenderViewport exceeded its bounded layout correction loop; \
+                 committed the clamped offset, children self-correct next frame"
+            );
+        }
 
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        size
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
@@ -568,14 +569,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         };
 
         if self.has_visual_overflow {
-            ctx.with_clip_rect(self.viewport_rect(), Clip::HardEdge, paint_children);
+            let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+            ctx.with_clip_rect(clip_rect, Clip::HardEdge, paint_children);
         } else {
             paint_children(ctx);
         }
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
-        if !ctx.is_within_size(self.size.width, self.size.height) {
+        if !ctx.is_within_own_size() {
             return false;
         }
 

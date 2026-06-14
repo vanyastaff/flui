@@ -100,6 +100,7 @@ mod sliver_fill_remaining;
 mod sliver_fill_viewport;
 mod sliver_fixed_extent_list;
 mod sliver_ignore_pointer;
+mod sliver_list_lazy;
 mod sliver_offstage;
 mod sliver_opacity;
 mod sliver_padding;
@@ -140,6 +141,7 @@ pub use sliver_fill_remaining::{
 pub use sliver_fill_viewport::RenderSliverFillViewport;
 pub use sliver_fixed_extent_list::RenderSliverFixedExtentList;
 pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
+pub use sliver_list_lazy::RenderSliverListLazy;
 pub use sliver_offstage::RenderSliverOffstage;
 pub use sliver_opacity::RenderSliverOpacity;
 pub use sliver_padding::RenderSliverPadding;

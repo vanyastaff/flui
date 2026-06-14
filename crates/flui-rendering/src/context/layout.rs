@@ -25,8 +25,8 @@
 //!         y_offset += child_size.height;
 //!     }
 //!
-//!     // Complete layout with computed size
-//!     ctx.complete(Size::new(constraints.max_width(), y_offset));
+//!     // Return the computed size
+//!     Size::new(constraints.max_width(), y_offset)
 //! }
 //! ```
 
@@ -36,8 +36,9 @@ use flui_types::{Pixels, Size, geometry::Offset};
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
-    protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol},
+    protocol::{BoxChildRef, BoxLayout, ChildLayout, LayoutCapability, LayoutContextApi, Protocol},
     storage::IntrinsicDimension,
+    traits::RenderObject,
 };
 
 // ============================================================================
@@ -71,11 +72,6 @@ where
     /// Gets the layout constraints from parent.
     pub fn constraints(&self) -> &<P::Layout as LayoutCapability>::Constraints {
         self.inner.constraints()
-    }
-
-    /// Checks if layout is complete.
-    pub fn is_complete(&self) -> bool {
-        self.inner.is_complete()
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -134,15 +130,6 @@ where
     /// Gets mutable reference to child's parent data.
     pub fn child_parent_data_mut(&mut self, index: usize) -> Option<&mut PD> {
         self.inner.child_parent_data_mut(index)
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // LAYOUT COMPLETION
-    // ════════════════════════════════════════════════════════════════════════
-
-    /// Completes layout with the given geometry.
-    pub fn complete(&mut self, geometry: <P::Layout as LayoutCapability>::Geometry) {
-        self.inner.complete_layout(geometry);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -312,29 +299,6 @@ where
             self.inner.position_child(0, Offset::ZERO);
         }
     }
-
-    /// Completes layout with the given size.
-    pub fn complete_with_size(&mut self, size: Size) {
-        self.inner.complete_layout(size);
-    }
-
-    /// Completes layout matching the biggest allowed size.
-    pub fn complete_with_biggest(&mut self) {
-        let size = self.biggest();
-        self.inner.complete_layout(size);
-    }
-
-    /// Completes layout matching the smallest allowed size.
-    pub fn complete_with_smallest(&mut self) {
-        let size = self.smallest();
-        self.inner.complete_layout(size);
-    }
-
-    /// Completes layout matching a single child's size.
-    pub fn complete_matching_child(&mut self) {
-        let size = self.child_geometry(0).cloned().unwrap_or(Size::ZERO);
-        self.inner.complete_layout(size);
-    }
 }
 
 // ============================================================================
@@ -434,6 +398,39 @@ where
         )
     }
 
+    /// On-demand build + layout of a **Box** child at `index`, materializing it
+    /// via `build` when it does not yet exist — the re-entrant build contract
+    /// (ADR-0003 Decision 2). A lazy sliver (e.g. a virtualized `SliverList`)
+    /// drives this during its own layout to build only the visible-plus-cache
+    /// band rather than every child up front.
+    ///
+    /// `logical_index` is the item index in the data source (e.g. position in the
+    /// virtual list). Distinct from `index` (the dense child-slot). The backend
+    /// stamps `logical_index` into the freshly-inserted child's parent-data so
+    /// the consumer can reconcile it on the next pass.
+    ///
+    /// Returns a [`ChildLayout<BoxChildRef>`]: `Ready(handle)` when the child is
+    /// laid out in this pass (the handle carries its id + size), `Scheduled` when
+    /// queued for a later pass (the v1 next-frame backend), `NoChild` when `build`
+    /// declines (end of an unknown-length source), or `Unwired` when this context
+    /// has no build backend. `build(index)` is called at most once, only when a
+    /// child must be created, and may return `None` to decline.
+    pub fn build_and_layout_box_child(
+        &mut self,
+        index: usize,
+        logical_index: usize,
+        constraints: BoxConstraints,
+        build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
+    ) -> ChildLayout<BoxChildRef> {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::build_and_layout_box_child(
+            &mut self.inner,
+            index,
+            logical_index,
+            constraints,
+            build,
+        )
+    }
+
     /// Queries a **Box** child intrinsic dimension from a Sliver parent.
     pub fn box_child_intrinsic(
         &mut self,
@@ -457,6 +454,25 @@ where
     /// Convenience wrapper for the child's maximum intrinsic width.
     pub fn box_child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
         self.box_child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
+    }
+
+    /// Enqueues a deferred removal for the Box child with the given
+    /// [`RenderId`](flui_foundation::RenderId). Applied after the current layout
+    /// walk releases its borrows (same discipline as
+    /// [`Self::build_and_layout_box_child`]). No-op when the context carries no
+    /// remove sink (Direct storage / test contexts).
+    pub fn dispose_box_child(&mut self, id: flui_foundation::RenderId) {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::dispose_box_child(
+            &mut self.inner,
+            id,
+        )
+    }
+
+    /// Returns the [`RenderId`](flui_foundation::RenderId) of the Box child at
+    /// dense slot `index`, if it exists. Used together with
+    /// [`Self::dispose_box_child`] to evict off-band children by id.
+    pub fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::child_id(&self.inner, index)
     }
 }
 

@@ -58,7 +58,6 @@ fn sliver_hit_constraints(axis: AxisDirection, growth: GrowthDirection) -> Slive
 #[derive(Debug)]
 struct SliverHitHost {
     constraints: SliverConstraints,
-    size: Size,
 }
 
 impl_sliver_test_caps!(SliverHitHost);
@@ -67,20 +66,11 @@ impl RenderBox for SliverHitHost {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
         }
-        self.size = ctx.constraints().biggest();
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        ctx.constraints().biggest()
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
@@ -93,8 +83,9 @@ struct MainAxisBandSliver {
     extent: f32,
     hit_start: f32,
     hit_end: f32,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
+    /// Cross-axis extent captured at layout, read by the `&self`-only
+    /// `hit_test_self` (the sliver hit-test context does not carry it).
+    cross_axis_extent: f32,
 }
 
 impl MainAxisBandSliver {
@@ -103,8 +94,7 @@ impl MainAxisBandSliver {
             extent,
             hit_start,
             hit_end,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
+            cross_axis_extent: 0.0,
         }
     }
 }
@@ -115,39 +105,30 @@ impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;
     type ParentData = SliverParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.extent);
-        self.geometry = SliverGeometry {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
+        self.cross_axis_extent = constraints.cross_axis_extent;
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
+        SliverGeometry {
             scroll_extent: self.extent,
             paint_extent,
             layout_extent: paint_extent,
             max_paint_extent: self.extent,
             hit_test_extent: paint_extent,
-            cache_extent: self.calculate_cache_offset(&self.constraints, 0.0, self.extent),
+            cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
             visible: paint_extent > 0.0,
             ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        }
     }
 
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
         main >= self.hit_start
             && main < self.hit_end
             && cross >= 0.0
-            && cross < self.constraints.cross_axis_extent
+            && cross < self.cross_axis_extent
     }
 }
 
@@ -208,7 +189,6 @@ fn sliver_hit_direction_matrix_through_box_host() {
         let mut owner = PipelineOwner::new();
         let host_id = owner.insert(Box::new(SliverHitHost {
             constraints: sliver_hit_constraints(axis, growth),
-            size: Size::ZERO,
         }) as BoxedRenderObject);
         let sliver_id = owner
             .render_tree_mut()

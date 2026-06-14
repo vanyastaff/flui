@@ -1,7 +1,7 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
 use flui_tree::Arity;
-use flui_types::{Point, Rect, Size};
+use flui_types::{Point, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -92,40 +92,35 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Layout
     // ========================================================================
 
-    /// Computes the layout of this render object.
+    /// Computes the layout of this render object and returns the resulting
+    /// size.
     ///
     /// The context provides:
     /// - Constraints from parent via `ctx.constraints()`
     /// - Type-safe child access via `ctx.layout_child()`,
     ///   `ctx.position_child()`
-    /// - Completion via `ctx.complete_with_size()`
     ///
     /// # Example
     ///
     /// ```ignore
-    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) {
+    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> Size {
     ///     let child_size = ctx.layout_single_child_loose();
     ///     ctx.position_single_child_at_origin();
-    ///     ctx.complete_with_size(ctx.constrain(child_size));
+    ///     ctx.constrain(child_size)
     /// }
     /// ```
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>);
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> Size;
 
-    /// Returns a reference to the current size of this render object.
-    ///
-    /// This method must return a reference to allow `RenderObject<BoxProtocol>`
-    /// blanket implementation to work correctly.
-    fn size(&self) -> &Size;
-
-    /// Returns a mutable reference to the size of this render object.
-    ///
-    /// This allows direct mutation of the size field without set_size().
-    fn size_mut(&mut self) -> &mut Size;
-
-    /// Returns whether this render object has undergone layout and has a size.
-    fn has_size(&self) -> bool {
-        true
-    }
+    // 2B field dedup: the box `Size` lives **only** on
+    // `RenderState<BoxProtocol>` (committed from the `perform_layout`
+    // return value). The former `size()` / `size_mut()` / `has_size()`
+    // accessors — which forced every render object to mirror its
+    // committed size in a field and risked desync — are gone. Paint and
+    // hit_test read the driver-supplied size via `ctx.size()` /
+    // `ctx.own_size()`; `perform_layout` returns its size directly.
 
     // ========================================================================
     // Hit Testing
@@ -160,8 +155,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ///
     /// ```ignore
     /// fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
-    ///     // Start with the default bounds gate.
-    ///     if !ctx.is_within_size(self.size().width, self.size().height) {
+    ///     // Start with the default bounds gate (size from RenderState).
+    ///     if !ctx.is_within_own_size() {
     ///         return false;
     ///     }
     ///     // Then test children
@@ -174,7 +169,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// }
     /// ```
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {
-        ctx.is_within_size(self.size().width, self.size().height)
+        ctx.is_within_own_size()
     }
 
     // ========================================================================
@@ -302,21 +297,6 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     }
 
     // ========================================================================
-    // Paint Bounds
-    // ========================================================================
-
-    /// Returns the paint bounds of this render box.
-    fn box_paint_bounds(&self) -> Rect {
-        let size = self.size();
-        Rect::new(
-            flui_types::Pixels::ZERO,
-            flui_types::Pixels::ZERO,
-            size.width,
-            size.height,
-        )
-    }
-
-    // ========================================================================
     // Painting
     // ========================================================================
 
@@ -339,9 +319,9 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ///
     /// ```ignore
     /// fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-    ///     // Draw background in local coordinates.
+    ///     // Draw background in local coordinates (size from RenderState).
     ///     ctx.canvas()
-    ///         .draw_rect(Rect::from_origin_size(Point::ZERO, self.size), &paint);
+    ///         .draw_rect(Rect::from_origin_size(Point::ZERO, ctx.size()), &paint);
     ///     // Splice the child at its laid-out offset.
     ///     ctx.paint_child();
     /// }
@@ -426,27 +406,12 @@ where
         // `&mut dyn BoxLayoutCtxErased` (the GAT for `BoxProtocol`
         // resolves to exactly this). We reconstruct a typed
         // `BoxLayoutCtx<T::Arity, T::ParentData>` via the `from_erased`
-        // ctor (Proxy storage that delegates child / completion ops
-        // back through the erased trait), wrap it in the ergonomic
-        // `BoxLayoutContext` so user widgets get `complete_with_size`
-        // etc., and call `T::perform_layout`.
+        // ctor (Proxy storage that delegates child ops back through the
+        // erased trait), wrap it in the ergonomic `BoxLayoutContext` so
+        // user widgets get nice helpers, and call `T::perform_layout`.
         //
-        // The user's `perform_layout` body must call
-        // `ctx.complete_with_size(...)` (or equivalent) to record the
-        // computed size; we read it back from the inner BoxLayoutCtx
-        // and return to the caller.
-        //
-        // # Contract-violation handling (follow-up to PR #141 #5 Option A)
-        //
-        // If `perform_layout` returns without calling
-        // `ctx.complete_with_size(...)`, we return
-        // [`RenderError::ContractViolation`] as `Err(...)` directly —
-        // no `panic_any`, no `catch_unwind` dance. The PR #141 review
-        // (finding #5) called out the previous panic_any path as a
-        // Constitution Principle 6 violation; this PR closes that
-        // technical debt by making the signature
-        // `RenderResult<ProtocolGeometry<P>>` so contract violations
-        // propagate as typed errors through `?`.
+        // `T::perform_layout` now returns `Size` directly — a missing
+        // completion is a compile error, not a runtime `ContractViolation`.
         //
         // `catch_unwind` in `RenderEntry::layout_leaf_only` is retained
         // only for genuine third-party panics (panic! / unwrap in user
@@ -455,23 +420,23 @@ where
             crate::protocol::BoxLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::BoxLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
-        T::perform_layout(self, &mut layout_ctx);
-        layout_ctx.inner().geometry().copied().ok_or_else(|| {
-            crate::error::RenderError::contract_violation(
-                self.debug_name(),
-                "RenderBox::perform_layout returned without calling \
-                     ctx.complete_with_size(...)",
-            )
-        })
+        Ok(T::perform_layout(self, &mut layout_ctx))
     }
 
-    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+    fn paint_raw(
+        &self,
+        recorder: &mut crate::context::FragmentRecorder,
+        child_count: usize,
+        size: flui_types::Size,
+    ) {
         // The paint bridge: wrap the recorder in the typed, arity-gated
         // PaintCx and call the user's RenderBox::paint. Unlike the
         // layout bridge there is no GAT erasure — the recorder is a
         // concrete type (no ParentData in the paint surface), so the
-        // re-typing is a zero-cost PhantomData re-tag.
-        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count);
+        // re-typing is a zero-cost PhantomData re-tag. `size` is the
+        // node's committed `RenderState` geometry, threaded by the
+        // pipeline so paint reads `ctx.size()` (2B field dedup).
+        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count, size);
         T::paint(self, &mut cx);
     }
 
@@ -479,6 +444,7 @@ where
         &self,
         position: crate::protocol::ProtocolPosition<BoxProtocol>,
         _child_count: usize,
+        size: flui_types::Size,
         hit_child: &mut (
                  dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<BoxProtocol>>) -> bool
                      + Send
@@ -489,10 +455,13 @@ where
         // the typed, arity-gated BoxHitTestContext and call the user's
         // RenderBox::hit_test. Same shape as the paint bridge — no GAT
         // erasure needed, the position/callback types are concrete.
+        // `size` is the node's committed `RenderState` geometry, threaded
+        // by the driver so the default bounds gate reads
+        // `ctx.is_within_own_size()` (2B field dedup).
         let inner = crate::protocol::BoxHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
             position, hit_child,
         );
-        let mut ctx = crate::context::BoxHitTestContext::new(inner);
+        let mut ctx = crate::context::BoxHitTestContext::new(inner, size);
         T::hit_test(self, &mut ctx)
     }
 
@@ -557,18 +526,6 @@ where
 
     fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f32> {
         T::compute_distance_to_actual_baseline(self, baseline)
-    }
-
-    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {
-        self.size()
-    }
-
-    fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<BoxProtocol>) {
-        *self.size_mut() = geometry;
-    }
-
-    fn paint_bounds(&self) -> Rect {
-        self.box_paint_bounds()
     }
 }
 

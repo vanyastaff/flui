@@ -35,7 +35,7 @@
 
 use flui_tree::Arity;
 use flui_types::{
-    Pixels,
+    Pixels, Size,
     geometry::{Matrix4, Offset, Rect},
 };
 
@@ -60,6 +60,13 @@ use crate::{
 pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
     /// The underlying hit test context from the capability
     inner: <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>,
+    /// The node's laid-out size in local pixels, resolved by the driver
+    /// from [`RenderState`](crate::storage::RenderState) (geometry's sole
+    /// owner). The box protocol uses it for the default bounds gate
+    /// (`is_within_own_size`); the sliver protocol leaves it `Size::ZERO`
+    /// (its hit gate is driver-owned). 2B field dedup: render objects no
+    /// longer cache their own size.
+    own_size: Size,
 }
 
 impl<'ctx, P: Protocol, A: Arity, PD: ParentData> HitTestContext<'ctx, P, A, PD>
@@ -68,8 +75,15 @@ where
         HitTestContextApi<'ctx, P::HitTest, A, PD>,
 {
     /// Creates a new hit test context wrapping the capability context.
-    pub fn new(inner: <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>) -> Self {
-        Self { inner }
+    ///
+    /// `own_size` is the node's laid-out size from `RenderState`; the
+    /// box bounds gate (`is_within_own_size`) reads it. Sliver callers
+    /// pass `Size::ZERO` (unused — the driver owns the sliver gate).
+    pub fn new(
+        inner: <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>,
+        own_size: Size,
+    ) -> Self {
+        Self { inner, own_size }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -236,6 +250,20 @@ where
     pub fn is_within_size(&self, width: Pixels, height: Pixels) -> bool {
         let pos = self.inner.position();
         pos.dx >= Pixels::ZERO && pos.dx < width && pos.dy >= Pixels::ZERO && pos.dy < height
+    }
+
+    /// The node's laid-out size, resolved by the driver from
+    /// `RenderState` (2B field dedup — objects no longer cache it).
+    pub fn own_size(&self) -> Size {
+        self.own_size
+    }
+
+    /// Checks if the hit position is within this node's own laid-out
+    /// bounds — the default [`RenderBox::hit_test`](crate::traits::RenderBox::hit_test)
+    /// gate. Equivalent to `is_within_size(own_size.width, own_size.height)`
+    /// but reads the driver-supplied size instead of a per-object field.
+    pub fn is_within_own_size(&self) -> bool {
+        self.is_within_size(self.own_size.width, self.own_size.height)
     }
 
     /// Adds self as a hit target with the given ID.

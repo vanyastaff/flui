@@ -2,10 +2,10 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Variable;
-use flui_types::{geometry::px, layout::AxisDirection::*};
+use flui_types::geometry::px;
 
 use crate::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry, child_paint_offset},
+    constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -17,12 +17,16 @@ use crate::{
 /// This is the direct-child FLUI counterpart of Flutter's
 /// `RenderSliverFillViewport`. Lazy child creation remains deferred to the
 /// future multi-box-adaptor layer; attached children are laid out eagerly.
+///
+/// 2B field dedup: incoming constraints live only in `perform_layout` and
+/// the committed `geometry` lives solely on `RenderState<SliverProtocol>`;
+/// `perform_layout` returns its geometry directly and the visibility cull
+/// is owned by the pipeline paint driver. `child_count` is retained because
+/// the `&self`-only `hit_test` walks the attached children in reverse.
 #[derive(Debug, Clone)]
 pub struct RenderSliverFillViewport {
     viewport_fraction: f32,
     allow_implicit_scrolling: bool,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
     child_count: usize,
 }
 
@@ -42,8 +46,6 @@ impl RenderSliverFillViewport {
         Self {
             viewport_fraction,
             allow_implicit_scrolling: true,
-            constraints: empty_sliver_constraints(),
-            geometry: SliverGeometry::ZERO,
             child_count: 0,
         }
     }
@@ -84,8 +86,8 @@ impl RenderSliverFillViewport {
     }
 
     #[inline]
-    fn item_extent(&self) -> f32 {
-        (self.constraints.viewport_main_axis_extent * self.viewport_fraction).max(0.0)
+    fn item_extent(&self, constraints: &SliverConstraints) -> f32 {
+        (constraints.viewport_main_axis_extent * self.viewport_fraction).max(0.0)
     }
 }
 
@@ -108,22 +110,24 @@ impl RenderSliver for RenderSliverFillViewport {
     type Arity = Variable;
     type ParentData = SliverPhysicalParentData;
 
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> SliverGeometry {
+        let constraints = *ctx.constraints();
         self.child_count = ctx.child_count();
-        let item_extent = self.item_extent();
+        let item_extent = self.item_extent(&constraints);
 
         for index in 0..self.child_count {
             ctx.layout_box_child(
                 index,
-                self.constraints
-                    .as_box_constraints(item_extent, item_extent, None),
+                constraints.as_box_constraints(item_extent, item_extent, None),
             );
         }
 
         let scroll_extent = item_extent * self.child_count as f32;
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, scroll_extent);
-        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, scroll_extent);
+        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, scroll_extent);
         let geometry = SliverGeometry {
             scroll_extent,
             paint_extent,
@@ -132,8 +136,8 @@ impl RenderSliver for RenderSliverFillViewport {
             cache_extent,
             hit_test_extent: paint_extent,
             visible: paint_extent > 0.0,
-            has_visual_overflow: scroll_extent > self.constraints.remaining_paint_extent
-                || self.constraints.scroll_offset > 0.0,
+            has_visual_overflow: scroll_extent > constraints.remaining_paint_extent
+                || constraints.scroll_offset > 0.0,
             ..SliverGeometry::ZERO
         };
 
@@ -141,35 +145,15 @@ impl RenderSliver for RenderSliverFillViewport {
             let layout_offset = item_extent * index as f32;
             ctx.position_child(
                 index,
-                child_paint_offset(
-                    &self.constraints,
-                    &geometry,
-                    px(layout_offset),
-                    px(item_extent),
-                ),
+                child_paint_offset(&constraints, &geometry, px(layout_offset), px(item_extent)),
             );
         }
 
-        self.geometry = geometry;
-        ctx.complete(geometry);
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
+        geometry
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        if self.geometry.visible {
-            ctx.paint_children();
-        }
+        ctx.paint_children();
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
@@ -179,22 +163,5 @@ impl RenderSliver for RenderSliverFillViewport {
             }
         }
         false
-    }
-}
-
-const fn empty_sliver_constraints() -> SliverConstraints {
-    SliverConstraints {
-        axis_direction: TopToBottom,
-        growth_direction: GrowthDirection::Forward,
-        user_scroll_direction: crate::view::ScrollDirection::Idle,
-        scroll_offset: 0.0,
-        preceding_scroll_extent: 0.0,
-        overlap: 0.0,
-        remaining_paint_extent: 0.0,
-        cross_axis_extent: 0.0,
-        cross_axis_direction: LeftToRight,
-        viewport_main_axis_extent: 0.0,
-        remaining_cache_extent: 0.0,
-        cache_origin: 0.0,
     }
 }

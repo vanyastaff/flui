@@ -94,13 +94,11 @@ fn relayout_overwrites_committed_offset() {
 /// `RenderState` already holds (Flutter parity: `BoxParentData.offset`
 /// persists until `positionChild` overwrites it).
 #[derive(Debug)]
-struct PositionFirstChildOnly {
-    size: Size,
-}
+struct PositionFirstChildOnly;
 
 impl PositionFirstChildOnly {
     fn new() -> Self {
-        Self { size: Size::ZERO }
+        Self
     }
 }
 
@@ -113,7 +111,7 @@ impl RenderBox for PositionFirstChildOnly {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         for i in 0..child_count {
@@ -122,16 +120,7 @@ impl RenderBox for PositionFirstChildOnly {
         if child_count > 0 {
             ctx.position_child(0, Offset::new(px(7.0), px(3.0)));
         }
-        self.size = constraints.constrain(Size::new(px(100.0), px(100.0)));
-        ctx.complete_with_size(self.size);
-    }
-
-    fn size(&self) -> &Size {
-        &self.size
-    }
-
-    fn size_mut(&mut self) -> &mut Size {
-        &mut self.size
+        constraints.constrain(Size::new(px(100.0), px(100.0)))
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
