@@ -421,6 +421,8 @@ impl Diagnosticable for Layer {
                 builder.add_value("bounds", p.bounds());
                 builder.add_i64(
                     "commands",
+                    // picture().len() is a monotonic counter bounded by frame
+                    // budget; i64::MAX is an unreachable diagnostics-only sentinel.
                     i64::try_from(p.picture().len()).unwrap_or(i64::MAX),
                 );
                 // Descend into the command stream: each DrawCommand becomes a
@@ -436,6 +438,8 @@ impl Diagnosticable for Layer {
             Layer::Texture(t) => {
                 builder.add_i64(
                     "id",
+                    // Texture ids are <2^63 monotonic counters assigned by the
+                    // GPU backend; i64::MAX is an unreachable diagnostics-only sentinel.
                     i64::try_from(t.texture_id().get()).unwrap_or(i64::MAX),
                 );
                 builder.add_value("rect", t.rect());
@@ -469,6 +473,8 @@ impl Diagnosticable for Layer {
                 builder.add_value("bounds", path.compute_bounds());
                 builder.add_i64(
                     "pts",
+                    // Path command counts are bounded by frame budget (<2^63);
+                    // i64::MAX is an unreachable diagnostics-only sentinel.
                     i64::try_from(path.commands().len()).unwrap_or(i64::MAX),
                 );
                 builder.add("clip", format!("{:?}", c.clip_behavior()));
@@ -507,13 +513,15 @@ impl Diagnosticable for Layer {
             }
 
             // ── Linking: Leader ───────────────────────────────────────────
-            // LayerLink::id() returns u64; clamp to i64::MAX for diagnostics.
             Layer::Leader(l) => {
+                // LayerLink ids are <2^63 monotonic counters; i64::MAX is an
+                // unreachable diagnostics-only sentinel (no lossy collapse in practice).
                 builder.add_i64("link_id", i64::try_from(l.link().id()).unwrap_or(i64::MAX));
             }
 
             // ── Linking: Follower ─────────────────────────────────────────
             Layer::Follower(f) => {
+                // Same sentinel rationale as Leader above.
                 builder.add_i64("link_id", i64::try_from(f.link().id()).unwrap_or(i64::MAX));
             }
 

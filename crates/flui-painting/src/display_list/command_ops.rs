@@ -3,11 +3,11 @@
 //!
 //! Mythos chain U5 extracted these from the 2,434-LOC
 //! `display_list.rs` god module. This file is the largest in
-//! `display_list/` because each method pattern-matches across all 29
+//! `display_list/` because each method pattern-matches across all 31
 //! variants. The structure is mechanical -- the 240-LOC
 //! `with_opacity` and 250-LOC `bounds` matches dominate.
 //!
-//! Future Outstanding refactor: collapse the 29-variant patterns via
+//! Future Outstanding refactor: collapse the 31-variant patterns via
 //! a hand-written `macro_rules!` `gen_command_accessors!` mirroring
 //! the `flui-layer` Step 4 macro pattern. Not bundled with this chain
 //! because the file is structurally clean despite size.

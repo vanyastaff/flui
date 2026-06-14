@@ -42,6 +42,26 @@ fn committed_schema_matches_generated() {
     );
 }
 
+/// Gate that `DIAGNOSTICS_FORMAT_VERSION` stays consistent with the committed
+/// schema file.
+///
+/// The schema filename encodes the version (`diagnostics.v1.json`); this test
+/// asserts the constant in code equals 1 so a maintainer cannot regenerate the
+/// schema with a different shape without also bumping the version constant —
+/// and thus breaking this coupled assertion.
+///
+/// When the version is bumped: update the `assert_eq!` below alongside the
+/// schema filename and constant.
+#[test]
+fn format_version_constant_matches_committed_schema_version() {
+    assert_eq!(
+        flui_foundation::DIAGNOSTICS_FORMAT_VERSION,
+        1,
+        "DIAGNOSTICS_FORMAT_VERSION must equal 1 while the committed schema \
+         is diagnostics.v1.json — bump both together when the wire changes"
+    );
+}
+
 /// Generate (or regenerate) `schema/diagnostics.v1.json` from the current types.
 ///
 /// Run explicitly with:

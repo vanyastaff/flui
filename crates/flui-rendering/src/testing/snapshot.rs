@@ -131,11 +131,13 @@ impl SnapshotStrategy {
         }
     }
 
-    /// Renders the node tree as a faithful typed JSON string
-    /// (via [`DiagnosticsNode::to_json`]).
+    /// Renders the node tree as a faithful typed JSON string via
+    /// [`flui_foundation::DiagnosticsEnvelope::to_json_pretty`].
     ///
-    /// Typed values (Rect, Color, Float, …) are serialized as JSON objects
-    /// / numbers, not as display strings.
+    /// The output is wrapped in a [`flui_foundation::DiagnosticsEnvelope`] and
+    /// always carries a `"format_version"` field, conforming to
+    /// `schema/diagnostics.v1.json`. Typed values (Rect, Color, Float, …) are
+    /// serialized as JSON objects / numbers, not as display strings.
     #[must_use]
     pub const fn json() -> Self {
         Self {

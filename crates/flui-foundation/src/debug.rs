@@ -1226,40 +1226,6 @@ impl DiagnosticsNode {
     pub fn to_string_deep_at_level(&self, min_level: DiagnosticLevel) -> String {
         self.format_deep_filtered(0, min_level)
     }
-
-    /// Exports this diagnostics tree as a JSON string.
-    ///
-    /// Produces a structured JSON representation suitable for devtools
-    /// consumption. Each node has `name`, `properties`, `children`,
-    /// and `level` fields.
-    ///
-    /// **Non-versioned path.** This method does NOT wrap the output in a
-    /// [`DiagnosticsEnvelope`], so the JSON has no `format_version` field.
-    /// For the versioned inspector contract (consumed by devtools and
-    /// golden-diff scripts) use [`DiagnosticsEnvelope`]'s `to_json_pretty`.
-    ///
-    /// Unlike [`DiagnosticsEnvelope`]'s `to_json_pretty`, this path is
-    /// infallible: non-finite floats are emitted as JSON `null` rather than
-    /// returning an error (RFC 8259 §6 forbids them, but the null sentinel is
-    /// stable for debug dumps that are not schema-validated).
-    ///
-    /// # Example output
-    ///
-    /// ```json
-    /// {
-    ///   "name": "RenderPadding",
-    ///   "level": "info",
-    ///   "properties": {"padding": "16px"},
-    ///   "children": []
-    /// }
-    /// ```
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        let mut buf = String::with_capacity(256);
-        // Writing to a `String` through `fmt::Write` is infallible.
-        let _ = write_json_node(self, &mut buf, 0);
-        buf
-    }
 }
 
 impl Default for DiagnosticsNode {
@@ -1267,166 +1233,6 @@ impl Default for DiagnosticsNode {
     fn default() -> Self {
         Self::anonymous()
     }
-}
-
-/// Emit a finite f64 as a JSON number, or `null` for non-finite values.
-///
-/// NaN and ±inf are not valid JSON (RFC 8259 §6). Emitting `null` matches
-/// what `serde_json` does via its `null_floats` convention, so both JSON
-/// paths produce consistent output.
-fn write_json_f64(buf: &mut String, v: f64) -> std::fmt::Result {
-    use std::fmt::Write as _;
-    if v.is_finite() {
-        write!(buf, "{v}")
-    } else {
-        buf.push_str("null");
-        Ok(())
-    }
-}
-
-/// Serialize a [`DiagnosticsValue`] into `buf` as a JSON fragment.
-///
-/// Typed variants produce faithful JSON (numbers, objects, arrays); the
-/// back-compat `Str` variant produces a JSON string. Non-finite f64 fields
-/// are emitted as `null` per RFC 8259 §6.
-fn write_json_value(val: &DiagnosticsValue, buf: &mut String) -> std::fmt::Result {
-    use std::fmt::Write as _;
-    match val {
-        DiagnosticsValue::Null => buf.push_str("null"),
-        DiagnosticsValue::Bool(b) => write!(buf, "{b}")?,
-        DiagnosticsValue::Int(i) => write!(buf, "{i}")?,
-        // Full precision in JSON; Display normalises to 2 d.p. for text.
-        // Non-finite values become `null` (RFC 8259 §6 forbids NaN/inf).
-        DiagnosticsValue::Float(v) => write_json_f64(buf, *v)?,
-        DiagnosticsValue::Str(s) => write!(buf, "\"{}\"", escape_json(s))?,
-        DiagnosticsValue::Color { r, g, b, a } => {
-            write!(buf, "{{\"r\":{r},\"g\":{g},\"b\":{b},\"a\":{a}}}")?;
-        }
-        DiagnosticsValue::Rect { x, y, w, h } => {
-            buf.push_str("{\"x\":");
-            write_json_f64(buf, *x)?;
-            buf.push_str(",\"y\":");
-            write_json_f64(buf, *y)?;
-            buf.push_str(",\"w\":");
-            write_json_f64(buf, *w)?;
-            buf.push_str(",\"h\":");
-            write_json_f64(buf, *h)?;
-            buf.push('}');
-        }
-        DiagnosticsValue::Offset { x, y } => {
-            buf.push_str("{\"x\":");
-            write_json_f64(buf, *x)?;
-            buf.push_str(",\"y\":");
-            write_json_f64(buf, *y)?;
-            buf.push('}');
-        }
-        DiagnosticsValue::Size { w, h } => {
-            buf.push_str("{\"w\":");
-            write_json_f64(buf, *w)?;
-            buf.push_str(",\"h\":");
-            write_json_f64(buf, *h)?;
-            buf.push('}');
-        }
-        DiagnosticsValue::List(items) => {
-            buf.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                write_json_value(item, buf)?;
-            }
-            buf.push(']');
-        }
-        DiagnosticsValue::Nested(props) => {
-            buf.push('{');
-            for (i, prop) in props.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                write!(buf, "\"{}\":", escape_json(prop.name()))?;
-                write_json_value(prop.value_typed(), buf)?;
-            }
-            buf.push('}');
-        }
-    }
-    Ok(())
-}
-
-/// Recursively serialize a [`DiagnosticsNode`] into `buf` as indented JSON.
-///
-/// Properties are serialized via [`write_json_value`] (typed, not Display
-/// strings). Children recurse with `indent + 4`.
-fn write_json_node(node: &DiagnosticsNode, buf: &mut String, indent: usize) -> std::fmt::Result {
-    use std::fmt::Write as _;
-
-    let pad = " ".repeat(indent);
-    writeln!(buf, "{pad}{{")?;
-    writeln!(
-        buf,
-        "{pad}  \"name\": \"{}\",",
-        escape_json(node.name().unwrap_or(""))
-    )?;
-    writeln!(buf, "{pad}  \"level\": \"{}\",", node.level.as_str())?;
-
-    // Properties — values come from typed variants, not Display strings,
-    // so a Rect emits {"x":...} and a Float emits a JSON number.
-    write!(buf, "{pad}  \"properties\": {{")?;
-    let props = node.properties();
-    for (i, prop) in props.iter().enumerate() {
-        if i > 0 {
-            buf.push(',');
-        }
-        buf.push('\n');
-        write!(buf, "{pad}    \"{}\": ", escape_json(prop.name()))?;
-        write_json_value(prop.value_typed(), buf)?;
-    }
-    if !props.is_empty() {
-        buf.push('\n');
-        write!(buf, "{pad}  ")?;
-    }
-    buf.push_str("},\n");
-
-    // Children
-    write!(buf, "{pad}  \"children\": [")?;
-    let children = node.children();
-    for (i, child) in children.iter().enumerate() {
-        if i > 0 {
-            buf.push(',');
-        }
-        buf.push('\n');
-        write_json_node(child, buf, indent + 4)?;
-    }
-    if !children.is_empty() {
-        buf.push('\n');
-        write!(buf, "{pad}  ")?;
-    }
-    buf.push_str("]\n");
-    write!(buf, "{pad}}}")
-}
-
-/// Escapes a string for JSON embedding.
-///
-/// Handles all JSON-mandatory escapes: `"`, `\`, the named control chars
-/// `\n`/`\r`/`\t`, and the remaining U+0000–U+001F range as `\u00XX`.
-fn escape_json(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            // Remaining C0 control characters (U+0000–U+001F) must be escaped
-            // per RFC 8259 §7; named forms above cover \n/\r/\t already.
-            c if (c as u32) < 0x0020 => {
-                use std::fmt::Write as _;
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 impl fmt::Display for DiagnosticsNode {
@@ -2436,49 +2242,87 @@ mod tests {
         }
     }
 
-    /// Non-finite f64 values (NaN, ±inf) are not valid JSON (RFC 8259 §6).
-    /// `to_json` must emit `null` for them, matching what `serde_json` does
-    /// via its `null_floats` convention so both JSON paths agree.
+    /// The serde wire is a round-trip: serialise an envelope, deserialise it back,
+    /// re-serialise — the result must be byte-identical to the first serialisation.
+    ///
+    /// This proves the "language-agnostic contract" is deserializable, not just
+    /// writable — a devtools client that parses `to_json_pretty` output and sends
+    /// it back must get the same envelope.
+    #[cfg(feature = "serde")]
     #[test]
-    fn to_json_non_finite_f64_emits_null() {
-        for (label, val) in [
-            ("NaN", f64::NAN),
-            ("+inf", f64::INFINITY),
-            ("-inf", f64::NEG_INFINITY),
-        ] {
-            let node = DiagnosticsNode::new("Test").with_property(DiagnosticsProperty::new_typed(
-                "v",
-                DiagnosticsValue::Float(val),
+    fn envelope_round_trip_is_idempotent() {
+        use crate::{DIAGNOSTICS_FORMAT_VERSION, DiagnosticsEnvelope};
+
+        let node = DiagnosticsNode::new("RenderPadding")
+            .with_property(DiagnosticsProperty::new_typed(
+                "padding",
+                DiagnosticsValue::Float(16.0),
+            ))
+            .with_property(DiagnosticsProperty::new_typed(
+                "bounds",
+                DiagnosticsValue::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 50.0,
+                },
+            ))
+            .child(DiagnosticsNode::new("RenderConstrainedBox").with_property(
+                DiagnosticsProperty::new_typed("width", DiagnosticsValue::Float(80.0)),
             ));
-            let json = node.to_json();
-            assert!(
-                json.contains("\"v\": null"),
-                "{label}: expected `\"v\": null` in JSON, got:\n{json}",
-            );
-        }
+
+        let env = DiagnosticsEnvelope {
+            format_version: DIAGNOSTICS_FORMAT_VERSION,
+            root: node,
+        };
+
+        let json1 = env
+            .to_json_pretty()
+            .expect("all values are finite; to_json_pretty must succeed");
+
+        let env2: DiagnosticsEnvelope = serde_json::from_str(&json1)
+            .expect("to_json_pretty output must be deserializable back to DiagnosticsEnvelope");
+
+        let json2 = env2
+            .to_json_pretty()
+            .expect("re-serialisation of round-tripped envelope must succeed");
+
+        assert_eq!(
+            json1, json2,
+            "to_json_pretty must be idempotent: first and second serialisations must be identical"
+        );
     }
 
-    /// A `DiagnosticsValue::Rect` with finite coordinates must serialize as a
-    /// JSON object `{"x":...,"y":...,"w":...,"h":...}`, not a display string.
+    /// A `DrawCommand` whose `Matrix4` transform contains a NaN (stored as
+    /// `DiagnosticsValue::List` of 16 floats) must cause `to_json_pretty` to
+    /// return `Err`.
+    ///
+    /// This tests that `find_nonfinite_float_in_value` recurses into `List` —
+    /// the realistic bad-transform path where a NaN propagates through matrix
+    /// arithmetic.
+    #[cfg(feature = "serde")]
     #[test]
-    fn to_json_rect_is_json_object_not_display_string() {
-        let node = DiagnosticsNode::new("Test").with_property(DiagnosticsProperty::new_typed(
-            "bounds",
-            DiagnosticsValue::Rect {
-                x: 1.0,
-                y: 2.0,
-                w: 3.0,
-                h: 4.0,
-            },
-        ));
-        let json = node.to_json();
-        assert!(
-            json.contains("{\"x\":1"),
-            "Rect must serialize as a JSON object, got:\n{json}",
+    fn nonfinite_float_in_list_value_is_detected() {
+        use crate::{DIAGNOSTICS_FORMAT_VERSION, DiagnosticsEnvelope};
+
+        // A Matrix4 transform with a NaN in position [0] (column-major).
+        let mut matrix_floats: Vec<DiagnosticsValue> = (0..16i32)
+            .map(|i| DiagnosticsValue::Float(f64::from(i)))
+            .collect();
+        matrix_floats[0] = DiagnosticsValue::Float(f64::NAN);
+
+        let node = DiagnosticsNode::new("DrawCommand").with_property(
+            DiagnosticsProperty::new_typed("transform", DiagnosticsValue::List(matrix_floats)),
         );
+
+        let env = DiagnosticsEnvelope {
+            format_version: DIAGNOSTICS_FORMAT_VERSION,
+            root: node,
+        };
+
         assert!(
-            !json.contains("(1"),
-            "Rect must NOT use display-string form `(x,y,w,h)`, got:\n{json}",
+            env.to_json_pretty().is_err(),
+            "NaN inside DiagnosticsValue::List must cause to_json_pretty to return Err"
         );
     }
 
@@ -2628,8 +2472,9 @@ impl DiagnosticsEnvelope {
     /// walk here surfaces the failure explicitly so the testing harness panics
     /// on the right error and production callers receive a typed `Err`.
     ///
-    /// Use [`DiagnosticsNode::to_json`] if you need a non-fallible path that
-    /// emits `null` for non-finite floats (the non-versioned debug dump).
+    /// Non-finite floats are a sign of a broken render object; callers that
+    /// need a non-fallible debug dump should use `fmt::Display` on the node,
+    /// which renders a human-readable text tree without JSON validation.
     #[cfg(feature = "serde")]
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
         // Pre-flight: reject non-finite floats before serde_json silently
