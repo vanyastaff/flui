@@ -279,6 +279,166 @@ fails CI if a new render object lacks harness coverage.
 | [`flui_foundation`](../../flui-foundation/docs/TESTING.md) | `DiagnosticsNode` query API for structured assertions |
 | [`flui_painting::testing`](../../flui-painting/docs/TESTING.md) | Display-list recording when testing paint in isolation |
 
+## Paint snapshots & phase pumping
+
+_Design reference: [`docs/plans/2026-06-14-render-harness-paint-phase-design.md`](../../plans/2026-06-14-render-harness-paint-phase-design.md)_
+
+Sub-project A of render-harness 2.0 adds three integrated capabilities:
+
+- **A.1** — Phase-granular run handles (compile-checked, not runtime-gated).
+- **A.2** — Structural layer-tree + display-list snapshot via `insta`.
+- **A.3** — Fallible run entry points + `has_overflow` flag read.
+
+### A.1 — Phase-granular run handles
+
+`RenderTester` now has four drive verbs instead of two:
+
+| Method | Returns | Stops after |
+|--------|---------|-------------|
+| `run_layout()` | `LayoutRun` | Layout — geometry / offsets available |
+| `run_to_compositing()` | `CompositingRun` | Compositing-bits update (no layer tree) |
+| `run_to_paint()` | `PaintRun` | Paint — cheapest handle with a `LayerTree` |
+| `run_frame()` | `FrameRun` | Full frame (layout → compositing → paint) back to `Idle` |
+| `run_to_semantics()` | `SemanticsRun` | All four phases (semantics stub; B's finders come later) |
+
+Each handle drives only `PipelineOwner<Phase>` transitions up to its phase and stops.
+The guarantee is **compile-time**: `LayoutRun` has no `snapshot` method — calling it is a
+compile error, not a runtime panic:
+
+```rust
+use flui_rendering::objects::RenderColoredBox;
+use flui_rendering::testing::{RenderTester, box_node};
+
+// cheapest handle that exposes the painted layer tree
+let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
+    .with_size(flui_types::Size::new(flui_types::geometry::px(40.0), flui_types::geometry::px(40.0)))
+    .run_to_paint();
+assert!(run.layer_tree().is_some());
+
+// compile_fail — snapshot lives only on PaintRun / FrameRun:
+// let layout = RenderTester::mount(…).run_layout();
+// let _ = layout.snapshot(); // error[E0599]: no method named `snapshot`
+```
+
+`CompositingRun` exposes no layer tree; use `run_to_paint` or `run_frame` when you need
+painted output.
+
+### A.2 — Structural paint snapshot
+
+`PaintRun` and `FrameRun` carry four snapshot helpers:
+
+| Method | Purpose |
+|--------|---------|
+| `snapshot()` | Serialize the full painted `LayerTree` to stable indented text |
+| `snapshot_of(node)` | Same, scoped to `node`'s layer subtree (falls back to full tree until `RenderId → LayerId` mapping is available) |
+| `display_commands()` | `Vec<DrawCommandSummary>` — all draw commands in pre-order, for predicate filtering |
+| `assert_paints_any(pred)` | Panics unless at least one command satisfies `pred`; failure prints the full snapshot |
+
+The serialized format is stable across runs: floats are 2-decimal, colors are `#RRGGBBAA`,
+children appear in insertion order, and no hash-map iteration is involved.  Example snapshot
+output for a `RenderColoredBox::red(40, 40)`:
+
+```text
+Offset dx=0.00 dy=0.00
+  Picture bounds=(0.00,0.00 40.00x40.00)
+    DrawRect rect=(0.00,0.00 40.00x40.00) fill #FF0000FF
+```
+
+**Pin snapshots with `insta`:**
+
+```rust
+use flui_rendering::objects::RenderDecoratedBox;
+use flui_rendering::testing::{DrawKind, RenderTester, box_node};
+use flui_types::{Size, geometry::px};
+
+let run = RenderTester::mount(box_node(RenderDecoratedBox::new(/* decoration */)))
+    .with_size(Size::new(px(80.0), px(60.0)))
+    .run_to_paint();                    // or .run_frame()
+
+insta::assert_snapshot!("my_widget", run.snapshot());    // pinned to tests/snapshots/
+run.assert_paints_any(|c| c.kind == DrawKind::Shadow);   // shadow is painted
+```
+
+**`insta` workflow:** run `cargo insta review` to inspect diffs and accept or reject them.
+Committed `.snap` files are reviewed like code — never auto-accept blindly.  Snapshot files
+live in `crates/flui-rendering/tests/snapshots/`.
+
+**Op-sequence matching is intentionally absent.** Flutter's `paints..rect()..clip()`
+style matcher is a documented anti-pattern: it has a silent-pass bug
+([flutter#95981](https://github.com/flutter/flutter/issues/95981)) and is brittle on benign
+paint refactors.  Use `snapshot()` (structural primary oracle) +
+`assert_paints_any(pred)` (targeted presence check) instead.
+
+**`DrawCommandSummary` and `DrawKind`** are the unit the predicates operate on:
+
+| Field | Type | Content |
+|-------|------|---------|
+| `kind` | `DrawKind` | Coarse category (`Rect`, `Clip`, `Shadow`, `Text`, `Image`, …) |
+| `line` | `String` | Stable single-line text (same as the snapshot line for that command) |
+
+### A.3 — Fallible runs and overflow inspection
+
+#### `try_run_frame` / `try_run_layout` / `expect_layout_error`
+
+The default `run_layout` / `run_frame` panic on any `RenderError`.  The fallible variants
+surface the error instead:
+
+| Method | Returns | Use for |
+|--------|---------|---------|
+| `try_run_layout()` | `Result<LayoutRun, RenderError>` | Layout errors (`UnboundedConstraint`, `ContractViolation`, …) |
+| `try_run_frame()` | `Result<FrameRun, RenderError>` | Paint panics captured as `RenderError::Poisoned` |
+| `expect_layout_error()` | `RenderError` | Assert that this tree _must_ fail layout (panics if it succeeds) |
+
+A render object whose `paint_raw` panics surfaces as `RenderError::Poisoned` — the pipeline
+wraps every paint body with `catch_unwind`:
+
+```rust
+use flui_rendering::error::RenderError;
+use flui_rendering::testing::{RenderTester, box_node};
+
+// PanicPaintBox is any RenderObject whose paint_raw panics.
+let err = RenderTester::mount(box_node(PanicPaintBox::new()))
+    .with_size(flui_types::Size::new(flui_types::geometry::px(10.0), flui_types::geometry::px(10.0)))
+    .try_run_frame()
+    .expect_err("a panicking paint must yield Err");
+
+assert!(matches!(err, RenderError::Poisoned { .. }));
+```
+
+#### `has_overflow`
+
+`has_overflow(probe, node)` reads the `has_visual_overflow` flag committed by
+`RenderFittedBox`, `RenderStack`, and `RenderViewport` after layout.  Overflow is a flag,
+not an error variant.
+
+```rust
+use flui_rendering::objects::{RenderColoredBox, RenderFittedBox};
+use flui_rendering::testing::{RenderTester, box_node, has_overflow};
+use flui_types::{Alignment, Size, geometry::px, layout::BoxFit, painting::Clip};
+
+let run = RenderTester::mount(
+    box_node(RenderFittedBox::new(BoxFit::None, Alignment::CENTER, Clip::None))
+        .label("fitted")
+        .child(box_node(RenderColoredBox::red(100.0, 100.0))),
+)
+.with_size(Size::new(px(50.0), px(50.0)))
+.run_layout();
+
+assert!(has_overflow(&run, run.id("fitted")));   // 100×100 child in 50×50 box
+```
+
+### Dogfood integration tests
+
+[`tests/harness_snapshot.rs`](../tests/harness_snapshot.rs) covers paint-logic-heavy objects
+(not tautological single-rect tests):
+
+| Test | Object | What the snapshot proves |
+|------|--------|--------------------------|
+| `snapshot_decorated_box` | `RenderDecoratedBox` | Shadow → fill → border command order |
+| `snapshot_clip_layer` | `RenderClipRect` | Clip-layer scoping (structural, not just a rect) |
+| `snapshot_opacity_layer` | `RenderOpacity` | Opacity layer alpha value (invisible to `structure()`) |
+| `snapshot_lazy_sliver_visible_band` | `RenderSliverListLazy` | Virtualization: only ≈ visible+cache children painted, not all 1 000 |
+
 ## See also
 
 - Workspace overview: [`docs/testing.md`](../../../docs/testing.md)
