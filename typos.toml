@@ -46,3 +46,7 @@ pn = "pn"
 ba = "ba"
 # Apple UDID — "Unique Device IDentifier" — standard iOS terminology.
 udid = "udid"
+# Hyphenated prefix `mis-` (mis-shaped / mis-compute / mis-using) tokenizes to
+# the bare token `mis`, which typos flags as `miss`/`mist`. The prefix is valid
+# English; allow the token so the hyphenated forms pass.
+mis = "mis"
