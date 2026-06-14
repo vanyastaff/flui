@@ -764,7 +764,7 @@ pub trait SliverLayoutCtxErased: Send + Sync {
         let _ = id;
     }
 
-    /// Returns the [`RenderId`](flui_foundation::RenderId) of the child at
+    /// Returns the [`RenderId`] of the child at
     /// dense slot `index`, if it exists.
     ///
     /// Used by consumers that need to dispose off-band children by id

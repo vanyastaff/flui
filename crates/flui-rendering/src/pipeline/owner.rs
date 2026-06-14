@@ -1269,7 +1269,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// `logical_index`: if `Some(li)`, the pipeline stamps `li` into the
     /// inserted child's parent-data after insertion (if the parent-data
-    /// type implements [`crate::parent_data::LogicalIndexParentData`]).
+    /// type implements `crate::parent_data::LogicalIndexParentData`).
     /// Pass `None` for non-lazy inserts.
     ///
     /// # Example
@@ -1303,7 +1303,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// parent-data after insertion.  Pass `None` for non-lazy inserts.
     ///
     /// `initial_parent_data`: pre-built parent-data to install on the fresh
-    /// node immediately after insertion.  See [`DeferredMutation::Insert`].
+    /// node immediately after insertion.  See `DeferredMutation::Insert`.
     pub fn defer_insert_sliver(
         &mut self,
         parent_id: RenderId,

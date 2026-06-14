@@ -5,7 +5,7 @@
 //! subtree. That summary is what makes the windowing math `O(log n)` in *both*
 //! directions and `O(log n)` under structural edits:
 //!
-//! - **offset → index** ([`ExtentTree::seek_offset`]): descend the tree, at each
+//! - **offset → index** (`ExtentTree::seek_offset`): descend the tree, at each
 //!   internal node skipping whole children whose summed extent lies before the
 //!   target offset. `O(log n)`.
 //! - **index → offset** ([`ExtentTree::offset_of`]): descend the tree, at each
@@ -255,7 +255,7 @@ impl Node {
 
     /// Seeks a batch of **ascending-sorted** `offsets` in a single descent that
     /// shares its prefix across them, writing `(global_index, offset_into_item)`
-    /// to `out[k]` for `offsets[k]`. Equivalent to calling [`seek_offset`] on
+    /// to `out[k]` for `offsets[k]`. Equivalent to calling `seek_offset` on
     /// each offset individually, but when the offsets cluster (the common
     /// windowing case: visible + cache band edges) they fall into the same
     /// children and the root-to-leaf prefix is walked once, not once per offset.
@@ -268,7 +268,7 @@ impl Node {
     ///
     /// Complexity: `O(log n + k)` when the `k` offsets share a descent (clustered),
     /// degrading to `O(k · log n)` only if every offset lands in a distinct
-    /// subtree. `seek_offset` ([`ExtentTree::seek_offset`]) docs.
+    /// subtree. `seek_offset` (`ExtentTree::seek_offset`) docs.
     fn seek_sorted(
         &self,
         offsets: &[f32],
@@ -930,11 +930,11 @@ impl ExtentTree {
         self.root.seek_offset(offset)
     }
 
-    /// Batched [`seek_offset`](Self::seek_offset) for **ascending-sorted**
+    /// Batched `seek_offset` for **ascending-sorted**
     /// `offsets`, writing each result to `out[k]`. The `[0, total]`-interior
     /// offsets are resolved in **one shared-prefix descent** (see
     /// [`Node::seek_sorted`]); the `<= 0` prefix and `>= total` suffix are
-    /// clamped exactly as the scalar [`seek_offset`](Self::seek_offset) would,
+    /// clamped exactly as the scalar `seek_offset` would,
     /// so `seek_sorted(&[o0, o1, ..], out)` is observably identical to calling
     /// `seek_offset(oi)` for each — just cheaper when the offsets cluster.
     ///

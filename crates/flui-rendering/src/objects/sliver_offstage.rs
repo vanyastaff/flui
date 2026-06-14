@@ -42,7 +42,7 @@ use crate::{
 ///
 /// When `offstage` is `false`, it behaves as a transparent
 /// single-child proxy: child receives the parent's
-/// [`SliverConstraints`] and its geometry becomes the parent's
+/// [`crate::constraints::SliverConstraints`] and its geometry becomes the parent's
 /// geometry.
 #[derive(Debug, Clone)]
 pub struct RenderSliverOffstage {

@@ -78,7 +78,7 @@ pub enum DeferredMutation {
         index: Option<usize>,
         /// Logical item index to stamp into the child's parent-data after
         /// insertion, if the parent-data type implements
-        /// [`crate::parent_data::LogicalIndexParentData`]. `None` means "no
+        /// `crate::parent_data::LogicalIndexParentData`. `None` means "no
         /// stamping" (legacy / non-lazy inserts).
         logical_index: Option<usize>,
         /// Pre-built parent-data to install on the fresh child node immediately
@@ -206,7 +206,7 @@ impl DeferredMutations {
     ///
     /// `logical_index`: if `Some(li)`, the pipeline will stamp `li` into the
     /// inserted child's parent-data (if the parent-data type implements
-    /// [`crate::parent_data::LogicalIndexParentData`]) after insertion. Pass
+    /// `crate::parent_data::LogicalIndexParentData`) after insertion. Pass
     /// `None` for legacy / non-lazy inserts.
     ///
     /// `initial_parent_data`: pre-built parent-data box to install on the fresh

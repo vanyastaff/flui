@@ -56,9 +56,9 @@ pub trait ParentData: Debug + DowncastSync + dyn_clone::DynClone {
     /// Default implementation does nothing.
     fn detach(&mut self) {}
 
-    /// Returns a mutable reference to `self` as a [`LogicalIndexParentData`] if
+    /// Returns a mutable reference to `self` as a `LogicalIndexParentData` if
     /// this type carries a logical child index (i.e. if it implements
-    /// [`LogicalIndexParentData`]).
+    /// `LogicalIndexParentData`).
     ///
     /// The default returns `None`.  Types that carry an `index` field override
     /// this to return `Some(self)`.  The pipeline uses this to stamp the

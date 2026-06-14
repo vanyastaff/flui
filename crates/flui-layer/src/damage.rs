@@ -5,7 +5,7 @@
 //!
 //! # Multi-rect strategy (Slint-inspired)
 //!
-//! The tracker holds at most [`MAX_DAMAGE_RECTS`] (3) regions. When a new
+//! The tracker holds at most `MAX_DAMAGE_RECTS` (3) regions. When a new
 //! dirty rect would exceed the limit, the pair with the smallest union area
 //! increase is merged first. This bounds GPU scissor passes to 3 while
 //! keeping damage tight — a single full-screen union wastes GPU work on
@@ -20,10 +20,10 @@ const MAX_DAMAGE_RECTS: usize = 3;
 
 /// Accumulates damage regions for incremental rendering.
 ///
-/// Tracks up to [`MAX_DAMAGE_RECTS`] dirty rectangles within a frame.
+/// Tracks up to `MAX_DAMAGE_RECTS` dirty rectangles within a frame.
 /// When the limit is exceeded, the pair with the smallest union area
-/// increase is merged. The renderer can query [`damage_rects`] for the
-/// individual rects (for multi-scissor passes) or [`damage_rect`] for
+/// increase is merged. The renderer can query `damage_rects` for the
+/// individual rects (for multi-scissor passes) or `damage_rect` for
 /// a single bounding rect.
 ///
 /// # Usage
@@ -63,7 +63,7 @@ impl DamageTracker {
     /// Adds a dirty region to the tracker.
     ///
     /// If the rect is zero-sized, it is ignored. If adding would exceed
-    /// [`MAX_DAMAGE_RECTS`], the pair with the smallest union area increase
+    /// `MAX_DAMAGE_RECTS`, the pair with the smallest union area increase
     /// is merged first.
     #[inline]
     pub fn mark_dirty(&mut self, rect: Rect<Pixels>) {

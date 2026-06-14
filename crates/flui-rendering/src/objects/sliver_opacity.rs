@@ -7,7 +7,7 @@
 //! [`RenderSliverOpacity`](https://api.flutter.dev/flutter/rendering/RenderSliverOpacity-class.html)
 //! (`packages/flutter/lib/src/rendering/sliver.dart` — `_RenderSliverOpacity`
 //! / the proxy-sliver variant). Layout is a pure passthrough of the
-//! parent's [`SliverConstraints`] to the child; the alpha is consumed
+//! parent's [`crate::constraints::SliverConstraints`] to the child; the alpha is consumed
 //! by the compositor via the
 //! [`crate::traits::PaintEffectsCapability::paint_alpha`] override.
 //!

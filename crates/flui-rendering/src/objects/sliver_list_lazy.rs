@@ -71,7 +71,7 @@ use crate::{
 // CONSTRAINTS → SCROLL WINDOW ADAPTER
 // ============================================================================
 
-/// Adapts [`SliverConstraints`] to the protocol-agnostic [`ScrollWindow`]
+/// Adapts [`crate::constraints::SliverConstraints`] to the protocol-agnostic [`ScrollWindow`]
 /// that [`Virtualizer::query`] expects.
 ///
 /// Field mapping follows Flutter's `RenderSliverMultiBoxAdaptor` semantics:

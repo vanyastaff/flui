@@ -22,7 +22,7 @@
 //! # Backbone
 //!
 //! The [`Virtualizer`] is backed by a focused augmented B+-tree
-//! ([`sumtree::ExtentTree`]) over per-item extents — `{ count, total_extent }`
+//! (`sumtree::ExtentTree`) over per-item extents — `{ count, total_extent }`
 //! summaries at every node give `O(log n)` seek in both directions
 //! (offset→index and index→offset) *and* `O(log n)` insert/delete. Each item is
 //! type-level [`ItemExtent::Unmeasured`] | [`ItemExtent::Measured`] so
@@ -405,13 +405,13 @@ impl Virtualizer {
     /// `[first, last)` is the tight band intersecting the viewport;
     /// `[cache_first, cache_last)` additionally spans the cache buffer.
     /// `leading_offset` is the first visible item's offset minus `window.offset`
-    /// (`<= 0`). Empty ([`VisibleRange::EMPTY`]) when there are no items.
+    /// (`<= 0`). Empty (`VisibleRange::EMPTY`) when there are no items.
     ///
     /// Pure read: the returned range is a function of `window` and the current
     /// extents only, so this takes `&self` and never mutates the windowing state.
     ///
     /// Complexity: `O(log n)`. The four band edges (visible/cache start/end) are
-    /// resolved in a **single shared-prefix descent** ([`ExtentTree::seek_sorted`]):
+    /// resolved in a **single shared-prefix descent** (`ExtentTree::seek_sorted`):
     /// because the edges cluster around the viewport they share their root-to-leaf
     /// path, so the cost is `O(log n + 4)`, not four independent descents. The two
     /// band starts needed for the empty-band check are recovered from the seeks,
@@ -463,7 +463,7 @@ impl Virtualizer {
 
     /// Computes the exclusive end index for a band whose first item is `first`
     /// and which ends at pixel `end`. `band_start` is `offset_of(first)` and
-    /// `end_seek` is `seek_offset(end)` — both already computed by [`query`]'s
+    /// `end_seek` is `seek_offset(end)` — both already computed by `query`'s
     /// single batched seek and passed in, so this does no tree descent of its own.
     ///
     /// The end item is the one whose span contains `end`; it is *included* (so
