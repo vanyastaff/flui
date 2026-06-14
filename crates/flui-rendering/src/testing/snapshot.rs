@@ -144,11 +144,29 @@ impl SnapshotStrategy {
     }
 
     /// Render a [`DiagnosticsNode`] according to this strategy.
+    ///
+    /// The `Json` variant wraps the node in a [`DiagnosticsEnvelope`] before
+    /// serializing, so the output always carries `"format_version"` as the
+    /// first field. This is the versioned contract consumed by devtools and
+    /// golden-diff scripts.
     #[must_use]
     pub fn render(&self, node: &DiagnosticsNode) -> String {
         match self.kind {
             StrategyKind::Text => node.to_string_deep(),
-            StrategyKind::Json => node.to_json(),
+            StrategyKind::Json => {
+                // Wrap in DiagnosticsEnvelope so every inspector JSON carries
+                // `format_version`. The `testing` feature activates
+                // `flui-foundation/serde`, which provides Serialize on the
+                // envelope and the full diagnostics tree.
+                //
+                // Non-finite floats produce Err from to_json_pretty (RFC 8259
+                // §6). A test that constructs NaN/inf values in a painted scene
+                // is itself broken; panicking here surfaces the real failure
+                // immediately rather than swallowing it.
+                flui_foundation::DiagnosticsEnvelope::new(node.clone())
+                    .to_json_pretty()
+                    .expect("non-finite float in DiagnosticsValue: painted scene contains NaN/±inf, which is invalid JSON (RFC 8259 §6)")
+            }
         }
     }
 }

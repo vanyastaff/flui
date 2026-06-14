@@ -79,7 +79,7 @@ flui-scheduler = { path = "../flui-scheduler" }
 # so the feature must be flipped on for the dev build graph. This is the
 # standard Cargo pattern for shipping a feature-gated test-support module
 # without making it part of normal/release builds.
-flui-rendering = { path = ".", features = ["testing"] }
+flui-rendering = { path = ".", features = ["testing", "serde"] }
 
 [features]
 default = []
@@ -95,7 +95,9 @@ serde = ["flui-types/serde"]
 # dev-dependency above. Downstream crates (e.g. flui-app) opt in explicitly.
 # Forwards to `flui-layer/testing` so the layer-tree walkers (`structure`,
 # `first_picture_bounds`, diagnostics dump) are reused rather than duplicated.
-testing = ["flui-layer/testing"]
+# Forwards to `flui-foundation/serde` so `DiagnosticsEnvelope::new(node)`
+# can be serialized by `SnapshotStrategy::json()` via serde_json.
+testing = ["flui-layer/testing", "flui-foundation/serde"]
 
 # Cycle 4 R-18: gate `ScrollMetrics` trait + `FixedScrollMetrics` +
 # `FixedExtentMetrics` (~452 LOC at `src/constraints/scroll_metrics.rs`)

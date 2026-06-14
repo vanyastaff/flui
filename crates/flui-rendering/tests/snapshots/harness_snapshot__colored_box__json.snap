@@ -3,32 +3,128 @@ source: crates/flui-rendering/tests/harness_snapshot.rs
 expression: json
 ---
 {
-  "name": "Offset",
-  "level": "info",
-  "properties": {
-    "dx": 0,
-    "dy": 0
-  },
-  "children": [
-    {
-      "name": "Picture",
-      "level": "info",
-      "properties": {
-        "bounds": {"x":0,"y":0,"w":40,"h":40},
-        "commands": 1
+  "format_version": 1,
+  "root": {
+    "name": "Offset",
+    "properties": [
+      {
+        "name": "dx",
+        "value": {
+          "Float": 0.0
+        },
+        "level": "info",
+        "kind": {
+          "Double": {
+            "unit": null
+          }
+        },
+        "show_name": true,
+        "show_separator": true
       },
-      "children": [
-        {
-          "name": "DrawCommand",
-          "level": "info",
-          "properties": {
-            "rect": {"x":0,"y":0,"w":40,"h":40},
-            "color": {"r":255,"g":0,"b":0,"a":255},
-            "style": "Fill"
+      {
+        "name": "dy",
+        "value": {
+          "Float": 0.0
+        },
+        "level": "info",
+        "kind": {
+          "Double": {
+            "unit": null
+          }
+        },
+        "show_name": true,
+        "show_separator": true
+      }
+    ],
+    "children": [
+      {
+        "name": "Picture",
+        "properties": [
+          {
+            "name": "bounds",
+            "value": {
+              "Rect": {
+                "x": 0.0,
+                "y": 0.0,
+                "w": 40.0,
+                "h": 40.0
+              }
+            },
+            "level": "info",
+            "kind": "Rect",
+            "show_name": true,
+            "show_separator": true
           },
-          "children": []
-        }
-      ]
-    }
-  ]
+          {
+            "name": "commands",
+            "value": {
+              "Int": 1
+            },
+            "level": "info",
+            "kind": {
+              "Int": {
+                "unit": null
+              }
+            },
+            "show_name": true,
+            "show_separator": true
+          }
+        ],
+        "children": [
+          {
+            "name": "DrawCommand",
+            "properties": [
+              {
+                "name": "rect",
+                "value": {
+                  "Rect": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "w": 40.0,
+                    "h": 40.0
+                  }
+                },
+                "level": "info",
+                "kind": "Rect",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "color",
+                "value": {
+                  "Color": {
+                    "r": 255,
+                    "g": 0,
+                    "b": 0,
+                    "a": 255
+                  }
+                },
+                "level": "info",
+                "kind": "Color",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "style",
+                "value": {
+                  "Str": "Fill"
+                },
+                "level": "info",
+                "kind": "Generic",
+                "show_name": true,
+                "show_separator": true
+              }
+            ],
+            "children": [],
+            "level": "info",
+            "style": "sparse"
+          }
+        ],
+        "level": "info",
+        "style": "sparse"
+      }
+    ],
+    "level": "info",
+    "style": "sparse"
+  }
 }

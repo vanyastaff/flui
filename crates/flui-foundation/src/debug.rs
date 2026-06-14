@@ -2425,6 +2425,72 @@ mod tests {
 }
 
 // ============================================================================
+// DIAGNOSTICS ENVELOPE (ADR-0005 Decision 4, Task 7)
+// ============================================================================
+
+/// The format version embedded in every [`DiagnosticsEnvelope`].
+///
+/// Bump this constant (and regenerate `schema/diagnostics.v<N>.json`) whenever
+/// the shape of [`DiagnosticsNode`] or any of the types reachable from it
+/// changes in a backwards-incompatible way. The committed schema file is the
+/// contract; the CI `schema_stability` test enforces it automatically.
+pub const DIAGNOSTICS_FORMAT_VERSION: u32 = 1;
+
+/// A versioned envelope wrapping a [`DiagnosticsNode`] tree for JSON export.
+///
+/// `format_version` lets tooling (devtools, golden-diff scripts, language
+/// bindings) detect schema evolution without ad-hoc version probing.
+///
+/// # Example
+///
+/// ```rust
+/// # use flui_foundation::{DiagnosticsEnvelope, DiagnosticsNode};
+/// let node = DiagnosticsNode::new("RenderPadding");
+/// let env = DiagnosticsEnvelope::new(node);
+/// assert_eq!(env.format_version, flui_foundation::DIAGNOSTICS_FORMAT_VERSION);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DiagnosticsEnvelope {
+    /// Schema version — always [`DIAGNOSTICS_FORMAT_VERSION`] for freshly
+    /// constructed envelopes. Tooling must check this field before
+    /// interpreting `root`.
+    pub format_version: u32,
+    /// The diagnostics tree root.
+    pub root: DiagnosticsNode,
+}
+
+impl DiagnosticsEnvelope {
+    /// Wrap `root` with the current [`DIAGNOSTICS_FORMAT_VERSION`].
+    #[must_use]
+    pub fn new(root: DiagnosticsNode) -> Self {
+        Self {
+            format_version: DIAGNOSTICS_FORMAT_VERSION,
+            root,
+        }
+    }
+
+    /// Serialize this envelope to a pretty-printed JSON string.
+    ///
+    /// Uses `serde_json::to_string_pretty` so the output is human-readable
+    /// and stable for golden-file diffing. The `serde` feature must be active
+    /// (it implies `dep:serde_json`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when any `DiagnosticsValue::Float` in the tree is
+    /// non-finite (`NaN` / `±inf`), because RFC 8259 §6 forbids those values
+    /// and `serde_json` rejects them. Use [`DiagnosticsNode::to_json`] if you
+    /// need a non-fallible path that emits `null` for non-finite floats.
+    #[cfg(feature = "serde")]
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+}
+
+// ============================================================================
 // DEBUG PAINT CONFIGURATION
 // ============================================================================
 

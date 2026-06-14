@@ -3,53 +3,345 @@ source: crates/flui-rendering/tests/harness_snapshot.rs
 expression: json
 ---
 {
-  "name": "Offset",
-  "level": "info",
-  "properties": {
-    "dx": 0,
-    "dy": 0
-  },
-  "children": [
-    {
-      "name": "Picture",
-      "level": "info",
-      "properties": {
-        "bounds": {"x":-4,"y":-2,"w":92,"h":72},
-        "commands": 3
+  "format_version": 1,
+  "root": {
+    "name": "Offset",
+    "properties": [
+      {
+        "name": "dx",
+        "value": {
+          "Float": 0.0
+        },
+        "level": "info",
+        "kind": {
+          "Double": {
+            "unit": null
+          }
+        },
+        "show_name": true,
+        "show_separator": true
       },
-      "children": [
-        {
-          "name": "DrawCommand",
-          "level": "info",
-          "properties": {
-            "path_bounds": {"x":2,"y":4,"w":80,"h":60},
-            "color": {"r":0,"g":0,"b":0,"a":128},
-            "elevation": 6
-          },
-          "children": []
+      {
+        "name": "dy",
+        "value": {
+          "Float": 0.0
         },
-        {
-          "name": "DrawCommand",
-          "level": "info",
-          "properties": {
-            "rect": {"x":0,"y":0,"w":80,"h":60},
-            "color": {"r":255,"g":255,"b":255,"a":255},
-            "style": "Fill"
-          },
-          "children": []
+        "level": "info",
+        "kind": {
+          "Double": {
+            "unit": null
+          }
         },
-        {
-          "name": "DrawCommand",
-          "level": "info",
-          "properties": {
-            "outer": {"rect":{"x":0,"y":0,"w":80,"h":60},"r_tl":0,"r_tr":0,"r_br":0,"r_bl":0},
-            "inner": {"rect":{"x":2,"y":2,"w":76,"h":56},"r_tl":0,"r_tr":0,"r_br":0,"r_bl":0},
-            "color": {"r":0,"g":0,"b":0,"a":255},
-            "style": "Fill"
+        "show_name": true,
+        "show_separator": true
+      }
+    ],
+    "children": [
+      {
+        "name": "Picture",
+        "properties": [
+          {
+            "name": "bounds",
+            "value": {
+              "Rect": {
+                "x": -4.0,
+                "y": -2.0,
+                "w": 92.0,
+                "h": 72.0
+              }
+            },
+            "level": "info",
+            "kind": "Rect",
+            "show_name": true,
+            "show_separator": true
           },
-          "children": []
-        }
-      ]
-    }
-  ]
+          {
+            "name": "commands",
+            "value": {
+              "Int": 3
+            },
+            "level": "info",
+            "kind": {
+              "Int": {
+                "unit": null
+              }
+            },
+            "show_name": true,
+            "show_separator": true
+          }
+        ],
+        "children": [
+          {
+            "name": "DrawCommand",
+            "properties": [
+              {
+                "name": "path_bounds",
+                "value": {
+                  "Rect": {
+                    "x": 2.0,
+                    "y": 4.0,
+                    "w": 80.0,
+                    "h": 60.0
+                  }
+                },
+                "level": "info",
+                "kind": "Rect",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "color",
+                "value": {
+                  "Color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0,
+                    "a": 128
+                  }
+                },
+                "level": "info",
+                "kind": "Color",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "elevation",
+                "value": {
+                  "Float": 6.0
+                },
+                "level": "info",
+                "kind": {
+                  "Double": {
+                    "unit": null
+                  }
+                },
+                "show_name": true,
+                "show_separator": true
+              }
+            ],
+            "children": [],
+            "level": "info",
+            "style": "sparse"
+          },
+          {
+            "name": "DrawCommand",
+            "properties": [
+              {
+                "name": "rect",
+                "value": {
+                  "Rect": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "w": 80.0,
+                    "h": 60.0
+                  }
+                },
+                "level": "info",
+                "kind": "Rect",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "color",
+                "value": {
+                  "Color": {
+                    "r": 255,
+                    "g": 255,
+                    "b": 255,
+                    "a": 255
+                  }
+                },
+                "level": "info",
+                "kind": "Color",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "style",
+                "value": {
+                  "Str": "Fill"
+                },
+                "level": "info",
+                "kind": "Generic",
+                "show_name": true,
+                "show_separator": true
+              }
+            ],
+            "children": [],
+            "level": "info",
+            "style": "sparse"
+          },
+          {
+            "name": "DrawCommand",
+            "properties": [
+              {
+                "name": "outer",
+                "value": {
+                  "Nested": [
+                    {
+                      "name": "rect",
+                      "value": {
+                        "Rect": {
+                          "x": 0.0,
+                          "y": 0.0,
+                          "w": 80.0,
+                          "h": 60.0
+                        }
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_tl",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_tr",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_br",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_bl",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    }
+                  ]
+                },
+                "level": "info",
+                "kind": "Generic",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "inner",
+                "value": {
+                  "Nested": [
+                    {
+                      "name": "rect",
+                      "value": {
+                        "Rect": {
+                          "x": 2.0,
+                          "y": 2.0,
+                          "w": 76.0,
+                          "h": 56.0
+                        }
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_tl",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_tr",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_br",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    },
+                    {
+                      "name": "r_bl",
+                      "value": {
+                        "Float": 0.0
+                      },
+                      "level": "info",
+                      "kind": "Generic",
+                      "show_name": true,
+                      "show_separator": true
+                    }
+                  ]
+                },
+                "level": "info",
+                "kind": "Generic",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "color",
+                "value": {
+                  "Color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0,
+                    "a": 255
+                  }
+                },
+                "level": "info",
+                "kind": "Color",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "style",
+                "value": {
+                  "Str": "Fill"
+                },
+                "level": "info",
+                "kind": "Generic",
+                "show_name": true,
+                "show_separator": true
+              }
+            ],
+            "children": [],
+            "level": "info",
+            "style": "sparse"
+          }
+        ],
+        "level": "info",
+        "style": "sparse"
+      }
+    ],
+    "level": "info",
+    "style": "sparse"
+  }
 }

@@ -182,8 +182,9 @@ pub use callbacks::{
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Diagnostics
 pub use debug::{
-    DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
-    DiagnosticsProperty, DiagnosticsPropertyKind, DiagnosticsTreeStyle, DiagnosticsValue,
+    DIAGNOSTICS_FORMAT_VERSION, DebugPaintConfig, DiagnosticLevel, Diagnosticable,
+    DiagnosticsBuilder, DiagnosticsEnvelope, DiagnosticsNode, DiagnosticsProperty,
+    DiagnosticsPropertyKind, DiagnosticsTreeStyle, DiagnosticsValue,
 };
 pub use id::{
     // Core tree IDs (5-tree architecture)
