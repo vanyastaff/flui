@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0005](ADR-0005-diagnosticable-everywhere-introspection.md) (2026-06-14, same day, before implementation) — the sibling-IR was reversed in favour of a uniform `Diagnosticable`-everywhere substrate. This record is kept because its source-verified refutation of the *naive* `DiagnosticsNode` unification (stringly `DiagnosticsProperty.value`, no `impl Diagnosticable for DrawCommand`) still holds and motivates ADR-0005's *evolved* form (typed-value `DiagnosticsProperty` + `impl Diagnosticable` on the painted types). See ADR-0005 §Context for why the decision flipped.
 - **Date:** 2026-06-14
 - **Deciders:** @vanyastaff
 - **Scope:** new painted-scene IR types in `flui-painting` (`DrawCommandSummary`, `DrawKind`, `PaintSummary`) and `flui-layer` (`SceneSnapshot`, `LayerSummary`, `LayerDescriptor`); the committed JSON Schema artifact + CI gate; a pluggable `SnapshotStrategy<Scene, Format>` renderer layer; migration of the PR #213 hand-rolled text serializer (`crates/flui-rendering/src/testing/snapshot.rs`) onto the IR's `Display`/`.text` strategy. **Out of scope (deferred):** the AccessKit `TreeUpdate` live-inspector wire (roadmap B), pixel/SVG goldens, a frame-trace artifact, and any `flui-testing` umbrella crate.
