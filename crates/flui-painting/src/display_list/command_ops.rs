@@ -45,7 +45,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsValue};
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
 
 use super::command::{CommandKind, DrawCommand};
@@ -911,8 +911,7 @@ fn log_effect_depth_saturation(variant: &'static str, op: &'static str, depth: u
 /// variants emit properties under the same names, making automated diffing
 /// stable. `stroke_width` is only emitted for stroke-style paints.
 fn add_paint_props(builder: &mut DiagnosticsBuilder, paint: &Paint) {
-    let c = paint.color;
-    builder.add_color_rgba("color", c.r, c.g, c.b, c.a);
+    builder.add_value("color", paint.color);
     builder.add("style", format!("{:?}", paint.style));
     if matches!(paint.style, PaintStyle::Stroke) {
         builder.add_f64("stroke_width", f64::from(paint.stroke_width));
@@ -929,51 +928,10 @@ fn add_opt_paint_props(builder: &mut DiagnosticsBuilder, paint: Option<&Arc<Pain
 
 /// Populate `builder` with an axis-aligned rect property in typed form.
 ///
-/// Uses `min.x` / `min.y` as origin and `width` / `height` computed from the
-/// `max` corner so the serialised form is `(x,y,w,h)` — consistent with
-/// [`DiagnosticsValue::Rect`](flui_foundation::DiagnosticsValue).
+/// Thin wrapper around [`DiagnosticsBuilder::add_value`] that accepts the
+/// concrete `Rect<Pixels>` type used throughout `DrawCommand` variants.
 fn add_rect_prop(builder: &mut DiagnosticsBuilder, name: &'static str, r: Rect<Pixels>) {
-    builder.add_rect(
-        name,
-        f64::from(r.min.x.get()),
-        f64::from(r.min.y.get()),
-        f64::from(r.width().get()),
-        f64::from(r.height().get()),
-    );
-}
-
-/// Populate `builder` with the rect + four corner radii (TL/TR/BR/BL) of an
-/// `RRect`.
-///
-/// The four radii are emitted as individual `f64` properties prefixed with
-/// `name`: `"{name}_r_tl"`, `"{name}_r_tr"`, `"{name}_r_br"`, `"{name}_r_bl"`.
-/// This prefix avoids property-name collisions when two rrects are emitted on
-/// the same node (e.g. `DrawDRRect` emits both `"outer"` and `"inner"`), so
-/// each radius remains reachable via `find_property`. Mirrors the stable
-/// fingerprint used by `fmt_rrect`.
-fn add_rrect_props(
-    builder: &mut DiagnosticsBuilder,
-    name: &str,
-    rrect: &flui_types::geometry::RRect,
-) {
-    // The rect bounds are stored under `name` (e.g. "outer", "inner", "rect").
-    // Corner radii are prefixed with `name` so that a node carrying two rrects
-    // (DrawDRRect) has no duplicate property names and each radius is reachable
-    // via `find_property`.
-    builder.add_rect(
-        name,
-        f64::from(rrect.rect.min.x.get()),
-        f64::from(rrect.rect.min.y.get()),
-        f64::from(rrect.rect.width().get()),
-        f64::from(rrect.rect.height().get()),
-    );
-    builder.add_f64(format!("{name}_r_tl"), f64::from(rrect.top_left.x.get()));
-    builder.add_f64(format!("{name}_r_tr"), f64::from(rrect.top_right.x.get()));
-    builder.add_f64(
-        format!("{name}_r_br"),
-        f64::from(rrect.bottom_right.x.get()),
-    );
-    builder.add_f64(format!("{name}_r_bl"), f64::from(rrect.bottom_left.x.get()));
+    builder.add_value(name, r);
 }
 
 /// Emit the recording-time transform as a typed `List` of 16 floats only when
@@ -983,12 +941,7 @@ fn add_rrect_props(
 /// match the contract of the stable text serialiser (`maybe_transform`).
 fn add_transform_if_nonidentity(builder: &mut DiagnosticsBuilder, transform: &Matrix4) {
     if !transform.is_identity() {
-        let items = transform
-            .m
-            .iter()
-            .map(|&v| DiagnosticsValue::Float(f64::from(v)))
-            .collect();
-        builder.add_typed("transform", DiagnosticsValue::List(items));
+        builder.add_value("transform", transform);
     }
 }
 
@@ -1014,8 +967,8 @@ impl Diagnosticable for DrawCommand {
                 clip_behavior,
                 transform,
             } => {
-                // Emit rect + corner radii so a radius change diffs the output.
-                add_rrect_props(p, "rect", rrect);
+                // Emit as Nested so a radius change diffs the output.
+                p.add_value("rect", *rrect);
                 p.add_enum("clip_op", clip_op);
                 p.add_enum("clip_behavior", clip_behavior);
                 add_transform_if_nonidentity(p, transform);
@@ -1058,8 +1011,8 @@ impl Diagnosticable for DrawCommand {
                 paint,
                 transform,
             } => {
-                p.add_offset("p1", f64::from(p1.x.get()), f64::from(p1.y.get()));
-                p.add_offset("p2", f64::from(p2.x.get()), f64::from(p2.y.get()));
+                p.add_value("p1", *p1);
+                p.add_value("p2", *p2);
                 add_paint_props(p, paint);
                 add_transform_if_nonidentity(p, transform);
             }
@@ -1079,7 +1032,7 @@ impl Diagnosticable for DrawCommand {
                 paint,
                 transform,
             } => {
-                add_rrect_props(p, "rect", rrect);
+                p.add_value("rect", *rrect);
                 add_paint_props(p, paint);
                 add_transform_if_nonidentity(p, transform);
             }
@@ -1090,11 +1043,7 @@ impl Diagnosticable for DrawCommand {
                 paint,
                 transform,
             } => {
-                p.add_offset(
-                    "center",
-                    f64::from(center.x.get()),
-                    f64::from(center.y.get()),
-                );
+                p.add_value("center", *center);
                 p.add_f64("radius", f64::from(radius.get()));
                 add_paint_props(p, paint);
                 add_transform_if_nonidentity(p, transform);
@@ -1136,16 +1085,8 @@ impl Diagnosticable for DrawCommand {
                 ..
             } => {
                 p.add("text", text.as_str());
-                p.add_offset(
-                    "offset",
-                    f64::from(offset.dx.get()),
-                    f64::from(offset.dy.get()),
-                );
-                p.add_size_f64(
-                    "size",
-                    f64::from(size.width.get()),
-                    f64::from(size.height.get()),
-                );
+                p.add_value("offset", *offset);
+                p.add_value("size", *size);
                 add_paint_props(p, paint);
                 add_transform_if_nonidentity(p, transform);
             }
@@ -1160,11 +1101,7 @@ impl Diagnosticable for DrawCommand {
                 // Plain text is the stable fingerprint; glyph/run details are
                 // not needed and change with shaper versions.
                 p.add("text", span.to_plain_text());
-                p.add_offset(
-                    "offset",
-                    f64::from(offset.dx.get()),
-                    f64::from(offset.dy.get()),
-                );
+                p.add_value("offset", *offset);
                 p.add_f64("text_scale_factor", *text_scale_factor);
                 if let Some(w) = wrap_width {
                     p.add_f64("wrap_width", f64::from(*w));
@@ -1252,7 +1189,7 @@ impl Diagnosticable for DrawCommand {
                 // Path bounds are the stable fingerprint for shadow geometry;
                 // mirrors `summarize_command` for DrawShadow.
                 add_rect_prop(p, "path_bounds", path.compute_bounds());
-                p.add_color_rgba("color", color.r, color.g, color.b, color.a);
+                p.add_value("color", *color);
                 p.add_f64("elevation", f64::from(*elevation));
                 add_transform_if_nonidentity(p, transform);
             }
@@ -1272,7 +1209,7 @@ impl Diagnosticable for DrawCommand {
                 shader,
                 transform,
             } => {
-                add_rrect_props(p, "rect", rrect);
+                p.add_value("rect", *rrect);
                 p.add_enum("shader", shader);
                 add_transform_if_nonidentity(p, transform);
             }
@@ -1330,10 +1267,10 @@ impl Diagnosticable for DrawCommand {
                 paint,
                 transform,
             } => {
-                // Emit rect + radii for both outer and inner so a radius change
-                // on either ring diffs the output; mirrors `fmt_rrect` coverage.
-                add_rrect_props(p, "outer", outer);
-                add_rrect_props(p, "inner", inner);
+                // Each rrect becomes a Nested value under its own top-level
+                // property name, so outer/inner corner radii cannot collide.
+                p.add_value("outer", *outer);
+                p.add_value("inner", *inner);
                 add_paint_props(p, paint);
                 add_transform_if_nonidentity(p, transform);
             }
@@ -1373,7 +1310,7 @@ impl Diagnosticable for DrawCommand {
                 blend_mode,
                 transform,
             } => {
-                p.add_color_rgba("color", color.r, color.g, color.b, color.a);
+                p.add_value("color", *color);
                 p.add_enum("blend_mode", blend_mode);
                 add_transform_if_nonidentity(p, transform);
             }
@@ -1419,8 +1356,8 @@ impl Diagnosticable for DrawCommand {
 }
 
 #[cfg(test)]
-// `expect` in tests is the approved pattern for asserting test-author invariants.
-#[allow(clippy::expect_used)]
+// `expect`/`panic!`/`unwrap_or_else(|| panic!())` are approved test-assertion patterns.
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use std::sync::Arc;
 
@@ -1498,14 +1435,18 @@ mod tests {
         );
     }
 
-    /// `DrawDRRect` emits outer and inner rrects with scoped property names so
-    /// both rings are reachable via `find_property` without shadowing.
+    /// `DrawDRRect` emits outer and inner rrects as `Nested` values so each
+    /// rrect's corner radii live inside their own sub-object.
     ///
-    /// The flat names `r_tl`/`r_tr`/`r_br`/`r_bl` previously collided when two
-    /// rrects were emitted on the same node — the inner radii were unreachable.
-    /// Now they are prefixed (`outer_r_tl`, `inner_r_tl`, …).
+    /// The top-level node has exactly two rrect properties (`"outer"` and
+    /// `"inner"`), each carrying a `Nested` value that contains `"rect"` plus
+    /// the four corner radii `"r_tl"` / `"r_tr"` / `"r_br"` / `"r_bl"`.
+    /// Distinct outer/inner radii must produce distinct nested values — the
+    /// old flat-name collision (`outer_r_tl` vs `inner_r_tl` on the same node)
+    /// is impossible with this structure.
     #[test]
     fn draw_drrect_outer_and_inner_radii_have_distinct_names() {
+        use flui_foundation::DiagnosticsValue;
         use flui_types::geometry::{Matrix4, RRect, Radius, Rect, px};
 
         let outer = RRect::from_rect_circular(
@@ -1525,43 +1466,53 @@ mod tests {
 
         let node = cmd.to_diagnostics_node();
 
-        // Both the outer and inner rect bounds must be reachable.
+        // Helper: extract the Nested props from a top-level property.
+        let get_nested = |name: &str| -> &[flui_foundation::DiagnosticsProperty] {
+            match node
+                .find_property(name)
+                .unwrap_or_else(|| panic!("{name} property must be present on DrawDRRect node"))
+                .value_typed()
+            {
+                DiagnosticsValue::Nested(props) => props.as_slice(),
+                other => panic!("{name} must be Nested, got {other:?}"),
+            }
+        };
+
+        let outer_props = get_nested("outer");
+        let inner_props = get_nested("inner");
+
+        // Each Nested must contain a "r_tl" float with the correct radius.
+        let find_r_tl = |props: &[flui_foundation::DiagnosticsProperty]| {
+            props
+                .iter()
+                .find(|p| p.name() == "r_tl")
+                .unwrap_or_else(|| panic!("Nested must contain r_tl"))
+                .value_typed()
+                .clone()
+        };
+
+        let outer_r_tl = find_r_tl(outer_props);
+        let inner_r_tl = find_r_tl(inner_props);
+
         assert!(
-            node.find_property("outer").is_some(),
-            "outer rect bounds must be present"
+            matches!(outer_r_tl, DiagnosticsValue::Float(v) if (v - 12.0_f64).abs() < 0.01),
+            "outer r_tl must be ~12.0, got: {outer_r_tl:?}",
         );
         assert!(
-            node.find_property("inner").is_some(),
-            "inner rect bounds must be present"
+            matches!(inner_r_tl, DiagnosticsValue::Float(v) if (v - 4.0_f64).abs() < 0.01),
+            "inner r_tl must be ~4.0, got: {inner_r_tl:?}",
         );
 
-        // Outer radii must be reachable under their scoped names.
-        let outer_r_tl = node
-            .find_property("outer_r_tl")
-            .expect("outer_r_tl must be present and distinct from inner_r_tl");
-        assert!(
-            matches!(
-                outer_r_tl.value_typed(),
-                flui_foundation::DiagnosticsValue::Float(v) if (*v - 12.0_f64).abs() < 0.01
-            ),
-            "outer_r_tl must be ~12.0, got: {:?}",
-            outer_r_tl.value_typed(),
+        // The two Nested values must not be equal — different radii, different values.
+        assert_ne!(
+            node.find_property("outer")
+                .map(flui_foundation::DiagnosticsProperty::value_typed),
+            node.find_property("inner")
+                .map(flui_foundation::DiagnosticsProperty::value_typed),
+            "outer and inner Nested values must differ (distinct radii)",
         );
 
-        // Inner radii must be reachable under their scoped names.
-        let inner_r_tl = node
-            .find_property("inner_r_tl")
-            .expect("inner_r_tl must be present and distinct from outer_r_tl");
-        assert!(
-            matches!(
-                inner_r_tl.value_typed(),
-                flui_foundation::DiagnosticsValue::Float(v) if (*v - 4.0_f64).abs() < 0.01
-            ),
-            "inner_r_tl must be ~4.0, got: {:?}",
-            inner_r_tl.value_typed(),
-        );
-
-        // There must be no duplicate property names (the old collision).
+        // No duplicate top-level property names.
         let all_names: Vec<&str> = node
             .properties()
             .iter()

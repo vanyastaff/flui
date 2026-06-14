@@ -452,6 +452,125 @@ impl From<bool> for DiagnosticsValue {
     }
 }
 
+// ---- Geometry / colour conversions (ADR-0005 Decision 1, Task 4.5) ----------
+//
+// Orphan rule: `DiagnosticsValue` is defined in this crate, so `From<ForeignType>`
+// impls are legal here. The direction is flui-types → flui-geometry with no
+// dependency on flui-foundation, so no cycle exists.
+//
+// All `f32` pixel values are widened to `f64` via `f64::from` (lossless for the
+// f32 range that Pixels carries).
+
+impl From<flui_types::geometry::Rect<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts a `Rect<Pixels>` to `DiagnosticsValue::Rect { x, y, w, h }`.
+    ///
+    /// Origin is the min corner; extent is width/height (not the max corner).
+    fn from(r: flui_types::geometry::Rect<flui_types::geometry::Pixels>) -> Self {
+        Self::Rect {
+            x: f64::from(r.left().get()),
+            y: f64::from(r.top().get()),
+            w: f64::from(r.width().get()),
+            h: f64::from(r.height().get()),
+        }
+    }
+}
+
+impl From<flui_types::styling::Color> for DiagnosticsValue {
+    /// Converts a `Color` (RGBA u8 channels) to `DiagnosticsValue::Color`.
+    fn from(c: flui_types::styling::Color) -> Self {
+        Self::Color {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+            a: c.a,
+        }
+    }
+}
+
+impl From<flui_types::geometry::Point<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts a `Point<Pixels>` to `DiagnosticsValue::Offset { x, y }`.
+    ///
+    /// Points and offsets share the same 2-D shape; the inspector renders
+    /// both as `(x, y)`.
+    fn from(p: flui_types::geometry::Point<flui_types::geometry::Pixels>) -> Self {
+        Self::Offset {
+            x: f64::from(p.x.get()),
+            y: f64::from(p.y.get()),
+        }
+    }
+}
+
+impl From<flui_types::geometry::Offset<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts an `Offset<Pixels>` to `DiagnosticsValue::Offset { x, y }`.
+    fn from(o: flui_types::geometry::Offset<flui_types::geometry::Pixels>) -> Self {
+        Self::Offset {
+            x: f64::from(o.dx.get()),
+            y: f64::from(o.dy.get()),
+        }
+    }
+}
+
+impl From<flui_types::geometry::Size<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts a `Size<Pixels>` to `DiagnosticsValue::Size { w, h }`.
+    fn from(s: flui_types::geometry::Size<flui_types::geometry::Pixels>) -> Self {
+        Self::Size {
+            w: f64::from(s.width.get()),
+            h: f64::from(s.height.get()),
+        }
+    }
+}
+
+impl From<flui_types::geometry::RRect> for DiagnosticsValue {
+    /// Converts an `RRect` to `DiagnosticsValue::Nested`.
+    ///
+    /// The nested properties are:
+    /// - `"rect"` — the bounding rectangle (`Rect` value)
+    /// - `"r_tl"`, `"r_tr"`, `"r_br"`, `"r_bl"` — per-corner x-radius as `Float`
+    ///
+    /// Using `Nested` (rather than flat prefixed names) means each rrect is one
+    /// logical value. When two rrects appear on the same diagnostics node (e.g.
+    /// `DrawDRRect` outer/inner), they each become a `Nested` value under their
+    /// own top-level property name — no collision is possible.
+    fn from(rr: flui_types::geometry::RRect) -> Self {
+        let rect_val = DiagnosticsValue::from(rr.rect);
+        let props = vec![
+            DiagnosticsProperty::new_typed("rect", rect_val),
+            DiagnosticsProperty::new_typed(
+                "r_tl",
+                DiagnosticsValue::Float(f64::from(rr.top_left.x.get())),
+            ),
+            DiagnosticsProperty::new_typed(
+                "r_tr",
+                DiagnosticsValue::Float(f64::from(rr.top_right.x.get())),
+            ),
+            DiagnosticsProperty::new_typed(
+                "r_br",
+                DiagnosticsValue::Float(f64::from(rr.bottom_right.x.get())),
+            ),
+            DiagnosticsProperty::new_typed(
+                "r_bl",
+                DiagnosticsValue::Float(f64::from(rr.bottom_left.x.get())),
+            ),
+        ];
+        Self::Nested(props)
+    }
+}
+
+impl From<&flui_types::geometry::Matrix4> for DiagnosticsValue {
+    /// Converts a `&Matrix4` to `DiagnosticsValue::List` of 16 `Float` entries
+    /// (column-major, matching the `m` array layout).
+    ///
+    /// By-ref because `Matrix4` is 64 bytes and typically borrowed at call sites
+    /// (the transform field is borrowed, not moved).
+    fn from(m: &flui_types::geometry::Matrix4) -> Self {
+        let items =
+            m.m.iter()
+                .map(|&v| DiagnosticsValue::Float(f64::from(v)))
+                .collect();
+        Self::List(items)
+    }
+}
+
 /// A diagnostic property
 ///
 /// Similar to Flutter's `DiagnosticsProperty`.
@@ -1622,6 +1741,45 @@ impl DiagnosticsBuilder {
         self
     }
 
+    /// Add a property whose typed value is derived from any type that implements
+    /// `Into<DiagnosticsValue>`.
+    ///
+    /// This is the uniform entry point for geometry and colour values: pass a
+    /// `Rect<Pixels>`, `Color`, `RRect`, `Size<Pixels>`, etc. directly and the
+    /// correct [`DiagnosticsPropertyKind`] is set automatically from the resulting
+    /// variant:
+    ///
+    /// | Input type          | Resulting variant         | Kind          |
+    /// |---------------------|---------------------------|---------------|
+    /// | `Rect<Pixels>`      | `DiagnosticsValue::Rect`  | `Rect`        |
+    /// | `Color`             | `DiagnosticsValue::Color` | `Color`       |
+    /// | `Point<Pixels>`     | `DiagnosticsValue::Offset`| `Offset`      |
+    /// | `Offset<Pixels>`    | `DiagnosticsValue::Offset`| `Offset`      |
+    /// | `Size<Pixels>`      | `DiagnosticsValue::Size`  | `Size`        |
+    /// | `RRect`             | `DiagnosticsValue::Nested`| `Generic`     |
+    /// | `&Matrix4`          | `DiagnosticsValue::List`  | `Generic`     |
+    /// | `f64`, `i64`, `bool`| typed scalar variants     | `Double`/`Int`|
+    pub fn add_value(
+        &mut self,
+        name: impl Into<String>,
+        value: impl Into<DiagnosticsValue>,
+    ) -> &mut Self {
+        let val = value.into();
+        let kind = match &val {
+            DiagnosticsValue::Rect { .. } => DiagnosticsPropertyKind::Rect,
+            DiagnosticsValue::Color { .. } => DiagnosticsPropertyKind::Color,
+            DiagnosticsValue::Offset { .. } => DiagnosticsPropertyKind::Offset,
+            DiagnosticsValue::Size { .. } => DiagnosticsPropertyKind::Size,
+            DiagnosticsValue::Float(_) => DiagnosticsPropertyKind::Double { unit: None },
+            DiagnosticsValue::Int(_) => DiagnosticsPropertyKind::Int { unit: None },
+            // Nested / List / Bool / Str / Null — no more-specific kind.
+            _ => DiagnosticsPropertyKind::Generic,
+        };
+        self.properties
+            .push(DiagnosticsProperty::new_typed(name, val).with_kind(kind));
+        self
+    }
+
     /// Add an optional property.
     pub fn add_optional<T: fmt::Display>(
         &mut self,
@@ -2037,6 +2195,103 @@ mod tests {
         let [property] = builder.build().try_into().ok().unwrap();
         let node = DiagnosticsNode::new("RenderSliverFixedExtentList").with_property(property);
         assert_eq!(node.get_property_f64("item_extent"), Some(25.0));
+    }
+
+    // ---- Task 4.5 geometry/colour From<T> + add_value (TDD: failing first) ----
+
+    #[test]
+    fn rect_into_diagnostics_value() {
+        use flui_types::geometry::{Rect, px};
+
+        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0));
+        let val = DiagnosticsValue::from(rect);
+        assert!(
+            matches!(val, DiagnosticsValue::Rect { w, .. } if (w - 40.0_f64).abs() < 1e-6),
+            "expected Rect{{ w: 40.0, .. }}, got: {val:?}",
+        );
+    }
+
+    #[test]
+    fn color_into_diagnostics_value() {
+        use flui_types::styling::Color;
+
+        let red = Color::rgba(255, 0, 0, 255);
+        let val = DiagnosticsValue::from(red);
+        assert_eq!(
+            val,
+            DiagnosticsValue::Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            },
+            "red Color must convert to DiagnosticsValue::Color{{r:255,g:0,b:0,a:255}}"
+        );
+    }
+
+    // Corner names (r_tl / r_tr / r_br / r_bl) are domain-mandated abbreviations
+    // that intentionally share a directional suffix pattern.
+    #[allow(clippy::similar_names)]
+    #[test]
+    fn rrect_into_diagnostics_value_is_nested() {
+        use flui_types::geometry::{RRect, Radius, Rect, px};
+
+        // Distinct corner radii so the nested values differ.
+        let rrect = RRect::from_rect_and_corners(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Radius::circular(px(10.0)),
+            Radius::circular(px(20.0)),
+            Radius::circular(px(30.0)),
+            Radius::circular(px(40.0)),
+        );
+        let val = DiagnosticsValue::from(rrect);
+        let DiagnosticsValue::Nested(ref props) = val else {
+            panic!("RRect must convert to Nested, got {val:?}")
+        };
+        // Must contain "rect" bounds and four corner radii.
+        assert!(
+            props.iter().any(|p| p.name() == "rect"),
+            "Nested must contain 'rect' property"
+        );
+        // Helper: look up a radius by short name, assert it exists.
+        let get_radius = |name: &str| {
+            props
+                .iter()
+                .find(|p| p.name() == name)
+                .unwrap_or_else(|| panic!("Nested must contain '{name}'"))
+                .value_typed()
+                .clone()
+        };
+        // The two corner names share a `radius_` prefix and differ only in the
+        // direction suffix — `similar_names` fires on domain-mandated abbreviations.
+        #[allow(clippy::similar_names)]
+        let (radius_tl, radius_tr) = (get_radius("r_tl"), get_radius("r_tr"));
+        // Distinct corner radii must produce distinct values.
+        assert_ne!(
+            radius_tl, radius_tr,
+            "distinct radii must not collide in Nested"
+        );
+    }
+
+    #[test]
+    fn add_value_matches_explicit_add_rect() {
+        use flui_types::geometry::{Rect, px};
+
+        let rect = Rect::from_ltrb(px(1.0), px(2.0), px(41.0), px(52.0));
+
+        let mut b1 = DiagnosticsBuilder::new();
+        b1.add_value("r", rect);
+
+        let mut b2 = DiagnosticsBuilder::new();
+        b2.add_rect("r", 1.0, 2.0, 40.0, 50.0);
+
+        let p1 = b1.build();
+        let p2 = b2.build();
+        assert_eq!(
+            p1[0].value_typed(),
+            p2[0].value_typed(),
+            "add_value(rect) must produce same typed value as add_rect(x,y,w,h)"
+        );
     }
 
     // ---- Task 3 typed-value tests (TDD: written before implementation) ----
