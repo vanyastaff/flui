@@ -240,6 +240,68 @@ fn snapshot_decorated_box() {
 }
 
 // ---------------------------------------------------------------------------
+// JSON synthetic-inspector snapshots — verify typed-JSON path is live
+//
+// These exercise SnapshotStrategy::json() to prove that typed DiagnosticsValue
+// variants (Rect, Color, Nested/RRect) serialise as JSON objects/numbers, NOT
+// as opaque Display strings.  A regression in the json path (e.g. falling back
+// to Display for Rect) would change the golden content and be caught here.
+// ---------------------------------------------------------------------------
+
+/// JSON snapshot of a simple red box.
+///
+/// Validates that:
+/// - `rect` is `{"x":…,"y":…,"w":…,"h":…}` (typed object, not a Display string)
+/// - `color` is `{"r":255,"g":0,"b":0,"a":255}` (typed RGBA object)
+#[test]
+fn snapshot_colored_box_json() {
+    use flui_rendering::testing::{SnapshotStrategy, scene_diagnostics_tree};
+
+    let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
+        .with_size(Size::new(px(40.0), px(40.0)))
+        .run_frame();
+    let json = SnapshotStrategy::json().render(&scene_diagnostics_tree(run.layer_tree()));
+    insta::assert_snapshot!("colored_box__json", json);
+}
+
+/// JSON snapshot of `RenderDecoratedBox` (shadow + fill + DRRect border).
+///
+/// Validates that:
+/// - `path_bounds` (shadow) is `{"x":…,"y":…,"w":…,"h":…}`, not a Display string
+/// - `color` (shadow) is a typed RGBA object `{"r":0,"g":0,"b":0,"a":128}`
+/// - `outer`/`inner` (DRRect) are nested JSON objects `{"rect":{…},"r_tl":…,…}`
+#[test]
+fn snapshot_decorated_box_json() {
+    use flui_rendering::objects::RenderDecoratedBox;
+    use flui_rendering::testing::{SnapshotStrategy, scene_diagnostics_tree};
+    use flui_types::{
+        Offset, Pixels,
+        geometry::px,
+        styling::{Border, BorderSide, BorderStyle, BoxDecoration, BoxShadow, Color},
+    };
+
+    let decoration = BoxDecoration::<Pixels>::new()
+        .set_color(Some(Color::WHITE))
+        .set_border(Some(Border::all(BorderSide::new(
+            Color::BLACK,
+            px(2.0),
+            BorderStyle::Solid,
+        ))))
+        .set_box_shadow(Some(vec![BoxShadow::new(
+            Color::rgba(0, 0, 0, 128),
+            Offset::new(px(2.0), px(4.0)),
+            px(6.0),
+            px(0.0),
+        )]));
+
+    let run = RenderTester::mount(box_node(RenderDecoratedBox::new(decoration)))
+        .with_size(Size::new(px(80.0), px(60.0)))
+        .run_frame();
+    let json = SnapshotStrategy::json().render(&scene_diagnostics_tree(run.layer_tree()));
+    insta::assert_snapshot!("decorated_box__json", json);
+}
+
+// ---------------------------------------------------------------------------
 // 2. RenderClipRect — clip layer wraps the child's picture
 // ---------------------------------------------------------------------------
 

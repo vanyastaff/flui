@@ -1,0 +1,55 @@
+---
+source: crates/flui-rendering/tests/harness_snapshot.rs
+expression: json
+---
+{
+  "name": "Offset",
+  "level": "info",
+  "properties": {
+    "dx": 0,
+    "dy": 0
+  },
+  "children": [
+    {
+      "name": "Picture",
+      "level": "info",
+      "properties": {
+        "bounds": {"x":-4,"y":-2,"w":92,"h":72},
+        "commands": 3
+      },
+      "children": [
+        {
+          "name": "DrawCommand",
+          "level": "info",
+          "properties": {
+            "path_bounds": {"x":2,"y":4,"w":80,"h":60},
+            "color": {"r":0,"g":0,"b":0,"a":128},
+            "elevation": 6
+          },
+          "children": []
+        },
+        {
+          "name": "DrawCommand",
+          "level": "info",
+          "properties": {
+            "rect": {"x":0,"y":0,"w":80,"h":60},
+            "color": {"r":255,"g":255,"b":255,"a":255},
+            "style": "Fill"
+          },
+          "children": []
+        },
+        {
+          "name": "DrawCommand",
+          "level": "info",
+          "properties": {
+            "outer": {"rect":{"x":0,"y":0,"w":80,"h":60},"r_tl":0,"r_tr":0,"r_br":0,"r_bl":0},
+            "inner": {"rect":{"x":2,"y":2,"w":76,"h":56},"r_tl":0,"r_tr":0,"r_br":0,"r_bl":0},
+            "color": {"r":0,"g":0,"b":0,"a":255},
+            "style": "Fill"
+          },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

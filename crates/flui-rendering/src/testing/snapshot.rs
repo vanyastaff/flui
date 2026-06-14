@@ -250,7 +250,7 @@ pub fn serialize_layer_subtree(tree: &LayerTree, _node: RenderId) -> String {
     scene_diagnostics(tree).to_string_deep()
 }
 
-/// Serialize a `LayerTree` to text, or return `"<no layer tree>"` when `None`.
+/// Serialize a `LayerTree` to text, or return an empty string when `None`.
 ///
 /// # Deprecation
 ///
@@ -264,7 +264,7 @@ pub fn snapshot_tree(tree: Option<&LayerTree>) -> String {
     SnapshotStrategy::text().render(&scene_diagnostics_tree(tree))
 }
 
-/// Serialize the subtree at `node`, or return `"<no layer tree>"` when `None`.
+/// Serialize the subtree at `node`, or return an empty string when `None`.
 ///
 /// # Deprecation
 ///
