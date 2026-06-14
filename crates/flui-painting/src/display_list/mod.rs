@@ -41,7 +41,6 @@ pub mod command;
 pub mod command_ops;
 pub mod sealed;
 pub mod stats;
-pub mod summary;
 
 // Re-export the public surface.
 pub use command::{CommandKind, DrawCommand};
