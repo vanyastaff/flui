@@ -45,10 +45,12 @@
 
 use std::sync::Arc;
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
 
 use super::command::{CommandKind, DrawCommand};
-use crate::display_list::Paint;
+use crate::PaintStyle;
+use crate::display_list::{Paint, sealed::DisplayListCore};
 
 /// Maximum recursion depth for [`DrawCommand::with_opacity`] and
 /// [`DrawCommand::apply_transform`] into the inner [`DisplayList`](super::DisplayList) of
@@ -897,4 +899,471 @@ fn log_effect_depth_saturation(variant: &'static str, op: &'static str, depth: u
         "DrawCommand::{op} saturated MAX_EFFECT_DEPTH on {variant}; \
          inner DisplayList left untouched"
     );
+}
+
+// ============================================================================
+// Diagnosticable impl for DrawCommand (ADR-0005 Decision 2)
+// ============================================================================
+
+/// Populate `builder` with the colour/geometry properties of `paint`.
+///
+/// Called from every `DrawCommand` variant that carries a `Paint` so all
+/// variants emit properties under the same names, making automated diffing
+/// stable. `stroke_width` is only emitted for stroke-style paints.
+fn add_paint_props(builder: &mut DiagnosticsBuilder, paint: &Paint) {
+    let c = paint.color;
+    builder.add_color_rgba("color", c.r, c.g, c.b, c.a);
+    builder.add("style", format!("{:?}", paint.style));
+    if matches!(paint.style, PaintStyle::Stroke) {
+        builder.add_f64("stroke_width", f64::from(paint.stroke_width));
+    }
+}
+
+/// Populate `builder` with the colour/geometry properties of `paint` when it
+/// is wrapped in an `Option<Arc<Paint>>`.
+fn add_opt_paint_props(builder: &mut DiagnosticsBuilder, paint: Option<&Arc<Paint>>) {
+    if let Some(p) = paint {
+        add_paint_props(builder, p);
+    }
+}
+
+/// Populate `builder` with an axis-aligned rect property in typed form.
+///
+/// Uses `min.x` / `min.y` as origin and `width` / `height` computed from the
+/// `max` corner so the serialised form is `(x,y,w,h)` — consistent with
+/// [`DiagnosticsValue::Rect`](flui_foundation::DiagnosticsValue).
+fn add_rect_prop(builder: &mut DiagnosticsBuilder, name: &'static str, r: Rect<Pixels>) {
+    builder.add_rect(
+        name,
+        f64::from(r.min.x.get()),
+        f64::from(r.min.y.get()),
+        f64::from(r.width().get()),
+        f64::from(r.height().get()),
+    );
+}
+
+impl Diagnosticable for DrawCommand {
+    fn debug_fill_properties(&self, p: &mut DiagnosticsBuilder) {
+        match self {
+            // ── Clipping ─────────────────────────────────────────────────────
+            DrawCommand::ClipRect {
+                rect,
+                clip_op,
+                clip_behavior,
+                ..
+            } => {
+                add_rect_prop(p, "rect", *rect);
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+            }
+
+            DrawCommand::ClipRRect {
+                rrect,
+                clip_op,
+                clip_behavior,
+                ..
+            } => {
+                add_rect_prop(p, "rect", rrect.rect);
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+            }
+
+            DrawCommand::ClipRSuperellipse {
+                rsuperellipse,
+                clip_op,
+                clip_behavior,
+                ..
+            } => {
+                add_rect_prop(p, "rect", rsuperellipse.outer_rect());
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+            }
+
+            DrawCommand::ClipPath {
+                clip_op,
+                clip_behavior,
+                ..
+            } => {
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+            }
+
+            // ── Primitive draws ───────────────────────────────────────────────
+            DrawCommand::DrawLine { p1, p2, paint, .. } => {
+                p.add_offset("p1", f64::from(p1.x.get()), f64::from(p1.y.get()));
+                p.add_offset("p2", f64::from(p2.x.get()), f64::from(p2.y.get()));
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawRect { rect, paint, .. } => {
+                add_rect_prop(p, "rect", *rect);
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawRRect { rrect, paint, .. } => {
+                add_rect_prop(p, "rect", rrect.rect);
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawCircle {
+                center,
+                radius,
+                paint,
+                ..
+            } => {
+                p.add_offset(
+                    "center",
+                    f64::from(center.x.get()),
+                    f64::from(center.y.get()),
+                );
+                p.add_f64("radius", f64::from(radius.get()));
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawOval { rect, paint, .. } => {
+                add_rect_prop(p, "rect", *rect);
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawPath { paint, .. } => {
+                // Path itself is opaque; emit paint only.
+                add_paint_props(p, paint);
+            }
+
+            // ── Text ─────────────────────────────────────────────────────────
+            DrawCommand::DrawText {
+                text,
+                offset,
+                size,
+                paint,
+                ..
+            } => {
+                p.add("text", text.as_str());
+                p.add_offset(
+                    "offset",
+                    f64::from(offset.dx.get()),
+                    f64::from(offset.dy.get()),
+                );
+                p.add_size_f64(
+                    "size",
+                    f64::from(size.width.get()),
+                    f64::from(size.height.get()),
+                );
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawTextSpan {
+                text_scale_factor,
+                wrap_width,
+                ..
+            } => {
+                p.add_f64("text_scale_factor", *text_scale_factor);
+                if let Some(w) = wrap_width {
+                    p.add_f64("wrap_width", f64::from(*w));
+                }
+            }
+
+            // ── Image ─────────────────────────────────────────────────────────
+            DrawCommand::DrawImage { dst, paint, .. } => {
+                add_rect_prop(p, "dst", *dst);
+                add_opt_paint_props(p, paint.as_ref());
+            }
+
+            DrawCommand::DrawImageRepeat {
+                dst, repeat, paint, ..
+            } => {
+                add_rect_prop(p, "dst", *dst);
+                p.add_enum("repeat", repeat);
+                add_opt_paint_props(p, paint.as_ref());
+            }
+
+            DrawCommand::DrawImageNineSlice {
+                center_slice,
+                dst,
+                paint,
+                ..
+            } => {
+                add_rect_prop(p, "dst", *dst);
+                add_rect_prop(p, "center_slice", *center_slice);
+                add_opt_paint_props(p, paint.as_ref());
+            }
+
+            DrawCommand::DrawImageFiltered {
+                dst, filter, paint, ..
+            } => {
+                add_rect_prop(p, "dst", *dst);
+                p.add_enum("filter", filter);
+                add_opt_paint_props(p, paint.as_ref());
+            }
+
+            // ── Texture ───────────────────────────────────────────────────────
+            DrawCommand::DrawTexture {
+                texture_id,
+                dst,
+                src,
+                filter_quality,
+                opacity,
+                ..
+            } => {
+                p.add("texture_id", texture_id.get());
+                add_rect_prop(p, "dst", *dst);
+                if let Some(s) = src {
+                    add_rect_prop(p, "src", *s);
+                }
+                p.add_enum("filter_quality", filter_quality);
+                p.add_f64("opacity", f64::from(*opacity));
+            }
+
+            // ── Effects ───────────────────────────────────────────────────────
+            DrawCommand::DrawShadow {
+                color, elevation, ..
+            } => {
+                p.add_color_rgba("color", color.r, color.g, color.b, color.a);
+                p.add_f64("elevation", f64::from(*elevation));
+            }
+
+            DrawCommand::DrawGradient { rect, shader, .. } => {
+                add_rect_prop(p, "rect", *rect);
+                p.add_enum("shader", shader);
+            }
+
+            DrawCommand::DrawGradientRRect { rrect, shader, .. } => {
+                add_rect_prop(p, "rect", rrect.rect);
+                p.add_enum("shader", shader);
+            }
+
+            DrawCommand::ShaderMask {
+                shader,
+                bounds,
+                blend_mode,
+                child,
+                ..
+            } => {
+                add_rect_prop(p, "bounds", *bounds);
+                p.add_enum("shader", shader);
+                p.add_enum("blend_mode", blend_mode);
+                p.add_i64("child_commands", child.len().try_into().unwrap_or(i64::MAX));
+            }
+
+            DrawCommand::BackdropFilter {
+                filter,
+                bounds,
+                blend_mode,
+                child,
+                ..
+            } => {
+                add_rect_prop(p, "bounds", *bounds);
+                p.add_enum("filter", filter);
+                p.add_enum("blend_mode", blend_mode);
+                if let Some(c) = child {
+                    p.add_i64("child_commands", c.len().try_into().unwrap_or(i64::MAX));
+                }
+            }
+
+            // ── Advanced primitives ───────────────────────────────────────────
+            DrawCommand::DrawArc {
+                rect,
+                start_angle,
+                sweep_angle,
+                use_center,
+                paint,
+                ..
+            } => {
+                add_rect_prop(p, "rect", *rect);
+                p.add_f64("start_angle", f64::from(*start_angle));
+                p.add_f64("sweep_angle", f64::from(*sweep_angle));
+                p.add_bool("use_center", *use_center);
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawDRRect {
+                outer,
+                inner,
+                paint,
+                ..
+            } => {
+                add_rect_prop(p, "outer", outer.rect);
+                add_rect_prop(p, "inner", inner.rect);
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawPoints {
+                mode,
+                points,
+                paint,
+                ..
+            } => {
+                p.add_enum("mode", mode);
+                p.add_i64("point_count", points.len().try_into().unwrap_or(i64::MAX));
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawVertices {
+                vertices,
+                colors,
+                tex_coords,
+                paint,
+                ..
+            } => {
+                p.add_i64(
+                    "vertex_count",
+                    vertices.len().try_into().unwrap_or(i64::MAX),
+                );
+                p.add_bool("has_colors", colors.is_some());
+                p.add_bool("has_tex_coords", tex_coords.is_some());
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawColor {
+                color, blend_mode, ..
+            } => {
+                p.add_color_rgba("color", color.r, color.g, color.b, color.a);
+                p.add_enum("blend_mode", blend_mode);
+            }
+
+            DrawCommand::DrawPaint { paint, .. } => {
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::DrawAtlas {
+                sprites,
+                colors,
+                blend_mode,
+                paint,
+                ..
+            } => {
+                p.add_i64("sprite_count", sprites.len().try_into().unwrap_or(i64::MAX));
+                p.add_bool("has_colors", colors.is_some());
+                p.add_enum("blend_mode", blend_mode);
+                add_opt_paint_props(p, paint.as_ref());
+            }
+
+            // ── Layer ─────────────────────────────────────────────────────────
+            DrawCommand::SaveLayer { bounds, paint, .. } => {
+                if let Some(b) = bounds {
+                    add_rect_prop(p, "bounds", *b);
+                }
+                add_paint_props(p, paint);
+            }
+
+            DrawCommand::RestoreLayer { .. } => {
+                // No visual properties beyond the transform.
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+// `expect` in tests is the approved pattern for asserting test-author invariants.
+#[allow(clippy::expect_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use flui_foundation::Diagnosticable;
+    use flui_types::{
+        geometry::{Point, Rect, px},
+        styling::Color,
+    };
+
+    use crate::{
+        Paint,
+        display_list::{BlendMode, DrawCommand},
+    };
+
+    /// Each `DrawRect` node must be named `"DrawCommand"` by the default
+    /// `Diagnosticable::to_diagnostics_node` impl (type-name strip), and the
+    /// `rect` property must carry a typed `Rect` value, not a `String`.
+    #[test]
+    fn draw_rect_node_name_and_typed_rect() {
+        use flui_foundation::DiagnosticsValue;
+
+        let cmd = DrawCommand::DrawRect {
+            rect: Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(30.0)),
+            paint: Arc::new(Paint::fill(Color::RED)),
+            transform: flui_types::geometry::Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+        // Type-name strip produces "DrawCommand" (the enum type), not the variant.
+        assert_eq!(node.name(), Some("DrawCommand"), "node name");
+
+        // The `rect` property must carry a typed Rect value.
+        let prop = node
+            .find_property("rect")
+            .expect("DrawRect must have a `rect` property");
+        assert!(
+            matches!(
+                prop.value_typed(),
+                DiagnosticsValue::Rect { w, h, .. } if *w > 0.0 && *h > 0.0
+            ),
+            "rect property must be a typed Rect, got: {:?}",
+            prop.value_typed(),
+        );
+    }
+
+    /// A `DrawColor` command must emit a typed `Color` value for the `color`
+    /// property so the inspector JSON is faithful (not a display string).
+    #[test]
+    fn draw_color_emits_typed_color_rgba() {
+        use flui_foundation::DiagnosticsValue;
+
+        let cmd = DrawCommand::DrawColor {
+            color: Color::rgba(255, 128, 0, 200),
+            blend_mode: BlendMode::SrcOver,
+            transform: flui_types::geometry::Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+        let prop = node
+            .find_property("color")
+            .expect("DrawColor must have a `color` property");
+
+        assert!(
+            matches!(
+                prop.value_typed(),
+                DiagnosticsValue::Color {
+                    r: 255,
+                    g: 128,
+                    b: 0,
+                    a: 200
+                }
+            ),
+            "color property must be typed Color {{r,g,b,a}}, got: {:?}",
+            prop.value_typed(),
+        );
+    }
+
+    /// `DrawCircle` must emit typed `Float` values for `radius`, and the
+    /// `Display` string for `radius` must be `"50.00"` (2-dp normalized).
+    #[test]
+    fn draw_circle_radius_is_typed_float_with_two_dp_display() {
+        let cmd = DrawCommand::DrawCircle {
+            center: Point::new(px(10.0), px(10.0)),
+            radius: px(50.0),
+            paint: Arc::new(Paint::fill(Color::BLUE)),
+            transform: flui_types::geometry::Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+
+        // Typed value is Float.
+        let prop = node
+            .find_property("radius")
+            .expect("DrawCircle must have a `radius` property");
+        assert!(
+            matches!(
+                prop.value_typed(),
+                flui_foundation::DiagnosticsValue::Float(_)
+            ),
+            "radius must be typed Float, got: {:?}",
+            prop.value_typed(),
+        );
+
+        // Display is the 2-decimal normalized float.
+        assert_eq!(
+            prop.value(),
+            "50.00",
+            "radius display must be 2-dp normalized",
+        );
+    }
 }
