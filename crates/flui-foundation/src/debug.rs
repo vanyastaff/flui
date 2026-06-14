@@ -981,9 +981,9 @@ impl DiagnosticsNode {
 
     /// Returns the display string of the first property named `name`, if present.
     ///
-    /// Convenience for structured assertions over a diagnostics tree
-    /// (instead of substring-matching the rendered dump). For typed access
-    /// use [`find_property`](Self::find_property) and then
+    /// Returns an **owned** `String` because [`DiagnosticsValue::Display`] owns
+    /// its payload with no borrow source. For typed access (avoiding
+    /// allocation) use [`find_property`](Self::find_property) and then
     /// [`value_typed`](DiagnosticsProperty::value_typed).
     #[must_use]
     pub fn get_property(&self, name: &str) -> Option<String> {
@@ -1231,6 +1231,16 @@ impl DiagnosticsNode {
     /// Produces a structured JSON representation suitable for devtools
     /// consumption. Each node has `name`, `properties`, `children`,
     /// and `level` fields.
+    ///
+    /// **Non-versioned path.** This method does NOT wrap the output in a
+    /// [`DiagnosticsEnvelope`], so the JSON has no `format_version` field.
+    /// For the versioned inspector contract (consumed by devtools and
+    /// golden-diff scripts) use [`DiagnosticsEnvelope::to_json_pretty`].
+    ///
+    /// Unlike [`DiagnosticsEnvelope::to_json_pretty`] this path is
+    /// infallible: non-finite floats are emitted as JSON `null` rather than
+    /// returning an error (RFC 8259 §6 forbids them, but the null sentinel is
+    /// stable for debug dumps that are not schema-validated).
     ///
     /// # Example output
     ///

@@ -7,6 +7,8 @@ Offset
   dy: 0.00
   Opacity
     alpha: 0.50
+    dx: 0.00
+    dy: 0.00
     needs_compositing
     Picture
       bounds: (0.00,0.00,50.00,50.00)

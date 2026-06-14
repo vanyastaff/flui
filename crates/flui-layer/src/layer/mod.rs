@@ -486,8 +486,13 @@ impl Diagnosticable for Layer {
             }
 
             // ── Effect: Opacity ───────────────────────────────────────────
+            // `offset` is carried alongside alpha to avoid a redundant
+            // OffsetLayer. Emit it alongside alpha so the inspector carries
+            // both, matching the old `debug_fill_properties` contract.
             Layer::Opacity(o) => {
                 builder.add_f64("alpha", f64::from(o.alpha()));
+                builder.add_f64("dx", f64::from(o.offset().dx));
+                builder.add_f64("dy", f64::from(o.offset().dy));
             }
 
             // ── Effect: ShaderMask ────────────────────────────────────────

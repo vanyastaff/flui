@@ -1169,7 +1169,10 @@ impl Diagnosticable for DrawCommand {
                 opacity,
                 transform,
             } => {
-                p.add("texture_id", texture_id.get());
+                p.add_i64(
+                    "texture_id",
+                    i64::try_from(texture_id.get()).unwrap_or(i64::MAX),
+                );
                 add_rect_prop(p, "dst", *dst);
                 if let Some(s) = src {
                     add_rect_prop(p, "src", *s);

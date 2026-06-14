@@ -149,6 +149,18 @@ impl SnapshotStrategy {
     /// serializing, so the output always carries `"format_version"` as the
     /// first field. This is the versioned contract consumed by devtools and
     /// golden-diff scripts.
+    ///
+    /// # Panics
+    ///
+    /// The `Json` variant panics if the diagnostics tree contains a
+    /// non-finite float (`NaN` / `±inf`). RFC 8259 §6 forbids those values
+    /// in JSON, and a scene that produces them is itself broken — panicking
+    /// surfaces the real failure immediately rather than swallowing it.
+    ///
+    /// This panic is acceptable in the testing harness because tests run in a
+    /// controlled environment. A live devtools inspector (roadmap item) must
+    /// instead call [`DiagnosticsEnvelope::to_json_pretty`] directly and
+    /// propagate the `Err` to the caller.
     #[must_use]
     pub fn render(&self, node: &DiagnosticsNode) -> String {
         match self.kind {
@@ -165,7 +177,7 @@ impl SnapshotStrategy {
                 // immediately rather than swallowing it.
                 flui_foundation::DiagnosticsEnvelope::new(node.clone())
                     .to_json_pretty()
-                    .expect("non-finite float in DiagnosticsValue: painted scene contains NaN/±inf, which is invalid JSON (RFC 8259 §6)")
+                    .expect("non-finite float in DiagnosticsValue: the painted scene is invalid (NaN/±inf violates RFC 8259 §6 — fix the render object that produces it)")
             }
         }
     }
