@@ -525,32 +525,33 @@ impl From<flui_types::geometry::RRect> for DiagnosticsValue {
     ///
     /// The nested properties are:
     /// - `"rect"` — the bounding rectangle (`Rect` value)
-    /// - `"r_tl"`, `"r_tr"`, `"r_br"`, `"r_bl"` — per-corner x-radius as `Float`
+    /// - `"r_tl"`, `"r_tr"`, `"r_br"`, `"r_bl"` — per-corner radius, each itself
+    ///   a `Nested` value with `"x"` (horizontal) and `"y"` (vertical) `Float`
+    ///   sub-properties so elliptical radii (`Radius::elliptical(rx, ry)`) are
+    ///   faithfully recorded.
     ///
     /// Using `Nested` (rather than flat prefixed names) means each rrect is one
     /// logical value. When two rrects appear on the same diagnostics node (e.g.
     /// `DrawDRRect` outer/inner), they each become a `Nested` value under their
     /// own top-level property name — no collision is possible.
     fn from(rr: flui_types::geometry::RRect) -> Self {
+        /// Emit a single corner radius as `Nested([x: Float, y: Float])`.
+        fn corner_nested(
+            r: flui_types::geometry::Radius<flui_types::geometry::Pixels>,
+        ) -> DiagnosticsValue {
+            DiagnosticsValue::Nested(vec![
+                DiagnosticsProperty::new_typed("x", DiagnosticsValue::Float(f64::from(r.x.get()))),
+                DiagnosticsProperty::new_typed("y", DiagnosticsValue::Float(f64::from(r.y.get()))),
+            ])
+        }
+
         let rect_val = DiagnosticsValue::from(rr.rect);
         let props = vec![
             DiagnosticsProperty::new_typed("rect", rect_val),
-            DiagnosticsProperty::new_typed(
-                "r_tl",
-                DiagnosticsValue::Float(f64::from(rr.top_left.x.get())),
-            ),
-            DiagnosticsProperty::new_typed(
-                "r_tr",
-                DiagnosticsValue::Float(f64::from(rr.top_right.x.get())),
-            ),
-            DiagnosticsProperty::new_typed(
-                "r_br",
-                DiagnosticsValue::Float(f64::from(rr.bottom_right.x.get())),
-            ),
-            DiagnosticsProperty::new_typed(
-                "r_bl",
-                DiagnosticsValue::Float(f64::from(rr.bottom_left.x.get())),
-            ),
+            DiagnosticsProperty::new_typed("r_tl", corner_nested(rr.top_left)),
+            DiagnosticsProperty::new_typed("r_tr", corner_nested(rr.top_right)),
+            DiagnosticsProperty::new_typed("r_br", corner_nested(rr.bottom_right)),
+            DiagnosticsProperty::new_typed("r_bl", corner_nested(rr.bottom_left)),
         ];
         Self::Nested(props)
     }
@@ -2263,23 +2264,83 @@ mod tests {
             props.iter().any(|p| p.name() == "rect"),
             "Nested must contain 'rect' property"
         );
-        // Helper: look up a radius by short name, assert it exists.
-        let get_radius = |name: &str| {
-            props
+        // Helper: look up a corner radius by short name; each corner is now
+        // itself a Nested{x, y} value (FIX 2 — elliptical radii faithfully stored).
+        let get_corner_x = |name: &str| -> f64 {
+            let prop = props
                 .iter()
                 .find(|p| p.name() == name)
-                .unwrap_or_else(|| panic!("Nested must contain '{name}'"))
-                .value_typed()
-                .clone()
+                .unwrap_or_else(|| panic!("Nested must contain '{name}'"));
+            match prop.value_typed() {
+                DiagnosticsValue::Nested(sub) => {
+                    let x = sub
+                        .iter()
+                        .find(|p| p.name() == "x")
+                        .unwrap_or_else(|| panic!("corner '{name}' must have 'x' sub-property"));
+                    match x.value_typed() {
+                        DiagnosticsValue::Float(v) => *v,
+                        other => panic!("corner '{name}'.x must be Float, got {other:?}"),
+                    }
+                }
+                other => panic!("corner '{name}' must be Nested{{x,y}}, got {other:?}"),
+            }
         };
-        // The two corner names share a `radius_` prefix and differ only in the
-        // direction suffix — `similar_names` fires on domain-mandated abbreviations.
+        // The two corner names share a directional suffix — similar_names is expected here.
         #[allow(clippy::similar_names)]
-        let (radius_tl, radius_tr) = (get_radius("r_tl"), get_radius("r_tr"));
-        // Distinct corner radii must produce distinct values.
-        assert_ne!(
-            radius_tl, radius_tr,
-            "distinct radii must not collide in Nested"
+        let (x_tl, x_tr) = (get_corner_x("r_tl"), get_corner_x("r_tr"));
+        // Distinct corner radii must produce distinct x values.
+        assert!(
+            (x_tl - x_tr).abs() > 0.1,
+            "distinct radii must not collide: r_tl.x={x_tl}, r_tr.x={x_tr}"
+        );
+    }
+
+    /// `Radius::elliptical(rx, ry)` with `rx ≠ ry` must record both axes.
+    ///
+    /// Before FIX 2, only `x` was stored and `y` was silently lost.
+    #[test]
+    fn rrect_elliptical_radius_records_both_axes() {
+        use flui_types::geometry::{RRect, Radius, Rect, px};
+
+        let rrect = RRect::from_rect_and_radius(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Radius::elliptical(px(4.0), px(12.0)),
+        );
+        let val = DiagnosticsValue::from(rrect);
+        let DiagnosticsValue::Nested(ref props) = val else {
+            panic!("RRect must convert to Nested, got {val:?}")
+        };
+
+        let r_tl = props
+            .iter()
+            .find(|p| p.name() == "r_tl")
+            .expect("Nested must contain r_tl");
+
+        let DiagnosticsValue::Nested(ref sub) = *r_tl.value_typed() else {
+            panic!("r_tl must be Nested{{x,y}}, got {:?}", r_tl.value_typed())
+        };
+
+        let get_f64 = |name: &str| -> f64 {
+            match sub
+                .iter()
+                .find(|p| p.name() == name)
+                .unwrap_or_else(|| panic!("r_tl must contain '{name}'"))
+                .value_typed()
+            {
+                DiagnosticsValue::Float(v) => *v,
+                other => panic!("r_tl.{name} must be Float, got {other:?}"),
+            }
+        };
+
+        let x = get_f64("x");
+        let y = get_f64("y");
+        assert!(
+            (x - 4.0_f64).abs() < 1e-5,
+            "elliptical rx must be 4.0, got {x}"
+        );
+        assert!(
+            (y - 12.0_f64).abs() < 1e-5,
+            "elliptical ry must be 12.0, got {y}"
         );
     }
 
@@ -2342,6 +2403,37 @@ mod tests {
         );
         // Display shows 2 decimal places
         assert_eq!(val.to_string(), "0.33");
+    }
+
+    /// `DiagnosticsEnvelope::to_json_pretty` must return `Err` when the tree
+    /// contains a non-finite float, not silently emit schema-invalid `null`.
+    ///
+    /// RFC 8259 §6 forbids NaN/±inf in JSON; the schema's `Float` variant
+    /// requires a number. Returning `Err` means the testing harness panics on
+    /// the real broken scene rather than passing with invalid JSON.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn to_json_pretty_rejects_nonfinite_float() {
+        use crate::{DIAGNOSTICS_FORMAT_VERSION, DiagnosticsEnvelope};
+
+        for (label, bad) in [
+            ("NaN", f64::NAN),
+            ("+inf", f64::INFINITY),
+            ("-inf", f64::NEG_INFINITY),
+        ] {
+            let node = DiagnosticsNode::new("Test").with_property(DiagnosticsProperty::new_typed(
+                "v",
+                DiagnosticsValue::Float(bad),
+            ));
+            let env = DiagnosticsEnvelope {
+                format_version: DIAGNOSTICS_FORMAT_VERSION,
+                root: node,
+            };
+            assert!(
+                env.to_json_pretty().is_err(),
+                "{label}: to_json_pretty must return Err for non-finite float, not Ok(invalid JSON)",
+            );
+        }
     }
 
     /// Non-finite f64 values (NaN, ±inf) are not valid JSON (RFC 8259 §6).
@@ -2472,6 +2564,45 @@ pub struct DiagnosticsEnvelope {
     pub root: DiagnosticsNode,
 }
 
+/// Walk a [`DiagnosticsValue`] tree and return the first non-finite `f64`
+/// encountered, or `None` when all floats are finite.
+///
+/// Checks `Float` scalars and the numeric fields embedded in `Rect`, `Offset`,
+/// and `Size` variants. `List` and `Nested` are recursed. This is O(n) in the
+/// number of values in the tree and is called once per `to_json_pretty`
+/// invocation — the tree is typically small (a few hundred nodes at most).
+#[cfg(feature = "serde")]
+fn find_nonfinite_float_in_value(val: &DiagnosticsValue) -> Option<f64> {
+    match val {
+        DiagnosticsValue::Float(v) if !v.is_finite() => Some(*v),
+        DiagnosticsValue::Rect { x, y, w, h } => {
+            [x, y, w, h].into_iter().copied().find(|v| !v.is_finite())
+        }
+        DiagnosticsValue::Offset { x, y } => [x, y].into_iter().copied().find(|v| !v.is_finite()),
+        DiagnosticsValue::Size { w, h } => [w, h].into_iter().copied().find(|v| !v.is_finite()),
+        DiagnosticsValue::List(items) => items.iter().find_map(find_nonfinite_float_in_value),
+        DiagnosticsValue::Nested(props) => props
+            .iter()
+            .find_map(|p| find_nonfinite_float_in_value(p.value_typed())),
+        // Bool / Int / Str / Color / Null carry no f64.
+        _ => None,
+    }
+}
+
+/// Walk a [`DiagnosticsNode`] tree depth-first and return the first non-finite
+/// `f64` found in any property value, or `None` when the tree is clean.
+#[cfg(feature = "serde")]
+fn find_nonfinite_float_in_node(node: &DiagnosticsNode) -> Option<f64> {
+    node.properties()
+        .iter()
+        .find_map(|p| find_nonfinite_float_in_value(p.value_typed()))
+        .or_else(|| {
+            node.children()
+                .iter()
+                .find_map(find_nonfinite_float_in_node)
+        })
+}
+
 impl DiagnosticsEnvelope {
     /// Wrap `root` with the current [`DIAGNOSTICS_FORMAT_VERSION`].
     #[must_use]
@@ -2492,10 +2623,23 @@ impl DiagnosticsEnvelope {
     ///
     /// Returns `Err` when any `DiagnosticsValue::Float` in the tree is
     /// non-finite (`NaN` / `±inf`), because RFC 8259 §6 forbids those values
-    /// and `serde_json` rejects them. Use [`DiagnosticsNode::to_json`] if you
-    /// need a non-fallible path that emits `null` for non-finite floats.
+    /// and `serde_json` would otherwise silently emit `null` — producing
+    /// schema-invalid JSON while the call returns `Ok`. The pre-serialization
+    /// walk here surfaces the failure explicitly so the testing harness panics
+    /// on the right error and production callers receive a typed `Err`.
+    ///
+    /// Use [`DiagnosticsNode::to_json`] if you need a non-fallible path that
+    /// emits `null` for non-finite floats (the non-versioned debug dump).
     #[cfg(feature = "serde")]
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        // Pre-flight: reject non-finite floats before serde_json silently
+        // converts them to null (RFC 8259 §6 forbids NaN/±inf in JSON).
+        if let Some(bad) = find_nonfinite_float_in_node(&self.root) {
+            return Err(serde::ser::Error::custom(format!(
+                "non-finite float ({bad}) in DiagnosticsValue: \
+                 fix the render object that produces it"
+            )));
+        }
         serde_json::to_string_pretty(self)
     }
 }

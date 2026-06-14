@@ -119,13 +119,12 @@ fn picture_layer_node_has_command_children() {
     // Must carry one child node per draw command.
     let children = node.children();
     assert_eq!(children.len(), 1, "one DrawRect command → one child node");
-    // DrawCommand is an enum; the default Diagnosticable impl strips the type
-    // name to "DrawCommand" (not the variant name). Assert the name and verify
-    // the child carries the rect property that identifies it as a DrawRect.
+    // DrawCommand uses per-variant node names (FIX 1); a DrawRect is named
+    // "DrawRect", not the generic enum type name "DrawCommand".
     assert_eq!(
         children[0].name(),
-        Some("DrawCommand"),
-        "child node name must be the type-stripped enum name"
+        Some("DrawRect"),
+        "child node name must be the per-variant name DrawRect"
     );
     assert!(
         children[0].find_property("rect").is_some(),

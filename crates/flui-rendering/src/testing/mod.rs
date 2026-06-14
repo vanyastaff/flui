@@ -77,13 +77,27 @@ pub use snapshot::{
     SnapshotStrategy, assert_paints_node, is_draw_command_with_rect, is_draw_command_with_shadow,
     scene_diagnostics, scene_diagnostics_tree,
 };
-// Deprecated shims kept for one release cycle so external callers compile.
-// The allow-deprecated suppresses the use-of-deprecated lint at the re-export
-// site; consumers that import these names will still receive the deprecation
-// warning in their own crate.
+// Deprecated shims kept for one release cycle so external callers compile with
+// a deprecation warning rather than a compile error. The allow-deprecated
+// suppresses the use-of-deprecated lint at the re-export site; consumers that
+// import these names will still receive the deprecation warning in their crate.
 #[allow(deprecated)]
 pub use snapshot::{
-    serialize_layer_subtree, serialize_layer_tree, snapshot_subtree, snapshot_tree,
+    // DrawCommandSummary predicate API (retired in favour of DiagnosticsNode
+    // predicates with assert_paints_node).
+    DrawCommandSummary,
+    DrawKind,
+    // Free-function snapshot helpers (retired in favour of scene_diagnostics /
+    // assert_paints_node).
+    assert_any,
+    collect_commands,
+    commands_of,
+    // Layer-tree string serializers (retired in favour of scene_diagnostics +
+    // SnapshotStrategy).
+    serialize_layer_subtree,
+    serialize_layer_tree,
+    snapshot_subtree,
+    snapshot_tree,
 };
 pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,

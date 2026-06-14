@@ -8,16 +8,16 @@ Offset
   Picture
     bounds: (-4.00,-2.00,92.00,72.00)
     commands: 3
-    DrawCommand
+    DrawShadow
       path_bounds: (2.00,4.00,80.00,60.00)
       color: #00000080
       elevation: 6.00
-    DrawCommand
+    DrawRect
       rect: (0.00,0.00,80.00,60.00)
       color: #FFFFFFFF
       style: Fill
-    DrawCommand
-      outer: {rect: (0.00,0.00,80.00,60.00), r_tl: 0.00, r_tr: 0.00, r_br: 0.00, r_bl: 0.00}
-      inner: {rect: (2.00,2.00,76.00,56.00), r_tl: 0.00, r_tr: 0.00, r_br: 0.00, r_bl: 0.00}
+    DrawDRRect
+      outer: {rect: (0.00,0.00,80.00,60.00), r_tl: {x: 0.00, y: 0.00}, r_tr: {x: 0.00, y: 0.00}, r_br: {x: 0.00, y: 0.00}, r_bl: {x: 0.00, y: 0.00}}
+      inner: {rect: (2.00,2.00,76.00,56.00), r_tl: {x: 0.00, y: 0.00}, r_tr: {x: 0.00, y: 0.00}, r_br: {x: 0.00, y: 0.00}, r_bl: {x: 0.00, y: 0.00}}
       color: #000000FF
       style: Fill

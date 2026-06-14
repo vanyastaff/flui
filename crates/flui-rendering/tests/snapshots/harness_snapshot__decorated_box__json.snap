@@ -72,7 +72,7 @@ expression: json
         ],
         "children": [
           {
-            "name": "DrawCommand",
+            "name": "DrawShadow",
             "properties": [
               {
                 "name": "path_bounds",
@@ -124,7 +124,7 @@ expression: json
             "style": "sparse"
           },
           {
-            "name": "DrawCommand",
+            "name": "DrawRect",
             "properties": [
               {
                 "name": "rect",
@@ -172,7 +172,7 @@ expression: json
             "style": "sparse"
           },
           {
-            "name": "DrawCommand",
+            "name": "DrawDRRect",
             "properties": [
               {
                 "name": "outer",
@@ -196,7 +196,28 @@ expression: json
                     {
                       "name": "r_tl",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",
@@ -206,7 +227,28 @@ expression: json
                     {
                       "name": "r_tr",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",
@@ -216,7 +258,28 @@ expression: json
                     {
                       "name": "r_br",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",
@@ -226,7 +289,28 @@ expression: json
                     {
                       "name": "r_bl",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",
@@ -262,7 +346,28 @@ expression: json
                     {
                       "name": "r_tl",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",
@@ -272,7 +377,28 @@ expression: json
                     {
                       "name": "r_tr",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",
@@ -282,7 +408,28 @@ expression: json
                     {
                       "name": "r_br",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",
@@ -292,7 +439,28 @@ expression: json
                     {
                       "name": "r_bl",
                       "value": {
-                        "Float": 0.0
+                        "Nested": [
+                          {
+                            "name": "x",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          },
+                          {
+                            "name": "y",
+                            "value": {
+                              "Float": 0.0
+                            },
+                            "level": "info",
+                            "kind": "Generic",
+                            "show_name": true,
+                            "show_separator": true
+                          }
+                        ]
                       },
                       "level": "info",
                       "kind": "Generic",

@@ -72,7 +72,7 @@ expression: json
         ],
         "children": [
           {
-            "name": "DrawCommand",
+            "name": "DrawRect",
             "properties": [
               {
                 "name": "rect",

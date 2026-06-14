@@ -11,47 +11,47 @@ Offset
     Picture
       bounds: (0.00,0.00,300.00,450.00)
       commands: 9
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 400.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 350.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 300.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 250.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 200.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 150.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 100.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill
         transform: [1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 50.00, 0.00, 1.00]
-      DrawCommand
+      DrawRect
         rect: (0.00,0.00,300.00,50.00)
         color: #FF0000FF
         style: Fill

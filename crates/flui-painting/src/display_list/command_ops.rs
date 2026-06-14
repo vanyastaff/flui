@@ -945,7 +945,60 @@ fn add_transform_if_nonidentity(builder: &mut DiagnosticsBuilder, transform: &Ma
     }
 }
 
+impl DrawCommand {
+    /// Returns the stable, per-variant name used as the diagnostics node name.
+    ///
+    /// This is the migration target for the retired `DrawKind`-based
+    /// categorisation and the old `summarize_command` prefix strings.  Using
+    /// per-variant names lets automated diff tooling distinguish a `DrawOval`
+    /// from a `DrawRect` even when both carry identical rects and paints.
+    #[must_use]
+    pub fn command_kind(&self) -> &'static str {
+        match self {
+            Self::DrawRect { .. } => "DrawRect",
+            Self::DrawRRect { .. } => "DrawRRect",
+            Self::DrawCircle { .. } => "DrawCircle",
+            Self::DrawOval { .. } => "DrawOval",
+            Self::DrawLine { .. } => "DrawLine",
+            Self::DrawArc { .. } => "DrawArc",
+            Self::DrawPath { .. } => "DrawPath",
+            Self::DrawDRRect { .. } => "DrawDRRect",
+            Self::DrawText { .. } => "DrawText",
+            Self::DrawTextSpan { .. } => "DrawTextSpan",
+            Self::DrawImage { .. } => "DrawImage",
+            Self::DrawImageRepeat { .. } => "DrawImageRepeat",
+            Self::DrawImageNineSlice { .. } => "DrawImageNineSlice",
+            Self::DrawImageFiltered { .. } => "DrawImageFiltered",
+            Self::DrawTexture { .. } => "DrawTexture",
+            Self::DrawShadow { .. } => "DrawShadow",
+            Self::DrawGradient { .. } => "DrawGradient",
+            Self::DrawGradientRRect { .. } => "DrawGradientRRect",
+            Self::ShaderMask { .. } => "ShaderMask",
+            Self::BackdropFilter { .. } => "BackdropFilter",
+            Self::DrawPoints { .. } => "DrawPoints",
+            Self::DrawVertices { .. } => "DrawVertices",
+            Self::DrawColor { .. } => "DrawColor",
+            Self::DrawPaint { .. } => "DrawPaint",
+            Self::DrawAtlas { .. } => "DrawAtlas",
+            Self::ClipRect { .. } => "ClipRect",
+            Self::ClipRRect { .. } => "ClipRRect",
+            Self::ClipRSuperellipse { .. } => "ClipRSuperellipse",
+            Self::ClipPath { .. } => "ClipPath",
+            Self::SaveLayer { .. } => "SaveLayer",
+            Self::RestoreLayer { .. } => "RestoreLayer",
+        }
+    }
+}
+
 impl Diagnosticable for DrawCommand {
+    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
+        let mut node = flui_foundation::DiagnosticsNode::new(self.command_kind());
+        let mut builder = flui_foundation::DiagnosticsBuilder::new();
+        self.debug_fill_properties(&mut builder);
+        *node.properties_mut() = builder.build();
+        node
+    }
+
     fn debug_fill_properties(&self, p: &mut DiagnosticsBuilder) {
         match self {
             // ── Clipping ─────────────────────────────────────────────────────
@@ -1375,9 +1428,9 @@ mod tests {
         display_list::{BlendMode, DrawCommand},
     };
 
-    /// Each `DrawRect` node must be named `"DrawCommand"` by the default
-    /// `Diagnosticable::to_diagnostics_node` impl (type-name strip), and the
-    /// `rect` property must carry a typed `Rect` value, not a `String`.
+    /// Each `DrawRect` node must be named `"DrawRect"` by the per-variant
+    /// `to_diagnostics_node` override, and the `rect` property must carry a
+    /// typed `Rect` value, not a `String`.
     #[test]
     fn draw_rect_node_name_and_typed_rect() {
         use flui_foundation::DiagnosticsValue;
@@ -1389,8 +1442,8 @@ mod tests {
         };
 
         let node = cmd.to_diagnostics_node();
-        // Type-name strip produces "DrawCommand" (the enum type), not the variant.
-        assert_eq!(node.name(), Some("DrawCommand"), "node name");
+        // Per-variant override produces "DrawRect", not the generic enum type name.
+        assert_eq!(node.name(), Some("DrawRect"), "node name");
 
         // The `rect` property must carry a typed Rect value.
         let prop = node
@@ -1444,6 +1497,8 @@ mod tests {
     /// The top-level node has exactly two rrect properties (`"outer"` and
     /// `"inner"`), each carrying a `Nested` value that contains `"rect"` plus
     /// the four corner radii `"r_tl"` / `"r_tr"` / `"r_br"` / `"r_bl"`.
+    /// Each corner radius is itself a `Nested` value with `"x"` and `"y"` float
+    /// sub-properties, faithfully recording elliptical radii (FIX 2).
     /// Distinct outer/inner radii must produce distinct nested values — the
     /// old flat-name collision (`outer_r_tl` vs `inner_r_tl` on the same node)
     /// is impossible with this structure.
@@ -1484,26 +1539,38 @@ mod tests {
         let outer_props = get_nested("outer");
         let inner_props = get_nested("inner");
 
-        // Each Nested must contain a "r_tl" float with the correct radius.
-        let find_r_tl = |props: &[flui_foundation::DiagnosticsProperty]| {
-            props
+        // Each Nested must contain a "r_tl" that is itself a Nested {x, y}.
+        // Extract the x-radius from a corner's Nested value.
+        let get_r_tl_x = |props: &[flui_foundation::DiagnosticsProperty]| -> f64 {
+            let r_tl = props
                 .iter()
                 .find(|p| p.name() == "r_tl")
-                .unwrap_or_else(|| panic!("Nested must contain r_tl"))
-                .value_typed()
-                .clone()
+                .unwrap_or_else(|| panic!("Nested must contain r_tl"));
+            match r_tl.value_typed() {
+                DiagnosticsValue::Nested(sub) => {
+                    let x_prop = sub
+                        .iter()
+                        .find(|p| p.name() == "x")
+                        .unwrap_or_else(|| panic!("r_tl Nested must contain x"));
+                    match x_prop.value_typed() {
+                        DiagnosticsValue::Float(v) => *v,
+                        other => panic!("r_tl.x must be Float, got {other:?}"),
+                    }
+                }
+                other => panic!("r_tl must be Nested{{x,y}}, got {other:?}"),
+            }
         };
 
-        let outer_r_tl = find_r_tl(outer_props);
-        let inner_r_tl = find_r_tl(inner_props);
+        let outer_r_tl_x = get_r_tl_x(outer_props);
+        let inner_r_tl_x = get_r_tl_x(inner_props);
 
         assert!(
-            matches!(outer_r_tl, DiagnosticsValue::Float(v) if (v - 12.0_f64).abs() < 0.01),
-            "outer r_tl must be ~12.0, got: {outer_r_tl:?}",
+            (outer_r_tl_x - 12.0_f64).abs() < 0.01,
+            "outer r_tl.x must be ~12.0, got: {outer_r_tl_x}",
         );
         assert!(
-            matches!(inner_r_tl, DiagnosticsValue::Float(v) if (v - 4.0_f64).abs() < 0.01),
-            "inner r_tl must be ~4.0, got: {inner_r_tl:?}",
+            (inner_r_tl_x - 4.0_f64).abs() < 0.01,
+            "inner r_tl.x must be ~4.0, got: {inner_r_tl_x}",
         );
 
         // The two Nested values must not be equal — different radii, different values.

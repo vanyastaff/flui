@@ -8,7 +8,7 @@ Offset
   Picture
     bounds: (0.00,0.00,40.00,40.00)
     commands: 1
-    DrawCommand
+    DrawRect
       rect: (0.00,0.00,40.00,40.00)
       color: #FF0000FF
       style: Fill

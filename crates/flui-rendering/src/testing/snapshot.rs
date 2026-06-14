@@ -212,27 +212,36 @@ fn any_node(node: &DiagnosticsNode, pred: &impl Fn(&DiagnosticsNode) -> bool) ->
 /// carries a `DiagnosticsValue::Rect` — the pattern that identifies
 /// `DrawRect`, `DrawOval`, `DrawArc`, and similar rect-bounded commands.
 ///
+/// Node names are now per-variant (e.g. `"DrawRect"`, `"DrawOval"`, `"DrawArc"`)
+/// rather than the generic `"DrawCommand"`, so this predicate matches any node
+/// whose name starts with `"Draw"` **and** carries a typed `"rect"` property.
+/// That combination is unique to rect-bearing draw primitives.
+///
 /// Use this with [`assert_paints_node`] as the migration target for the retired
 /// `|c| c.kind == DrawKind::Rect` predicate.
 #[must_use]
 pub fn is_draw_command_with_rect(node: &DiagnosticsNode) -> bool {
     use flui_foundation::DiagnosticsValue;
-    node.name() == Some("DrawCommand")
+    node.name().is_some_and(|n| n.starts_with("Draw"))
         && node
             .find_property("rect")
             .is_some_and(|p| matches!(p.value_typed(), DiagnosticsValue::Rect { .. }))
 }
 
-/// Returns `true` if `node` is a draw-command node whose `"path_bounds"`
-/// property carries a `DiagnosticsValue::Rect` — the pattern that identifies
-/// `DrawShadow` and `DrawPath`.
+/// Returns `true` if `node` is a `DrawShadow` node — identified by the
+/// per-variant node name `"DrawShadow"` plus the presence of a typed
+/// `"path_bounds"` rect and an `"elevation"` property.
+///
+/// Node names are now per-variant (`"DrawShadow"`) rather than the generic
+/// `"DrawCommand"`, so this predicate checks the exact name first for
+/// precision, then validates the expected properties are present.
 ///
 /// Use this with [`assert_paints_node`] as the migration target for the retired
 /// `|c| c.kind == DrawKind::Shadow` predicate.
 #[must_use]
 pub fn is_draw_command_with_shadow(node: &DiagnosticsNode) -> bool {
     use flui_foundation::DiagnosticsValue;
-    node.name() == Some("DrawCommand")
+    node.name() == Some("DrawShadow")
         && node
             .find_property("path_bounds")
             .is_some_and(|p| matches!(p.value_typed(), DiagnosticsValue::Rect { .. }))
@@ -373,6 +382,79 @@ pub struct DrawCommandSummary {
     pub line: String,
 }
 
+/// Collect all draw-command diagnostics nodes from a layer tree.
+///
+/// # Deprecation
+///
+/// Superseded by [`scene_diagnostics`] + walking the returned
+/// [`DiagnosticsNode`] tree with custom predicates or [`assert_paints_node`].
+#[must_use]
+#[deprecated(
+    since = "0.1.0",
+    note = "Walk `scene_diagnostics(tree)` children instead; \
+            this shim returns all command nodes depth-first."
+)]
+pub fn collect_commands(tree: &LayerTree) -> Vec<DiagnosticsNode> {
+    let root = scene_diagnostics(tree);
+    let mut out = Vec::new();
+    collect_command_nodes(&root, &mut out);
+    out
+}
+
+/// Collect all draw-command nodes from the subtree at `node` into `out`.
+fn collect_command_nodes(node: &DiagnosticsNode, out: &mut Vec<DiagnosticsNode>) {
+    // A "command node" is any node whose name starts with a known draw-command
+    // prefix.  Layer nodes (Offset, Picture, ClipRect, Opacity, …) are skipped.
+    if node.name().is_some_and(|n| {
+        n.starts_with("Draw")
+            || n.starts_with("Clip")
+            || n.starts_with("Save")
+            || n.starts_with("Restore")
+            || n.starts_with("Shader")
+            || n.starts_with("Backdrop")
+    }) {
+        out.push(node.clone());
+    }
+    for child in node.children() {
+        collect_command_nodes(child, out);
+    }
+}
+
+/// Collect draw-command nodes from an optional layer tree.
+///
+/// # Deprecation
+///
+/// Superseded by [`scene_diagnostics_tree`] + a manual depth-first walk.
+#[must_use]
+#[deprecated(
+    since = "0.1.0",
+    note = "Walk `scene_diagnostics_tree(tree)` children instead."
+)]
+pub fn commands_of(tree: Option<&LayerTree>) -> Vec<DiagnosticsNode> {
+    tree.map_or_else(Vec::new, |t| {
+        #[allow(deprecated)] // calling our own shim
+        collect_commands(t)
+    })
+}
+
+/// Assert that at least one draw-command node in the tree satisfies `pred`.
+///
+/// # Deprecation
+///
+/// Superseded by [`assert_paints_node`], which accepts the same predicate
+/// signature but operates directly on [`DiagnosticsNode`] values.
+///
+/// # Panics
+///
+/// Panics when no node satisfies `pred`, with a text snapshot in the message.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `assert_paints_node(tree, pred)` instead."
+)]
+pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DiagnosticsNode) -> bool) {
+    assert_paints_node(tree, pred);
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -441,16 +523,16 @@ mod tests {
         let picture_node = layer_children[0];
 
         // Picture must have exactly one command child: the DrawRect (named
-        // "DrawCommand" by the default Diagnosticable type-name strip).
+        // "DrawRect" by the per-variant Diagnosticable override).
         let cmd_children: Vec<&DiagnosticsNode> = picture_node
             .children()
             .iter()
-            .filter(|n| n.name() == Some("DrawCommand"))
+            .filter(|n| n.name() == Some("DrawRect"))
             .collect();
         assert_eq!(
             cmd_children.len(),
             1,
-            "Picture must have exactly one DrawCommand child; got: {:?}",
+            "Picture must have exactly one DrawRect child; got: {:?}",
             picture_node
                 .children()
                 .iter()
@@ -533,10 +615,10 @@ mod tests {
             text.contains("Picture"),
             "scene_diagnostics text must contain a Picture layer; got:\n{text}"
         );
-        // The DrawCommand node name appears in the text output.
+        // Per-variant node names appear in the text output (e.g. "DrawRect").
         assert!(
-            text.contains("DrawCommand"),
-            "scene_diagnostics text must contain DrawCommand nodes; got:\n{text}"
+            text.contains("DrawRect"),
+            "scene_diagnostics text must contain per-variant DrawRect node; got:\n{text}"
         );
     }
 
