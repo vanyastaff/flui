@@ -58,17 +58,25 @@ pub mod parent_data;
 pub mod queries;
 mod report;
 pub mod sliver;
+pub mod snapshot;
 pub mod tree;
 
 pub use assertions::{
     assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
     assert_properties,
 };
-pub use harness::{FrameRun, LayoutRun, RenderTester};
+pub use harness::{
+    CompositingRun, FrameRun, LayoutRun, PaintRun, RenderTester, SemanticsRun, has_overflow,
+};
 pub use inspect::Probe;
 pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
 pub use report::FrameReport;
+pub use snapshot::{
+    DrawCommandSummary, DrawKind, assert_any, collect_commands, commands_of,
+    serialize_layer_subtree, serialize_layer_tree, snapshot_subtree, snapshot_tree,
+    summarize_command,
+};
 pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,
 };
