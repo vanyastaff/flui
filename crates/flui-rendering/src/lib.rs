@@ -83,7 +83,7 @@ pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
 pub use flui_semantics as semantics;
 pub mod objects;
-pub mod slivers;
+pub mod slivers; // PORT-CHECK-OK-SP4: sliver protocol + objects; the cross-crate consumer is the future flui-view scrollable widgets (ADR-0003 U4 / ROADMAP Core.1). This branch removed the façade flui-view→render coupling, which is what surfaced the module as cross-crate-consumer-less.
 pub mod storage;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -91,7 +91,7 @@ pub(crate) mod test_support;
 // render/sliver/protocol type, so it stays a general-purpose abstraction and is
 // cheaply extractable into a standalone crate once a 2nd direct consumer
 // appears. The `SliverConstraints -> ScrollWindow` adapter lives outside it.
-pub mod virtualization;
+pub mod virtualization; // PORT-CHECK-OK-SP4: agnostic windowing core; intra-crate consumer is RenderSliverListLazy + the criterion bench (both excluded from the cross-crate consumer search); cross-crate consumers are future flui-view lazy widgets / a standalone flui-virtualization crate (ADR-0003 U4).
 // Render-object test harness. Compiled only for this crate's own tests
 // (`cfg(test)`) or when a consumer enables the `testing` feature. Builds
 // real `PipelineOwner` trees through the production pipeline and exposes a
