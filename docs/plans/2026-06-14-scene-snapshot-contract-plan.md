@@ -119,6 +119,57 @@ git commit -m "feat(painting): impl Diagnosticable for DrawCommand (typed per-co
 
 ---
 
+## Task 4.5: `From<value-type> for DiagnosticsValue` + generic `add_value` — diagnostics through the leaf types
+
+Make the geometry/color value types self-convert to `DiagnosticsValue` so the `DrawCommand`/`Layer` arms compose via one generic `add_value` instead of destructuring fields at every call-site. This realizes "go through the types and wire diagnostics" at the **correct layer**: the conversions live in `flui-foundation` (where `DiagnosticsValue` is local — orphan-rule legal) reaching *down* to the `flui-types`/`flui-geometry` types it already depends on. The literal alternative — `flui-types` depending on the diagnostics crate — is a **dependency cycle** (`flui-foundation` already depends on `flui-types`) and is rejected. Value types get `From<T> for DiagnosticsValue` (a `Rect` as a *property* is a `DiagnosticsValue::Rect`, not a node); only *objects* (RenderObject/Layer/DrawCommand) are `Diagnosticable` (→ node).
+
+**Files:** `crates/flui-foundation/src/debug.rs` (From impls + `add_value`); `crates/flui-painting/src/display_list/command_ops.rs` (simplify arms); later `crates/flui-layer` arms.
+
+- [ ] **Step 1: Failing conversion + ergonomics test**
+
+```rust
+#[test]
+fn rect_converts_to_typed_value() {
+    let r = flui_types::geometry::Rect::from_ltwh(/* 0,0,40,40 in Pixels */);
+    assert!(matches!(DiagnosticsValue::from(r), DiagnosticsValue::Rect { w, .. } if w == 40.0));
+}
+#[test]
+fn add_value_matches_explicit() {
+    let mut a = DiagnosticsBuilder::new(); a.add_rect("r", 0.0,0.0,40.0,40.0);
+    let mut b = DiagnosticsBuilder::new(); b.add_value("r", /* Rect 0,0,40,40 */);
+    assert_eq!(a.build(), b.build());
+}
+```
+
+Run → FAIL.
+
+- [ ] **Step 2: Add the From impls (flui-foundation, orphan-rule)**
+
+`impl From<Rect<Pixels>> for DiagnosticsValue` (→ `Rect{x,y,w,h}` via `.left().get()` etc.), `From<Color>` (→ `Color{r,g,b,a}`), `From<Point<Pixels>>`/`From<Offset<Pixels>>` (→ `Offset`), `From<Size<Pixels>>` (→ `Size`), `From<RRect>` (→ a typed form that preserves the bounds **and** per-corner radii — e.g. `Nested([rect, radii-List])`), `From<&Matrix4>` (→ `List` of the 16 elements). Verify each source type's real accessors before writing. (`Matrix4` stays by-ref since it isn't `Copy`-cheap.)
+
+- [ ] **Step 3: `DiagnosticsBuilder::add_value`**
+
+`pub fn add_value(&mut self, name: impl Into<String>, value: impl Into<DiagnosticsValue>) -> &mut Self` — sets the matching `DiagnosticsPropertyKind` from the resulting variant. Keep the explicit `add_rect`/`add_color_rgba`/… (they delegate to `add_value` or stay).
+
+- [ ] **Step 4: Simplify the `DrawCommand` arms**
+
+In `command_ops.rs`, replace manual `add_rect("rect", r.left().get(), …)` / `add_color_rgba(…)` with `add_value("rect", *rect)` / `add_value("color", color)` etc. **Behaviour identical** — the typed values are the same; this is ergonomics + uniformity, not a fidelity change. The Task 4 fix (transform/radii/bounds/text) must remain intact; the `RRect` radii now flow through `From<RRect>`.
+
+- [ ] **Step 5: Gates**
+
+`cargo test -p flui-foundation --features serde` + `cargo test -p flui-painting` + `cargo build --workspace` + `cargo clippy -p flui-foundation -p flui-painting --all-targets --all-features -- -D warnings` + `cargo fmt`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/flui-foundation/src/debug.rs crates/flui-painting/src/display_list/command_ops.rs
+git commit -m "feat(foundation): From<geometry/color> for DiagnosticsValue + add_value — uniform diagnostics through the value types"
+```
+
+> `Layer` arms (Task 5) are authored directly against `add_value` from the start (no double-write).
+
+---
+
 ## Task 5: `Layer` command-descent + opaque-handle projection
 
 **Files:** Modify `crates/flui-layer/src/layer/mod.rs` (the `to_diagnostics_node` override at ≈395) + per-variant layer files as needed.
