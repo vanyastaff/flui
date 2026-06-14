@@ -71,7 +71,8 @@ pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
 pub use report::FrameReport;
 pub use snapshot::{
-    DrawCommandSummary, DrawKind, collect_commands, serialize_layer_subtree, serialize_layer_tree,
+    DrawCommandSummary, DrawKind, assert_any, collect_commands, commands_of,
+    serialize_layer_subtree, serialize_layer_tree, snapshot_subtree, snapshot_tree,
     summarize_command,
 };
 pub use tree::{

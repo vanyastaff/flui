@@ -893,6 +893,55 @@ pub fn collect_commands(tree: &LayerTree) -> Vec<DrawCommandSummary> {
     out
 }
 
+// ── Option<&LayerTree> helpers (shared by FrameRun and PaintRun) ─────────────
+
+/// Serialize a `LayerTree` to stable indented text, or return `"<no layer
+/// tree>"` when `tree` is `None`.
+///
+/// Delegates to [`serialize_layer_tree`]; see its docs for the format contract.
+#[must_use]
+pub fn snapshot_tree(tree: Option<&LayerTree>) -> String {
+    tree.map_or_else(|| "<no layer tree>".to_owned(), serialize_layer_tree)
+}
+
+/// Serialize the subtree rooted at the layer boundary for `node`, or return
+/// `"<no layer tree>"` when `tree` is `None`.
+///
+/// Delegates to [`serialize_layer_subtree`]; see its docs for the current
+/// approximation (whole-tree fallback until a `RenderId → LayerId` map exists).
+#[must_use]
+pub fn snapshot_subtree(tree: Option<&LayerTree>, node: RenderId) -> String {
+    tree.map_or_else(
+        || "<no layer tree>".to_owned(),
+        |t| serialize_layer_subtree(t, node),
+    )
+}
+
+/// Collect every [`DrawCommandSummary`] reachable from `tree`, or return an
+/// empty `Vec` when `tree` is `None`.
+///
+/// Delegates to [`collect_commands`].
+#[must_use]
+pub fn commands_of(tree: Option<&LayerTree>) -> Vec<DrawCommandSummary> {
+    tree.map(collect_commands).unwrap_or_default()
+}
+
+/// Panics unless at least one command in `tree` satisfies `pred`.
+///
+/// On failure the panic message includes the full snapshot so the developer
+/// can see what was actually painted.
+///
+/// Unlike Flutter's `paints..something()` matcher this assertion is **strict**:
+/// if `pred` never matches it is always a test failure, never a silent pass.
+pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -> bool) {
+    if !commands_of(tree).iter().any(pred) {
+        panic!(
+            "no painted command matched the predicate:\n{}",
+            snapshot_tree(tree),
+        );
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

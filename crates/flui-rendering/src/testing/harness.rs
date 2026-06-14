@@ -465,6 +465,46 @@ impl FrameRun {
     pub fn mark_needs_paint(&mut self, id: RenderId) {
         mark_needs_paint(&mut self.owner, id);
     }
+
+    /// Serializes the most recent frame's layer tree to a stable indented
+    /// text form, or returns `"<no layer tree>"` when nothing was painted.
+    ///
+    /// Use with `insta::assert_snapshot!` to pin the layer structure over
+    /// time. The format is stable across runs (2-decimal floats, insertion-order
+    /// children, no hash iteration).
+    #[must_use]
+    pub fn snapshot(&self) -> String {
+        super::snapshot::snapshot_tree(self.layer_tree.as_ref())
+    }
+
+    /// Serializes the subtree at the layer boundary for `node`, or returns
+    /// `"<no layer tree>"` when nothing was painted.
+    ///
+    /// Falls back to the full tree until a `RenderId → LayerId` mapping is
+    /// available; see [`super::snapshot::snapshot_subtree`] for details.
+    #[must_use]
+    pub fn snapshot_of(&self, node: RenderId) -> String {
+        super::snapshot::snapshot_subtree(self.layer_tree.as_ref(), node)
+    }
+
+    /// Returns every [`DrawCommandSummary`] reachable from the most recent
+    /// frame's layer tree in pre-order, or an empty `Vec` when nothing was
+    /// painted.
+    ///
+    /// [`DrawCommandSummary`]: super::snapshot::DrawCommandSummary
+    #[must_use]
+    pub fn display_commands(&self) -> Vec<super::snapshot::DrawCommandSummary> {
+        super::snapshot::commands_of(self.layer_tree.as_ref())
+    }
+
+    /// Panics unless at least one painted command satisfies `pred`.
+    ///
+    /// The panic message includes the full snapshot so it is immediately clear
+    /// what was actually painted. Unlike Flutter's `paints..something()` this
+    /// assertion never passes silently when `pred` never matches.
+    pub fn assert_paints_any(&self, pred: impl Fn(&super::snapshot::DrawCommandSummary) -> bool) {
+        super::snapshot::assert_any(self.layer_tree.as_ref(), pred);
+    }
 }
 
 impl Probe for FrameRun {
