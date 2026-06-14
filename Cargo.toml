@@ -160,6 +160,10 @@ lasso = { version = "0.7", features = ["multi-threaded"] }
 # PERFORMANCE & PROFILING
 criterion = "0.7"
 
+# SNAPSHOT TESTING - render-harness paint-phase (sub-project A) and any crate
+# that needs deterministic output assertions. Test-only; not compiled in release.
+insta = "1"
+
 # Workspace-wide lints for consistent code quality (Rust 1.74+)
 [workspace.lints.rust]
 unsafe_code = "warn"
