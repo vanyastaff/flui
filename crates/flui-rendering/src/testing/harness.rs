@@ -682,15 +682,8 @@ impl RenderTester {
 /// Snapshot and predicate helpers delegate to the shared free functions in
 /// [`super::snapshot`], keeping the implementation DRY with [`FrameRun`].
 ///
-/// `LayoutRun` deliberately has no `snapshot` method — that method lives
-/// exclusively on paint-phase handles. The compile-time proof:
-///
-/// ```compile_fail
-/// # use flui_rendering::objects::RenderColoredBox;
-/// # use flui_rendering::testing::{box_node, RenderTester};
-/// let run = RenderTester::mount(box_node(RenderColoredBox::red(1.0, 1.0))).run_layout();
-/// let _ = run.snapshot(); // error: no method `snapshot` found for `LayoutRun`
-/// ```
+/// The compile-time proof that `LayoutRun` has no `snapshot` method lives on
+/// [`RenderTester::run_to_paint`].
 #[derive(Debug)]
 pub struct PaintRun {
     owner: PipelineOwner<PaintPhase>,

@@ -71,6 +71,13 @@ pub struct DrawCommandSummary {
 
 /// Format one `f32` to 2 decimal places, normalizing `-0.0` → `0.0`.
 fn f(v: f32) -> String {
+    // Stability contract: callers pass finite floats. A non-finite value would
+    // format as "NaN"/"inf" and break the fixed-decimal snapshot invariant — it
+    // signals a bug in the render object that produced the command, not here.
+    debug_assert!(
+        v.is_finite(),
+        "snapshot: non-finite float in a draw command"
+    );
     // Normalize negative zero before formatting.
     let v = if v == 0.0 { 0.0_f32 } else { v };
     format!("{v:.2}")
@@ -765,6 +772,11 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             out.push_str(&format!("Offset dx={} dy={}\n", f(o.dx()), f(o.dy())));
         }
         Layer::Transform(_) => {
+            // Known blind spot: `TransformLayer` exposes no public matrix getter
+            // (only `is_identity`/`transform_point`), so the snapshot records the
+            // layer's presence but not its matrix. Two distinct matrices produce
+            // the same line; a `TransformLayer::matrix` accessor would let this
+            // print the normalized matrix (same `f()` format) and close the gap.
             out.push_str(&indent);
             out.push_str("Transform\n");
         }
@@ -815,10 +827,9 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             out.push_str("AnnotatedRegion\n");
         }
     }
-    // NOTE: `Layer` is `#[non_exhaustive]` but this crate is in the same
-    // workspace, so the compiler sees all variants and the match is
-    // exhaustive. A new variant in `flui-layer` will produce a compile
-    // error here, which is the desired behaviour.
+    // NOTE: `Layer` is not `#[non_exhaustive]`, so this match is exhaustive by
+    // construction — a new variant in `flui-layer` produces a compile error
+    // here, which is the desired behaviour (the snapshot must account for it).
 
     // Recurse into children in their stored order (deterministic).
     for &child_id in node.children() {
