@@ -382,7 +382,14 @@ impl RenderSliver for RenderSliverListLazy {
         // ── 4. Lay out in-band children + request absent ones ──────────────
         // Box constraints: cross axis tight, main axis unbounded (child sizes itself).
         let box_constraints = constraints.as_box_constraints(0.0, f32::INFINITY, None);
-        let anchor = self.virtualizer.anchor_item();
+        // Anchor = first VISIBLE item this pass.  Using `range.first` makes
+        // `set_measured` emit an `AnchorCorrection` whenever an item above the
+        // viewport is re-measured with a different extent than its estimate —
+        // the correction keeps the viewport pixel-stationary.  The old
+        // `self.virtualizer.anchor_item()` always returned `(0, 0.0)` (the
+        // virtualizer's default), so `index < anchor.0` was always false →
+        // AnchorCorrection was never emitted (dead code).
+        let anchor = (range.first, 0.0);
 
         for logical_i in cache_first..cache_last {
             if logical_i >= self.item_count {
@@ -445,6 +452,19 @@ impl RenderSliver for RenderSliverListLazy {
                 }
             }
         }
+
+        // ── 4b. Clamp cache_last after possible mid-pass item_count shrink ──
+        // The build loop above may call `self.virtualizer.set_count(logical_i)`
+        // when the source returns `NoChild`, shrinking `self.item_count` mid-pass.
+        // Steps 5/8/10 gate on `in_band` using the PRE-shrink `cache_last`: any
+        // child whose logical index is ≥ the new count is still treated as in-band
+        // → `offset_of(logical_i)` / `offset_of(logical_i+1)` asserts
+        // `index <= len()` and panics.  The same hazard applies via the public
+        // `set_item_count` shrink path.  Shadow here so every downstream gate uses
+        // the tighter bound, causing stale high-index children to fall outside the
+        // in-band check → disposed (step 5) / skipped (steps 8/10) instead of
+        // panicking.
+        let cache_last = cache_last.min(self.item_count);
 
         // ── 5. Dispose off-band children ──────────────────────────────────
         // Children whose logical index is outside [cache_first, cache_last) are

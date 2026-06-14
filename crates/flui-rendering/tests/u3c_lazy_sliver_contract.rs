@@ -20,7 +20,10 @@
 //! ## Step-7 regression — Remove → Insert ordering
 //! A mixed Remove+Insert batch targeting the same parent applies Remove first.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use flui_foundation::Diagnosticable;
 use flui_rendering::{
@@ -704,5 +707,358 @@ fn nochild_clamps_item_count_to_real_source_length() {
         owner.render_tree().children(sliver_id).len() <= real_len,
         "NoChild: attached child count {} exceeds the real source length {real_len}",
         owner.render_tree().children(sliver_id).len(),
+    );
+}
+
+// ============================================================================
+// TEST A — anchor correction fires when an above-viewport item is re-measured
+// ============================================================================
+
+/// A variable-height Box child.  Returns `height` for the chosen `target_idx`
+/// and `default_height` for every other index.  Used to inject a measurement
+/// delta that should (post-fix) trigger an anchor correction.
+#[derive(Debug, Clone)]
+struct VarBox {
+    height: f32,
+}
+
+impl VarBox {
+    fn new(height: f32) -> Self {
+        Self { height }
+    }
+}
+
+impl Diagnosticable for VarBox {}
+impl PaintEffectsCapability for VarBox {}
+impl SemanticsCapability for VarBox {}
+impl HotReloadCapability for VarBox {}
+
+impl RenderBox for VarBox {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
+        let w = ctx.constraints().max_width;
+        Size::new(w, px(self.height))
+    }
+
+    fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        false
+    }
+}
+
+/// Guards BUG 1 (anchor correction was inert).
+///
+/// Layout configuration:
+/// - Item 0: actual height = 80 px (estimate = 50 px → delta = 30 px).
+/// - Items 1+: height = 50 px (matches estimate, delta = 0).
+/// - `scroll_offset = 50 px`, `cache_origin = −50 px` →
+///   `cache_before = 50 px` → `cache_first = 0` (item 0 is still in the
+///   cache band) but `range.first = 1` (item 0 is above the visible edge).
+///
+/// On the first pass where item 0 transitions from `Unmeasured{hint:50}` to
+/// `Measured{extent:80}`:
+///
+/// - **Post-fix** (`anchor = (range.first=1, 0.0)`):
+///   `set_measured(0, 80.0, anchor=(1,0.0))` → `0 < 1` → `AnchorCorrection{delta:30.0}`
+///   → accumulated → emitted as `scroll_offset_correction = Some(30.0)`.
+///
+/// - **Pre-fix** (`anchor = self.virtualizer.anchor_item() = (0, 0.0)`):
+///   `set_measured(0, 80.0, anchor=(0,0.0))` → `0 < 0 = false` → no correction
+///   → `scroll_offset_correction = None` forever.
+///
+/// The test asserts that at least one layout pass yields a non-`None`
+/// `scroll_offset_correction`, which is impossible under the pre-fix anchor.
+#[test]
+fn anchor_correction_fires_when_item_above_viewport_remeasured() {
+    // Estimate used by the Virtualizer for all items.
+    let estimate = 50.0_f32;
+    // Item 0 actually measures larger — this delta is the expected correction.
+    let item0_height = 80.0_f32;
+    let expected_delta = item0_height - estimate; // 30.0
+
+    // Scroll offset = one estimate-height: item 0 (0..50 px estimated) sits
+    // entirely before the visible edge.  With cache_origin = -50 px the
+    // cache band starts at offset 0, so item 0 IS in the cache band and
+    // will be laid out — but range.first = 1, so the anchor = (1, 0.0).
+    let scroll_offset = estimate; // 50 px
+
+    let source: ItemSource = Arc::new(move |idx| {
+        let h = if idx == 0 { item0_height } else { estimate };
+        Some(Box::new(VarBox::new(h)) as Box<dyn RenderObject<BoxProtocol>>)
+    });
+
+    let lazy = RenderSliverListLazy::new(20, estimate, Arc::clone(&source), None);
+
+    let constraints = vertical(scroll_offset, 300.0);
+    let mut owner = PipelineOwner::new();
+    let root_id =
+        owner.insert(Box::new(SliverHost::new(constraints)) as Box<dyn RenderObject<BoxProtocol>>);
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(lazy) as Box<dyn RenderObject<SliverProtocol>>,
+        )
+        .expect("sliver must insert under root host");
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(300.0), px(300.0)))));
+
+    let mut owner = owner.into_layout();
+
+    // Drive enough frames for item 0 to be built (next-frame backend) and
+    // then measured.  The correction fires on the pass that first measures
+    // item 0 as 80 px (was estimated at 50 px).
+    let mut saw_correction = false;
+    for _ in 0..10 {
+        owner.run_layout().expect("layout must succeed");
+
+        // Read the sliver's committed geometry to check scroll_offset_correction.
+        let correction = owner
+            .render_tree()
+            .get(sliver_id)
+            .and_then(|n| n.as_sliver())
+            .and_then(|e| e.state().geometry())
+            .and_then(|g| g.scroll_offset_correction);
+
+        if correction == Some(expected_delta) {
+            saw_correction = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_correction,
+        "BUG 1 regression: no pass produced scroll_offset_correction = Some({expected_delta}). \
+         Pre-fix: anchor=(0,0) → set_measured(idx=0, …, anchor=(0,0)) → 0 < 0 = false \
+         → AnchorCorrection never emitted. \
+         Post-fix: anchor=(range.first=1, 0.0) → 0 < 1 = true → delta=30.0 emitted.",
+    );
+}
+
+// ============================================================================
+// TEST B — no panic when the source shrinks mid-scroll
+// ============================================================================
+
+/// A [`SliverHost`]-equivalent whose sliver constraints are updated at runtime
+/// via a shared handle.  Only used by [`no_panic_on_source_shrink_mid_scroll`].
+#[derive(Debug, Clone)]
+struct SharedConstraintSliverHost {
+    constraints: Arc<Mutex<SliverConstraints>>,
+}
+
+impl SharedConstraintSliverHost {
+    fn new(initial: SliverConstraints) -> (Self, Arc<Mutex<SliverConstraints>>) {
+        let shared = Arc::new(Mutex::new(initial));
+        (
+            Self {
+                constraints: Arc::clone(&shared),
+            },
+            shared,
+        )
+    }
+}
+
+impl Diagnosticable for SharedConstraintSliverHost {}
+impl PaintEffectsCapability for SharedConstraintSliverHost {}
+impl SemanticsCapability for SharedConstraintSliverHost {}
+impl HotReloadCapability for SharedConstraintSliverHost {}
+
+impl RenderBox for SharedConstraintSliverHost {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> Size {
+        let c = *self
+            .constraints
+            .lock()
+            .expect("constraints lock must not be poisoned");
+        if ctx.child_count() > 0 {
+            let _ = ctx.layout_sliver_child(0, c);
+        }
+        ctx.constraints().biggest()
+    }
+
+    fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
+        false
+    }
+}
+
+/// Guards BUG 2 (`offset_of` panic on stale high-index children after
+/// a mid-pass count shrink).
+///
+/// **How the panic fires (pre-fix):**
+///
+/// The build loop iterates `cache_first..cache_last`.  When the source returns
+/// `NoChild` at index N_new it sets `self.item_count = N_new` and
+/// `self.virtualizer.set_count(N_new)` — so `virtualizer.len() = N_new`.
+/// But `cache_last` was computed by `virtualizer.query()` before the shrink;
+/// it may be larger than N_new.  Steps 8 and 10 then call `offset_of(logical_i)`
+/// for any child with `logical_i >= N_new` that is still "in-band" per the
+/// stale bound.  `offset_of` asserts `index <= len()`, and with
+/// `logical_i >= N_new = len()` the assert fires — thread panics.
+///
+/// **Setup that triggers it (two-phase scroll):**
+///
+/// Phase A (high-scroll warm-up): scroll = 600 px → cache covers items 11–18.
+/// Pump 10 frames so items 11–18 are all attached.
+///
+/// Phase B (lower scroll + shrink): switch to scroll = 400 px → cache covers
+/// items 7–14.  Items 7–10 are absent (never built at this scroll).
+/// Items 11–14 remain attached from Phase A.  Now shrink source to 5.
+///
+/// On the first layout pass at scroll 400 with source shrunk to 5:
+///  1. `query()` uses virtualizer with `len = 20` → `cache_first = 7,
+///     cache_last ≈ 15`.
+///  2. Build loop: items 7–10 absent → source(7) → `None` → `NoChild` →
+///     `item_count = 7`, `virtualizer.len() = 7`, loop breaks.
+///  3. (pre-fix) Steps 8/10 find items 11–14 "in-band" (`11 < 15`), call
+///     `offset_of(11)` on virtualizer with `len = 7` → `11 > 7` → **panic**.
+///  4. (post-fix) `cache_last = 15.min(7) = 7` → items 11–14 disposed in
+///     step 5, skipped in steps 8/10 — no `offset_of` call on out-of-range index.
+///
+/// Pre-fix observable: `run_layout` returns `Err(LayoutPanic(...))` (the
+/// `catch_unwind` wrapper converts the assert-panic to `RenderError`).
+/// Post-fix observable: `run_layout` returns `Ok(())` and items ≥ 7 are disposed.
+#[test]
+fn no_panic_on_source_shrink_mid_scroll() {
+    // item_height=50 px, viewport=300 px, cache_origin=−50 px →
+    // cache_before=50 px, cache_after=100 px.
+    let item_height = 50.0_f32;
+    let viewport_height = 300.0_f32;
+    let initial_count = 20usize;
+    // Phase A: scroll=600 px → cache covers items 11–18 (600−50=550 .. 550+400=950,
+    // i.e. floor(550/50)=11 .. ceil(950/50)=19 → exclusive end = 19).
+    let phase_a_scroll = 600.0_f32;
+    // Phase B: scroll=400 px → cache covers items 7–14 (350 .. 750).
+    let phase_b_scroll = 400.0_f32;
+    // Shrink well below the Phase-B cache_first so NoChild fires at an absent
+    // item (7) while Phase-A-attached items 11–14 are still in logical_to_slot.
+    let new_count = 5usize;
+
+    let max_len = Arc::new(AtomicUsize::new(initial_count));
+    let max_clone = Arc::clone(&max_len);
+    let source: ItemSource = Arc::new(move |idx| {
+        (idx < max_clone.load(Ordering::Relaxed))
+            .then(|| Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
+    });
+
+    let lazy = RenderSliverListLazy::new(initial_count, item_height, Arc::clone(&source), None);
+
+    let (host, constraint_handle) =
+        SharedConstraintSliverHost::new(vertical(phase_a_scroll, viewport_height));
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(host) as Box<dyn RenderObject<BoxProtocol>>);
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(lazy) as Box<dyn RenderObject<SliverProtocol>>,
+        )
+        .expect("sliver must insert under root host");
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
+        px(300.0),
+        px(viewport_height),
+    ))));
+
+    let mut owner = owner.into_layout();
+
+    // Phase A: warm up at scroll=600.  The next-frame backend builds one child
+    // per frame; 10 frames is enough to attach all 8 items in the 11–18 band.
+    for _ in 0..10 {
+        owner
+            .run_layout()
+            .expect("layout must succeed during Phase A warm-up");
+    }
+
+    // Pre-condition A: items in the Phase-A band (indices ≥ 11) must be attached.
+    let phase_a_children = collect_child_indices(&owner, sliver_id);
+    assert!(
+        phase_a_children.iter().any(|(idx, _)| *idx >= 11),
+        "pre-condition A: need at least one child at index ≥ 11 from Phase A warm-up; \
+         got indices: {:?}",
+        phase_a_children.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+    );
+
+    // Switch scroll to 400 px WITHOUT pumping any frames first.  The constraint
+    // handle is shared (Arc<Mutex<>>) so the SliverHost reads the new value on
+    // its very next perform_layout call.
+    //
+    // At this point the render tree still holds the Phase-A children (indices
+    // 11–18).  Items 7–10 were NEVER built at Phase-A scroll (Phase-A cache
+    // covered 11–18), so they are absent.  After the scroll switch the Phase-B
+    // cache band is [7, 15): items 11–14 overlap it and remain in logical_to_slot;
+    // items 7–10 are absent and will be requested as new builds.
+    {
+        let mut c = constraint_handle
+            .lock()
+            .expect("constraint handle lock must not be poisoned");
+        *c = vertical(phase_b_scroll, viewport_height);
+    }
+
+    // Pre-condition B: the render tree already holds children from Phase A.
+    // At least one must have index >= new_count so the stale in-band path fires.
+    // We do NOT run layout here — pumping would build items 7–10 and eliminate
+    // the absence needed to trigger NoChild.
+    let pre_shrink_children = collect_child_indices(&owner, sliver_id);
+    let pre_indices: Vec<usize> = pre_shrink_children.iter().map(|(i, _)| *i).collect();
+    let stale_count = pre_indices.iter().filter(|&&idx| idx >= new_count).count();
+    assert!(
+        stale_count > 0,
+        "pre-condition B: need at least one child at index >= {new_count} before \
+         the shrink so the stale in-band path is exercised; \
+         got indices: {pre_indices:?}",
+    );
+
+    // Shrink source to new_count=5.  On the next layout pass at scroll=400:
+    //   cache_first=7, cache_last≈15, items 7–10 absent → source(7)=None →
+    //   NoChild → item_count=7.
+    // Pre-fix: cache_last still ≈ 15; items 11–14 in-band; offset_of(11) on
+    //          virtualizer.len()=7 → assert(11 ≤ 7) → PANIC inside run_layout.
+    // Post-fix: cache_last = 15.min(7) = 7; items 11–14 NOT in-band → disposed.
+    max_len.store(new_count, Ordering::Relaxed);
+    owner.mark_needs_layout(root_id);
+
+    // Run exactly ONE layout pass.  The observable distinction is:
+    //
+    // Pre-fix (no cache_last clamp): the build loop shrinks virtualizer to
+    //   len=7, but cache_last stays at ≈15.  Step 5 sees items 11–14 as
+    //   in-band (11 < 15 = true) → skips disposal.  Step 8 calls
+    //   offset_of(11) on a virtualizer with len=7 → asserts 11 ≤ 7 →
+    //   panics.  The catch_unwind converts the panic to RenderError (silently
+    //   recovered by the Box parent's sliver callback), but the disposal DID
+    //   NOT fire.  After one frame, items 11–14 are still attached.
+    //
+    // Post-fix (cache_last clamped to 7): step 5 sees items 11–14 as
+    //   out-of-band (11 < 7 = false) → disposes them.  Step 8 iterates an
+    //   empty in-band set → no offset_of call → no panic.  After one frame,
+    //   items 11–14 are gone; only items with index < 7 ≤ new_count could
+    //   be present (there are none here because items 7–10 returned NoChild
+    //   and 0–6 were never in the Phase-B cache band).
+    owner.run_layout().expect(
+        "run_layout must not return Err after source shrink; \
+         the Box parent's sliver callback swallows descendant errors as Ok, \
+         so an Err here indicates a protocol violation outside the sliver itself",
+    );
+
+    // After one frame, stale items (index ≥ new_count) that were in the
+    // Phase-B cache band (indices 11–14) must be disposed.
+    // Pre-fix: they are NOT disposed (cache_last clamp absent → in-band →
+    //   step 5 skips them → they remain attached after frame 1).
+    // Post-fix: they ARE disposed (clamp makes them out-of-band → step 5
+    //   disposes them → tree is clean after frame 1).
+    let after_one_frame = collect_child_indices(&owner, sliver_id);
+    assert!(
+        after_one_frame.iter().all(|(idx, _)| *idx < new_count),
+        "BUG 2 regression: after one layout pass following a source shrink, \
+         children with index >= {new_count} remain attached — cache_last was \
+         not clamped to item_count so in-band detection used the pre-shrink \
+         bound and skipped disposal of stale high-index children. \
+         Still attached: {:?}",
+        after_one_frame.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
     );
 }
