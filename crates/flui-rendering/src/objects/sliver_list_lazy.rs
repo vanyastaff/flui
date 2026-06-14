@@ -213,7 +213,7 @@ impl Clone for RenderSliverListLazy {
     fn clone(&self) -> Self {
         Self {
             item_count: self.item_count,
-            child_source: Arc::clone(&self.child_source),
+            child_source: self.child_source.clone(),
             dispose_hook: self.dispose_hook.clone(),
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: self.logical_to_slot.clone(),
@@ -398,15 +398,17 @@ impl RenderSliver for RenderSliverListLazy {
 
             if let Some(&slot) = self.logical_to_slot.get(&logical_i) {
                 // Child already attached: lay it out and record the real extent.
-                let source = Arc::clone(&self.child_source);
                 let result = ctx.build_and_layout_box_child(
                     slot,
                     logical_i,
                     box_constraints,
                     // Child already exists — build closure is unreachable on the
                     // Ready arm, but the backend may call it if the child was
-                    // concurrently removed. Provide a valid factory.
-                    &mut |_| source(logical_i),
+                    // concurrently removed. Provide a valid factory. Borrow the
+                    // source directly (no per-frame Arc::clone) — Rust-2021 disjoint
+                    // capture borrows only `child_source`, released when the call
+                    // returns, before the `&mut self.virtualizer` use below.
+                    &mut |_| (self.child_source)(logical_i),
                 );
                 if let ChildLayout::Ready(BoxChildRef { size, .. }) = result {
                     let extent = main_axis_extent(size, constraints.axis_direction);
@@ -425,12 +427,12 @@ impl RenderSliver for RenderSliverListLazy {
                 // insert, so the clamp resolves to the current tail every time and the
                 // children land in consecutive slots in request order (D3 keeps Remove
                 // before Insert, so any removed slots are already compacted away).
-                let source = Arc::clone(&self.child_source);
                 let result = ctx.build_and_layout_box_child(
                     dense_count,
                     logical_i,
                     box_constraints,
-                    &mut move |_| source(logical_i),
+                    // Borrow the source directly (no per-frame Arc::clone).
+                    &mut |_| (self.child_source)(logical_i),
                 );
                 match result {
                     ChildLayout::Scheduled | ChildLayout::Ready(_) => {
