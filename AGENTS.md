@@ -4,6 +4,16 @@
 
 ---
 
+## Prime Directive
+
+Three rules, in priority order. They override convenience, never each other.
+
+1. **Port the core, loyal to behavior.** The three-tree model (View → Element → Render), lifecycle, the layout/paint/hit-test protocol, and reconciliation are ported 1:1 from `.flutter/`. *Structure* is Rust-native (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`); *behavior* stays loyal. "Make the core better" reverts to Flutter semantics — see [`STRATEGY.md`](STRATEGY.md).
+2. **Leapfrog the edges.** Where Flutter has *no strong contract* — animation curves, velocity prediction, color interpolation, input smoothing — propose the market-best abstraction now, not the Flutter one. Breaking changes are cheap today and ossify once consumers exist; do not defer a better shape to "later". (This never touches the widget-tree mental model rule #1 protects.)
+3. **Done means verified against the reference.** "Implemented" is not "done", and a green gate is necessary but not sufficient. Before claiming parity or completion, verify against `.flutter/` and the render harness — see [Definition of Done](#definition-of-done-anti-cheating).
+
+---
+
 ## Quick Start for AI Agents
 
 **Read this first.** Then read `crates/<crate>/AGENTS.md` for the crate you're working on.
@@ -149,6 +159,8 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 
 When changing render-tree, sliver, layout, paint, hit-test, semantics, scheduling, or parent-data behavior, **check `.flutter/` first**. Preserve behavioral contracts unless FLUI has an explicit documented divergence. The `.flutter/` and `.gpui/` directories are read-only architectural references — adapt patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
 
+**Read the reference for *what* and *why*, then write Rust from that understanding — do not transcribe.** Loyalty is to observable behavior (output, edge cases, ordering), not to Dart's structure, naming, or file layout. Confirm the match before reporting done — see [Definition of Done](#definition-of-done-anti-cheating).
+
 ## Documentation
 
 | Document | Path | When to read |
@@ -167,6 +179,7 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 | File | Purpose |
 |------|---------|
 | `AGENTS.md` | This file — what every agent needs to know |
+| `CLAUDE.md` | Thin shim that imports `@AGENTS.md` so Claude Code auto-loads this guide — keep substance here, not there |
 | `.mcp.json` | MCP servers (Serena, rust-analyzer, cratesio, etc.) |
 | `mimocode.jsonc` | MiMoCode runtime config |
 | `.pi/settings.json` | Pi runtime settings |
@@ -204,6 +217,25 @@ When you hit a build/test error:
 4. **Render-object harness failure** → every exported `RenderBox`/`RenderSliver` must appear in `RENDER_OBJECT_TYPES` with a matching `harness_*` test. See `crates/flui-rendering/docs/TESTING.md`.
 5. **Test flake (flui-app singleton)** → CI uses `--test-threads=1`. If tests fail locally with parallelism, try single-threaded.
 6. **Type mismatch across crate boundary** → check if you're using the wrong ID type (1-based vs 0-based). See ID offset pattern above.
+
+## Definition of Done (anti-cheating)
+
+An agent reporting "done" makes a claim that later work is built on. A green gate is **necessary but not sufficient** — gates can be satisfied without implementing the behavior. The recurring failure mode in this repo is **"MVP reported as parity"**: a change passes the harness and port-check but silently diverges from Flutter on untested edges.
+
+**Before reporting a render/layout/paint/lifecycle change done:**
+
+1. **Verify against `.flutter/`.** Open the corresponding Flutter source and confirm edge-case behavior matches — or is a *documented* divergence. An audit finding without a `.flutter/` cross-check is a hypothesis, not a fact.
+2. **No fake-passing.** Never satisfy a gate by:
+   - special-casing the test/harness input instead of implementing the behavior;
+   - returning a stub / `Size::ZERO` / empty value that happens to pass;
+   - narrowing a test to only what the partial impl handles;
+   - reporting intrinsics, baselines, or hit-test as working when they return defaults.
+
+   If a behavior is not implemented, **say so explicitly** — do not paper over it.
+3. **Harness evidence.** Every concrete `RenderBox`/`RenderSliver` carries harness tests (catalog CI guard). New behavior needs a test that would *fail* without the change.
+4. **Report scope honestly.** "X done" from a prior session ≠ parity — re-verify. State what is implemented vs deferred and *why*; never imply completeness you did not check.
+
+> Rationale: the same guardrails Git's own Rust reimplementation (GitButler's Grit) had to encode for its agents — *"you gotta be super explicit with the ground rules"* — because agents will pass through to the reference or fake a feature to make tests green unless it is explicitly forbidden.
 
 ## Agent Rules
 
