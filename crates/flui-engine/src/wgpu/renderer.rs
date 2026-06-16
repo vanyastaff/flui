@@ -1165,6 +1165,7 @@ impl Renderer {
         surface_view: &wgpu::TextureView,
         occlusion: &mut OcclusionTracker,
     ) {
+        use flui_types::geometry::{Pixels, Rect};
         use flui_types::painting::ImageFilter;
 
         let bounds = bf_layer.bounds();
@@ -1191,6 +1192,73 @@ impl Renderer {
             return;
         };
 
+        // 2. Map the layer's local-space `bounds` to a device-space rect before
+        //    sampling/compositing. `bf_layer.bounds()` is in logical pixels; the
+        //    surface texture and the composite viewport are in physical pixels.
+        //    The accumulated layer-walk CTM — which carries the `RenderView`
+        //    root `scale(dpr)` plus every intervening transform/offset layer —
+        //    lives in the painter's `current_transform` at this point (the walk
+        //    pushes it via `push_transform`/`push_offset`). Reading it here is
+        //    the layer-tree equivalent of the `transform` argument the
+        //    display-list backdrop path ("Path B", `Backend::render_backdrop_filter`)
+        //    receives. Without this mapping a backdrop at logical (100,100,200,200)
+        //    sampled device region (100,100,200,200) on a 2x display — wrong
+        //    source pixels, half size, half position.
+        let transform = backend.painter().current_transform_matrix();
+        let device_rect = transform.transform_rect(&bounds);
+
+        // Clamp the device rect against the surface extent. Path A previously
+        // only lower-clamped (`max(0.0)`/`max(1.0)`); a backdrop partially
+        // off-screen (negative origin or extent beyond the frame) would feed
+        // `copy_texture_to_texture` an out-of-range region and trip wgpu
+        // validation at submit time, dropping the frame. Mirror Path B: clamp
+        // both edges, derive extents from the clamped corners.
+        let surface_extent = surface_texture.size();
+        let surface_w = surface_extent.width;
+        let surface_h = surface_extent.height;
+
+        // Use `.round()` before truncation to match the shader-mask path and avoid
+        // a 1-device-pixel undersize on sub-pixel boundaries (e.g. DPR=1.5 or
+        // fractional-offset CTMs). Keep ≥ 0 via the prior `clamp`.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x = device_rect.left().0.clamp(0.0, surface_w as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let y = device_rect.top().0.clamp(0.0, surface_h as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let right = device_rect.right().0.clamp(0.0, surface_w as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32).round() as u32;
+        let w = right.saturating_sub(x).max(1);
+        let h = bottom.saturating_sub(y).max(1);
+
+        // If the clamped region is empty the backdrop is entirely off-screen.
+        // `copy_texture_to_texture` requires non-zero extents — fall through to
+        // child rendering (no GPU blur) instead of tripping validation.
+        if right <= x || bottom <= y {
+            tracing::warn!(
+                bounds_l = bounds.left().0,
+                bounds_t = bounds.top().0,
+                bounds_r = bounds.right().0,
+                bounds_b = bounds.bottom().0,
+                surface_w,
+                surface_h,
+                "Backdrop filter (Path A): clamped device region is empty (entirely off-screen); \
+                 rendering children only"
+            );
+            for &child_id in node.children() {
+                Self::render_layer_recursive(
+                    tree,
+                    child_id,
+                    backend,
+                    ctx,
+                    surface_texture,
+                    surface_view,
+                    occlusion,
+                );
+            }
+            return;
+        }
+
         // 1. Flush current painter batches to the surface so pixels are available
         let mut flush_encoder =
             ctx.device
@@ -1204,18 +1272,13 @@ impl Renderer {
             tracing::error!("Backdrop flush failed: {}", e);
         }
 
-        // 2. Copy region from surface to offscreen texture for blur input
-        let x = bounds.left().0.max(0.0) as u32;
-        let y = bounds.top().0.max(0.0) as u32;
-        let w = bounds.width().0.max(1.0) as u32;
-        let h = bounds.height().0.max(1.0) as u32;
-
         if let Some(offscreen_arc) = backend.offscreen().cloned() {
             let blur_input = {
                 let offscreen = offscreen_arc.lock();
                 offscreen.texture_pool().acquire(w, h, ctx.surface_format)
             };
 
+            // 3. Copy the device-space region from the surface to the blur input.
             flush_encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: surface_texture,
@@ -1237,16 +1300,28 @@ impl Renderer {
             );
             ctx.queue.submit(std::iter::once(flush_encoder.finish()));
 
-            // 3. Apply Dual Kawase blur
+            // 4. Apply Dual Kawase blur
             let blurred = {
                 let mut offscreen = offscreen_arc.lock();
                 offscreen.render_blur(&blur_input, sigma)
             };
 
-            // 4. Queue blurred result for compositing
+            // 5. Queue the blurred result for compositing at the CLAMPED device
+            //    rect — the copy source origin is (x,y) and extent (w,h), so the
+            //    composite rect must match exactly. `device_rect` is unclamped
+            //    (may extend outside the surface for a backdrop crossing the edge),
+            //    meaning the smaller blurred texture would be stretched/misaligned
+            //    across the larger unclamped rect. Build the composite rect from
+            //    the same clamped u32 values used for the copy.
+            let clamped_composite_rect = Rect::from_xywh(
+                Pixels(x as f32),
+                Pixels(y as f32),
+                Pixels(w as f32),
+                Pixels(h as f32),
+            );
             backend
                 .painter_mut()
-                .queue_offscreen_result(blurred, bounds);
+                .queue_offscreen_result(blurred, clamped_composite_rect);
         } else {
             // No offscreen renderer available — just submit the flush
             ctx.queue.submit(std::iter::once(flush_encoder.finish()));
@@ -1384,5 +1459,437 @@ mod tests {
                 });
             renderer.queue.submit(std::iter::once(encoder.finish()));
         });
+    }
+
+    /// Acquire a real device/queue for the HiDPI backdrop regression below.
+    /// Returns `None` when no GPU adapter is available (CI without a GPU).
+    fn test_device_and_queue() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Backdrop HiDPI Test Device"),
+            ..Default::default()
+        }))
+        .ok()?;
+        Some((Arc::new(device), Arc::new(queue)))
+    }
+
+    /// BUG 1 (HiDPI backdrop "Path A"): the layer-tree backdrop path must map
+    /// the layer's logical `bounds` through the accumulated CTM (which carries
+    /// the `RenderView` `scale(dpr)`) before sampling/compositing. Under a
+    /// `scale(2)` CTM a backdrop at logical (100,100,200,200) must sample and
+    /// composite the device rect (200,200,400,400), not the logical rect.
+    ///
+    /// Drives the real `Renderer::handle_backdrop_filter` (not a reimpl) with a
+    /// synthetic surface texture and asserts the queued offscreen composite rect
+    /// is the device rect. Red before the fix (logical (100,100,200,200)).
+    #[test]
+    fn backdrop_filter_path_a_composites_at_device_rect_under_dpr() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
+        use flui_types::{
+            geometry::{Rect, px},
+            painting::ImageFilter,
+        };
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            // No GPU in this environment; skip gracefully (matches the other
+            // GPU tests in this module).
+            return;
+        };
+
+        // Surface format used for the synthetic surface + offscreen pool. A
+        // UNorm format with COPY_SRC|COPY_DST|RENDER_ATTACHMENT|TEXTURE_BINDING
+        // is what the real surface uses (see `Renderer::new`).
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let surface_w = 800u32;
+        let surface_h = 800u32;
+
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backdrop HiDPI Test Surface"),
+            size: wgpu::Extent3d {
+                width: surface_w,
+                height: surface_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (surface_w, surface_h),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        // Simulate the `RenderView` DPR root transform: scale(2) on the CTM.
+        backend.painter_mut().scale(2.0, 2.0);
+
+        // Build a one-node layer tree: a leaf BackdropFilter with no children.
+        let mut tree = LayerTree::new();
+        let logical_bounds = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let bf = BackdropFilterLayer::new(
+            ImageFilter::blur(5.0),
+            flui_types::painting::BlendMode::SrcOver,
+            logical_bounds,
+        );
+        let id = tree.insert(Layer::BackdropFilter(bf));
+        tree.set_root(Some(id));
+        let node = tree.get(id).expect("inserted backdrop node");
+        let Layer::BackdropFilter(bf_layer) = node.layer() else {
+            unreachable!("inserted a BackdropFilter layer");
+        };
+
+        let ctx = RenderContext {
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+            surface_format: format,
+            supports_copy_src: true,
+        };
+        let mut occlusion = OcclusionTracker::new();
+
+        Renderer::handle_backdrop_filter(
+            bf_layer,
+            node,
+            &tree,
+            &mut backend,
+            &ctx,
+            &surface_texture,
+            &surface_view,
+            &mut occlusion,
+        );
+
+        // The blurred backdrop must be queued for compositing at the DEVICE
+        // rect — logical bounds (x=100, y=100, w=200, h=200) under scale(2)
+        // maps to (x=200, y=200, w=400, h=400), i.e. corners (200,200)→(600,600).
+        // The bug would leave the logical rect (corners (100,100)→(300,300)).
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "backdrop must queue exactly one offscreen composite"
+        );
+        let (composite_rect, _tw, _th) = results[0];
+        assert!(
+            (composite_rect.left().0 - 200.0).abs() < 0.5
+                && (composite_rect.top().0 - 200.0).abs() < 0.5
+                && (composite_rect.width().0 - 400.0).abs() < 0.5
+                && (composite_rect.height().0 - 400.0).abs() < 0.5,
+            "backdrop composite rect must be the device rect (x=200,y=200,w=400,h=400) \
+             under DPR=2; got {composite_rect:?} (logical (x=100,y=100,w=200,h=200) means \
+             the DPR transform was dropped)"
+        );
+    }
+
+    /// Locks that `handle_backdrop_filter` honours CTM TRANSLATION, not just
+    /// scale. Pure-scale(2) is sufficient to catch the "dropped DPR" bug but
+    /// insufficient to catch "translation eaten by the CTM reader".
+    ///
+    /// CTM: scale(2) THEN translate(+10, +10) (post-multiply order).
+    /// The accumulated matrix maps (x,y) → (2x+20, 2y+20).
+    /// Logical bounds (100,100)→(300,300) device-map to (220,220)→(620,620):
+    ///   left  = 2*100 + 20 = 220
+    ///   top   = 2*100 + 20 = 220
+    ///   right = 2*300 + 20 = 620  →  width  = 400
+    ///   bottom= 2*300 + 20 = 620  →  height = 400
+    ///
+    /// A regression that drops the translation but keeps the scale would give
+    /// (200,200,400,400) with the position wrong at (200,200) instead of (220,220).
+    #[test]
+    fn backdrop_filter_path_a_honors_translation_under_dpr() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
+        use flui_types::{
+            geometry::{Offset, Rect, px},
+            painting::ImageFilter,
+        };
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return;
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let surface_w = 1000u32;
+        let surface_h = 1000u32;
+
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backdrop Translation Test Surface"),
+            size: wgpu::Extent3d {
+                width: surface_w,
+                height: surface_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (surface_w, surface_h),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        // CTM: scale(2) then translate(+10,+10).
+        // Maps (x,y) → (2x+20, 2y+20).
+        backend.painter_mut().scale(2.0, 2.0);
+        backend
+            .painter_mut()
+            .translate(Offset::new(px(10.0), px(10.0)));
+
+        let mut tree = LayerTree::new();
+        let logical_bounds = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let bf = BackdropFilterLayer::new(
+            ImageFilter::blur(5.0),
+            flui_types::painting::BlendMode::SrcOver,
+            logical_bounds,
+        );
+        let id = tree.insert(Layer::BackdropFilter(bf));
+        tree.set_root(Some(id));
+        let node = tree.get(id).expect("inserted backdrop node");
+        let Layer::BackdropFilter(bf_layer) = node.layer() else {
+            unreachable!("inserted a BackdropFilter layer");
+        };
+
+        let ctx = RenderContext {
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+            surface_format: format,
+            supports_copy_src: true,
+        };
+        let mut occlusion = OcclusionTracker::new();
+
+        Renderer::handle_backdrop_filter(
+            bf_layer,
+            node,
+            &tree,
+            &mut backend,
+            &ctx,
+            &surface_texture,
+            &surface_view,
+            &mut occlusion,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "backdrop must queue exactly one offscreen composite"
+        );
+        let (composite_rect, _tw, _th) = results[0];
+
+        // Expected device rect corners: (220,220)→(620,620); w=h=400.
+        // A translation-drop regression gives (200,200) position (not 220).
+        assert!(
+            (composite_rect.left().0 - 220.0).abs() < 0.5,
+            "composite rect left must be ~220.0 (2*100+20); got {:.2} \
+             (translation was likely dropped from CTM)",
+            composite_rect.left().0
+        );
+        assert!(
+            (composite_rect.top().0 - 220.0).abs() < 0.5,
+            "composite rect top must be ~220.0 (2*100+20); got {:.2}",
+            composite_rect.top().0
+        );
+        assert!(
+            (composite_rect.width().0 - 400.0).abs() < 0.5,
+            "composite rect width must be ~400.0; got {:.2}",
+            composite_rect.width().0
+        );
+        assert!(
+            (composite_rect.height().0 - 400.0).abs() < 0.5,
+            "composite rect height must be ~400.0; got {:.2}",
+            composite_rect.height().0
+        );
+    }
+
+    /// Locks P2 #2: `handle_backdrop_filter` must composite the blurred texture
+    /// at the CLAMPED device rect, not the unclamped `device_rect`.
+    ///
+    /// When a backdrop layer extends beyond the window boundary, the copy source
+    /// and blur texture are sized at the CLAMPED extent (the portion that fits
+    /// on screen). Before this fix, `queue_offscreen_result` received the
+    /// unclamped `device_rect` — the blurred texture (w×h) would be stretched
+    /// or misaligned across the larger rect that extends off-screen.
+    ///
+    /// Scenario: surface = 400×400, CTM = identity (DPR=1 for simplicity —
+    /// device coords == logical coords). Backdrop layer at logical
+    /// (350, 350, 200, 200) i.e. corners (350,350)→(550,550).
+    /// Clamped: x=350, y=350, right=400, bottom=400 → w=50, h=50.
+    ///
+    /// Red-before: composite rect is (350,350,200,200) — the unclamped device
+    ///   rect width/height (200,200 from the layer bounds), not the clamped (50,50).
+    /// Green-after: composite rect is (350,350,50,50) — matches copy origin/extent.
+    #[test]
+    fn backdrop_filter_path_a_composites_clamped_rect_when_partially_offscreen() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
+        use flui_types::{
+            geometry::{Rect, px},
+            painting::ImageFilter,
+        };
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return;
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        // Small surface so the layer extends off the right/bottom edge.
+        let surface_w = 400u32;
+        let surface_h = 400u32;
+
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backdrop Clamp Test Surface"),
+            size: wgpu::Extent3d {
+                width: surface_w,
+                height: surface_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (surface_w, surface_h),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        // CTM is identity (scale=1, DPR=1): device coords == logical coords.
+        // Backdrop at (350,350,200,200) — corners (350,350)→(550,550).
+        // Clamped to 400×400 surface: x=350,y=350,right=400,bottom=400 →
+        // w=50, h=50.
+        let mut tree = LayerTree::new();
+        let logical_bounds = Rect::from_xywh(px(350.0), px(350.0), px(200.0), px(200.0));
+        let bf = BackdropFilterLayer::new(
+            ImageFilter::blur(5.0),
+            flui_types::painting::BlendMode::SrcOver,
+            logical_bounds,
+        );
+        let id = tree.insert(Layer::BackdropFilter(bf));
+        tree.set_root(Some(id));
+        let node = tree.get(id).expect("inserted backdrop node");
+        let Layer::BackdropFilter(bf_layer) = node.layer() else {
+            unreachable!("inserted a BackdropFilter layer");
+        };
+
+        let ctx = RenderContext {
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+            surface_format: format,
+            supports_copy_src: true,
+        };
+        let mut occlusion = OcclusionTracker::new();
+
+        Renderer::handle_backdrop_filter(
+            bf_layer,
+            node,
+            &tree,
+            &mut backend,
+            &ctx,
+            &surface_texture,
+            &surface_view,
+            &mut occlusion,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "backdrop must queue exactly one offscreen composite"
+        );
+        let (composite_rect, tex_w, tex_h) = results[0];
+
+        // Blur texture must be the CLAMPED size, not the full logical size.
+        assert_eq!(
+            (tex_w, tex_h),
+            (50, 50),
+            "blur texture must be clamped size 50×50; got {tex_w}×{tex_h} — \
+             200×200 indicates the copy was sourced at the unclamped region"
+        );
+
+        // Composite rect origin must match the clamped origin (350,350) and
+        // extent must be the clamped size (50,50), NOT the unclamped (200,200).
+        // Before the fix, width/height would be 200 (device_rect was passed
+        // to queue_offscreen_result instead of clamped_composite_rect).
+        assert!(
+            (composite_rect.left().0 - 350.0).abs() < 0.5,
+            "composite rect left must be ~350.0 (clamped origin); got {:.2}",
+            composite_rect.left().0
+        );
+        assert!(
+            (composite_rect.top().0 - 350.0).abs() < 0.5,
+            "composite rect top must be ~350.0 (clamped origin); got {:.2}",
+            composite_rect.top().0
+        );
+        assert!(
+            (composite_rect.width().0 - 50.0).abs() < 0.5,
+            "composite rect width must be ~50.0 (clamped extent); got {:.2} — \
+             200.0 indicates the unclamped device_rect was passed to \
+             queue_offscreen_result (blurred texture would be stretched)",
+            composite_rect.width().0
+        );
+        assert!(
+            (composite_rect.height().0 - 50.0).abs() < 0.5,
+            "composite rect height must be ~50.0 (clamped extent); got {:.2}",
+            composite_rect.height().0
+        );
     }
 }
