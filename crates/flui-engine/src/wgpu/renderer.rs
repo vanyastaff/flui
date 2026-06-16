@@ -955,6 +955,11 @@ impl Renderer {
             // vs Flutter.
             backend.bind_surface(&view, &output.texture);
 
+            // Reset per-frame clip/transform/opacity/layer state so that
+            // partial-damage scissors from frame N cannot leak into frame N+1.
+            // This must happen BEFORE the damage clip_rect below.
+            backend.painter_mut().reset_frame_state();
+
             // Apply damage rect as scissor optimization: when only part of the
             // screen changed, limit GPU work to the damaged region.
             // `damage_rect()` returns `None` for full repaint (no scissor needed),

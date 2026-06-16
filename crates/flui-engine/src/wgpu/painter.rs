@@ -964,6 +964,45 @@ impl WgpuPainter {
         self.surface_format
     }
 
+    // ===== Frame Lifecycle =====
+
+    /// Reset all per-frame clip/transform/opacity/layer state to pristine values.
+    ///
+    /// Must be called at the **start** of every frame, before any damage scissor
+    /// or other per-frame setup, so that state from frame N is never visible in
+    /// frame N+1.
+    ///
+    /// Without this call the damage-scissor that was intersected into
+    /// `current_scissor` during a partial-damage frame leaks into the next
+    /// frame, causing full-repaint frames to silently clip to the previous
+    /// damage rect.
+    pub fn reset_frame_state(&mut self) {
+        self.current_scissor = None;
+        self.scissor_stack.clear();
+        self.current_rrect_clip = [0.0; 8];
+        self.rrect_clip_stack.clear();
+        self.current_rsuperellipse_clip = [0.0; 12];
+        self.rsuperellipse_clip_stack.clear();
+        self.current_opacity = 1.0;
+        self.opacity_stack.clear();
+        self.layer_stack.clear();
+        // Identity is the construction-time value (see `new()`: `let current_transform =
+        // glam::Mat4::IDENTITY`). Reset to the same initial value.
+        self.current_transform = glam::Mat4::IDENTITY;
+        self.transform_stack.clear();
+
+        tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
+    }
+
+    /// Returns the current scissor rect for testing purposes.
+    ///
+    /// Gated to match its sole consumer (`reset_frame_state_clears_damage_scissor`)
+    /// so it is never dead code in either build configuration.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn current_scissor_for_test(&self) -> Option<(u32, u32, u32, u32)> {
+        self.current_scissor
+    }
+
     // ===== Offscreen Compositing =====
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.
@@ -3821,7 +3860,19 @@ impl WgpuPainter {
                     composite_bounds
                 );
             } else if has_offscreen_content {
-                // Opacity is ~1.0, no compositing needed — just merge content back
+                // Opacity is ~1.0, no compositing needed — merge content back.
+                // Finalize the parent's pre-save content into the draw order
+                // BEFORE re-integrating the offscreen items so that the parent
+                // content renders beneath the layer subtree (correct Z-order).
+                // Without this flush the parent segment sits in `current_segment`
+                // and is emitted last by `render()`, placing it on top of the
+                // layer — an inversion.  Mirror the mem::replace pattern used by
+                // the opacity < 1.0 branch above.
+                let parent_segment =
+                    std::mem::replace(&mut self.current_segment, DrawSegment::new());
+                if !parent_segment.is_empty() {
+                    self.draw_order.push(DrawItem::Segment(parent_segment));
+                }
                 self.reintegrate_offscreen_content(offscreen_segment, offscreen_order, 1.0);
             }
 
@@ -3883,7 +3934,24 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
+        let current_len = self.current_segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            // Logged once per process: a >MAX_GRADIENT_STOPS frame would
+            // otherwise spam this for every overflowing instance, every frame.
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "gradient_rect: gradient stop buffer full; dropping linear gradient \
+                     instance (logged once per process)"
+                );
+            }
+            return;
+        }
+        let stop_offset = current_len as u32;
         self.current_segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -3946,7 +4014,22 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
+        let current_len = self.current_segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "radial_gradient_rect: gradient stop buffer full; dropping radial \
+                     gradient instance (logged once per process)"
+                );
+            }
+            return;
+        }
+        let stop_offset = current_len as u32;
         self.current_segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -3996,7 +4079,22 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
+        let current_len = self.current_segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "sweep_gradient_rect: gradient stop buffer full; dropping sweep \
+                     gradient instance (logged once per process)"
+                );
+            }
+            return;
+        }
+        let stop_offset = current_len as u32;
         self.current_segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -4070,12 +4168,56 @@ impl WgpuPainter {
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
+    use std::sync::Arc;
 
-    // Note: Full tests require wgpu device initialization
-    // These would be integration tests with headless rendering
+    use flui_types::{Point, Rect, Size, geometry::px};
 
+    use super::WgpuPainter;
+
+    /// Headless GPU device + queue for painter tests.
+    fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("a GPU adapter for painter tests");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Painter Test Device"),
+            ..Default::default()
+        }))
+        .expect("a GPU device for painter tests");
+        (Arc::new(device), Arc::new(queue))
+    }
+
+    /// Regression for the damage-scissor leak: the painter is reused across
+    /// frames, so `reset_frame_state` MUST clear a per-frame scissor or it
+    /// would clip subsequent frames to a stale damage rect.
     #[test]
-    fn test_transform_stack() {
-        // Would need headless wgpu device for proper testing
+    fn reset_frame_state_clears_damage_scissor() {
+        let (device, queue) = test_device_and_queue();
+        let mut painter = WgpuPainter::with_shared_device(
+            device,
+            queue,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (100, 100),
+        );
+
+        // Simulate the per-frame damage clip the Renderer applies (unpaired).
+        painter.clip_rect(Rect::from_origin_size(
+            Point::ZERO,
+            Size::new(px(50.0), px(50.0)),
+        ));
+        assert!(
+            painter.current_scissor_for_test().is_some(),
+            "clip_rect must set the current scissor"
+        );
+
+        painter.reset_frame_state();
+        assert!(
+            painter.current_scissor_for_test().is_none(),
+            "reset_frame_state must clear the scissor so it cannot leak into the next frame"
+        );
     }
 }

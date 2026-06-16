@@ -360,10 +360,19 @@ pub(crate) fn collect_styled_spans(
             && !text.is_empty()
         {
             let mut effective = merged.clone();
-            if let Some(style) = &mut effective
-                && let Some(size) = style.font_size
-            {
-                style.font_size = Some(size * f64::from(scale));
+            if let Some(style) = &mut effective {
+                // Scale font_size to device pixels.
+                if let Some(size) = style.font_size {
+                    style.font_size = Some(size * f64::from(scale));
+                }
+                // Scale letter_spacing by the same DPR factor so that
+                // `from_spans` can compute the EM ratio as
+                // `spacing / font_size` using consistent (device-px) units.
+                // Without this scaling, at DPR=2 a 2px spacing on a 16px
+                // font yields 2/32=0.0625 EM instead of the correct 0.125 EM.
+                if let Some(spacing) = style.letter_spacing {
+                    style.letter_spacing = Some(spacing * f64::from(scale));
+                }
             }
             out.push((text.clone(), effective));
         }
