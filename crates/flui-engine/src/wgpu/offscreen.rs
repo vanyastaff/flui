@@ -287,10 +287,19 @@ impl OffscreenRenderer {
     ///
     /// # Arguments
     ///
-    /// * `child_bounds` - Bounding rectangle of child content
+    /// * `child_bounds` - Bounding rectangle of child content, in **logical**
+    ///   pixels. Used only to normalize the shader's gradient endpoints into the
+    ///   0..1 range (`(endpoint - origin) / extent`); that normalization is
+    ///   scale-invariant, so the shader's endpoints and these bounds must share
+    ///   one coordinate space (both logical) for the gradient to land correctly.
+    /// * `result_size` - Size of the masked result texture, in **device**
+    ///   pixels (`child_bounds` extent × device-pixel-ratio). The fullscreen
+    ///   quad covers the whole result regardless of its pixel dimensions, so
+    ///   sizing it at device resolution keeps a HiDPI masked layer crisp instead
+    ///   of allocating it at half resolution and upscaling on composite.
     /// * `shader` - Shader (gradient, solid, etc.)
     /// * `blend_mode` - Blend mode for compositing
-    /// * `child_texture` - Pre-rendered child content texture
+    /// * `child_texture` - Pre-rendered child content texture (device-sized)
     ///
     /// # Returns
     ///
@@ -306,6 +315,7 @@ impl OffscreenRenderer {
     pub fn render_masked(
         &mut self,
         child_bounds: Rect<Pixels>,
+        result_size: Size<Pixels>,
         shader: &Shader,
         blend_mode: BlendMode,
         child_texture: &wgpu::Texture,
@@ -314,16 +324,17 @@ impl OffscreenRenderer {
         let shader_type = ShaderType::from_shader(shader);
 
         tracing::trace!(
-            "Rendering shader mask: {:?}, bounds: {:?}",
+            "Rendering shader mask: {:?}, bounds: {:?}, result_size: {:?}",
             shader_type,
-            child_bounds
+            child_bounds,
+            result_size
         );
 
-        // Acquire offscreen texture for masked result
-        let size = Size::new(child_bounds.width(), child_bounds.height());
+        // Acquire offscreen texture for masked result, sized at device
+        // resolution so a HiDPI mask is not allocated at half resolution.
         let texture = self
             .texture_pool
-            .acquire_from_size(size, self.surface_format);
+            .acquire_from_size(result_size, self.surface_format);
 
         // Ensure pipeline exists (Arc allows using after mutable borrow ends)
         let _ = self.get_or_create_pipeline(shader_type);
@@ -433,8 +444,8 @@ impl OffscreenRenderer {
         tracing::trace!(
             "Shader mask rendering complete: {:?}, size: {}x{}",
             shader_type,
-            size.width,
-            size.height
+            result_size.width,
+            result_size.height
         );
 
         MaskedRenderResult {

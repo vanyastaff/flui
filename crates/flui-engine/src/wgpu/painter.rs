@@ -1149,6 +1149,26 @@ impl WgpuPainter {
         self.tessellator.set_max_scale(scale);
     }
 
+    /// The composite `bounds` and backing texture pixel size of every pending
+    /// [`DrawItem::OffscreenTexture`] in the draw order, in draw order. Used by
+    /// the HiDPI shader-mask / backdrop regression tests to assert an offscreen
+    /// result is allocated at device resolution (`extent * dpr`) and composited
+    /// at the device-space rect (`bounds * dpr`), not the logical rect.
+    ///
+    /// Returns `(bounds, texture_width, texture_height)`.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn offscreen_results_for_test(&self) -> Vec<(Rect<Pixels>, u32, u32)> {
+        self.draw_order
+            .iter()
+            .filter_map(|item| match item {
+                DrawItem::OffscreenTexture(p) => {
+                    Some((p.bounds, p.texture.width(), p.texture.height()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     // ===== Offscreen Compositing =====
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.
@@ -1634,11 +1654,38 @@ impl WgpuPainter {
     /// device-space chord-error budget by this so curves are subdivided finely
     /// enough at the magnification they will be baked and drawn at — see
     /// [`Tessellator::set_max_scale`](super::tessellator::Tessellator::set_max_scale).
-    fn current_max_scale(&self) -> f32 {
+    ///
+    /// Also consulted by `Backend::render_shader_mask` to size the shader-mask
+    /// offscreen at device resolution: on a HiDPI frame the live device-pixel
+    /// ratio rides in the painter CTM (the `RenderView` root pushes
+    /// `scale(dpr)`), so the offscreen child/result textures must be allocated
+    /// `bounds * dpr` to avoid rendering the masked layer at half resolution.
+    pub(crate) fn current_max_scale(&self) -> f32 {
         let m = self.current_transform;
         let col_x = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
         let col_y = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
         col_x.max(col_y)
+    }
+
+    /// The accumulated current transform (CTM) as a [`flui_types::Matrix4`].
+    ///
+    /// The painter stores its CTM as a `glam::Mat4`; both `glam::Mat4` and
+    /// `Matrix4` are column-major `[f32; 16]`, so this is a direct reinterpret
+    /// of the 16 floats.
+    ///
+    /// Consumed by `Renderer::handle_backdrop_filter` (layer-tree "Path A") to
+    /// map a layer's local-space `bounds` into device space before sampling /
+    /// compositing. The layer walk pushes the `RenderView` root `scale(dpr)`
+    /// (and every intervening `TransformLayer`/`OffsetLayer`) onto this CTM via
+    /// `push_transform`/`push_offset`, so reading it here is the same source of
+    /// truth the display-list backdrop path ("Path B") receives as its
+    /// `transform` argument.
+    pub(crate) fn current_transform_matrix(&self) -> flui_types::Matrix4 {
+        let c = self.current_transform.to_cols_array();
+        flui_types::Matrix4::new(
+            c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12], c[13],
+            c[14], c[15],
+        )
     }
 
     /// Prime the tessellator with the current world scale so its curve-flattening

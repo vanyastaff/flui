@@ -5,7 +5,7 @@
 
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Transform, px},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size, Transform, px},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
@@ -625,10 +625,31 @@ impl CommandRenderer for Backend<'_> {
     ) {
         // Try GPU shader mask pipeline
         if let Some(offscreen_arc) = self.offscreen.clone() {
+            // The live device-pixel ratio rides in the painter's current
+            // transform: the `RenderView` root pushes `scale(dpr)` and the paint
+            // walk accumulates it into the CTM. The `_transform` argument is
+            // identity on the paint path, so it is NOT the DPR source — read the
+            // active CTM here, before `reset_frame_state` below clears it.
+            //
+            // Sizing the offscreen child/result textures from the logical
+            // `bounds` would allocate the masked layer at half resolution on a
+            // 2x display and composite it at half coordinates / quarter area
+            // (Flutter/Impeller `ShaderMaskLayer::Paint` runs the child + masked
+            // saveLayer under the accumulated device matrix, so the offscreen is
+            // device-resolution and composited in device space).
+            let transform = self.painter.current_transform_matrix();
+            let dpr_scale = self.painter.current_max_scale().max(1.0);
+
+            // Device-resolution offscreen dimensions: logical extent × DPR.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let width = bounds.width().0.max(1.0) as u32;
+            let dev_width = (bounds.width().0 * dpr_scale).round().max(1.0) as u32;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let height = bounds.height().0.max(1.0) as u32;
+            let dev_height = (bounds.height().0 * dpr_scale).round().max(1.0) as u32;
+
+            // Composite rect in device space — mirrors Path B (backdrop filter):
+            // map the logical bounds through the CTM rather than scaling by DPR
+            // alone, so any translation in the CTM is honored too.
+            let device_bounds = transform.transform_rect(&bounds);
 
             // Step 1: Get GPU resources from offscreen renderer
             let (device, queue, format, child_tex) = {
@@ -636,7 +657,9 @@ impl CommandRenderer for Backend<'_> {
                 let device = Arc::clone(offscreen.device());
                 let queue = Arc::clone(offscreen.queue());
                 let format = offscreen.surface_format();
-                let child_tex = offscreen.texture_pool().acquire(width, height, format);
+                let child_tex = offscreen
+                    .texture_pool()
+                    .acquire(dev_width, dev_height, format);
                 (device, queue, format, child_tex)
             };
             // Lock released here
@@ -644,7 +667,14 @@ impl CommandRenderer for Backend<'_> {
             // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
             // Ensure the cache is populated (creates or resizes as needed), then take
             // it out temporarily so we can wrap it in a Backend for command dispatch.
-            let _ = self.get_or_create_offscreen_painter(&device, &queue, format, (width, height));
+            // The cached painter's render target is the device-sized child texture,
+            // so it must be sized at device resolution too.
+            let _ = self.get_or_create_offscreen_painter(
+                &device,
+                &queue,
+                format,
+                (dev_width, dev_height),
+            );
             let mut temp_painter = self
                 .offscreen_painter
                 .take()
@@ -657,6 +687,13 @@ impl CommandRenderer for Backend<'_> {
                 // causing the second ShaderMask's child content to be silently
                 // clipped to the prior mask's scissor region.
                 temp_painter.reset_frame_state();
+                // After reset the CTM is identity. The child DisplayList carries
+                // logical coordinates, so scale by the DPR to bake it into the
+                // device-sized offscreen — without this the child renders into
+                // the top-left logical quadrant of the device texture.
+                if (dpr_scale - 1.0).abs() > f32::EPSILON {
+                    temp_painter.scale(dpr_scale, dpr_scale);
+                }
                 let mut temp_backend = Backend::new(temp_painter);
                 for command in child.commands() {
                     dispatch_command(command, &mut temp_backend);
@@ -696,22 +733,36 @@ impl CommandRenderer for Backend<'_> {
             // Put the cached painter back for reuse
             self.offscreen_painter = Some(temp_painter);
 
-            // Step 5: Apply shader mask via GPU pipeline
+            // Step 5: Apply shader mask via GPU pipeline. The result texture is
+            // sized at device resolution; `bounds` stays logical so the shader's
+            // gradient-endpoint normalization (scale-invariant) lands correctly.
+            let result_size = Size::new(Pixels(dev_width as f32), Pixels(dev_height as f32));
             let masked_texture = {
                 let mut offscreen = offscreen_arc.lock();
-                let result =
-                    offscreen.render_masked(bounds, shader, blend_mode, child_tex.texture());
+                let result = offscreen.render_masked(
+                    bounds,
+                    result_size,
+                    shader,
+                    blend_mode,
+                    child_tex.texture(),
+                );
                 result.into_texture()
             };
 
-            // Step 6: Queue masked result for compositing on main target
-            self.painter.queue_offscreen_result(masked_texture, bounds);
+            // Step 6: Queue masked result for compositing on main target at the
+            // device-space rect (logical `bounds` would composite at half
+            // scale/position on a HiDPI frame).
+            self.painter
+                .queue_offscreen_result(masked_texture, device_bounds);
 
             tracing::debug!(
-                "ShaderMask GPU pipeline complete: bounds={:?}, child_size={}x{}",
+                "ShaderMask GPU pipeline complete: bounds={:?}, device_bounds={:?}, \
+                 dpr_scale={}, child_size={}x{}",
                 bounds,
-                width,
-                height
+                device_bounds,
+                dpr_scale,
+                dev_width,
+                dev_height
             );
             return;
         }
@@ -1565,5 +1616,208 @@ impl LayerStateStack for Backend<'_> {
     fn pop_image_filter(&mut self) {
         self.flush_active_transform();
         self.painter.restore_layer();
+    }
+}
+
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod tests {
+    use super::*;
+    use crate::traits::CommandRenderer;
+
+    /// Acquire a real device/queue. Returns `None` when no GPU adapter exists
+    /// (CI without a GPU), so the test skips gracefully.
+    fn test_device_and_queue() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("ShaderMask HiDPI Test Device"),
+            ..Default::default()
+        }))
+        .ok()?;
+        Some((Arc::new(device), Arc::new(queue)))
+    }
+
+    /// BUG 2 (HiDPI shader mask): the offscreen child/result textures must be
+    /// allocated at DEVICE resolution (`bounds * dpr`) and the masked result
+    /// composited at the device-space rect, sourcing the DPR from the live
+    /// painter CTM (not the identity `_transform` paint-path argument).
+    ///
+    /// Under a `scale(2)` CTM a `ShaderMask` over logical bounds (0,0,100,100)
+    /// must allocate a 200x200 offscreen and composite at device (0,0,200,200).
+    /// Red before the fix: 100x100 offscreen composited at (0,0,100,100)
+    /// (half resolution, quarter area).
+    #[test]
+    fn shader_mask_offscreen_is_device_sized_under_dpr() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU here; skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (800, 800),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        // Simulate the `RenderView` DPR root transform on the live CTM.
+        backend.painter_mut().scale(2.0, 2.0);
+
+        // Child display list: a single 100x100 rect, built via the public Canvas.
+        let mut canvas = flui_painting::Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            &Paint::fill(Color::WHITE),
+        );
+        let child = canvas.finish();
+
+        let shader = flui_painting::Shader::solid(Color::WHITE);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+
+        // `_transform` is identity on the paint path — the DPR comes from the CTM.
+        backend.render_shader_mask(
+            &child,
+            &shader,
+            bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "shader mask must queue exactly one offscreen composite"
+        );
+        let (composite_rect, tex_w, tex_h) = results[0];
+
+        // Result texture allocated at device resolution.
+        assert_eq!(
+            (tex_w, tex_h),
+            (200, 200),
+            "shader-mask offscreen must be device-sized (200x200) under DPR=2; \
+             got {tex_w}x{tex_h} (100x100 means the CTM scale was dropped)"
+        );
+
+        // Composited at the device-space rect (0,0,200,200).
+        assert!(
+            composite_rect.left().0.abs() < 0.5
+                && composite_rect.top().0.abs() < 0.5
+                && (composite_rect.right().0 - 200.0).abs() < 0.5
+                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            "shader-mask composite rect must span device (0,0,200,200) under DPR=2; \
+             got {composite_rect:?}"
+        );
+    }
+
+    /// Locks the gradient-uniform / device-sizing split under HiDPI.
+    ///
+    /// `render_masked` receives `child_bounds` in LOGICAL pixels (for gradient
+    /// normalization) but `result_size` in DEVICE pixels. A regression that passes
+    /// device-sized bounds as `child_bounds` would misplace gradient stop positions;
+    /// a regression that passes logical size as `result_size` would under-allocate.
+    ///
+    /// This test uses a LINEAR-GRADIENT shader (not solid) to exercise the
+    /// gradient-uniform branch. Under DPR=2 over logical bounds (0,0,100,100):
+    /// - result texture must be 200×200 (device-sized)
+    /// - composite rect must cover device (0,0,200,200)
+    /// - the dispatch must not panic (gradient uniforms stay in logical space)
+    ///
+    /// Red before the fix: result texture is 100×100 (logical size fed as
+    /// `result_size`) and composite rect is (0,0,100,100).
+    #[test]
+    fn shader_mask_gradient_is_device_sized_under_dpr() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_types::painting::TileMode;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU here; skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (800, 800),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        // Simulate DPR=2 on the live CTM.
+        backend.painter_mut().scale(2.0, 2.0);
+
+        // Child display list: a white rect matching the logical mask bounds.
+        let mut canvas = flui_painting::Canvas::new();
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        canvas.draw_rect(bounds, &Paint::fill(Color::WHITE));
+        let child = canvas.finish();
+
+        // Linear gradient: black-to-white left-to-right across the logical bounds.
+        // `to_mask_uniform_data` normalizes endpoints as (endpoint - origin) / extent;
+        // both endpoints and `child_bounds` are logical, so normalization is correct.
+        let shader = flui_painting::Shader::linear_gradient(
+            Offset::new(px(0.0), px(0.0)),
+            Offset::new(px(100.0), px(0.0)),
+            vec![Color::BLACK, Color::WHITE],
+            None,
+            TileMode::Clamp,
+        );
+
+        backend.render_shader_mask(
+            &child,
+            &shader,
+            bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "gradient shader mask must queue exactly one offscreen composite"
+        );
+        let (composite_rect, tex_w, tex_h) = results[0];
+
+        // Result texture must be device-sized: 200×200 under DPR=2.
+        assert_eq!(
+            (tex_w, tex_h),
+            (200, 200),
+            "gradient shader-mask offscreen must be device-sized (200×200) under DPR=2; \
+             got {tex_w}×{tex_h} — logical sizing means the CTM scale was ignored for \
+             result_size"
+        );
+
+        // Composite must cover device (0,0,200,200).
+        assert!(
+            composite_rect.left().0.abs() < 0.5
+                && composite_rect.top().0.abs() < 0.5
+                && (composite_rect.right().0 - 200.0).abs() < 0.5
+                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            "gradient shader-mask composite rect must be (0,0,200,200) under DPR=2; \
+             got {composite_rect:?}"
+        );
     }
 }
