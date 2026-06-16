@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use flui_painting::{Paint, PaintStyle};
+use flui_painting::{BlendMode, Paint, PaintStyle};
 use flui_types::{
     Offset, Point, Rect,
     geometry::{Pixels, RRect, px},
@@ -2546,9 +2546,28 @@ impl WgpuPainter {
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
         if paint.style == PaintStyle::Fill {
-            // Check for shader (gradient) — dispatch to gradient pipeline
-            if paint.has_shader() && self.dispatch_shader_rect(rect, paint, [0.0; 4]) {
-                return;
+            // Phase-A limit: gradient/shader fills always use the SrcOver
+            // pipeline regardless of `paint.blend_mode`. Blending a shader with
+            // a non-SrcOver operator requires reading the destination through the
+            // shader, which is not possible with the fixed-function GPU blend
+            // stage. Phase B will introduce a fullscreen-quad dst-sample approach.
+            if paint.has_shader() {
+                if paint.blend_mode != BlendMode::SrcOver {
+                    static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!(
+                            blend_mode = ?paint.blend_mode,
+                            "gradient/shader fill with blend_mode {:?} is not supported by the \
+                             Phase A fixed-function path; rendering as SrcOver. \
+                             Phase B will add dst-sample blended gradients. (logged once per process)",
+                            paint.blend_mode,
+                        );
+                    }
+                }
+                if self.dispatch_shader_rect(rect, paint, [0.0; 4]) {
+                    return;
+                }
             }
 
             // Apply current opacity to color
@@ -2559,7 +2578,16 @@ impl WgpuPainter {
                 paint.color
             };
 
-            if self.is_axis_aligned_transform() {
+            // The instanced fast path renders with a hardcoded SrcOver
+            // (ALPHA_BLENDING) pipeline. Non-SrcOver blend modes must route
+            // through the tessellated path, whose pipeline is selected per
+            // `pipeline_key_from_paint` (Phase A fixed-function Porter-Duff).
+            //
+            // Phase-A quality limit: the tessellated path produces aliased edges
+            // at sample_count=1 (no SDF anti-aliasing) and the scissor clip is
+            // an AABB, not a pixel-perfect rounded shape. SDF-quality blended
+            // shapes are Phase B.
+            if self.is_axis_aligned_transform() && paint.blend_mode == BlendMode::SrcOver {
                 // Fast path: GPU instancing for axis-aligned rects
                 let top_left = self.apply_transform(Point::new(rect.left(), rect.top()));
                 let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
@@ -2575,7 +2603,12 @@ impl WgpuPainter {
                     self.current_scissor,
                 );
             } else {
-                // Slow path: tessellate rotated/skewed rects as a transformed quad
+                // Slow path: tessellate rotated/skewed rects (or any non-SrcOver
+                // blend mode) as a transformed quad.
+                //
+                // Phase-A quality note: uses the tessellated path → aliased edges
+                // (no SDF AA), AABB scissor clip. SDF-quality blended rects are
+                // Phase B.
                 let tl = self.apply_transform(Point::new(rect.left(), rect.top()));
                 let tr = self.apply_transform(Point::new(rect.right(), rect.top()));
                 let br = self.apply_transform(Point::new(rect.right(), rect.bottom()));
@@ -2627,8 +2660,23 @@ impl WgpuPainter {
 
     pub fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         if paint.style == PaintStyle::Fill {
-            // Check for shader (gradient) — dispatch to gradient pipeline
+            // Phase-A limit: gradient/shader fills always use the SrcOver
+            // pipeline regardless of `paint.blend_mode`. See the doc comment in
+            // `rect()` for the full rationale. Phase B will add dst-sample support.
             if paint.has_shader() {
+                if paint.blend_mode != BlendMode::SrcOver {
+                    static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!(
+                            blend_mode = ?paint.blend_mode,
+                            "gradient/shader rrect fill with blend_mode {:?} is not supported by \
+                             the Phase A fixed-function path; rendering as SrcOver. \
+                             Phase B will add dst-sample blended gradients. (logged once per process)",
+                            paint.blend_mode,
+                        );
+                    }
+                }
                 let corner_radii = [
                     rrect.top_left.x.0.max(rrect.top_left.y.0),
                     rrect.top_right.x.0.max(rrect.top_right.y.0),
@@ -2640,13 +2688,6 @@ impl WgpuPainter {
                 }
             }
 
-            // Apply current transform to rect bounds
-            let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
-            let bottom_right =
-                self.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
-            let transformed_rect =
-                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-
             // Apply current opacity to color
             let color = if self.current_opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * self.current_opacity) as u8;
@@ -2654,6 +2695,38 @@ impl WgpuPainter {
             } else {
                 paint.color
             };
+
+            // The instanced fast path renders with a hardcoded SrcOver pipeline.
+            // A non-SrcOver blend mode must route through the tessellated path so
+            // the blend pipeline keyed by `pipeline_key_from_paint` is selected.
+            //
+            // Phase-A quality note: the tessellated fallback produces aliased edges
+            // (no SDF AA) and the scissor clip is an AABB, not the rounded shape.
+            // SDF-quality blended rounded rects are Phase B.
+            if paint.blend_mode != BlendMode::SrcOver {
+                // Tessellate the filled rounded rect in local space, carry the
+                // opacity-adjusted color and the requested blend mode, then bake
+                // the transform via `submit_transformed_geometry`.
+                let fill_paint = Paint::fill(color).with_blend_mode(paint.blend_mode);
+                self.prime_tessellator_scale();
+                match self.tessellator.tessellate_rrect(rrect, &fill_paint) {
+                    Ok((vertices, indices)) => {
+                        let key = pipeline::pipeline_key_from_paint(&fill_paint);
+                        self.submit_transformed_geometry(vertices, &indices, key);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to tessellate blended rrect: {}", e);
+                    }
+                }
+                return;
+            }
+
+            // Apply current transform to rect bounds
+            let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
+            let bottom_right =
+                self.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
+            let transformed_rect =
+                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
             // Use GPU instancing for filled rounded rects (100x faster!)
             let instance =
@@ -2693,8 +2766,23 @@ impl WgpuPainter {
         );
 
         if paint.style == PaintStyle::Fill {
-            // Check for shader (gradient) — dispatch to gradient pipeline
+            // Phase-A limit: gradient/shader fills always use the SrcOver
+            // pipeline regardless of `paint.blend_mode`. See the doc comment in
+            // `rect()` for the full rationale. Phase B will add dst-sample support.
             if paint.has_shader() {
+                if paint.blend_mode != BlendMode::SrcOver {
+                    static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!(
+                            blend_mode = ?paint.blend_mode,
+                            "gradient/shader circle fill with blend_mode {:?} is not supported by \
+                             the Phase A fixed-function path; rendering as SrcOver. \
+                             Phase B will add dst-sample blended gradients. (logged once per process)",
+                            paint.blend_mode,
+                        );
+                    }
+                }
                 let bounds = Rect::from_xywh(
                     center.x - px(radius),
                     center.y - px(radius),
@@ -2715,7 +2803,9 @@ impl WgpuPainter {
                 paint.color
             };
 
-            if self.is_axis_aligned_transform() {
+            // The instanced fast path renders with a hardcoded SrcOver pipeline;
+            // a non-SrcOver blend mode must route through the tessellated path.
+            if self.is_axis_aligned_transform() && paint.blend_mode == BlendMode::SrcOver {
                 // Fast path: axis-aligned — use GPU instancing (100x faster!).
                 // Apply current transform to center point for translation + scale.
                 let transformed_center = self.apply_transform(center);
@@ -2739,12 +2829,19 @@ impl WgpuPainter {
                     self.current_scissor,
                 );
             } else {
-                // Slow path: rotation/shear present — tessellate in local space and
-                // bake the full transform into vertex positions via submit_transformed_geometry.
-                // This correctly maps a circle under arbitrary affine transforms.
+                // Slow path: rotation/shear present, or a non-SrcOver blend mode —
+                // tessellate in local space and bake the full transform into vertex
+                // positions via submit_transformed_geometry. This correctly maps a
+                // circle under arbitrary affine transforms, and routes the blend
+                // mode through `pipeline_key_from_paint`.
+                //
+                // Phase-A quality note: uses the tessellated path → aliased edges
+                // (no SDF AA), AABB scissor clip. SDF-quality blended circles are
+                // Phase B.
                 let fill_paint = Paint {
                     color,
                     style: PaintStyle::Fill,
+                    blend_mode: paint.blend_mode,
                     ..Paint::default()
                 };
                 self.prime_tessellator_scale();
@@ -2830,7 +2927,13 @@ impl WgpuPainter {
             // the wedge would be drawn on the wrong side.
             let m = self.current_transform;
             let det = m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x;
-            if self.is_axis_aligned_transform() && det >= 0.0 {
+            // The instanced fast path renders with a hardcoded SrcOver pipeline;
+            // a non-SrcOver blend mode must route through the tessellated path
+            // (which selects the blend pipeline via `pipeline_key_from_paint`).
+            if self.is_axis_aligned_transform()
+                && det >= 0.0
+                && paint.blend_mode == BlendMode::SrcOver
+            {
                 // Fast path: GPU instancing for filled arcs.
                 let transformed_center = self.apply_transform(center);
                 let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
@@ -2850,8 +2953,13 @@ impl WgpuPainter {
                     self.current_scissor,
                 );
             } else {
-                // Slow path: rotation, shear, or reflection present — tessellate in
-                // local space and bake the full transform into vertex positions.
+                // Slow path: rotation, shear, reflection, or non-SrcOver blend
+                // mode — tessellate in local space and bake the full transform
+                // into vertex positions.
+                //
+                // Phase-A quality note: uses the tessellated path → aliased edges
+                // (no SDF AA), AABB scissor clip. SDF-quality blended arcs are
+                // Phase B.
                 self.prime_tessellator_scale();
                 match self.tessellator.tessellate_arc(
                     rect,
@@ -4731,6 +4839,7 @@ impl WgpuPainter {
 mod tests {
     use std::sync::Arc;
 
+    use flui_painting::BlendMode;
     use flui_types::{Point, Rect, Size, geometry::px};
 
     use super::WgpuPainter;
@@ -5892,6 +6001,290 @@ mod tests {
             "right pixel = (R={rr}, G={rg}): expected GREEN (~0,~255). \
              A blended value means uv_coords has a half-texel inset that \
              shifts sampling away from the texel center."
+        );
+    }
+
+    // ===== Phase A per-draw blend mode (fixed-function Porter-Duff) =====
+    //
+    // These tests exercise the TESSELLATED path: a filled `Path` and stroked
+    // shapes always tessellate (never the instanced fast path), so they go
+    // through `pipeline_key_from_paint` → the blend pipeline keyed by
+    // `PipelineKey::blend_mode`. All values are premultiplied-alpha results on
+    // the UNorm readback target.
+
+    /// Helper: a filled-path rect covering the whole `size`×`size` frame. Forces
+    /// the tessellated path regardless of the (axis-aligned) transform, so the
+    /// per-draw blend pipeline is selected.
+    fn full_frame_fill_path(size: f32) -> flui_types::painting::path::Path {
+        flui_types::painting::path::Path::rectangle(Rect::from_xywh(
+            px(0.0),
+            px(0.0),
+            px(size),
+            px(size),
+        ))
+    }
+
+    /// SrcOver pixel-identity (regression guard for the premultiply switch):
+    /// a 50%-alpha RED filled PATH over opaque white must read back the same
+    /// straight-SrcOver value the old `input.color` + `ALPHA_BLENDING` path
+    /// produced. Premultiplied SrcOver is `src + dst*(1-a)`; with
+    /// `src = (0.502,0,0,0.502)` over white this is `(1.0, 0.498, 0.498)` ≈
+    /// `(255, 127, 127)` — identical to the old output. A divergence here means
+    /// the premultiply switch changed visible SrcOver output.
+    #[test]
+    fn blend_srcover_filled_path_pixel_identity() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+            painter.draw_path(
+                &full_frame_fill_path(64.0),
+                &Paint::fill(flui_types::Color::rgba(255, 0, 0, 128)),
+            );
+        });
+
+        let (r, g, b) = (
+            i32::from(px_val[0]),
+            i32::from(px_val[1]),
+            i32::from(px_val[2]),
+        );
+        assert!(
+            (r - 255).abs() <= 3,
+            "R = {r}, expected ~255 (premultiplied SrcOver red over white). pixel = {px_val:?}"
+        );
+        assert!(
+            (g - 127).abs() <= 4 && (b - 127).abs() <= 4,
+            "G,B = {g},{b}, expected ~127 (50% red over white). \
+             A drift here means premultiplied SrcOver is no longer identical to \
+             the old straight-alpha output. pixel = {px_val:?}"
+        );
+    }
+
+    /// SrcOver pixel-identity for a STROKED shape (also always tessellated).
+    /// A 50%-alpha RED stroke (width 16, centerline at x=8) over opaque white,
+    /// sampled on the left stroke band, must read the same premultiplied SrcOver
+    /// value `(255, 127, 127)`.
+    #[test]
+    fn blend_srcover_stroked_rect_pixel_identity() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let rgba = render_to_rgba(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+            // Inset rect so its left edge centerline sits at x=8; a 16px stroke
+            // fully covers the band around x=8.
+            painter.rect(
+                Rect::from_ltrb(px(8.0), px(8.0), px(56.0), px(56.0)),
+                &Paint::stroke(flui_types::Color::rgba(255, 0, 0, 128), 16.0),
+            );
+        });
+
+        // Sample the left vertical stroke band, away from the corner.
+        let p = pixel_at(&rgba, 64, 8, 32);
+        let (r, g, b) = (i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
+        assert!(
+            (r - 255).abs() <= 4 && (g - 127).abs() <= 6 && (b - 127).abs() <= 6,
+            "stroke-band pixel = (R={r}, G={g}, B={b}), expected ~(255,127,127) \
+             (premultiplied SrcOver 50% red over white). pixel = {p:?}"
+        );
+    }
+
+    /// Clear: an OPAQUE shape drawn with `BlendMode::Clear` over a red background
+    /// punches out to fully transparent. Clear factors are `src Zero, dst Zero`,
+    /// so the covered texel becomes `(0,0,0,0)` regardless of source color.
+    #[test]
+    fn blend_clear_punches_out() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::RED, |painter| {
+            painter.draw_path(
+                &full_frame_fill_path(64.0),
+                &Paint::fill(flui_types::Color::rgb(0, 255, 0)).with_blend_mode(BlendMode::Clear),
+            );
+        });
+
+        assert_eq!(
+            px_val,
+            [0, 0, 0, 0],
+            "Clear must punch the covered region to transparent (0,0,0,0); \
+             got {px_val:?}. A red result means Clear fell back to SrcOver."
+        );
+    }
+
+    /// Plus (Lighter): a RED shape drawn `Plus` over a green background sums the
+    /// components → yellow. Plus factors are `src One, dst One`, so
+    /// `result = src + dst = (1,1,0)` → `(255, 255, 0)`.
+    #[test]
+    fn blend_plus_sums_to_yellow() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::GREEN, |painter| {
+            painter.draw_path(
+                &full_frame_fill_path(64.0),
+                &Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(BlendMode::Plus),
+            );
+        });
+
+        let (r, g, b) = (
+            i32::from(px_val[0]),
+            i32::from(px_val[1]),
+            i32::from(px_val[2]),
+        );
+        assert!(
+            r > 250 && g > 250 && b < 5,
+            "Plus(red, green) must read back yellow ~(255,255,0); got {px_val:?}. \
+             A non-additive result means Plus fell back to SrcOver."
+        );
+    }
+
+    /// Modulate: an opaque 50%-gray shape drawn `Modulate` over RED multiplies
+    /// the components → ~half red. Modulate color factor is `src Dst, dst Zero`,
+    /// so `result.rgb = src.rgb * dst.rgb`. With premultiplied opaque gray
+    /// `(0.502,0.502,0.502)` over red `(1,0,0)` → `(0.502, 0, 0)` ≈ `(128,0,0)`.
+    #[test]
+    fn blend_modulate_multiplies_to_half_red() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::RED, |painter| {
+            painter.draw_path(
+                &full_frame_fill_path(64.0),
+                &Paint::fill(flui_types::Color::rgb(128, 128, 128))
+                    .with_blend_mode(BlendMode::Modulate),
+            );
+        });
+
+        let (r, g, b) = (
+            i32::from(px_val[0]),
+            i32::from(px_val[1]),
+            i32::from(px_val[2]),
+        );
+        assert!(
+            (r - 128).abs() <= 6,
+            "R = {r}, expected ~128 (gray * red). pixel = {px_val:?}"
+        );
+        assert!(
+            g < 5 && b < 5,
+            "G,B = {g},{b}, expected ~0 (red has no green/blue to modulate). \
+             pixel = {px_val:?}"
+        );
+    }
+
+    /// DstOver: an opaque BLUE shape drawn `DstOver` over opaque RED leaves the
+    /// destination unchanged where it is already opaque. DstOver factors are
+    /// `src OneMinusDstAlpha, dst One`; with `dst.a = 1` the source contributes
+    /// nothing, so the result stays RED.
+    #[test]
+    fn blend_dstover_keeps_opaque_destination() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::RED, |painter| {
+            painter.draw_path(
+                &full_frame_fill_path(64.0),
+                &Paint::fill(flui_types::Color::rgb(0, 0, 255)).with_blend_mode(BlendMode::DstOver),
+            );
+        });
+
+        let (r, g, b) = (
+            i32::from(px_val[0]),
+            i32::from(px_val[1]),
+            i32::from(px_val[2]),
+        );
+        assert!(
+            r > 250 && g < 5 && b < 5,
+            "DstOver over opaque red must stay red ~(255,0,0); got {px_val:?}. \
+             A blue result means the source wrongly painted over the opaque dest."
+        );
+    }
+
+    /// Advanced fallback honesty: `BlendMode::Multiply` is an advanced (dst-read)
+    /// mode NOT supported by the Phase A fixed-function path. It must fall back
+    /// to SrcOver (warn-once), NOT render garbage or panic. We assert the
+    /// Multiply draw produces the exact same pixel as an explicit SrcOver draw
+    /// of the same shape — documenting the Phase-A fallback.
+    #[test]
+    fn blend_advanced_multiply_falls_back_to_srcover() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let color = flui_types::Color::rgba(255, 0, 0, 128);
+
+        let multiply_px = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |p| {
+            p.draw_path(
+                &full_frame_fill_path(64.0),
+                &Paint::fill(color).with_blend_mode(BlendMode::Multiply),
+            );
+        });
+        let srcover_px = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |p| {
+            p.draw_path(
+                &full_frame_fill_path(64.0),
+                &Paint::fill(color).with_blend_mode(BlendMode::SrcOver),
+            );
+        });
+
+        assert_eq!(
+            multiply_px, srcover_px,
+            "advanced Multiply must fall back to SrcOver (Phase A): \
+             Multiply pixel {multiply_px:?} must equal SrcOver pixel {srcover_px:?}. \
+             A difference means Multiply was treated as a real (incorrect) \
+             fixed-function blend instead of the honest SrcOver fallback."
+        );
+        // And the fallback must be the known SrcOver value, not transparent/garbage.
+        let r = i32::from(srcover_px[0]);
+        assert!(
+            (r - 255).abs() <= 3,
+            "fallback R = {r}, expected ~255 (SrcOver red over white). pixel = {srcover_px:?}"
+        );
+    }
+
+    /// Phase-A gradient + non-SrcOver honesty: drawing a gradient (shader) fill
+    /// with `BlendMode::Clear` must NOT panic and must render as SrcOver (the
+    /// gradient pipeline ignores `blend_mode` in Phase A). The test documents
+    /// the limit — a white background must remain visible (non-zero alpha)
+    /// because Clear is silently downgraded to SrcOver for gradients.
+    ///
+    /// Phase B will add dst-sample blended gradient support.
+    #[test]
+    fn gradient_with_non_srcover_blend_mode_does_not_panic() {
+        use flui_painting::Paint;
+        use flui_types::painting::TileMode;
+
+        let (device, queue) = test_device_and_queue();
+
+        // A horizontal red→blue linear gradient with BlendMode::Clear.
+        // Phase A: Clear is ignored; the gradient renders via SrcOver so the
+        // white background is partially or fully covered — NOT erased to (0,0,0,0).
+        let shader = flui_painting::Shader::linear_gradient(
+            flui_types::Point::new(px(0.0), px(0.0)).into(),
+            flui_types::Point::new(px(64.0), px(0.0)).into(),
+            vec![
+                flui_types::Color::rgb(255, 0, 0),
+                flui_types::Color::rgb(0, 0, 255),
+            ],
+            None,
+            TileMode::Clamp,
+        );
+        let paint = Paint::fill(flui_types::Color::WHITE)
+            .with_shader(shader)
+            .with_blend_mode(BlendMode::Clear);
+
+        // Must not panic. The result is SrcOver (gradient), so alpha stays 255.
+        // A working Clear would produce (0,0,0,0) — that must NOT happen here.
+        let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+                &paint,
+            );
+        });
+
+        // The alpha channel must be non-zero: if Clear had been honored the
+        // output would be (0,0,0,0). SrcOver of any opaque gradient keeps a=255.
+        assert!(
+            px_val[3] > 0,
+            "gradient + Clear must not erase the target to alpha=0 in Phase A \
+             (gradient blend_mode is SrcOver, not Clear). got {px_val:?}"
         );
     }
 }
