@@ -96,6 +96,12 @@ struct SavedLayer {
     saved_opacity: f32,
     /// Opacity to apply when compositing the offscreen layer
     layer_opacity: f32,
+    /// Per-channel tint applied when compositing the offscreen layer.
+    ///
+    /// White (`(1.0, 1.0, 1.0)`) for a plain opacity layer; a non-white value
+    /// carries the ColorFilter chroma (`filter.apply([1,1,1,1])` RGB) so hue
+    /// shifts survive compositing. Captured from `paint.color` in `save_layer`.
+    layer_tint_rgb: [f32; 3],
     /// Bounds of the layer in screen space [x, y, w, h], or None for full viewport
     bounds: Option<[f32; 4]>,
 }
@@ -254,6 +260,9 @@ struct PendingOpacityLayer {
     final_segment: DrawSegment,
     /// Group opacity to apply during compositing (0.0-1.0)
     opacity: f32,
+    /// Per-channel chroma tint for ColorFilter layers; white for plain opacity.
+    /// See [`SavedLayer::layer_tint_rgb`].
+    tint_rgb: [f32; 3],
     /// Compositing bounds in screen coordinates
     bounds: Rect<Pixels>,
 }
@@ -306,7 +315,24 @@ pub struct WgpuPainter {
     instanced_arc_pipeline: wgpu::RenderPipeline,
 
     /// Instanced texture pipeline (100x faster for images/icons)
+    ///
+    /// Uses straight `ALPHA_BLENDING` — correct for normal decoded-image draws,
+    /// whose samples are *straight* alpha (rgb not pre-multiplied).
     instanced_texture_pipeline: wgpu::RenderPipeline,
+
+    /// Instanced texture pipeline using **premultiplied** source-over blending.
+    ///
+    /// Used exclusively for compositing offscreen *layer* textures
+    /// (`flush_opacity_layer`). A layer offscreen is cleared to transparent and
+    /// its children are drawn with straight `ALPHA_BLENDING`, which leaves every
+    /// texel *premultiplied* (`rgb = straight_rgb * a`). Compositing such a texel
+    /// with straight alpha would multiply rgb by alpha a second time, darkening
+    /// translucent/anti-aliased content. This pipeline uses
+    /// `PREMULTIPLIED_ALPHA_BLENDING` (src factor `One`) so a premultiplied
+    /// sample is composited correctly, and a per-channel tint of
+    /// `(C.r*O, C.g*O, C.b*O, O)` applies group opacity `O` and ColorFilter
+    /// chroma `C` uniformly across the already-premultiplied texel.
+    instanced_texture_premul_pipeline: wgpu::RenderPipeline,
 
     /// Texture instance batch
     texture_batch: super::instancing::InstanceBatch<super::instancing::TextureInstance>,
@@ -843,6 +869,57 @@ impl WgpuPainter {
                 cache: None,
             });
 
+        // Create the premultiplied-blend variant for offscreen-layer compositing.
+        // Identical to `instanced_texture_pipeline` (same shader, same layout)
+        // except for the blend state: PREMULTIPLIED_ALPHA_BLENDING (src factor
+        // One) composites premultiplied layer texels without re-multiplying by
+        // alpha. See the field doc on `instanced_texture_premul_pipeline`.
+        let instanced_texture_premul_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Instanced Texture Premultiplied Pipeline"),
+                layout: Some(&texture_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &texture_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[
+                        wgpu::VertexBufferLayout {
+                            array_stride: 8, // 2 floats (vec2)
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
+                        },
+                        super::instancing::TextureInstance::desc(),
+                    ],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &texture_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview_mask: None,
+                cache: None,
+            });
+
         // Create texture instance batch
         let texture_batch = super::instancing::InstanceBatch::new(1024); // 1024 textures per batch
 
@@ -930,6 +1007,7 @@ impl WgpuPainter {
             instanced_circle_pipeline,
             instanced_arc_pipeline,
             instanced_texture_pipeline,
+            instanced_texture_premul_pipeline,
             texture_batch,
             texture_bind_group_layout,
             linear_gradient_pipeline,
@@ -1168,7 +1246,16 @@ impl WgpuPainter {
                     );
                     let _ = self.texture_batch.add(instance);
                     // Offscreen compositing is always full-viewport — no scissor.
-                    self.flush_texture_batch(encoder, view, p.texture.view(), None);
+                    //
+                    // These are shader-mask / backdrop-blur results from
+                    // `OffscreenRenderer`, which clears its target transparent
+                    // and draws with straight `ALPHA_BLENDING` (offscreen.rs +
+                    // backend.rs) — leaving the result *premultiplied*, exactly
+                    // like an opacity-layer offscreen. Composite it with the
+                    // premultiplied pipeline and an identity (white) tint so it
+                    // is not re-multiplied by its own alpha (same defect class as
+                    // BUG 2; fixed consistently here).
+                    self.flush_texture_batch_premultiplied(encoder, view, p.texture.view(), None);
                     // p.texture dropped here, returns to pool
                 }
                 DrawItem::OpacityLayer(layer) => {
@@ -1300,13 +1387,22 @@ impl WgpuPainter {
                     self.flush_segment(&mut seg, encoder, offscreen_view);
                 }
                 DrawItem::OffscreenTexture(p) => {
+                    // A nested OffscreenTexture (shader-mask / backdrop-blur
+                    // result) is itself a premultiplied offscreen — composite it
+                    // with the premultiplied pipeline and an identity tint so it
+                    // is not re-multiplied by its own alpha.
                     let instance = super::instancing::TextureInstance::new(
                         p.bounds,
                         flui_types::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
                     // Nested offscreen compositing — full-viewport, no scissor.
-                    self.flush_texture_batch(encoder, offscreen_view, p.texture.view(), None);
+                    self.flush_texture_batch_premultiplied(
+                        encoder,
+                        offscreen_view,
+                        p.texture.view(),
+                        None,
+                    );
                 }
                 DrawItem::OpacityLayer(nested) => {
                     // Recursively handle nested opacity layers
@@ -1320,11 +1416,25 @@ impl WgpuPainter {
             self.flush_segment(&mut layer.final_segment, encoder, offscreen_view);
         }
 
-        // Composite the offscreen texture onto the main surface with group opacity.
-        // The tint color is white with the layer opacity as alpha, so the texture
-        // shader multiplies every texel by that alpha value.
-        let alpha_u8 = (layer.opacity.clamp(0.0, 1.0) * 255.0) as u8;
-        let tint = flui_types::styling::Color::rgba(255, 255, 255, alpha_u8);
+        // Composite the premultiplied offscreen onto the main surface.
+        //
+        // The offscreen texel `T` is premultiplied: `T.rgb = straight_rgb * a`,
+        // `T.a = a`. With group opacity `O` and ColorFilter chroma `C`
+        // (white = no-op), the correct result is premultiplied source-over of
+        // `T * (C.r*O, C.g*O, C.b*O, O)` — every premultiplied channel scaled by
+        // its tint, then OVER the destination. The shader applies `tex * tint`
+        // and the premultiplied pipeline (src factor `One`) performs the OVER.
+        //
+        // - White tint, O<1  → tint (O,O,O,O): uniform group opacity (BUG 2 fix).
+        // - Chroma tint       → modulates hue while preserving premultiplication
+        //                       (BUG 3 fix).
+        let o = layer.opacity.clamp(0.0, 1.0);
+        let tint = [
+            layer.tint_rgb[0] * o,
+            layer.tint_rgb[1] * o,
+            layer.tint_rgb[2] * o,
+            o,
+        ];
 
         // Use layer bounds as the destination rect for compositing.
         // The UV coordinates map the bounds region from the full-viewport texture.
@@ -1333,14 +1443,15 @@ impl WgpuPainter {
         let uv_right = layer.bounds.right().0 / vp_w as f32;
         let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
 
-        let instance = super::instancing::TextureInstance::with_uv(
+        let instance = super::instancing::TextureInstance::with_uv_tint_f32(
             layer.bounds,
             [uv_left, uv_top, uv_right, uv_bottom],
             tint,
         );
         let _ = self.texture_batch.add(instance);
         // Opacity-layer composite onto main surface — full-viewport, no scissor.
-        self.flush_texture_batch(encoder, main_view, offscreen_view, None);
+        // Premultiplied: the offscreen texels are premultiplied (see above).
+        self.flush_texture_batch_premultiplied(encoder, main_view, offscreen_view, None);
 
         tracing::trace!(
             opacity = layer.opacity,
@@ -2095,16 +2206,20 @@ impl WgpuPainter {
         self.current_segment.sweep_grad_scissors.clear();
     }
 
-    /// Flush texture instance batch with given texture
+    /// Flush texture instance batch with given texture (straight-alpha blend).
     ///
     /// Renders all batched textures in a single draw call using GPU instancing.
     /// This is 50-100x faster than individual draw calls for image-heavy UIs.
     ///
+    /// This is the **straight-alpha** entry point used for normal decoded-image
+    /// draws, whose samples carry straight (non-premultiplied) alpha. Offscreen
+    /// *layer* composites must instead use `flush_texture_batch_premultiplied`,
+    /// because their texels are premultiplied — see that method and
+    /// `flush_opacity_layer`.
+    ///
     /// `scissor` is the clip rect to apply for this draw call.  Pass `None` to
     /// render unclipped (full viewport), matching the behaviour of the rect/circle
-    /// instanced batches when no scissor is active.  Offscreen/opacity-layer
-    /// composite callers always pass `None` because their content is inherently
-    /// full-viewport.
+    /// instanced batches when no scissor is active.
     ///
     /// # Arguments
     /// * `encoder` - Command encoder
@@ -2117,6 +2232,44 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
         texture_view: &wgpu::TextureView,
         scissor: ScissorRect,
+    ) {
+        self.flush_texture_batch_with_blend(encoder, view, texture_view, scissor, false);
+    }
+
+    /// Flush texture instance batch using **premultiplied** source-over blending.
+    ///
+    /// Used to composite offscreen *layer* textures
+    /// (opacity / ColorFilter / ShaderMask / backdrop results). Those offscreens
+    /// are cleared transparent then drawn into with straight `ALPHA_BLENDING`,
+    /// which leaves their texels premultiplied (`rgb = straight_rgb * a`).
+    /// Compositing them with the straight pipeline would re-multiply rgb by
+    /// alpha, darkening translucent/AA content. This routes the batch through
+    /// [`Self::instanced_texture_premul_pipeline`] (src factor `One`) so the
+    /// composite is correct, with the per-channel `tint` carrying group opacity
+    /// and any ColorFilter chroma as `(C.r*O, C.g*O, C.b*O, O)`.
+    fn flush_texture_batch_premultiplied(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        texture_view: &wgpu::TextureView,
+        scissor: ScissorRect,
+    ) {
+        self.flush_texture_batch_with_blend(encoder, view, texture_view, scissor, true);
+    }
+
+    /// Shared body for [`Self::flush_texture_batch`] and
+    /// [`Self::flush_texture_batch_premultiplied`].
+    ///
+    /// `premultiplied` selects the blend pipeline: `false` =
+    /// straight-alpha (decoded images), `true` = premultiplied source-over
+    /// (offscreen-layer composites).
+    fn flush_texture_batch_with_blend(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        texture_view: &wgpu::TextureView,
+        scissor: ScissorRect,
+        premultiplied: bool,
     ) {
         if self.texture_batch.is_empty() {
             return;
@@ -2170,8 +2323,14 @@ impl WgpuPainter {
             multiview_mask: None,
         });
 
-        // Set pipeline and buffers
-        render_pass.set_pipeline(&self.instanced_texture_pipeline);
+        // Set pipeline and buffers. Offscreen-layer composites use the
+        // premultiplied pipeline; normal decoded-image draws use straight alpha.
+        let pipeline = if premultiplied {
+            &self.instanced_texture_premul_pipeline
+        } else {
+            &self.instanced_texture_pipeline
+        };
+        render_pass.set_pipeline(pipeline);
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         render_pass.set_bind_group(1, &texture_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
@@ -4016,6 +4175,52 @@ impl WgpuPainter {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
         let layer_opacity = self.current_opacity * paint_alpha;
 
+        // A saveLayer paint's RGB is NOT a compositing tint. Per Flutter
+        // semantics the layer's group opacity comes from the paint's *alpha*,
+        // and chroma comes only from an explicit ColorFilter — never from
+        // `paint.color`'s RGB. The public canvas opacity helpers build
+        // alpha-only layer paints as `Paint::fill(Color::TRANSPARENT)
+        // .with_opacity(..)` (RGB `[0,0,0]`, see flui-painting
+        // `canvas/state.rs`), so reading RGB here would tint group-opacity
+        // layers black. Always use a white (no-op) chroma; ColorFilter chroma
+        // arrives explicitly via `save_layer_with_tint` from
+        // `push_color_filter`.
+        self.save_layer_impl(bounds, layer_opacity, [1.0, 1.0, 1.0]);
+    }
+
+    /// Like [`Self::save_layer`] but applies an explicit per-channel chroma
+    /// `tint_rgb` to the composited layer.
+    ///
+    /// Used by the ColorFilter layer path (`push_color_filter`), which
+    /// approximates a color matrix as a single multiply tint
+    /// (`filter.apply([1,1,1,1])`). `opacity` is the layer's effective alpha in
+    /// `[0, 1]`; `tint_rgb` components are clamped to `[0, 1]`. The composite
+    /// applies `(C.r*O, C.g*O, C.b*O, O)` to the premultiplied offscreen, so a
+    /// hue shift survives compositing — see `flush_opacity_layer`.
+    pub fn save_layer_with_tint(
+        &mut self,
+        bounds: Option<Rect<Pixels>>,
+        opacity: f32,
+        tint_rgb: [f32; 3],
+    ) {
+        let layer_opacity = self.current_opacity * opacity.clamp(0.0, 1.0);
+        let tint = [
+            tint_rgb[0].clamp(0.0, 1.0),
+            tint_rgb[1].clamp(0.0, 1.0),
+            tint_rgb[2].clamp(0.0, 1.0),
+        ];
+        self.save_layer_impl(bounds, layer_opacity, tint);
+    }
+
+    /// Shared implementation for [`Self::save_layer`] /
+    /// [`Self::save_layer_with_tint`]: snapshot the draw state and push a layer
+    /// with the given composite `layer_opacity` and `layer_tint_rgb`.
+    fn save_layer_impl(
+        &mut self,
+        bounds: Option<Rect<Pixels>>,
+        layer_opacity: f32,
+        layer_tint_rgb: [f32; 3],
+    ) {
         // Convert bounds to [x, y, w, h] if provided
         let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
 
@@ -4026,6 +4231,7 @@ impl WgpuPainter {
             saved_opacity_stack: std::mem::take(&mut self.opacity_stack),
             saved_opacity: self.current_opacity,
             layer_opacity,
+            layer_tint_rgb,
             bounds: bounds_array,
         };
         self.layer_stack.push(saved);
@@ -4035,8 +4241,9 @@ impl WgpuPainter {
         self.current_opacity = 1.0;
 
         tracing::trace!(
-            "WgpuPainter::save_layer: layer_opacity={:.3}, bounds={:?}",
+            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, bounds={:?}",
             layer_opacity,
+            layer_tint_rgb,
             bounds_array
         );
     }
@@ -4062,11 +4269,25 @@ impl WgpuPainter {
             let has_offscreen_content =
                 !offscreen_segment.is_empty() || !offscreen_order.is_empty();
 
-            if has_offscreen_content && (1.0 - saved.layer_opacity).abs() > f32::EPSILON {
+            // A non-white tint carries ColorFilter chroma that the fast
+            // reintegrate path cannot apply (it just splices children into the
+            // parent draw order unchanged). So a hue-only filter at
+            // effective_alpha == 1.0 must STILL go through the offscreen
+            // composite path, where the premultiplied tint shifts chroma —
+            // otherwise the hue shift is silently dropped (BUG 3). White tint
+            // (plain opacity) at ~1.0 keeps the cheap reintegrate path.
+            let has_chroma = (saved.layer_tint_rgb[0] - 1.0).abs() > f32::EPSILON
+                || (saved.layer_tint_rgb[1] - 1.0).abs() > f32::EPSILON
+                || (saved.layer_tint_rgb[2] - 1.0).abs() > f32::EPSILON;
+            let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON || has_chroma;
+
+            if has_offscreen_content && needs_composite {
                 // Offscreen render-to-texture compositing:
                 // Package the offscreen content as an OpacityLayer draw item.
-                // During render(), this will be flushed to a pooled offscreen texture
-                // and composited onto the main surface with the layer opacity as tint alpha.
+                // During render(), this is flushed to a pooled offscreen texture
+                // (premultiplied) and composited onto the main surface with the
+                // tint `(C.r*O, C.g*O, C.b*O, O)` applied through the
+                // premultiplied pipeline — correct group opacity AND chroma.
 
                 // Finalize the current parent segment so the opacity layer is
                 // inserted at the correct Z-position in the draw order
@@ -4081,24 +4302,26 @@ impl WgpuPainter {
                         items: offscreen_order,
                         final_segment: offscreen_segment,
                         opacity: saved.layer_opacity,
+                        tint_rgb: saved.layer_tint_rgb,
                         bounds: composite_bounds,
                     }));
 
                 tracing::trace!(
                     "WgpuPainter::restore_layer: queued OpacityLayer \
-                     (opacity={:.3}, bounds={:?})",
+                     (opacity={:.3}, tint_rgb={:?}, bounds={:?})",
                     saved.layer_opacity,
+                    saved.layer_tint_rgb,
                     composite_bounds
                 );
             } else if has_offscreen_content {
-                // Opacity is ~1.0, no compositing needed — merge content back.
-                // Finalize the parent's pre-save content into the draw order
-                // BEFORE re-integrating the offscreen items so that the parent
-                // content renders beneath the layer subtree (correct Z-order).
-                // Without this flush the parent segment sits in `current_segment`
-                // and is emitted last by `render()`, placing it on top of the
-                // layer — an inversion.  Mirror the mem::replace pattern used by
-                // the opacity < 1.0 branch above.
+                // Opacity is ~1.0 AND tint is white — no compositing needed,
+                // merge content back. Finalize the parent's pre-save content
+                // into the draw order BEFORE re-integrating the offscreen items
+                // so that the parent content renders beneath the layer subtree
+                // (correct Z-order). Without this flush the parent segment sits
+                // in `current_segment` and is emitted last by `render()`, placing
+                // it on top of the layer — an inversion. Mirror the mem::replace
+                // pattern used by the composite branch above.
                 let parent_segment =
                     std::mem::replace(&mut self.current_segment, DrawSegment::new());
                 if !parent_segment.is_empty() {
@@ -4769,5 +4992,479 @@ mod tests {
             painter.current_scissor_for_test().is_none(),
             "reset_frame_state must clear the scissor so it cannot leak into the next frame"
         );
+    }
+
+    // ===== Color-readback helpers (BUG 1/2/3 regression tests) =====
+
+    /// Format used for all color-readback tests: plain UNorm so the stored bytes
+    /// equal the sRGB-encoded bytes the shader emits 1:1 (no OETF on store),
+    /// matching the production surface format chosen by `select_surface_format`
+    /// and Flutter/Impeller's onscreen convention.
+    const READBACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+    /// Render `draw` into a `size`×`size` UNorm offscreen target cleared to
+    /// `clear`, then read back the center texel as `[r, g, b, a]` bytes.
+    ///
+    /// Mirrors the production frame: the painter records draw commands and
+    /// `render()` flushes them, including offscreen opacity/ColorFilter layers,
+    /// onto the offscreen target. The center pixel is well inside any full-size
+    /// fill so we avoid AA-edge ambiguity.
+    fn render_and_read_center(
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        size: u32,
+        clear: wgpu::Color,
+        draw: impl FnOnce(&mut WgpuPainter),
+    ) -> [u8; 4] {
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("readback target"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: READBACK_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(device),
+            Arc::clone(queue),
+            READBACK_FORMAT,
+            (size, size),
+        );
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        // Clear the target to the requested background colour.
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("readback clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+
+        draw(&mut painter);
+        painter
+            .render(&target_view, &mut encoder)
+            .expect("painter.render must succeed for readback");
+
+        // Copy the target into a CPU-readable buffer. `bytes_per_row` must be a
+        // multiple of 256; for the small square targets here a single padded row
+        // covers the full width.
+        let bytes_per_pixel = 4u32;
+        let unpadded = size * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = unpadded.div_ceil(align) * align;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback buffer"),
+            size: u64::from(padded_bytes_per_row) * u64::from(size),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(size),
+                },
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| {
+            r.expect("buffer mapping must succeed");
+        });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("device poll must complete the readback copy");
+
+        let data = slice.get_mapped_range();
+        let center = size / 2;
+        let row = center as usize * padded_bytes_per_row as usize;
+        let col = center as usize * bytes_per_pixel as usize;
+        let off = row + col;
+        let px = [data[off], data[off + 1], data[off + 2], data[off + 3]];
+        drop(data);
+        buffer.unmap();
+        px
+    }
+
+    /// BUG 1 (sRGB double-encode): a mid-tone `Color::rgb(128,128,128)` filled
+    /// over an opaque target must read back ~128 per channel on the UNorm
+    /// surface format, NOT ~188.
+    ///
+    /// On an sRGB target the GPU treats the shader's already-sRGB 0.502 as
+    /// *linear* and applies the linear->sRGB OETF on store, brightening 0x80 to
+    /// ~0xBC (188). Primaries (0/255) are OETF fixed points, so geometry tests
+    /// never caught this — only a mid-tone readback does. This fails on the old
+    /// sRGB-preferring format and passes on UNorm (Impeller parity).
+    #[test]
+    fn midtone_fill_is_not_srgb_double_encoded() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+                &Paint::fill(flui_types::Color::rgb(128, 128, 128)),
+            );
+        });
+
+        for (i, label) in ["R", "G", "B"].iter().enumerate() {
+            let v = i32::from(px[i]);
+            assert!(
+                (v - 128).abs() <= 3,
+                "channel {label} = {v}, expected ~128 (UNorm 1:1 store). \
+                 ~188 indicates an sRGB target double-encoding the color. \
+                 full pixel = {px:?}"
+            );
+        }
+    }
+
+    /// BUG 2 (opacity-layer premultiplied double-multiply): a translucent rect
+    /// `rgba(255,0,0,128)` drawn inside a `save_layer` of opacity 0.5 over an
+    /// opaque WHITE background must composite as premultiplied source-over.
+    ///
+    /// The offscreen texel is premultiplied (`rgb = 255*0.502 = 128`, `a=128`).
+    /// Pre-scaled by the group tint `(0.5,0.5,0.5,0.5)` it is `(0.251,0,0,0.251)`;
+    /// premultiplied-OVER white yields R ≈ 255, G ≈ B ≈ 191. The OLD straight-
+    /// alpha composite re-multiplies rgb by alpha, dropping R to ~223. So R is
+    /// the discriminating channel: this fails (~223) before the fix and passes
+    /// (~255) after.
+    #[test]
+    fn opacity_layer_composites_premultiplied() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
+            painter.save_layer(None, &Paint::fill(flui_types::Color::WHITE).with_alpha(128));
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+                &Paint::fill(flui_types::Color::rgba(255, 0, 0, 128)),
+            );
+            painter.restore_layer();
+        });
+
+        let (r, g, b) = (i32::from(px[0]), i32::from(px[1]), i32::from(px[2]));
+        // Premultiplied-OVER white: R ≈ 255 (fixed). The straight-alpha bug
+        // gives R ≈ 223. Use a tolerance that excludes the buggy value.
+        assert!(
+            (r - 255).abs() <= 4,
+            "R = {r}, expected ~255 (premultiplied composite). \
+             R ≈ 223 indicates the straight-alpha double-multiply bug. pixel = {px:?}"
+        );
+        assert!(
+            (g - 191).abs() <= 6 && (b - 191).abs() <= 6,
+            "G,B = {g},{b}, expected ~191. pixel = {px:?}"
+        );
+    }
+
+    /// BUG 3 (dropped ColorFilter tint): a `save_layer` whose paint carries a
+    /// non-white chroma (blue at alpha 0.5) must shift the composited hue, not
+    /// merely attenuate alpha.
+    ///
+    /// An opaque WHITE rect inside the layer becomes premultiplied
+    /// `(255,255,255,255)`; the chroma tint `(0,0,1)*0.5 = (0,0,0.502)` with
+    /// `a=0.502` selects only the blue channel. Premultiplied-OVER BLACK yields
+    /// `(0,0,128)`. The OLD path hardcoded a white tint (chroma discarded), so
+    /// the result would be gray `(128,128,128)` — B not dominant. The assertion
+    /// `B >> R,G` fails before the fix and passes after.
+    #[test]
+    fn color_filter_layer_shifts_hue() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        // Blue chroma at opacity 0.5 via the explicit tint entry point — exactly
+        // what `Backend::push_color_filter` now calls for a white->blue
+        // ColorMatrix. (`save_layer` deliberately ignores paint RGB, so chroma
+        // must come through `save_layer_with_tint`.)
+        let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+            painter.save_layer_with_tint(None, 0.5, [0.0, 0.0, 1.0]);
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+                &Paint::fill(flui_types::Color::WHITE),
+            );
+            painter.restore_layer();
+        });
+
+        let (r, g, b) = (i32::from(px[0]), i32::from(px[1]), i32::from(px[2]));
+        assert!(
+            b > r + 40 && b > g + 40,
+            "expected blue-dominant composite (hue shift present): \
+             B={b} must exceed R={r} and G={g} substantially. \
+             A gray result (~128,128,128) means the ColorFilter chroma was dropped. \
+             pixel = {px:?}"
+        );
+        assert!(
+            b > 100,
+            "B = {b}, expected ~128 (blue chroma at 0.5 over black). pixel = {px:?}"
+        );
+    }
+
+    /// P1 regression: an alpha-only saveLayer paint with non-white RGB must NOT
+    /// tint the layer.
+    ///
+    /// The public canvas opacity helpers (`Canvas::save_layer_alpha` /
+    /// `save_layer_opacity`, flui-painting `canvas/state.rs`) build their layer
+    /// paint as `Paint::fill(Color::TRANSPARENT).with_opacity(O)` — RGB
+    /// `[0,0,0]`, alpha `O`. If `save_layer` treated paint RGB as a composite
+    /// tint, those layers would composite with `(0,0,0,O)` and render the
+    /// contents BLACK instead of applying group opacity. `save_layer` must
+    /// normalize to a white (no-op) chroma; only `save_layer_with_tint` carries
+    /// chroma.
+    ///
+    /// Opaque WHITE content in a 0.5 layer (black-RGB paint) over BLACK must
+    /// composite to mid-gray ≈128, not 0.
+    #[test]
+    fn alpha_only_layer_paint_does_not_tint_black() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+            // Mirror the canvas opacity helper: TRANSPARENT (RGB 0,0,0) + alpha.
+            painter.save_layer(None, &Paint::fill(flui_types::Color::rgba(0, 0, 0, 128)));
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+                &Paint::fill(flui_types::Color::WHITE),
+            );
+            painter.restore_layer();
+        });
+
+        let (r, g, b) = (i32::from(px[0]), i32::from(px[1]), i32::from(px[2]));
+        // White at group opacity 0.5 over black ≈ (128,128,128). The pre-fix
+        // RGB-as-tint bug gives (0,0,0) — assert clearly above black.
+        assert!(
+            r > 100 && g > 100 && b > 100,
+            "expected mid-gray ~128 (group opacity, white chroma); \
+             a near-black result means the alpha-only paint's RGB was wrongly \
+             used as a tint. pixel = {px:?}"
+        );
+        assert!(
+            (r - 128).abs() <= 12 && (g - 128).abs() <= 12 && (b - 128).abs() <= 12,
+            "R,G,B = {r},{g},{b}, expected ~128. pixel = {px:?}"
+        );
+    }
+
+    /// P0 regression: decoded-image textures must NOT be sRGB when the surface
+    /// is UNorm.
+    ///
+    /// Before the fix `texture_cache.rs` created image textures as
+    /// `Rgba8UnormSrgb`. On sample the GPU applies the sRGB→linear EOTF
+    /// (byte 0x80 → linear ≈0.216), the shader outputs that linear float,
+    /// and the UNorm surface stores it as ≈0x37 — much too dark. After the fix
+    /// `IMAGE_TEXTURE_FORMAT = Rgba8Unorm`: the byte is sampled verbatim as
+    /// byte/255, the shader emits it unchanged, and the UNorm surface stores
+    /// 0x80 → 0x80.
+    ///
+    /// The test creates an image texture using `IMAGE_TEXTURE_FORMAT` (the same
+    /// constant `texture_cache` uses at runtime), fills every pixel with 0x80,
+    /// draws it full-frame via the external-texture path, and asserts the center
+    /// readback is ≈0x80 (±3).  When `IMAGE_TEXTURE_FORMAT` was `Rgba8UnormSrgb`
+    /// the test would have read ≈0x37 (55) and failed.
+    #[test]
+    fn decoded_image_midtone_round_trips() {
+        const SIZE: u32 = 64;
+        let (device, queue) = test_device_and_queue();
+
+        // Create a texture using the format that texture_cache uses for decoded
+        // images.  All pixels = RGBA(0x80, 0x80, 0x80, 0xFF).
+        let img_format = crate::wgpu::texture_cache::IMAGE_TEXTURE_FORMAT;
+        let img_data: Vec<u8> = (0..SIZE * SIZE)
+            .flat_map(|_| [0x80u8, 0x80, 0x80, 0xFF])
+            .collect();
+        let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("midtone round-trip image"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: img_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gpu_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &img_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * SIZE),
+                rows_per_image: Some(SIZE),
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Readback target: UNorm, matching the production surface format.
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("readback target"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: READBACK_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            READBACK_FORMAT,
+            (SIZE, SIZE),
+        );
+        let tex_id = flui_types::painting::TextureId::new(99);
+        painter
+            .external_texture_registry_mut()
+            .register(tex_id, gpu_tex, SIZE, SIZE, false, false);
+        painter.draw_texture(
+            tex_id,
+            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            None,
+            flui_types::painting::FilterQuality::None,
+            1.0,
+        );
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            // Clear to black so the image pixels are the only contributor.
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("readback clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        painter
+            .render(&target_view, &mut encoder)
+            .expect("painter.render must succeed");
+
+        let bytes_per_pixel = 4u32;
+        let unpadded = SIZE * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = unpadded.div_ceil(align) * align;
+        let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback buffer"),
+            size: u64::from(padded_bytes_per_row) * u64::from(SIZE),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback_buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(SIZE),
+                },
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = readback_buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| {
+            r.expect("buffer mapping must succeed");
+        });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("device poll must complete");
+
+        let data = slice.get_mapped_range();
+        let center = SIZE / 2;
+        let row = center as usize * padded_bytes_per_row as usize;
+        let col = center as usize * bytes_per_pixel as usize;
+        let off = row + col;
+        let px = [data[off], data[off + 1], data[off + 2], data[off + 3]];
+        drop(data);
+        readback_buf.unmap();
+
+        for (i, label) in ["R", "G", "B"].iter().enumerate() {
+            let v = i32::from(px[i]);
+            assert!(
+                (v - 0x80).abs() <= 3,
+                "channel {label} = {v} (0x{v:02X}), expected ~0x80 (128). \
+                 A value ~0x37 (55) means the image texture was sampled as sRGB \
+                 (GPU applied EOTF on read) — IMAGE_TEXTURE_FORMAT must be Rgba8Unorm. \
+                 full pixel = {px:?}"
+            );
+        }
     }
 }
