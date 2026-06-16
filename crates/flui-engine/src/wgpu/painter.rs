@@ -2400,7 +2400,6 @@ impl WgpuPainter {
                         );
                     }
                     Err(e) => {
-                        #[cfg(debug_assertions)]
                         tracing::error!("Failed to tessellate stroked arc: {}", e);
                     }
                 }
@@ -2427,7 +2426,6 @@ impl WgpuPainter {
                 );
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("Failed to tessellate DRRect: {}", e);
             }
         }
@@ -2459,7 +2457,6 @@ impl WgpuPainter {
                 );
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("WgpuPainter::line: Tessellation failed - {}", e);
             }
         }
@@ -2502,8 +2499,13 @@ impl WgpuPainter {
             "WgpuPainter::rich_text"
         );
         let transformed_position = self.apply_transform(position);
-        self.text_renderer
-            .add_rich_text(runs, transformed_position, base_font_size, base_color, wrap_width);
+        self.text_renderer.add_rich_text(
+            runs,
+            transformed_position,
+            base_font_size,
+            base_color,
+            wrap_width,
+        );
     }
 
     pub fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {
@@ -3077,7 +3079,6 @@ impl WgpuPainter {
                     self.add_tessellated(vertices, &indices);
                 }
                 Err(e) => {
-                    #[cfg(debug_assertions)]
                     tracing::error!("Failed to tessellate shadow path: {}", e);
                 }
             }
@@ -3255,7 +3256,6 @@ impl WgpuPainter {
                 }
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("Failed to load atlas texture: {}", e);
             }
         }

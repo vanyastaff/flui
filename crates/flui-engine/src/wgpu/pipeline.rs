@@ -27,11 +27,8 @@ pub struct PipelineKey {
 impl PipelineKey {
     // Feature flags
     const ALPHA_BLEND: u32 = 1 << 0; // Requires alpha blending
-    const TEXTURED: u32 = 1 << 1; // Uses textures
     const MSAA_4X: u32 = 1 << 2; // 4x MSAA enabled
     const MSAA_8X: u32 = 1 << 3; // 8x MSAA enabled
-    const HDR: u32 = 1 << 4; // HDR color space
-    const PREMUL_ALPHA: u32 = 1 << 5; // Premultiplied alpha
 
     /// Create opaque pipeline key (no blending, fastest)
     pub fn opaque() -> Self {
@@ -45,57 +42,9 @@ impl PipelineKey {
         }
     }
 
-    /// Create textured pipeline key
-    pub fn textured() -> Self {
-        Self {
-            bits: Self::TEXTURED,
-        }
-    }
-
-    /// Enable alpha blending
-    pub fn with_alpha_blend(mut self) -> Self {
-        self.bits |= Self::ALPHA_BLEND;
-        self
-    }
-
-    /// Enable texturing
-    pub fn with_textured(mut self) -> Self {
-        self.bits |= Self::TEXTURED;
-        self
-    }
-
-    /// Enable 4x MSAA
-    pub fn with_msaa_4x(mut self) -> Self {
-        self.bits |= Self::MSAA_4X;
-        self
-    }
-
-    /// Enable 8x MSAA
-    pub fn with_msaa_8x(mut self) -> Self {
-        self.bits |= Self::MSAA_8X;
-        self
-    }
-
-    /// Enable HDR
-    pub fn with_hdr(mut self) -> Self {
-        self.bits |= Self::HDR;
-        self
-    }
-
-    /// Enable premultiplied alpha
-    pub fn with_premul_alpha(mut self) -> Self {
-        self.bits |= Self::PREMUL_ALPHA;
-        self
-    }
-
     /// Check if pipeline requires alpha blending
     pub fn is_alpha_blended(self) -> bool {
         self.bits & Self::ALPHA_BLEND != 0
-    }
-
-    /// Check if pipeline uses textures
-    pub fn is_textured(self) -> bool {
-        self.bits & Self::TEXTURED != 0
     }
 
     /// Get MSAA sample count
@@ -160,14 +109,14 @@ impl PipelineCache {
     /// Returns cached pipeline if available, otherwise creates and caches new
     /// one.
     pub fn get_or_create(&mut self, device: &wgpu::Device, key: PipelineKey) -> &RenderPipeline {
-        // Check if pipeline exists
+        // `entry` needs `&mut self.cache`; `create_pipeline` needs `&self.shader` /
+        // `self.format` / `self.viewport_bind_group_layout` — disjoint fields.
+        // We pre-create on miss, then insert, to keep one logical lookup on hit.
         if !self.cache.contains_key(&key) {
-            // Create and insert new pipeline
             let pipeline = self.create_pipeline(device, key);
             self.cache.insert(key, pipeline);
         }
-
-        // Return cached pipeline (guaranteed to exist now)
+        // Safety: just inserted above on miss path.
         &self.cache[&key]
     }
 
@@ -233,16 +182,6 @@ impl PipelineCache {
         })
     }
 
-    /// Get number of cached pipelines
-    pub fn cached_count(&self) -> usize {
-        self.cache.len()
-    }
-
-    /// Clear the cache (useful for resource cleanup)
-    pub fn clear(&mut self) {
-        self.cache.clear();
-    }
-
     /// Get a reference to the viewport bind group layout
     ///
     /// This is needed to create bind groups that are compatible with pipelines
@@ -273,7 +212,6 @@ mod tests {
     fn test_pipeline_key_opaque() {
         let key = PipelineKey::opaque();
         assert!(!key.is_alpha_blended());
-        assert!(!key.is_textured());
         assert_eq!(key.msaa_samples(), 1);
     }
 
@@ -281,36 +219,13 @@ mod tests {
     fn test_pipeline_key_alpha_blend() {
         let key = PipelineKey::alpha_blend();
         assert!(key.is_alpha_blended());
-        assert!(!key.is_textured());
         assert_eq!(key.msaa_samples(), 1);
     }
 
     #[test]
-    fn test_pipeline_key_builder() {
-        let key = PipelineKey::opaque().with_alpha_blend().with_msaa_4x();
-
-        assert!(key.is_alpha_blended());
-        assert_eq!(key.msaa_samples(), 4);
-    }
-
-    #[test]
-    fn test_pipeline_key_msaa() {
-        let key_4x = PipelineKey::opaque().with_msaa_4x();
-        assert_eq!(key_4x.msaa_samples(), 4);
-
-        let key_8x = PipelineKey::opaque().with_msaa_8x();
-        assert_eq!(key_8x.msaa_samples(), 8);
-
-        // 8x overrides 4x
-        let key_both = PipelineKey::opaque().with_msaa_4x().with_msaa_8x();
-        assert_eq!(key_both.msaa_samples(), 8);
-    }
-
-    #[test]
-    fn test_pipeline_key_equality() {
-        let key1 = PipelineKey::alpha_blend().with_msaa_4x();
-        let key2 = PipelineKey::opaque().with_alpha_blend().with_msaa_4x();
-
-        assert_eq!(key1, key2);
+    fn test_pipeline_key_msaa_samples_default() {
+        // opaque() has no MSAA bits set → 1 sample
+        let key = PipelineKey::opaque();
+        assert_eq!(key.msaa_samples(), 1);
     }
 }

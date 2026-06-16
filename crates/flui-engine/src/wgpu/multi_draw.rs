@@ -118,7 +118,11 @@ impl MultiDrawBatcher {
         self.total_instances += instance_count as usize;
     }
 
-    /// Get statistics
+    /// Get statistics (debug-only telemetry).
+    ///
+    /// The sole consumer logs at `debug_assertions`, so the method is gated to
+    /// match — avoiding a dead-code warning in release/bench builds.
+    #[cfg(debug_assertions)]
     pub fn stats(&self) -> MultiDrawStats {
         MultiDrawStats {
             active_draws: self.active_draws,
@@ -133,7 +137,8 @@ impl Default for MultiDrawBatcher {
     }
 }
 
-/// Multi-draw statistics
+/// Multi-draw statistics (debug-only telemetry).
+#[cfg(debug_assertions)]
 #[derive(Debug, Clone, Copy)]
 pub struct MultiDrawStats {
     /// Number of draw commands in current batch

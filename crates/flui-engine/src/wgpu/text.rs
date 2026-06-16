@@ -537,47 +537,49 @@ impl TextRenderer {
         );
 
         let key = RichTextCacheKey::new(runs, base_font_size, base_color);
-        match self.rich_cache.entry(key.clone()) {
-            Entry::Occupied(mut e) => {
-                e.get_mut().last_used_frame = self.current_frame;
-                self.cache_hits += 1;
-            }
-            Entry::Vacant(e) => {
-                let line_height = base_font_size * 1.2;
-                let mut buffer = Buffer::new(
-                    &mut self.font_system,
-                    Metrics::new(base_font_size, line_height),
-                );
-                // Use wrap_width from the layout constraint so glyphon
-                // respects the same line-breaking as cosmic-text.
-                // None = unbounded (no wrapping); Some(w) = wrap at w pixels.
-                let buffer_width = wrap_width.unwrap_or(f32::MAX);
-                buffer.set_size(&mut self.font_system, Some(buffer_width), None);
 
-                // Build per-run AttrsOwned; the iterator borrows from the vec
-                // of owned values, satisfying set_rich_text's lifetime.
-                let owned_attrs: Vec<AttrsOwned> = runs
-                    .iter()
-                    .map(|(_, style)| style_to_attrs_owned(style.as_ref(), base_color))
-                    .collect();
+        // Borrow `key` on hit to avoid an allocation; move it into the map on miss.
+        if let Some(entry) = self.rich_cache.get_mut(&key) {
+            entry.last_used_frame = self.current_frame;
+            self.cache_hits += 1;
+        } else {
+            let line_height = base_font_size * 1.2;
+            let mut buffer = Buffer::new(
+                &mut self.font_system,
+                Metrics::new(base_font_size, line_height),
+            );
+            // Use wrap_width from the layout constraint so glyphon
+            // respects the same line-breaking as cosmic-text.
+            // None = unbounded (no wrapping); Some(w) = wrap at w pixels.
+            let buffer_width = wrap_width.unwrap_or(f32::MAX);
+            buffer.set_size(&mut self.font_system, Some(buffer_width), None);
 
-                buffer.set_rich_text(
-                    &mut self.font_system,
-                    runs.iter()
-                        .zip(owned_attrs.iter())
-                        .map(|((text, _), attrs)| (text.as_str(), attrs.as_attrs())),
-                    &Attrs::new(),
-                    Shaping::Advanced,
-                    None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, false);
+            // Build per-run AttrsOwned; the iterator borrows from the vec
+            // of owned values, satisfying set_rich_text's lifetime.
+            let owned_attrs: Vec<AttrsOwned> = runs
+                .iter()
+                .map(|(_, style)| style_to_attrs_owned(style.as_ref(), base_color))
+                .collect();
 
-                e.insert(CachedBuffer {
+            buffer.set_rich_text(
+                &mut self.font_system,
+                runs.iter()
+                    .zip(owned_attrs.iter())
+                    .map(|((text, _), attrs)| (text.as_str(), attrs.as_attrs())),
+                &Attrs::new(),
+                Shaping::Advanced,
+                None,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+
+            self.rich_cache.insert(
+                key.clone(),
+                CachedBuffer {
                     buffer,
                     last_used_frame: self.current_frame,
-                });
-                self.cache_misses += 1;
-            }
+                },
+            );
+            self.cache_misses += 1;
         }
 
         let default_color =

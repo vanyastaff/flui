@@ -47,8 +47,6 @@ struct PooledBuffer {
     buffer: Buffer,
     size: usize,
     in_use: bool,
-    #[allow(dead_code)]
-    usage: BufferUsages,
 }
 
 /// GPU buffer pool for efficient buffer reuse
@@ -201,7 +199,6 @@ impl BufferPool {
             buffer,
             size,
             in_use: true,
-            usage,
         });
 
         // Safe: We just pushed, so pool[index] exists
@@ -233,8 +230,12 @@ impl BufferPool {
         index_contents: &[u8],
     ) -> (&Buffer, &Buffer) {
         // We must call get_buffer_internal twice with disjoint borrows.
-        // Since vertex_buffers and index_buffers are separate fields,
-        // we split the borrow manually.
+        // `vertex_buffers` and `index_buffers` are separate Vec fields, so
+        // lending &mut to each simultaneously is safe at the value level.
+        // The `allocations`/`reuses` counters are shared between the two calls
+        // via raw pointers; each `unsafe { &mut *ptr }` expression lives only
+        // for the duration of one call argument list, so no two `&mut` aliases
+        // to the same counter are simultaneously live.
         let allocations = &raw mut self.allocations;
         let reuses = &raw mut self.reuses;
 
@@ -245,14 +246,16 @@ impl BufferPool {
             vertex_contents,
             BufferUsages::VERTEX | BufferUsages::COPY_DST,
             &mut self.vertex_buffers,
-            // SAFETY: allocations/reuses are only used for statistics counting.
-            // The two calls never alias the same Vec, and the counters are
-            // simple increments with no observable side effects between calls.
+            // SAFETY: `allocations` is a valid, aligned, initialised `usize` owned by
+            // `self`. This `&mut` is the only live reference to it at this point —
+            // `reuses` is a separate field and the borrow ends before the next call.
             unsafe { &mut *allocations },
+            // SAFETY: `reuses` is a valid, aligned, initialised `usize` owned by
+            // `self`, distinct from `allocations`. This `&mut` ends at the call site.
             unsafe { &mut *reuses },
         );
 
-        // Convert to raw pointer to release the mutable borrow on vertex_buffers
+        // Convert to raw pointer to release the mutable borrow on vertex_buffers.
         let vertex_ptr = std::ptr::from_ref::<Buffer>(vertex_buf);
 
         let index_buf = Self::get_buffer_internal(
@@ -262,13 +265,18 @@ impl BufferPool {
             index_contents,
             BufferUsages::INDEX | BufferUsages::COPY_DST,
             &mut self.index_buffers,
+            // SAFETY: the previous call's `&mut *allocations` borrow has ended
+            // (it was a temporary for the function call above). This is the only
+            // live `&mut` to `allocations` at this point.
             unsafe { &mut *allocations },
+            // SAFETY: same reasoning as above for `reuses`.
             unsafe { &mut *reuses },
         );
 
-        // SAFETY: vertex_ptr points into self.vertex_buffers which is not
-        // modified by the index buffer call (separate Vec). The buffer
-        // reference is valid for the lifetime of &mut self.
+        // SAFETY: valid because the index-buffer call mutates only `index_buffers`;
+        // it never pushes to / reallocates `vertex_buffers`, so `vertex_ptr` stays
+        // in-bounds of a live allocation and its borrow tag is not invalidated by
+        // the disjoint `index_buffers`/counter borrows.
         let vertex_ref = unsafe { &*vertex_ptr };
 
         (vertex_ref, index_buf)

@@ -97,11 +97,10 @@ pub mod occlusion;
 mod offscreen;
 mod painter;
 pub mod path_cache;
-/// Pipeline key types + descriptors consumed by `painter.rs`'s pipeline cache.
-/// `#[allow(dead_code)]` retained because the `PipelineKey::from_color` /
-/// related constructors are not yet wired into painter.rs's pipeline
-/// construction. Per-item audit tracked in ARCHITECTURE.md.
-#[allow(dead_code)]
+/// Pipeline key types and cache consumed by `painter.rs`. Live items:
+/// `PipelineKey` (opaque/alpha-blend factory methods + bitfield queries),
+/// `PipelineCache` (get_or_create, viewport_bind_group_layout), and
+/// `pipeline_key_from_paint`. Unused constants/methods/cache helpers deleted.
 mod pipeline;
 // Cycle 4 E-6: parallel `pipelines.rs` module (with its own
 // `PipelineCache` + `PipelineBuilder` structs, name-colliding with
@@ -181,25 +180,6 @@ pub use debug::DebugBackend;
 pub use layer_render::LayerRender;
 pub use painter::WgpuPainter;
 
-// Cycle 4 PR #112 review fix: deprecated migration shim for
-// `PipelineBuilder`, which was re-exported from the deleted
-// `pipelines.rs` (plural) module pre-cycle. Workspace grep showed
-// zero consumers; if a downstream consumer DID import the name,
-// they hit a `#[deprecated]` warning rather than an unresolved-symbol
-// error. The shim resolves to the unit type so any method call on it
-// will fail compilation immediately -- the type's role was to host
-// builder methods that no longer exist. One-cycle migration window
-// before the alias goes away in cycle 5.
-/// Deprecated migration shim — see cycle 4 E-6 / PR #112 review.
-#[deprecated(
-    since = "0.1.0",
-    note = "`PipelineBuilder` (from the deleted `wgpu::pipelines` \
-            module) had zero workspace consumers and was removed in \
-            cycle 4 E-6. There is no replacement; pipeline construction \
-            goes through `pipeline::PipelineCache` (singular) directly. \
-            This deprecated alias will be removed in cycle 5."
-)]
-pub type PipelineBuilder = ();
 // Renderer (the one and only externally-consumed wgpu/* type)
 pub use renderer::Renderer;
 // Font loading utilities (external via lib.rs re-export at crate root)

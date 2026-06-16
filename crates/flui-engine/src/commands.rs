@@ -369,7 +369,10 @@ where
     }
 }
 
-#[cfg(test)]
+// `DebugBackend` is only compiled under debug_assertions (it exists only for
+// testing and uses no GPU). The test must carry the same gate so it compiles
+// in release/bench profiles where `debug_assertions` is off.
+#[cfg(all(test, debug_assertions))]
 mod tests {
     //! Cycle 5 U10 regression: dispatching an `Arc<Paint>`-carrying
     //! `DrawCommand` reaches the backend identically to the pre-U10
