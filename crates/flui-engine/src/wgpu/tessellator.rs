@@ -619,6 +619,22 @@ impl Tessellator {
         self.tessellate_stroke(&lyon_path, paint)
     }
 
+    /// Tessellate a FLUI Path with a dash pattern (stroked).
+    ///
+    /// Converts the FLUI path to a Lyon path then delegates to
+    /// [`Self::tessellate_dashed_stroke`].  The caller is responsible for
+    /// verifying that `dash_pattern` is valid before calling this method;
+    /// an invalid pattern falls back to a solid stroke.
+    pub fn tessellate_flui_path_dashed_stroke(
+        &mut self,
+        flui_path: &flui_types::painting::path::Path,
+        paint: &Paint,
+        dash_pattern: &flui_types::painting::DashPattern,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let lyon_path = flui_path.to_lyon_path();
+        self.tessellate_dashed_stroke(&lyon_path, paint, dash_pattern)
+    }
+
     /// Tessellate a stroked lyon path with dash pattern.
     ///
     /// Splits the path into dash segments based on the pattern, then tessellates
