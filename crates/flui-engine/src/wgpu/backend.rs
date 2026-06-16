@@ -623,6 +623,16 @@ impl CommandRenderer for Backend<'_> {
         blend_mode: BlendMode,
         _transform: &Matrix4,
     ) {
+        // Flush any deferred-coalesced transform from the prior command before
+        // reading the CTM. The Backend defers transforms lazily (see
+        // `with_transform` / `active_transform`); without this call
+        // `current_transform_matrix()` / `current_max_scale()` below would read
+        // the PRIOR command's unrelated transform and size/position the offscreen
+        // from stale state. Every other method that reads painter transform state
+        // calls `flush_active_transform()` first (push_opacity, push_color_filter,
+        // push_image_filter, all LayerStateStack impls); shader-mask must match.
+        self.flush_active_transform();
+
         // Try GPU shader mask pipeline
         if let Some(offscreen_arc) = self.offscreen.clone() {
             // The live device-pixel ratio rides in the painter's current
@@ -1818,6 +1828,119 @@ mod tests {
                 && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
             "gradient shader-mask composite rect must be (0,0,200,200) under DPR=2; \
              got {composite_rect:?}"
+        );
+    }
+
+    /// Locks P2 #1: `render_shader_mask` must flush the backend's deferred
+    /// transform coalescing state before reading the painter CTM.
+    ///
+    /// The Backend's `with_transform` mechanism batches consecutive same-matrix
+    /// draw calls by leaving a `save()+apply` on the painter stack between calls,
+    /// clearing it lazily on the next transform change. If `render_shader_mask`
+    /// reads `current_transform_matrix()` / `current_max_scale()` WITHOUT first
+    /// calling `flush_active_transform()`, it reads the PRIOR command's transform
+    /// stacked on top of the DPR root, and sizes/positions the offscreen from
+    /// stale state.
+    ///
+    /// Scenario:
+    ///   1. Main painter CTM = scale(2) (DPR root, pushed by the test before
+    ///      any commands, simulating RenderView).
+    ///   2. `render_rect` is called with a non-identity per-command transform
+    ///      `scale(3, 3, 1)`. `with_transform` leaves `active_transform =
+    ///      Some(scale3)` on the stack (the painter's current transform matrix
+    ///      is now scale(2)*scale(3) = scale(6) in the lazy-save layer).
+    ///   3. `render_shader_mask` is called for bounds (0,0,100,100) under the
+    ///      DPR=2 root CTM (no additional per-mask transform, _transform=identity).
+    ///
+    ///   Without the flush: `current_max_scale()` returns ≈6.0 (scale(6) from
+    ///   the still-active rect transform), device_size ≈ 600, composite rect ≈
+    ///   (0,0,600,600).
+    ///   With the flush (fix): `flush_active_transform()` restores the lazy save,
+    ///   `current_max_scale()` returns ≈2.0 (the DPR root only), device_size =
+    ///   200, composite rect = (0,0,200,200).
+    ///
+    /// Red-before: tex 600×600, composite (0,0,600,600).
+    /// Green-after: tex 200×200, composite (0,0,200,200).
+    #[test]
+    fn shader_mask_uses_own_transform_not_prior_command() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU here; skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (800, 800),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        // Step 1: push the DPR root scale(2) into the main painter CTM — this
+        // happens before any command dispatch in a real frame.
+        backend.painter_mut().scale(2.0, 2.0);
+
+        // Step 2: dispatch a rect with a non-identity per-command transform. This
+        // calls `with_transform(scale3_matrix, …)` which leaves
+        // `active_transform = Some(scale3)` and the painter's CTM temporarily at
+        // scale(2)*scale(3) = scale(6).
+        let scale3_matrix = Matrix4::scaling(3.0, 3.0, 1.0);
+        let prior_rect_bounds = Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+        backend.render_rect(prior_rect_bounds, &Paint::fill(Color::RED), &scale3_matrix);
+
+        // Step 3: build the ShaderMask child display list and issue the mask
+        // under the DPR=2 root CTM (_transform = identity, as on the paint path).
+        let mut canvas = flui_painting::Canvas::new();
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        canvas.draw_rect(bounds, &Paint::fill(Color::WHITE));
+        let child = canvas.finish();
+        let shader = flui_painting::Shader::solid(Color::WHITE);
+
+        backend.render_shader_mask(
+            &child,
+            &shader,
+            bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "shader mask must queue exactly one offscreen composite"
+        );
+        let (composite_rect, tex_w, tex_h) = results[0];
+
+        // Must be sized at DPR=2 (200×200), NOT at scale(2)*scale(3)=scale(6)
+        // (600×600) which would be the result if the deferred transform was not
+        // flushed before reading the CTM.
+        assert_eq!(
+            (tex_w, tex_h),
+            (200, 200),
+            "shader-mask offscreen must be 200×200 (DPR=2 only); got {tex_w}×{tex_h} — \
+             600×600 indicates the prior rect's deferred scale(3) was not flushed \
+             before the mask read the CTM (stale active_transform leak)"
+        );
+
+        // Composite rect must also derive from the DPR=2 CTM, not scale(6).
+        assert!(
+            composite_rect.left().0.abs() < 0.5
+                && composite_rect.top().0.abs() < 0.5
+                && (composite_rect.right().0 - 200.0).abs() < 0.5
+                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            "shader-mask composite rect must be (0,0,200,200) under DPR=2; \
+             got {composite_rect:?} — (0,0,600,600) indicates stale prior-rect \
+             transform leaked into the mask CTM read"
         );
     }
 }
