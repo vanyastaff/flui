@@ -5736,16 +5736,15 @@ mod tests {
     /// RED (A) is allocated first so it occupies atlas column range `[0, 64)`;
     /// BLUE (B) is allocated next, immediately to A's right. A is then drawn
     /// magnified AND extended past the right of the frame (`dst.x ∈ [-64, 128]`,
-    /// a 3x stretch) so that its *texture* right edge (`max_u`) maps to a screen
-    /// column that is a fully-covered interior pixel — no geometric AA edge to
-    /// confound the readback. Sampling that near-`max_u` column must read pure
-    /// RED.
+    /// a 3x stretch) so that its `max_u` maps near screen column 128. Column
+    /// x=127 checks for BLUE bleed at the atlas seam.
     ///
-    /// Before the fix the atlas packed edge-to-edge and `uv_coords` returned
-    /// exact pixel boundaries, so A's `max_u` coincided with B's first column;
-    /// the Linear sampler's bilinear footprint mixed in BLUE, raising the B
-    /// channel. After the fix a 1px gutter separates the entries AND the UVs are
-    /// inset by half a texel, so the footprint never reaches B.
+    /// With the fix: `upload_image` clears a 1px transparent gutter on the right
+    /// side of A. The bilinear kernel blends the last RED texel with alpha-zero
+    /// (not B's solid BLUE), leaving B~0. R may be attenuated but is never BLUE.
+    ///
+    /// Before the fix: no gutter clear — A's `max_u` coincided with B's first
+    /// texel and bilinear sampling raised B well above 40.
     #[test]
     fn atlas_neighbors_do_not_bleed_under_linear_sampling() {
         use flui_types::painting::Image;
@@ -5766,26 +5765,86 @@ mod tests {
                 &red,
                 Rect::from_xywh(px(-64.0), px(0.0), px(192.0), px(128.0)),
             );
-            // BLUE packs next → atlas columns immediately right of RED. Its slot
-            // is what an un-guttered, un-inset bilinear sample of RED's right
-            // edge would bleed. Draw it off-screen-ish in a corner; the bleed
-            // lives in atlas *texture* space, so B's on-screen position is
-            // irrelevant — only its atlas adjacency matters.
+            // BLUE packs next → atlas columns immediately right of RED's gutter.
+            // Its slot is what an un-guttered bilinear sample of RED's right edge
+            // would bleed into. Draw it off-screen; bleed is a texture-space
+            // phenomenon, not screen-space.
             painter.draw_image(
                 &blue,
                 Rect::from_xywh(px(120.0), px(120.0), px(8.0), px(8.0)),
             );
         });
 
-        // Sample the near-max_u interior column (x=127) at mid-height.
+        // Sample the near-max_u column (x=127) at mid-height.
+        //
+        // With a transparent gutter the bilinear kernel at max_u blends the
+        // last RED texel with an alpha-zero gutter pixel, which dims the RED
+        // channel but contributes *zero* BLUE. So the correct assertion for the
+        // "no bleed" property is `b < 40` (BLUE does not reach the sample site)
+        // and `r > b + 80` (RED dominates BLUE even when partially attenuated).
+        //
+        // Without the gutter clear, BLUE from the neighboring atlas entry bleeds
+        // in and raises B above 100 — clearly distinguishable from the ~0 B of
+        // the transparent-gutter case.
         let edge = pixel_at(&rgba, SIZE, 127, 64);
         let (r, g, b) = (i32::from(edge[0]), i32::from(edge[1]), i32::from(edge[2]));
         assert!(
-            r > 200 && b < 40,
-            "RED's near-max_u column = (R={r}, G={g}, B={b}), expected pure RED \
-             (R~255, B~0). A raised B channel means the Linear sampler bled BLUE \
-             from the neighboring atlas entry — the gutter or half-texel UV inset \
-             is missing."
+            b < 40 && r > b + 80,
+            "RED's near-max_u column = (R={r}, G={g}, B={b}). \
+             Expected B~0 (no BLUE bleed) and R dominant. \
+             A B≥40 value means the Linear sampler bled BLUE from the neighboring \
+             atlas entry — the transparent gutter strip in upload_image is missing."
+        );
+    }
+
+    /// BUG 3 sharpness: a 2×1 image drawn exactly 1:1 must sample each texel
+    /// with its own color, not a blend with its neighbor.
+    ///
+    /// With the (wrong) half-texel UV inset, `min_u` for a 2-wide image in a
+    /// 2048-wide atlas shifts right by `0.5/2048 ≈ 0.000244`, and `max_u`
+    /// shifts left symmetrically.  The left screen pixel's UV maps to roughly
+    /// `texel 0.25` (mix of 75% RED + 25% GREEN) rather than `texel 0.5` (pure
+    /// RED); the right pixel maps to roughly `texel 1.75` (25% RED + 75% GREEN)
+    /// rather than `texel 1.5` (pure GREEN).  The RED and GREEN channels would
+    /// both read ~191 instead of 255/0.
+    ///
+    /// With exact texel-boundary UVs and a transparent gutter: left pixel maps to
+    /// `texel 0.5` → pure RED; right pixel maps to `texel 1.5` → pure GREEN.
+    #[test]
+    fn atlas_image_is_sharp_at_one_to_one() {
+        use flui_types::painting::Image;
+
+        // 2-pixel wide, 1-pixel tall render target (drawn 1:1).
+        const W: u32 = 2;
+        const H: u32 = 1;
+        let (device, queue) = test_device_and_queue();
+
+        // Left texel = RED, right texel = GREEN.
+        let pixels: Vec<u8> = vec![
+            255, 0, 0, 255, // left pixel: RED
+            0, 255, 0, 255, // right pixel: GREEN
+        ];
+        let img = Image::from_rgba8(W, H, pixels);
+
+        let rgba = render_to_rgba(&device, &queue, W, wgpu::Color::BLACK, |painter| {
+            painter.draw_image(&img, Rect::from_xywh(px(0.0), px(0.0), px(2.0), px(1.0)));
+        });
+
+        let left = pixel_at(&rgba, W, 0, 0);
+        let right = pixel_at(&rgba, W, 1, 0);
+        let (lr, lg) = (i32::from(left[0]), i32::from(left[1]));
+        let (rr, rg) = (i32::from(right[0]), i32::from(right[1]));
+        assert!(
+            lr > 200 && lg < 55,
+            "left pixel = (R={lr}, G={lg}): expected RED (~255,~0). \
+             A blended value means uv_coords has a half-texel inset that \
+             shifts sampling away from the texel center."
+        );
+        assert!(
+            rg > 200 && rr < 55,
+            "right pixel = (R={rr}, G={rg}): expected GREEN (~0,~255). \
+             A blended value means uv_coords has a half-texel inset that \
+             shifts sampling away from the texel center."
         );
     }
 }

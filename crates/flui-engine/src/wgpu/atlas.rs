@@ -37,11 +37,13 @@ impl AtlasRect {
 
     /// Get UV coordinates (0.0 - 1.0) for this rect in the atlas.
     ///
-    /// The UVs are inset by half a texel on every side so that bilinear
-    /// filtering — which can reach up to half a texel past a sampled coordinate —
-    /// never reads outside this entry's own pixels. Combined with the 1px
-    /// [`GUTTER`] reserved by [`TextureAtlas::allocate`], this stops a fractional
-    /// device scale from bleeding a neighbor's color into this image's edge.
+    /// Returns exact texel-boundary UVs: `min_u = x / atlas_width`, etc.
+    /// Bilinear bleed into neighboring entries is prevented not by shrinking
+    /// the UV range but by [`TextureAtlas::upload_image`] zeroing the 1px
+    /// [`GUTTER`] strips on the right and bottom of every uploaded image. A
+    /// transparent gutter absorbs the bilinear footprint without distorting the
+    /// sampling grid — so a 2-pixel image drawn 1:1 still samples its own
+    /// texel centers crisply.
     ///
     /// # Arguments
     ///
@@ -50,16 +52,15 @@ impl AtlasRect {
     ///
     /// # Returns
     ///
-    /// (min_u, min_v, max_u, max_v)
+    /// `([min_u, min_v], [max_u, max_v])` in normalized atlas space.
     #[must_use]
     pub fn uv_coords(&self, atlas_width: u32, atlas_height: u32) -> ([f32; 2], [f32; 2]) {
         let aw = atlas_width as f32;
         let ah = atlas_height as f32;
-        // Half-texel inset keeps the bilinear footprint inside this entry.
-        let min_u = (self.x as f32 + 0.5) / aw;
-        let min_v = (self.y as f32 + 0.5) / ah;
-        let max_u = ((self.x + self.width) as f32 - 0.5) / aw;
-        let max_v = ((self.y + self.height) as f32 - 0.5) / ah;
+        let min_u = self.x as f32 / aw;
+        let min_v = self.y as f32 / ah;
+        let max_u = (self.x + self.width) as f32 / aw;
+        let max_v = (self.y + self.height) as f32 / ah;
 
         ([min_u, min_v], [max_u, max_v])
     }
@@ -94,9 +95,12 @@ pub const ATLAS_DEFAULT_SIZE: u32 = 2048;
 /// Bilinear filtering at a fractional device scale reaches up to half a texel
 /// past the sampled coordinate; with edge-to-edge packing that footprint spills
 /// into the neighboring image and produces a wrong-color fringe. A 1px gutter
-/// (paired with the half-texel UV inset in [`AtlasRect::uv_coords`]) guarantees
-/// the filter footprint of one entry never overlaps another's pixels. Impeller's
-/// glyph atlas uses a 2px gutter for mip safety; this atlas is mip-free
+/// cleared to transparent zeros by [`TextureAtlas::upload_image`] absorbs the
+/// bilinear footprint without distorting the sampling grid. Unlike a half-texel
+/// UV inset — which compresses the per-pixel sampling grid and blurs small
+/// images — transparent gutter strips leave [`AtlasRect::uv_coords`] at exact
+/// texel boundaries so a 1:1 draw samples each texel crisply. Impeller's glyph
+/// atlas uses a 2px gutter for mip safety; this atlas is mip-free
 /// (`mip_level_count: 1`), so a single texel is sufficient.
 pub const GUTTER: u32 = 1;
 
@@ -260,17 +264,23 @@ impl TextureAtlas {
         self.next_image_id = 1;
     }
 
-    /// Upload image data to the atlas
+    /// Upload image data to the atlas and zero the surrounding gutter strips.
+    ///
+    /// After writing the image pixels the method clears the right and bottom
+    /// [`GUTTER`] strips to transparent zeros. This prevents bilinear filtering
+    /// from bleeding a neighbor's color into this image's edge without distorting
+    /// the per-pixel sampling grid (cf. the UV boundary note on [`AtlasRect::uv_coords`]).
     ///
     /// # Arguments
     ///
     /// * `queue` - GPU queue
     /// * `image_id` - Image ID from allocate()
-    /// * `data` - Image data (RGBA8)
+    /// * `data` - Image data (RGBA8, `width * height * 4` bytes)
     pub fn upload_image(&self, queue: &Queue, image_id: u32, data: &[u8]) {
         if let Some(entry) = self.entries.get(&image_id) {
             let rect = entry.rect;
 
+            // --- Write the image pixels ---
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.texture,
@@ -291,6 +301,65 @@ impl TextureAtlas {
                 Extent3d {
                     width: rect.width,
                     height: rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            // --- Clear right gutter strip: GUTTER × rect.height at (rect.x+rect.width, rect.y) ---
+            //
+            // `allocate` reserved rect.width + GUTTER columns so this write stays
+            // within the atlas bounds even at the right edge of a shelf.
+            let zeros_right = vec![0u8; (GUTTER * rect.height) as usize * 4];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: rect.x + rect.width,
+                        y: rect.y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &zeros_right,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(GUTTER * 4),
+                    rows_per_image: Some(rect.height),
+                },
+                Extent3d {
+                    width: GUTTER,
+                    height: rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            // --- Clear bottom gutter strip: (rect.width + GUTTER) × GUTTER at (rect.x, rect.y+rect.height) ---
+            //
+            // The bottom strip spans the full footprint width (image + right gutter)
+            // so the corner texel shared by both strips is also zeroed.
+            let bottom_w = rect.width + GUTTER;
+            let zeros_bottom = vec![0u8; (bottom_w * GUTTER) as usize * 4];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: rect.x,
+                        y: rect.y + rect.height,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &zeros_bottom,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bottom_w * 4),
+                    rows_per_image: Some(GUTTER),
+                },
+                Extent3d {
+                    width: bottom_w,
+                    height: GUTTER,
                     depth_or_array_layers: 1,
                 },
             );
@@ -401,13 +470,12 @@ mod tests {
 
     #[test]
     fn test_atlas_rect_uv_coords() {
+        // uv_coords returns exact texel-boundary UVs: x/w and (x+width)/w.
         let rect = AtlasRect::new(0, 0, 512, 512);
         let (min_uv, max_uv) = rect.uv_coords(1024, 1024);
 
-        // Half-texel inset: min += 0.5/1024, max -= 0.5/1024.
-        let half = 0.5 / 1024.0;
-        assert_eq!(min_uv, [half, half]);
-        assert_eq!(max_uv, [0.5 - half, 0.5 - half]);
+        assert_eq!(min_uv, [0.0, 0.0]);
+        assert_eq!(max_uv, [0.5, 0.5]);
     }
 
     #[test]
@@ -415,40 +483,8 @@ mod tests {
         let rect = AtlasRect::new(256, 256, 256, 256);
         let (min_uv, max_uv) = rect.uv_coords(1024, 1024);
 
-        let half = 0.5 / 1024.0;
-        assert_eq!(min_uv, [0.25 + half, 0.25 + half]);
-        assert_eq!(max_uv, [0.5 - half, 0.5 - half]);
-    }
-
-    /// The half-texel inset must keep every sampled UV strictly inside the
-    /// entry's own pixel span — never at or past the seam where the gutter (and
-    /// the next image) begins.
-    #[test]
-    fn uv_coords_are_inset_within_entry() {
-        let rect = AtlasRect::new(10, 20, 64, 64);
-        let (min_uv, max_uv) = rect.uv_coords(2048, 2048);
-
-        let left_edge = 10.0 / 2048.0;
-        let right_edge = (10.0 + 64.0) / 2048.0;
-        let top_edge = 20.0 / 2048.0;
-        let bottom_edge = (20.0 + 64.0) / 2048.0;
-
-        assert!(
-            min_uv[0] > left_edge,
-            "min_u must be inset past the left edge"
-        );
-        assert!(
-            max_uv[0] < right_edge,
-            "max_u must be inset before the right edge"
-        );
-        assert!(
-            min_uv[1] > top_edge,
-            "min_v must be inset past the top edge"
-        );
-        assert!(
-            max_uv[1] < bottom_edge,
-            "max_v must be inset before the bottom edge"
-        );
+        assert_eq!(min_uv, [0.25, 0.25]);
+        assert_eq!(max_uv, [0.5, 0.5]);
     }
 
     /// Adjacent entries packed by `allocate` must leave a gutter between them:
