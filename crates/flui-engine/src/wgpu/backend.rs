@@ -650,6 +650,13 @@ impl CommandRenderer for Backend<'_> {
                 .take()
                 .expect("offscreen_painter was just populated by get_or_create");
             {
+                // Reset per-frame clip/transform/opacity state before rendering
+                // into this painter.  Without this, a clip_rect command from a
+                // previous ShaderMask call in the same frame leaks
+                // `current_scissor` / `current_rrect_clip` into the next one,
+                // causing the second ShaderMask's child content to be silently
+                // clipped to the prior mask's scissor region.
+                temp_painter.reset_frame_state();
                 let mut temp_backend = Backend::new(temp_painter);
                 for command in child.commands() {
                     dispatch_command(command, &mut temp_backend);

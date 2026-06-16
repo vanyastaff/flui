@@ -228,20 +228,26 @@ pub struct CircleInstance {
 }
 
 impl CircleInstance {
-    /// Create a circle instance
+    /// Create a circle instance.
+    ///
+    /// `scale_xy` is the per-axis scale `[sx, sy]` extracted from the current
+    /// transform matrix.  Pass `[1.0, 1.0]` for identity / uniform scale.
+    /// The circle shader computes the bounding-quad half-extent as
+    /// `radius * scale_xy`, so non-unit values correctly handle a zoomed
+    /// or non-uniformly scaled canvas.
     #[must_use]
-    pub fn new(center: Point<Pixels>, radius: f32, color: Color) -> Self {
+    pub fn new(center: Point<Pixels>, radius: f32, color: Color, scale_xy: [f32; 2]) -> Self {
         Self {
             center_radius: [center.x.0, center.y.0, radius, 0.0],
             color: color.to_f32_array(),
-            transform: [1.0, 1.0, 0.0, 0.0],
+            transform: [scale_xy[0], scale_xy[1], 0.0, 0.0],
         }
     }
 
     // Cycle 4 E-5: deleted `CircleInstance::ellipse(center, radius_x,
-    // radius_y, color)`. Zero callsites -- production paths use
-    // `CircleInstance::new` (uniform-radius). When per-axis radii are
-    // needed it relands with a concrete first consumer.
+    // radius_y, color)`. Zero call sites — production paths use
+    // `CircleInstance::new` with scale_xy. When per-axis radii independent of
+    // the canvas scale are needed it relands with a concrete first consumer.
 
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
@@ -287,14 +293,21 @@ pub struct ArcInstance {
 }
 
 impl ArcInstance {
-    /// Create an arc instance
+    /// Create an arc instance.
+    ///
+    /// `scale_xy` is the per-axis scale `[sx, sy]` extracted from the current
+    /// transform matrix.  Pass `[1.0, 1.0]` for identity / uniform scale.
+    /// The arc shader computes the bounding-quad half-extent as
+    /// `radius * scale_xy`, so non-unit values correctly handle a zoomed
+    /// or non-uniformly scaled canvas.
     ///
     /// # Arguments
-    /// * `center` - Center point of the arc
-    /// * `radius` - Radius of the arc
-    /// * `start_angle` - Starting angle in radians (0 = right)
-    /// * `sweep_angle` - Sweep angle in radians (positive = clockwise)
-    /// * `color` - Arc color
+    /// * `center` — Center point of the arc (already in transformed space)
+    /// * `radius` — Radius of the arc before scale is applied
+    /// * `start_angle` — Starting angle in radians (0 = right)
+    /// * `sweep_angle` — Sweep angle in radians (positive = clockwise)
+    /// * `color` — Arc color
+    /// * `scale_xy` — Per-axis canvas scale `[sx, sy]`
     #[must_use]
     pub fn new(
         center: Point<Pixels>,
@@ -302,18 +315,19 @@ impl ArcInstance {
         start_angle: f32,
         sweep_angle: f32,
         color: Color,
+        scale_xy: [f32; 2],
     ) -> Self {
         Self {
             center_radius: [center.x.0, center.y.0, radius, 0.0],
             angles: [start_angle, sweep_angle, 0.0, 0.0],
             color: color.to_f32_array(),
-            transform: [1.0, 1.0, 0.0, 0.0],
+            transform: [scale_xy[0], scale_xy[1], 0.0, 0.0],
         }
     }
 
     // Cycle 4 E-5: deleted `ArcInstance::ellipse(center, radius_x,
-    // radius_y, start_angle, sweep_angle, color)`. Zero callsites --
-    // production paths use `ArcInstance::new` (uniform-radius arc).
+    // radius_y, start_angle, sweep_angle, color)`. Zero call sites —
+    // production paths use `ArcInstance::new` with scale_xy.
     // Re-lands with a concrete consumer when needed.
 
     /// Get wgpu vertex buffer layout for instance data
@@ -828,10 +842,47 @@ mod tests {
     fn test_circle_instance_field_values() {
         use flui_types::{Point, geometry::Pixels};
         let center = Point::new(flui_types::geometry::Pixels(50.0), Pixels(75.0));
-        let instance = CircleInstance::new(center, 20.0, Color::RED);
+        let instance = CircleInstance::new(center, 20.0, Color::RED, [1.0, 1.0]);
         assert_eq!(instance.center_radius[0], 50.0); // x
         assert_eq!(instance.center_radius[1], 75.0); // y
         assert_eq!(instance.center_radius[2], 20.0); // radius
         assert_eq!(instance.center_radius[3], 0.0); // padding
+    }
+
+    /// Regression: CircleInstance::new must propagate scale_xy into the
+    /// transform field so the circle shader sizes the bounding quad correctly.
+    /// Before the fix, transform was always [1.0, 1.0, 0.0, 0.0] regardless
+    /// of the canvas scale, causing scaled circles to render at wrong size.
+    #[test]
+    fn circle_instance_scale_propagates_to_transform() {
+        use flui_types::{Point, geometry::Pixels};
+        let center = Point::new(Pixels(0.0), Pixels(0.0));
+        let identity = CircleInstance::new(center, 10.0, Color::RED, [1.0, 1.0]);
+        assert_eq!(identity.transform[0], 1.0, "identity sx");
+        assert_eq!(identity.transform[1], 1.0, "identity sy");
+
+        let scaled = CircleInstance::new(center, 10.0, Color::RED, [2.5, 3.0]);
+        assert_eq!(scaled.transform[0], 2.5, "scaled sx");
+        assert_eq!(scaled.transform[1], 3.0, "scaled sy");
+        assert_eq!(scaled.transform[2], 0.0, "translate_x always 0");
+        assert_eq!(scaled.transform[3], 0.0, "translate_y always 0");
+    }
+
+    /// Regression: ArcInstance::new must propagate scale_xy into the transform
+    /// field so the arc shader sizes the bounding quad correctly.
+    /// Before the fix, transform was always [1.0, 1.0, 0.0, 0.0].
+    #[test]
+    fn arc_instance_scale_propagates_to_transform() {
+        use flui_types::{Point, geometry::Pixels};
+        let center = Point::new(Pixels(0.0), Pixels(0.0));
+        let identity = ArcInstance::new(center, 10.0, 0.0, 1.0, Color::RED, [1.0, 1.0]);
+        assert_eq!(identity.transform[0], 1.0, "identity sx");
+        assert_eq!(identity.transform[1], 1.0, "identity sy");
+
+        let scaled = ArcInstance::new(center, 10.0, 0.0, 1.0, Color::RED, [2.5, 3.0]);
+        assert_eq!(scaled.transform[0], 2.5, "scaled sx");
+        assert_eq!(scaled.transform[1], 3.0, "scaled sy");
+        assert_eq!(scaled.transform[2], 0.0, "translate_x always 0");
+        assert_eq!(scaled.transform[3], 0.0, "translate_y always 0");
     }
 }

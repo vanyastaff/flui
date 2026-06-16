@@ -151,6 +151,13 @@ struct DrawSegment {
         super::texture_cache::TextureId,
         super::instancing::TextureInstance,
     )>,
+    /// External-texture draws queued for this segment.
+    ///
+    /// Each entry carries the registry's `wgpu::TextureView` alongside the
+    /// instance data so `flush_segment_external_images` can bind each view
+    /// independently — identical to how `flush_segment_cached_images` binds
+    /// per-texture views for the atlas cache.
+    external_images: Vec<(wgpu::TextureView, super::instancing::TextureInstance)>,
 }
 
 impl DrawSegment {
@@ -176,6 +183,7 @@ impl DrawSegment {
             radial_grad_scissors: Vec::new(),
             sweep_grad_scissors: Vec::new(),
             cached_images: Vec::new(),
+            external_images: Vec::new(),
         }
     }
 
@@ -1174,10 +1182,12 @@ impl WgpuPainter {
         // 2. Gradient primitives (linear, radial, sweep) - similar pipelines
         // 3. Tessellated geometry - different pipeline type
         // 4. Segment-cached images - grouped by texture while preserving draw order
+        // 5. External (registered) textures - grouped by TextureView
         self.flush_all_instanced_batches(encoder, view);
         self.flush_gradient_batches(encoder, view);
         self.flush_tessellated_geometry(encoder, view);
         self.flush_segment_cached_images(encoder, view);
+        self.flush_segment_external_images(encoder, view);
 
         // Swap back (now empty after flush)
         std::mem::swap(&mut self.current_segment, seg);
@@ -2143,8 +2153,39 @@ impl WgpuPainter {
             self.flush_texture_batch(encoder, view, texture_view);
         }
     }
-}
 
+    /// Flush external-texture draws for the current segment.
+    ///
+    /// Each entry in `external_images` carries the registry's `wgpu::TextureView`
+    /// that was cloned at draw time, so we bind it directly via
+    /// `flush_texture_batch` — no lookup against `texture_cache` needed.
+    ///
+    /// Because `wgpu::TextureView` is not `PartialEq`, instances are flushed
+    /// individually (one draw call per instance) rather than trying to group
+    /// by view equality.  External textures are uncommon in a typical UI; the
+    /// extra draw calls are not a hot path.
+    fn flush_segment_external_images(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        if self.current_segment.external_images.is_empty() {
+            return;
+        }
+
+        // Drain into a local vec so we can call &mut self methods (flush_texture_batch
+        // takes &mut self) while iterating.
+        let pending: Vec<(wgpu::TextureView, super::instancing::TextureInstance)> =
+            self.current_segment.external_images.drain(..).collect();
+
+        for (tex_view, instance) in pending {
+            // One instance → one batch-of-one → one draw call.
+            // This is the safe default when view identity cannot be checked.
+            let _ = self.texture_batch.add(instance);
+            self.flush_texture_batch(encoder, view, &tex_view);
+        }
+    }
+}
 // ===== Public Drawing API =====
 //
 // These methods used to be the `impl Painter for WgpuPainter` trait impl;
@@ -2332,8 +2373,18 @@ impl WgpuPainter {
                 }
             }
 
-            // Apply current transform to center point
+            // Apply current transform to center point (handles translation and
+            // rotation; scale is extracted separately below).
             let transformed_center = self.apply_transform(center);
+
+            // Extract the 2-D scale components from the current transform matrix.
+            // For axis-aligned transforms, x_axis.x = scale_x and y_axis.y = scale_y.
+            // When a rotation is present the circle should fall back to tessellation
+            // (an ellipse), but we don't have that fallback yet; for now we use the
+            // magnitude of the x/y columns so that uniform scale is always correct.
+            let m = self.current_transform;
+            let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
+            let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
 
             // Apply current opacity to color
             let color = if self.current_opacity < 1.0 {
@@ -2344,8 +2395,12 @@ impl WgpuPainter {
             };
 
             // Use GPU instancing for filled circles (100x faster!)
+            // Pass the extracted scale via the constructor so the circle shader
+            // scales the bounding quad correctly:
+            //   scaled_pos = normalized_pos * vec2(radius * transform.x,
+            //                                      radius * transform.y)
             let instance =
-                super::instancing::CircleInstance::new(transformed_center, radius, color);
+                super::instancing::CircleInstance::new(transformed_center, radius, color, [sx, sy]);
             let _ = self.current_segment.circle_batch.add(instance);
             DrawSegment::push_scissor_region(
                 &mut self.current_segment.circle_scissors,
@@ -2402,16 +2457,26 @@ impl WgpuPainter {
         );
 
         let center = rect.center();
-        let radius = (rect.width() + rect.height()) / px(4.0); // Average radius for elliptical arcs
+        // Pixels / Pixels = f32 (dimensionless ratio)
+        let radius: f32 = (rect.width() + rect.height()) / px(4.0);
+
+        // Apply the current transform to the center point so the arc follows
+        // the matrix stack (translation, scale, rotation).  Also extract the
+        // per-axis scale so the bounding-quad is sized correctly.
+        let transformed_center = self.apply_transform(center);
+        let m = self.current_transform;
+        let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
+        let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
 
         if paint.style == PaintStyle::Fill && use_center {
             // Use GPU instancing for filled arcs with center (pie slices)
             let instance = super::instancing::ArcInstance::new(
-                center,
+                transformed_center,
                 radius,
                 start_angle,
                 sweep_angle,
                 paint.color,
+                [sx, sy],
             );
             let _ = self.current_segment.arc_batch.add(instance);
             DrawSegment::push_scissor_region(
@@ -2419,16 +2484,17 @@ impl WgpuPainter {
                 self.current_scissor,
             );
         } else {
-            // For stroked arcs or arcs without center, use tessellation
-            // TODO: Implement proper arc tessellation in Tessellator
-            // For now, approximate with instanced arc (less accurate for strokes)
+            // For stroked arcs or filled arcs without center, use tessellation.
+            // (Stroked arcs always tessellate; filled arcs without a center
+            // are arc-segment shapes, also tessellated for correctness.)
             if paint.style == PaintStyle::Fill {
                 let instance = super::instancing::ArcInstance::new(
-                    center,
+                    transformed_center,
                     radius,
                     start_angle,
                     sweep_angle,
                     paint.color,
+                    [sx, sy],
                 );
                 let _ = self.current_segment.arc_batch.add(instance);
                 DrawSegment::push_scissor_region(
@@ -2595,10 +2661,33 @@ impl WgpuPainter {
         let _ = self.texture_batch.add(instance);
 
         // NOTE: Actual rendering will happen in flush_texture_batch()
-        // The texture bind group is created per-batch with the actual texture
     }
 
     pub fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
+        // Dashed strokes cannot use the path cache: the dash pattern affects
+        // geometry but is not part of compute_path_hash, so caching would
+        // collide a solid and a dashed stroke of the same path.
+        if paint.style != PaintStyle::Fill
+            && let Some(ref dash) = paint.dash_pattern
+        {
+            match self
+                .tessellator
+                .tessellate_flui_path_dashed_stroke(path, paint, dash)
+            {
+                Ok((vertices, indices)) => {
+                    self.add_tessellated_with_key(
+                        vertices,
+                        &indices,
+                        pipeline::pipeline_key_from_paint(paint),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to tessellate dashed path stroke: {}", e);
+                }
+            }
+            return;
+        }
+
         // Compute cache key from path geometry + paint tessellation parameters
         let path_hash = super::path_cache::PathCache::compute_path_hash(
             path,
@@ -3351,14 +3440,10 @@ impl WgpuPainter {
             // Apply opacity via tint color alpha
             let tint = flui_types::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
 
-            // Create texture instance
             let instance = super::instancing::TextureInstance::with_uv(dst, src_uv, tint);
-            let _ = self.texture_batch.add(instance);
-
-            // Note: The actual texture rendering happens in flush_all_instanced_batches()
-            // which needs to use entry.bind_group for the texture binding.
-            // For now, the texture batch uses a placeholder - full integration requires
-            // modifying the texture rendering pass to support per-texture bind groups.
+            // Clone the registry view so this segment owns it independently of
+            // the registry lifetime.
+            let view = entry.view.clone();
 
             #[cfg(debug_assertions)]
             tracing::trace!(
@@ -3368,38 +3453,19 @@ impl WgpuPainter {
                 entry.height,
                 entry.frame_count
             );
+
+            // Push into per-segment external_images; flushed in flush_segment
+            // via flush_segment_external_images which binds each view via
+            // flush_texture_batch — identical to the cached-image path.
+            self.current_segment.external_images.push((view, instance));
         } else {
-            // Texture not registered - render placeholder for debugging
-            #[cfg(debug_assertions)]
+            // Texture not registered — warn and skip.  Rendering an invisible
+            // placeholder via `texture_batch` (the old code) would orphan the
+            // instance because texture_batch is never drained by flush_segment.
             tracing::warn!(
-                "External texture {} not registered - rendering placeholder",
+                "External texture {} not registered — skipping draw_texture",
                 texture_id.get()
             );
-
-            // Create a placeholder color based on texture ID (for debugging)
-            let id_hash = texture_id.get();
-            let r = (id_hash & 0xFF) as u8;
-            let g = ((id_hash >> 8) & 0xFF) as u8;
-            let b = ((id_hash >> 16) & 0xFF) as u8;
-            let a = (opacity * 255.0) as u8;
-            let placeholder_color =
-                flui_types::styling::Color::rgba(r.max(64), g.max(64), b.max(64), a);
-
-            // Default UV coordinates
-            let src_uv = if let Some(src_rect) = src {
-                [
-                    src_rect.left().0,
-                    src_rect.top().0,
-                    src_rect.right().0,
-                    src_rect.bottom().0,
-                ]
-            } else {
-                [0.0, 0.0, 1.0, 1.0]
-            };
-
-            let instance =
-                super::instancing::TextureInstance::with_uv(dst, src_uv, placeholder_color);
-            let _ = self.texture_batch.add(instance);
         }
     }
 
