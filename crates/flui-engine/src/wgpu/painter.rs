@@ -1183,10 +1183,7 @@ impl WgpuPainter {
         bounds: Rect<Pixels>,
     ) {
         // Finalize the current segment and start a new one
-        let segment = std::mem::replace(&mut self.current_segment, DrawSegment::new());
-        if !segment.is_empty() {
-            self.draw_order.push(DrawItem::Segment(segment));
-        }
+        self.finish_current_segment();
         self.draw_order
             .push(DrawItem::OffscreenTexture(PendingOffscreenTexture {
                 texture,
@@ -1259,10 +1256,7 @@ impl WgpuPainter {
         );
 
         // ===== Finalize current segment =====
-        let final_segment = std::mem::replace(&mut self.current_segment, DrawSegment::new());
-        if !final_segment.is_empty() {
-            self.draw_order.push(DrawItem::Segment(final_segment));
-        }
+        self.finish_current_segment();
 
         // ===== Process draw items in order =====
         let items: Vec<DrawItem> = self.draw_order.drain(..).collect();
@@ -1698,10 +1692,48 @@ impl WgpuPainter {
 
     /// Add tessellated shape from vertices/indices with pipeline key tracking.
     ///
+    /// Seal the current `DrawSegment` and push it onto `draw_order`, then begin
+    /// a fresh empty segment.
+    ///
+    /// This is the single place that performs `current_segment → draw_order`
+    /// promotion. It is called:
+    ///
+    /// - by `queue_offscreen_result` when an offscreen texture must be
+    ///   interleaved at the correct Z-position, and
+    /// - by `add_tessellated_with_key` immediately AFTER appending a
+    ///   non-SrcOver tessellated draw, so subsequent instanced or tessellated
+    ///   content is guaranteed to flush AFTER the blend-mode shape. See the
+    ///   draw-order contract documented at the top of the file.
+    ///
+    /// An empty segment is never pushed (avoids empty GPU passes).
+    fn finish_current_segment(&mut self) {
+        let seg = std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        if !seg.is_empty() {
+            self.draw_order.push(DrawItem::Segment(seg));
+        }
+    }
+
     /// When the requested `key` matches the current batch's pipeline key the
     /// indices are simply appended.  When the key differs a new
     /// [`TessellatedBatch`] is started so the render pass can switch pipelines
     /// at the correct boundary.
+    ///
+    /// # Draw-order contract for non-SrcOver blend modes
+    ///
+    /// `flush_segment` renders all batches in a FIXED order
+    /// (instanced → gradient → tessellated → images), not recording order.
+    /// A non-SrcOver tessellated shape submitted into a segment that also
+    /// contains instanced draws would execute AFTER those instanced draws
+    /// regardless of recording order, violating draw semantics for destructive
+    /// modes (Clear, DstOut, Src, SrcIn, DstIn, SrcOut, SrcATop, DstATop, Xor).
+    ///
+    /// The fix: after appending a non-SrcOver tessellated shape, immediately
+    /// seal the segment via `finish_current_segment`.  The sealed segment
+    /// flushes (instanced first, blended tessellated last — correct, because
+    /// instanced draws were recorded BEFORE the non-SrcOver shape), and any
+    /// subsequent content lands in a new segment (flushed entirely after this
+    /// one — also correct).  SrcOver shapes do NOT trigger a split; the common
+    /// path has zero overhead.
     fn add_tessellated_with_key(
         &mut self,
         vertices: Vec<Vertex>,
@@ -1731,17 +1763,22 @@ impl WgpuPainter {
             && last.scissor == self.current_scissor
         {
             last.index_count += index_count;
-            return;
+        } else {
+            // Pipeline key changed (or first batch) — start a new batch
+            self.current_segment.current_pipeline_key = Some(key);
+            self.current_segment.tess_batches.push(TessellatedBatch {
+                pipeline_key: key,
+                scissor: self.current_scissor,
+                index_start,
+                index_count,
+            });
         }
 
-        // Pipeline key changed (or first batch) — start a new batch
-        self.current_segment.current_pipeline_key = Some(key);
-        self.current_segment.tess_batches.push(TessellatedBatch {
-            pipeline_key: key,
-            scissor: self.current_scissor,
-            index_start,
-            index_count,
-        });
+        // Draw-order contract: close the segment after any non-SrcOver blend.
+        // See the method-level doc comment for the full rationale.
+        if key.blend_mode() != BlendMode::SrcOver {
+            self.finish_current_segment();
+        }
     }
 
     /// Apply the current world transform to every vertex position of an already-
@@ -6285,6 +6322,89 @@ mod tests {
             px_val[3] > 0,
             "gradient + Clear must not erase the target to alpha=0 in Phase A \
              (gradient blend_mode is SrcOver, not Clear). got {px_val:?}"
+        );
+    }
+
+    /// Draw-order correctness for non-SrcOver blend modes (P1 regression).
+    ///
+    /// `flush_segment` renders batches in FIXED order (instanced → tessellated),
+    /// not recording order.  Without the segment-split fix, a non-SrcOver
+    /// tessellated shape batched into the same segment as LATER instanced draws
+    /// would execute AFTER those draws, erasing content that was laid down after it.
+    ///
+    /// Scenario (64×64 frame, cleared to black):
+    ///   1. Draw opaque RED instanced rect over the entire frame (SrcOver) → S0.
+    ///   2. Draw a Clear `draw_path` over the entire frame (non-SrcOver →
+    ///      tessellated → segment-split fix seals S0 and opens S1).
+    ///   3. Draw opaque GREEN instanced rect over the entire frame (SrcOver → S1).
+    ///
+    /// Correct draw order: RED, then Clear (transparent), then GREEN → center GREEN.
+    ///
+    /// Without the fix (all three in segment S0):
+    ///   - `flush_segment` runs instanced FIRST (RED + GREEN: last writer wins →
+    ///     GREEN), then tessellated Clear → transparent. Center = transparent.
+    ///   - The GREEN assertion (G > 200) fails.
+    ///
+    /// With the fix (segment split after Clear):
+    ///   - S0 flush: RED (instanced), Clear (tess) → transparent.
+    ///   - S1 flush: GREEN (instanced) → GREEN on transparent → GREEN visible.
+    ///   - Center reads GREEN ~(0,255,0). Assertion passes.
+    ///
+    /// RED-BEFORE (no fix): center alpha = 0, G = 0 (cleared by out-of-order Clear).
+    /// GREEN-AFTER (fix):   center pixel ~(0,255,0,255).
+    #[test]
+    fn blend_clear_respects_draw_order() {
+        use flui_painting::Paint;
+
+        const SIZE: u32 = 64;
+        let (device, queue) = test_device_and_queue();
+
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            let red = flui_types::Color::rgb(255, 0, 0);
+            let green = flui_types::Color::rgb(0, 255, 0);
+
+            // Step 1: fill frame RED via instanced path (SrcOver → S0 rect_batch).
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(red),
+            );
+
+            // Step 2: Clear entire frame via tessellated path (BlendMode::Clear).
+            // The segment-split fix appends Clear to S0's tess_batches then seals
+            // S0 → draw_order, opening fresh S1.
+            // Without fix: Clear goes into S0 alongside the RED and GREEN instanced
+            // draws, and flush_segment would run instanced FIRST (RED+GREEN both
+            // rendered, last-writer GREEN wins), then tessellated Clear → erases
+            // everything; center is transparent.
+            painter.draw_path(
+                &full_frame_fill_path(SIZE as f32),
+                &Paint::fill(red).with_blend_mode(BlendMode::Clear),
+            );
+
+            // Step 3: fill frame GREEN via instanced path (SrcOver → S1 rect_batch).
+            // With the fix: S1 flushes entirely AFTER S0 (which ended with Clear),
+            // so GREEN is drawn on top of transparent → GREEN visible.
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(green),
+            );
+        });
+
+        // Center must be GREEN: drawn AFTER the Clear.
+        // Without fix: center is transparent (0,0,0,0) — Clear ran last, erased GREEN.
+        // With fix:    center is ~(0,255,0,255) — Clear sealed S0, GREEN in S1 is intact.
+        let center = pixel_at(&rgba, SIZE, SIZE / 2, SIZE / 2);
+        assert!(
+            center[1] > 200 && center[0] < 10 && center[2] < 10,
+            "center pixel = {center:?}, expected GREEN ~(0,255,0). \
+             A transparent or red result means the out-of-order Clear erased \
+             the GREEN that was drawn AFTER it (segment-split fix missing)."
+        );
+        assert_eq!(
+            center[3], 255,
+            "center alpha = {}, expected 255 (GREEN fully covers the cleared frame). \
+             alpha=0 means the Clear ran AFTER GREEN and erased it. pixel = {center:?}",
+            center[3]
         );
     }
 }
