@@ -139,7 +139,10 @@ pub struct CachedTexture {
 impl CachedTexture {
     /// Create new cached texture entry (standalone, not in atlas)
     fn new(texture: Texture, view: TextureView, width: u32, height: u32) -> Self {
-        let size_bytes = (width * height * 4) as usize; // RGBA8 = 4 bytes per pixel
+        // Widen to usize BEFORE multiplying: `width * height * 4` in u32 panics
+        // (debug overflow-checks) for large dimensions whose product exceeds
+        // u32::MAX. RGBA8 = 4 bytes per pixel.
+        let size_bytes = width as usize * height as usize * 4;
         Self {
             texture,
             view,
@@ -160,8 +163,9 @@ impl CachedTexture {
         uv_rect: [f32; 4],
     ) -> Self {
         // Size accounting: the pixels live inside the atlas, but we still
-        // track per-entry byte usage for memory budgeting.
-        let size_bytes = (width * height * 4) as usize;
+        // track per-entry byte usage for memory budgeting. Widen to usize before
+        // multiplying so large dimensions cannot overflow u32.
+        let size_bytes = width as usize * height as usize * 4;
         Self {
             texture: atlas_texture,
             view: atlas_view,
@@ -401,8 +405,10 @@ impl TextureCache {
     ) -> Result<&CachedTexture, String> {
         use std::collections::hash_map::Entry;
 
-        // Validate data size
-        let expected_size = (width * height * 4) as usize;
+        // Validate data size. Widen to usize BEFORE multiplying so an oversized
+        // (width, height) returns a clean Err here instead of panicking in the
+        // u32 multiply under debug overflow-checks.
+        let expected_size = width as usize * height as usize * 4;
         if data.len() != expected_size {
             return Err(format!(
                 "Invalid RGBA data size: expected {}, got {}",
@@ -1107,6 +1113,27 @@ mod tests {
         }))
         .expect("a GPU device for texture-cache tests");
         (std::sync::Arc::new(device), std::sync::Arc::new(queue))
+    }
+
+    /// BUG 4 regression: an absurdly large `(width, height)` must return a clean
+    /// `Err` (size mismatch), NOT panic in the size multiply.
+    ///
+    /// `40000 * 40000 * 4 = 6.4e9` exceeds `u32::MAX` (4.29e9). The old code
+    /// computed `(width * height * 4) as usize` — the multiply ran in u32 and
+    /// panicked under debug overflow-checks BEFORE the `data.len()` guard. Widen
+    /// to usize first so validation rejects the input gracefully.
+    #[test]
+    fn load_from_rgba_oversized_dimensions_errors_without_panic() {
+        let (device, queue) = test_device_and_queue();
+        let mut cache = TextureCache::new(device, queue);
+
+        // Empty data, gigantic dimensions: the size check must fire first.
+        let result = cache.load_from_rgba(TextureId::from_name("big"), 40000, 40000, &[]);
+        assert!(
+            result.is_err(),
+            "oversized dimensions must return Err (size mismatch), not panic in \
+             the u32 size multiply"
+        );
     }
 
     /// Regression: frame maintenance must RETAIN textures used this frame.

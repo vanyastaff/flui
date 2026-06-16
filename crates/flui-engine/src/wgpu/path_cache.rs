@@ -120,11 +120,48 @@ impl PathCache {
         }
     }
 
-    /// Compute a hash for a path combined with paint properties that affect
-    /// tessellation geometry (style, stroke width, caps, joins).
+    /// Quantize a world scale into a coarse bucket for cache keying.
     ///
-    /// Two calls with identical path commands and paint parameters will produce
-    /// the same hash, allowing the tessellated result to be reused.
+    /// Cached geometry stores the *local* (untransformed) tessellation, but the
+    /// chord density baked into it was chosen for the scale it was first
+    /// tessellated at (see the scale-aware tolerance in
+    /// `super::tessellator::Tessellator`). Reusing a scale-1 tessellation at
+    /// scale 8 would show facets, so the scale must participate in the key —
+    /// quantized so that nearby scales (which need indistinguishable density)
+    /// still share an entry and avoid cache churn during smooth zoom.
+    ///
+    /// Rounds to two decimal places, matching the bucketing the audit
+    /// prescribed: 1.00 and 8.00 land in distinct buckets, 1.001 and 1.004 do
+    /// not. Non-finite or non-positive scales collapse to the identity bucket.
+    #[must_use]
+    fn quantize_scale(max_scale: f32) -> u64 {
+        // Mirror `Tessellator::set_max_scale`'s guard (`> f32::EPSILON`) so the
+        // cache bucket and the tessellation tolerance agree on the effective
+        // scale: a degenerate scale in `(0, EPSILON]` falls back to 1.0 in both,
+        // keeping the cached geometry consistent with its key.
+        let s = if max_scale.is_finite() && max_scale > f32::EPSILON {
+            max_scale
+        } else {
+            1.0
+        };
+        // Two-decimal bucket; `round` keeps adjacent sub-pixel scales together.
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "s>0 and bounded by texture limits; product is a small non-negative integer"
+        )]
+        let bucket = (s * 100.0).round() as u64;
+        bucket
+    }
+
+    /// Compute a hash for a path combined with paint properties AND the world
+    /// scale that affect tessellation geometry (fill type, style, stroke width,
+    /// caps, joins, and the quantized scale the curves were flattened at).
+    ///
+    /// Two calls with identical path commands, paint parameters, and scale
+    /// bucket will produce the same hash, allowing the tessellated result to be
+    /// reused. A different scale bucket yields a different key so geometry
+    /// flattened for scale 1 is never reused at scale 8 (which would facet).
     #[must_use]
     pub fn compute_path_hash(
         path: &Path,
@@ -132,6 +169,7 @@ impl PathCache {
         stroke_width: f32,
         stroke_cap: StrokeCap,
         stroke_join: StrokeJoin,
+        max_scale: f32,
     ) -> u64 {
         let mut hasher = DefaultHasher::new();
 
@@ -146,6 +184,10 @@ impl PathCache {
         stroke_width.to_bits().hash(&mut hasher);
         stroke_cap.hash(&mut hasher);
         stroke_join.hash(&mut hasher);
+
+        // Hash the quantized world scale: cached local geometry carries the
+        // chord density tuned for the scale it was flattened at.
+        Self::quantize_scale(max_scale).hash(&mut hasher);
 
         // Hash each path command
         for cmd in path.commands() {
@@ -286,6 +328,7 @@ mod tests {
             0.0,
             StrokeCap::Butt,
             StrokeJoin::Miter,
+            1.0,
         );
         let h2 = PathCache::compute_path_hash(
             &path,
@@ -293,6 +336,7 @@ mod tests {
             0.0,
             StrokeCap::Butt,
             StrokeJoin::Miter,
+            1.0,
         );
         assert_eq!(h1, h2);
     }
@@ -309,6 +353,7 @@ mod tests {
             0.0,
             StrokeCap::Butt,
             StrokeJoin::Miter,
+            1.0,
         );
         let h_stroke = PathCache::compute_path_hash(
             &path,
@@ -316,8 +361,52 @@ mod tests {
             2.0,
             StrokeCap::Round,
             StrokeJoin::Round,
+            1.0,
         );
         assert_ne!(h_fill, h_stroke);
+    }
+
+    /// BUG 2b regression: the scale bucket participates in the cache key, so a
+    /// path tessellated at scale 1 and the same path at scale 8 produce DISTINCT
+    /// hashes. Without this, scale-1 (coarse) geometry would be reused at scale 8
+    /// and visibly facet. Adjacent sub-bucket scales (1.00 vs 1.004) must still
+    /// share a key to avoid cache churn during smooth zoom.
+    #[test]
+    fn test_scale_bucket_partitions_hash() {
+        let mut path = Path::new();
+        path.add_oval(flui_types::Rect::from_ltrb(
+            px(0.0),
+            px(0.0),
+            px(100.0),
+            px(100.0),
+        ));
+
+        let key = |scale: f32| {
+            PathCache::compute_path_hash(
+                &path,
+                PaintStyle::Fill,
+                0.0,
+                StrokeCap::Butt,
+                StrokeJoin::Miter,
+                scale,
+            )
+        };
+
+        assert_ne!(
+            key(1.0),
+            key(8.0),
+            "scale 1 and scale 8 must occupy distinct cache entries"
+        );
+        assert_eq!(
+            key(1.0),
+            key(1.004),
+            "scales within the same 0.01 bucket must share a cache entry"
+        );
+        assert_ne!(
+            key(1.0),
+            key(1.02),
+            "scales two buckets apart must occupy distinct cache entries"
+        );
     }
 
     #[test]
@@ -350,6 +439,7 @@ mod tests {
             2.0,
             StrokeCap::Butt,
             StrokeJoin::Miter,
+            1.0,
         );
         // Calling with identical arguments (dash pattern is not a parameter)
         let h_dashed = PathCache::compute_path_hash(
@@ -358,6 +448,7 @@ mod tests {
             2.0,
             StrokeCap::Butt,
             StrokeJoin::Miter,
+            1.0,
         );
         assert_eq!(
             h_solid, h_dashed,

@@ -10,7 +10,7 @@ use flui_types::{
     styling::Color,
 };
 use lyon::{
-    path::Path,
+    path::{FillRule, Path},
     tessellation::{
         BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
         StrokeVertex, VertexBuffers,
@@ -19,6 +19,33 @@ use lyon::{
 use thiserror::Error;
 
 use super::vertex::Vertex;
+
+/// Device-space chord-error budget for curve flattening, in device pixels.
+///
+/// Mirrors Impeller's `kCircleTolerance = 0.1f` (`impeller/tessellator/
+/// tessellator.h`): a curve is subdivided until its chord deviates from the
+/// true arc by at most this many *device* pixels. FLUI bakes the world
+/// transform into vertices after tessellation (`shape.wgsl` has no model
+/// matrix), so the local-space tolerance handed to lyon must be pre-divided by
+/// the transform's scale to keep the device-space error constant — see
+/// [`Tessellator::set_max_scale`].
+const DEVICE_FILL_TOLERANCE: f32 = 0.1;
+
+/// Device-space chord-error budget for the dashed-stroke walker's flattening
+/// pass, in device pixels. Coarser than [`DEVICE_FILL_TOLERANCE`] because dash
+/// placement only needs segment endpoints, not render-quality curvature.
+const DEVICE_DASH_TOLERANCE: f32 = 0.5;
+
+/// Map a FLUI [`PathFillType`](flui_types::painting::PathFillType) to lyon's
+/// [`FillRule`]. FLUI/Flutter default to non-zero winding; lyon's
+/// `FillOptions::default()` defaults to even-odd, so this mapping must be
+/// applied explicitly for every filled FLUI path.
+fn fill_rule_for(fill_type: flui_types::painting::PathFillType) -> FillRule {
+    match fill_type {
+        flui_types::painting::PathFillType::NonZero => FillRule::NonZero,
+        flui_types::painting::PathFillType::EvenOdd => FillRule::EvenOdd,
+    }
+}
 
 /// Errors that can occur during tessellation
 ///
@@ -76,7 +103,6 @@ impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstru
 ///
 /// Converts vector paths into triangle meshes using Lyon.
 /// Provides both fill and stroke tessellation.
-#[derive(Default)]
 #[allow(missing_debug_implementations)]
 pub struct Tessellator {
     /// Lyon fill tessellator
@@ -87,6 +113,27 @@ pub struct Tessellator {
 
     /// Reusable geometry buffers
     geometry: VertexBuffers<Vertex, u32>,
+
+    /// Maximum basis length of the world transform's 2D linear part.
+    ///
+    /// The painter bakes the world transform into vertices *after*
+    /// tessellation, so flattening tolerances are pre-divided by this scale to
+    /// keep the device-space chord error constant regardless of the on-screen
+    /// magnification (HiDPI root scale, user `Transform.scale`). Set via
+    /// [`Self::set_max_scale`] immediately before each tessellation call;
+    /// defaults to `1.0` (identity transform).
+    max_scale: f32,
+}
+
+impl Default for Tessellator {
+    fn default() -> Self {
+        Self {
+            fill_tessellator: FillTessellator::default(),
+            stroke_tessellator: StrokeTessellator::default(),
+            geometry: VertexBuffers::default(),
+            max_scale: 1.0,
+        }
+    }
 }
 
 impl Tessellator {
@@ -95,11 +142,51 @@ impl Tessellator {
         Self::default()
     }
 
-    /// Tessellate a filled path
+    /// Set the world-transform scale used to derive scale-aware flattening
+    /// tolerances. `max_scale` is the maximum basis length of the transform's
+    /// upper-left 2x2 (mirroring Impeller's `GetMaxBasisLengthXY`). The painter
+    /// must call this immediately before tessellating so curves are subdivided
+    /// finely enough at the magnification they will be drawn at.
+    pub fn set_max_scale(&mut self, max_scale: f32) {
+        // Guard against zero/NaN/negative collapsing the tolerance to infinity.
+        self.max_scale = if max_scale.is_finite() && max_scale > f32::EPSILON {
+            max_scale
+        } else {
+            1.0
+        };
+    }
+
+    /// The effective flatten scale currently set (post-guard). Test-only
+    /// introspection to assert a call site primed the tessellator.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn max_scale(&self) -> f32 {
+        self.max_scale
+    }
+
+    /// Local-space tolerance for fill/stroke flattening at the current scale.
+    ///
+    /// Equals the device-space budget divided by the world scale, so that after
+    /// the painter bakes the transform the on-screen chord error stays at
+    /// [`DEVICE_FILL_TOLERANCE`] device pixels.
+    fn fill_tolerance(&self) -> f32 {
+        DEVICE_FILL_TOLERANCE / self.max_scale
+    }
+
+    /// Local-space tolerance for the dashed-stroke walker at the current scale.
+    fn dash_tolerance(&self) -> f32 {
+        DEVICE_DASH_TOLERANCE / self.max_scale
+    }
+
+    /// Tessellate a filled path with the given fill rule.
     ///
     /// # Arguments
     /// * `path` - Lyon path to tessellate
     /// * `paint` - Paint style (color)
+    /// * `fill_rule` - Winding rule. FLUI/Flutter default to
+    ///   [`FillRule::NonZero`]; only paths carrying an explicit
+    ///   [`PathFillType::EvenOdd`](flui_types::painting::PathFillType) use
+    ///   even-odd. Convex shapes (circle/ellipse/arc/rrect/drrect) are unaffected
+    ///   by the rule, so their callers pass the FLUI default.
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
@@ -107,11 +194,14 @@ impl Tessellator {
         &mut self,
         path: &Path,
         paint: &Paint,
+        fill_rule: FillRule,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         self.geometry.vertices.clear();
         self.geometry.indices.clear();
 
-        let options = FillOptions::default().with_tolerance(0.1);
+        let options = FillOptions::default()
+            .with_fill_rule(fill_rule)
+            .with_tolerance(self.fill_tolerance());
 
         self.fill_tessellator
             .tessellate_path(
@@ -150,6 +240,7 @@ impl Tessellator {
 
         // Extract stroke info from Paint
         let options = StrokeOptions::default()
+            .with_tolerance(self.fill_tolerance())
             .with_line_width(paint.stroke_width)
             .with_line_cap(match paint.stroke_cap {
                 StrokeCap::Butt => LineCap::Butt,
@@ -204,7 +295,8 @@ impl Tessellator {
         );
 
         let path = path_builder.build();
-        self.tessellate_fill(&path, paint)
+        // Convex shape: fill rule is moot; pass the FLUI default.
+        self.tessellate_fill(&path, paint, FillRule::NonZero)
     }
 
     /// Tessellate an ellipse
@@ -224,7 +316,8 @@ impl Tessellator {
         );
 
         let path = path_builder.build();
-        self.tessellate_fill(&path, paint)
+        // Convex shape: fill rule is moot; pass the FLUI default.
+        self.tessellate_fill(&path, paint, FillRule::NonZero)
     }
 
     /// Tessellate an arc (pie slice or arc stroke)
@@ -263,7 +356,7 @@ impl Tessellator {
             path_builder.end(false);
             let path = path_builder.build();
             return if paint.style == flui_painting::PaintStyle::Fill {
-                self.tessellate_fill(&path, paint)
+                self.tessellate_fill(&path, paint, FillRule::NonZero)
             } else {
                 self.tessellate_stroke(&path, paint)
             };
@@ -305,7 +398,8 @@ impl Tessellator {
 
         // Use fill or stroke based on paint style
         if paint.style == flui_painting::PaintStyle::Fill {
-            self.tessellate_fill(&path, paint)
+            // Convex pie/arc segment: fill rule is moot; pass the FLUI default.
+            self.tessellate_fill(&path, paint, FillRule::NonZero)
         } else {
             self.tessellate_stroke(&path, paint)
         }
@@ -445,7 +539,10 @@ impl Tessellator {
         add_rrect(&mut path_builder, inner, lyon::path::Winding::Negative);
 
         let path = path_builder.build();
-        self.tessellate_fill(&path, paint)
+        // The cutout is built from opposite windings, so either fill rule rings
+        // the inner region correctly; use NonZero to match the FLUI/Flutter
+        // default.
+        self.tessellate_fill(&path, paint, FillRule::NonZero)
     }
 
     /// Create a lyon path from points (polyline)
@@ -542,7 +639,8 @@ impl Tessellator {
         path_builder.close();
 
         let path = path_builder.build();
-        self.tessellate_fill(&path, paint)
+        // Convex rounded rect: fill rule is moot; pass the FLUI default.
+        self.tessellate_fill(&path, paint, FillRule::NonZero)
     }
 
     /// Tessellate a stroked rectangle
@@ -599,14 +697,20 @@ impl Tessellator {
         result
     }
 
-    /// Tessellate a FLUI Path (filled)
+    /// Tessellate a FLUI Path (filled), honoring the path's own fill rule.
+    ///
+    /// Unlike the convex-shape helpers, an arbitrary FLUI path can
+    /// self-intersect or overlap same-winding subpaths, so the winding rule is
+    /// observable: `PathFillType::NonZero` (the FLUI default) fills overlaps
+    /// solid, `EvenOdd` punches holes. This is the only fill entry point that
+    /// reads [`flui_types::painting::path::Path::fill_type`].
     pub fn tessellate_flui_path_fill(
         &mut self,
         flui_path: &flui_types::painting::path::Path,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let lyon_path = flui_path.to_lyon_path();
-        self.tessellate_fill(&lyon_path, paint)
+        self.tessellate_fill(&lyon_path, paint, fill_rule_for(flui_path.fill_type()))
     }
 
     /// Tessellate a FLUI Path (stroked)
@@ -679,8 +783,10 @@ impl Tessellator {
         let mut segments: Vec<(lyon::geom::Point<f32>, lyon::geom::Point<f32>)> = Vec::new();
         let mut current_pos = lyon::geom::point(0.0f32, 0.0);
 
-        // Flatten the path to line segments (tolerance controls curve approximation quality)
-        for event in path.iter().flattened(0.5) {
+        // Flatten the path to line segments. Scale-aware: the dash walker runs
+        // in local space but the result is baked through the world transform, so
+        // divide the device-space budget by the scale to keep facets sub-pixel.
+        for event in path.iter().flattened(self.dash_tolerance()) {
             match event {
                 PathEvent::Begin { at } => {
                     current_pos = at;
@@ -793,6 +899,7 @@ impl Tessellator {
 
         // Now tessellate all dash sub-paths and combine the geometry
         let options = StrokeOptions::default()
+            .with_tolerance(self.fill_tolerance())
             .with_line_width(paint.stroke_width)
             .with_line_cap(match paint.stroke_cap {
                 StrokeCap::Butt => LineCap::Butt,
@@ -1011,6 +1118,174 @@ impl IntoLyonPath for flui_types::painting::path::Path {
         }
 
         builder.build()
+    }
+}
+
+/// CPU-only tessellation tests (no GPU device required). These run under the
+/// default `cargo test --lib`.
+#[cfg(test)]
+mod cpu_tests {
+    use super::*;
+    use flui_types::geometry::px;
+
+    /// Worst-case local chord sag and rim-vertex count for a tessellated circle
+    /// of `radius`, flattened at the tessellator's current `max_scale`.
+    ///
+    /// lyon places flattening points ON the (cubic-Bezier-approximated) circle,
+    /// so the chord sag between consecutive rim vertices is `R*(1 - cos(Δθ/2))`
+    /// where `Δθ` is the angular gap. The worst gap gives the worst sag. The
+    /// returned sag is in LOCAL space; multiply by the world scale to get the
+    /// device-space error the viewer sees after the painter bakes the transform.
+    fn rim_local_sag_and_count(tess: &mut Tessellator, radius: f32) -> (f32, usize) {
+        let paint = Paint::fill(Color::RED);
+        let (vertices, _indices) = tess
+            .tessellate_circle(Point::new(px(0.0), px(0.0)), radius, &paint)
+            .expect("circle tessellation must succeed");
+
+        // Angles of the rim vertices (those at ~radius from center; lyon may also
+        // emit interior vertices for the fill).
+        let mut angles: Vec<f32> = vertices
+            .iter()
+            .filter_map(|v| {
+                let (x, y) = (v.position[0], v.position[1]);
+                let r = (x * x + y * y).sqrt();
+                if (r - radius).abs() <= radius * 0.02 {
+                    Some(y.atan2(x))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            angles.len() >= 3,
+            "expected a tessellated rim, got {} boundary vertices",
+            angles.len()
+        );
+        angles.sort_by(|a, b| a.partial_cmp(b).expect("angles are finite"));
+        angles.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
+
+        let mut max_gap = 0.0f32;
+        for w in angles.windows(2) {
+            max_gap = max_gap.max(w[1] - w[0]);
+        }
+        let wrap = (angles[0] + std::f32::consts::TAU) - angles[angles.len() - 1];
+        max_gap = max_gap.max(wrap);
+
+        let local_sag = radius * (1.0 - (max_gap / 2.0).cos());
+        (local_sag, angles.len())
+    }
+
+    /// Device-space chord error of a radius-`radius` circle flattened at
+    /// `flatten_scale` and then baked through `bake_scale`.
+    ///
+    /// With the scale-aware fix `flatten_scale == bake_scale`. To reproduce the
+    /// OLD bug (tolerance fixed in local space), flatten at scale 1 but bake at
+    /// the real scale.
+    fn device_chord_error(radius: f32, flatten_scale: f32, bake_scale: f32) -> f32 {
+        let mut tess = Tessellator::new();
+        tess.set_max_scale(flatten_scale);
+        let (local_sag, _) = rim_local_sag_and_count(&mut tess, radius);
+        local_sag * bake_scale
+    }
+
+    /// BUG 2 regression: the curve-flattening tolerance is applied in DEVICE
+    /// space, so a radius-100 circle baked at scale 8 stays sub-pixel on screen,
+    /// whereas the OLD fixed-local tolerance would facet badly.
+    ///
+    /// The discriminator is a direct contrast at the same bake scale (8):
+    /// - OLD: flatten at the fixed local 0.1 budget (simulated by
+    ///   `flatten_scale = 1`), bake ×8 → device error well over the 0.25 px
+    ///   budget (the "today ~0.8 px" facets).
+    /// - NEW: flatten scale-aware (`flatten_scale = 8` → 0.1/8 local), bake ×8 →
+    ///   device error under 0.25 px.
+    #[test]
+    fn circle_chord_error_stays_subpixel_when_scaled_up() {
+        let old_err = device_chord_error(100.0, 1.0, 8.0);
+        let new_err = device_chord_error(100.0, 8.0, 8.0);
+
+        assert!(
+            old_err > 0.25,
+            "sanity: the OLD fixed-local tolerance must facet at scale 8 \
+             (device error {old_err:.4} px); if this is already sub-pixel the \
+             contrast does not exercise the fix"
+        );
+        assert!(
+            new_err < 0.25,
+            "device chord error = {new_err:.4} px at scale 8 (was {old_err:.4} px \
+             with the fixed-local tolerance), expected < 0.25 px. A large value \
+             means the tolerance was not divided by the world scale."
+        );
+    }
+
+    /// The device error stays within budget at unit scale too, confirming the
+    /// budget is honored at both ends.
+    #[test]
+    fn circle_chord_error_at_unit_scale_is_within_budget() {
+        let err = device_chord_error(100.0, 1.0, 1.0);
+        assert!(
+            err < 0.25,
+            "device chord error = {err:.4} px at scale 1, expected < 0.25 px"
+        );
+    }
+
+    /// The scale-aware tolerance actually tightens the local subdivision: a circle
+    /// flattened at scale 8 has strictly more rim vertices (smaller local chord)
+    /// than the same circle flattened at scale 1.
+    #[test]
+    fn higher_scale_subdivides_more_finely() {
+        let mut coarse = Tessellator::new();
+        coarse.set_max_scale(1.0);
+        let (coarse_sag, coarse_count) = rim_local_sag_and_count(&mut coarse, 100.0);
+
+        let mut fine = Tessellator::new();
+        fine.set_max_scale(8.0);
+        let (fine_sag, fine_count) = rim_local_sag_and_count(&mut fine, 100.0);
+
+        assert!(
+            fine_count > coarse_count,
+            "scale-8 rim must have more vertices than scale-1 \
+             (fine={fine_count}, coarse={coarse_count}); the tolerance is not \
+             tightening with scale"
+        );
+        assert!(
+            fine_sag < coarse_sag,
+            "scale-8 local chord sag ({fine_sag:.5}) must be smaller than scale-1 \
+             ({coarse_sag:.5})"
+        );
+    }
+
+    /// The fill-rule mapping must preserve the FLUI semantics 1:1: NonZero (the
+    /// default) → lyon NonZero, EvenOdd → lyon EvenOdd.
+    #[test]
+    fn fill_rule_mapping_is_faithful() {
+        use flui_types::painting::PathFillType;
+        assert!(matches!(
+            fill_rule_for(PathFillType::NonZero),
+            FillRule::NonZero
+        ));
+        assert!(matches!(
+            fill_rule_for(PathFillType::EvenOdd),
+            FillRule::EvenOdd
+        ));
+        // Default is NonZero (the documented FLUI/Flutter default).
+        assert!(matches!(
+            fill_rule_for(PathFillType::default()),
+            FillRule::NonZero
+        ));
+    }
+
+    /// A zero / non-finite scale must collapse to the identity scale, not divide
+    /// the tolerance by zero (which would yield an infinite tolerance and emit a
+    /// degenerate triangle).
+    #[test]
+    fn degenerate_scale_falls_back_to_identity() {
+        let mut tess = Tessellator::new();
+        tess.set_max_scale(0.0);
+        assert!((tess.fill_tolerance() - DEVICE_FILL_TOLERANCE).abs() < 1e-6);
+        tess.set_max_scale(f32::NAN);
+        assert!((tess.fill_tolerance() - DEVICE_FILL_TOLERANCE).abs() < 1e-6);
+        tess.set_max_scale(-4.0);
+        assert!((tess.fill_tolerance() - DEVICE_FILL_TOLERANCE).abs() < 1e-6);
     }
 }
 
