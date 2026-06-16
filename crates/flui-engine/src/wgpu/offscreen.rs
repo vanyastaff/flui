@@ -644,6 +644,49 @@ impl OffscreenRenderer {
     ///
     /// A new `PooledTexture` containing the blurred result at the original resolution.
     pub fn render_blur(&mut self, input: &PooledTexture, sigma: f32) -> PooledTexture {
+        // sigma ≤ 0 means "no blur" — copy the input through without running
+        // any Kawase passes. Without this guard sigma=0 would produce one
+        // downsample+upsample pass (iterations=1 from the clamp below), visibly
+        // blurring content that should be unchanged (e.g. backdrop_filter with
+        // sigma 0, identity image filters).
+        if sigma <= 0.0 {
+            tracing::trace!(
+                sigma,
+                width = input.width(),
+                height = input.height(),
+                "render_blur: sigma ≤ 0, copying input through without Kawase passes"
+            );
+            let out = self
+                .texture_pool
+                .acquire(input.width(), input.height(), self.surface_format);
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Blur Passthrough Encoder"),
+                });
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: input.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: out.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: input.width(),
+                    height: input.height(),
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit(std::iter::once(encoder.finish()));
+            return out;
+        }
+
         // `sigma` flows in from public APIs (BlurFilter constructors) that do
         // not clamp non-negative, so explicitly clamp to `[0, ∞)` in float
         // space before the `as u32` cast. The `.clamp(1, 5)` then bounds the

@@ -59,10 +59,19 @@ pub(super) fn collect_styled_spans(
             && !text.is_empty()
         {
             let mut effective = merged.clone();
-            if let Some(style) = &mut effective
-                && let Some(size) = style.font_size
-            {
-                style.font_size = Some(size * f64::from(scale));
+            if let Some(style) = &mut effective {
+                // Scale font_size to device pixels.
+                if let Some(size) = style.font_size {
+                    style.font_size = Some(size * f64::from(scale));
+                }
+                // Scale letter_spacing by the same DPR factor so that
+                // `style_to_attrs_owned` can compute the EM ratio as
+                // `spacing / font_size` using consistent (device-px) units.
+                // Without this scaling, at DPR=2 a 2px spacing on a 16px
+                // font yields 2/32=0.0625 EM instead of the correct 0.125 EM.
+                if let Some(spacing) = style.letter_spacing {
+                    style.letter_spacing = Some(spacing * f64::from(scale));
+                }
             }
             out.push((text.clone(), effective));
         }
@@ -213,8 +222,15 @@ impl RichTextCacheKey {
     /// identically-worded but differently-styled spans collide and reuse the
     /// wrong shaped buffer: family, weight, style, font_size, color,
     /// letter_spacing, height (per-run `Metrics` line height), plus the
-    /// buffer-level `base_font_size` default.
-    fn new(runs: &[(String, Option<TextStyle>)], base_font_size: f32, base_color: Color) -> Self {
+    /// buffer-level `base_font_size` default and the `wrap_width` (which
+    /// controls line-breaking, so two identical runs at different wrap widths
+    /// must produce distinct shaped buffers).
+    fn new(
+        runs: &[(String, Option<TextStyle>)],
+        base_font_size: f32,
+        base_color: Color,
+        wrap_width: Option<f32>,
+    ) -> Self {
         // Variable-length strings (run text, font family) are length-prefixed
         // `<byte-len>:<bytes>` (netstring style) so the concatenation is
         // unambiguous even when the text itself contains the field separators —
@@ -230,6 +246,13 @@ impl RichTextCacheKey {
             u32::from_le_bytes([base_color.r, base_color.g, base_color.b, base_color.a]);
         let mut fingerprint = String::new();
         fingerprint.push_str(&base_font_size.to_bits().to_string());
+        fingerprint.push('\x03');
+        // Encode wrap_width: None → sentinel 0xFFFF_FFFF (never a valid f32
+        // bit pattern for a positive finite width); Some(w) → w.to_bits().
+        // Wrap width changes line-breaking, so two identical runs at different
+        // wrap widths must not collide.
+        let wrap_bits: u32 = wrap_width.map_or(0xFFFF_FFFF, f32::to_bits);
+        fingerprint.push_str(&wrap_bits.to_string());
         fingerprint.push('\x03');
         for (text, style) in runs {
             push_len_prefixed(&mut fingerprint, text);
@@ -536,7 +559,7 @@ impl TextRenderer {
             "TextRenderer::add_rich_text"
         );
 
-        let key = RichTextCacheKey::new(runs, base_font_size, base_color);
+        let key = RichTextCacheKey::new(runs, base_font_size, base_color, wrap_width);
 
         // Borrow `key` on hit to avoid an allocation; move it into the map on miss.
         if let Some(entry) = self.rich_cache.get_mut(&key) {
@@ -934,7 +957,7 @@ mod tests {
             ..Default::default()
         };
         let runs_of = |s: &TextStyle| vec![("text".to_string(), Some(s.clone()))];
-        let key = |s: &TextStyle| RichTextCacheKey::new(&runs_of(s), 14.0, Color::BLACK);
+        let key = |s: &TextStyle| RichTextCacheKey::new(&runs_of(s), 14.0, Color::BLACK, None);
         let baseline = key(&base);
 
         let with_spacing = TextStyle {
@@ -957,8 +980,8 @@ mod tests {
 
         // The buffer-level default size is part of the key too.
         assert_ne!(
-            RichTextCacheKey::new(&runs_of(&base), 14.0, Color::BLACK),
-            RichTextCacheKey::new(&runs_of(&base), 28.0, Color::BLACK),
+            RichTextCacheKey::new(&runs_of(&base), 14.0, Color::BLACK, None),
+            RichTextCacheKey::new(&runs_of(&base), 28.0, Color::BLACK, None),
             "base_font_size must be keyed",
         );
     }
@@ -974,10 +997,111 @@ mod tests {
         let one_run = vec![("a\u{0}b\u{1}c\u{2}".to_string(), None)];
         let two_runs = vec![("a".to_string(), None), ("b\u{1}c\u{2}".to_string(), None)];
         assert_ne!(
-            RichTextCacheKey::new(&one_run, 14.0, Color::BLACK),
-            RichTextCacheKey::new(&two_runs, 14.0, Color::BLACK),
+            RichTextCacheKey::new(&one_run, 14.0, Color::BLACK, None),
+            RichTextCacheKey::new(&two_runs, 14.0, Color::BLACK, None),
             "separator bytes in run text must not collide distinct run sequences",
         );
+    }
+
+    /// `collect_styled_spans` must scale `letter_spacing` by the same DPR
+    /// factor as `font_size` so that `style_to_attrs_owned` computes the
+    /// correct EM ratio at high device-pixel-ratio.
+    ///
+    /// Regression test for P1-3 (cross-crate): at DPR=2 a 16px/2px-spacing
+    /// run was producing 2/32=0.0625 EM instead of 2/16=0.125 EM because
+    /// `font_size` was scaled by DPR but `letter_spacing` was not.
+    #[test]
+    fn collect_styled_spans_scales_letter_spacing_with_dpr() {
+        use flui_types::typography::{TextSpan, TextStyle};
+
+        let style = TextStyle {
+            font_size: Some(16.0),
+            letter_spacing: Some(2.0),
+            ..Default::default()
+        };
+        let span = InlineSpan::Text(std::sync::Arc::new(
+            TextSpan::new("hello").with_style(style),
+        ));
+
+        // DPR = 1: no scaling, both values stay the same
+        let runs_1x = collect_styled_spans(&span, 1.0);
+        assert_eq!(runs_1x.len(), 1);
+        let s1 = runs_1x[0].1.as_ref().expect("style must be present");
+        #[allow(clippy::cast_possible_truncation)] // UI coordinate; f64 value ≤ 300 fits f32 exactly
+        let size_1x = s1.font_size.expect("font_size must be present") as f32;
+        #[allow(clippy::cast_possible_truncation)] // UI coordinate; spacing fits f32
+        let spacing_1x = s1.letter_spacing.expect("letter_spacing must be present") as f32;
+        let em_1x = spacing_1x / size_1x;
+        assert!(
+            (em_1x - 0.125_f32).abs() < 1e-5,
+            "DPR=1 EM ratio must be 2/16=0.125, got {em_1x}"
+        );
+
+        // DPR = 2: both font_size and letter_spacing must be scaled by 2
+        let runs_2x = collect_styled_spans(&span, 2.0);
+        assert_eq!(runs_2x.len(), 1);
+        let s2 = runs_2x[0].1.as_ref().expect("style must be present");
+        #[allow(clippy::cast_possible_truncation)] // UI coordinate; fits f32
+        let size_2x = s2.font_size.expect("font_size must be present") as f32;
+        #[allow(clippy::cast_possible_truncation)] // UI coordinate; fits f32
+        let spacing_2x = s2.letter_spacing.expect("letter_spacing must be present") as f32;
+        let em_2x = spacing_2x / size_2x;
+        assert!(
+            (size_2x - 32.0_f32).abs() < 1e-5,
+            "DPR=2 font_size must be 16×2=32, got {size_2x}"
+        );
+        assert!(
+            (spacing_2x - 4.0_f32).abs() < 1e-5,
+            "DPR=2 letter_spacing must be 2×2=4, got {spacing_2x}"
+        );
+        assert!(
+            (em_2x - 0.125_f32).abs() < 1e-5,
+            "DPR=2 EM ratio must equal DPR=1 ratio (4/32=0.125), got {em_2x}"
+        );
+    }
+
+    /// `wrap_width` must be part of the cache key: the same styled runs at
+    /// different wrap widths produce different line breaks, so they must not
+    /// share a shaped buffer.
+    ///
+    /// Regression test for P0-3: `add_rich_text` was building the key with
+    /// `RichTextCacheKey::new(runs, base_font_size, base_color)` — without
+    /// `wrap_width` — so `Some(200.0)` and `Some(400.0)` and `None` all
+    /// hashed to the same key and the first width's buffer was reused for
+    /// the others, producing wrong line breaks at high DPR.
+    #[test]
+    fn rich_cache_key_distinguishes_wrap_width() {
+        use flui_types::Color;
+
+        use super::RichTextCacheKey;
+
+        let runs = vec![("hello world".to_string(), None)];
+        let key = |w: Option<f32>| RichTextCacheKey::new(&runs, 14.0, Color::BLACK, w);
+
+        let narrow = key(Some(200.0));
+        let wide = key(Some(400.0));
+        let unbounded = key(None);
+
+        assert_ne!(
+            narrow, wide,
+            "different wrap widths must produce distinct keys"
+        );
+        assert_ne!(
+            narrow, unbounded,
+            "Some(w) and None must produce distinct keys"
+        );
+        assert_ne!(
+            wide, unbounded,
+            "Some(w) and None must produce distinct keys"
+        );
+
+        // Identical wrap_width must produce equal keys (idempotence).
+        assert_eq!(
+            key(Some(200.0)),
+            key(Some(200.0)),
+            "identical wrap_width must be stable"
+        );
+        assert_eq!(key(None), key(None), "None must be stable");
     }
 }
 

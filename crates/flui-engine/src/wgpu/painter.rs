@@ -964,6 +964,46 @@ impl WgpuPainter {
         self.surface_format
     }
 
+    // ===== Frame Lifecycle =====
+
+    /// Reset all per-frame clip/transform/opacity/layer state to pristine values.
+    ///
+    /// Must be called at the **start** of every frame, before any damage scissor
+    /// or other per-frame setup, so that state from frame N is never visible in
+    /// frame N+1.
+    ///
+    /// Without this call the damage-scissor that was intersected into
+    /// `current_scissor` during a partial-damage frame leaks into the next
+    /// frame, causing full-repaint frames to silently clip to the previous
+    /// damage rect.
+    pub fn reset_frame_state(&mut self) {
+        self.current_scissor = None;
+        self.scissor_stack.clear();
+        self.current_rrect_clip = [0.0; 8];
+        self.rrect_clip_stack.clear();
+        self.current_rsuperellipse_clip = [0.0; 12];
+        self.rsuperellipse_clip_stack.clear();
+        self.current_opacity = 1.0;
+        self.opacity_stack.clear();
+        self.layer_stack.clear();
+        // Identity is the construction-time value (see `new()`: `let current_transform =
+        // glam::Mat4::IDENTITY`). Reset to the same initial value.
+        self.current_transform = glam::Mat4::IDENTITY;
+        self.transform_stack.clear();
+
+        tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
+    }
+
+    /// Returns the current scissor rect for testing purposes.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "used by GPU integration tests under `enable-wgpu-tests`"
+    )]
+    pub(crate) fn current_scissor_for_test(&self) -> Option<(u32, u32, u32, u32)> {
+        self.current_scissor
+    }
+
     // ===== Offscreen Compositing =====
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.
@@ -3821,7 +3861,19 @@ impl WgpuPainter {
                     composite_bounds
                 );
             } else if has_offscreen_content {
-                // Opacity is ~1.0, no compositing needed — just merge content back
+                // Opacity is ~1.0, no compositing needed — merge content back.
+                // Finalize the parent's pre-save content into the draw order
+                // BEFORE re-integrating the offscreen items so that the parent
+                // content renders beneath the layer subtree (correct Z-order).
+                // Without this flush the parent segment sits in `current_segment`
+                // and is emitted last by `render()`, placing it on top of the
+                // layer — an inversion.  Mirror the mem::replace pattern used by
+                // the opacity < 1.0 branch above.
+                let parent_segment =
+                    std::mem::replace(&mut self.current_segment, DrawSegment::new());
+                if !parent_segment.is_empty() {
+                    self.draw_order.push(DrawItem::Segment(parent_segment));
+                }
                 self.reintegrate_offscreen_content(offscreen_segment, offscreen_order, 1.0);
             }
 
@@ -3883,7 +3935,17 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
+        let current_len = self.current_segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            tracing::warn!(
+                current_stops = current_len,
+                requested = stop_count,
+                limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                "gradient_rect: gradient stop buffer full; dropping linear gradient instance"
+            );
+            return;
+        }
+        let stop_offset = current_len as u32;
         self.current_segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -3946,7 +4008,17 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
+        let current_len = self.current_segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            tracing::warn!(
+                current_stops = current_len,
+                requested = stop_count,
+                limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                "radial_gradient_rect: gradient stop buffer full; dropping radial gradient instance"
+            );
+            return;
+        }
+        let stop_offset = current_len as u32;
         self.current_segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
@@ -3996,7 +4068,17 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
+        let current_len = self.current_segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            tracing::warn!(
+                current_stops = current_len,
+                requested = stop_count,
+                limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                "sweep_gradient_rect: gradient stop buffer full; dropping sweep gradient instance"
+            );
+            return;
+        }
+        let stop_offset = current_len as u32;
         self.current_segment
             .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
