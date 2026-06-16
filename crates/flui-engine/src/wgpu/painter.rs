@@ -995,11 +995,10 @@ impl WgpuPainter {
     }
 
     /// Returns the current scissor rect for testing purposes.
-    #[cfg(test)]
-    #[allow(
-        dead_code,
-        reason = "used by GPU integration tests under `enable-wgpu-tests`"
-    )]
+    ///
+    /// Gated to match its sole consumer (`reset_frame_state_clears_damage_scissor`)
+    /// so it is never dead code in either build configuration.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
     pub(crate) fn current_scissor_for_test(&self) -> Option<(u32, u32, u32, u32)> {
         self.current_scissor
     }
@@ -3937,12 +3936,19 @@ impl WgpuPainter {
         let stop_count = stops.len().min(8);
         let current_len = self.current_segment.current_gradient_stops.len();
         if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
-            tracing::warn!(
-                current_stops = current_len,
-                requested = stop_count,
-                limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
-                "gradient_rect: gradient stop buffer full; dropping linear gradient instance"
-            );
+            // Logged once per process: a >MAX_GRADIENT_STOPS frame would
+            // otherwise spam this for every overflowing instance, every frame.
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "gradient_rect: gradient stop buffer full; dropping linear gradient \
+                     instance (logged once per process)"
+                );
+            }
             return;
         }
         let stop_offset = current_len as u32;
@@ -4010,12 +4016,17 @@ impl WgpuPainter {
         let stop_count = stops.len().min(8);
         let current_len = self.current_segment.current_gradient_stops.len();
         if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
-            tracing::warn!(
-                current_stops = current_len,
-                requested = stop_count,
-                limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
-                "radial_gradient_rect: gradient stop buffer full; dropping radial gradient instance"
-            );
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "radial_gradient_rect: gradient stop buffer full; dropping radial \
+                     gradient instance (logged once per process)"
+                );
+            }
             return;
         }
         let stop_offset = current_len as u32;
@@ -4070,12 +4081,17 @@ impl WgpuPainter {
         let stop_count = stops.len().min(8);
         let current_len = self.current_segment.current_gradient_stops.len();
         if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
-            tracing::warn!(
-                current_stops = current_len,
-                requested = stop_count,
-                limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
-                "sweep_gradient_rect: gradient stop buffer full; dropping sweep gradient instance"
-            );
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "sweep_gradient_rect: gradient stop buffer full; dropping sweep \
+                     gradient instance (logged once per process)"
+                );
+            }
             return;
         }
         let stop_offset = current_len as u32;
@@ -4152,12 +4168,56 @@ impl WgpuPainter {
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
+    use std::sync::Arc;
 
-    // Note: Full tests require wgpu device initialization
-    // These would be integration tests with headless rendering
+    use flui_types::{Point, Rect, Size, geometry::px};
 
+    use super::WgpuPainter;
+
+    /// Headless GPU device + queue for painter tests.
+    fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("a GPU adapter for painter tests");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Painter Test Device"),
+            ..Default::default()
+        }))
+        .expect("a GPU device for painter tests");
+        (Arc::new(device), Arc::new(queue))
+    }
+
+    /// Regression for the damage-scissor leak: the painter is reused across
+    /// frames, so `reset_frame_state` MUST clear a per-frame scissor or it
+    /// would clip subsequent frames to a stale damage rect.
     #[test]
-    fn test_transform_stack() {
-        // Would need headless wgpu device for proper testing
+    fn reset_frame_state_clears_damage_scissor() {
+        let (device, queue) = test_device_and_queue();
+        let mut painter = WgpuPainter::with_shared_device(
+            device,
+            queue,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (100, 100),
+        );
+
+        // Simulate the per-frame damage clip the Renderer applies (unpaired).
+        painter.clip_rect(Rect::from_origin_size(
+            Point::ZERO,
+            Size::new(px(50.0), px(50.0)),
+        ));
+        assert!(
+            painter.current_scissor_for_test().is_some(),
+            "clip_rect must set the current scissor"
+        );
+
+        painter.reset_frame_state();
+        assert!(
+            painter.current_scissor_for_test().is_none(),
+            "reset_frame_state must clear the scissor so it cannot leak into the next frame"
+        );
     }
 }

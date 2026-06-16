@@ -1027,7 +1027,8 @@ mod tests {
         let runs_1x = collect_styled_spans(&span, 1.0);
         assert_eq!(runs_1x.len(), 1);
         let s1 = runs_1x[0].1.as_ref().expect("style must be present");
-        #[allow(clippy::cast_possible_truncation)] // UI coordinate; f64 value ≤ 300 fits f32 exactly
+        #[allow(clippy::cast_possible_truncation)]
+        // UI coordinate; f64 value ≤ 300 fits f32 exactly
         let size_1x = s1.font_size.expect("font_size must be present") as f32;
         #[allow(clippy::cast_possible_truncation)] // UI coordinate; spacing fits f32
         let spacing_1x = s1.letter_spacing.expect("letter_spacing must be present") as f32;
