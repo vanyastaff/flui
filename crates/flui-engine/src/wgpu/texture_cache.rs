@@ -41,6 +41,25 @@ use wgpu::{
     TextureFormat, TextureUsages, TextureView,
 };
 
+/// GPU texture format used for all decoded image data (atlas, standalone, placeholder).
+///
+/// # Why `Rgba8Unorm` and NOT `Rgba8UnormSrgb`
+///
+/// The onscreen surface format is `Bgra8Unorm` / `Rgba8Unorm` (UNorm, plain
+/// gamma-space storage, per Impeller parity — see `renderer.rs`
+/// `select_surface_format`). When sampling an `*Srgb` texture, the GPU
+/// hardware applies the sRGB→linear EOTF on every texel read, converting the
+/// stored byte/255 value to a linear float. The shader then writes that linear
+/// float into the UNorm surface, which stores it as-is — so a mid-tone byte
+/// 0x80 in the PNG becomes ≈0x37 on screen (much too dark).
+///
+/// Using `Rgba8Unorm` for image textures means the GPU samples byte/255
+/// verbatim (no EOTF), the shader outputs that value unchanged, and the UNorm
+/// surface stores it as byte/255 — so 0x80 in → 0x80 out. This matches
+/// Impeller's behavior: `solid_fill.frag` and the image blit shader both
+/// operate in gamma space with UNorm textures and a UNorm surface.
+pub(crate) const IMAGE_TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+
 /// Unique identifier for cached textures
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum TextureId {
@@ -263,7 +282,7 @@ impl TextureCache {
             &device,
             super::atlas::ATLAS_DEFAULT_SIZE,
             super::atlas::ATLAS_DEFAULT_SIZE,
-            TextureFormat::Rgba8UnormSrgb,
+            IMAGE_TEXTURE_FORMAT,
         );
 
         tracing::debug!(
@@ -437,7 +456,7 @@ impl TextureCache {
                             mip_level_count: 1,
                             sample_count: 1,
                             dimension: TextureDimension::D2,
-                            format: TextureFormat::Rgba8UnormSrgb,
+                            format: IMAGE_TEXTURE_FORMAT,
                             usage: TextureUsages::TEXTURE_BINDING,
                             view_formats: &[],
                         });
@@ -485,7 +504,7 @@ impl TextureCache {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D2,
-                    format: TextureFormat::Rgba8UnormSrgb,
+                    format: IMAGE_TEXTURE_FORMAT,
                     usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -552,7 +571,7 @@ impl TextureCache {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8UnormSrgb,
+            format: IMAGE_TEXTURE_FORMAT,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });

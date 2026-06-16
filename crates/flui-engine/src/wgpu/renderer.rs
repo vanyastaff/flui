@@ -690,19 +690,36 @@ impl Renderer {
         surface_caps: &wgpu::SurfaceCapabilities,
         capabilities: &GpuCapabilities,
     ) -> wgpu::TextureFormat {
-        // Prefer sRGB formats for correct color rendering
+        // Prefer plain UNorm onscreen formats over the *Srgb variants — this
+        // matches Flutter/Impeller, whose default onscreen format is plain
+        // UNorm on every backend (Metal kBGRA8UNorm, Vulkan eR8G8B8A8Unorm,
+        // GLES kR8G8B8A8UNormInt), *not* the sRGB variants.
+        //
+        // `Color::to_f32_array()` (flui-types) returns the sRGB-encoded byte
+        // value `/255` with no linearization, and the shaders emit that value
+        // verbatim. Writing that to a UNorm target stores the sRGB byte 1:1
+        // (no OETF on store), so authored `Color::rgb(128,128,128)` -> shader
+        // 0.502 -> stored byte 0x80 — exactly what the user authored, and
+        // blending happens in gamma space, which is Flutter's behavior.
+        //
+        // An sRGB target would instead treat the shader's already-sRGB output
+        // as *linear* and apply the linear->sRGB OETF on store, brightening
+        // mid-tones (0x80 -> ~0xBC) and forcing linear-space blends/gradient
+        // interpolation that diverge from Flutter's gamma-space lerp. Primaries
+        // (0 / 255) are OETF fixed points, so the divergence hides on solid
+        // black/white but corrupts every mid-tone.
         let preferred_formats = if capabilities.supports_hdr {
             vec![
                 wgpu::TextureFormat::Rgba16Float, // HDR
-                wgpu::TextureFormat::Bgra8UnormSrgb,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::TextureFormat::Rgba8Unorm,
             ]
         } else {
             vec![
-                wgpu::TextureFormat::Bgra8UnormSrgb,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
                 wgpu::TextureFormat::Bgra8Unorm,
                 wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
             ]
         };
 
@@ -714,12 +731,13 @@ impl Renderer {
         }
 
         // Fallback: some drivers report zero formats (e.g. headless CI).
-        // Default to a universally supported sRGB format rather than panicking.
+        // Default to a universally supported UNorm format (Impeller parity,
+        // see above) rather than panicking.
         if let Some(fmt) = surface_caps.formats.first().copied() {
             fmt
         } else {
-            tracing::error!("surface reported zero formats; defaulting to Bgra8UnormSrgb");
-            wgpu::TextureFormat::Bgra8UnormSrgb
+            tracing::error!("surface reported zero formats; defaulting to Bgra8Unorm");
+            wgpu::TextureFormat::Bgra8Unorm
         }
     }
 
@@ -926,7 +944,7 @@ impl Renderer {
         let surface_format = self
             .config
             .as_ref()
-            .map_or(wgpu::TextureFormat::Bgra8UnormSrgb, |c| c.format);
+            .map_or(wgpu::TextureFormat::Bgra8Unorm, |c| c.format);
 
         let ctx = RenderContext {
             device: Arc::clone(&self.device),

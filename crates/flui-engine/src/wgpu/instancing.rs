@@ -431,6 +431,31 @@ impl TextureInstance {
     // the audit's recommendation because it IS live (audit text
     // claimed otherwise; grep proved 5 painter callsites).
 
+    /// Create a textured quad with custom UV and a raw `[f32; 4]` tint.
+    ///
+    /// Used by the offscreen-layer composite path, which needs a fractional
+    /// premultiplied tint `(C.r*O, C.g*O, C.b*O, O)` that an 8-bit [`Color`]
+    /// would quantize prematurely. The shader multiplies the sampled texel by
+    /// this tint (`tex_color * in.tint`).
+    #[must_use]
+    pub fn with_uv_tint_f32(
+        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        src_uv: [f32; 4],
+        tint: [f32; 4],
+    ) -> Self {
+        Self {
+            dst_rect: [
+                dst_rect.left().0,
+                dst_rect.top().0,
+                dst_rect.width().0,
+                dst_rect.height().0,
+            ],
+            src_uv,
+            tint,
+            transform: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
+
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
