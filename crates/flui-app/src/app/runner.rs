@@ -259,7 +259,12 @@ where
             match pollster::block_on(r.recover()) {
                 Ok(()) => {
                     tracing::warn!("GPU device lost — recovered successfully");
-                    AppBinding::instance().request_redraw();
+                    // `wake_frame` (not `request_redraw`) so an idle winit loop
+                    // actually queues a `RedrawRequested`: device loss is
+                    // detected on a quiescent loop, where only flipping the
+                    // `needs_redraw` flag would leave the recovered renderer
+                    // idle until the next external input/resize.
+                    AppBinding::instance().wake_frame();
                 }
                 Err(e) => {
                     // Driver may still be resetting. Log and let the next frame
@@ -529,7 +534,12 @@ where
             match pollster::block_on(r.recover()) {
                 Ok(()) => {
                     tracing::warn!("GPU device lost — recovered successfully");
-                    AppBinding::instance().request_redraw();
+                    // `wake_frame` (not `request_redraw`) so an idle winit loop
+                    // actually queues a `RedrawRequested`: device loss is
+                    // detected on a quiescent loop, where only flipping the
+                    // `needs_redraw` flag would leave the recovered renderer
+                    // idle until the next external input/resize.
+                    AppBinding::instance().wake_frame();
                 }
                 Err(e) => {
                     tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
@@ -747,7 +757,10 @@ where
                 match result {
                     Ok(()) => {
                         tracing::warn!("GPU device lost — recovered successfully");
-                        AppBinding::instance().request_redraw();
+                        // `wake_frame` so the idle rAF loop is pumped — see the
+                        // native paths; flipping `needs_redraw` alone would leave
+                        // the recovered renderer idle until the next input event.
+                        AppBinding::instance().wake_frame();
                     }
                     Err(e) => {
                         tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
