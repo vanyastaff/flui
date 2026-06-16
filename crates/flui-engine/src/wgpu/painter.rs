@@ -27,7 +27,7 @@ use super::{
 
 /// A recorded batch of tessellated geometry sharing the same pipeline key.
 ///
-/// During a frame, each call to [`WgpuPainter::add_tessellated`] appends
+/// During a frame, each call to [`WgpuPainter::add_tessellated_with_key`] appends
 /// vertices/indices to the global buffers.  When the pipeline key changes
 /// a new batch is started so that the render pass can switch pipelines at
 /// the correct index boundary.
@@ -147,9 +147,13 @@ struct DrawSegment {
     /// Scissor regions for sweep gradient batch
     sweep_grad_scissors: Vec<ScissorRegion>,
     /// Cached image draws queued for this segment.
+    ///
+    /// The third element is the scissor rect active at draw time, forwarded to
+    /// `flush_texture_batch` so clipped images don't spill outside their clip region.
     cached_images: Vec<(
         super::texture_cache::TextureId,
         super::instancing::TextureInstance,
+        ScissorRect,
     )>,
     /// External-texture draws queued for this segment.
     ///
@@ -157,7 +161,13 @@ struct DrawSegment {
     /// instance data so `flush_segment_external_images` can bind each view
     /// independently — identical to how `flush_segment_cached_images` binds
     /// per-texture views for the atlas cache.
-    external_images: Vec<(wgpu::TextureView, super::instancing::TextureInstance)>,
+    ///
+    /// The third element is the scissor rect active at draw time.
+    external_images: Vec<(
+        wgpu::TextureView,
+        super::instancing::TextureInstance,
+        ScissorRect,
+    )>,
 }
 
 impl DrawSegment {
@@ -1012,6 +1022,43 @@ impl WgpuPainter {
         self.current_scissor
     }
 
+    /// Returns the `dst_rect` field `[x, y, w, h]` of each pending external-image
+    /// instance in the current segment.  Used by regression tests to verify that
+    /// `draw_texture` transforms the destination rect through `current_transform`.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn external_image_rects_for_test(&self) -> Vec<[f32; 4]> {
+        self.current_segment
+            .external_images
+            .iter()
+            .map(|(_, inst, _)| inst.dst_rect)
+            .collect()
+    }
+
+    /// Returns the scissor stored alongside each pending external-image instance.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn external_image_scissors_for_test(&self) -> Vec<ScissorRect> {
+        self.current_segment
+            .external_images
+            .iter()
+            .map(|(_, _, scissor)| *scissor)
+            .collect()
+    }
+
+    /// Returns a copy of the tessellated vertex positions accumulated in the
+    /// current segment.  Used by the transform-baking regression test to verify
+    /// that `submit_transformed_geometry` is applied exactly once.
+    ///
+    /// Gated to `#[cfg(all(test, feature = "enable-wgpu-tests"))]` so it is
+    /// never dead code in production builds.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn tess_vertices_for_test(&self) -> Vec<[f32; 2]> {
+        self.current_segment
+            .vertices
+            .iter()
+            .map(|v| v.position)
+            .collect()
+    }
+
     // ===== Offscreen Compositing =====
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.
@@ -1120,7 +1167,8 @@ impl WgpuPainter {
                         flui_types::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
-                    self.flush_texture_batch(encoder, view, p.texture.view());
+                    // Offscreen compositing is always full-viewport — no scissor.
+                    self.flush_texture_batch(encoder, view, p.texture.view(), None);
                     // p.texture dropped here, returns to pool
                 }
                 DrawItem::OpacityLayer(layer) => {
@@ -1257,7 +1305,8 @@ impl WgpuPainter {
                         flui_types::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
-                    self.flush_texture_batch(encoder, offscreen_view, p.texture.view());
+                    // Nested offscreen compositing — full-viewport, no scissor.
+                    self.flush_texture_batch(encoder, offscreen_view, p.texture.view(), None);
                 }
                 DrawItem::OpacityLayer(nested) => {
                     // Recursively handle nested opacity layers
@@ -1290,7 +1339,8 @@ impl WgpuPainter {
             tint,
         );
         let _ = self.texture_batch.add(instance);
-        self.flush_texture_batch(encoder, main_view, offscreen_view);
+        // Opacity-layer composite onto main surface — full-viewport, no scissor.
+        self.flush_texture_batch(encoder, main_view, offscreen_view, None);
 
         tracing::trace!(
             opacity = layer.opacity,
@@ -1502,25 +1552,19 @@ impl WgpuPainter {
         });
     }
 
-    /// Add tessellated shape using alpha-blend pipeline (convenience wrapper).
-    ///
-    /// Used by callers that don't have a [`Paint`] reference (e.g.
-    /// `draw_vertices`, `draw_shadow`).
-    fn add_tessellated(&mut self, vertices: Vec<Vertex>, indices: &[u32]) {
-        self.add_tessellated_with_key(vertices, indices, PipelineKey::alpha_blend());
-    }
-
     /// Apply the current world transform to every vertex position of an already-
     /// tessellated shape and submit it to the tessellated geometry batch.
     ///
-    /// Use this as the fallback for GPU-instanced paths (circle, arc) when the
-    /// current transform contains rotation or shear — the instance shader only
-    /// handles axis-aligned scale + translation, so non-axis-aligned transforms
-    /// must be baked into vertex positions by the CPU tessellator.
+    /// Used for tessellated geometry (fills AND strokes): any path whose vertices
+    /// are produced in local/pre-transform space must pass through here so the
+    /// baked screen-space positions match `current_transform`.  The shape.wgsl
+    /// vertex shader only converts px→clip via the viewport uniform — it has no
+    /// model-matrix uniform — so the CPU must bake the transform into the vertices
+    /// at record time.
     ///
     /// `vertices` are in pre-transform (local) space; this method maps each
     /// `[x, y]` through `current_transform` before storing.
-    fn submit_transformed_fill(
+    fn submit_transformed_geometry(
         &mut self,
         mut vertices: Vec<Vertex>,
         indices: &[u32],
@@ -2056,15 +2100,23 @@ impl WgpuPainter {
     /// Renders all batched textures in a single draw call using GPU instancing.
     /// This is 50-100x faster than individual draw calls for image-heavy UIs.
     ///
+    /// `scissor` is the clip rect to apply for this draw call.  Pass `None` to
+    /// render unclipped (full viewport), matching the behaviour of the rect/circle
+    /// instanced batches when no scissor is active.  Offscreen/opacity-layer
+    /// composite callers always pass `None` because their content is inherently
+    /// full-viewport.
+    ///
     /// # Arguments
     /// * `encoder` - Command encoder
     /// * `view` - Render target view
     /// * `texture_view` - Texture to use for all instances in this batch
+    /// * `scissor` - Optional scissor rect `(x, y, w, h)` in physical pixels
     pub fn flush_texture_batch(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         texture_view: &wgpu::TextureView,
+        scissor: ScissorRect,
     ) {
         if self.texture_batch.is_empty() {
             return;
@@ -2129,7 +2181,14 @@ impl WgpuPainter {
             wgpu::IndexFormat::Uint16,
         );
 
-        // Draw all instances in ONE draw call! 🚀
+        // Apply scissor rect, mirroring the rect/circle/arc instanced batch pattern.
+        if let Some((x, y, w, h)) = scissor {
+            render_pass.set_scissor_rect(x, y, w, h);
+        } else {
+            render_pass.set_scissor_rect(0, 0, self.size.0, self.size.1);
+        }
+
+        // Draw all instances in ONE draw call.
         render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
 
         drop(render_pass);
@@ -2146,6 +2205,7 @@ impl WgpuPainter {
         let mut pending_images: Vec<(
             super::texture_cache::TextureId,
             super::instancing::TextureInstance,
+            ScissorRect,
         )> = self.current_segment.cached_images.drain(..).collect();
 
         if pending_images.is_empty() {
@@ -2154,11 +2214,14 @@ impl WgpuPainter {
 
         let mut active_texture_id: Option<super::texture_cache::TextureId> = None;
         let mut active_texture_view: Option<wgpu::TextureView> = None;
+        // Track the scissor of the most-recently buffered instance so we can
+        // forward it when a texture-change forces an early flush.
+        let mut active_scissor: ScissorRect = None;
 
-        for (texture_id, instance) in pending_images.drain(..) {
+        for (texture_id, instance, scissor) in pending_images.drain(..) {
             if active_texture_id.as_ref() != Some(&texture_id) {
                 if let Some(texture_view) = active_texture_view.as_ref() {
-                    self.flush_texture_batch(encoder, view, texture_view);
+                    self.flush_texture_batch(encoder, view, texture_view, active_scissor);
                 }
                 active_texture_id = Some(texture_id.clone());
                 active_texture_view = self
@@ -2167,15 +2230,16 @@ impl WgpuPainter {
                     .map(|cached| cached.view.clone());
             }
 
+            active_scissor = scissor;
             if let Some(texture_view) = active_texture_view.as_ref()
                 && self.texture_batch.add(instance)
             {
-                self.flush_texture_batch(encoder, view, texture_view);
+                self.flush_texture_batch(encoder, view, texture_view, active_scissor);
             }
         }
 
         if let Some(texture_view) = active_texture_view.as_ref() {
-            self.flush_texture_batch(encoder, view, texture_view);
+            self.flush_texture_batch(encoder, view, texture_view, active_scissor);
         }
     }
 
@@ -2200,14 +2264,17 @@ impl WgpuPainter {
 
         // Drain into a local vec so we can call &mut self methods (flush_texture_batch
         // takes &mut self) while iterating.
-        let pending: Vec<(wgpu::TextureView, super::instancing::TextureInstance)> =
-            self.current_segment.external_images.drain(..).collect();
+        let pending: Vec<(
+            wgpu::TextureView,
+            super::instancing::TextureInstance,
+            ScissorRect,
+        )> = self.current_segment.external_images.drain(..).collect();
 
-        for (tex_view, instance) in pending {
+        for (tex_view, instance, scissor) in pending {
             // One instance → one batch-of-one → one draw call.
             // This is the safe default when view identity cannot be checked.
             let _ = self.texture_batch.add(instance);
-            self.flush_texture_batch(encoder, view, &tex_view);
+            self.flush_texture_batch(encoder, view, &tex_view, scissor);
         }
     }
 }
@@ -2308,7 +2375,7 @@ impl WgpuPainter {
             // Paint already contains stroke information (stroke_width, stroke_cap,
             // stroke_join)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2365,7 +2432,7 @@ impl WgpuPainter {
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2431,7 +2498,7 @@ impl WgpuPainter {
                 );
             } else {
                 // Slow path: rotation/shear present — tessellate in local space and
-                // bake the full transform into vertex positions via submit_transformed_fill.
+                // bake the full transform into vertex positions via submit_transformed_geometry.
                 // This correctly maps a circle under arbitrary affine transforms.
                 let fill_paint = Paint {
                     color,
@@ -2444,7 +2511,7 @@ impl WgpuPainter {
                 {
                     Ok((vertices, indices)) => {
                         let key = pipeline::pipeline_key_from_paint(&fill_paint);
-                        self.submit_transformed_fill(vertices, &indices, key);
+                        self.submit_transformed_geometry(vertices, &indices, key);
                     }
                     Err(e) => {
                         tracing::warn!("Failed to tessellate rotated circle: {}", e);
@@ -2456,7 +2523,7 @@ impl WgpuPainter {
             if let Ok((vertices, indices)) =
                 self.tessellator.tessellate_circle(center, radius, paint)
             {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2474,7 +2541,7 @@ impl WgpuPainter {
         let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
 
         if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
-            self.add_tessellated_with_key(
+            self.submit_transformed_geometry(
                 vertices,
                 &indices,
                 pipeline::pipeline_key_from_paint(paint),
@@ -2507,11 +2574,20 @@ impl WgpuPainter {
         if paint.style == PaintStyle::Fill {
             // Filled arc (pie slice when use_center, arc segment when !use_center).
             // Gate on axis-aligned transform: the arc instance shader only handles
-            // translation + axis-aligned scale; rotation/shear require tessellation.
-            if self.is_axis_aligned_transform() {
+            // translation + axis-aligned scale; rotation/shear/reflection require
+            // tessellation.
+            //
+            // `is_axis_aligned_transform` already rejects rotation and shear, but it
+            // also returns `true` for a reflection like `scale(-1, 1)` because the
+            // off-diagonal elements are still zero.  A reflection negates the wedge
+            // direction, which the instanced shader cannot represent.  Guard with the
+            // 2D determinant: det < 0 means the transform includes a reflection and
+            // the wedge would be drawn on the wrong side.
+            let m = self.current_transform;
+            let det = m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x;
+            if self.is_axis_aligned_transform() && det >= 0.0 {
                 // Fast path: GPU instancing for filled arcs.
                 let transformed_center = self.apply_transform(center);
-                let m = self.current_transform;
                 let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
                 let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
 
@@ -2529,8 +2605,8 @@ impl WgpuPainter {
                     self.current_scissor,
                 );
             } else {
-                // Slow path: rotation/shear present — tessellate in local space and
-                // bake the full transform into vertex positions.
+                // Slow path: rotation, shear, or reflection present — tessellate in
+                // local space and bake the full transform into vertex positions.
                 match self.tessellator.tessellate_arc(
                     rect,
                     start_angle,
@@ -2540,10 +2616,10 @@ impl WgpuPainter {
                 ) {
                     Ok((vertices, indices)) => {
                         let key = pipeline::pipeline_key_from_paint(paint);
-                        self.submit_transformed_fill(vertices, &indices, key);
+                        self.submit_transformed_geometry(vertices, &indices, key);
                     }
                     Err(e) => {
-                        tracing::error!("Failed to tessellate rotated filled arc: {}", e);
+                        tracing::error!("Failed to tessellate filled arc: {}", e);
                     }
                 }
             }
@@ -2554,7 +2630,7 @@ impl WgpuPainter {
                 .tessellate_arc(rect, start_angle, sweep_angle, use_center, paint)
             {
                 Ok((vertices, indices)) => {
-                    self.add_tessellated_with_key(
+                    self.submit_transformed_geometry(
                         vertices,
                         &indices,
                         pipeline::pipeline_key_from_paint(paint),
@@ -2579,7 +2655,7 @@ impl WgpuPainter {
         // Tessellate the DRRect (ring with inner cutout)
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2610,7 +2686,7 @@ impl WgpuPainter {
                     vertices.len(),
                     indices.len()
                 );
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2712,7 +2788,9 @@ impl WgpuPainter {
 
         // Route through per-segment external_images (flushed by flush_segment_external_images
         // which calls flush_texture_batch per entry with the correct view bound).
-        self.current_segment.external_images.push((view, instance));
+        self.current_segment
+            .external_images
+            .push((view, instance, self.current_scissor));
     }
 
     pub fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
@@ -2727,7 +2805,8 @@ impl WgpuPainter {
                 .tessellate_flui_path_dashed_stroke(path, paint, dash)
             {
                 Ok((vertices, indices)) => {
-                    self.add_tessellated_with_key(
+                    // Bake current_transform into vertices: shape.wgsl has no model matrix.
+                    self.submit_transformed_geometry(
                         vertices,
                         &indices,
                         pipeline::pipeline_key_from_paint(paint),
@@ -2751,14 +2830,16 @@ impl WgpuPainter {
 
         // Check cache for previously tessellated geometry
         if let Some((positions, cached_indices)) = self.path_cache.get(path_hash) {
-            // Reconstruct full Vertex data with current paint color
+            // Reconstruct full Vertex data with current paint color.
+            // The cache stores UNTRANSFORMED positions; bake the current transform now.
             let rgba = paint.color.to_rgba_f32_array();
             let vertices: Vec<Vertex> = positions
                 .iter()
                 .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
                 .collect();
             let indices: Vec<u32> = cached_indices.to_vec();
-            self.add_tessellated_with_key(
+            // Bake current_transform into vertices: shape.wgsl has no model matrix.
+            self.submit_transformed_geometry(
                 vertices,
                 &indices,
                 pipeline::pipeline_key_from_paint(paint),
@@ -2775,12 +2856,15 @@ impl WgpuPainter {
 
         match result {
             Ok((vertices, indices)) => {
-                // Extract position data for cache (color-independent)
+                // Extract position data for cache BEFORE baking the transform.
+                // The cache stores local (untransformed) positions so that cached
+                // geometry can be re-used across frames with different transforms.
                 let positions: Vec<[f32; 2]> = vertices.iter().map(|v| v.position).collect();
                 self.path_cache
                     .insert(path_hash, positions, indices.clone());
 
-                self.add_tessellated_with_key(
+                // Bake current_transform into vertices: shape.wgsl has no model matrix.
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2825,9 +2909,13 @@ impl WgpuPainter {
                 };
 
                 // Keep cached image draws in segment order for correct layer compositing.
-                self.current_segment
-                    .cached_images
-                    .push((texture_id, instance));
+                // Capture the active scissor so flush_segment_cached_images can clip
+                // images that live inside a clip_rect region.
+                self.current_segment.cached_images.push((
+                    texture_id,
+                    instance,
+                    self.current_scissor,
+                ));
             }
             Err(e) => {
                 tracing::error!("Failed to load image texture: {}", e);
@@ -3263,13 +3351,19 @@ impl WgpuPainter {
                 px(offset_y + current_blur * 0.5),
             ));
 
-            // Draw the shadow layer
+            // Draw the shadow layer.
+            // Route through submit_transformed_geometry so the save()+translate() offset
+            // above is actually baked into the vertices (shape.wgsl has no model matrix).
             match self
                 .tessellator
                 .tessellate_flui_path_fill(path, &shadow_paint)
             {
                 Ok((vertices, indices)) => {
-                    self.add_tessellated(vertices, &indices);
+                    self.submit_transformed_geometry(
+                        vertices,
+                        &indices,
+                        PipelineKey::alpha_blend(),
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to tessellate shadow path: {}", e);
@@ -3356,8 +3450,9 @@ impl WgpuPainter {
         let our_indices: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
 
         // Add to tessellated geometry (bypassing tessellator since we already have
-        // triangles)
-        self.add_tessellated_with_key(
+        // triangles).  Bake current_transform into vertex positions: shape.wgsl has
+        // no model-matrix uniform.
+        self.submit_transformed_geometry(
             our_vertices,
             &our_indices,
             pipeline::pipeline_key_from_paint(paint),
@@ -3449,9 +3544,11 @@ impl WgpuPainter {
                     // flushed by flush_segment_cached_images (not the orphaned texture_batch).
                     let instance =
                         super::instancing::TextureInstance::with_uv(dst_rect, src_uv, tint);
-                    self.current_segment
-                        .cached_images
-                        .push((cache_id.clone(), instance));
+                    self.current_segment.cached_images.push((
+                        cache_id.clone(),
+                        instance,
+                        self.current_scissor,
+                    ));
                 }
             }
             Err(e) => {
@@ -3498,7 +3595,15 @@ impl WgpuPainter {
             // Apply opacity via tint color alpha
             let tint = flui_types::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
 
-            let instance = super::instancing::TextureInstance::with_uv(dst, src_uv, tint);
+            // Apply the current transform to dst corners (translation + scale; rotation
+            // collapses to AABB — same accepted limitation as `texture()` and `draw_image`).
+            let top_left = self.apply_transform(Point::new(dst.left(), dst.top()));
+            let bottom_right = self.apply_transform(Point::new(dst.right(), dst.bottom()));
+            let transformed_dst =
+                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+            let instance =
+                super::instancing::TextureInstance::with_uv(transformed_dst, src_uv, tint);
             // Clone the registry view so this segment owns it independently of
             // the registry lifetime.
             let view = entry.view.clone();
@@ -3515,7 +3620,9 @@ impl WgpuPainter {
             // Push into per-segment external_images; flushed in flush_segment
             // via flush_segment_external_images which binds each view via
             // flush_texture_batch — identical to the cached-image path.
-            self.current_segment.external_images.push((view, instance));
+            self.current_segment
+                .external_images
+                .push((view, instance, self.current_scissor));
         } else {
             // Texture not registered — warn and skip.  Rendering an invisible
             // placeholder via `texture_batch` (the old code) would orphan the
@@ -4313,6 +4420,325 @@ mod tests {
         }))
         .expect("a GPU device for painter tests");
         (Arc::new(device), Arc::new(queue))
+    }
+
+    /// Regression: tessellated vertices must be baked through `current_transform`
+    /// exactly once by `submit_transformed_geometry`.
+    ///
+    /// Draw the same line under identity and under scale(2,2) and assert that
+    /// the baked vertex x-extent (max_x − min_x) is approximately 2× larger
+    /// under the scaled transform.  A double-transform bug would produce ~4×;
+    /// a missing transform would produce ~1× regardless of scale.
+    #[test]
+    fn tessellated_line_bakes_current_transform() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let black = flui_types::Color::rgba(0, 0, 0, 255);
+
+        // --- Identity pass ---
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (200, 200),
+        );
+        // current_transform == IDENTITY at construction
+        painter.line(
+            Point::new(px(10.0), px(0.0)),
+            Point::new(px(20.0), px(0.0)),
+            &Paint::stroke(black, 2.0),
+        );
+        let verts_identity = painter.tess_vertices_for_test();
+        assert!(
+            !verts_identity.is_empty(),
+            "tessellated line must produce vertices"
+        );
+        let min_x_id = verts_identity.iter().map(|v| v[0]).fold(f32::MAX, f32::min);
+        let max_x_id = verts_identity.iter().map(|v| v[0]).fold(f32::MIN, f32::max);
+        let extent_identity = max_x_id - min_x_id;
+
+        // --- Scale(2, 2) pass ---
+        let mut painter2 = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (200, 200),
+        );
+        painter2.scale(2.0, 2.0);
+        painter2.line(
+            Point::new(px(10.0), px(0.0)),
+            Point::new(px(20.0), px(0.0)),
+            &Paint::stroke(black, 2.0),
+        );
+        let verts_scaled = painter2.tess_vertices_for_test();
+        assert!(
+            !verts_scaled.is_empty(),
+            "tessellated line under scale(2) must produce vertices"
+        );
+        let min_x_sc = verts_scaled.iter().map(|v| v[0]).fold(f32::MAX, f32::min);
+        let max_x_sc = verts_scaled.iter().map(|v| v[0]).fold(f32::MIN, f32::max);
+        let extent_scaled = max_x_sc - min_x_sc;
+
+        // Under scale(2,2) the x-extent should be ~2× the identity extent.
+        // We allow ±10% tolerance to accommodate stroke-cap geometry.
+        // A missing-transform bug yields ratio ≈ 1.0; a double-transform bug
+        // yields ratio ≈ 4.0; the correct fix yields ratio ≈ 2.0.
+        let ratio = extent_scaled / extent_identity;
+        assert!(
+            (ratio - 2.0).abs() < 0.2,
+            "expected x-extent ratio ≈ 2.0 (transform baked once), got {ratio:.3} \
+             (identity_extent={extent_identity:.2}, scaled_extent={extent_scaled:.2})"
+        );
+    }
+
+    /// P1 regression: `draw_texture` must apply `current_transform` to the
+    /// destination rect before queuing the instance.
+    ///
+    /// Draw the same texture under identity and under `scale(2, 2)` and verify
+    /// that the queued instance width/height are 2× larger under the scale.
+    /// Before the fix, `draw_texture` passed the raw `dst` rect straight to
+    /// `TextureInstance::with_uv`, so HiDPI scale and any widget transform were
+    /// silently ignored.
+    #[test]
+    fn draw_texture_bakes_current_transform() {
+        let (device, queue) = test_device_and_queue();
+        let tex_id = flui_types::painting::TextureId::new(1);
+
+        // Helper: create a minimal 1×1 external texture.
+        let make_tex = |device: &wgpu::Device| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("test external texture"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+
+        let dst = Rect::from_xywh(px(10.0), px(20.0), px(50.0), px(30.0));
+
+        // --- Identity pass ---
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (400, 400),
+        );
+        painter.external_texture_registry_mut().register(
+            tex_id,
+            make_tex(&device),
+            1,
+            1,
+            false,
+            false,
+        );
+        painter.draw_texture(
+            tex_id,
+            dst,
+            None,
+            flui_types::painting::FilterQuality::None,
+            1.0,
+        );
+        let rects_id = painter.external_image_rects_for_test();
+        assert_eq!(rects_id.len(), 1, "expected one queued instance");
+        let [x_id, y_id, w_id, h_id] = rects_id[0];
+
+        // --- Scale(2, 2) pass ---
+        let mut painter2 = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (400, 400),
+        );
+        painter2.external_texture_registry_mut().register(
+            tex_id,
+            make_tex(&device),
+            1,
+            1,
+            false,
+            false,
+        );
+        painter2.scale(2.0, 2.0);
+        painter2.draw_texture(
+            tex_id,
+            dst,
+            None,
+            flui_types::painting::FilterQuality::None,
+            1.0,
+        );
+        let rects_sc = painter2.external_image_rects_for_test();
+        assert_eq!(
+            rects_sc.len(),
+            1,
+            "expected one queued instance under scale"
+        );
+        let [x_sc, y_sc, w_sc, h_sc] = rects_sc[0];
+
+        // Under scale(2,2) origin and size must both be 2×.
+        // A missing-transform bug produces identical rects regardless of scale.
+        assert!(
+            (x_sc - x_id * 2.0).abs() < 0.5,
+            "expected x ≈ {:.1}, got {x_sc:.1}",
+            x_id * 2.0
+        );
+        assert!(
+            (y_sc - y_id * 2.0).abs() < 0.5,
+            "expected y ≈ {:.1}, got {y_sc:.1}",
+            y_id * 2.0
+        );
+        // Width and height: from_ltrb stores (right-left, bottom-top) so we check
+        // that the scaled instance covers a 2× larger extent.
+        assert!(
+            (w_sc - w_id * 2.0).abs() < 0.5,
+            "expected w ≈ {:.1}, got {w_sc:.1} (transform not applied to draw_texture dst)",
+            w_id * 2.0
+        );
+        assert!(
+            (h_sc - h_id * 2.0).abs() < 0.5,
+            "expected h ≈ {:.1}, got {h_sc:.1} (transform not applied to draw_texture dst)",
+            h_id * 2.0
+        );
+    }
+
+    /// P2 regression: texture instances must carry the active scissor so that
+    /// `flush_texture_batch` can enforce the clip region.
+    ///
+    /// Call `clip_rect`, then `draw_texture`, and verify that the queued
+    /// external-image entry stores the clip.  Without the fix the scissor field
+    /// was absent and all texture draws rendered unclipped.
+    #[test]
+    fn draw_texture_captures_scissor() {
+        let (device, queue) = test_device_and_queue();
+        let tex_id = flui_types::painting::TextureId::new(2);
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (400, 400),
+        );
+
+        // Create a minimal external texture.
+        let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("test external texture scissor"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        painter
+            .external_texture_registry_mut()
+            .register(tex_id, gpu_tex, 1, 1, false, false);
+
+        // Establish a clip region, then draw the texture inside it.
+        painter.clip_rect(Rect::from_xywh(px(10.0), px(10.0), px(80.0), px(60.0)));
+        let scissor_before = painter.current_scissor_for_test();
+        assert!(
+            scissor_before.is_some(),
+            "clip_rect must set current_scissor"
+        );
+
+        let dst = Rect::from_xywh(px(20.0), px(20.0), px(40.0), px(30.0));
+        painter.draw_texture(
+            tex_id,
+            dst,
+            None,
+            flui_types::painting::FilterQuality::None,
+            1.0,
+        );
+
+        let scissors = painter.external_image_scissors_for_test();
+        assert_eq!(scissors.len(), 1, "expected one queued instance");
+        assert_eq!(
+            scissors[0], scissor_before,
+            "external image must carry the active scissor at draw time"
+        );
+    }
+
+    /// P3 regression: `draw_arc` fast path must fall back to tessellation when
+    /// the current transform includes a reflection (negative determinant).
+    ///
+    /// A reflection like `scale(-1, 1)` satisfies `is_axis_aligned_transform()`
+    /// (off-diagonals are zero) but would mirror the wedge direction, producing
+    /// an arc on the wrong side.  The fix guards on `det >= 0`; reflected arcs
+    /// must be routed to `tessellate_arc` which bakes the full matrix.
+    ///
+    /// We verify by comparing tessellated-vertex x-extents: under `scale(-1, 1)`
+    /// (reflection across y-axis) the vertices must be negated relative to
+    /// identity, which is only possible if the tessellation path was taken.
+    #[test]
+    fn draw_arc_reflection_takes_tessellation_path() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+
+        // Draw a filled arc under identity — fast path, no tessellated vertices.
+        let mut painter_id = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (400, 400),
+        );
+        let rect = Rect::from_xywh(px(100.0), px(100.0), px(80.0), px(80.0));
+        painter_id.draw_arc(
+            rect,
+            0.0,
+            std::f32::consts::PI,
+            true,
+            &Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
+        );
+        // Identity + no rotation: fast path used → no tessellated geometry.
+        let verts_id = painter_id.tess_vertices_for_test();
+        assert!(
+            verts_id.is_empty(),
+            "identity arc must use fast path (no tessellated verts)"
+        );
+
+        // Draw the same arc under scale(-1, 1) — reflection, det = -1.
+        // Must fall through to tessellation.
+        let mut painter_ref = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (400, 400),
+        );
+        painter_ref.scale(-1.0, 1.0);
+        painter_ref.draw_arc(
+            rect,
+            0.0,
+            std::f32::consts::PI,
+            true,
+            &Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
+        );
+        let verts_ref = painter_ref.tess_vertices_for_test();
+        assert!(
+            !verts_ref.is_empty(),
+            "reflected arc must fall back to tessellation (det < 0 guard not applied)"
+        );
+
+        // The tessellated vertices should be in negative-x territory (the reflection
+        // maps x → -x, so a rect at x=100..180 becomes x=-180..-100).
+        let max_x = verts_ref.iter().map(|v| v[0]).fold(f32::MIN, f32::max);
+        assert!(
+            max_x < 0.0,
+            "reflected arc vertices must have max_x < 0 (got {max_x:.1}), \
+             indicating the reflection was actually applied via tessellation"
+        );
     }
 
     /// Regression for the damage-scissor leak: the painter is reused across
