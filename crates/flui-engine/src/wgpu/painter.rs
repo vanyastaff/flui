@@ -2213,9 +2213,9 @@ impl WgpuPainter {
     ///
     /// This is the **straight-alpha** entry point used for normal decoded-image
     /// draws, whose samples carry straight (non-premultiplied) alpha. Offscreen
-    /// *layer* composites must instead use
-    /// [`Self::flush_texture_batch_premultiplied`], because their texels are
-    /// premultiplied — see that method and `flush_opacity_layer`.
+    /// *layer* composites must instead use `flush_texture_batch_premultiplied`,
+    /// because their texels are premultiplied — see that method and
+    /// `flush_opacity_layer`.
     ///
     /// `scissor` is the clip rect to apply for this draw call.  Pass `None` to
     /// render unclipped (full viewport), matching the behaviour of the rect/circle
