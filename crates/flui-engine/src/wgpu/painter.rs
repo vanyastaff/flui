@@ -1137,6 +1137,18 @@ impl WgpuPainter {
             .collect()
     }
 
+    /// The tessellator's current flatten scale — to assert a draw call primed it.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn tessellator_max_scale_for_test(&self) -> f32 {
+        self.tessellator.max_scale()
+    }
+
+    /// Force a stale tessellator scale to set up the prime-on-draw regression.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn set_tessellator_max_scale_for_test(&mut self, scale: f32) {
+        self.tessellator.set_max_scale(scale);
+    }
+
     // ===== Offscreen Compositing =====
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.
@@ -1613,6 +1625,28 @@ impl WgpuPainter {
         let m = self.current_transform;
         // Off-diagonal elements of the 2D part must be ~zero
         m.x_axis.y.abs() < 1e-6 && m.y_axis.x.abs() < 1e-6
+    }
+
+    /// Maximum basis length of the current transform's 2D linear part.
+    ///
+    /// Mirrors Impeller's `Matrix::GetMaxBasisLengthXY`: the larger of the two
+    /// column-vector lengths of the upper-left 2x2. The tessellator divides its
+    /// device-space chord-error budget by this so curves are subdivided finely
+    /// enough at the magnification they will be baked and drawn at — see
+    /// [`Tessellator::set_max_scale`](super::tessellator::Tessellator::set_max_scale).
+    fn current_max_scale(&self) -> f32 {
+        let m = self.current_transform;
+        let col_x = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
+        let col_y = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
+        col_x.max(col_y)
+    }
+
+    /// Prime the tessellator with the current world scale so its curve-flattening
+    /// tolerances stay sub-pixel after the transform is baked into vertices.
+    /// Call immediately before any `self.tessellator.tessellate_*` invocation.
+    fn prime_tessellator_scale(&mut self) {
+        let scale = self.current_max_scale();
+        self.tessellator.set_max_scale(scale);
     }
 
     /// Add tessellated shape from vertices/indices with pipeline key tracking.
@@ -2533,6 +2567,7 @@ impl WgpuPainter {
             // Stroked rect - use tessellator (less common, fallback path)
             // Paint already contains stroke information (stroke_width, stroke_cap,
             // stroke_join)
+            self.prime_tessellator_scale();
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
                 self.submit_transformed_geometry(
                     vertices,
@@ -2590,6 +2625,7 @@ impl WgpuPainter {
             );
         } else {
             // Stroked rounded rect - use tessellator (fallback)
+            self.prime_tessellator_scale();
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
                 self.submit_transformed_geometry(
                     vertices,
@@ -2664,6 +2700,7 @@ impl WgpuPainter {
                     style: PaintStyle::Fill,
                     ..Paint::default()
                 };
+                self.prime_tessellator_scale();
                 match self
                     .tessellator
                     .tessellate_circle(center, radius, &fill_paint)
@@ -2679,6 +2716,7 @@ impl WgpuPainter {
             }
         } else {
             // Stroked circle - use tessellator (less common, fallback path)
+            self.prime_tessellator_scale();
             if let Ok((vertices, indices)) =
                 self.tessellator.tessellate_circle(center, radius, paint)
             {
@@ -2699,6 +2737,7 @@ impl WgpuPainter {
         let center = rect.center();
         let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
 
+        self.prime_tessellator_scale();
         if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
             self.submit_transformed_geometry(
                 vertices,
@@ -2766,6 +2805,7 @@ impl WgpuPainter {
             } else {
                 // Slow path: rotation, shear, or reflection present — tessellate in
                 // local space and bake the full transform into vertex positions.
+                self.prime_tessellator_scale();
                 match self.tessellator.tessellate_arc(
                     rect,
                     start_angle,
@@ -2784,6 +2824,7 @@ impl WgpuPainter {
             }
         } else {
             // Stroked arcs always tessellate (no instanced stroke pipeline).
+            self.prime_tessellator_scale();
             match self
                 .tessellator
                 .tessellate_arc(rect, start_angle, sweep_angle, use_center, paint)
@@ -2812,6 +2853,7 @@ impl WgpuPainter {
         );
 
         // Tessellate the DRRect (ring with inner cutout)
+        self.prime_tessellator_scale();
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
                 self.submit_transformed_geometry(
@@ -2837,6 +2879,7 @@ impl WgpuPainter {
 
         // Use tessellator for line stroke
         // Paint already contains stroke information
+        self.prime_tessellator_scale();
         match self.tessellator.tessellate_line(p1, p2, paint) {
             Ok((vertices, indices)) => {
                 #[cfg(debug_assertions)]
@@ -2953,6 +2996,12 @@ impl WgpuPainter {
     }
 
     pub fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
+        // World scale used both to flatten curves finely enough (the tessellator
+        // bakes the transform after tessellation) and to bucket the path cache
+        // so scale-1 geometry is never reused at scale 8 (which would facet).
+        let max_scale = self.current_max_scale();
+        self.tessellator.set_max_scale(max_scale);
+
         // Dashed strokes cannot use the path cache: the dash pattern affects
         // geometry but is not part of compute_path_hash, so caching would
         // collide a solid and a dashed stroke of the same path.
@@ -2979,12 +3028,15 @@ impl WgpuPainter {
         }
 
         // Compute cache key from path geometry + paint tessellation parameters
+        // + the quantized world scale (so a scale-1 entry is not reused at a
+        // larger scale with scale-1 chord density).
         let path_hash = super::path_cache::PathCache::compute_path_hash(
             path,
             paint.style,
             paint.stroke_width,
             paint.stroke_cap,
             paint.stroke_join,
+            max_scale,
         );
 
         // Check cache for previously tessellated geometry
@@ -3491,6 +3543,14 @@ impl WgpuPainter {
         }
 
         let alpha_per_layer = f32::from(color.a) / num_layers as f32;
+
+        // Prime the tessellator's flatten tolerance to the current CTM scale so
+        // shadow curves don't facet on HiDPI / scaled frames. The per-layer
+        // `translate` below only shifts the path (no scale change), so the scale
+        // captured here is correct for every layer. Without this, the shadow
+        // path would tessellate at whatever `max_scale` a previous draw left
+        // behind (stale-scale hazard).
+        self.prime_tessellator_scale();
 
         for i in 0..num_layers {
             let offset_scale = (i as f32 + 1.0) / num_layers as f32;
@@ -5126,6 +5186,131 @@ mod tests {
         px
     }
 
+    /// Render `draw` into a `size`×`size` UNorm target cleared to `clear`, then
+    /// return the tightly-packed RGBA bytes (`size*size*4`, row stride
+    /// `size*4`). Use [`pixel_at`] to sample an individual texel. Unlike
+    /// [`render_and_read_center`] this exposes every pixel so edge/column
+    /// sampling (e.g. atlas-bleed checks) is possible.
+    fn render_to_rgba(
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        size: u32,
+        clear: wgpu::Color,
+        draw: impl FnOnce(&mut WgpuPainter),
+    ) -> Vec<u8> {
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("readback target (full)"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: READBACK_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(device),
+            Arc::clone(queue),
+            READBACK_FORMAT,
+            (size, size),
+        );
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("readback clear (full)"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+
+        draw(&mut painter);
+        painter
+            .render(&target_view, &mut encoder)
+            .expect("painter.render must succeed for readback");
+
+        let bytes_per_pixel = 4u32;
+        let unpadded = size * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = unpadded.div_ceil(align) * align;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback buffer (full)"),
+            size: u64::from(padded_bytes_per_row) * u64::from(size),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(size),
+                },
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| {
+            r.expect("buffer mapping must succeed");
+        });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("device poll must complete the readback copy");
+
+        let data = slice.get_mapped_range();
+        let stride = padded_bytes_per_row as usize;
+        let row_bytes = (size * bytes_per_pixel) as usize;
+        let mut out = Vec::with_capacity(row_bytes * size as usize);
+        for y in 0..size as usize {
+            let start = y * stride;
+            out.extend_from_slice(&data[start..start + row_bytes]);
+        }
+        drop(data);
+        buffer.unmap();
+        out
+    }
+
+    /// Sample one RGBA texel from a tightly-packed buffer produced by
+    /// [`render_to_rgba`].
+    fn pixel_at(rgba: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
+        let off = (y as usize * size as usize + x as usize) * 4;
+        [rgba[off], rgba[off + 1], rgba[off + 2], rgba[off + 3]]
+    }
+
     /// BUG 1 (sRGB double-encode): a mid-tone `Color::rgb(128,128,128)` filled
     /// over an opaque target must read back ~128 per channel on the UNorm
     /// surface format, NOT ~188.
@@ -5466,5 +5651,200 @@ mod tests {
                  full pixel = {px:?}"
             );
         }
+    }
+
+    /// BUG 1 (fill rule hardcoded EvenOdd): a default-fill-type `Path` of two
+    /// overlapping same-winding triangles must fill the overlap SOLID (non-zero
+    /// winding, the FLUI/Flutter default), not punch a hole there (even-odd).
+    ///
+    /// The two triangles share the same winding, so the overlap region has a
+    /// non-zero winding number (filled under NonZero) but an even crossing count
+    /// (a hole under EvenOdd). Sampling the overlap center discriminates the two
+    /// rules: before the fix `tessellate_fill` hardcoded
+    /// `FillOptions::default()` (EvenOdd), so the overlap read back the clear
+    /// color (transparent hole over black ≈ 0). After the fix the path's
+    /// `fill_type()` (default NonZero) flows through, so the overlap reads the
+    /// opaque fill color (RED).
+    #[test]
+    fn path_fill_honors_nonzero_default_fill_rule() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px_val = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+            // Default fill type is NonZero. Two same-winding triangles whose
+            // bodies overlap around the frame center (~32,24).
+            let mut path = flui_types::painting::path::Path::new();
+            path.move_to(Point::new(px(4.0), px(4.0)));
+            path.line_to(Point::new(px(56.0), px(4.0)));
+            path.line_to(Point::new(px(30.0), px(56.0)));
+            path.close();
+            path.move_to(Point::new(px(8.0), px(4.0)));
+            path.line_to(Point::new(px(60.0), px(4.0)));
+            path.line_to(Point::new(px(34.0), px(56.0)));
+            path.close();
+            painter.draw_path(&path, &Paint::fill(flui_types::Color::rgb(255, 0, 0)));
+        });
+
+        let r = i32::from(px_val[0]);
+        assert!(
+            r > 200,
+            "overlap center R = {r}, expected ~255 (opaque RED). \
+             A near-zero R means the overlap was punched out as an EvenOdd hole \
+             instead of filled under the path's default NonZero rule. pixel = {px_val:?}"
+        );
+    }
+
+    /// BUG 2 follow-up (stale-scale hazard): `draw_shadow` tessellates a path and
+    /// must prime the tessellator's flatten scale from the current CTM, like every
+    /// other tessellation site. Otherwise shadow curves facet at whatever scale a
+    /// previous draw left behind.
+    ///
+    /// We seed a stale scale (1.0) under a scale(8) CTM, then `draw_shadow`. With
+    /// the prime call the tessellator reports 8.0; without it the stale 1.0
+    /// survives — the assertion (inside the draw closure, so it runs with the live
+    /// painter) discriminates the two.
+    #[test]
+    fn draw_shadow_primes_tessellator_scale() {
+        let (device, queue) = test_device_and_queue();
+        let _ = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+            painter.scale(8.0, 8.0);
+            // Simulate a prior draw that left the tessellator at scale 1.0.
+            painter.set_tessellator_max_scale_for_test(1.0);
+
+            let mut path = flui_types::painting::path::Path::new();
+            path.move_to(Point::new(px(8.0), px(8.0)));
+            path.line_to(Point::new(px(24.0), px(8.0)));
+            path.line_to(Point::new(px(24.0), px(24.0)));
+            path.line_to(Point::new(px(8.0), px(24.0)));
+            path.close();
+            // elevation > 0.1 so the shadow actually tessellates.
+            painter.draw_shadow(&path, flui_types::Color::BLACK, 4.0);
+
+            let s = painter.tessellator_max_scale_for_test();
+            assert!(
+                (s - 8.0).abs() < 1e-3,
+                "draw_shadow must prime the tessellator to the CTM scale (8.0); \
+                 got {s}. A value of ~1.0 means draw_shadow tessellated with a \
+                 stale scale (faceted shadow curves on HiDPI)."
+            );
+        });
+    }
+
+    /// BUG 3 (atlas packed with zero gutter): two images packed adjacently in
+    /// the shared atlas must not bleed into each other under the Linear sampler.
+    ///
+    /// RED (A) is allocated first so it occupies atlas column range `[0, 64)`;
+    /// BLUE (B) is allocated next, immediately to A's right. A is then drawn
+    /// magnified AND extended past the right of the frame (`dst.x ∈ [-64, 128]`,
+    /// a 3x stretch) so that its `max_u` maps near screen column 128. Column
+    /// x=127 checks for BLUE bleed at the atlas seam.
+    ///
+    /// With the fix: `upload_image` clears a 1px transparent gutter on the right
+    /// side of A. The bilinear kernel blends the last RED texel with alpha-zero
+    /// (not B's solid BLUE), leaving B~0. R may be attenuated but is never BLUE.
+    ///
+    /// Before the fix: no gutter clear — A's `max_u` coincided with B's first
+    /// texel and bilinear sampling raised B well above 40.
+    #[test]
+    fn atlas_neighbors_do_not_bleed_under_linear_sampling() {
+        use flui_types::painting::Image;
+
+        const SIZE: u32 = 128;
+        let (device, queue) = test_device_and_queue();
+
+        let red = Image::solid_color(64, 64, flui_types::Color::rgb(255, 0, 0));
+        let blue = Image::solid_color(64, 64, flui_types::Color::rgb(0, 0, 255));
+
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            // RED packs first → atlas columns [0, 64). It is stretched over
+            // screen x ∈ [-64, 128] (width 192, 3x): the dst maps source u=0..1
+            // across that span, so screen x=127 → u≈0.995 (near max_u) and is a
+            // fully-RED interior pixel because the geometric right edge sits at
+            // x=128, off the sampled column.
+            painter.draw_image(
+                &red,
+                Rect::from_xywh(px(-64.0), px(0.0), px(192.0), px(128.0)),
+            );
+            // BLUE packs next → atlas columns immediately right of RED's gutter.
+            // Its slot is what an un-guttered bilinear sample of RED's right edge
+            // would bleed into. Draw it off-screen; bleed is a texture-space
+            // phenomenon, not screen-space.
+            painter.draw_image(
+                &blue,
+                Rect::from_xywh(px(120.0), px(120.0), px(8.0), px(8.0)),
+            );
+        });
+
+        // Sample the near-max_u column (x=127) at mid-height.
+        //
+        // With a transparent gutter the bilinear kernel at max_u blends the
+        // last RED texel with an alpha-zero gutter pixel, which dims the RED
+        // channel but contributes *zero* BLUE. So the correct assertion for the
+        // "no bleed" property is `b < 40` (BLUE does not reach the sample site)
+        // and `r > b + 80` (RED dominates BLUE even when partially attenuated).
+        //
+        // Without the gutter clear, BLUE from the neighboring atlas entry bleeds
+        // in and raises B above 100 — clearly distinguishable from the ~0 B of
+        // the transparent-gutter case.
+        let edge = pixel_at(&rgba, SIZE, 127, 64);
+        let (r, g, b) = (i32::from(edge[0]), i32::from(edge[1]), i32::from(edge[2]));
+        assert!(
+            b < 40 && r > b + 80,
+            "RED's near-max_u column = (R={r}, G={g}, B={b}). \
+             Expected B~0 (no BLUE bleed) and R dominant. \
+             A B≥40 value means the Linear sampler bled BLUE from the neighboring \
+             atlas entry — the transparent gutter strip in upload_image is missing."
+        );
+    }
+
+    /// BUG 3 sharpness: a 2×1 image drawn exactly 1:1 must sample each texel
+    /// with its own color, not a blend with its neighbor.
+    ///
+    /// With the (wrong) half-texel UV inset, `min_u` for a 2-wide image in a
+    /// 2048-wide atlas shifts right by `0.5/2048 ≈ 0.000244`, and `max_u`
+    /// shifts left symmetrically.  The left screen pixel's UV maps to roughly
+    /// `texel 0.25` (mix of 75% RED + 25% GREEN) rather than `texel 0.5` (pure
+    /// RED); the right pixel maps to roughly `texel 1.75` (25% RED + 75% GREEN)
+    /// rather than `texel 1.5` (pure GREEN).  The RED and GREEN channels would
+    /// both read ~191 instead of 255/0.
+    ///
+    /// With exact texel-boundary UVs and a transparent gutter: left pixel maps to
+    /// `texel 0.5` → pure RED; right pixel maps to `texel 1.5` → pure GREEN.
+    #[test]
+    fn atlas_image_is_sharp_at_one_to_one() {
+        use flui_types::painting::Image;
+
+        // 2-pixel wide, 1-pixel tall render target (drawn 1:1).
+        const W: u32 = 2;
+        const H: u32 = 1;
+        let (device, queue) = test_device_and_queue();
+
+        // Left texel = RED, right texel = GREEN.
+        let pixels: Vec<u8> = vec![
+            255, 0, 0, 255, // left pixel: RED
+            0, 255, 0, 255, // right pixel: GREEN
+        ];
+        let img = Image::from_rgba8(W, H, pixels);
+
+        let rgba = render_to_rgba(&device, &queue, W, wgpu::Color::BLACK, |painter| {
+            painter.draw_image(&img, Rect::from_xywh(px(0.0), px(0.0), px(2.0), px(1.0)));
+        });
+
+        let left = pixel_at(&rgba, W, 0, 0);
+        let right = pixel_at(&rgba, W, 1, 0);
+        let (lr, lg) = (i32::from(left[0]), i32::from(left[1]));
+        let (rr, rg) = (i32::from(right[0]), i32::from(right[1]));
+        assert!(
+            lr > 200 && lg < 55,
+            "left pixel = (R={lr}, G={lg}): expected RED (~255,~0). \
+             A blended value means uv_coords has a half-texel inset that \
+             shifts sampling away from the texel center."
+        );
+        assert!(
+            rg > 200 && rr < 55,
+            "right pixel = (R={rr}, G={rg}): expected GREEN (~0,~255). \
+             A blended value means uv_coords has a half-texel inset that \
+             shifts sampling away from the texel center."
+        );
     }
 }
