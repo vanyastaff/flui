@@ -1089,13 +1089,13 @@ impl WgpuPainter {
         self.buffer_pool.reset();
 
         // ===== Frame-boundary texture cache maintenance =====
-        self.texture_cache.reset_use_counters();
-        let shrunk = self.texture_cache.shrink();
-        let evicted = self.texture_cache.evict_over_budget();
-        if shrunk > 0 || evicted > 0 {
+        // One encapsulated pass (evict + atlas-reclaim, THEN reset counters) so
+        // the ordering can't regress into wiping the cache every frame.
+        let maint = self.texture_cache.end_frame_maintenance();
+        if maint.evicted > 0 || maint.atlas_reset {
             tracing::debug!(
-                shrunk,
-                evicted,
+                evicted = maint.evicted,
+                atlas_reset = maint.atlas_reset,
                 memory_bytes = self.texture_cache.memory_bytes(),
                 "Texture cache maintenance"
             );

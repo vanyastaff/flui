@@ -185,6 +185,15 @@ pub struct TextureCacheStats {
     pub atlas_utilization: f32,
 }
 
+/// Outcome of one frame-boundary [`TextureCache::end_frame_maintenance`] pass.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FrameMaintenance {
+    /// Number of standalone textures evicted to stay within the memory budget.
+    pub evicted: usize,
+    /// `true` when the shared atlas was reclaimed this frame.
+    pub atlas_reset: bool,
+}
+
 /// GPU Texture Cache
 ///
 /// Manages texture loading, caching, and reuse for optimal performance.
@@ -226,6 +235,10 @@ pub struct TextureCache {
     /// Images with both dimensions <= `ATLAS_MAX_DIMENSION` are packed here.
     /// When the atlas is full, allocation falls back to standalone textures.
     atlas: super::atlas::TextureAtlas,
+    /// Set when an atlas allocation fails (the shelf packer is full). Read at
+    /// the frame boundary by [`Self::end_frame_maintenance`] to decide whether
+    /// to reclaim the atlas; cleared once the atlas is reset.
+    atlas_full: bool,
 }
 
 impl TextureCache {
@@ -268,6 +281,7 @@ impl TextureCache {
             queue,
             max_memory_bytes: 100 * 1024 * 1024, // 100 MB default
             atlas,
+            atlas_full: false,
         }
     }
 
@@ -446,7 +460,10 @@ impl TextureCache {
 
                         return Ok(entry.insert(cached_texture));
                     }
-                    // Atlas full — fall through to standalone texture
+                    // Atlas full — fall through to standalone texture, and flag
+                    // the atlas for frame-boundary reclamation (see
+                    // `end_frame_maintenance`).
+                    self.atlas_full = true;
                     tracing::debug!(
                         width,
                         height,
@@ -670,12 +687,66 @@ impl TextureCache {
         before - self.textures.len()
     }
 
-    /// Reset use counters (call at frame start)
+    /// Reset use counters.
     ///
-    /// Sets all use_count to 0 so unused textures can be detected.
+    /// Sets all `use_count` to 0 so the next frame can detect unused textures.
+    /// Run at the END of frame maintenance, after eviction has read this
+    /// frame's counts — see [`Self::end_frame_maintenance`].
     pub fn reset_use_counters(&mut self) {
         for texture in self.textures.values_mut() {
             texture.use_count = 0;
+        }
+    }
+
+    /// Reclaim the shared atlas if it filled up and holds stale entries.
+    ///
+    /// The shelf packer never frees individual slots, so once it fills, every
+    /// subsequent small image falls back to a standalone texture and loses
+    /// atlas batching for the rest of the session. When that has happened AND
+    /// at least one atlas-backed entry went unused this frame (a stale slot to
+    /// reclaim), drop ALL atlas entries and reset the packer; the still-live
+    /// ones re-pack from their source image on the next frame (a one-frame
+    /// standalone blip, then back in the atlas).
+    ///
+    /// Skips the reset when every atlas entry was used this frame — the working
+    /// set genuinely exceeds the atlas, so a reset would immediately refill and
+    /// thrash. Returns `true` when the atlas was reset.
+    ///
+    /// Must run before [`Self::reset_use_counters`] so per-entry `use_count`
+    /// still reflects this frame.
+    fn maybe_reset_atlas(&mut self) -> bool {
+        if !self.atlas_full {
+            return false;
+        }
+        let has_stale = self
+            .textures
+            .values()
+            .any(|t| t.is_atlas_entry() && t.use_count == 0);
+        if !has_stale {
+            // Working set fills the atlas; resetting now would only thrash.
+            return false;
+        }
+        self.textures.retain(|_, t| !t.is_atlas_entry());
+        self.atlas.reset();
+        self.atlas_full = false;
+        true
+    }
+
+    /// Frame-boundary cache maintenance — call once per frame AFTER rendering.
+    ///
+    /// Order is load-bearing: stale-atlas detection and budget eviction read
+    /// this frame's `use_count`s, THEN the counters reset for the next frame. A
+    /// previous call site reset the counters FIRST and then removed every
+    /// `use_count == 0` entry, which wiped the entire cache every frame and
+    /// defeated cross-frame reuse. Encapsulating the sequence here keeps callers
+    /// from reintroducing that ordering bug.
+    pub fn end_frame_maintenance(&mut self) -> FrameMaintenance {
+        let atlas_reset = self.maybe_reset_atlas();
+        let evicted = self.evict_over_budget();
+        self.reset_use_counters();
+        FrameMaintenance {
+            evicted,
+            atlas_reset,
         }
     }
 
@@ -1000,5 +1071,54 @@ mod tests {
 
         assert_eq!(stats.cached_textures, 0);
         assert_eq!(stats.hit_rate, 0.0);
+    }
+
+    /// Headless GPU device + queue for cache tests.
+    fn test_device_and_queue() -> (std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("a GPU adapter for texture-cache tests");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("TextureCache Test Device"),
+            ..Default::default()
+        }))
+        .expect("a GPU device for texture-cache tests");
+        (std::sync::Arc::new(device), std::sync::Arc::new(queue))
+    }
+
+    /// Regression: frame maintenance must RETAIN textures used this frame.
+    ///
+    /// The previous call site reset the use-counters and THEN removed every
+    /// zero-count entry, wiping the entire cache every frame. `end_frame_main`
+    /// now evicts (budget-gated) before resetting, so an under-budget cache
+    /// keeps its entries for cross-frame reuse.
+    #[test]
+    fn end_frame_maintenance_retains_used_texture() {
+        let (device, queue) = test_device_and_queue();
+        let mut cache = TextureCache::new(device, queue);
+        let id = TextureId::from_name("retained");
+        // 4x4 RGBA — far under the default 100 MB budget.
+        cache
+            .load_from_rgba(id.clone(), 4, 4, &[0u8; 4 * 4 * 4])
+            .expect("rgba upload");
+        // A frame draws it (record_use -> use_count > 0).
+        assert!(cache.get(&id).is_some());
+
+        cache.end_frame_maintenance();
+        assert!(
+            cache.contains(&id),
+            "a texture used this frame must survive frame maintenance"
+        );
+
+        // A second, idle frame under budget also retains it for reuse.
+        cache.end_frame_maintenance();
+        assert!(
+            cache.contains(&id),
+            "under budget, a cached texture persists across idle frames"
+        );
     }
 }
