@@ -1003,6 +1003,12 @@ impl Renderer {
             }
             self.queue.submit(std::iter::once(final_encoder.finish()));
 
+            // Frame boundary: run texture-cache maintenance ONCE, after the
+            // final flush. `painter.render` runs per-pass (backdrop-filter
+            // flushes call it mid-frame), so maintenance lives here — not inside
+            // `render` — to avoid resetting use-counters between passes.
+            painter.end_frame_maintenance();
+
             // Return painter to Renderer for reuse
             self.painter = Some(painter);
         }
@@ -1301,12 +1307,9 @@ mod tests {
     #[test]
     fn offscreen_recover_clears_device_lost_flag() {
         pollster::block_on(async {
-            let mut renderer = match Renderer::new_offscreen().await {
-                Ok(r) => r,
-                Err(_) => {
-                    // No GPU in this environment (common in CI); skip gracefully.
-                    return;
-                }
+            let Ok(mut renderer) = Renderer::new_offscreen().await else {
+                // No GPU in this environment (common in CI); skip gracefully.
+                return;
             };
 
             // Precondition: flag starts clear on a healthy device.

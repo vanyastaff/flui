@@ -1102,23 +1102,35 @@ mod tests {
         let mut cache = TextureCache::new(device, queue);
         let id = TextureId::from_name("retained");
         // 4x4 RGBA — far under the default 100 MB budget.
+        // 4x4 <= ATLAS_MAX_DIMENSION -> atlas-backed path.
         cache
             .load_from_rgba(id.clone(), 4, 4, &[0u8; 4 * 4 * 4])
             .expect("rgba upload");
-        // A frame draws it (record_use -> use_count > 0).
+        // 300x300 > ATLAS_MAX_DIMENSION -> standalone path. The per-frame wipe
+        // removed atlas AND standalone entries alike, so cover both here.
+        let big = TextureId::from_name("retained_standalone");
+        cache
+            .load_from_rgba(big.clone(), 300, 300, &vec![0u8; 300 * 300 * 4])
+            .expect("rgba upload");
+        // A frame draws both (record_use -> use_count > 0).
         assert!(cache.get(&id).is_some());
+        assert!(cache.get(&big).is_some());
 
         cache.end_frame_maintenance();
         assert!(
             cache.contains(&id),
-            "a texture used this frame must survive frame maintenance"
+            "an atlas-backed texture used this frame must survive frame maintenance"
+        );
+        assert!(
+            cache.contains(&big),
+            "a standalone texture used this frame must survive frame maintenance"
         );
 
-        // A second, idle frame under budget also retains it for reuse.
+        // A second, idle frame under budget also retains them for reuse.
         cache.end_frame_maintenance();
         assert!(
-            cache.contains(&id),
-            "under budget, a cached texture persists across idle frames"
+            cache.contains(&id) && cache.contains(&big),
+            "under budget, cached textures persist across idle frames"
         );
     }
 }
