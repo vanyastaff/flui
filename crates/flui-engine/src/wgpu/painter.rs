@@ -27,7 +27,7 @@ use super::{
 
 /// A recorded batch of tessellated geometry sharing the same pipeline key.
 ///
-/// During a frame, each call to [`WgpuPainter::add_tessellated`] appends
+/// During a frame, each call to [`WgpuPainter::add_tessellated_with_key`] appends
 /// vertices/indices to the global buffers.  When the pipeline key changes
 /// a new batch is started so that the render pass can switch pipelines at
 /// the correct index boundary.
@@ -1012,6 +1012,21 @@ impl WgpuPainter {
         self.current_scissor
     }
 
+    /// Returns a copy of the tessellated vertex positions accumulated in the
+    /// current segment.  Used by the transform-baking regression test to verify
+    /// that `submit_transformed_geometry` is applied exactly once.
+    ///
+    /// Gated to `#[cfg(all(test, feature = "enable-wgpu-tests"))]` so it is
+    /// never dead code in production builds.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn tess_vertices_for_test(&self) -> Vec<[f32; 2]> {
+        self.current_segment
+            .vertices
+            .iter()
+            .map(|v| v.position)
+            .collect()
+    }
+
     // ===== Offscreen Compositing =====
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.
@@ -1502,25 +1517,19 @@ impl WgpuPainter {
         });
     }
 
-    /// Add tessellated shape using alpha-blend pipeline (convenience wrapper).
-    ///
-    /// Used by callers that don't have a [`Paint`] reference (e.g.
-    /// `draw_vertices`, `draw_shadow`).
-    fn add_tessellated(&mut self, vertices: Vec<Vertex>, indices: &[u32]) {
-        self.add_tessellated_with_key(vertices, indices, PipelineKey::alpha_blend());
-    }
-
     /// Apply the current world transform to every vertex position of an already-
     /// tessellated shape and submit it to the tessellated geometry batch.
     ///
-    /// Use this as the fallback for GPU-instanced paths (circle, arc) when the
-    /// current transform contains rotation or shear — the instance shader only
-    /// handles axis-aligned scale + translation, so non-axis-aligned transforms
-    /// must be baked into vertex positions by the CPU tessellator.
+    /// Used for tessellated geometry (fills AND strokes): any path whose vertices
+    /// are produced in local/pre-transform space must pass through here so the
+    /// baked screen-space positions match `current_transform`.  The shape.wgsl
+    /// vertex shader only converts px→clip via the viewport uniform — it has no
+    /// model-matrix uniform — so the CPU must bake the transform into the vertices
+    /// at record time.
     ///
     /// `vertices` are in pre-transform (local) space; this method maps each
     /// `[x, y]` through `current_transform` before storing.
-    fn submit_transformed_fill(
+    fn submit_transformed_geometry(
         &mut self,
         mut vertices: Vec<Vertex>,
         indices: &[u32],
@@ -2308,7 +2317,7 @@ impl WgpuPainter {
             // Paint already contains stroke information (stroke_width, stroke_cap,
             // stroke_join)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2365,7 +2374,7 @@ impl WgpuPainter {
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2431,7 +2440,7 @@ impl WgpuPainter {
                 );
             } else {
                 // Slow path: rotation/shear present — tessellate in local space and
-                // bake the full transform into vertex positions via submit_transformed_fill.
+                // bake the full transform into vertex positions via submit_transformed_geometry.
                 // This correctly maps a circle under arbitrary affine transforms.
                 let fill_paint = Paint {
                     color,
@@ -2444,7 +2453,7 @@ impl WgpuPainter {
                 {
                     Ok((vertices, indices)) => {
                         let key = pipeline::pipeline_key_from_paint(&fill_paint);
-                        self.submit_transformed_fill(vertices, &indices, key);
+                        self.submit_transformed_geometry(vertices, &indices, key);
                     }
                     Err(e) => {
                         tracing::warn!("Failed to tessellate rotated circle: {}", e);
@@ -2456,7 +2465,7 @@ impl WgpuPainter {
             if let Ok((vertices, indices)) =
                 self.tessellator.tessellate_circle(center, radius, paint)
             {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2474,7 +2483,7 @@ impl WgpuPainter {
         let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
 
         if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
-            self.add_tessellated_with_key(
+            self.submit_transformed_geometry(
                 vertices,
                 &indices,
                 pipeline::pipeline_key_from_paint(paint),
@@ -2540,7 +2549,7 @@ impl WgpuPainter {
                 ) {
                     Ok((vertices, indices)) => {
                         let key = pipeline::pipeline_key_from_paint(paint);
-                        self.submit_transformed_fill(vertices, &indices, key);
+                        self.submit_transformed_geometry(vertices, &indices, key);
                     }
                     Err(e) => {
                         tracing::error!("Failed to tessellate rotated filled arc: {}", e);
@@ -2554,7 +2563,7 @@ impl WgpuPainter {
                 .tessellate_arc(rect, start_angle, sweep_angle, use_center, paint)
             {
                 Ok((vertices, indices)) => {
-                    self.add_tessellated_with_key(
+                    self.submit_transformed_geometry(
                         vertices,
                         &indices,
                         pipeline::pipeline_key_from_paint(paint),
@@ -2579,7 +2588,7 @@ impl WgpuPainter {
         // Tessellate the DRRect (ring with inner cutout)
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2610,7 +2619,7 @@ impl WgpuPainter {
                     vertices.len(),
                     indices.len()
                 );
-                self.add_tessellated_with_key(
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -2727,7 +2736,8 @@ impl WgpuPainter {
                 .tessellate_flui_path_dashed_stroke(path, paint, dash)
             {
                 Ok((vertices, indices)) => {
-                    self.add_tessellated_with_key(
+                    // Bake current_transform into vertices: shape.wgsl has no model matrix.
+                    self.submit_transformed_geometry(
                         vertices,
                         &indices,
                         pipeline::pipeline_key_from_paint(paint),
@@ -2751,14 +2761,16 @@ impl WgpuPainter {
 
         // Check cache for previously tessellated geometry
         if let Some((positions, cached_indices)) = self.path_cache.get(path_hash) {
-            // Reconstruct full Vertex data with current paint color
+            // Reconstruct full Vertex data with current paint color.
+            // The cache stores UNTRANSFORMED positions; bake the current transform now.
             let rgba = paint.color.to_rgba_f32_array();
             let vertices: Vec<Vertex> = positions
                 .iter()
                 .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
                 .collect();
             let indices: Vec<u32> = cached_indices.to_vec();
-            self.add_tessellated_with_key(
+            // Bake current_transform into vertices: shape.wgsl has no model matrix.
+            self.submit_transformed_geometry(
                 vertices,
                 &indices,
                 pipeline::pipeline_key_from_paint(paint),
@@ -2775,12 +2787,15 @@ impl WgpuPainter {
 
         match result {
             Ok((vertices, indices)) => {
-                // Extract position data for cache (color-independent)
+                // Extract position data for cache BEFORE baking the transform.
+                // The cache stores local (untransformed) positions so that cached
+                // geometry can be re-used across frames with different transforms.
                 let positions: Vec<[f32; 2]> = vertices.iter().map(|v| v.position).collect();
                 self.path_cache
                     .insert(path_hash, positions, indices.clone());
 
-                self.add_tessellated_with_key(
+                // Bake current_transform into vertices: shape.wgsl has no model matrix.
+                self.submit_transformed_geometry(
                     vertices,
                     &indices,
                     pipeline::pipeline_key_from_paint(paint),
@@ -3263,13 +3278,19 @@ impl WgpuPainter {
                 px(offset_y + current_blur * 0.5),
             ));
 
-            // Draw the shadow layer
+            // Draw the shadow layer.
+            // Route through submit_transformed_geometry so the save()+translate() offset
+            // above is actually baked into the vertices (shape.wgsl has no model matrix).
             match self
                 .tessellator
                 .tessellate_flui_path_fill(path, &shadow_paint)
             {
                 Ok((vertices, indices)) => {
-                    self.add_tessellated(vertices, &indices);
+                    self.submit_transformed_geometry(
+                        vertices,
+                        &indices,
+                        PipelineKey::alpha_blend(),
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to tessellate shadow path: {}", e);
@@ -3356,8 +3377,9 @@ impl WgpuPainter {
         let our_indices: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
 
         // Add to tessellated geometry (bypassing tessellator since we already have
-        // triangles)
-        self.add_tessellated_with_key(
+        // triangles).  Bake current_transform into vertex positions: shape.wgsl has
+        // no model-matrix uniform.
+        self.submit_transformed_geometry(
             our_vertices,
             &our_indices,
             pipeline::pipeline_key_from_paint(paint),
@@ -4313,6 +4335,76 @@ mod tests {
         }))
         .expect("a GPU device for painter tests");
         (Arc::new(device), Arc::new(queue))
+    }
+
+    /// Regression: tessellated vertices must be baked through `current_transform`
+    /// exactly once by `submit_transformed_geometry`.
+    ///
+    /// Draw the same line under identity and under scale(2,2) and assert that
+    /// the baked vertex x-extent (max_x − min_x) is approximately 2× larger
+    /// under the scaled transform.  A double-transform bug would produce ~4×;
+    /// a missing transform would produce ~1× regardless of scale.
+    #[test]
+    fn tessellated_line_bakes_current_transform() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let black = flui_types::Color::rgba(0, 0, 0, 255);
+
+        // --- Identity pass ---
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (200, 200),
+        );
+        // current_transform == IDENTITY at construction
+        painter.line(
+            Point::new(px(10.0), px(0.0)),
+            Point::new(px(20.0), px(0.0)),
+            &Paint::stroke(black, 2.0),
+        );
+        let verts_identity = painter.tess_vertices_for_test();
+        assert!(
+            !verts_identity.is_empty(),
+            "tessellated line must produce vertices"
+        );
+        let min_x_id = verts_identity.iter().map(|v| v[0]).fold(f32::MAX, f32::min);
+        let max_x_id = verts_identity.iter().map(|v| v[0]).fold(f32::MIN, f32::max);
+        let extent_identity = max_x_id - min_x_id;
+
+        // --- Scale(2, 2) pass ---
+        let mut painter2 = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            (200, 200),
+        );
+        painter2.scale(2.0, 2.0);
+        painter2.line(
+            Point::new(px(10.0), px(0.0)),
+            Point::new(px(20.0), px(0.0)),
+            &Paint::stroke(black, 2.0),
+        );
+        let verts_scaled = painter2.tess_vertices_for_test();
+        assert!(
+            !verts_scaled.is_empty(),
+            "tessellated line under scale(2) must produce vertices"
+        );
+        let min_x_sc = verts_scaled.iter().map(|v| v[0]).fold(f32::MAX, f32::min);
+        let max_x_sc = verts_scaled.iter().map(|v| v[0]).fold(f32::MIN, f32::max);
+        let extent_scaled = max_x_sc - min_x_sc;
+
+        // Under scale(2,2) the x-extent should be ~2× the identity extent.
+        // We allow ±10% tolerance to accommodate stroke-cap geometry.
+        // A missing-transform bug yields ratio ≈ 1.0; a double-transform bug
+        // yields ratio ≈ 4.0; the correct fix yields ratio ≈ 2.0.
+        let ratio = extent_scaled / extent_identity;
+        assert!(
+            (ratio - 2.0).abs() < 0.2,
+            "expected x-extent ratio ≈ 2.0 (transform baked once), got {ratio:.3} \
+             (identity_extent={extent_identity:.2}, scaled_extent={extent_scaled:.2})"
+        );
     }
 
     /// Regression for the damage-scissor leak: the painter is reused across
