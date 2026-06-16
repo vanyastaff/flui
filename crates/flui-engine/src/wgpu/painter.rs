@@ -215,6 +215,7 @@ impl DrawSegment {
             && self.vertices.is_empty()
             && self.tess_batches.is_empty()
             && self.cached_images.is_empty()
+            && self.external_images.is_empty()
     }
 }
 
