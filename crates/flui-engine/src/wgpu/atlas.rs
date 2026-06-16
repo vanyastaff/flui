@@ -99,11 +99,6 @@ pub struct TextureAtlas {
     /// Atlas height
     height: u32,
 
-    /// Texture format (stored at construction; queried via the underlying
-    /// `wgpu::Texture` at runtime, not via this field).
-    #[allow(dead_code)]
-    format: TextureFormat,
-
     /// Current shelf Y position
     current_shelf_y: u32,
 
@@ -149,7 +144,6 @@ impl TextureAtlas {
             texture,
             width,
             height,
-            format,
             current_shelf_y: 0,
             current_shelf_height: 0,
             current_x: 0,
@@ -205,6 +199,30 @@ impl TextureAtlas {
                 None // Atlas is full
             }
         }
+    }
+
+    /// Reclaim the entire atlas: drop every entry and rewind the shelf cursor.
+    ///
+    /// The shelf packer is append-only — once `allocate` walks the cursor to the
+    /// bottom-right it can never reuse a freed slot, so a long-lived atlas
+    /// eventually fills with stale entries and `allocate` returns `None`
+    /// forever. `reset` is the freeing mechanism: it clears `entries` and
+    /// rewinds the cursor so the GPU texture (reused as-is) can be re-packed
+    /// from scratch.
+    ///
+    /// # Invalidates outstanding rects
+    ///
+    /// Every [`AtlasRect`] / `image_id` handed out by `allocate` before this
+    /// call is invalidated — the regions they point at will be overwritten by
+    /// future uploads. Callers that cache atlas UVs (e.g. `TextureCache`) MUST
+    /// drop those cached entries in the same step. Old pixels are not cleared;
+    /// they become garbage that the next `upload_image` overwrites.
+    pub fn reset(&mut self) {
+        self.entries.clear();
+        self.current_shelf_y = 0;
+        self.current_shelf_height = 0;
+        self.current_x = 0;
+        self.next_image_id = 1;
     }
 
     /// Upload image data to the atlas
@@ -368,5 +386,45 @@ mod tests {
     fn test_texture_atlas_exists() {
         // Compile-time check
         let _ = std::marker::PhantomData::<TextureAtlas>;
+    }
+
+    /// Headless GPU device for atlas allocation/reset tests.
+    fn test_device() -> Device {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("a GPU adapter for atlas tests");
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Atlas Test Device"),
+                ..Default::default()
+            }))
+            .expect("a GPU device for atlas tests");
+        device
+    }
+
+    #[test]
+    fn reset_reclaims_a_full_atlas() {
+        let device = test_device();
+        // A 64x64 atlas fits exactly one 64x64 image, then is full.
+        let mut atlas = TextureAtlas::new(&device, 64, 64, TextureFormat::Rgba8UnormSrgb);
+
+        assert!(atlas.allocate(64, 64).is_some(), "first 64x64 must fit");
+        assert!(
+            atlas.allocate(1, 1).is_none(),
+            "atlas must report full — the shelf packer cannot reuse freed space"
+        );
+        assert_eq!(atlas.image_count(), 1);
+
+        atlas.reset();
+
+        assert_eq!(atlas.image_count(), 0, "reset drops all entries");
+        assert!(
+            atlas.allocate(64, 64).is_some(),
+            "reset must rewind the shelf cursor so the atlas is allocatable again"
+        );
     }
 }

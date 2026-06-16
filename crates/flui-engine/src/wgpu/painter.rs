@@ -1088,20 +1088,33 @@ impl WgpuPainter {
         // ===== Reset buffer pool for next frame =====
         self.buffer_pool.reset();
 
-        // ===== Frame-boundary texture cache maintenance =====
-        self.texture_cache.reset_use_counters();
-        let shrunk = self.texture_cache.shrink();
-        let evicted = self.texture_cache.evict_over_budget();
-        if shrunk > 0 || evicted > 0 {
+        // NOTE: texture-cache maintenance is intentionally NOT done here.
+        // `render` runs multiple times per frame — each backdrop-filter flush
+        // (backend.rs / renderer.rs) plus the final flush — on the SAME cache.
+        // Resetting use-counters here would mis-classify textures used in an
+        // earlier pass as unused and evict / atlas-reset them mid-frame. The
+        // Renderer calls `end_frame_maintenance` exactly once per frame instead.
+
+        Ok(())
+    }
+
+    /// Run end-of-frame texture-cache maintenance: evict over-budget textures,
+    /// reclaim a full atlas that holds stale entries, then reset use-counters.
+    ///
+    /// Call EXACTLY ONCE per frame, after the final [`Self::render`] flush.
+    /// `render` must not do this itself — it runs once per pass (backdrop-filter
+    /// flushes invoke it mid-frame), so per-call maintenance would reset
+    /// use-counters between passes and drop textures still in use this frame.
+    pub fn end_frame_maintenance(&mut self) {
+        let maint = self.texture_cache.end_frame_maintenance();
+        if maint.evicted > 0 || maint.atlas_reset {
             tracing::debug!(
-                shrunk,
-                evicted,
+                evicted = maint.evicted,
+                atlas_reset = maint.atlas_reset,
                 memory_bytes = self.texture_cache.memory_bytes(),
                 "Texture cache maintenance"
             );
         }
-
-        Ok(())
     }
 
     /// Flush a single draw segment by temporarily swapping it into current_segment
@@ -2400,7 +2413,6 @@ impl WgpuPainter {
                         );
                     }
                     Err(e) => {
-                        #[cfg(debug_assertions)]
                         tracing::error!("Failed to tessellate stroked arc: {}", e);
                     }
                 }
@@ -2427,7 +2439,6 @@ impl WgpuPainter {
                 );
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("Failed to tessellate DRRect: {}", e);
             }
         }
@@ -2459,7 +2470,6 @@ impl WgpuPainter {
                 );
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("WgpuPainter::line: Tessellation failed - {}", e);
             }
         }
@@ -3082,7 +3092,6 @@ impl WgpuPainter {
                     self.add_tessellated(vertices, &indices);
                 }
                 Err(e) => {
-                    #[cfg(debug_assertions)]
                     tracing::error!("Failed to tessellate shadow path: {}", e);
                 }
             }
@@ -3260,7 +3269,6 @@ impl WgpuPainter {
                 }
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("Failed to load atlas texture: {}", e);
             }
         }

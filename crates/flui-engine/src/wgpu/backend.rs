@@ -10,6 +10,7 @@ use flui_types::{
     styling::Color,
     typography::TextStyle,
 };
+use smallvec::SmallVec;
 
 use std::sync::Arc;
 
@@ -18,6 +19,39 @@ use crate::{
     commands::dispatch_command,
     traits::{CommandRenderer, LayerStateStack},
 };
+
+/// Builds a gradient stop array from a color slice and optional explicit stop
+/// positions, with no heap allocation for the common case of ≤ 8 stops.
+///
+/// When `stop_positions` is `None`, stops are spaced evenly across [0, 1].
+/// The return type derefs to `&[GradientStop]`, satisfying every painter call site.
+fn build_gradient_stops(
+    colors: &[Color],
+    stop_positions: Option<&Vec<f32>>,
+) -> SmallVec<[super::effects::GradientStop; 8]> {
+    use super::effects::GradientStop;
+    if let Some(positions) = stop_positions {
+        colors
+            .iter()
+            .zip(positions.iter())
+            .map(|(color, pos)| GradientStop::new(*color, *pos))
+            .collect()
+    } else {
+        let count = colors.len();
+        colors
+            .iter()
+            .enumerate()
+            .map(|(i, color)| {
+                let pos = if count > 1 {
+                    i as f32 / (count - 1) as f32
+                } else {
+                    0.0
+                };
+                GradientStop::new(*color, pos)
+            })
+            .collect()
+    }
+}
 
 /// wgpu backend implementation of CommandRenderer.
 ///
@@ -688,8 +722,6 @@ impl CommandRenderer for Backend<'_> {
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
-        use super::effects::GradientStop;
-
         self.with_transform(transform, |painter| {
             match shader {
                 flui_painting::Shader::LinearGradient {
@@ -703,30 +735,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.gradient_rect(
                         rect,
                         glam::Vec2::new(from.dx.0, from.dy.0),
@@ -746,30 +755,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.radial_gradient_rect(
                         rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
@@ -790,29 +776,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.sweep_gradient_rect(
                         rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
@@ -837,8 +801,6 @@ impl CommandRenderer for Backend<'_> {
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
-        use super::effects::GradientStop;
-
         self.with_transform(transform, |painter| {
             // Get average corner radius
             let corner_radius =
@@ -857,30 +819,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(from.dx.0, from.dy.0),
@@ -900,30 +839,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.radial_gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
@@ -944,28 +860,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.sweep_gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),

@@ -534,9 +534,20 @@ impl AppBinding {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
                     tracing::debug!("Surface lost, will retry next frame");
                 }
+                Err(EngineError::DeviceLost) => {
+                    // GPU device lost (TDR / driver crash / GPU switch). Recovery
+                    // requires rebuilding the entire GPU context asynchronously; it
+                    // is handled by the platform runner after `render_frame` returns.
+                    // `render_frame` itself has no async context and no raw window
+                    // handle, so it must not attempt recovery here.
+                    self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(
+                        "GPU device lost — recovery will be attempted by the platform runner"
+                    );
+                }
                 Err(e) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                    tracing::error!("Render error: {:?}", e);
+                    tracing::error!(error = ?e, "Render error (non-recoverable this frame)");
                 }
             }
         }

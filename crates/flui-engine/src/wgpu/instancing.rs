@@ -642,9 +642,7 @@ impl<T> Default for InstanceBatch<T> {
     }
 }
 
-// NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels
-// migration
-#[cfg(all(test, feature = "disabled-tests"))]
+#[cfg(test)]
 #[allow(
     clippy::float_cmp,
     reason = "tests assert exact expected values produced by exact arithmetic"
@@ -656,12 +654,15 @@ mod tests {
 
     #[test]
     fn test_rect_instance_size() {
-        // Verify struct is tightly packed for GPU
-        // 16 original floats + 8 clip_rrect floats = 24 floats = 96 bytes
-        assert_eq!(
-            std::mem::size_of::<RectInstance>(),
-            24 * 4 // 24 floats = 96 bytes
-        );
+        // RectInstance field layout (all #[repr(C)], tightly packed):
+        //   bounds:       [f32; 4]  = 16 bytes
+        //   color:        [f32; 4]  = 16 bytes
+        //   corner_radii: [f32; 4]  = 16 bytes
+        //   transform:    [f32; 4]  = 16 bytes
+        //   clip_rrect:   [f32; 8]  = 32 bytes
+        //   clip_kind:    [u32; 4]  = 16 bytes  ← added with squircle SDF
+        //   Total: 112 bytes
+        assert_eq!(std::mem::size_of::<RectInstance>(), 112);
     }
 
     #[test]
@@ -727,5 +728,110 @@ mod tests {
         assert_eq!(instance.color[1], 0.0); // G
         assert_eq!(instance.color[2], 0.0); // B
         assert_eq!(instance.color[3], 1.0); // A
+    }
+
+    #[test]
+    fn test_rect_bounds_mapping() {
+        // `rect` maps Rect fields to [left, top, width, height] — not ltrb.
+        let instance = RectInstance::rect(
+            Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(70.0)),
+            Color::RED,
+        );
+        assert_eq!(instance.bounds[0], 10.0); // x = left
+        assert_eq!(instance.bounds[1], 20.0); // y = top
+        assert_eq!(instance.bounds[2], 100.0); // width = right − left
+        assert_eq!(instance.bounds[3], 50.0); // height = bottom − top
+    }
+
+    #[test]
+    fn test_rect_default_clip_is_no_clip() {
+        // Plain rect: clip_rrect must be all-zeros and clip_kind must be 0
+        // (no SDF clip active). The fragment shader reads clip_kind[0] == 0
+        // as "skip clip test".
+        let instance = RectInstance::rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
+            Color::RED,
+        );
+        assert_eq!(instance.clip_rrect, [0.0; 8]);
+        assert_eq!(instance.clip_kind, [0u32; 4]);
+    }
+
+    #[test]
+    fn test_with_clip_rrect_sets_kind_one() {
+        // Non-zero clip_rrect must set clip_kind[0] = 1 (sdRoundedBox).
+        let clip: [f32; 8] = [5.0, 5.0, 90.0, 40.0, 4.0, 4.0, 4.0, 4.0];
+        let instance = RectInstance::rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
+            Color::RED,
+        )
+        .with_clip_rrect(clip);
+        assert_eq!(instance.clip_rrect, clip);
+        assert_eq!(instance.clip_kind[0], 1u32);
+        // Padding lanes must be zero.
+        assert_eq!(instance.clip_kind[1], 0u32);
+        assert_eq!(instance.clip_kind[2], 0u32);
+        assert_eq!(instance.clip_kind[3], 0u32);
+    }
+
+    #[test]
+    fn test_with_clip_rrect_all_zeros_keeps_no_clip() {
+        // Passing the all-zeros sentinel must leave clip_kind == 0.
+        let instance = RectInstance::rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
+            Color::RED,
+        )
+        .with_clip_rrect([0.0; 8]);
+        assert_eq!(instance.clip_kind, [0u32; 4]);
+    }
+
+    #[test]
+    fn test_with_clip_rsuperellipse_sets_kind_two() {
+        // Non-zero squircle clip must set clip_kind[0] = 2.
+        let se: [f32; 12] = [
+            0.0, 0.0, 100.0, 50.0, 8.0, 10.0, 8.0, 10.0, 8.0, 10.0, 8.0, 10.0,
+        ];
+        let instance = RectInstance::rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
+            Color::RED,
+        )
+        .with_clip_rsuperellipse(se);
+        assert_eq!(instance.clip_kind[0], 2u32);
+        // Averaged corner radii: avg(8,10) = 9.0 for each corner.
+        assert_eq!(instance.clip_rrect[4], 9.0);
+        assert_eq!(instance.clip_rrect[5], 9.0);
+        assert_eq!(instance.clip_rrect[6], 9.0);
+        assert_eq!(instance.clip_rrect[7], 9.0);
+    }
+
+    #[test]
+    fn test_gradient_instance_sizes() {
+        // LinearGradientInstance:
+        //   bounds[4]=16  gradient_start[2]=8  gradient_end[2]=8
+        //   corner_radii[4]=16  stop_count(u32)=4  stop_offset(u32)=4  padding[2u32]=8
+        //   Total: 64 bytes
+        assert_eq!(std::mem::size_of::<LinearGradientInstance>(), 64);
+
+        // RadialGradientInstance:
+        //   bounds[4]=16  center[2]=8  radius(f32)=4  padding1(f32)=4
+        //   corner_radii[4]=16  stop_count(u32)=4  stop_offset(u32)=4  padding2[2u32]=8
+        //   Total: 64 bytes
+        assert_eq!(std::mem::size_of::<RadialGradientInstance>(), 64);
+
+        // SweepGradientInstance:
+        //   bounds[4]=16  center[2]=8  angles[2]=8
+        //   corner_radii[4]=16  stop_count(u32)=4  stop_offset(u32)=4  padding[2u32]=8
+        //   Total: 64 bytes
+        assert_eq!(std::mem::size_of::<SweepGradientInstance>(), 64);
+    }
+
+    #[test]
+    fn test_circle_instance_field_values() {
+        use flui_types::{Point, geometry::Pixels};
+        let center = Point::new(flui_types::geometry::Pixels(50.0), Pixels(75.0));
+        let instance = CircleInstance::new(center, 20.0, Color::RED);
+        assert_eq!(instance.center_radius[0], 50.0); // x
+        assert_eq!(instance.center_radius[1], 75.0); // y
+        assert_eq!(instance.center_radius[2], 20.0); // radius
+        assert_eq!(instance.center_radius[3], 0.0); // padding
     }
 }

@@ -148,7 +148,19 @@ pub fn run_direct(
             if e.is_recoverable() {
                 tracing::warn!("Recoverable render error (will retry): {}", e);
             } else {
-                tracing::error!("Fatal render error: {}", e);
+                tracing::error!(error = ?e, "Fatal render error");
+            }
+        }
+
+        // GPU device-loss recovery: same logic as runner.rs frame callbacks.
+        if r.is_device_lost() {
+            match pollster::block_on(r.recover()) {
+                Ok(()) => {
+                    tracing::warn!("GPU device lost — recovered successfully");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                }
             }
         }
     }));

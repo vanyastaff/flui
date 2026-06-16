@@ -1409,7 +1409,11 @@ impl FullscreenVertex {
         ]
     }
 
-    // TODO: Add wgpu::VertexBufferLayout when integrated
+    // Vertex buffer layout descriptor for this type, for use when
+    // `FullscreenVertex` is bound as a vertex buffer in a render pipeline.
+    // Uncomment and implement when `OffscreenRenderer` grows a wired-up
+    // vertex-based fullscreen pass (current path uses hard-coded clip-space
+    // triangles via a storage buffer).
     // pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> { ... }
 }
 

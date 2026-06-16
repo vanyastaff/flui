@@ -64,6 +64,16 @@
 //! - `wgpu` (default) - wgpu GPU backend
 //! - Future: `skia`, `vello`, `software`
 
+// Compile-time guard: the `fragile-send-sync-non-atomic-wasm` wgpu feature
+// marks !Send types as Send+Sync, which is only sound when the wasm target has
+// no threads (no atomics target feature). Enabling atomics with this feature
+// is UB — catch it at compile time instead of silently producing data races.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+compile_error!(
+    "fragile-send-sync-non-atomic-wasm is unsound with threads/atomics enabled \
+     — see flui-engine Cargo.toml [target.wasm32] note"
+);
+
 // ============================================================================
 // ABSTRACT LAYER (backend-agnostic)
 // ============================================================================
@@ -92,11 +102,6 @@ pub mod wgpu;
 // Abstract traits and errors
 pub use commands::{dispatch_command, dispatch_commands};
 pub use error::{EngineError, EngineResult};
-// Cycle 4 R-10: deprecated aliases re-exported for one-cycle
-// migration. Downstream consumers (flui-app) switch on their next
-// touch.
-#[allow(deprecated)]
-pub use error::{RenderError, RenderResult};
 // Re-export layer types from flui-layer
 pub use flui_layer::{
     CanvasLayer, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor,

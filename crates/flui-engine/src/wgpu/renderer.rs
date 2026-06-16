@@ -129,6 +129,24 @@ struct RenderContext {
     supports_copy_src: bool,
 }
 
+/// Bundled GPU stack rebuilt by `new` (windowed path) and `recover`.
+///
+/// All fields are moved into `Renderer` after construction — this struct is
+/// a local bundle, not a long-lived allocation.
+struct WindowedGpuStack {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    capabilities: GpuCapabilities,
+    painter: super::painter::WgpuPainter,
+    offscreen: Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>,
+    supports_copy_src: bool,
+    device_lost: Arc<std::sync::atomic::AtomicBool>,
+}
+
 /// Cross-platform GPU renderer
 pub struct Renderer {
     // `instance` and `adapter` are kept alive for the lifetime of the renderer
@@ -155,7 +173,36 @@ pub struct Renderer {
     damage_tracker: flui_layer::damage::DamageTracker,
     /// Tracks opaque regions to skip fully-occluded layers during traversal
     occlusion: OcclusionTracker,
+    /// Raw window handle stored for self-contained device recovery.
+    ///
+    /// SAFETY: The stored handles are reused by `recover()` to rebuild the wgpu
+    /// surface after a GPU device loss. They remain valid for the same reason the
+    /// existing `wgpu::Surface<'static>` is sound — the window (owned by
+    /// flui-app's `App`) outlives the `Renderer`. `None` for offscreen renderers.
+    raw_window_handle: Option<raw_window_handle::RawWindowHandle>,
+    /// Raw display handle stored alongside `raw_window_handle` for recovery.
+    /// `None` for offscreen renderers.
+    raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
 }
+
+// SAFETY: `Renderer` stores `Option<RawWindowHandle>` and
+// `Option<RawDisplayHandle>`, which contain `NonNull<c_void>` on some
+// platforms (e.g. `UiKitWindowHandle`) and are therefore `!Send` by default.
+// The handles are:
+//   1. Extracted once at construction from the live window (or `None` for
+//      offscreen renderers).
+//   2. Read only inside `recover(&mut self)`, which requires exclusive access —
+//      no two threads can call `recover` concurrently on the same `Renderer`.
+//   3. Never sent to another thread while they are being dereferenced; the
+//      dereferencing happens only inside the `unsafe` block in
+//      `build_windowed_gpu_stack`, which runs in the same logical context as the
+//      caller holding `&mut self`.
+// This is the same Send posture that wgpu itself uses for its internal raw-handle
+// wrappers: the window pointer is accessed exclusively and never aliased across
+// threads. The owning window (flui-app's `App`) is alive for the lifetime of the
+// `Renderer`, satisfying the validity requirement.
+#[allow(unsafe_code)]
+unsafe impl Send for Renderer {}
 
 impl Renderer {
     /// Create a new renderer with automatic backend selection
@@ -181,49 +228,90 @@ impl Renderer {
     where
         W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     {
-        // Select backend based on platform
-        let backends = Self::select_backend();
+        // Extract raw handles before calling the GPU stack builder.
+        // `window_handle()` and `display_handle()` are safe trait methods; no
+        // unsafe is required here. The stored raw handles are later reused by
+        // `recover()` to rebuild the surface; they remain valid for the same
+        // reason the `wgpu::Surface<'static>` is sound — the window (owned by
+        // flui-app's `App`) outlives the `Renderer`.
+        //
+        // wgpu 29.x multi-monitor fix: explicitly extract raw handles to work
+        // around DisplayHandle lifetime issues on multi-display systems.
+        let window_handle = window
+            .window_handle()
+            .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
+        let display_handle = window
+            .display_handle()
+            .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
+        let (raw_window_handle, raw_display_handle) =
+            (window_handle.as_raw(), Some(display_handle.as_raw()));
 
+        let (w, h) = (800u32, 600u32); // Will be updated on first resize
+        let stack =
+            Self::build_windowed_gpu_stack(raw_window_handle, raw_display_handle, w, h).await?;
+
+        Ok(Self {
+            instance: stack.instance,
+            adapter: stack.adapter,
+            device: stack.device,
+            queue: stack.queue,
+            surface: Some(stack.surface),
+            config: Some(stack.config),
+            capabilities: stack.capabilities,
+            painter: Some(stack.painter),
+            offscreen: Some(stack.offscreen),
+            supports_copy_src: stack.supports_copy_src,
+            device_lost: stack.device_lost,
+            damage_tracker: flui_layer::damage::DamageTracker::new(),
+            occlusion: OcclusionTracker::new(),
+            raw_window_handle: Some(raw_window_handle),
+            raw_display_handle,
+        })
+    }
+
+    /// Build the full windowed GPU stack from raw handles.
+    ///
+    /// Factored out of `new` so `recover` can call it without re-extracting
+    /// the window handles. Called once at construction and again on device loss.
+    ///
+    /// # Errors
+    ///
+    /// Adapter or device creation can fail (e.g. driver still resetting after
+    /// a TDR). Returns the underlying [`EngineError`]; the caller may retry on
+    /// the next frame.
+    async fn build_windowed_gpu_stack(
+        raw_window_handle: raw_window_handle::RawWindowHandle,
+        raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
+        width: u32,
+        height: u32,
+    ) -> EngineResult<WindowedGpuStack> {
+        let backends = Self::select_backend();
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            flags: wgpu::InstanceFlags::default(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
-        // Create surface — requires unsafe: wgpu surface creation from raw window
-        // handle.
+        // Create surface from stored raw handles.
         //
-        // SAFETY: the caller (typically flui-app) guarantees the window handle
-        // remains valid for the lifetime of the returned `Renderer` (and thus the
-        // `wgpu::Surface<'static>` it holds). This invariant is honoured by
-        // flui-app's `App` which owns the winit window for the application's
-        // lifetime. Both `SurfaceTargetUnsafe::from_window` and
-        // `Instance::create_surface_unsafe` carry this requirement; we audit it
-        // here once for the combined block.
+        // SAFETY: The raw handles were captured from the live window at
+        // construction time (see `Renderer::new`) and remain valid while the
+        // window is alive. Both `SurfaceTargetUnsafe::RawHandle` and
+        // `Instance::create_surface_unsafe` require the handles to stay valid
+        // for the lifetime of the resulting `Surface<'static>`; that invariant
+        // is upheld because flui-app's `App` owns the window for its lifetime.
         #[allow(unsafe_code)]
         let surface = unsafe {
-            // wgpu 29.x multi-monitor fix: explicitly extract raw handles to work
-            // around DisplayHandle lifetime issues on multi-display systems.
-            let window_handle = window
-                .window_handle()
-                .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
-            let display_handle = window
-                .display_handle()
-                .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
-
-            // Create surface target with explicit raw handles to avoid lifetime issues
             let surface_target = wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: Some(display_handle.as_raw()),
-                raw_window_handle: window_handle.as_raw(),
+                raw_display_handle,
+                raw_window_handle,
             };
             instance
                 .create_surface_unsafe(surface_target)
                 .map_err(EngineError::surface_creation)?
         };
 
-        // Request adapter
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -233,9 +321,7 @@ impl Renderer {
             .await
             .map_err(EngineError::adapter_request)?;
 
-        // Detect capabilities
         let capabilities = GpuCapabilities::detect(&adapter);
-
         tracing::info!(
             "Selected GPU: {} ({}), Backend: {:?}",
             capabilities.adapter_name,
@@ -243,13 +329,13 @@ impl Renderer {
             capabilities.backend
         );
 
-        // Request device and queue
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("FLUI GPU Device"),
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
-                memory_hints: wgpu::MemoryHints::default(),
+                // Desktop UI: trade VRAM for faster per-frame GPU allocations.
+                memory_hints: wgpu::MemoryHints::Performance,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 trace: wgpu::Trace::Off,
             })
@@ -262,11 +348,9 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        // Configure surface
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = Self::select_surface_format(&surface_caps, &capabilities);
 
-        // Check if the surface supports COPY_SRC (needed for backdrop blur)
         let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
         if !supports_copy_src {
             tracing::warn!(
@@ -283,17 +367,15 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: surface_usage,
             format: surface_format,
-            width: 800, // Will be updated on resize
-            height: 600,
+            width,
+            height,
             present_mode: Self::select_present_mode(&surface_caps),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-
         surface.configure(&device, &config);
 
-        // Create painter for GPU rendering
         let painter = super::painter::WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
@@ -301,28 +383,25 @@ impl Renderer {
             (config.width, config.height),
         );
 
-        // Create offscreen renderer for shader mask / backdrop filter effects
         let offscreen = super::offscreen::OffscreenRenderer::new(
             Arc::clone(&device),
             Arc::clone(&queue),
             surface_format,
         );
-        let offscreen = Some(Arc::new(parking_lot::Mutex::new(offscreen)));
+        let offscreen = Arc::new(parking_lot::Mutex::new(offscreen));
 
-        Ok(Self {
+        Ok(WindowedGpuStack {
             instance,
             adapter,
             device,
             queue,
-            surface: Some(surface),
-            config: Some(config),
+            surface,
+            config,
             capabilities,
-            painter: Some(painter),
+            painter,
             offscreen,
             supports_copy_src,
             device_lost,
-            damage_tracker: flui_layer::damage::DamageTracker::new(),
-            occlusion: OcclusionTracker::new(),
         })
     }
 
@@ -353,7 +432,8 @@ impl Renderer {
                 label: Some("FLUI Offscreen Device"),
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
-                memory_hints: wgpu::MemoryHints::default(),
+                // Desktop UI: trade VRAM for faster per-frame GPU allocations.
+                memory_hints: wgpu::MemoryHints::Performance,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 trace: wgpu::Trace::Off,
             })
@@ -377,7 +457,120 @@ impl Renderer {
             device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
             occlusion: OcclusionTracker::new(),
+            raw_window_handle: None,
+            raw_display_handle: None,
         })
+    }
+
+    /// Returns `true` if the GPU device has been lost.
+    ///
+    /// After a TDR, driver crash, or GPU hardware failure the device-lost
+    /// callback fires and sets this flag. The caller (runner frame loop)
+    /// should call [`recover()`](Self::recover) to rebuild the GPU context.
+    #[must_use]
+    pub fn is_device_lost(&self) -> bool {
+        self.device_lost.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Rebuild the GPU device and surface after a device-lost event.
+    ///
+    /// On the **windowed** path (`raw_window_handle` is `Some`) this rebuilds
+    /// the entire GPU stack (instance → adapter → device → surface → painter →
+    /// offscreen) and swaps the new pieces into `self`. The recovered surface
+    /// is configured at the **current** surface size captured from `self.config`
+    /// (falling back to 800×600), so the window keeps its correct dimensions
+    /// without a separate resize call.
+    ///
+    /// On the **offscreen** path (`raw_window_handle` is `None`) only the
+    /// device/queue are replaced; surface, painter, and offscreen are left as
+    /// `None`.
+    ///
+    /// On success the device-lost flag is cleared (the fresh device starts
+    /// healthy). On failure the underlying [`EngineError`] is returned — the
+    /// driver may still be resetting; the runner should retry on the next frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::AdapterRequest`] or [`EngineError::DeviceCreation`]
+    /// when the driver is still resetting or the adapter is no longer available.
+    /// Returns [`EngineError::SurfaceCreation`] if the surface cannot be
+    /// recreated from the stored raw handles (very unlikely while the window is
+    /// alive).
+    #[tracing::instrument(level = "warn", skip(self))]
+    pub async fn recover(&mut self) -> EngineResult<()> {
+        if let Some(raw_window) = self.raw_window_handle {
+            // Capture current dimensions before rebuild so the recovered
+            // surface matches the live window size instead of defaulting to
+            // 800×600.
+            let (width, height) = self
+                .config
+                .as_ref()
+                .map_or((800u32, 600u32), |c| (c.width, c.height));
+
+            let stack =
+                Self::build_windowed_gpu_stack(raw_window, self.raw_display_handle, width, height)
+                    .await?;
+
+            self.instance = stack.instance;
+            self.adapter = stack.adapter;
+            self.device = stack.device;
+            self.queue = stack.queue;
+            self.surface = Some(stack.surface);
+            self.config = Some(stack.config);
+            self.capabilities = stack.capabilities;
+            self.painter = Some(stack.painter);
+            self.offscreen = Some(stack.offscreen);
+            self.supports_copy_src = stack.supports_copy_src;
+            // Replace with a fresh flag — the new device starts healthy.
+            self.device_lost = stack.device_lost;
+            // Force a full repaint so the first recovered frame is complete.
+            self.damage_tracker.mark_full_repaint();
+        } else {
+            // Offscreen path: rebuild device/queue only.
+            let backends = Self::select_backend();
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends,
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                })
+                .await
+                .map_err(EngineError::adapter_request)?;
+            let capabilities = GpuCapabilities::detect(&adapter);
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("FLUI Offscreen Device"),
+                    required_features: Self::required_features(&capabilities),
+                    required_limits: Self::required_limits(&capabilities),
+                    memory_hints: wgpu::MemoryHints::Performance,
+                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                    trace: wgpu::Trace::Off,
+                })
+                .await
+                .map_err(EngineError::device_creation)?;
+
+            let fresh_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            Self::install_device_diagnostics(&device, Arc::clone(&fresh_flag));
+
+            self.instance = instance;
+            self.adapter = adapter;
+            self.device = Arc::new(device);
+            self.queue = Arc::new(queue);
+            self.capabilities = capabilities;
+            self.device_lost = fresh_flag;
+        }
+
+        tracing::info!(
+            width = self.config.as_ref().map_or(0, |c| c.width),
+            height = self.config.as_ref().map_or(0, |c| c.height),
+            "GPU device recovered successfully"
+        );
+
+        Ok(())
     }
 
     /// Select appropriate backend for the current platform
@@ -520,8 +713,14 @@ impl Renderer {
             }
         }
 
-        // Fallback to first available format
-        surface_caps.formats[0]
+        // Fallback: some drivers report zero formats (e.g. headless CI).
+        // Default to a universally supported sRGB format rather than panicking.
+        if let Some(fmt) = surface_caps.formats.first().copied() {
+            fmt
+        } else {
+            tracing::error!("surface reported zero formats; defaulting to Bgra8UnormSrgb");
+            wgpu::TextureFormat::Bgra8UnormSrgb
+        }
     }
 
     /// Select present mode based on capabilities
@@ -631,11 +830,11 @@ impl Renderer {
     pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), EngineError> {
         use super::backend::Backend;
 
-        // TODO: Fine-grained damage tracking from widget state changes.
-        // Currently, the application layer must call `mark_dirty()` or
-        // `mark_full_repaint()` explicitly (e.g., after any input event).
-        // When the widget layer (flui-view) is re-enabled, widgets should
-        // call `mark_dirty(bounds)` on state change for per-region tracking.
+        // Fine-grained damage tracking is the caller's responsibility: the
+        // application layer calls `mark_dirty()` / `mark_full_repaint()` after
+        // input events or state changes. When flui-view is wired up, widgets
+        // will call `mark_dirty(bounds)` on state change; until then, callers
+        // use `mark_full_repaint()` to force a frame.
 
         // Check if we need to render at all
         if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
@@ -804,6 +1003,12 @@ impl Renderer {
             }
             self.queue.submit(std::iter::once(final_encoder.finish()));
 
+            // Frame boundary: run texture-cache maintenance ONCE, after the
+            // final flush. `painter.render` runs per-pass (backdrop-filter
+            // flushes call it mid-frame), so maintenance lives here — not inside
+            // `render` — to avoid resetting use-counters between passes.
+            painter.end_frame_maintenance();
+
             // Return painter to Renderer for reuse
             self.painter = Some(painter);
         }
@@ -880,8 +1085,9 @@ impl Renderer {
         // Normal path: render → children → cleanup
         layer.render(backend);
 
-        let children: Vec<_> = node.children().to_vec();
-        for child_id in children {
+        // Borrow children as a slice of Copy values; re-borrow `tree` inside the
+        // call is shared and does not conflict with this shared borrow of `node`.
+        for &child_id in node.children() {
             Self::render_layer_recursive(
                 tree,
                 child_id,
@@ -948,8 +1154,7 @@ impl Renderer {
             tracing::warn!(
                 "Backdrop filter type not supported for GPU blur, rendering children only"
             );
-            let children: Vec<_> = node.children().to_vec();
-            for child_id in children {
+            for &child_id in node.children() {
                 Self::render_layer_recursive(
                     tree,
                     child_id,
@@ -1026,8 +1231,7 @@ impl Renderer {
         }
 
         // 5. Render children on top of the blurred backdrop
-        let children: Vec<_> = node.children().to_vec();
-        for child_id in children {
+        for &child_id in node.children() {
             Self::render_layer_recursive(
                 tree,
                 child_id,
@@ -1084,6 +1288,78 @@ mod tests {
                 assert!(renderer.config.is_none());
                 assert!(!renderer.capabilities.adapter_name.is_empty());
             }
+        });
+    }
+
+    /// Verify that `recover()` on an offscreen renderer:
+    ///   1. Starts with `is_device_lost() == false`.
+    ///   2. Reports `true` after the flag is set manually.
+    ///   3. Returns to `false` after `recover()` (fresh device = fresh flag).
+    ///   4. The recovered device is functional (buffer creation + empty submit).
+    ///
+    /// # Limitation
+    ///
+    /// wgpu has no public API to force a real device loss programmatically, so
+    /// we simulate the flag being set by the driver callback by storing directly
+    /// into the `Arc<AtomicBool>`. The windowed surface-rebuild path (raw handle
+    /// → surface → adapter → device) cannot be unit-tested without a real window
+    /// and a real GPU loss event; it is covered by compilation + code review only.
+    #[test]
+    fn offscreen_recover_clears_device_lost_flag() {
+        pollster::block_on(async {
+            let Ok(mut renderer) = Renderer::new_offscreen().await else {
+                // No GPU in this environment (common in CI); skip gracefully.
+                return;
+            };
+
+            // Precondition: flag starts clear on a healthy device.
+            assert!(
+                !renderer.is_device_lost(),
+                "device_lost must be false on a freshly created offscreen renderer"
+            );
+
+            // Simulate the device-lost callback firing (wgpu sets this flag when
+            // a real loss occurs; we set it directly because wgpu exposes no API
+            // to force a device loss in tests).
+            renderer
+                .device_lost
+                .store(true, std::sync::atomic::Ordering::Release);
+            assert!(
+                renderer.is_device_lost(),
+                "flag must read true after simulated device loss"
+            );
+
+            // Recover — this builds a fresh device with a fresh flag.
+            match renderer.recover().await {
+                Ok(()) => {}
+                Err(_) => {
+                    // recover() can fail when the adapter is unavailable (e.g.
+                    // software rasterizer CI). That's expected; the important
+                    // property is that the flag is reset on *success*.
+                    return;
+                }
+            }
+
+            // Post-condition: fresh device, fresh flag.
+            assert!(
+                !renderer.is_device_lost(),
+                "is_device_lost() must be false after a successful recover()"
+            );
+
+            // Verify the recovered device is functional: create a tiny buffer and
+            // submit an empty command encoder without panicking.
+            let _buf = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("recovery-probe"),
+                size: 16,
+                usage: wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let encoder = renderer
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("recovery-probe-encoder"),
+                });
+            renderer.queue.submit(std::iter::once(encoder.finish()));
         });
     }
 }

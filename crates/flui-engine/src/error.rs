@@ -3,16 +3,6 @@
 //! This module provides backend-agnostic error types that can be used
 //! by any rendering backend (wgpu, skia, vello, software, etc.)
 //!
-//! # Naming (cycle 4 R-10)
-//!
-//! The canonical type is [`EngineError`]; `RenderError` is a deprecated
-//! alias kept for one cycle to ease the migration. Pre-cycle the type
-//! was named `RenderError`, which collided with
-//! `flui_rendering::RenderError` at every call site importing both
-//! crates. The engine-side error is about GPU / surface / pipeline /
-//! shader / wgpu — "engine" is the right namespace; "rendering" stays
-//! the pipeline-phase error in the sister crate.
-//!
 //! # Design Principles
 //!
 //! 1. **Backend-agnostic**: Core error variants don't depend on specific
@@ -289,28 +279,6 @@ impl EngineError {
 
 /// A Result type alias for engine operations.
 pub type EngineResult<T> = Result<T, EngineError>;
-
-// Cycle 4 R-10: deprecated aliases for one-cycle migration. The
-// pre-cycle names (`RenderError`, `RenderResult`) collided with
-// `flui_rendering::RenderError` / `RenderResult` at every call site
-// importing both crates. New code should use `EngineError` /
-// `EngineResult` directly.
-
-/// Deprecated alias for [`EngineError`] (renamed in cycle 4 R-10).
-#[deprecated(
-    since = "0.1.0",
-    note = "Renamed to `EngineError` to disambiguate from \
-            `flui_rendering::RenderError`. See cycle 4 audit R-10."
-)]
-pub type RenderError = EngineError;
-
-/// Deprecated alias for [`EngineResult`] (renamed in cycle 4 R-10).
-#[deprecated(
-    since = "0.1.0",
-    note = "Renamed to `EngineResult` to disambiguate from \
-            `flui_rendering::RenderResult`. See cycle 4 audit R-10."
-)]
-pub type RenderResult<T> = EngineResult<T>;
 
 #[cfg(test)]
 mod tests {

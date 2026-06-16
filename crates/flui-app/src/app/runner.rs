@@ -249,6 +249,31 @@ where
         // Render frame via AppBinding
         let mut r = renderer_frame.lock();
         binding.render_frame(&mut r);
+
+        // GPU device-loss recovery: if the device was lost during this frame
+        // (detected by the wgpu callback that fired between render_frame calls),
+        // attempt a synchronous rebuild on the runner thread. `pollster` is
+        // already a dep and safe to use here — the desktop runner owns this
+        // synchronous callback, not an async executor.
+        if r.is_device_lost() {
+            match pollster::block_on(r.recover()) {
+                Ok(()) => {
+                    tracing::warn!("GPU device lost — recovered successfully");
+                    // `wake_frame` (not `request_redraw`) so an idle winit loop
+                    // actually queues a `RedrawRequested`: device loss is
+                    // detected on a quiescent loop, where only flipping the
+                    // `needs_redraw` flag would leave the recovered renderer
+                    // idle until the next external input/resize.
+                    AppBinding::instance().wake_frame();
+                }
+                Err(e) => {
+                    // Driver may still be resetting. Log and let the next frame
+                    // retry; the device-lost flag remains set so recover() will
+                    // be tried again.
+                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                }
+            }
+        }
     }));
 
     // 7. Register resize callback -> renderer.resize()
@@ -503,6 +528,24 @@ where
 
         let mut r = renderer_frame.lock();
         binding.render_frame(&mut r);
+
+        // GPU device-loss recovery (same logic as the desktop path).
+        if r.is_device_lost() {
+            match pollster::block_on(r.recover()) {
+                Ok(()) => {
+                    tracing::warn!("GPU device lost — recovered successfully");
+                    // `wake_frame` (not `request_redraw`) so an idle winit loop
+                    // actually queues a `RedrawRequested`: device loss is
+                    // detected on a quiescent loop, where only flipping the
+                    // `needs_redraw` flag would leave the recovered renderer
+                    // idle until the next external input/resize.
+                    AppBinding::instance().wake_frame();
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                }
+            }
+        }
     }));
 
     // 7. Register resize callback -> renderer.resize()
@@ -578,6 +621,8 @@ fn run_web<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
+    use std::sync::Arc;
+
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
     use flui_platform::{
@@ -585,6 +630,7 @@ where
         traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
     };
     use flui_scheduler::Scheduler;
+    use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
 
@@ -598,26 +644,37 @@ where
         .open_window(options)
         .expect("Failed to create canvas window");
 
-    // 2. Create GPU renderer via wasm-bindgen-futures (async on web)
+    // 2. Shared renderer slot — starts as None, filled async once the WebGPU
+    //    adapter is available. `Option` lets the frame callback skip frames that
+    //    arrive before the renderer is ready.
+    let renderer: Arc<Mutex<Option<Renderer>>> = Arc::new(Mutex::new(None));
+
     let phys_size = window.physical_size();
+    let renderer_init = Arc::clone(&renderer);
     let renderer_window = window.as_ref() as *const dyn flui_platform::PlatformWindow;
 
-    // SAFETY: On wasm32, everything is single-threaded, the pointer remains valid
-    // within the spawn_local closure. We must use spawn_local because wgpu surface
-    // creation is async on web (WebGPU adapter request).
+    // SAFETY: On wasm32, the runtime is single-threaded and cooperative.
+    // The raw pointer to the window is valid for the duration of
+    // `spawn_local` because `window` is alive in the enclosing scope, which
+    // is not dropped until `platform.run()` ends (after `spawn_local`
+    // completes). The pointer is cast back to a shared reference only inside
+    // the `async move` block, and no other task can alias or mutate the
+    // window concurrently on the single-threaded wasm executor.
+    #[allow(unsafe_code)]
     wasm_bindgen_futures::spawn_local(async move {
+        // SAFETY: See the block-level SAFETY comment above.
         let window_ref = unsafe { &*renderer_window };
         let handle = PlatformWindowHandle(window_ref);
-        let renderer = Renderer::new(&handle).await;
-        let mut renderer = match renderer {
+        let mut r = match Renderer::new(&handle).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("GPU init failed: {:?}", e);
                 return;
             }
         };
-        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        r.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
         tracing::info!("WebGPU renderer initialized");
+        *renderer_init.lock() = Some(r);
     });
 
     // 3. Mount root widget at the LOGICAL size; the paint root's DPR
@@ -647,6 +704,7 @@ where
     }));
 
     // 5. Register frame callback
+    let renderer_frame = Arc::clone(&renderer);
     window.on_request_frame(Box::new(move || {
         let binding = AppBinding::instance();
 
@@ -664,7 +722,52 @@ where
         let _frame_id = scheduler.handle_begin_frame(now);
         scheduler.handle_draw_frame();
 
-        // Note: renderer is initialized async, frames without a renderer are no-ops
+        // Renderer may not be ready yet (async init in flight). Skip this frame;
+        // the spawn_local will call request_redraw once the renderer is ready.
+        let mut slot = renderer_frame.lock();
+        let Some(r) = slot.as_mut() else {
+            return;
+        };
+
+        binding.render_frame(r);
+
+        // GPU device-loss recovery on wasm. `block_on` is unavailable, but
+        // wasm32 is single-threaded and `spawn_local` is the correct async
+        // dispatch. We drop the `slot` guard before spawning so the future can
+        // re-acquire the lock without deadlocking.
+        if r.is_device_lost() {
+            drop(slot); // release the lock before spawning the async recovery
+            let renderer_recover = Arc::clone(&renderer_frame);
+            wasm_bindgen_futures::spawn_local(async move {
+                // Take the renderer OUT of the slot so the lock is NOT held
+                // across `.await`. wasm32 is single-threaded: holding the
+                // `parking_lot::Mutex` guard across `recover().await` (which
+                // suspends in `request_adapter`/`request_device`) would let the
+                // next `on_request_frame` block forever on `lock()` — a hard
+                // hang. While recovery is in flight the slot is `None`, so frame
+                // callbacks skip rendering instead of blocking. A racing second
+                // spawn finds `None` here and returns — no double recovery.
+                let Some(mut renderer) = renderer_recover.lock().take() else {
+                    return;
+                };
+                let result = renderer.recover().await;
+                // Restore the renderer regardless of outcome; a failed recover
+                // leaves the device lost and the next frame re-detects + retries.
+                *renderer_recover.lock() = Some(renderer);
+                match result {
+                    Ok(()) => {
+                        tracing::warn!("GPU device lost — recovered successfully");
+                        // `wake_frame` so the idle rAF loop is pumped — see the
+                        // native paths; flipping `needs_redraw` alone would leave
+                        // the recovered renderer idle until the next input event.
+                        AppBinding::instance().wake_frame();
+                    }
+                    Err(e) => {
+                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                    }
+                }
+            });
+        }
     }));
 
     // 6. Lifecycle callbacks

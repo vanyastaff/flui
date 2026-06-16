@@ -1192,6 +1192,7 @@ name = "flui-engine"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "criterion",
  "flui-assets",
  "flui-foundation",
  "flui-layer",
@@ -1204,6 +1205,7 @@ dependencies = [
  "parking_lot",
  "pollster",
  "raw-window-handle",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
  "wgpu",
