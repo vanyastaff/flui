@@ -4175,17 +4175,52 @@ impl WgpuPainter {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
         let layer_opacity = self.current_opacity * paint_alpha;
 
-        // Capture the paint's RGB as the composite tint. White (the default for
-        // plain opacity layers) is a no-op chroma; a non-white value comes from
-        // `push_color_filter`, which sets `paint.color` to the filter's chroma
-        // (`filter.apply([1,1,1,1])`). Without capturing RGB, ColorFilter layers
-        // could only attenuate alpha and never shift hue (BUG 3).
-        let layer_tint_rgb = [
-            f32::from(paint.color.r) / 255.0,
-            f32::from(paint.color.g) / 255.0,
-            f32::from(paint.color.b) / 255.0,
-        ];
+        // A saveLayer paint's RGB is NOT a compositing tint. Per Flutter
+        // semantics the layer's group opacity comes from the paint's *alpha*,
+        // and chroma comes only from an explicit ColorFilter — never from
+        // `paint.color`'s RGB. The public canvas opacity helpers build
+        // alpha-only layer paints as `Paint::fill(Color::TRANSPARENT)
+        // .with_opacity(..)` (RGB `[0,0,0]`, see flui-painting
+        // `canvas/state.rs`), so reading RGB here would tint group-opacity
+        // layers black. Always use a white (no-op) chroma; ColorFilter chroma
+        // arrives explicitly via `save_layer_with_tint` from
+        // `push_color_filter`.
+        self.save_layer_impl(bounds, layer_opacity, [1.0, 1.0, 1.0]);
+    }
 
+    /// Like [`Self::save_layer`] but applies an explicit per-channel chroma
+    /// `tint_rgb` to the composited layer.
+    ///
+    /// Used by the ColorFilter layer path (`push_color_filter`), which
+    /// approximates a color matrix as a single multiply tint
+    /// (`filter.apply([1,1,1,1])`). `opacity` is the layer's effective alpha in
+    /// `[0, 1]`; `tint_rgb` components are clamped to `[0, 1]`. The composite
+    /// applies `(C.r*O, C.g*O, C.b*O, O)` to the premultiplied offscreen, so a
+    /// hue shift survives compositing — see `flush_opacity_layer`.
+    pub fn save_layer_with_tint(
+        &mut self,
+        bounds: Option<Rect<Pixels>>,
+        opacity: f32,
+        tint_rgb: [f32; 3],
+    ) {
+        let layer_opacity = self.current_opacity * opacity.clamp(0.0, 1.0);
+        let tint = [
+            tint_rgb[0].clamp(0.0, 1.0),
+            tint_rgb[1].clamp(0.0, 1.0),
+            tint_rgb[2].clamp(0.0, 1.0),
+        ];
+        self.save_layer_impl(bounds, layer_opacity, tint);
+    }
+
+    /// Shared implementation for [`Self::save_layer`] /
+    /// [`Self::save_layer_with_tint`]: snapshot the draw state and push a layer
+    /// with the given composite `layer_opacity` and `layer_tint_rgb`.
+    fn save_layer_impl(
+        &mut self,
+        bounds: Option<Rect<Pixels>>,
+        layer_opacity: f32,
+        layer_tint_rgb: [f32; 3],
+    ) {
         // Convert bounds to [x, y, w, h] if provided
         let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
 
@@ -4206,8 +4241,9 @@ impl WgpuPainter {
         self.current_opacity = 1.0;
 
         tracing::trace!(
-            "WgpuPainter::save_layer: layer_opacity={:.3}, bounds={:?}",
+            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, bounds={:?}",
             layer_opacity,
+            layer_tint_rgb,
             bounds_array
         );
     }
@@ -5175,11 +5211,12 @@ mod tests {
         use flui_painting::Paint;
 
         let (device, queue) = test_device_and_queue();
-        // Layer paint = blue chroma at alpha 0.5, mirroring what
-        // `Backend::push_color_filter` builds from a white->blue ColorMatrix.
-        let filter_paint = Paint::fill(flui_types::Color::rgb(0, 0, 255)).with_alpha(128);
+        // Blue chroma at opacity 0.5 via the explicit tint entry point — exactly
+        // what `Backend::push_color_filter` now calls for a white->blue
+        // ColorMatrix. (`save_layer` deliberately ignores paint RGB, so chroma
+        // must come through `save_layer_with_tint`.)
         let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
-            painter.save_layer(None, &filter_paint);
+            painter.save_layer_with_tint(None, 0.5, [0.0, 0.0, 1.0]);
             painter.rect(
                 Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
                 &Paint::fill(flui_types::Color::WHITE),
@@ -5198,6 +5235,50 @@ mod tests {
         assert!(
             b > 100,
             "B = {b}, expected ~128 (blue chroma at 0.5 over black). pixel = {px:?}"
+        );
+    }
+
+    /// P1 regression: an alpha-only saveLayer paint with non-white RGB must NOT
+    /// tint the layer.
+    ///
+    /// The public canvas opacity helpers (`Canvas::save_layer_alpha` /
+    /// `save_layer_opacity`, flui-painting `canvas/state.rs`) build their layer
+    /// paint as `Paint::fill(Color::TRANSPARENT).with_opacity(O)` — RGB
+    /// `[0,0,0]`, alpha `O`. If `save_layer` treated paint RGB as a composite
+    /// tint, those layers would composite with `(0,0,0,O)` and render the
+    /// contents BLACK instead of applying group opacity. `save_layer` must
+    /// normalize to a white (no-op) chroma; only `save_layer_with_tint` carries
+    /// chroma.
+    ///
+    /// Opaque WHITE content in a 0.5 layer (black-RGB paint) over BLACK must
+    /// composite to mid-gray ≈128, not 0.
+    #[test]
+    fn alpha_only_layer_paint_does_not_tint_black() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+            // Mirror the canvas opacity helper: TRANSPARENT (RGB 0,0,0) + alpha.
+            painter.save_layer(None, &Paint::fill(flui_types::Color::rgba(0, 0, 0, 128)));
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+                &Paint::fill(flui_types::Color::WHITE),
+            );
+            painter.restore_layer();
+        });
+
+        let (r, g, b) = (i32::from(px[0]), i32::from(px[1]), i32::from(px[2]));
+        // White at group opacity 0.5 over black ≈ (128,128,128). The pre-fix
+        // RGB-as-tint bug gives (0,0,0) — assert clearly above black.
+        assert!(
+            r > 100 && g > 100 && b > 100,
+            "expected mid-gray ~128 (group opacity, white chroma); \
+             a near-black result means the alpha-only paint's RGB was wrongly \
+             used as a tint. pixel = {px:?}"
+        );
+        assert!(
+            (r - 128).abs() <= 12 && (g - 128).abs() <= 12 && (b - 128).abs() <= 12,
+            "R,G,B = {r},{g},{b}, expected ~128. pixel = {px:?}"
         );
     }
 

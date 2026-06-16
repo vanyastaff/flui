@@ -1446,22 +1446,18 @@ impl LayerStateStack for Backend<'_> {
             color_matrix_effective_alpha(&filter.values);
         let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let tint_color = Color::rgba(
-            (tinted[0] * 255.0) as u8,
-            (tinted[1] * 255.0) as u8,
-            (tinted[2] * 255.0) as u8,
-            (effective_alpha * 255.0) as u8,
-        );
-
-        let paint = Paint::fill(tint_color);
-        self.painter.save_layer(None, &paint);
+        // Pass the chroma explicitly. `save_layer` ignores its paint's RGB (a
+        // saveLayer paint's color is not a tint — opacity comes from alpha,
+        // chroma only from a ColorFilter), so the filter's RGB must go through
+        // the dedicated tint entry point or it would be dropped.
+        self.painter
+            .save_layer_with_tint(None, effective_alpha, [tinted[0], tinted[1], tinted[2]]);
 
         tracing::debug!(
-            "push_color_filter: approximation tint=({},{},{}) alpha={:.2}",
-            tint_color.r,
-            tint_color.g,
-            tint_color.b,
+            "push_color_filter: approximation tint=({:.3},{:.3},{:.3}) alpha={:.2}",
+            tinted[0],
+            tinted[1],
+            tinted[2],
             effective_alpha
         );
     }
