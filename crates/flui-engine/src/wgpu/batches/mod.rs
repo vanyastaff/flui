@@ -56,6 +56,7 @@ use super::{
 };
 
 mod gradients;
+mod images;
 mod paths;
 mod shapes;
 
