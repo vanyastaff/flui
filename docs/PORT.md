@@ -22,7 +22,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 
 **Governance layer** (write-time refusal rules, lock-decision matrix, per-crate documentation shape):
 
-- [§Refusal triggers](#refusal-triggers) — 14 anti-patterns the maintainer refuses to introduce, with grep regexes
+- [§Refusal triggers](#refusal-triggers) — 19 anti-patterns the maintainer refuses to introduce, with grep regexes
 - [§Lock decisions](#lock-decisions) — allowed vs forbidden `RwLock`/`Mutex` placements
 - [§Mapping rules](#mapping-rules) — Flutter behaviour primacy + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
 - [§Per-crate `ARCHITECTURE.md` template](#per-crate-architecturemd-template) — required and optional sections per crate
@@ -200,6 +200,54 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 **Allowlist marker:** `// PORT-CHECK-OK-UNIT: <reason>` within ±2 lines of the declaration (e.g. `PixelDelta`'s `From<f64>`, which carries a platform scroll delta rather than a coordinate).
 
 **Back-references:** [N-geom polish-pass research §III U1–U12](research/2026-05-24-flui-geometry-polish-pass-research.md), [ROADMAP-TRACKER N-geom block](ROADMAP-TRACKER.md).
+
+### 15. `println!` / `eprintln!` / `dbg!` in foundation / tree / macros source
+
+**F26 — stdout/stderr macros in the low-level substrate.** Foundation, tree, and macros are the framework's low-level substrate; they must route diagnostics through `tracing::{error,warn,info,debug,trace}!`, never stdout/stderr macros. A stray `println!` / `eprintln!` / `dbg!` in this layer leaks unstructured output into every downstream binary and is invisible to the tracing subscriber.
+
+**Scope:** `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-macros/src`.
+
+**Exclusions:** doc-comment lines (`//!`, `///`, `//`) — example code in docs is fine; dedicated test files (`tests/`, `test*.rs`). In-file `#[cfg(test)]` modules are NOT post-filtered (unlike trigger 8): the three crates in scope keep their test output via `assert!` / `tracing`, so the path-glob exclusion of dedicated test files suffices. If a future `#[cfg(test)]` block legitimately needs `println!`, add a `test*.rs`-style split or a per-line allowlist marker in the same PR.
+
+**Allowlist:** none today (see the `#[cfg(test)]` note above).
+
+**Back-references:** [core-0a foundation adversarial reaudit §F26 / SC10](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md); [`AGENTS.md`](../AGENTS.md) "no `println!` / `eprintln!` / `dbg!` in foundation/tree/macros crates."
+
+### 16. Module-level `#![allow(unsafe_code)]` in foundation / tree source
+
+**F9 — blanket unsafe-allow that never self-cleans.** Edition-2024 idiom: a module that genuinely needs `unsafe` must use `#![expect(unsafe_code, reason = "...")]` so the lint fires the day the last `unsafe` block is removed; a module with no `unsafe` carries neither attribute. A blanket `#![allow(unsafe_code)]` silently permits any future unsafe and never self-cleans — it is forbidden in these two crates.
+
+**Scope:** `crates/flui-foundation/src`, `crates/flui-tree/src`.
+
+**Allowed:** `#![expect(unsafe_code, reason = "...")]` is the sanctioned form and does NOT match this pattern (the regex is anchored to `#![allow(unsafe_code`).
+
+**Allowlist:** none — convert to `#![expect(...)]` or delete the attribute.
+
+**Back-references:** [core-0a foundation adversarial reaudit §F9 / SC9](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md).
+
+### 17. Reinvented `debug_assert_*` macros in foundation source
+
+**F29 — custom assert macros that reinvent `debug_assert!`.** F29 deleted `debug_assert_valid!` / `debug_assert_range!` / `debug_assert_finite!` / `debug_assert_not_nan!` — they reinvented stdlib `debug_assert!` with no added value. This trigger prevents their reintroduction: any `macro_rules!` defining one of these four names in foundation source is a regression.
+
+**Scope:** `crates/flui-foundation/src`.
+
+**Allowed:** stdlib `debug_assert!` is the canonical form.
+
+**Allowlist:** none.
+
+**Back-references:** [core-0a foundation adversarial reaudit §F29 / SC11](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md).
+
+### 18. `new_unchecked` in `flui-foundation/src/key.rs`
+
+**F2 (P0 UB) — key counter off the checked path.** F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the `fetch_update` sentinel pattern (counter = 0 is the permanent-exhaustion sentinel; retries panic without mutation or duplicate keys), eliminating the UB-on-counter-wrap hazard. This trigger guards against reintroducing any `new_unchecked` call into `crates/flui-foundation/src/key.rs` — the key counter must stay on the safe checked path.
+
+**Scope:** `crates/flui-foundation/src/key.rs` only.
+
+**Exclusions:** doc-comment lines (`//!`, `///`, `//`).
+
+**Allowlist:** none. `*_unchecked` constructors elsewhere (e.g. `id.rs`) are out of scope and governed by their own `#![expect(unsafe_code, ...)]`.
+
+**Back-references:** [core-0a foundation adversarial reaudit §F2 / SC2](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md) (Rustonomicon §3.2 is the UB basis).
 
 ### 19. `Matrix4` in the DrawBatcher record side or `PipelineCache`/`PipelineBuilder`
 
