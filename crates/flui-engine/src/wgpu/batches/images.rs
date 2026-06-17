@@ -12,7 +12,7 @@
 //! | `texture`, `draw_texture`                    | `&ExternalTextureRegistry` |
 //! | `draw_image`, `draw_atlas`                   | `&mut TextureCache`      |
 //! | `draw_image_repeat`, `draw_image_nine_slice` | `&mut TextureCache` (delegate to `draw_image`) |
-//! | `draw_image_filtered`                        | `&mut TextureCache` + `&mut Vec<DrawItem>` + `opacity: f32` (inner `rect`/`draw_image` calls) |
+//! | `draw_image_filtered`                        | `&mut TextureCache` (all branches CPU-recolor then delegate to `draw_image`) |
 //!
 //! # Invariants preserved
 //!
@@ -22,25 +22,25 @@
 //! - The `draw_image_repeat`/`draw_image_nine_slice` → `draw_image` delegation
 //!   produces identical per-tile/per-region calls; loop bounds and dst rects are
 //!   byte-identical to the painter originals.
-//! - `draw_image_filtered`'s branch selection (overlay/CPU-recolor vs rect path)
-//!   is unchanged; the inner `rect` call receives the same `opacity` the shim
-//!   reads once from `compositor.current_opacity()`.
+//! - `draw_image_filtered` bakes every filter (`Mode`, `Matrix`, gamma) into
+//!   the image on the CPU and routes the result through `draw_image`, so the
+//!   filtered pixels share the `cached_images` flush bucket and compositing of
+//!   a plain image draw. No separate overlay rect, so no `draw_order`/`opacity`
+//!   seam is needed.
 //! - `texture_batch` is **not touched** by any method here — it remains a
 //!   painter field for T10.
 
-use flui_painting::Paint;
 use flui_types::{
     Offset, Point, Rect,
     geometry::{Pixels, px},
     painting::Image,
+    styling::Color,
 };
 
 use super::{
     super::{
-        command_ir::{DrawItem, DrawSegment},
-        external_texture_registry::ExternalTextureRegistry,
-        state_stack::GpuStateStack,
-        texture_cache::TextureCache,
+        command_ir::DrawSegment, external_texture_registry::ExternalTextureRegistry,
+        state_stack::GpuStateStack, texture_cache::TextureCache,
     },
     DrawBatcher,
 };
@@ -113,10 +113,34 @@ impl DrawBatcher {
 
     /// Record an image draw by uploading (or retrieving from cache) its RGBA
     /// pixels into the texture cache, then pushing a `cached_images` entry.
+    ///
+    /// Keys the cache on the image's `Arc` pointer identity (O(1), no hashing).
+    /// This is safe for real images, whose allocation is content-stable for the
+    /// lifetime of the `Arc`. **Short-lived temporaries (e.g. CPU-filtered
+    /// images) must NOT use this path** — their pointer is freed on drop and can
+    /// be reused by a different image, colliding in the cache; route those
+    /// through [`Self::draw_image_with_id`] with a content-derived key instead.
     pub(in super::super) fn draw_image(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
+        image: &Image,
+        dst_rect: Rect<Pixels>,
+    ) {
+        let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
+        Self::draw_image_with_id(segment, state, texture_cache, texture_id, image, dst_rect);
+    }
+
+    /// Record an image draw under an explicit cache `texture_id`.
+    ///
+    /// Splits the keying decision out of [`Self::draw_image`] so callers that
+    /// generate transient pixel buffers (the CPU color-filter branches) can key
+    /// on a stable content hash rather than a soon-to-be-freed pointer.
+    fn draw_image_with_id(
+        segment: &mut DrawSegment,
+        state: &GpuStateStack,
+        texture_cache: &mut TextureCache,
+        texture_id: super::super::texture_cache::TextureId,
         image: &Image,
         dst_rect: Rect<Pixels>,
     ) {
@@ -125,8 +149,6 @@ impl DrawBatcher {
         let transformed_rect =
             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
-        // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels.
-        let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
         let data = image.data();
 
         // Load or get cached texture (small images are auto-packed into the atlas).
@@ -158,6 +180,34 @@ impl DrawBatcher {
                 tracing::error!("Failed to load image texture: {}", e);
             }
         }
+    }
+
+    /// Draw a freshly produced (CPU-filtered) RGBA buffer, keyed on a content
+    /// hash of its bytes.
+    ///
+    /// A filtered buffer is a short-lived temporary: its `Arc` allocation is
+    /// freed when this returns, so [`Self::draw_image`]'s pointer-identity key
+    /// could be reused by a later image and collide in the cache (the cache
+    /// returns a hit on key alone, never re-comparing bytes — see
+    /// `TextureCache::load_from_rgba`). Hashing the bytes is collision-free and
+    /// lets identical filtered output reuse its cached texture across frames.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/state/texture_cache are disjoint WgpuPainter fields; \
+                  width/height/pixels/dst are the distinct filtered-image inputs"
+    )]
+    fn draw_filtered_pixels(
+        segment: &mut DrawSegment,
+        state: &GpuStateStack,
+        texture_cache: &mut TextureCache,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+        dst: Rect<Pixels>,
+    ) {
+        let texture_id = super::super::texture_cache::TextureId::from_data(&pixels);
+        let filtered = Image::from_rgba8(width, height, pixels);
+        Self::draw_image_with_id(segment, state, texture_cache, texture_id, &filtered, dst);
     }
 
     /// Record a tiled image draw by delegating to `draw_image` for each tile.
@@ -422,28 +472,21 @@ impl DrawBatcher {
 
     /// Record a color-filtered image draw.
     ///
-    /// The `Mode` branch draws the image then overlays a tinted rect; the rect
-    /// call requires `&mut draw_order` and `opacity` (same seam as
-    /// `WgpuPainter::rect`). The CPU-recolor branches (`Matrix`,
-    /// `LinearToSrgbGamma`, `SrgbToLinearGamma`) apply the filter on CPU and
-    /// delegate to `draw_image`.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/draw_order/state/texture_cache/opacity are disjoint \
-                  WgpuPainter fields passed as separate borrows; merging them into a context struct \
-                  defeats the T9a borrow split"
-    )]
+    /// Every branch bakes the filter into the image pixels on the CPU and then
+    /// delegates to [`Self::draw_image`], so the filtered result lives in the
+    /// same `cached_images` flush bucket as a plain image draw — correct
+    /// z-order, scissor, and opacity for free. The `Mode` branch composites
+    /// each pixel as `blend_mode(src = color, dst = pixel)`, matching
+    /// `ui.ColorFilter.mode`; the `Matrix` / gamma branches apply their
+    /// per-pixel transform the same way.
     #[allow(
         clippy::many_single_char_names,
         reason = "w/h/r/g/b/a are idiomatic in CPU-side color-matrix pixel loops"
     )]
     pub(in super::super) fn draw_image_filtered(
-        &mut self,
         segment: &mut DrawSegment,
-        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
-        opacity: f32,
         image: &Image,
         dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
@@ -451,25 +494,29 @@ impl DrawBatcher {
         use flui_painting::display_list::ColorFilter;
 
         match filter {
-            ColorFilter::Mode {
-                color,
-                blend_mode: _,
-            } => {
-                // Pragmatic v1: draw image then overlay a tinted rect.
-                // First draw the image normally.
-                Self::draw_image(segment, state, texture_cache, image, dst);
+            ColorFilter::Mode { color, blend_mode } => {
+                // `ColorFilter.mode(color, blend_mode)` composites each pixel as
+                // `blend_mode(src = color, dst = pixel)` before the layer merges
+                // with its background. Bake it per-pixel and draw the result —
+                // the same path as the Matrix / gamma branches below. (The old
+                // implementation overlaid a half-alpha rect, which the segment
+                // flush order draws *beneath* the image, so it was fully
+                // occluded for an opaque image and ignored the blend mode.)
+                let data = image.data();
+                let w = image.width();
+                let h = image.height();
+                let mut new_data = Vec::with_capacity(data.len());
 
-                // Then overlay with the tint color using a semi-transparent rect.
-                let tint_paint = Paint {
-                    color: color.with_alpha(color.a / 2),
-                    style: flui_painting::PaintStyle::Fill,
-                    ..Default::default()
-                };
-                self.rect(segment, draw_order, state, opacity, dst, &tint_paint);
+                for pixel in data.chunks_exact(4) {
+                    let dst_pixel = Color::rgba(pixel[0], pixel[1], pixel[2], pixel[3]);
+                    let blended = color.blend(dst_pixel, blend_mode);
+                    new_data.extend_from_slice(&[blended.r, blended.g, blended.b, blended.a]);
+                }
+
+                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
 
                 tracing::debug!(
-                    "draw_image_filtered: Mode filter applied as color overlay (color={:?})",
-                    color
+                    "draw_image_filtered: Mode filter baked per-pixel (color={color:?}, mode={blend_mode:?})"
                 );
             }
             ColorFilter::Matrix(matrix) => {
@@ -510,8 +557,7 @@ impl DrawBatcher {
                     new_data.push((na * 255.0) as u8);
                 }
 
-                let filtered = Image::from_rgba8(w, h, new_data);
-                Self::draw_image(segment, state, texture_cache, &filtered, dst);
+                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
 
                 tracing::debug!("draw_image_filtered: Matrix filter applied via CPU");
             }
@@ -535,8 +581,7 @@ impl DrawBatcher {
                     new_data.push(pixel[3]); // Alpha unchanged.
                 }
 
-                let filtered = Image::from_rgba8(w, h, new_data);
-                Self::draw_image(segment, state, texture_cache, &filtered, dst);
+                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
 
                 tracing::debug!("draw_image_filtered: LinearToSrgbGamma applied via CPU");
             }
@@ -560,8 +605,7 @@ impl DrawBatcher {
                     new_data.push(pixel[3]); // Alpha unchanged.
                 }
 
-                let filtered = Image::from_rgba8(w, h, new_data);
-                Self::draw_image(segment, state, texture_cache, &filtered, dst);
+                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
 
                 tracing::debug!("draw_image_filtered: SrgbToLinearGamma applied via CPU");
             }

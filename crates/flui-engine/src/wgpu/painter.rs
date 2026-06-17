@@ -1802,13 +1802,14 @@ impl WgpuPainter {
         dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
     ) {
-        let opacity = self.compositor.current_opacity();
-        self.batcher.draw_image_filtered(
+        // Every filter branch bakes the color filter into the image pixels and
+        // routes the result through `draw_image`, so it shares the cached-image
+        // flush bucket (z-order, scissor, opacity) — no `draw_order`/`opacity`
+        // seam is needed.
+        super::batches::DrawBatcher::draw_image_filtered(
             &mut self.current_segment,
-            &mut self.draw_order,
             &self.state,
             self.resources.texture_cache_mut(),
-            opacity,
             image,
             dst,
             filter,
@@ -4519,62 +4520,53 @@ mod tests {
         );
     }
 
-    /// `draw_image_filtered` with `ColorFilter::Mode` must emit a half-alpha
-    /// tinted rect whose alpha is correctly threaded from the painter shim
-    /// through `DrawBatcher::draw_image_filtered` into the inner `rect` call.
+    /// `draw_image_filtered` with `ColorFilter::Mode` must tint an **opaque**
+    /// image — the tint has to composite *over* the image, not under it.
     ///
-    /// ## Flush-ordering note
+    /// This is the regression guard for the pre-T9 bug: the old `Mode` branch
+    /// drew the image into `cached_images` and a half-alpha tint rect into
+    /// `rect_batch`, but `flush_segment` flushes `rect_batch` *before*
+    /// `cached_images`, so an opaque image fully occluded the tint and the color
+    /// filter had no visible effect. The fix bakes `blend_mode(src = color,
+    /// dst = pixel)` into the image pixels (per `ui.ColorFilter.mode`), so the
+    /// tint is in the same flush bucket as the image.
     ///
-    /// The segment flush order is: instanced rect_batch → cached image batch.
-    /// With an **opaque** source image the image overwrites the tint rect
-    /// entirely; no useful readback is possible.  This test therefore uses a
-    /// **fully transparent** source image so the tint rect is visible through
-    /// the image layer, making the opacity-thread the sole variable under test.
+    /// ## Blend math (opaque GREEN image, BLACK background)
     ///
-    /// ## Blend math (transparent image, BLACK background)
+    /// Filter = `mode(rgba(255, 0, 0, 128), SrcOver)` over `rgba(0, 200, 0, 255)`:
+    /// `srcOver(src = red·0.5, dst = green)` ≈ `rgba(128, 100, 0, 255)`. Drawn
+    /// opaque on black it reads back ≈ `(128, 100, 0)`.
     ///
-    /// 1. Filter color = RED (255, 0, 0, 255). The Mode branch computes
-    ///    `tint_alpha = color.a / 2` (u8 integer division) = 127.
-    /// 2. With painter opacity = 1.0 (default, no push_opacity), the `rect`
-    ///    fill path uses `paint.color.a` unscaled = 127.
-    /// 3. The tint rect renders SrcOver on BLACK:
-    ///    `out_R = 255 × (127/255) + 0 × (128/255) ≈ 127`.
-    /// 4. The transparent image draws over that — no change (alpha=0).
+    /// | Scenario                                   | R    | G    |
+    /// |--------------------------------------------|------|------|
+    /// | Fixed (tint baked over image)              | ~128 | ~100 |
+    /// | Old bug (tint occluded under opaque image) | ~0   | ~200 |
     ///
-    /// Final pixel: R ≈ 127, G ≈ 0, B ≈ 0.
-    ///
-    /// ## Discriminating band: R in [80, 170]
-    ///
-    /// | Scenario                              | R    |
-    /// |---------------------------------------|------|
-    /// | Correct (opacity=1.0, alpha=127)      | ~127 |  ← in band
-    /// | opacity dropped to 0 (zero-thread)    | ~0   |  ← below band
-    /// | opacity doubled / alpha=255 (clamp)   | ~255 |  ← above band
-    /// | tint rect not emitted at all          | ~0   |  ← below band
-    ///
-    /// G and B must stay near 0 (pure red tint).
+    /// So `R` is raised well above 0 (tint applied) while `G` stays mid-range
+    /// (the image content survives). The old code fails the `R` assertion.
     #[test]
-    fn draw_image_filtered_mode_overlays_tint() {
+    fn draw_image_filtered_mode_tints_opaque_image() {
         use flui_painting::display_list::ColorFilter;
         use flui_types::{painting::Image, styling::Color};
 
-        const SIZE: u32 = 8;
+        const SIZE: u32 = 16;
         let (device, queue) = test_device_and_queue();
 
-        // Fully transparent source image: lets the tint rect show through the
-        // cached-image flush so the opacity thread is the discriminating variable.
-        let transparent_pixels: Vec<u8> = (0..SIZE * SIZE).flat_map(|_| [0u8, 0, 0, 0]).collect();
-        let transparent_image = Image::from_rgba8(SIZE, SIZE, transparent_pixels);
+        // Opaque GREEN source image — an opaque image is exactly what the old
+        // overlay path failed to tint (the tint rect was drawn underneath it).
+        let green_pixels: Vec<u8> = (0..SIZE * SIZE).flat_map(|_| [0u8, 200, 0, 255]).collect();
+        let green_image = Image::from_rgba8(SIZE, SIZE, green_pixels);
 
-        // Full-alpha RED filter color; `color.a / 2` (u8 integer div) = 127.
+        // Half-alpha RED tint via SrcOver — mixes with the image so both the
+        // tint (raised R) and the surviving image content (mid G) are visible.
         let red_filter = ColorFilter::mode(
-            Color::rgba(255, 0, 0, 255),
+            Color::rgba(255, 0, 0, 128),
             flui_painting::BlendMode::SrcOver,
         );
 
         let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
             painter.draw_image_filtered(
-                &transparent_image,
+                &green_image,
                 Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
                 red_filter,
             );
@@ -4586,27 +4578,205 @@ mod tests {
             i32::from(px_val[2]),
         );
 
-        // R must land in [80, 170]: half-alpha RED on BLACK ≈ 127.
-        // R ≈ 0 means tint rect was not emitted or opacity was zero-threaded.
-        // R ≈ 255 means opacity was over-multiplied (alpha saturated to 255).
+        // R raised to ~128: the tint composited over the image. R ≈ 0 means the
+        // tint was occluded under the opaque image (the original bug).
         assert!(
-            (80..=170).contains(&r),
-            "R={r}: expected R in [80, 170] (half-alpha RED SrcOver on BLACK ≈ 127). \
-             R ≈ 0 means the tint overlay was not emitted or opacity=0 was threaded. \
-             R ≈ 255 means opacity was over-multiplied (full-alpha tint). \
-             pixel={px_val:?}"
+            (90..=165).contains(&r),
+            "R={r}: expected R in [90, 165] (half-alpha RED over GREEN ≈ 128). \
+             R ≈ 0 means the tint was drawn under the opaque image and occluded \
+             (the pre-fix bug). pixel={px_val:?}"
         );
 
-        // G and B must stay near zero: pure RED tint, no other color contributor.
+        // G mid-range ~100: the underlying image content survives the tint.
         assert!(
-            g <= 30,
-            "G={g}: expected G ≈ 0 (RED-only tint, no green contribution). \
-             High G means a wrong color was used for the overlay. pixel={px_val:?}"
+            (55..=135).contains(&g),
+            "G={g}: expected G in [55, 135] (GREEN image showing through the \
+             half-alpha tint). G ≈ 200 means no tint was applied; G ≈ 0 means the \
+             image content was lost. pixel={px_val:?}"
+        );
+
+        // B near zero: neither the RED tint nor the GREEN image contributes blue.
+        assert!(
+            b <= 35,
+            "B={b}: expected B ≈ 0 (no blue contributor). pixel={px_val:?}"
+        );
+    }
+
+    /// `ColorFilter::Mode` must honor its `blend_mode`, not just composite a
+    /// fixed SrcOver tint. The old branch ignored `blend_mode` entirely.
+    ///
+    /// `mode(RED, Modulate)` over an opaque WHITE image multiplies per channel:
+    /// `red · white = red`. So a white image becomes pure red — green and blue
+    /// are driven to zero. The old code (which ignored the mode and drew an
+    /// occluded half-alpha overlay) leaves the white image untouched, so its
+    /// `G ≈ 255` fails the green assertion below.
+    #[test]
+    fn draw_image_filtered_mode_honors_blend_mode() {
+        use flui_painting::display_list::ColorFilter;
+        use flui_types::{painting::Image, styling::Color};
+
+        const SIZE: u32 = 16;
+        let (device, queue) = test_device_and_queue();
+
+        // Opaque WHITE source image.
+        let white_pixels: Vec<u8> = (0..SIZE * SIZE)
+            .flat_map(|_| [255u8, 255, 255, 255])
+            .collect();
+        let white_image = Image::from_rgba8(SIZE, SIZE, white_pixels);
+
+        let modulate_red = ColorFilter::mode(
+            Color::rgba(255, 0, 0, 255),
+            flui_painting::BlendMode::Modulate,
+        );
+
+        let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            painter.draw_image_filtered(
+                &white_image,
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                modulate_red,
+            );
+        });
+
+        let (r, g, b) = (
+            i32::from(px_val[0]),
+            i32::from(px_val[1]),
+            i32::from(px_val[2]),
+        );
+
+        // Modulate(RED, WHITE) = RED.
+        assert!(
+            r >= 200,
+            "R={r}: expected R ≈ 255 (red·white = red). pixel={px_val:?}"
         );
         assert!(
-            b <= 30,
-            "B={b}: expected B ≈ 0 (RED-only tint, no blue contribution). \
-             High B means a wrong color was used for the overlay. pixel={px_val:?}"
+            g <= 40,
+            "G={g}: expected G ≈ 0 (modulate kills the white image's green). \
+             G ≈ 255 means blend_mode was ignored and the white image was left \
+             untinted. pixel={px_val:?}"
+        );
+        assert!(
+            b <= 40,
+            "B={b}: expected B ≈ 0 (modulate kills the white image's blue). \
+             pixel={px_val:?}"
+        );
+    }
+
+    /// `ColorFilter::Matrix` recolors the image on the CPU then routes through
+    /// `draw_image`. A red↔blue channel-swap matrix turns an opaque RED image
+    /// blue — covering the CPU-recolor delegation path the `Mode` branch now
+    /// shares.
+    #[test]
+    fn draw_image_filtered_matrix_swaps_channels() {
+        use flui_painting::display_list::ColorFilter;
+        use flui_types::painting::Image;
+
+        const SIZE: u32 = 16;
+        let (device, queue) = test_device_and_queue();
+
+        // Opaque RED source image.
+        let red_pixels: Vec<u8> = (0..SIZE * SIZE).flat_map(|_| [255u8, 0, 0, 255]).collect();
+        let red_image = Image::from_rgba8(SIZE, SIZE, red_pixels);
+
+        // 5×4 row-major matrix swapping R and B (R'=B, G'=G, B'=R, A'=A).
+        let swap_rb = ColorFilter::matrix([
+            0.0, 0.0, 1.0, 0.0, 0.0, // R' = B
+            0.0, 1.0, 0.0, 0.0, 0.0, // G' = G
+            1.0, 0.0, 0.0, 0.0, 0.0, // B' = R
+            0.0, 0.0, 0.0, 1.0, 0.0, // A' = A
+        ]);
+
+        let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            painter.draw_image_filtered(
+                &red_image,
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                swap_rb,
+            );
+        });
+
+        let (r, g, b) = (
+            i32::from(px_val[0]),
+            i32::from(px_val[1]),
+            i32::from(px_val[2]),
+        );
+
+        assert!(
+            b >= 200,
+            "B={b}: expected B ≈ 255 (R swapped into B). pixel={px_val:?}"
+        );
+        assert!(
+            r <= 40,
+            "R={r}: expected R ≈ 0 (B=0 swapped into R). pixel={px_val:?}"
+        );
+        assert!(
+            g <= 40,
+            "G={g}: expected G ≈ 0 (unchanged). pixel={px_val:?}"
+        );
+    }
+
+    /// Two filtered draws of the **same source image** with **different** color
+    /// filters in one frame must not alias in the texture cache.
+    ///
+    /// Each filter produces a short-lived temporary `Image`; filtered draws key
+    /// the cache on a hash of the produced bytes, not the temporary's pointer.
+    /// If they keyed on the pointer (as a plain `draw_image` does), the second
+    /// temporary — frequently reallocated at the just-freed address of the first
+    /// — would collide on key and the cache would return the first filter's
+    /// texture for the second draw (it hits on key alone, never re-comparing
+    /// bytes). Here a white source is modulated RED in the top half and BLUE in
+    /// the bottom half; a collision would paint the bottom half red.
+    #[test]
+    fn draw_image_filtered_distinct_filters_do_not_alias() {
+        use flui_painting::display_list::ColorFilter;
+        use flui_types::{painting::Image, styling::Color};
+
+        const SIZE: u32 = 16;
+        let (device, queue) = test_device_and_queue();
+
+        let white_pixels: Vec<u8> = (0..SIZE * SIZE)
+            .flat_map(|_| [255u8, 255, 255, 255])
+            .collect();
+        let white_image = Image::from_rgba8(SIZE, SIZE, white_pixels);
+
+        let modulate_red = ColorFilter::mode(
+            Color::rgba(255, 0, 0, 255),
+            flui_painting::BlendMode::Modulate,
+        );
+        let modulate_blue = ColorFilter::mode(
+            Color::rgba(0, 0, 255, 255),
+            flui_painting::BlendMode::Modulate,
+        );
+
+        let half = SIZE as f32 / 2.0;
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            // Two separate filtered draws → two short-lived temporaries, the
+            // second likely reusing the first's freed allocation address.
+            painter.draw_image_filtered(
+                &white_image,
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(half)),
+                modulate_red,
+            );
+            painter.draw_image_filtered(
+                &white_image,
+                Rect::from_xywh(px(0.0), px(half), px(SIZE as f32), px(half)),
+                modulate_blue,
+            );
+        });
+
+        let top = pixel_at(&rgba, SIZE, SIZE / 2, SIZE / 4);
+        let bottom = pixel_at(&rgba, SIZE, SIZE / 2, SIZE * 3 / 4);
+
+        // Top half: modulate RED → red.
+        assert!(
+            top[0] >= 200 && top[2] <= 40,
+            "top={top:?}: expected red (R≈255, B≈0) from modulate-RED"
+        );
+        // Bottom half: modulate BLUE → blue. A cache collision with the first
+        // (red) temporary would paint this red instead.
+        assert!(
+            bottom[2] >= 200 && bottom[0] <= 40,
+            "bottom={bottom:?}: expected blue (B≈255, R≈0) from modulate-BLUE. \
+             Red here means the second filtered draw aliased the first in the \
+             texture cache (pointer-identity key on a freed temporary)."
         );
     }
 }
