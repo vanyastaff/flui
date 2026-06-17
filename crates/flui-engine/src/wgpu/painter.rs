@@ -20,9 +20,10 @@ use wgpu::util::DeviceExt;
 
 use super::{
     command_ir::{
-        DrawItem, DrawSegment, PendingOffscreenTexture, PendingOpacityLayer, SavedLayer,
-        ScissorRect, TessellatedBatch,
+        DrawItem, DrawSegment, PendingOffscreenTexture, PendingOpacityLayer, ScissorRect,
+        TessellatedBatch,
     },
+    layer_compositor::{LayerCompositor, RestoreOutcome},
     pipeline::{self, PipelineKey},
     pipelines::PipelineSet,
     resources::GpuResources,
@@ -106,25 +107,14 @@ pub struct WgpuPainter {
     // ===== GPU Draw-State Stack =====
     /// Owns the four parallel transform/scissor/SDF-clip stacks and their
     /// cached current values. All save/restore/translate/rotate/scale and
-    /// clip operations delegate through this. Opacity and layer state stay
-    /// on `WgpuPainter` directly (see `opacity_stack`, `layer_stack` below)
-    /// and are managed by T8 LayerCompositor.
+    /// clip operations delegate through this.
     state: GpuStateStack,
 
-    // ===== Opacity/Layer Stack =====
-    /// Stack of opacity values for save_layer/restore_layer
-    /// Each element is the accumulated alpha (0.0-1.0)
-    opacity_stack: Vec<f32>,
-
-    /// Current accumulated opacity (1.0 = fully opaque)
-    current_opacity: f32,
-
-    // ===== Layer Compositing =====
-    /// Stack of saved render state for save_layer/restore_layer.
-    /// Each entry captures the draw state at the time of save_layer so that
-    /// the subtree can be rendered to an offscreen texture and composited
-    /// with group opacity.
-    layer_stack: Vec<SavedLayer>,
+    // ===== Opacity/Layer Compositing =====
+    /// Owns the opacity/layer save-state: `opacity_stack`, `current_opacity`,
+    /// and `layer_stack`.  All save-layer book-keeping delegates here;
+    /// GPU emission and draw-record mutation stay on `WgpuPainter`.
+    compositor: LayerCompositor,
 
     // ===== Segmented Draw Order =====
     /// Current draw segment accumulating batched commands
@@ -270,9 +260,7 @@ impl WgpuPainter {
             superellipse_cache: super::superellipse_cache::SuperellipsePathCache::new(256),
             text_renderer,
             state: GpuStateStack::new(),
-            opacity_stack: Vec::new(),
-            current_opacity: 1.0,
-            layer_stack: Vec::new(),
+            compositor: LayerCompositor::new(),
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
         }
@@ -321,11 +309,10 @@ impl WgpuPainter {
         // The assertion logic lives in `GpuStateStack::debug_assert_balanced`
         // so it can be exercised by unit tests without a GPU.
         self.state.debug_assert_balanced();
+        self.compositor.debug_assert_balanced();
 
         self.state.reset();
-        self.current_opacity = 1.0;
-        self.opacity_stack.clear();
-        self.layer_stack.clear();
+        self.compositor.reset();
 
         tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
     }
@@ -1836,8 +1823,8 @@ impl WgpuPainter {
             }
 
             // Apply current opacity to color
-            let color = if self.current_opacity < 1.0 {
-                let alpha = (f32::from(paint.color.a) * self.current_opacity) as u8;
+            let color = if self.compositor.current_opacity() < 1.0 {
+                let alpha = (f32::from(paint.color.a) * self.compositor.current_opacity()) as u8;
                 flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
             } else {
                 paint.color
@@ -1954,8 +1941,8 @@ impl WgpuPainter {
             }
 
             // Apply current opacity to color
-            let color = if self.current_opacity < 1.0 {
-                let alpha = (f32::from(paint.color.a) * self.current_opacity) as u8;
+            let color = if self.compositor.current_opacity() < 1.0 {
+                let alpha = (f32::from(paint.color.a) * self.compositor.current_opacity()) as u8;
                 flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
             } else {
                 paint.color
@@ -2061,8 +2048,8 @@ impl WgpuPainter {
             }
 
             // Apply current opacity to color (needed for both the fast and slow paths).
-            let color = if self.current_opacity < 1.0 {
-                let alpha = (f32::from(paint.color.a) * self.current_opacity) as u8;
+            let color = if self.compositor.current_opacity() < 1.0 {
+                let alpha = (f32::from(paint.color.a) * self.compositor.current_opacity()) as u8;
                 flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
             } else {
                 paint.color
@@ -3407,7 +3394,7 @@ impl WgpuPainter {
 
     pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
-        let layer_opacity = self.current_opacity * paint_alpha;
+        let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
 
         // A saveLayer paint's RGB is NOT a compositing tint. Per Flutter
         // semantics the layer's group opacity comes from the paint's *alpha*,
@@ -3437,7 +3424,9 @@ impl WgpuPainter {
         opacity: f32,
         tint_rgb: [f32; 3],
     ) {
-        let layer_opacity = self.current_opacity * opacity.clamp(0.0, 1.0);
+        let layer_opacity = self
+            .compositor
+            .effective_layer_opacity(opacity.clamp(0.0, 1.0));
         let tint = [
             tint_rgb[0].clamp(0.0, 1.0),
             tint_rgb[1].clamp(0.0, 1.0),
@@ -3455,24 +3444,20 @@ impl WgpuPainter {
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
     ) {
-        // Convert bounds to [x, y, w, h] if provided
+        // Convert bounds to [x, y, w, h] if provided.
         let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
 
-        // Save current draw state — all subsequent draws go into a fresh segment/draw_order
-        let saved = SavedLayer {
-            saved_draw_order: std::mem::take(&mut self.draw_order),
-            saved_segment: std::mem::replace(&mut self.current_segment, DrawSegment::new()),
-            saved_opacity_stack: std::mem::take(&mut self.opacity_stack),
-            saved_opacity: self.current_opacity,
+        // Hand the current draw-record accumulators to the compositor; it wraps
+        // them in a SavedLayer and resets current_opacity to 1.0 for the subtree.
+        let saved_draw_order = std::mem::take(&mut self.draw_order);
+        let saved_segment = std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        self.compositor.push_layer(
+            saved_draw_order,
+            saved_segment,
             layer_opacity,
             layer_tint_rgb,
-            bounds: bounds_array,
-        };
-        self.layer_stack.push(saved);
-
-        // Reset opacity for the offscreen subtree — children draw at full opacity
-        // within the layer; the group opacity is applied during compositing
-        self.current_opacity = 1.0;
+            bounds_array,
+        );
 
         tracing::trace!(
             "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, bounds={:?}",
@@ -3483,48 +3468,48 @@ impl WgpuPainter {
     }
 
     pub fn restore_layer(&mut self) {
-        if let Some(saved) = self.layer_stack.pop() {
-            // Capture the offscreen content drawn since save_layer
-            let offscreen_segment =
-                std::mem::replace(&mut self.current_segment, saved.saved_segment);
-            let offscreen_order = std::mem::replace(&mut self.draw_order, saved.saved_draw_order);
+        // Capture the offscreen content drawn since save_layer.
+        let offscreen_final_segment =
+            std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        let offscreen_items = std::mem::take(&mut self.draw_order);
 
-            // Restore parent opacity state
-            self.opacity_stack = saved.saved_opacity_stack;
-            self.current_opacity = saved.saved_opacity;
+        // Determine compositing bounds before calling pop_layer so the painter
+        // can resolve the viewport fallback using its own `size` field.
+        // We need the SavedLayer bounds — peek at the top without popping.
+        // The compositor's pop_layer needs the already-resolved Rect, so we
+        // resolve it here using the pattern from the original restore_layer.
+        // We peek the bounds from the top of the layer_stack before delegating.
+        let composite_bounds = self.compositor.peek_layer_bounds().map_or_else(
+            || self.viewport_bounds(),
+            |b| Rect::from_ltrb(px(b[0]), px(b[1]), px(b[0] + b[2]), px(b[1] + b[3])),
+        );
 
-            // Determine compositing bounds — use provided bounds or fall back to viewport
-            let composite_bounds = if let Some(b) = saved.bounds {
-                Rect::from_ltrb(px(b[0]), px(b[1]), px(b[0] + b[2]), px(b[1] + b[3]))
-            } else {
-                self.viewport_bounds()
-            };
+        let outcome =
+            self.compositor
+                .pop_layer(offscreen_final_segment, offscreen_items, composite_bounds);
 
-            let has_offscreen_content =
-                !offscreen_segment.is_empty() || !offscreen_order.is_empty();
+        match outcome {
+            RestoreOutcome::Composite {
+                offscreen_items,
+                offscreen_final_segment,
+                layer_opacity,
+                tint_rgb,
+                composite_bounds,
+                saved_segment,
+                saved_draw_order,
+            } => {
+                // Restore the parent draw-record accumulators.
+                self.current_segment = saved_segment;
+                self.draw_order = saved_draw_order;
 
-            // A non-white tint carries ColorFilter chroma that the fast
-            // reintegrate path cannot apply (it just splices children into the
-            // parent draw order unchanged). So a hue-only filter at
-            // effective_alpha == 1.0 must STILL go through the offscreen
-            // composite path, where the premultiplied tint shifts chroma —
-            // otherwise the hue shift is silently dropped (BUG 3). White tint
-            // (plain opacity) at ~1.0 keeps the cheap reintegrate path.
-            let has_chroma = (saved.layer_tint_rgb[0] - 1.0).abs() > f32::EPSILON
-                || (saved.layer_tint_rgb[1] - 1.0).abs() > f32::EPSILON
-                || (saved.layer_tint_rgb[2] - 1.0).abs() > f32::EPSILON;
-            let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON || has_chroma;
-
-            if has_offscreen_content && needs_composite {
-                // Offscreen render-to-texture compositing:
-                // Package the offscreen content as an OpacityLayer draw item.
-                // During render(), this is flushed to a pooled offscreen texture
-                // (premultiplied) and composited onto the main surface with the
-                // tint `(C.r*O, C.g*O, C.b*O, O)` applied through the
-                // premultiplied pipeline — correct group opacity AND chroma.
+                // Offscreen render-to-texture compositing: package the offscreen
+                // content as an OpacityLayer draw item.  During render(), this is
+                // flushed to a pooled offscreen texture (premultiplied) and
+                // composited onto the main surface with the tint
+                // `(C.r*O, C.g*O, C.b*O, O)` — correct group opacity AND chroma.
 
                 // Finalize the current parent segment so the opacity layer is
-                // inserted at the correct Z-position in the draw order
+                // inserted at the correct Z-position in the draw order.
                 let parent_segment =
                     std::mem::replace(&mut self.current_segment, DrawSegment::new());
                 if !parent_segment.is_empty() {
@@ -3533,51 +3518,70 @@ impl WgpuPainter {
 
                 self.draw_order
                     .push(DrawItem::OpacityLayer(PendingOpacityLayer {
-                        items: offscreen_order,
-                        final_segment: offscreen_segment,
-                        opacity: saved.layer_opacity,
-                        tint_rgb: saved.layer_tint_rgb,
+                        items: offscreen_items,
+                        final_segment: offscreen_final_segment,
+                        opacity: layer_opacity,
+                        tint_rgb,
                         bounds: composite_bounds,
                     }));
 
                 tracing::trace!(
                     "WgpuPainter::restore_layer: queued OpacityLayer \
                      (opacity={:.3}, tint_rgb={:?}, bounds={:?})",
-                    saved.layer_opacity,
-                    saved.layer_tint_rgb,
+                    layer_opacity,
+                    tint_rgb,
                     composite_bounds
                 );
-            } else if has_offscreen_content {
-                // Opacity is ~1.0 AND tint is white — no compositing needed,
-                // merge content back. Finalize the parent's pre-save content
-                // into the draw order BEFORE re-integrating the offscreen items
-                // so that the parent content renders beneath the layer subtree
-                // (correct Z-order). Without this flush the parent segment sits
-                // in `current_segment` and is emitted last by `render()`, placing
-                // it on top of the layer — an inversion. Mirror the mem::replace
-                // pattern used by the composite branch above.
+            }
+            RestoreOutcome::Reintegrate {
+                offscreen_items,
+                offscreen_final_segment,
+                saved_segment,
+                saved_draw_order,
+            } => {
+                // Restore the parent draw-record accumulators.
+                self.current_segment = saved_segment;
+                self.draw_order = saved_draw_order;
+
+                // Opacity is ~1.0 AND tint is white — no compositing needed.
+                // Finalize the parent's pre-save content into the draw order
+                // BEFORE re-integrating the offscreen items so that parent
+                // content renders beneath the layer subtree (correct Z-order).
                 let parent_segment =
                     std::mem::replace(&mut self.current_segment, DrawSegment::new());
                 if !parent_segment.is_empty() {
                     self.draw_order.push(DrawItem::Segment(parent_segment));
                 }
-                self.reintegrate_offscreen_content(offscreen_segment, offscreen_order, 1.0);
+                self.reintegrate_offscreen_content(offscreen_final_segment, offscreen_items, 1.0);
             }
-
-            tracing::trace!(
-                "WgpuPainter::restore_layer: restored opacity={:.3}, had_content={}",
-                self.current_opacity,
-                has_offscreen_content
-            );
-        } else {
-            tracing::warn!("WgpuPainter::restore_layer: layer_stack underflow");
-
-            // Fall back to legacy opacity_stack behavior for callers that didn't
-            // go through the new save_layer path
-            if let Some(prev_opacity) = self.opacity_stack.pop() {
-                self.current_opacity = prev_opacity;
+            RestoreOutcome::Empty {
+                saved_segment,
+                saved_draw_order,
+            } => {
+                // Layer was empty — restore draw-record state, emit nothing.
+                self.current_segment = saved_segment;
+                self.draw_order = saved_draw_order;
+            }
+            RestoreOutcome::Underflow {
+                current_segment,
+                draw_order,
+            } => {
+                // Compositor already logged the warning and handled the
+                // legacy opacity_stack fallback.
+                //
+                // Restore the records that were unconditionally captured before
+                // the pop_layer call, so the frame's in-flight draws are not
+                // wiped.  This matches the original painter behaviour where the
+                // mem::take was guarded inside the `if let Some(saved)` block.
+                self.current_segment = current_segment;
+                self.draw_order = draw_order;
             }
         }
+
+        tracing::trace!(
+            "WgpuPainter::restore_layer: restored opacity={:.3}",
+            self.compositor.current_opacity(),
+        );
     }
 }
 

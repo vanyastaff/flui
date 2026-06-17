@@ -112,6 +112,10 @@ mod pipeline;
 // The `pipelines.rs` introduced by T3 is distinct: it defines `PipelineSet`,
 // which *composes* the live `PipelineCache` from `pipeline.rs` (singular) and
 // adds the nine named pipelines previously scattered as painter fields.
+/// Opacity/layer save-state machine: `opacity_stack`, `current_opacity`, and
+/// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
+/// `save_layer`/`restore_layer`; all GPU emission stays on `WgpuPainter`.
+pub(super) mod layer_compositor;
 pub(crate) mod pipelines;
 mod profiler;
 mod renderer;
