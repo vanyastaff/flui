@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use flui_painting::{Paint, PaintStyle};
+use flui_painting::Paint;
 use flui_types::{
     Offset, Point, Rect,
     geometry::{Pixels, RRect, px},
@@ -23,12 +23,11 @@ use super::{
         DrawItem, DrawSegment, PendingOffscreenTexture, PendingOpacityLayer, ScissorRect,
     },
     layer_compositor::{LayerCompositor, RestoreOutcome},
-    pipeline::{self, PipelineKey},
+    pipeline::PipelineKey,
     pipelines::PipelineSet,
     resources::GpuResources,
     state_stack::GpuStateStack,
     text::TextRenderer,
-    vertex::Vertex,
 };
 
 /// GPU painter for wgpu-based rendering.
@@ -892,25 +891,6 @@ impl WgpuPainter {
         super::batches::DrawBatcher::finish_current_segment(
             &mut self.current_segment,
             &mut self.draw_order,
-        );
-    }
-
-    /// Apply the current world transform to every vertex position and submit to
-    /// the tessellated batch.  Shim that forwards to
-    /// `DrawBatcher::submit_transformed_geometry`.
-    fn submit_transformed_geometry(
-        &mut self,
-        vertices: Vec<Vertex>,
-        indices: &[u32],
-        key: PipelineKey,
-    ) {
-        super::batches::DrawBatcher::submit_transformed_geometry(
-            &mut self.current_segment,
-            &mut self.draw_order,
-            &self.state,
-            vertices,
-            indices,
-            key,
         );
     }
 
@@ -1808,101 +1788,13 @@ impl WgpuPainter {
     }
 
     pub fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
-        // World scale used both to flatten curves finely enough (the tessellator
-        // bakes the transform after tessellation) and to bucket the path cache
-        // so scale-1 geometry is never reused at scale 8 (which would facet).
-        let max_scale = self.current_max_scale();
-        self.batcher.tessellator.set_max_scale(max_scale);
-
-        // Dashed strokes cannot use the path cache: the dash pattern affects
-        // geometry but is not part of compute_path_hash, so caching would
-        // collide a solid and a dashed stroke of the same path.
-        if paint.style != PaintStyle::Fill
-            && let Some(ref dash) = paint.dash_pattern
-        {
-            match self
-                .batcher
-                .tessellator
-                .tessellate_flui_path_dashed_stroke(path, paint, dash)
-            {
-                Ok((vertices, indices)) => {
-                    // Bake current_transform into vertices: shape.wgsl has no model matrix.
-                    self.submit_transformed_geometry(
-                        vertices,
-                        &indices,
-                        pipeline::pipeline_key_from_paint(paint),
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to tessellate dashed path stroke: {}", e);
-                }
-            }
-            return;
-        }
-
-        // Compute cache key from path geometry + paint tessellation parameters
-        // + the quantized world scale (so a scale-1 entry is not reused at a
-        // larger scale with scale-1 chord density).
-        let path_hash = super::path_cache::PathCache::compute_path_hash(
+        self.batcher.draw_path(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
             path,
-            paint.style,
-            paint.stroke_width,
-            paint.stroke_cap,
-            paint.stroke_join,
-            max_scale,
+            paint,
         );
-
-        // Check cache for previously tessellated geometry
-        if let Some((positions, cached_indices)) = self.batcher.path_cache.get(path_hash) {
-            // Reconstruct full Vertex data with current paint color.
-            // The cache stores UNTRANSFORMED positions; bake the current transform now.
-            let rgba = paint.color.to_rgba_f32_array();
-            let vertices: Vec<Vertex> = positions
-                .iter()
-                .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
-                .collect();
-            let indices: Vec<u32> = cached_indices.to_vec();
-            // Bake current_transform into vertices: shape.wgsl has no model matrix.
-            self.submit_transformed_geometry(
-                vertices,
-                &indices,
-                pipeline::pipeline_key_from_paint(paint),
-            );
-            return;
-        }
-
-        // Cache miss — tessellate and store
-        let result = if paint.style == PaintStyle::Fill {
-            self.batcher
-                .tessellator
-                .tessellate_flui_path_fill(path, paint)
-        } else {
-            self.batcher
-                .tessellator
-                .tessellate_flui_path_stroke(path, paint)
-        };
-
-        match result {
-            Ok((vertices, indices)) => {
-                // Extract position data for cache BEFORE baking the transform.
-                // The cache stores local (untransformed) positions so that cached
-                // geometry can be re-used across frames with different transforms.
-                let positions: Vec<[f32; 2]> = vertices.iter().map(|v| v.position).collect();
-                self.batcher
-                    .path_cache
-                    .insert(path_hash, positions, indices.clone());
-
-                // Bake current_transform into vertices: shape.wgsl has no model matrix.
-                self.submit_transformed_geometry(
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Failed to tessellate path: {}", e);
-            }
-        }
     }
 
     pub fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
@@ -2360,18 +2252,16 @@ impl WgpuPainter {
     ///
     /// # `tex_coords` parameter
     ///
-    /// Cycle 4 E-12: pre-cycle the parameter carried a `// TODO: Full
-    /// texture coordinate support` comment that was misleading -- the
-    /// per-vertex uv extraction IS implemented (the `tex_coords` slice
-    /// is consumed at the per-vertex loop below, copied into
-    /// `Vertex::tex_coord`, and baked into the GPU vertex buffer).
-    /// What is NOT yet wired is the **texture-binding pipeline path**:
-    /// `pipeline_key_from_paint(paint)` returns a solid-color pipeline
-    /// today, so the uv values reach the vertex shader but the fragment
-    /// shader has no texture to sample. A textured pipeline-key variant
-    /// is a follow-up audit item; until then `tex_coords` callers pre-
-    /// populate the vertex stream for forward-compat (the data path is
-    /// correct, only the pipeline binding is missing).
+    /// Cycle 4 E-12: the per-vertex uv extraction IS implemented (the
+    /// `tex_coords` slice is consumed at the per-vertex loop, copied into
+    /// `Vertex::tex_coord`, and baked into the GPU vertex buffer).  What is
+    /// NOT yet wired is the **texture-binding pipeline path**:
+    /// `pipeline_key_from_paint(paint)` returns a solid-color pipeline today,
+    /// so the uv values reach the vertex shader but the fragment shader has no
+    /// texture to sample.  A textured pipeline-key variant is a follow-up
+    /// audit item; until then `tex_coords` callers pre-populate the vertex
+    /// stream for forward-compat (the data path is correct, only the pipeline
+    /// binding is missing).
     pub fn draw_vertices(
         &mut self,
         vertices: &[Point<Pixels>],
@@ -2380,63 +2270,15 @@ impl WgpuPainter {
         indices: &[u16],
         paint: &Paint,
     ) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::draw_vertices: vertices={}, indices={}",
-            vertices.len(),
-            indices.len()
-        );
-
-        // Validate input
-        if vertices.is_empty() || indices.is_empty() {
-            return;
-        }
-
-        if let Some(colors_arr) = colors
-            && colors_arr.len() != vertices.len()
-        {
-            #[cfg(debug_assertions)]
-            tracing::error!(
-                "DrawVertices: color count ({}) doesn't match vertex count ({})",
-                colors_arr.len(),
-                vertices.len()
-            );
-            return;
-        }
-
-        // Convert to our Vertex format
-        let default_color = paint.color;
-        let our_vertices: Vec<super::vertex::Vertex> = vertices
-            .iter()
-            .enumerate()
-            .map(|(i, pos)| {
-                let color = colors
-                    .and_then(|c| c.get(i))
-                    .copied()
-                    .unwrap_or(default_color);
-
-                let uv = tex_coords
-                    .and_then(|tc| tc.get(i))
-                    .map_or([0.0, 0.0], |p| [p.x.0, p.y.0]);
-
-                super::vertex::Vertex {
-                    position: [pos.x.0, pos.y.0],
-                    color: color.to_f32_array(),
-                    tex_coord: uv,
-                }
-            })
-            .collect();
-
-        // Convert indices to u32
-        let our_indices: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
-
-        // Add to tessellated geometry (bypassing tessellator since we already have
-        // triangles).  Bake current_transform into vertex positions: shape.wgsl has
-        // no model-matrix uniform.
-        self.submit_transformed_geometry(
-            our_vertices,
-            &our_indices,
-            pipeline::pipeline_key_from_paint(paint),
+        super::batches::DrawBatcher::draw_vertices(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            vertices,
+            colors,
+            tex_coords,
+            indices,
+            paint,
         );
     }
 
@@ -5139,6 +4981,84 @@ mod tests {
              pixel={right_pixel:?}",
             right_pixel[0],
             right_pixel[2]
+        );
+    }
+
+    /// T9d characterisation: `draw_path` cache-hit branch uses the *current*
+    /// `paint.color`, not the color from the first (cache-miss) tessellation.
+    ///
+    /// # Discriminating strategy
+    ///
+    /// Both draws happen in the **same painter frame** so the second call hits
+    /// the per-frame `path_cache` entry written by the first call:
+    ///
+    ///   1. Draw a filled triangle that covers the top-left quadrant in RED.
+    ///   2. Draw the **identical path** in BLUE — the cache returns the
+    ///      untransformed positions; the cache-hit branch must reconstruct
+    ///      `Vertex`s with the *current* blue paint color before submitting.
+    ///
+    /// Sampling the center of the second triangle must yield BLUE (not RED).
+    /// If the cache-hit branch silently reuses the first tessellation's
+    /// `Vertex::color` bytes, the pixel stays red and the assertion fails.
+    ///
+    /// The triangle is translated for the second draw so it does not overlap
+    /// with the first, making the test pixel unambiguous.
+    #[cfg(feature = "enable-wgpu-tests")]
+    #[test]
+    fn draw_path_cache_hit_uses_current_paint_color() {
+        use flui_types::painting::path::Path;
+
+        const SIZE: u32 = 64;
+        let (device, queue) = test_device_and_queue();
+
+        // A filled right-triangle occupying the top-left 32×32 area.
+        let triangle_path = {
+            let mut p = Path::new();
+            p.move_to(flui_types::Point::new(px(0.0), px(0.0)));
+            p.line_to(flui_types::Point::new(px(32.0), px(0.0)));
+            p.line_to(flui_types::Point::new(px(0.0), px(32.0)));
+            p.close();
+            p
+        };
+
+        let red_paint = flui_painting::Paint::fill(flui_types::Color::rgb(255, 0, 0));
+        let blue_paint = flui_painting::Paint::fill(flui_types::Color::rgb(0, 0, 255));
+
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::TRANSPARENT, |painter| {
+            // First draw: cache MISS — tessellates and caches; renders at origin.
+            painter.draw_path(&triangle_path, &red_paint);
+
+            // Translate right so the second triangle doesn't overlap the first.
+            painter.translate(flui_types::Offset::new(px(32.0), px(0.0)));
+
+            // Second draw: cache HIT — must use blue_paint.color, not cached red.
+            painter.draw_path(&triangle_path, &blue_paint);
+        });
+
+        // Sample a pixel well inside the second (blue) triangle's area.
+        // After the translate(32, 0), the second triangle spans x=[32..64], y=[0..32].
+        // x=40, y=8 is safely inside the filled region.
+        let second_triangle_pixel = pixel_at(&rgba, SIZE, 40, 8);
+
+        assert_eq!(
+            second_triangle_pixel[3], 255,
+            "second triangle pixel alpha={}, expected 255 (path rendered opaque). \
+             Alpha=0 means draw_path did not submit geometry. pixel={second_triangle_pixel:?}",
+            second_triangle_pixel[3]
+        );
+        assert!(
+            second_triangle_pixel[2] > 200,
+            "second triangle pixel B={}: expected B > 200 (blue fill). \
+             Low blue means the cache-hit branch reused the first draw's red color. \
+             pixel={second_triangle_pixel:?}",
+            second_triangle_pixel[2]
+        );
+        assert!(
+            second_triangle_pixel[0] < 10,
+            "second triangle pixel R={}: expected R < 10 (no red leakage from cache). \
+             High red means the cache-hit branch did not apply current paint.color. \
+             pixel={second_triangle_pixel:?}",
+            second_triangle_pixel[0]
         );
     }
 }
