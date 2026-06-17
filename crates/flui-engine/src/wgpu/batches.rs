@@ -20,12 +20,12 @@
 //!
 //! # Shader dispatch
 //!
-//! `dispatch_shader_rect` (gradient/shader fills for rect/rrect/circle) is NOT
-//! on `DrawBatcher`; it stays on `WgpuPainter` because it calls
-//! `gradient_rect`/`radial_gradient_rect`/`sweep_gradient_rect` which write
-//! directly into `current_segment`.  Each painter shim pre-checks the shader
-//! case (early return) and only delegates to the batcher for the non-shader
-//! paths.
+//! `dispatch_shader_rect` (gradient/shader fills for rect/rrect/circle) lives on
+//! `DrawBatcher` (T9c).  The gradient methods (`gradient_rect`,
+//! `radial_gradient_rect`, `sweep_gradient_rect`) and `shadow_rect` also live here,
+//! taking `(&mut DrawSegment, &GpuStateStack, …)` via the same borrow seam.
+//! Each painter shim (`rect`/`rrect`/`circle`) folds the shader pre-check into the
+//! batcher call; the shim becomes a thin opacity-read + delegation.
 //!
 //! # Invariants preserved
 //!
@@ -43,7 +43,7 @@ use flui_painting::{BlendMode, Paint, PaintStyle};
 use flui_types::{
     Offset, Point, Rect,
     geometry::{Pixels, RRect, px},
-    painting::path::Path,
+    painting::{Shader, path::Path},
     styling::Color,
 };
 
@@ -200,8 +200,7 @@ impl DrawBatcher {
 
     /// Convert a `Shader` into GPU `GradientStop`s (max 8 stops).
     ///
-    /// Kept on `DrawBatcher` so `WgpuPainter::dispatch_shader_rect` can call it
-    /// without owning the batcher.
+    /// Called by `DrawBatcher::dispatch_shader_rect` which lives in the same module.
     pub(super) fn shader_to_gradient_stops(
         shader: &flui_types::painting::Shader,
     ) -> Vec<super::effects::GradientStop> {
@@ -237,15 +236,16 @@ impl DrawBatcher {
 
     // ===== Moved record methods (T9a set) =====
     //
-    // Each method handles everything EXCEPT the shader/gradient dispatch path
-    // (which stays on `WgpuPainter::dispatch_shader_rect`).  The painter shim
-    // pre-handles the shader case with an early return before calling into the
-    // batcher.
+    // Each method (rect/rrect/circle) dispatches the shader/gradient case first
+    // via `self.dispatch_shader_rect(…)` (T9c), then handles solid fills and
+    // strokes.  Painter shims are now thin: opacity-read + delegation.
 
-    /// Record a non-shader filled rectangle, or a stroked rectangle.
+    /// Record a filled rectangle or a stroked rectangle.
     ///
-    /// The painter shim pre-handles gradient/shader fills via
-    /// `dispatch_shader_rect` before calling this method.
+    /// Shader/gradient fills are dispatched first (T9c): when `paint.style` is
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called and the
+    /// method returns early.  The non-shader fill and stroke paths are unchanged
+    /// from T9a.
     pub(super) fn rect(
         &mut self,
         segment: &mut DrawSegment,
@@ -255,6 +255,26 @@ impl DrawBatcher {
         rect: Rect<Pixels>,
         paint: &Paint,
     ) {
+        // Shader/gradient fill — dispatch before any opacity or color work.
+        if paint.style == PaintStyle::Fill && paint.has_shader() {
+            if paint.blend_mode != BlendMode::SrcOver {
+                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        blend_mode = ?paint.blend_mode,
+                        "gradient/shader fill with blend_mode {:?} is not supported by the \
+                         Phase A fixed-function path; rendering as SrcOver. \
+                         Phase B will add dst-sample blended gradients. (logged once per process)",
+                        paint.blend_mode,
+                    );
+                }
+            }
+            if Self::dispatch_shader_rect(segment, state, rect, paint, [0.0; 4]) {
+                return;
+            }
+        }
+
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
@@ -347,9 +367,12 @@ impl DrawBatcher {
         }
     }
 
-    /// Record a non-shader filled rounded rectangle, or a stroked one.
+    /// Record a filled rounded rectangle or a stroked one.
     ///
-    /// The painter shim pre-handles gradient/shader fills.
+    /// Shader/gradient fills are dispatched first (T9c): when `paint.style` is
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with the
+    /// max per-corner radii and returns early.  The non-shader fill and stroke
+    /// paths are unchanged from T9a.
     pub(super) fn rrect(
         &mut self,
         segment: &mut DrawSegment,
@@ -359,6 +382,38 @@ impl DrawBatcher {
         rrect: RRect,
         paint: &Paint,
     ) {
+        // Shader/gradient fill — dispatch before any opacity or color work.
+        if paint.style == PaintStyle::Fill && paint.has_shader() {
+            if paint.blend_mode != BlendMode::SrcOver {
+                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        blend_mode = ?paint.blend_mode,
+                        "gradient/shader rrect fill with blend_mode {:?} is not supported by \
+                         the Phase A fixed-function path; rendering as SrcOver. \
+                         Phase B will add dst-sample blended gradients. (logged once per process)",
+                        paint.blend_mode,
+                    );
+                }
+            }
+            let corner_radii = [
+                rrect.top_left.x.0.max(rrect.top_left.y.0),
+                rrect.top_right.x.0.max(rrect.top_right.y.0),
+                rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
+                rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
+            ];
+            if Self::dispatch_shader_rect(
+                segment,
+                state,
+                rrect.bounding_rect(),
+                paint,
+                corner_radii,
+            ) {
+                return;
+            }
+        }
+
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
@@ -428,9 +483,12 @@ impl DrawBatcher {
         }
     }
 
-    /// Record a non-shader filled circle, or a stroked circle.
+    /// Record a filled circle or a stroked circle.
     ///
-    /// The painter shim pre-handles gradient/shader fills.
+    /// Shader/gradient fills are dispatched first (T9c): when `paint.style` is
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with
+    /// `[radius; 4]` corner radii and the center±radius bounding rect, then
+    /// returns early.  The non-shader fill and stroke paths are unchanged from T9a.
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/opacity are disjoint WgpuPainter \
@@ -447,6 +505,32 @@ impl DrawBatcher {
         radius: f32,
         paint: &Paint,
     ) {
+        // Shader/gradient fill — dispatch before any opacity or color work.
+        if paint.style == PaintStyle::Fill && paint.has_shader() {
+            if paint.blend_mode != BlendMode::SrcOver {
+                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        blend_mode = ?paint.blend_mode,
+                        "gradient/shader circle fill with blend_mode {:?} is not supported by \
+                         the Phase A fixed-function path; rendering as SrcOver. \
+                         Phase B will add dst-sample blended gradients. (logged once per process)",
+                        paint.blend_mode,
+                    );
+                }
+            }
+            let bounds = Rect::from_xywh(
+                center.x - px(radius),
+                center.y - px(radius),
+                px(radius * 2.0),
+                px(radius * 2.0),
+            );
+            if Self::dispatch_shader_rect(segment, state, bounds, paint, [radius; 4]) {
+                return;
+            }
+        }
+
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
@@ -827,5 +911,339 @@ impl DrawBatcher {
 
             state.restore();
         }
+    }
+
+    /// Record a rectangle with a linear gradient.
+    ///
+    /// Takes `segment` and `state` as disjoint borrows (borrow seam, T9c).
+    /// No draw-order slot is consumed — gradient instances are instanced (no
+    /// tessellation, no non-`SrcOver` seal).
+    ///
+    /// # Arguments
+    /// * `segment`         — current accumulation buffer
+    /// * `state`           — read-only transform/scissor queries
+    /// * `bounds`          — rectangle bounds (already in transformed space)
+    /// * `gradient_start`  — gradient start point (local to `bounds`)
+    /// * `gradient_end`    — gradient end point (local to `bounds`)
+    /// * `stops`           — gradient color stops (max 8)
+    /// * `corner_radius`   — uniform corner radius (0.0 = sharp)
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
+                  the remaining args mirror the gradient's own parameters"
+    )]
+    pub(super) fn gradient_rect(
+        segment: &mut DrawSegment,
+        state: &GpuStateStack,
+        bounds: Rect<Pixels>,
+        gradient_start: glam::Vec2,
+        gradient_end: glam::Vec2,
+        stops: &[super::effects::GradientStop],
+        corner_radius: f32,
+    ) {
+        use super::instancing::LinearGradientInstance;
+
+        // Append gradient stops to global buffer (max 8 per gradient).
+        let stop_count = stops.len().min(8);
+        let current_len = segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            // Logged once per process: a >MAX_GRADIENT_STOPS frame would otherwise
+            // spam this for every overflowing instance, every frame.
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "gradient_rect: gradient stop buffer full; dropping linear gradient \
+                     instance (logged once per process)"
+                );
+            }
+            return;
+        }
+        let stop_offset = current_len as u32;
+        segment
+            .current_gradient_stops
+            .extend_from_slice(&stops[..stop_count]);
+
+        let instance = LinearGradientInstance::new(
+            [
+                bounds.left().0,
+                bounds.top().0,
+                bounds.width().0,
+                bounds.height().0,
+            ],
+            gradient_start,
+            gradient_end,
+            [corner_radius; 4],
+            stop_count as u32,
+        )
+        .with_stop_offset(stop_offset);
+
+        let _ = segment.linear_gradient_batch.add(instance);
+        DrawSegment::push_scissor_region(
+            &mut segment.linear_grad_scissors,
+            state.current_scissor(),
+        );
+    }
+
+    /// Record a rectangle with a radial gradient.
+    ///
+    /// Takes `segment` and `state` as disjoint borrows (borrow seam, T9c).
+    /// No draw-order slot — instanced, no tessellation.
+    ///
+    /// # Arguments
+    /// * `segment`        — current accumulation buffer
+    /// * `state`          — read-only transform/scissor queries
+    /// * `bounds`         — rectangle bounds (already in transformed space)
+    /// * `center`         — gradient center (local to `bounds`)
+    /// * `radius`         — gradient radius
+    /// * `stops`          — gradient color stops (max 8)
+    /// * `corner_radius`  — uniform corner radius (0.0 = sharp)
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
+                  the remaining args mirror the gradient's own parameters"
+    )]
+    pub(super) fn radial_gradient_rect(
+        segment: &mut DrawSegment,
+        state: &GpuStateStack,
+        bounds: Rect<Pixels>,
+        center: glam::Vec2,
+        radius: f32,
+        stops: &[super::effects::GradientStop],
+        corner_radius: f32,
+    ) {
+        use super::instancing::RadialGradientInstance;
+
+        let stop_count = stops.len().min(8);
+        let current_len = segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "radial_gradient_rect: gradient stop buffer full; dropping radial \
+                     gradient instance (logged once per process)"
+                );
+            }
+            return;
+        }
+        let stop_offset = current_len as u32;
+        segment
+            .current_gradient_stops
+            .extend_from_slice(&stops[..stop_count]);
+
+        let instance = RadialGradientInstance::new(
+            [
+                bounds.left().0,
+                bounds.top().0,
+                bounds.width().0,
+                bounds.height().0,
+            ],
+            center,
+            radius,
+            [corner_radius; 4],
+            stop_count as u32,
+        )
+        .with_stop_offset(stop_offset);
+
+        let _ = segment.radial_gradient_batch.add(instance);
+        DrawSegment::push_scissor_region(
+            &mut segment.radial_grad_scissors,
+            state.current_scissor(),
+        );
+    }
+
+    /// Record a rectangle with a sweep (angular/conic) gradient.
+    ///
+    /// Takes `segment` and `state` as disjoint borrows (borrow seam, T9c).
+    /// No draw-order slot — instanced, no tessellation.
+    ///
+    /// # Arguments
+    /// * `segment`      — current accumulation buffer
+    /// * `state`        — read-only transform/scissor queries
+    /// * `bounds`       — rectangle bounds (already in transformed space)
+    /// * `center`       — gradient center (local to `bounds`)
+    /// * `start_angle`  — start angle in radians
+    /// * `end_angle`    — end angle in radians
+    /// * `stops`        — gradient color stops (max 8)
+    /// * `corner_radius`— uniform corner radius (0.0 = sharp)
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/state are disjoint WgpuPainter fields; \
+                  the remaining args mirror the gradient's own parameters"
+    )]
+    pub(super) fn sweep_gradient_rect(
+        segment: &mut DrawSegment,
+        state: &GpuStateStack,
+        bounds: Rect<Pixels>,
+        center: glam::Vec2,
+        start_angle: f32,
+        end_angle: f32,
+        stops: &[super::effects::GradientStop],
+        corner_radius: f32,
+    ) {
+        use super::instancing::SweepGradientInstance;
+
+        let stop_count = stops.len().min(8);
+        let current_len = segment.current_gradient_stops.len();
+        if current_len + stop_count > super::effects_pipeline::MAX_GRADIENT_STOPS {
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    current_stops = current_len,
+                    requested = stop_count,
+                    limit = super::effects_pipeline::MAX_GRADIENT_STOPS,
+                    "sweep_gradient_rect: gradient stop buffer full; dropping sweep \
+                     gradient instance (logged once per process)"
+                );
+            }
+            return;
+        }
+        let stop_offset = current_len as u32;
+        segment
+            .current_gradient_stops
+            .extend_from_slice(&stops[..stop_count]);
+
+        let instance = SweepGradientInstance::new(
+            [
+                bounds.left().0,
+                bounds.top().0,
+                bounds.width().0,
+                bounds.height().0,
+            ],
+            center,
+            start_angle,
+            end_angle,
+            [corner_radius; 4],
+            stop_count as u32,
+        )
+        .with_stop_offset(stop_offset);
+
+        let _ = segment.sweep_gradient_batch.add(instance);
+        DrawSegment::push_scissor_region(&mut segment.sweep_grad_scissors, state.current_scissor());
+    }
+
+    /// Record an analytical shadow for a rectangle (Evan Wallace technique).
+    ///
+    /// Single-pass O(1) rendering; quality is indistinguishable from a real
+    /// Gaussian blur at typical shadow radii.  Instanced — no draw-order slot,
+    /// no tessellation.
+    ///
+    /// # Arguments
+    /// * `segment`        — current accumulation buffer
+    /// * `rect_pos`       — rectangle position [x, y]
+    /// * `rect_size`      — rectangle size [width, height]
+    /// * `corner_radius`  — uniform corner radius
+    /// * `params`         — shadow offset, blur sigma, and color
+    pub(super) fn shadow_rect(
+        segment: &mut DrawSegment,
+        rect_pos: [f32; 2],
+        rect_size: [f32; 2],
+        corner_radius: f32,
+        params: &super::effects::ShadowParams,
+    ) {
+        use super::instancing::ShadowInstance;
+
+        let instance = ShadowInstance::new(rect_pos, rect_size, corner_radius, params);
+        let _ = segment.shadow_batch.add(instance);
+    }
+
+    /// Dispatch a filled rect/rrect/circle with a shader paint to the correct
+    /// gradient pipeline.  Returns `true` if the shader was handled; `false`
+    /// means fall through to solid-color fill.
+    ///
+    /// Reads `state` for the current-transform (to convert local bounds to
+    /// device space) and calls the appropriate `gradient_rect` /
+    /// `radial_gradient_rect` / `sweep_gradient_rect` associated function.
+    ///
+    /// Callers must check `paint.has_shader()` **and** `paint.style ==
+    /// PaintStyle::Fill` before calling this; it is not rechecked here.
+    ///
+    /// # Arguments
+    /// * `segment`       — current accumulation buffer
+    /// * `state`         — read-only transform/scissor queries
+    /// * `bounds`        — local-space bounds of the shape
+    /// * `paint`         — fill paint carrying the shader
+    /// * `corner_radii`  — per-corner radii `[tl, tr, br, bl]`
+    pub(super) fn dispatch_shader_rect(
+        segment: &mut DrawSegment,
+        state: &GpuStateStack,
+        bounds: Rect<Pixels>,
+        paint: &Paint,
+        corner_radii: [f32; 4],
+    ) -> bool {
+        let Some(shader) = &paint.shader else {
+            return false;
+        };
+
+        let stops = Self::shader_to_gradient_stops(shader);
+        if stops.is_empty() {
+            return false;
+        }
+
+        // Compute transformed bounds using the read-only state — read before any
+        // mutable gradient call so there is no aliasing.
+        let top_left = state.apply_transform(Point::new(bounds.left(), bounds.top()));
+        let bottom_right = state.apply_transform(Point::new(bounds.right(), bounds.bottom()));
+        let transformed = Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+        match shader {
+            Shader::LinearGradient { from, to, .. } => {
+                let start =
+                    glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
+                let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
+                Self::gradient_rect(
+                    segment,
+                    state,
+                    transformed,
+                    start,
+                    end,
+                    &stops,
+                    corner_radii[0],
+                );
+            }
+            Shader::RadialGradient { center, radius, .. } => {
+                let c =
+                    glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
+                Self::radial_gradient_rect(
+                    segment,
+                    state,
+                    transformed,
+                    c,
+                    *radius,
+                    &stops,
+                    corner_radii[0],
+                );
+            }
+            Shader::SweepGradient {
+                center,
+                start_angle,
+                end_angle,
+                ..
+            } => {
+                let c =
+                    glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
+                Self::sweep_gradient_rect(
+                    segment,
+                    state,
+                    transformed,
+                    c,
+                    *start_angle,
+                    *end_angle,
+                    &stops,
+                    corner_radii[0],
+                );
+            }
+            Shader::Solid { .. } | _ => return false,
+        }
+
+        true
     }
 }
