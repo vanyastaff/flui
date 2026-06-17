@@ -1501,11 +1501,14 @@ impl WgpuPainter {
         }
     }
 
-    /// Flush external-texture draws for the current segment.
+    /// Flush all external-texture draws recorded in the current segment.
     ///
-    /// Each entry in `external_images` carries the registry's `wgpu::TextureView`
-    /// that was cloned at draw time, so we bind it directly via
-    /// `flush_texture_batch` — no lookup against `texture_cache` needed.
+    /// Each entry carries a `flui_types::painting::TextureId` (stored at record
+    /// time).  Here, at replay time, we resolve each ID to a `wgpu::TextureView`
+    /// via the external texture registry.  If an ID is not found (texture was
+    /// unregistered between record and flush), a warning is emitted and the entry
+    /// is skipped — identical behavior to before, now on the correct replay side
+    /// of the record/replay seam.
     ///
     /// Because `wgpu::TextureView` is not `PartialEq`, instances are flushed
     /// individually (one draw call per instance) rather than trying to group
@@ -1521,16 +1524,31 @@ impl WgpuPainter {
         }
 
         // Drain into a local vec so we can call &mut self methods (flush_texture_batch
-        // takes &mut self) while iterating.
+        // takes &mut self) while iterating without holding a borrow on
+        // self.current_segment.
         let pending: Vec<(
-            wgpu::TextureView,
+            flui_types::painting::TextureId,
             super::instancing::TextureInstance,
             ScissorRect,
         )> = self.current_segment.external_images.drain(..).collect();
 
-        for (tex_view, instance, scissor) in pending {
+        for (texture_id, instance, scissor) in pending {
+            // Resolve the ID to a view at replay time.
+            // We cannot hold a borrow on self.resources and call self.flush_texture_batch
+            // (&mut self) simultaneously, so we clone the view here.  External textures
+            // are uncommon; this clone is not a hot-path concern.
+            let tex_view =
+                if let Some(entry) = self.resources.external_texture_registry().get(texture_id) {
+                    entry.view.clone()
+                } else {
+                    tracing::warn!(
+                        "External texture {} not found at flush time — skipping draw",
+                        texture_id.get()
+                    );
+                    continue;
+                };
+
             // One instance → one batch-of-one → one draw call.
-            // This is the safe default when view identity cannot be checked.
             let _ = self.texture_batch.add(instance);
             self.flush_texture_batch(encoder, view, &tex_view, scissor);
         }
@@ -1738,7 +1756,6 @@ impl WgpuPainter {
         super::batches::DrawBatcher::texture(
             &mut self.current_segment,
             &self.state,
-            self.resources.external_texture_registry(),
             texture_id,
             dst_rect,
         );
@@ -1909,10 +1926,19 @@ impl WgpuPainter {
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
     ) {
+        // Read dimensions only when a `src` sub-rect was supplied, so the
+        // batcher can normalize pixel coordinates to UV in [0,1].  The
+        // TextureView stays in the registry until replay time.
+        let src_dimensions = src.and_then(|_| {
+            self.resources
+                .external_texture_registry()
+                .get(texture_id)
+                .map(|entry| (entry.width, entry.height))
+        });
         super::batches::DrawBatcher::draw_texture(
             &mut self.current_segment,
             &self.state,
-            self.resources.external_texture_registry(),
+            src_dimensions,
             texture_id,
             dst,
             src,
@@ -4777,6 +4803,344 @@ mod tests {
             "bottom={bottom:?}: expected blue (B≈255, R≈0) from modulate-BLUE. \
              Red here means the second filtered draw aliased the first in the \
              texture cache (pointer-identity key on a freed temporary)."
+        );
+    }
+
+    /// T10a: external-texture resolution happens at replay time, not record time.
+    ///
+    /// Register a solid-RED texture under ID 77, record `draw_texture`, then
+    /// call `update()` on the same ID replacing it with a solid-GREEN texture —
+    /// all BEFORE `render()`.  Assert the readback shows GREEN, not RED.
+    ///
+    /// This test FAILS before T10a (record-time resolution → RED survives the
+    /// update) and PASSES after (replay-time resolution → GREEN wins).
+    ///
+    /// Flutter reference: `Texture` widget and the engine's `ExternalTextureRegistry`
+    /// feed the platform's most-recently-uploaded frame to the rasterizer at
+    /// present time, not at the `drawImage` command time — any frame produced
+    /// between record and rasterize is presented (latest-frame semantics).
+    /// This test encodes that contract for the FLUI IR.
+    #[test]
+    fn external_texture_resolves_at_replay_not_record_time() {
+        const SIZE: u32 = 16;
+        let (device, queue) = test_device_and_queue();
+
+        // Helper: create a solid-color 1-channel RGBA Unorm texture.
+        let make_solid_texture =
+            |device: &wgpu::Device, queue: &wgpu::Queue, r: u8, g: u8, b: u8| -> wgpu::Texture {
+                let data: Vec<u8> = (0..SIZE * SIZE).flat_map(|_| [r, g, b, 0xFFu8]).collect();
+                let tex = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("solid color test texture"),
+                    size: wgpu::Extent3d {
+                        width: SIZE,
+                        height: SIZE,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * SIZE),
+                        rows_per_image: Some(SIZE),
+                    },
+                    wgpu::Extent3d {
+                        width: SIZE,
+                        height: SIZE,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                tex
+            };
+
+        let tex_id = flui_types::painting::TextureId::new(77);
+
+        // Build a painter with a full-size UNorm render target.
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("replay-timing readback target"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: READBACK_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            READBACK_FORMAT,
+            (SIZE, SIZE),
+        );
+
+        // Step 1: register a solid-RED texture.
+        painter.external_texture_registry_mut().register(
+            tex_id,
+            make_solid_texture(&device, &queue, 0xFF, 0x00, 0x00),
+            SIZE,
+            SIZE,
+            true,  // dynamic
+            false, // nearest sampler
+        );
+
+        // Step 2: record draw_texture.  Under record-time resolution this would
+        // capture RED's TextureView into the IR.  Under replay-time resolution
+        // only the TextureId is stored.
+        painter.draw_texture(
+            tex_id,
+            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            None,
+            flui_types::painting::FilterQuality::None,
+            1.0,
+        );
+
+        // Step 3: update the same ID to a solid-GREEN texture BEFORE render().
+        // Under record-time resolution this update would be invisible (the old
+        // RED view was already cloned into the IR).  Under replay-time resolution
+        // the registry lookup at flush time picks up GREEN.
+        let updated = painter.external_texture_registry_mut().update(
+            tex_id,
+            make_solid_texture(&device, &queue, 0x00, 0xFF, 0x00),
+        );
+        assert!(updated, "update must return true when the ID is registered");
+
+        // Step 4: render.
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("replay-timing clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        painter
+            .render(&target_view, &mut encoder)
+            .expect("painter.render must succeed");
+
+        // Readback.
+        let bytes_per_pixel = 4u32;
+        let unpadded = SIZE * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = unpadded.div_ceil(align) * align;
+        let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("replay-timing readback buffer"),
+            size: u64::from(padded_bytes_per_row) * u64::from(SIZE),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback_buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(SIZE),
+                },
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = readback_buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| {
+            r.expect("buffer mapping must succeed");
+        });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("device poll must complete the readback copy");
+
+        let data = slice.get_mapped_range();
+        // Sample center pixel.
+        let center = (SIZE / 2) as usize;
+        let stride = padded_bytes_per_row as usize;
+        let off = center * stride + center * 4;
+        let pixel = [data[off], data[off + 1], data[off + 2], data[off + 3]];
+        drop(data);
+        readback_buf.unmap();
+
+        let (r, g, b) = (
+            i32::from(pixel[0]),
+            i32::from(pixel[1]),
+            i32::from(pixel[2]),
+        );
+        // Must be GREEN (updated texture), NOT RED (originally recorded texture).
+        // Failure here means resolution happened at record time (T10a regressed).
+        assert!(
+            g > 200 && r < 20,
+            "Center pixel = {pixel:?}: expected GREEN (G>200, R<20) to prove \
+             replay-time resolution (T10a). \
+             RED (R>200, G<20) means the TextureView was captured at record time \
+             and the update() was invisible — regression in T10a record/replay seam."
+        );
+        assert!(
+            b < 20,
+            "B = {b}, expected near-zero (solid GREEN texture, no blue). pixel = {pixel:?}"
+        );
+    }
+
+    /// T10a edge: unregistered external texture at replay time is warn-skipped, not rendered.
+    ///
+    /// Sequence:
+    /// 1. Register a solid-GREEN texture under ID 88.
+    /// 2. Record `draw_texture` filling the top-left quadrant (GREEN expected there).
+    /// 3. Record a solid-RED `rect` in the bottom-right quadrant as a "frame is alive" marker.
+    /// 4. Unregister ID 88 via `unregister()` — before `render()`.
+    /// 5. `render()`.
+    ///
+    /// Assert (a): top-left quadrant center is NOT GREEN — the missing texture was
+    /// skipped, leaving the black clear color.
+    /// Assert (b): bottom-right quadrant center IS RED — the skip did not abort the
+    /// frame; subsequent draws still executed.
+    ///
+    /// This locks the Flutter-aligned "removed external texture is not composited"
+    /// contract: unregistered platform textures must not leave stale pixels, and
+    /// a missing texture must not prevent the rest of the frame from rendering.
+    #[test]
+    fn external_texture_unregistered_at_replay_is_skipped() {
+        use flui_painting::Paint;
+
+        const SIZE: u32 = 32;
+        let half = SIZE / 2;
+
+        let (device, queue) = test_device_and_queue();
+        let tex_id = flui_types::painting::TextureId::new(88);
+
+        // Build a solid-GREEN texture (SIZE×SIZE).
+        let green_data: Vec<u8> = (0..SIZE * SIZE)
+            .flat_map(|_| [0x00u8, 0xFFu8, 0x00u8, 0xFFu8])
+            .collect();
+        let green_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("unregistered-test green texture"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &green_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &green_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * SIZE),
+                rows_per_image: Some(SIZE),
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Use render_to_rgba so the draw closure gets &mut WgpuPainter.
+        // We register, record, unregister, then draw the RED marker — all inside
+        // the closure, before render() is called by render_to_rgba.
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            // Step 1: register GREEN under ID 88.
+            painter.external_texture_registry_mut().register(
+                tex_id, green_tex, SIZE, SIZE, false, // static
+                true,  // linear filter
+            );
+
+            // Step 2: record draw_texture in the top-left quadrant.
+            painter.draw_texture(
+                tex_id,
+                Rect::from_xywh(px(0.0), px(0.0), px(half as f32), px(half as f32)),
+                None,
+                flui_types::painting::FilterQuality::None,
+                1.0,
+            );
+
+            // Step 3: unregister ID 88 BEFORE render() — the recorded draw must be skipped.
+            let removed = painter.external_texture_registry_mut().unregister(tex_id);
+            assert!(removed, "unregister must return true for a registered id");
+
+            // Step 4: record a solid-RED rect in the bottom-right quadrant as a
+            // "frame is alive" marker.  This must survive the external-texture skip.
+            painter.rect(
+                Rect::from_xywh(
+                    px(half as f32),
+                    px(half as f32),
+                    px(half as f32),
+                    px(half as f32),
+                ),
+                &Paint::fill(flui_types::Color::rgba(0xFF, 0x00, 0x00, 0xFF)),
+            );
+        });
+
+        // Assert (a): top-left quadrant center was NOT rendered (GREEN texture skipped →
+        // background black remains).
+        let tl = pixel_at(&rgba, SIZE, half / 2, half / 2);
+        let (tl_r, tl_g) = (i32::from(tl[0]), i32::from(tl[1]));
+        assert!(
+            tl_g < 20 && tl_r < 20,
+            "Top-left center pixel = {tl:?}: expected near-BLACK (unregistered external \
+             texture must be skipped, not composited). High G={tl_g} means the GREEN texture \
+             was rendered despite being unregistered before render() — T10a skip-on-missing contract broken."
+        );
+
+        // Assert (b): bottom-right quadrant center IS RED — the skip did not abort the frame.
+        let br = pixel_at(&rgba, SIZE, half + half / 2, half + half / 2);
+        let (br_r, br_g) = (i32::from(br[0]), i32::from(br[1]));
+        assert!(
+            br_r > 200 && br_g < 20,
+            "Bottom-right center pixel = {br:?}: expected RED (marker rect must render \
+             even when a preceding external-texture draw was skipped). \
+             R={br_r}, G={br_g}. If R<200, the frame was aborted instead of skip+continue."
         );
     }
 }
