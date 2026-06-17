@@ -945,10 +945,12 @@ impl CommandRenderer for Backend<'_> {
         });
     }
 
-    fn render_color(&mut self, color: Color, _blend_mode: BlendMode, transform: &Matrix4) {
+    fn render_color(&mut self, color: Color, blend_mode: BlendMode, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             let viewport_bounds = painter.viewport_bounds();
-            let paint = Paint::fill(color);
+            // Carry the command's blend mode so the full-viewport fill composites
+            // correctly (e.g. `DrawColor` with `Clear` punches out the layer).
+            let paint = Paint::fill(color).with_blend_mode(blend_mode);
             painter.rect(viewport_bounds, &paint);
         });
     }

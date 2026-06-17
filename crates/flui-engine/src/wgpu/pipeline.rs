@@ -12,16 +12,24 @@
 
 use std::collections::HashMap;
 
-use flui_painting::Paint;
+use flui_painting::{BlendMode, Paint};
 use wgpu::RenderPipeline;
 
 /// Pipeline key identifying a specific pipeline variant
 ///
-/// Uses bitflags for compact representation and fast hashing.
-/// Each bit represents a different pipeline feature.
+/// Uses bitflags for compact representation of MSAA / blend-enable state, plus a
+/// [`BlendMode`] dimension so the tessellated path produces (and caches) one
+/// pipeline per fixed-function Porter-Duff blend mode.
+///
+/// The `blend_mode` is only meaningful when blending is enabled (the
+/// [`Self::ALPHA_BLEND`] bit). Opaque keys carry `BlendMode::SrcOver` purely as
+/// a canonical value so equal opaque keys hash equal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     bits: u32,
+    /// Fixed-function blend mode for the color target. Only consulted when
+    /// [`Self::is_alpha_blended`] is true.
+    blend_mode: BlendMode,
 }
 
 impl PipelineKey {
@@ -32,19 +40,42 @@ impl PipelineKey {
 
     /// Create opaque pipeline key (no blending, fastest)
     pub fn opaque() -> Self {
-        Self { bits: 0 }
+        Self {
+            bits: 0,
+            blend_mode: BlendMode::SrcOver,
+        }
     }
 
-    /// Create alpha blending pipeline key
+    /// Create an alpha-blending pipeline key for the default `SrcOver` mode.
     pub fn alpha_blend() -> Self {
         Self {
             bits: Self::ALPHA_BLEND,
+            blend_mode: BlendMode::SrcOver,
+        }
+    }
+
+    /// Create an alpha-blending pipeline key for a specific fixed-function
+    /// [`BlendMode`].
+    ///
+    /// The caller is responsible for passing a Porter-Duff mode; advanced
+    /// (dst-read) modes are mapped to `SrcOver` upstream in
+    /// [`pipeline_key_from_paint`].
+    pub fn with_blend(mode: BlendMode) -> Self {
+        Self {
+            bits: Self::ALPHA_BLEND,
+            blend_mode: mode,
         }
     }
 
     /// Check if pipeline requires alpha blending
     pub fn is_alpha_blended(self) -> bool {
         self.bits & Self::ALPHA_BLEND != 0
+    }
+
+    /// The fixed-function blend mode this key selects (only meaningful when
+    /// [`Self::is_alpha_blended`] is true).
+    pub fn blend_mode(self) -> BlendMode {
+        self.blend_mode
     }
 
     /// Get MSAA sample count
@@ -56,6 +87,74 @@ impl PipelineKey {
         } else {
             1
         }
+    }
+}
+
+/// Map a fixed-function Porter-Duff [`BlendMode`] to its premultiplied-alpha
+/// [`wgpu::BlendState`].
+///
+/// These factors assume PREMULTIPLIED source and destination color (the
+/// tessellated `shape.wgsl` fragment emits `rgb * a`), which is the only form in
+/// which fixed-function Porter-Duff blending is correct. Color and alpha
+/// components use identical factors unless a mode requires otherwise.
+///
+/// `SrcOver` is exactly [`wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING`].
+///
+/// Advanced (separable/non-separable, dst-reading) modes are *not* handled here
+/// — they are mapped to `SrcOver` in [`pipeline_key_from_paint`] before a key is
+/// built, so this function only ever receives Porter-Duff modes. Any advanced
+/// mode that reaches it (a logic error) falls back to `SrcOver` rather than
+/// panicking.
+pub fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
+    use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
+
+    // Helper: build a BlendState whose color and alpha components share the
+    // same (src, dst) factors with the Add operation.
+    let same = |src: BlendFactor, dst: BlendFactor| BlendState {
+        color: BlendComponent {
+            src_factor: src,
+            dst_factor: dst,
+            operation: BlendOperation::Add,
+        },
+        alpha: BlendComponent {
+            src_factor: src,
+            dst_factor: dst,
+            operation: BlendOperation::Add,
+        },
+    };
+
+    match mode {
+        BlendMode::Clear => same(BlendFactor::Zero, BlendFactor::Zero),
+        BlendMode::Src => same(BlendFactor::One, BlendFactor::Zero),
+        BlendMode::Dst => same(BlendFactor::Zero, BlendFactor::One),
+        BlendMode::SrcOver => same(BlendFactor::One, BlendFactor::OneMinusSrcAlpha),
+        BlendMode::DstOver => same(BlendFactor::OneMinusDstAlpha, BlendFactor::One),
+        BlendMode::SrcIn => same(BlendFactor::DstAlpha, BlendFactor::Zero),
+        BlendMode::DstIn => same(BlendFactor::Zero, BlendFactor::SrcAlpha),
+        BlendMode::SrcOut => same(BlendFactor::OneMinusDstAlpha, BlendFactor::Zero),
+        BlendMode::DstOut => same(BlendFactor::Zero, BlendFactor::OneMinusSrcAlpha),
+        BlendMode::SrcATop => same(BlendFactor::DstAlpha, BlendFactor::OneMinusSrcAlpha),
+        BlendMode::DstATop => same(BlendFactor::OneMinusDstAlpha, BlendFactor::SrcAlpha),
+        BlendMode::Xor => same(BlendFactor::OneMinusDstAlpha, BlendFactor::OneMinusSrcAlpha),
+        // Plus / Lighter: additive.
+        BlendMode::Plus => same(BlendFactor::One, BlendFactor::One),
+        // Modulate: src * dst. The color channels multiply by the destination
+        // color; alpha multiplies by destination alpha.
+        BlendMode::Modulate => BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::Dst,
+                dst_factor: BlendFactor::Zero,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::DstAlpha,
+                dst_factor: BlendFactor::Zero,
+                operation: BlendOperation::Add,
+            },
+        },
+        // Advanced modes never reach here (mapped to SrcOver upstream). Fall
+        // back defensively rather than panicking.
+        _ => BlendState::PREMULTIPLIED_ALPHA_BLENDING,
     }
 }
 
@@ -132,9 +231,13 @@ impl PipelineCache {
             immediate_size: 0,
         });
 
-        // Configure blend state based on key
+        // Configure blend state based on key. The tessellated fragment shader
+        // emits PREMULTIPLIED alpha, so blended pipelines use the premultiplied
+        // Porter-Duff factors for `key.blend_mode()`. SrcOver maps to
+        // PREMULTIPLIED_ALPHA_BLENDING — visually identical to the previous
+        // straight-alpha output now that the shader premultiplies.
         let blend_state = if key.is_alpha_blended() {
-            Some(wgpu::BlendState::ALPHA_BLENDING)
+            Some(blend_state_for(key.blend_mode()))
         } else {
             None // Opaque - no blending (faster!)
         };
@@ -192,15 +295,193 @@ impl PipelineCache {
     }
 }
 
-/// Helper to determine pipeline key from paint properties
+/// Helper to determine pipeline key from paint properties.
+///
+/// Blend-mode routing (Phase A — fixed-function Porter-Duff):
+/// - A non-`SrcOver` Porter-Duff mode always selects a blended pipeline keyed by
+///   that mode (the blend stage is required even for fully opaque source, e.g.
+///   `Clear`/`DstOut` punch-outs and `Plus` additive).
+/// - An advanced (dst-reading) mode — `Screen`, `Multiply`, `Overlay`, the HSL
+///   modes, etc. — is *not* expressible as a fixed-function blend. It is mapped
+///   to `SrcOver` here with a one-shot `tracing::warn!` so the fallback is
+///   observable rather than silent. These land in Phase B.
+/// - `SrcOver` keeps the legacy fast heuristic: opaque source (`a == 255`) skips
+///   the blend stage entirely; translucent source uses the SrcOver blend.
 pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
-    let color = paint.color;
+    let mode = paint.blend_mode;
 
-    // Check if we need alpha blending
-    if color.a < 255 {
-        PipelineKey::alpha_blend()
+    if mode == BlendMode::SrcOver {
+        // Legacy fast path: opaque SrcOver skips blending.
+        return if paint.color.a < 255 {
+            PipelineKey::alpha_blend()
+        } else {
+            PipelineKey::opaque()
+        };
+    }
+
+    if mode.is_porter_duff() {
+        // Fixed-function Porter-Duff: dedicated blended pipeline for this mode.
+        PipelineKey::with_blend(mode)
     } else {
-        PipelineKey::opaque()
+        // Advanced / dst-read mode: not representable with fixed-function
+        // blending. Fall back to SrcOver and warn once per process so the gap
+        // is honest and visible (Phase B will implement these via a dst-read
+        // shader pass).
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                blend_mode = ?mode,
+                "shape blend mode {:?} is an advanced (dst-read) mode not supported \
+                 by the Phase A fixed-function path; falling back to SrcOver \
+                 (Phase B) (logged once per process)",
+                mode
+            );
+        }
+        // Preserve the opaque/alpha distinction for the SrcOver fallback.
+        if paint.color.a < 255 {
+            PipelineKey::alpha_blend()
+        } else {
+            PipelineKey::opaque()
+        }
+    }
+}
+
+/// Pure-logic tests for the blend-mode routing and Porter-Duff factor table.
+/// Not gated behind `enable-wgpu-tests` because they need no GPU device, so they
+/// run in the default `cargo test --lib` gate.
+#[cfg(test)]
+mod blend_logic {
+    use flui_painting::BlendMode;
+    use wgpu::{BlendFactor, BlendOperation};
+
+    use super::*;
+
+    #[test]
+    fn srcover_opaque_skips_blending() {
+        let paint = Paint::fill(flui_types::Color::rgb(10, 20, 30)); // a == 255, SrcOver
+        let key = pipeline_key_from_paint(&paint);
+        assert!(
+            !key.is_alpha_blended(),
+            "opaque SrcOver must skip the blend stage"
+        );
+    }
+
+    #[test]
+    fn srcover_translucent_uses_blend() {
+        let paint = Paint::fill(flui_types::Color::rgba(10, 20, 30, 128));
+        let key = pipeline_key_from_paint(&paint);
+        assert!(key.is_alpha_blended());
+        assert_eq!(key.blend_mode(), BlendMode::SrcOver);
+    }
+
+    #[test]
+    fn porter_duff_modes_select_their_own_pipeline() {
+        // Even an opaque source must take the blend stage for non-SrcOver modes
+        // (Clear punches out, Plus adds, etc.).
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::Dst,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ] {
+            let paint = Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(mode);
+            let key = pipeline_key_from_paint(&paint);
+            assert!(key.is_alpha_blended(), "{mode:?} must enable blending");
+            assert_eq!(key.blend_mode(), mode, "{mode:?} must key its own pipeline");
+        }
+    }
+
+    #[test]
+    fn advanced_modes_fall_back_to_srcover() {
+        for mode in [
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Multiply,
+            BlendMode::Darken,
+            BlendMode::Hue,
+            BlendMode::Luminosity,
+        ] {
+            let paint = Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(mode);
+            let key = pipeline_key_from_paint(&paint);
+            // Opaque source under the fallback keeps the opaque key (SrcOver).
+            assert!(
+                !key.is_alpha_blended(),
+                "{mode:?} fallback should reuse the SrcOver heuristic"
+            );
+            assert_eq!(key.blend_mode(), BlendMode::SrcOver);
+        }
+    }
+
+    #[test]
+    fn srcover_blend_state_matches_premultiplied() {
+        // SrcOver must equal wgpu's PREMULTIPLIED_ALPHA_BLENDING so the shader's
+        // premultiply switch is a no-op visually.
+        assert_eq!(
+            blend_state_for(BlendMode::SrcOver),
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
+        );
+    }
+
+    #[test]
+    fn blend_state_factor_table_is_correct() {
+        let c = |m: BlendMode| blend_state_for(m).color;
+        let a = |m: BlendMode| blend_state_for(m).alpha;
+
+        // Clear: zero everything.
+        assert_eq!(c(BlendMode::Clear).src_factor, BlendFactor::Zero);
+        assert_eq!(c(BlendMode::Clear).dst_factor, BlendFactor::Zero);
+
+        // Src: keep source, drop dest.
+        assert_eq!(c(BlendMode::Src).src_factor, BlendFactor::One);
+        assert_eq!(c(BlendMode::Src).dst_factor, BlendFactor::Zero);
+
+        // Plus: additive.
+        assert_eq!(c(BlendMode::Plus).src_factor, BlendFactor::One);
+        assert_eq!(c(BlendMode::Plus).dst_factor, BlendFactor::One);
+
+        // DstOver: dst wins where it covers.
+        assert_eq!(
+            c(BlendMode::DstOver).src_factor,
+            BlendFactor::OneMinusDstAlpha
+        );
+        assert_eq!(c(BlendMode::DstOver).dst_factor, BlendFactor::One);
+
+        // Modulate: color uses Dst (src*dst), alpha uses DstAlpha.
+        assert_eq!(c(BlendMode::Modulate).src_factor, BlendFactor::Dst);
+        assert_eq!(c(BlendMode::Modulate).dst_factor, BlendFactor::Zero);
+        assert_eq!(a(BlendMode::Modulate).src_factor, BlendFactor::DstAlpha);
+
+        // All Porter-Duff modes use the Add operation.
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::SrcOver,
+            BlendMode::Xor,
+            BlendMode::Modulate,
+            BlendMode::Plus,
+        ] {
+            assert_eq!(c(mode).operation, BlendOperation::Add);
+            assert_eq!(a(mode).operation, BlendOperation::Add);
+        }
+    }
+
+    #[test]
+    fn distinct_blend_modes_produce_distinct_keys() {
+        let red = flui_types::Color::rgb(255, 0, 0);
+        let k_plus = pipeline_key_from_paint(&Paint::fill(red).with_blend_mode(BlendMode::Plus));
+        let k_clear = pipeline_key_from_paint(&Paint::fill(red).with_blend_mode(BlendMode::Clear));
+        assert_ne!(
+            k_plus, k_clear,
+            "different blend modes must hash to different pipeline keys"
+        );
     }
 }
 

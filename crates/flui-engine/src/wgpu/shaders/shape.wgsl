@@ -38,8 +38,17 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 }
 
 // Fragment shader
+//
+// Emits PREMULTIPLIED alpha: rgb is scaled by the final alpha. This is the
+// correct input form for fixed-function Porter-Duff blending, which the
+// tessellated pipeline selects per `PipelineKey::blend_mode`. The default
+// SrcOver case pairs this with `BlendState::PREMULTIPLIED_ALPHA_BLENDING`
+// (src factor One), making it visually identical to the previous straight
+// `input.color` + `ALPHA_BLENDING` output. No clip/opacity factor is applied
+// to alpha in this shader, so premultiplying by `c.a` is the full final alpha.
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return input.color;
+    let c = input.color;
+    return vec4<f32>(c.rgb * c.a, c.a);
 }
