@@ -1209,6 +1209,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "wgpu",
+ "wgpu-profiler",
 ]
 
 [[package]]
@@ -5375,6 +5376,17 @@ checksum = "59c654c483f058800972c3645e95388a7eca31bf9fe1933bc20e036588a0be02"
 dependencies = [
  "naga",
  "wgpu-types",
+]
+
+[[package]]
+name = "wgpu-profiler"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "948e23cc220c021611e4de4072b20365192e861cde1f2d17437c1cdd7651bbc0"
+dependencies = [
+ "parking_lot",
+ "thiserror 2.0.18",
+ "wgpu",
 ]
 
 [[package]]

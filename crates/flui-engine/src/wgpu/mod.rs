@@ -110,6 +110,7 @@ mod pipeline;
 // `pipeline` (singular), which is the live version. The audit
 // (R-7 entry E-6) had the singular/plural mapping reversed; the
 // outcome is the same — one of the two parallel modules dies.
+mod profiler;
 mod renderer;
 /// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
 /// blur / morph). Cycle 4 E-7 dropped the module-level
@@ -184,5 +185,8 @@ pub use painter::WgpuPainter;
 pub use renderer::Renderer;
 // Font loading utilities (external via lib.rs re-export at crate root)
 pub use font_loader::FontLoader;
+// GPU frame profile — feature-independent type, always available so callers
+// can store/display profiling results without gating on `gpu-profiler`.
+pub use profiler::{GpuFrameProfile, PassTiming};
 
 // Painter (WgpuPainter is the concrete implementation; Painter trait deleted in Mythos U5)
