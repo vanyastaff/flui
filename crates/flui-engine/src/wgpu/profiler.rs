@@ -9,7 +9,7 @@
 //!
 //! # Integration
 //!
-//! [`GpuFrameProfiler`] wraps the underlying `wgpu_profiler::GpuProfiler` and is
+//! `GpuFrameProfiler` (a feature-gated type) wraps the underlying `wgpu_profiler::GpuProfiler` and is
 //! owned as an `Option<GpuFrameProfiler>` by [`crate::wgpu::Renderer`]. When the
 //! option is `None` — either because the feature flag is off or the adapter lacks
 //! `TIMESTAMP_QUERY` — every call site compiles away with no runtime cost.
@@ -201,7 +201,7 @@ impl GpuFrameProfiler {
     /// Open a named profiler scope on the given encoder.
     ///
     /// The returned [`ScopeGuard`] wraps `wgpu_profiler::Scope` and closes the
-    /// query on drop. Drop the guard **before** calling [`resolve_queries`].
+    /// query on drop. Drop the guard **before** calling [`Self::resolve_queries`].
     ///
     /// # Lifetime
     ///
@@ -246,7 +246,7 @@ impl GpuFrameProfiler {
     /// `timestamp_period` is `wgpu::Queue::get_timestamp_period()` — the
     /// conversion factor from raw GPU ticks to nanoseconds.
     ///
-    /// Returns the completed profile and stores it in [`latest_completed_frame`].
+    /// Returns the completed profile and stores it in [`Self::latest_completed_frame`].
     /// Returns `None` when the GPU pipeline hasn't yet completed enough frames
     /// to return results (normally requires `PENDING_FRAME_BUFFER_DEPTH` frames).
     pub fn process_finished_frame(&mut self, timestamp_period: f32) -> Option<&GpuFrameProfile> {
