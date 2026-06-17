@@ -19,7 +19,8 @@ use flui_types::{
 use wgpu::util::DeviceExt;
 
 use super::{
-    pipeline::{self, PipelineCache, PipelineKey},
+    pipeline::{self, PipelineKey},
+    pipelines::PipelineSet,
     resources::GpuResources,
     tessellator::Tessellator,
     text::TextRenderer,
@@ -289,79 +290,33 @@ pub struct WgpuPainter {
     /// Facade owning BufferPool, TextureCache, TexturePool, and ExternalTextureRegistry.
     resources: GpuResources,
 
-    // ===== Shape Rendering =====
-    /// Pipeline cache for specialized rendering pipelines
-    pipeline_cache: PipelineCache,
+    // ===== Pipeline Collection =====
+    /// All render pipelines used by this painter: nine named instanced/gradient/shadow
+    /// pipelines + the on-demand shape pipeline cache. See `PipelineSet` for the full
+    /// field map from previous painter fields to sub-fields.
+    pipelines: PipelineSet,
 
-    // ===== Instanced Rendering =====
-    /// Instanced rectangle pipeline (100x faster for UI)
-    instanced_rect_pipeline: wgpu::RenderPipeline,
-
-    /// Viewport uniform buffer (for instanced shader)
+    // ===== Instanced Rendering Geometry =====
+    /// Viewport uniform buffer (updated on resize, read by all instanced pipelines).
     viewport_buffer: wgpu::Buffer,
 
-    /// Viewport bind group (for instanced pipelines)
+    /// Viewport bind group (group 0 for all instanced/gradient/shadow pipelines).
+    ///
+    /// Created against [`PipelineSet::viewport_bind_group_layout`] to satisfy
+    /// the wgpu identity requirement: bind group and pipeline must share the
+    /// exact same layout object.
     viewport_bind_group: wgpu::BindGroup,
 
-    /// Shared unit quad vertex buffer (reused for all instances)
+    /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced pipelines.
     unit_quad_buffer: wgpu::Buffer,
 
-    /// Shared unit quad index buffer
+    /// Shared unit-quad index buffer (two triangles: 0,1,2 and 0,2,3).
     unit_quad_index_buffer: wgpu::Buffer,
-
-    /// Instanced circle pipeline (100x faster for UI)
-    instanced_circle_pipeline: wgpu::RenderPipeline,
-
-    /// Instanced arc pipeline (100x faster for progress indicators)
-    instanced_arc_pipeline: wgpu::RenderPipeline,
-
-    /// Instanced texture pipeline (100x faster for images/icons)
-    ///
-    /// Uses straight `ALPHA_BLENDING` — correct for normal decoded-image draws,
-    /// whose samples are *straight* alpha (rgb not pre-multiplied).
-    instanced_texture_pipeline: wgpu::RenderPipeline,
-
-    /// Instanced texture pipeline using **premultiplied** source-over blending.
-    ///
-    /// Used exclusively for compositing offscreen *layer* textures
-    /// (`flush_opacity_layer`). A layer offscreen is cleared to transparent and
-    /// its children are drawn with straight `ALPHA_BLENDING`, which leaves every
-    /// texel *premultiplied* (`rgb = straight_rgb * a`). Compositing such a texel
-    /// with straight alpha would multiply rgb by alpha a second time, darkening
-    /// translucent/anti-aliased content. This pipeline uses
-    /// `PREMULTIPLIED_ALPHA_BLENDING` (src factor `One`) so a premultiplied
-    /// sample is composited correctly, and a per-channel tint of
-    /// `(C.r*O, C.g*O, C.b*O, O)` applies group opacity `O` and ColorFilter
-    /// chroma `C` uniformly across the already-premultiplied texel.
-    instanced_texture_premul_pipeline: wgpu::RenderPipeline,
 
     /// Texture instance batch
     texture_batch: super::instancing::InstanceBatch<super::instancing::TextureInstance>,
 
-    /// Texture bind group layout (for texture + sampler)
-    texture_bind_group_layout: wgpu::BindGroupLayout,
-
-    // ===== Advanced Effects =====
-    /// Linear gradient pipeline (GPU-accelerated gradients)
-    linear_gradient_pipeline: wgpu::RenderPipeline,
-
-    /// Radial gradient pipeline (GPU-accelerated radial gradients)
-    radial_gradient_pipeline: wgpu::RenderPipeline,
-    sweep_gradient_pipeline: wgpu::RenderPipeline,
-
-    /// Shadow pipeline (analytical shadows with single-pass rendering)
-    shadow_pipeline: wgpu::RenderPipeline,
-
-    /// Gradient stops storage buffer (shared for all gradients)
-    gradient_stops_buffer: wgpu::Buffer,
-
-    /// Gradient stops bind group layout
-    gradient_bind_group_layout: wgpu::BindGroupLayout,
-
-    /// Current gradient stops bind group (recreated when stops change)
-    gradient_bind_group: Option<wgpu::BindGroup>,
-
-    /// Default texture sampler (linear filtering with repeat)
+    /// Default texture sampler (linear filtering, clamp-to-edge).
     default_sampler: wgpu::Sampler,
 
     // ===== Tessellation =====
@@ -502,107 +457,26 @@ impl WgpuPainter {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create bind group layout for viewport (will be owned by PipelineCache)
-        let viewport_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Viewport Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        // ===== Pipeline collection (all 9 named pipelines + shape cache) =====
+        //
+        // `PipelineSet::new` creates the viewport bind-group layout internally
+        // and exposes it via `viewport_bind_group_layout()`. The bind group
+        // created below MUST use that exact accessor to satisfy the wgpu identity
+        // requirement between bind groups and pipelines.
+        let pipelines = PipelineSet::new(&device, surface_format);
 
-        // Create pipeline cache FIRST - it will own the layout
-        let pipeline_cache = PipelineCache::new(
-            &device,
-            super::shaders::SHAPE,
-            surface_format,
-            viewport_bind_group_layout,
-        );
-
-        // Now create bind group using layout FROM pipeline_cache
-        // This ensures the bind group uses the EXACT SAME layout object as shape
-        // pipeline
+        // Create the viewport bind group using the layout from PipelineSet so
+        // identity is preserved across bind group and all pipeline layouts.
         let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Viewport Bind Group"),
-            layout: pipeline_cache.viewport_bind_group_layout(),
+            layout: pipelines.viewport_bind_group_layout(),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: viewport_buffer.as_entire_binding(),
             }],
         });
 
-        // ===== Instanced Rendering Setup =====
-
-        // Create instanced rectangle shader
-        let instanced_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Instanced Rect Shader"),
-            source: wgpu::ShaderSource::Wgsl(super::shaders::RECT_INSTANCED.into()),
-        });
-
-        // Create instanced rectangle pipeline
-        let instanced_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Instanced Rect Pipeline Layout"),
-                bind_group_layouts: &[Some(pipeline_cache.viewport_bind_group_layout())],
-                immediate_size: 0,
-            });
-
-        let instanced_rect_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Instanced Rect Pipeline"),
-                layout: Some(&instanced_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &instanced_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[
-                        // Vertex buffer (shared unit quad)
-                        wgpu::VertexBufferLayout {
-                            array_stride: 8, // 2 floats (vec2)
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                        },
-                        // Instance buffer
-                        super::instancing::RectInstance::desc(),
-                    ],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &instanced_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            });
-
-        // Create shared unit quad vertex buffer (0,0 to 1,1)
+        // ===== Shared unit quad geometry =====
         #[rustfmt::skip]
         let unit_quad_vertices: &[f32] = &[
             0.0, 0.0,  // Top-left
@@ -610,174 +484,23 @@ impl WgpuPainter {
             1.0, 1.0,  // Bottom-right
             0.0, 1.0,  // Bottom-left
         ];
-
         let unit_quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Unit Quad Vertex Buffer"),
             contents: bytemuck::cast_slice(unit_quad_vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-
-        // Create shared unit quad index buffer (2 triangles)
         let unit_quad_indices: &[u16] = &[
             0, 1, 2, // Triangle 1
             0, 2, 3, // Triangle 2
         ];
-
         let unit_quad_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Unit Quad Index Buffer"),
             contents: bytemuck::cast_slice(unit_quad_indices),
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // (Rectangle instance batch moved to DrawSegment)
-
-        // ===== Circle Instanced Rendering Setup =====
-
-        // Create instanced circle shader
-        let circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Instanced Circle Shader"),
-            source: wgpu::ShaderSource::Wgsl(super::shaders::CIRCLE_INSTANCED.into()),
-        });
-
-        // Create instanced circle pipeline (reuses viewport bind group layout)
-        let instanced_circle_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Instanced Circle Pipeline"),
-                layout: Some(&instanced_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &circle_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[
-                        // Vertex buffer (shared unit quad)
-                        wgpu::VertexBufferLayout {
-                            array_stride: 8, // 2 floats (vec2)
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                        },
-                        // Instance buffer
-                        super::instancing::CircleInstance::desc(),
-                    ],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &circle_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            });
-
-        // (Circle instance batch moved to DrawSegment)
-
-        // ===== Arc Instanced Rendering Setup =====
-
-        // Create instanced arc shader
-        let arc_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Instanced Arc Shader"),
-            source: wgpu::ShaderSource::Wgsl(super::shaders::ARC_INSTANCED.into()),
-        });
-
-        // Create instanced arc pipeline (reuses viewport bind group layout)
-        let instanced_arc_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Instanced Arc Pipeline"),
-                layout: Some(&instanced_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &arc_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[
-                        // Vertex buffer (shared unit quad)
-                        wgpu::VertexBufferLayout {
-                            array_stride: 8, // 2 floats (vec2)
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                        },
-                        // Instance buffer
-                        super::instancing::ArcInstance::desc(),
-                    ],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &arc_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            });
-
-        // (Arc instance batch moved to DrawSegment)
-
-        // ===== Texture Instanced Rendering Setup =====
-
-        // Create texture bind group layout
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Texture Bind Group Layout"),
-                entries: &[
-                    // Sampler
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    // Texture view
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        // Create default sampler (linear filtering, repeat)
+        // ===== Texture instance batch and default sampler =====
+        let texture_batch = super::instancing::InstanceBatch::new(1024);
         let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Default Texture Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -793,182 +516,13 @@ impl WgpuPainter {
             border_color: None,
         });
 
-        // Create instanced texture shader
-        let texture_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Instanced Texture Shader"),
-            source: wgpu::ShaderSource::Wgsl(super::shaders::TEXTURE_INSTANCED.into()),
-        });
-
-        // Create texture pipeline layout
-        let texture_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Instanced Texture Pipeline Layout"),
-                bind_group_layouts: &[
-                    Some(pipeline_cache.viewport_bind_group_layout()),
-                    Some(&texture_bind_group_layout),
-                ],
-                immediate_size: 0,
-            });
-
-        // Create instanced texture pipeline
-        let instanced_texture_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Instanced Texture Pipeline"),
-                layout: Some(&texture_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &texture_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[
-                        // Vertex buffer (shared unit quad)
-                        wgpu::VertexBufferLayout {
-                            array_stride: 8, // 2 floats (vec2)
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                        },
-                        // Instance buffer
-                        super::instancing::TextureInstance::desc(),
-                    ],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &texture_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            });
-
-        // Create the premultiplied-blend variant for offscreen-layer compositing.
-        // Identical to `instanced_texture_pipeline` (same shader, same layout)
-        // except for the blend state: PREMULTIPLIED_ALPHA_BLENDING (src factor
-        // One) composites premultiplied layer texels without re-multiplying by
-        // alpha. See the field doc on `instanced_texture_premul_pipeline`.
-        let instanced_texture_premul_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Instanced Texture Premultiplied Pipeline"),
-                layout: Some(&texture_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &texture_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[
-                        wgpu::VertexBufferLayout {
-                            array_stride: 8, // 2 floats (vec2)
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                        },
-                        super::instancing::TextureInstance::desc(),
-                    ],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &texture_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            });
-
-        // Create texture instance batch
-        let texture_batch = super::instancing::InstanceBatch::new(1024); // 1024 textures per batch
-
-        // Create tessellator for complex shapes
+        // ===== Tessellator, text renderer, transform stack =====
         let tessellator = Tessellator::new();
-
-        // Create text renderer
         let text_renderer = TextRenderer::new(&device, &queue, surface_format);
-
-        // Initialize transform stack with identity
         let current_transform = glam::Mat4::IDENTITY;
         let transform_stack = Vec::new();
 
-        // ===== Advanced Effects Setup =====
-
-        // Create gradient stops buffer and bind group layout
-        let gradient_stops_buffer = super::effects_pipeline::create_gradient_stops_buffer(&device);
-        let gradient_bind_group_layout =
-            super::effects_pipeline::create_gradient_bind_group_layout(&device);
-
-        // Create shared pipeline layout for all gradient pipelines
-        let gradient_pipeline_layout = super::effects_pipeline::create_gradient_pipeline_layout(
-            &device,
-            pipeline_cache.viewport_bind_group_layout(),
-            &gradient_bind_group_layout,
-        );
-
-        // Create gradient pipelines (all share the same PipelineLayout for bind group compatibility)
-        let linear_gradient_pipeline = super::effects_pipeline::create_linear_gradient_pipeline(
-            &device,
-            surface_format,
-            &gradient_pipeline_layout,
-        );
-        let radial_gradient_pipeline = super::effects_pipeline::create_radial_gradient_pipeline(
-            &device,
-            surface_format,
-            &gradient_pipeline_layout,
-        );
-        let sweep_gradient_pipeline = super::effects_pipeline::create_sweep_gradient_pipeline(
-            &device,
-            surface_format,
-            &gradient_pipeline_layout,
-        );
-
-        // (Sweep gradient batch moved to DrawSegment)
-
-        // Create shadow pipeline
-        let shadow_pipeline = super::effects_pipeline::create_shadow_pipeline(
-            &device,
-            surface_format,
-            pipeline_cache.viewport_bind_group_layout(),
-        );
-
-        // (Shadow batch moved to DrawSegment)
-
-        // No bind group yet (created on first gradient use)
-        let gradient_bind_group = None;
-
-        // Construct all four resource managers as a single facade.
+        // ===== Resource managers =====
         let resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
 
         Self {
@@ -977,25 +531,12 @@ impl WgpuPainter {
             surface_format,
             size,
             resources,
-            pipeline_cache,
-            instanced_rect_pipeline,
+            pipelines,
             viewport_buffer,
             viewport_bind_group,
             unit_quad_buffer,
             unit_quad_index_buffer,
-            instanced_circle_pipeline,
-            instanced_arc_pipeline,
-            instanced_texture_pipeline,
-            instanced_texture_premul_pipeline,
             texture_batch,
-            texture_bind_group_layout,
-            linear_gradient_pipeline,
-            radial_gradient_pipeline,
-            sweep_gradient_pipeline,
-            shadow_pipeline,
-            gradient_stops_buffer,
-            gradient_bind_group_layout,
-            gradient_bind_group,
             default_sampler,
             tessellator,
             path_cache: super::path_cache::PathCache::new(512),
@@ -1517,8 +1058,11 @@ impl WgpuPainter {
         let mut active_key: Option<PipelineKey> = None;
         for batch in &self.current_segment.tess_batches {
             if active_key != Some(batch.pipeline_key) {
+                // `self.pipelines` and `self.device` are disjoint fields — no
+                // borrow conflict with the encoder/render_pass borrows above.
                 let pipeline = self
-                    .pipeline_cache
+                    .pipelines
+                    .shape_cache_mut()
                     .get_or_create(&self.device, batch.pipeline_key);
                 render_pass.set_pipeline(pipeline);
                 active_key = Some(batch.pipeline_key);
@@ -2035,7 +1579,7 @@ impl WgpuPainter {
 
         // --- Shadows (rendered first for correct z-ordering) ---
         if has_shadows {
-            render_pass.set_pipeline(&self.shadow_pipeline);
+            render_pass.set_pipeline(&self.pipelines.shadow);
             let buf_start = shadow_offset;
             let buf_end = buf_start + shadow_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
@@ -2046,7 +1590,7 @@ impl WgpuPainter {
 
         // --- Rectangles (per-scissor-region) ---
         if has_rects {
-            render_pass.set_pipeline(&self.instanced_rect_pipeline);
+            render_pass.set_pipeline(&self.pipelines.instanced_rect);
             let buf_start = rect_offset;
             let buf_end = buf_start + rect_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
@@ -2063,7 +1607,7 @@ impl WgpuPainter {
 
         // --- Circles (per-scissor-region) ---
         if has_circles {
-            render_pass.set_pipeline(&self.instanced_circle_pipeline);
+            render_pass.set_pipeline(&self.pipelines.instanced_circle);
             let buf_start = circle_offset;
             let buf_end = buf_start + circle_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
@@ -2080,7 +1624,7 @@ impl WgpuPainter {
 
         // --- Arcs (per-scissor-region) ---
         if has_arcs {
-            render_pass.set_pipeline(&self.instanced_arc_pipeline);
+            render_pass.set_pipeline(&self.pipelines.instanced_arc);
             let buf_start = arc_offset;
             let buf_end = buf_start + arc_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
@@ -2137,22 +1681,11 @@ impl WgpuPainter {
 
         // ===== Upload Gradient Stops to GPU =====
         if !self.current_segment.current_gradient_stops.is_empty() {
-            self.queue.write_buffer(
-                &self.gradient_stops_buffer,
-                0,
+            self.pipelines.refresh_gradient_bind_group(
+                &self.device,
+                &self.queue,
                 bytemuck::cast_slice(&self.current_segment.current_gradient_stops),
             );
-
-            // Create/update bind group
-            self.gradient_bind_group =
-                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Gradient Stops Bind Group"),
-                    layout: &self.gradient_bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.gradient_stops_buffer.as_entire_binding(),
-                    }],
-                }));
         }
 
         // Calculate buffer sizes
@@ -2211,7 +1744,7 @@ impl WgpuPainter {
 
         // Set shared resources
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-        if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+        if let Some(ref gradient_bind_group) = self.pipelines.gradient_bind_group {
             render_pass.set_bind_group(1, gradient_bind_group, &[]);
         }
         render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
@@ -2225,11 +1758,11 @@ impl WgpuPainter {
 
         // ===== Draw Linear Gradients (per-scissor-region) =====
         if has_linear {
-            render_pass.set_pipeline(&self.linear_gradient_pipeline);
+            render_pass.set_pipeline(&self.pipelines.linear_gradient);
             // Re-set bind groups after pipeline switch (WebGPU invalidates bind groups
             // when the new pipeline's PipelineLayout is a different object)
             render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-            if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+            if let Some(ref gradient_bind_group) = self.pipelines.gradient_bind_group {
                 render_pass.set_bind_group(1, gradient_bind_group, &[]);
             }
 
@@ -2249,9 +1782,9 @@ impl WgpuPainter {
 
         // ===== Draw Radial Gradients (per-scissor-region) =====
         if has_radial {
-            render_pass.set_pipeline(&self.radial_gradient_pipeline);
+            render_pass.set_pipeline(&self.pipelines.radial_gradient);
             render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-            if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+            if let Some(ref gradient_bind_group) = self.pipelines.gradient_bind_group {
                 render_pass.set_bind_group(1, gradient_bind_group, &[]);
             }
 
@@ -2271,9 +1804,9 @@ impl WgpuPainter {
 
         // ===== Draw Sweep Gradients (per-scissor-region) =====
         if has_sweep {
-            render_pass.set_pipeline(&self.sweep_gradient_pipeline);
+            render_pass.set_pipeline(&self.pipelines.sweep_gradient);
             render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-            if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+            if let Some(ref gradient_bind_group) = self.pipelines.gradient_bind_group {
                 render_pass.set_bind_group(1, gradient_bind_group, &[]);
             }
 
@@ -2342,7 +1875,7 @@ impl WgpuPainter {
     /// which leaves their texels premultiplied (`rgb = straight_rgb * a`).
     /// Compositing them with the straight pipeline would re-multiply rgb by
     /// alpha, darkening translucent/AA content. This routes the batch through
-    /// [`Self::instanced_texture_premul_pipeline`] (src factor `One`) so the
+    /// [`super::pipelines::PipelineSet::instanced_texture_premul`] (src factor `One`) so the
     /// composite is correct, with the per-channel `tint` carrying group opacity
     /// and any ColorFilter chroma as `(C.r*O, C.g*O, C.b*O, O)`.
     fn flush_texture_batch_premultiplied(
@@ -2382,7 +1915,7 @@ impl WgpuPainter {
         // Create texture bind group for this batch
         let texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Texture Instance Bind Group"),
-            layout: &self.texture_bind_group_layout,
+            layout: &self.pipelines.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -2423,10 +1956,11 @@ impl WgpuPainter {
 
         // Set pipeline and buffers. Offscreen-layer composites use the
         // premultiplied pipeline; normal decoded-image draws use straight alpha.
+        // Selection logic is behavior-preserving (round-5c color-correctness fix).
         let pipeline = if premultiplied {
-            &self.instanced_texture_premul_pipeline
+            &self.pipelines.instanced_texture_premul
         } else {
-            &self.instanced_texture_pipeline
+            &self.pipelines.instanced_texture
         };
         render_pass.set_pipeline(pipeline);
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);

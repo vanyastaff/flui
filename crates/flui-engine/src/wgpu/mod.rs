@@ -102,14 +102,12 @@ pub mod path_cache;
 /// `PipelineCache` (get_or_create, viewport_bind_group_layout), and
 /// `pipeline_key_from_paint`. Unused constants/methods/cache helpers deleted.
 mod pipeline;
-// Cycle 4 E-6: parallel `pipelines.rs` module (with its own
-// `PipelineCache` + `PipelineBuilder` structs, name-colliding with
-// `pipeline.rs`) was deleted. Workspace grep showed zero non-self
-// consumers of `pipelines::PipelineCache` / `pipelines::PipelineBuilder`
-// outside the re-export line below; `painter.rs:22` imports from
-// `pipeline` (singular), which is the live version. The audit
-// (R-7 entry E-6) had the singular/plural mapping reversed; the
-// outcome is the same — one of the two parallel modules dies.
+// Cycle 4 E-6: the parallel `pipelines.rs` (with its own `PipelineCache` +
+// `PipelineBuilder` structs, name-colliding with `pipeline.rs`) was deleted.
+// The `pipelines.rs` introduced by T3 is distinct: it defines `PipelineSet`,
+// which *composes* the live `PipelineCache` from `pipeline.rs` (singular) and
+// adds the nine named pipelines previously scattered as painter fields.
+pub(crate) mod pipelines;
 mod profiler;
 mod renderer;
 pub(crate) mod resources;
