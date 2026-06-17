@@ -1048,6 +1048,12 @@ impl Renderer {
                     let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
                 }
                 // scope drops here → end_query fires
+            } else {
+                // Feature compiled but no capable adapter (gpu_profiler is None):
+                // fall back to the unprofiled clear pass so the surface is still
+                // cleared. Branching on the Option, not just the Cargo feature, is
+                // what makes the documented "graceful no-op" actually graceful.
+                let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
             }
             #[cfg(not(feature = "gpu-profiler"))]
             {
@@ -1147,16 +1153,22 @@ impl Renderer {
             // painter.render writes into the same underlying encoder.
             // Scope drops at end of block → end_query fires → resolve_queries
             // copies the result → encoder finishes and is submitted.
+            // Branch on the Option (runtime), not just the Cargo feature
+            // (compile-time): when the feature is compiled but `gpu_profiler` is
+            // None (incapable adapter), the render must STILL run — otherwise the
+            // frame presents only the clear pass (blank content). This is the
+            // documented graceful no-op.
             #[cfg(feature = "gpu-profiler")]
-            if let Some(profiler) = self.gpu_profiler.as_ref() {
+            let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
                 let mut scope = profiler.scope("final_render", &mut final_encoder);
-                if let Err(e) = painter.render(&view, scope.recorder()) {
-                    tracing::error!("Painter render failed: {}", e);
-                }
+                painter.render(&view, scope.recorder())
                 // scope drops here → end_query fires
-            }
+            } else {
+                painter.render(&view, &mut final_encoder)
+            };
             #[cfg(not(feature = "gpu-profiler"))]
-            if let Err(e) = painter.render(&view, &mut final_encoder) {
+            let render_result = painter.render(&view, &mut final_encoder);
+            if let Err(e) = render_result {
                 tracing::error!("Painter render failed: {}", e);
             }
             // Resolve before finishing the encoder.
