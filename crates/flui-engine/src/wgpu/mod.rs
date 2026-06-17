@@ -126,6 +126,11 @@ pub(crate) mod resources;
 /// method existed -- only `clear`.
 mod shader_compiler;
 mod shaders;
+/// GPU draw-state stack: the four paired transform/scissor/SDF-clip stacks
+/// and their cached current values, extracted from `WgpuPainter` so they can
+/// be owned and delegated as a unit. Owned by `WgpuPainter` via the `state`
+/// field.
+pub(super) mod state_stack;
 pub mod superellipse_cache;
 mod tessellator;
 mod text;

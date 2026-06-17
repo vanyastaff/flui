@@ -26,6 +26,7 @@ use super::{
     pipeline::{self, PipelineKey},
     pipelines::PipelineSet,
     resources::GpuResources,
+    state_stack::GpuStateStack,
     tessellator::Tessellator,
     text::TextRenderer,
     vertex::Vertex,
@@ -102,47 +103,13 @@ pub struct WgpuPainter {
     /// Glyphon-based text renderer
     text_renderer: TextRenderer,
 
-    // ===== Transform Stack =====
-    /// Stack of saved transforms
-    transform_stack: Vec<glam::Mat4>,
-
-    /// Current active transform
-    current_transform: glam::Mat4,
-
-    // ===== Clipping =====
-    /// Stack of scissor rectangles for axis-aligned clipping
-    /// Each element is (x, y, width, height) in physical pixels
-    scissor_stack: Vec<(u32, u32, u32, u32)>,
-
-    /// Current active scissor rect (None = no clipping)
-    current_scissor: Option<(u32, u32, u32, u32)>,
-
-    // ===== SDF Clip Stack =====
-    /// Stack of SDF rounded rectangle clip regions.
-    /// Each element is `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
-    /// Used to restore clip state on `restore()`.
-    rrect_clip_stack: Vec<[f32; 8]>,
-
-    /// SDF rsuperellipse clip stack (for save/restore).
-    ///
-    /// Stack of `[f32; 12]` superellipse clip uniforms — 4 floats outer
-    /// rect (x, y, w, h) + 8 floats per-corner radii (rx/ry per 4 corners
-    /// in tl, tr, br, bl order). Mirrors the `rrect_clip_stack` shape with
-    /// a wider tuple to carry the per-corner separate-axis radii.
-    rsuperellipse_clip_stack: Vec<[f32; 12]>,
-
-    /// Current SDF rounded rectangle clip.
-    /// All zeros means no clip is active.
-    /// When non-zero, each new instance gets this clip data so the fragment
-    /// shader can perform per-pixel SDF clipping without a stencil buffer.
-    current_rrect_clip: [f32; 8],
-
-    /// Active SDF rsuperellipse clip uniform (zero when no clip is active).
-    ///
-    /// Tuple layout: indices 0-3 = outer rect `(x, y, w, h)`; indices 4-11
-    /// = per-corner radii `(tl_x, tl_y, tr_x, tr_y, br_x, br_y, bl_x, bl_y)`.
-    /// Exponent `n = 4` is hardcoded in the WGSL shader, not stored here.
-    current_rsuperellipse_clip: [f32; 12],
+    // ===== GPU Draw-State Stack =====
+    /// Owns the four parallel transform/scissor/SDF-clip stacks and their
+    /// cached current values. All save/restore/translate/rotate/scale and
+    /// clip operations delegate through this. Opacity and layer state stay
+    /// on `WgpuPainter` directly (see `opacity_stack`, `layer_stack` below)
+    /// and are managed by T8 LayerCompositor.
+    state: GpuStateStack,
 
     // ===== Opacity/Layer Stack =====
     /// Stack of opacity values for save_layer/restore_layer
@@ -278,11 +245,9 @@ impl WgpuPainter {
             border_color: None,
         });
 
-        // ===== Tessellator, text renderer, transform stack =====
+        // ===== Tessellator, text renderer =====
         let tessellator = Tessellator::new();
         let text_renderer = TextRenderer::new(&device, &queue, surface_format);
-        let current_transform = glam::Mat4::IDENTITY;
-        let transform_stack = Vec::new();
 
         // ===== Resource managers =====
         let resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
@@ -304,14 +269,7 @@ impl WgpuPainter {
             path_cache: super::path_cache::PathCache::new(512),
             superellipse_cache: super::superellipse_cache::SuperellipsePathCache::new(256),
             text_renderer,
-            transform_stack,
-            current_transform,
-            scissor_stack: Vec::new(),
-            current_scissor: None,
-            rrect_clip_stack: Vec::new(),
-            current_rrect_clip: [0.0; 8],
-            rsuperellipse_clip_stack: Vec::new(),
-            current_rsuperellipse_clip: [0.0; 12],
+            state: GpuStateStack::new(),
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
             layer_stack: Vec::new(),
@@ -353,19 +311,21 @@ impl WgpuPainter {
     /// frame, causing full-repaint frames to silently clip to the previous
     /// damage rect.
     pub fn reset_frame_state(&mut self) {
-        self.current_scissor = None;
-        self.scissor_stack.clear();
-        self.current_rrect_clip = [0.0; 8];
-        self.rrect_clip_stack.clear();
-        self.current_rsuperellipse_clip = [0.0; 12];
-        self.rsuperellipse_clip_stack.clear();
+        // Assert save/restore balance at the frame boundary BEFORE clearing.
+        //
+        // Not placed in `GpuStateStack::Drop` because the Backend
+        // implicit-single-save (a lazy `active_transform` save left when a
+        // Backend is dropped without calling `into_painter`) must not
+        // false-positive-panic, and a Drop panic during unwind aborts the process.
+        //
+        // The assertion logic lives in `GpuStateStack::debug_assert_balanced`
+        // so it can be exercised by unit tests without a GPU.
+        self.state.debug_assert_balanced();
+
+        self.state.reset();
         self.current_opacity = 1.0;
         self.opacity_stack.clear();
         self.layer_stack.clear();
-        // Identity is the construction-time value (see `new()`: `let current_transform =
-        // glam::Mat4::IDENTITY`). Reset to the same initial value.
-        self.current_transform = glam::Mat4::IDENTITY;
-        self.transform_stack.clear();
 
         tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
     }
@@ -376,7 +336,7 @@ impl WgpuPainter {
     /// so it is never dead code in either build configuration.
     #[cfg(all(test, feature = "enable-wgpu-tests"))]
     pub(crate) fn current_scissor_for_test(&self) -> Option<(u32, u32, u32, u32)> {
-        self.current_scissor
+        self.state.current_scissor()
     }
 
     /// Returns the `dst_rect` field `[x, y, w, h]` of each pending external-image
@@ -874,10 +834,11 @@ impl WgpuPainter {
 
     /// Returns the current save stack depth.
     ///
-    /// This is useful for tracking how many `save()` calls have been made
-    /// so that the corresponding number of `restore()` calls can be issued.
+    /// Delegates to `GpuStateStack::depth` — the single source of truth is
+    /// `transform_stack.len()` inside the stack; no parallel counter is
+    /// maintained.
     pub fn save_count(&self) -> usize {
-        self.transform_stack.len()
+        self.state.depth()
     }
 
     // ===== External Texture Registry Access =====
@@ -915,16 +876,13 @@ impl WgpuPainter {
 
     /// Apply current transform to a point
     fn apply_transform(&self, point: Point<Pixels>) -> Point<Pixels> {
-        let p = self.current_transform * glam::vec4(point.x.0, point.y.0, 0.0, 1.0);
-        Point::new(px(p.x), px(p.y))
+        self.state.apply_transform(point)
     }
 
     /// Check if the current transform is axis-aligned (no rotation/skew).
     /// When false, rects must be tessellated rather than instanced.
     fn is_axis_aligned_transform(&self) -> bool {
-        let m = self.current_transform;
-        // Off-diagonal elements of the 2D part must be ~zero
-        m.x_axis.y.abs() < 1e-6 && m.y_axis.x.abs() < 1e-6
+        self.state.is_axis_aligned()
     }
 
     /// Maximum basis length of the current transform's 2D linear part.
@@ -941,10 +899,7 @@ impl WgpuPainter {
     /// `scale(dpr)`), so the offscreen child/result textures must be allocated
     /// `bounds * dpr` to avoid rendering the masked layer at half resolution.
     pub(crate) fn current_max_scale(&self) -> f32 {
-        let m = self.current_transform;
-        let col_x = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
-        let col_y = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
-        col_x.max(col_y)
+        self.state.max_scale()
     }
 
     /// The accumulated current transform (CTM) as a [`flui_types::Matrix4`].
@@ -961,18 +916,14 @@ impl WgpuPainter {
     /// truth the display-list backdrop path ("Path B") receives as its
     /// `transform` argument.
     pub(crate) fn current_transform_matrix(&self) -> flui_types::Matrix4 {
-        let c = self.current_transform.to_cols_array();
-        flui_types::Matrix4::new(
-            c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12], c[13],
-            c[14], c[15],
-        )
+        self.state.current_transform_matrix()
     }
 
     /// Prime the tessellator with the current world scale so its curve-flattening
     /// tolerances stay sub-pixel after the transform is baked into vertices.
     /// Call immediately before any `self.tessellator.tessellate_*` invocation.
     fn prime_tessellator_scale(&mut self) {
-        let scale = self.current_max_scale();
+        let scale = self.state.max_scale();
         self.tessellator.set_max_scale(scale);
     }
 
@@ -1046,7 +997,7 @@ impl WgpuPainter {
         // Try to extend the current batch if pipeline key AND scissor match
         if let Some(last) = self.current_segment.tess_batches.last_mut()
             && last.pipeline_key == key
-            && last.scissor == self.current_scissor
+            && last.scissor == self.state.current_scissor()
         {
             last.index_count += index_count;
         } else {
@@ -1054,7 +1005,7 @@ impl WgpuPainter {
             self.current_segment.current_pipeline_key = Some(key);
             self.current_segment.tess_batches.push(TessellatedBatch {
                 pipeline_key: key,
-                scissor: self.current_scissor,
+                scissor: self.state.current_scissor(),
                 index_start,
                 index_count,
             });
@@ -1085,7 +1036,7 @@ impl WgpuPainter {
         indices: &[u32],
         key: PipelineKey,
     ) {
-        let m = self.current_transform;
+        let m = self.state.current_transform();
         for v in &mut vertices {
             let p = m * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
             v.position = [p.x, p.y];
@@ -1914,7 +1865,7 @@ impl WgpuPainter {
                 let _ = self.current_segment.rect_batch.add(instance);
                 DrawSegment::push_scissor_region(
                     &mut self.current_segment.rect_scissors,
-                    self.current_scissor,
+                    self.state.current_scissor(),
                 );
             } else {
                 // Slow path: tessellate rotated/skewed rects (or any non-SrcOver
@@ -2055,7 +2006,7 @@ impl WgpuPainter {
             let _ = self.current_segment.rect_batch.add(instance);
             DrawSegment::push_scissor_region(
                 &mut self.current_segment.rect_scissors,
-                self.current_scissor,
+                self.state.current_scissor(),
             );
         } else {
             // Stroked rounded rect - use tessellator (fallback)
@@ -2127,7 +2078,7 @@ impl WgpuPainter {
                 // Extract the per-axis scale from the 2-D part of the matrix.
                 // Off-diagonal elements are ~zero (guarded above), so column
                 // magnitudes equal the axis scales without cross-contamination.
-                let m = self.current_transform;
+                let m = self.state.current_transform();
                 let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
                 let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
 
@@ -2140,7 +2091,7 @@ impl WgpuPainter {
                 let _ = self.current_segment.circle_batch.add(instance);
                 DrawSegment::push_scissor_region(
                     &mut self.current_segment.circle_scissors,
-                    self.current_scissor,
+                    self.state.current_scissor(),
                 );
             } else {
                 // Slow path: rotation/shear present, or a non-SrcOver blend mode —
@@ -2239,7 +2190,7 @@ impl WgpuPainter {
             // direction, which the instanced shader cannot represent.  Guard with the
             // 2D determinant: det < 0 means the transform includes a reflection and
             // the wedge would be drawn on the wrong side.
-            let m = self.current_transform;
+            let m = self.state.current_transform();
             let det = m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x;
             // The instanced fast path renders with a hardcoded SrcOver pipeline;
             // a non-SrcOver blend mode must route through the tessellated path
@@ -2264,7 +2215,7 @@ impl WgpuPainter {
                 let _ = self.current_segment.arc_batch.add(instance);
                 DrawSegment::push_scissor_region(
                     &mut self.current_segment.arc_scissors,
-                    self.current_scissor,
+                    self.state.current_scissor(),
                 );
             } else {
                 // Slow path: rotation, shear, reflection, or non-SrcOver blend
@@ -2461,7 +2412,7 @@ impl WgpuPainter {
         // which calls flush_texture_batch per entry with the correct view bound).
         self.current_segment
             .external_images
-            .push((view, instance, self.current_scissor));
+            .push((view, instance, self.state.current_scissor()));
     }
 
     pub fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
@@ -2594,7 +2545,7 @@ impl WgpuPainter {
                 self.current_segment.cached_images.push((
                     texture_id,
                     instance,
-                    self.current_scissor,
+                    self.state.current_scissor(),
                 ));
             }
             Err(e) => {
@@ -3235,7 +3186,7 @@ impl WgpuPainter {
                     self.current_segment.cached_images.push((
                         cache_id.clone(),
                         instance,
-                        self.current_scissor,
+                        self.state.current_scissor(),
                     ));
                 }
             }
@@ -3308,9 +3259,11 @@ impl WgpuPainter {
             // Push into per-segment external_images; flushed in flush_segment
             // via flush_segment_external_images which binds each view via
             // flush_texture_batch — identical to the cached-image path.
-            self.current_segment
-                .external_images
-                .push((view, instance, self.current_scissor));
+            self.current_segment.external_images.push((
+                view,
+                instance,
+                self.state.current_scissor(),
+            ));
         } else {
             // Texture not registered — warn and skip.  Rendering an invisible
             // placeholder via `texture_batch` (the old code) would orphan the
@@ -3325,180 +3278,29 @@ impl WgpuPainter {
     // ===== Transform Stack =====
 
     pub fn save(&mut self) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::save: stack depth={}",
-            self.transform_stack.len()
-        );
-
-        // Save both transform and scissor state
-        self.transform_stack.push(self.current_transform);
-
-        // Scissor is saved conditionally: push only when a scissor is active.
-        //
-        // DESIGN INVARIANT (cross-check: Impeller/canvas.cc Save()/Restore()):
-        // scissor_stack.len() ≤ transform_stack.len() at all times.
-        //
-        // When current_scissor=None at save() time nothing is pushed. The matching
-        // restore() will find is_empty() true for the saves that contributed nothing,
-        // and return None — which is exactly the state at entry. This is a lazy/
-        // conditional-push strategy that is semantically equivalent to Impeller's
-        // unified CanvasStackEntry (which always captures clip_height per frame) but
-        // avoids the per-save allocation of the "no scissor" case.
-        //
-        // Proof the invariant holds:
-        //   - save with None → nothing pushed; restore sees stack unchanged, returns None ✓
-        //   - save with Some(S) → S pushed; restore pops S, returns Some(S) ✓
-        //   - nested saves: each restore() pops only what its paired save() pushed,
-        //     because pops are gated inside `if let Some(transform) = …pop()`, so the
-        //     scissor pop count equals the number of saves that were Some, never more.
-        if let Some(scissor) = self.current_scissor {
-            self.scissor_stack.push(scissor);
-        }
-
-        // Save current SDF rrect clip
-        self.rrect_clip_stack.push(self.current_rrect_clip);
-
-        // Save current SDF rsuperellipse clip
-        self.rsuperellipse_clip_stack
-            .push(self.current_rsuperellipse_clip);
+        self.state.save();
     }
 
     pub fn restore(&mut self) {
-        if let Some(transform) = self.transform_stack.pop() {
-            self.current_transform = transform;
-
-            // Restore scissor state
-            // Pop from scissor stack if there was a saved scissor
-            if self.scissor_stack.is_empty() {
-                // No scissor was saved, clear current
-                self.current_scissor = None;
-            } else {
-                self.current_scissor = self.scissor_stack.pop();
-            }
-
-            // Restore SDF rrect clip state
-            if let Some(clip) = self.rrect_clip_stack.pop() {
-                self.current_rrect_clip = clip;
-            } else {
-                self.current_rrect_clip = [0.0; 8];
-            }
-
-            // Restore SDF rsuperellipse clip state
-            if let Some(clip) = self.rsuperellipse_clip_stack.pop() {
-                self.current_rsuperellipse_clip = clip;
-            } else {
-                self.current_rsuperellipse_clip = [0.0; 12];
-            }
-
-            #[cfg(debug_assertions)]
-            tracing::trace!(
-                "WgpuPainter::restore: stack depth={}",
-                self.transform_stack.len()
-            );
-        } else {
-            #[cfg(debug_assertions)]
-            tracing::warn!("WgpuPainter::restore: stack underflow");
-        }
+        self.state.restore();
     }
 
     pub fn translate(&mut self, offset: Offset<Pixels>) {
-        #[cfg(debug_assertions)]
-        tracing::trace!("WgpuPainter::translate: offset={:?}", offset);
-
-        let translation = glam::Mat4::from_translation(glam::vec3(offset.dx.0, offset.dy.0, 0.0));
-        self.current_transform *= translation;
+        self.state.translate(offset);
     }
 
     pub fn rotate(&mut self, angle: f32) {
-        #[cfg(debug_assertions)]
-        tracing::trace!("WgpuPainter::rotate: angle={}", angle);
-
-        let rotation = glam::Mat4::from_rotation_z(angle);
-        self.current_transform *= rotation;
+        self.state.rotate(angle);
     }
 
     pub fn scale(&mut self, sx: f32, sy: f32) {
-        #[cfg(debug_assertions)]
-        tracing::trace!("WgpuPainter::scale: sx={}, sy={}", sx, sy);
-
-        let scaling = glam::Mat4::from_scale(glam::vec3(sx, sy, 1.0));
-        self.current_transform *= scaling;
+        self.state.scale(sx, sy);
     }
 
     // ===== Clipping =====
 
     pub fn clip_rect(&mut self, rect: Rect<Pixels>) {
-        // Apply current transform to get screen-space coordinates
-        let transform = self.current_transform;
-
-        // Compute axis-aligned bounding box in screen space
-        let (x, y, width, height) = if transform == glam::Mat4::IDENTITY {
-            // Fast path: no transform, use rect directly
-            let x = rect.left().0.max(0.0) as u32;
-            let y = rect.top().0.max(0.0) as u32;
-            let right = rect.right().0.min(self.size.0 as f32) as u32;
-            let bottom = rect.bottom().0.min(self.size.1 as f32) as u32;
-            (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
-        } else {
-            // Transform all 4 corners to screen space and compute AABB
-            // This is a conservative approximation for rotated/skewed clips
-            let corners = [
-                transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0)),
-                transform.transform_point3(glam::Vec3::new(rect.right().0, rect.top().0, 0.0)),
-                transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0)),
-                transform.transform_point3(glam::Vec3::new(rect.left().0, rect.bottom().0, 0.0)),
-            ];
-            let min_x = corners.iter().map(|c| c.x).fold(f32::INFINITY, f32::min);
-            let min_y = corners.iter().map(|c| c.y).fold(f32::INFINITY, f32::min);
-            let max_x = corners
-                .iter()
-                .map(|c| c.x)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let max_y = corners
-                .iter()
-                .map(|c| c.y)
-                .fold(f32::NEG_INFINITY, f32::max);
-
-            // Clamp to surface bounds
-            let x = min_x.max(0.0) as u32;
-            let y = min_y.max(0.0) as u32;
-            let w = (max_x.min(self.size.0 as f32) - min_x.max(0.0))
-                .ceil()
-                .max(0.0) as u32;
-            let h = (max_y.min(self.size.1 as f32) - min_y.max(0.0))
-                .ceil()
-                .max(0.0) as u32;
-            (x, y, w, h)
-        };
-
-        // Intersect with current scissor if any
-        let scissor = if let Some((cur_x, cur_y, cur_w, cur_h)) = self.current_scissor {
-            // Compute intersection
-            let intersect_x = x.max(cur_x);
-            let intersect_y = y.max(cur_y);
-            let intersect_right = (x + width).min(cur_x + cur_w);
-            let intersect_bottom = (y + height).min(cur_y + cur_h);
-
-            let intersect_width = intersect_right.saturating_sub(intersect_x);
-            let intersect_height = intersect_bottom.saturating_sub(intersect_y);
-
-            (intersect_x, intersect_y, intersect_width, intersect_height)
-        } else {
-            (x, y, width, height)
-        };
-
-        self.current_scissor = Some(scissor);
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::clip_rect: rect={:?} → scissor=({}, {}, {}, {})",
-            rect,
-            scissor.0,
-            scissor.1,
-            scissor.2,
-            scissor.3
-        );
+        self.state.clip_rect(rect, self.size);
     }
 
     #[allow(
@@ -3506,56 +3308,7 @@ impl WgpuPainter {
         reason = "r_tl/r_tr/r_br/r_bl mirror the rrect-corner field names; renaming would obscure intent"
     )]
     pub fn clip_rrect(&mut self, rrect: RRect) {
-        // SDF-based rounded rectangle clipping: pass clip bounds and radii
-        // to each instance so the fragment shader can do per-pixel SDF clipping.
-        // This avoids stencil buffers and tessellation entirely.
-
-        // Apply current transform to get screen-space clip coordinates
-        let transform = self.current_transform;
-        let rect = rrect.rect;
-
-        let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
-            (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
-        } else {
-            // Transform corners and compute AABB
-            let tl = transform * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
-            let br = transform * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
-            let min_x = tl.x.min(br.x);
-            let min_y = tl.y.min(br.y);
-            let max_x = tl.x.max(br.x);
-            let max_y = tl.y.max(br.y);
-            (min_x, min_y, max_x - min_x, max_y - min_y)
-        };
-
-        // Use the maximum of each corner's x/y radius (same approach as draw_rrect)
-        let r_tl = rrect.top_left.x.0.max(rrect.top_left.y.0);
-        let r_tr = rrect.top_right.x.0.max(rrect.top_right.y.0);
-        let r_br = rrect.bottom_right.x.0.max(rrect.bottom_right.y.0);
-        let r_bl = rrect.bottom_left.x.0.max(rrect.bottom_left.y.0);
-
-        self.current_rrect_clip = [x, y, w, h, r_tl, r_tr, r_br, r_bl];
-        // Clear any previously-set rsuperellipse clip so `apply_active_clip`
-        // doesn't keep applying the squircle SDF after the caller has
-        // switched to a plain rrect clip. The two clip kinds are mutually
-        // exclusive at the per-instance `clip_kind` level — setting one
-        // must invalidate the other.
-        self.current_rsuperellipse_clip = [0.0; 12];
-
-        // Also apply bounding-box scissor clip for early rejection by the rasterizer
-        self.clip_rect(rrect.rect);
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::clip_rrect: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] radii=[{:.1}, {:.1}, {:.1}, {:.1}]",
-            x,
-            y,
-            w,
-            h,
-            r_tl,
-            r_tr,
-            r_br,
-            r_bl
-        );
+        self.state.clip_rrect(rrect, self.size);
     }
 
     /// Look up or generate a tessellated superellipse path via the
@@ -3592,20 +3345,7 @@ impl WgpuPainter {
         &self,
         instance: super::instancing::RectInstance,
     ) -> super::instancing::RectInstance {
-        // Exact equality against the all-zero "no clip active" sentinel is
-        // intentional: the field is set bit-exact to `[0.0; 12]` whenever
-        // the clip is cleared, never via arithmetic that would introduce
-        // ULP noise.
-        #[expect(
-            clippy::float_cmp,
-            reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
-        )]
-        let superellipse_active = self.current_rsuperellipse_clip != [0.0; 12];
-        if superellipse_active {
-            instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)
-        } else {
-            instance.with_clip_rrect(self.current_rrect_clip)
-        }
+        self.state.apply_active_clip(instance)
     }
 
     /// Set an SDF rounded-superellipse clip (iOS-squircle).
@@ -3620,59 +3360,7 @@ impl WgpuPainter {
         reason = "tl_r/tr_r/br_r/bl_r mirror the rsuperellipse-corner field names; renaming would obscure intent"
     )]
     pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse) {
-        // Apply current transform to outer rect (identical AABB logic to
-        // `clip_rrect`).
-        let transform = self.current_transform;
-        let rect = rse.outer_rect();
-
-        let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
-            (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
-        } else {
-            let tl = transform * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
-            let br = transform * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
-            let min_x = tl.x.min(br.x);
-            let min_y = tl.y.min(br.y);
-            let max_x = tl.x.max(br.x);
-            let max_y = tl.y.max(br.y);
-            (min_x, min_y, max_x - min_x, max_y - min_y)
-        };
-
-        // Per-corner separate-axis radii (rx, ry per corner).
-        let tl_r = rse.tl_radius();
-        let tr_r = rse.tr_radius();
-        let br_r = rse.br_radius();
-        let bl_r = rse.bl_radius();
-
-        self.current_rsuperellipse_clip = [
-            x, y, w, h, tl_r.x.0, tl_r.y.0, tr_r.x.0, tr_r.y.0, br_r.x.0, br_r.y.0, bl_r.x.0,
-            bl_r.y.0,
-        ];
-        // Clear any previously-set rrect clip so `apply_active_clip`
-        // doesn't fall back to it. Mirror of the corresponding clear in
-        // `clip_rrect`; the two clip kinds are mutually exclusive at the
-        // per-instance `clip_kind` level.
-        self.current_rrect_clip = [0.0; 8];
-
-        // Bounding-box scissor for early rasterizer rejection (same pattern
-        // as `clip_rrect`).
-        self.clip_rect(rect);
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::clip_rsuperellipse: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] radii=[(tl {:.1},{:.1}) (tr {:.1},{:.1}) (br {:.1},{:.1}) (bl {:.1},{:.1})]",
-            x,
-            y,
-            w,
-            h,
-            tl_r.x.0,
-            tl_r.y.0,
-            tr_r.x.0,
-            tr_r.y.0,
-            br_r.x.0,
-            br_r.y.0,
-            bl_r.x.0,
-            bl_r.y.0,
-        );
+        self.state.clip_rsuperellipse(rse, self.size);
     }
 
     pub fn clip_path(&mut self, _path: &Path) {
@@ -3975,7 +3663,7 @@ impl WgpuPainter {
         }
         DrawSegment::push_scissor_region(
             &mut self.current_segment.linear_grad_scissors,
-            self.current_scissor,
+            self.state.current_scissor(),
         );
     }
 
@@ -4053,7 +3741,7 @@ impl WgpuPainter {
         }
         DrawSegment::push_scissor_region(
             &mut self.current_segment.radial_grad_scissors,
-            self.current_scissor,
+            self.state.current_scissor(),
         );
     }
 
@@ -4119,7 +3807,7 @@ impl WgpuPainter {
         }
         DrawSegment::push_scissor_region(
             &mut self.current_segment.sweep_grad_scissors,
-            self.current_scissor,
+            self.state.current_scissor(),
         );
     }
 
