@@ -21,14 +21,12 @@ use wgpu::util::DeviceExt;
 use super::{
     command_ir::{
         DrawItem, DrawSegment, PendingOffscreenTexture, PendingOpacityLayer, ScissorRect,
-        TessellatedBatch,
     },
     layer_compositor::{LayerCompositor, RestoreOutcome},
     pipeline::{self, PipelineKey},
     pipelines::PipelineSet,
     resources::GpuResources,
     state_stack::GpuStateStack,
-    tessellator::Tessellator,
     text::TextRenderer,
     vertex::Vertex,
 };
@@ -83,22 +81,14 @@ pub struct WgpuPainter {
     /// Default texture sampler (linear filtering, clamp-to-edge).
     default_sampler: wgpu::Sampler,
 
-    // ===== Tessellation =====
-    /// Lyon-based path tessellator for complex shapes
-    tessellator: Tessellator,
-
-    /// Cache for tessellated path geometry (avoids re-tessellation of identical paths)
-    path_cache: super::path_cache::PathCache,
-
-    /// Cache for tessellated superellipse (iOS-squircle) paths.
+    // ===== Record-side draw batcher =====
+    /// Owns the tessellator, path cache, and superellipse cache — the three
+    /// mutable-but-non-GPU assets used only during draw recording.
     ///
-    /// Mirrors [`PathCache`](super::path_cache::PathCache) ownership: per-
-    /// Painter, single-threaded, with `max_entries` + frame-based eviction.
-    /// Replaces the previously-unbounded `thread_local!` cache in
-    /// `layer_render.rs`. Consulted by `Backend::superellipse_path`
-    /// override; the trait default for non-Painter backends regenerates
-    /// without caching.
-    superellipse_cache: super::superellipse_cache::SuperellipsePathCache,
+    /// Separated from the flush-side fields so the borrow checker can split
+    /// `&mut batcher` from `&mut current_segment`, `&mut draw_order`, and
+    /// `&state` in the same call.  See `batches.rs` for the borrow seam contract.
+    batcher: super::batches::DrawBatcher,
 
     // ===== Text Rendering =====
     /// Glyphon-based text renderer
@@ -235,8 +225,7 @@ impl WgpuPainter {
             border_color: None,
         });
 
-        // ===== Tessellator, text renderer =====
-        let tessellator = Tessellator::new();
+        // ===== Text renderer =====
         let text_renderer = TextRenderer::new(&device, &queue, surface_format);
 
         // ===== Resource managers =====
@@ -255,9 +244,7 @@ impl WgpuPainter {
             unit_quad_index_buffer,
             texture_batch,
             default_sampler,
-            tessellator,
-            path_cache: super::path_cache::PathCache::new(512),
-            superellipse_cache: super::superellipse_cache::SuperellipsePathCache::new(256),
+            batcher: super::batches::DrawBatcher::new(),
             text_renderer,
             state: GpuStateStack::new(),
             compositor: LayerCompositor::new(),
@@ -366,13 +353,13 @@ impl WgpuPainter {
     /// The tessellator's current flatten scale — to assert a draw call primed it.
     #[cfg(all(test, feature = "enable-wgpu-tests"))]
     pub(crate) fn tessellator_max_scale_for_test(&self) -> f32 {
-        self.tessellator.max_scale()
+        self.batcher.tessellator.max_scale()
     }
 
     /// Force a stale tessellator scale to set up the prime-on-draw regression.
     #[cfg(all(test, feature = "enable-wgpu-tests"))]
     pub(crate) fn set_tessellator_max_scale_for_test(&mut self, scale: f32) {
-        self.tessellator.set_max_scale(scale);
+        self.batcher.tessellator.set_max_scale(scale);
     }
 
     /// The composite `bounds` and backing texture pixel size of every pending
@@ -460,9 +447,9 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::EngineResult<()> {
-        // Advance path cache frame counters and evict stale entries
-        self.path_cache.advance_frame();
-        self.superellipse_cache.advance_frame();
+        // Advance batcher cache frame counters and evict stale entries.
+        self.batcher.path_cache.advance_frame();
+        self.batcher.superellipse_cache.advance_frame();
 
         // Log rendering stats
         let text_count = self.text_renderer.text_count();
@@ -861,17 +848,6 @@ impl WgpuPainter {
 
     // ===== Helper Methods =====
 
-    /// Apply current transform to a point
-    fn apply_transform(&self, point: Point<Pixels>) -> Point<Pixels> {
-        self.state.apply_transform(point)
-    }
-
-    /// Check if the current transform is axis-aligned (no rotation/skew).
-    /// When false, rects must be tessellated rather than instanced.
-    fn is_axis_aligned_transform(&self) -> bool {
-        self.state.is_axis_aligned()
-    }
-
     /// Maximum basis length of the current transform's 2D linear part.
     ///
     /// Mirrors Impeller's `Matrix::GetMaxBasisLengthXY`: the larger of the two
@@ -906,167 +882,51 @@ impl WgpuPainter {
         self.state.current_transform_matrix()
     }
 
-    /// Prime the tessellator with the current world scale so its curve-flattening
-    /// tolerances stay sub-pixel after the transform is baked into vertices.
-    /// Call immediately before any `self.tessellator.tessellate_*` invocation.
+    /// Prime the tessellator's flatten tolerance from the current CTM max-basis
+    /// length.  Shim that forwards to `DrawBatcher::prime_tessellator_scale`.
     fn prime_tessellator_scale(&mut self) {
-        let scale = self.state.max_scale();
-        self.tessellator.set_max_scale(scale);
+        self.batcher.prime_tessellator_scale(&self.state);
     }
 
-    /// Add tessellated shape from vertices/indices with pipeline key tracking.
+    /// Seal the current segment and start a fresh one.
     ///
-    /// Seal the current `DrawSegment` and push it onto `draw_order`, then begin
-    /// a fresh empty segment.
-    ///
-    /// This is the single place that performs `current_segment → draw_order`
-    /// promotion. It is called:
-    ///
-    /// - by `queue_offscreen_result` when an offscreen texture must be
-    ///   interleaved at the correct Z-position, and
-    /// - by `add_tessellated_with_key` immediately AFTER appending a
-    ///   non-SrcOver tessellated draw, so subsequent instanced or tessellated
-    ///   content is guaranteed to flush AFTER the blend-mode shape. See the
-    ///   draw-order contract documented at the top of the file.
-    ///
-    /// An empty segment is never pushed (avoids empty GPU passes).
+    /// Forwards to `DrawBatcher::finish_current_segment`.  Called explicitly
+    /// from `queue_offscreen_result` when an offscreen texture must be
+    /// interleaved at the correct Z-position, and from the flush path to
+    /// finalize the last segment before GPU submission.
     fn finish_current_segment(&mut self) {
-        let seg = std::mem::replace(&mut self.current_segment, DrawSegment::new());
-        if !seg.is_empty() {
-            self.draw_order.push(DrawItem::Segment(seg));
-        }
+        super::batches::DrawBatcher::finish_current_segment(
+            &mut self.current_segment,
+            &mut self.draw_order,
+        );
     }
 
-    /// When the requested `key` matches the current batch's pipeline key the
-    /// indices are simply appended.  When the key differs a new
-    /// [`TessellatedBatch`] is started so the render pass can switch pipelines
-    /// at the correct boundary.
-    ///
-    /// # Draw-order contract for non-SrcOver blend modes
-    ///
-    /// `flush_segment` renders all batches in a FIXED order
-    /// (instanced → gradient → tessellated → images), not recording order.
-    /// A non-SrcOver tessellated shape submitted into a segment that also
-    /// contains instanced draws would execute AFTER those instanced draws
-    /// regardless of recording order, violating draw semantics for destructive
-    /// modes (Clear, DstOut, Src, SrcIn, DstIn, SrcOut, SrcATop, DstATop, Xor).
-    ///
-    /// The fix: after appending a non-SrcOver tessellated shape, immediately
-    /// seal the segment via `finish_current_segment`.  The sealed segment
-    /// flushes (instanced first, blended tessellated last — correct, because
-    /// instanced draws were recorded BEFORE the non-SrcOver shape), and any
-    /// subsequent content lands in a new segment (flushed entirely after this
-    /// one — also correct).  SrcOver shapes do NOT trigger a split; the common
-    /// path has zero overhead.
-    fn add_tessellated_with_key(
+    /// Apply the current world transform to every vertex position and submit to
+    /// the tessellated batch.  Shim that forwards to
+    /// `DrawBatcher::submit_transformed_geometry`.
+    fn submit_transformed_geometry(
         &mut self,
         vertices: Vec<Vertex>,
         indices: &[u32],
         key: PipelineKey,
     ) {
-        if indices.is_empty() {
-            return;
-        }
-
-        let base_index = self.current_segment.vertices.len() as u32;
-        let index_start = self.current_segment.indices.len() as u32;
-
-        // Add vertices (already transformed by tessellator if needed)
-        self.current_segment.vertices.extend(vertices);
-
-        // Add indices with offset
-        self.current_segment
-            .indices
-            .extend(indices.iter().map(|&i| i + base_index));
-
-        let index_count = indices.len() as u32;
-
-        // Try to extend the current batch if pipeline key AND scissor match
-        if let Some(last) = self.current_segment.tess_batches.last_mut()
-            && last.pipeline_key == key
-            && last.scissor == self.state.current_scissor()
-        {
-            last.index_count += index_count;
-        } else {
-            // Pipeline key changed (or first batch) — start a new batch
-            self.current_segment.current_pipeline_key = Some(key);
-            self.current_segment.tess_batches.push(TessellatedBatch {
-                pipeline_key: key,
-                scissor: self.state.current_scissor(),
-                index_start,
-                index_count,
-            });
-        }
-
-        // Draw-order contract: close the segment after any non-SrcOver blend.
-        // See the method-level doc comment for the full rationale.
-        if key.blend_mode() != BlendMode::SrcOver {
-            self.finish_current_segment();
-        }
+        super::batches::DrawBatcher::submit_transformed_geometry(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            vertices,
+            indices,
+            key,
+        );
     }
 
-    /// Apply the current world transform to every vertex position of an already-
-    /// tessellated shape and submit it to the tessellated geometry batch.
+    /// Dispatch a filled rect/rrect/circle with a shader to the correct gradient
+    /// pipeline.  Returns `true` if the shader was handled; `false` means fall
+    /// through to solid color.
     ///
-    /// Used for tessellated geometry (fills AND strokes): any path whose vertices
-    /// are produced in local/pre-transform space must pass through here so the
-    /// baked screen-space positions match `current_transform`.  The shape.wgsl
-    /// vertex shader only converts px→clip via the viewport uniform — it has no
-    /// model-matrix uniform — so the CPU must bake the transform into the vertices
-    /// at record time.
-    ///
-    /// `vertices` are in pre-transform (local) space; this method maps each
-    /// `[x, y]` through `current_transform` before storing.
-    fn submit_transformed_geometry(
-        &mut self,
-        mut vertices: Vec<Vertex>,
-        indices: &[u32],
-        key: PipelineKey,
-    ) {
-        let m = self.state.current_transform();
-        for v in &mut vertices {
-            let p = m * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
-            v.position = [p.x, p.y];
-        }
-        self.add_tessellated_with_key(vertices, indices, key);
-    }
-
-    /// Convert a `Shader` into GPU `GradientStop`s (max 8).
-    fn shader_to_gradient_stops(
-        shader: &flui_types::painting::Shader,
-    ) -> Vec<super::effects::GradientStop> {
-        let (colors, stops) = match shader {
-            flui_types::painting::Shader::LinearGradient { colors, stops, .. }
-            | flui_types::painting::Shader::RadialGradient { colors, stops, .. }
-            | flui_types::painting::Shader::SweepGradient { colors, stops, .. } => {
-                (colors.as_slice(), stops.as_deref())
-            }
-            flui_types::painting::Shader::Solid { color } => {
-                return vec![
-                    super::effects::GradientStop::new(*color, 0.0),
-                    super::effects::GradientStop::new(*color, 1.0),
-                ];
-            }
-            _ => return vec![],
-        };
-
-        let count = colors.len().min(8);
-        (0..count)
-            .map(|i| {
-                let position = if let Some(s) = stops {
-                    s.get(i)
-                        .copied()
-                        .unwrap_or(i as f32 / (count - 1).max(1) as f32)
-                } else {
-                    i as f32 / (count - 1).max(1) as f32
-                };
-                super::effects::GradientStop::new(colors[i], position)
-            })
-            .collect()
-    }
-
-    /// Dispatch a filled rect/rrect/circle with a shader to the correct gradient pipeline.
-    /// Returns `true` if the shader was handled, `false` if it should fall through to solid color.
+    /// Stays on `WgpuPainter` (not moved to `DrawBatcher`) because
+    /// `gradient_rect`/`radial_gradient_rect`/`sweep_gradient_rect` write
+    /// directly into `current_segment` and are only reachable via `&mut self`.
     fn dispatch_shader_rect(
         &mut self,
         bounds: Rect<Pixels>,
@@ -1077,19 +937,23 @@ impl WgpuPainter {
             return false;
         };
 
-        let stops = Self::shader_to_gradient_stops(shader);
+        let stops = super::batches::DrawBatcher::shader_to_gradient_stops(shader);
         if stops.is_empty() {
             return false;
         }
 
-        // Apply current transform to bounds
-        let top_left = self.apply_transform(Point::new(bounds.left(), bounds.top()));
-        let bottom_right = self.apply_transform(Point::new(bounds.right(), bounds.bottom()));
+        // Compute transformed bounds using the read-only state — read before any
+        // mutable gradient call so there is no aliasing.
+        let top_left = self
+            .state
+            .apply_transform(Point::new(bounds.left(), bounds.top()));
+        let bottom_right = self
+            .state
+            .apply_transform(Point::new(bounds.right(), bounds.bottom()));
         let transformed = Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
         match shader {
             flui_types::painting::Shader::LinearGradient { from, to, .. } => {
-                // Convert Offset<Pixels> to local coordinates relative to bounds
                 let start =
                     glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
                 let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
@@ -1117,12 +981,7 @@ impl WgpuPainter {
                     corner_radii[0],
                 );
             }
-            flui_types::painting::Shader::Solid { color } => {
-                // Just use the solid color directly — fall through
-                let _ = color;
-                return false;
-            }
-            _ => return false,
+            flui_types::painting::Shader::Solid { .. } | _ => return false,
         }
 
         true
@@ -1797,215 +1656,77 @@ impl WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
-        if paint.style == PaintStyle::Fill {
-            // Phase-A limit: gradient/shader fills always use the SrcOver
-            // pipeline regardless of `paint.blend_mode`. Blending a shader with
-            // a non-SrcOver operator requires reading the destination through the
-            // shader, which is not possible with the fixed-function GPU blend
-            // stage. Phase B will introduce a fullscreen-quad dst-sample approach.
-            if paint.has_shader() {
-                if paint.blend_mode != BlendMode::SrcOver {
-                    static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        tracing::warn!(
-                            blend_mode = ?paint.blend_mode,
-                            "gradient/shader fill with blend_mode {:?} is not supported by the \
-                             Phase A fixed-function path; rendering as SrcOver. \
-                             Phase B will add dst-sample blended gradients. (logged once per process)",
-                            paint.blend_mode,
-                        );
-                    }
-                }
-                if self.dispatch_shader_rect(rect, paint, [0.0; 4]) {
-                    return;
+        // Shader/gradient fill: dispatch_shader_rect handles this and returns.
+        // It stays on WgpuPainter because it calls gradient_rect/radial_gradient_rect/
+        // sweep_gradient_rect which write directly into current_segment.
+        if paint.style == PaintStyle::Fill && paint.has_shader() {
+            if paint.blend_mode != BlendMode::SrcOver {
+                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        blend_mode = ?paint.blend_mode,
+                        "gradient/shader fill with blend_mode {:?} is not supported by the \
+                         Phase A fixed-function path; rendering as SrcOver. \
+                         Phase B will add dst-sample blended gradients. (logged once per process)",
+                        paint.blend_mode,
+                    );
                 }
             }
-
-            // Apply current opacity to color
-            let color = if self.compositor.current_opacity() < 1.0 {
-                let alpha = (f32::from(paint.color.a) * self.compositor.current_opacity()) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
-            } else {
-                paint.color
-            };
-
-            // The instanced fast path renders with a hardcoded SrcOver
-            // (ALPHA_BLENDING) pipeline. Non-SrcOver blend modes must route
-            // through the tessellated path, whose pipeline is selected per
-            // `pipeline_key_from_paint` (Phase A fixed-function Porter-Duff).
-            //
-            // Phase-A quality limit: the tessellated path produces aliased edges
-            // at sample_count=1 (no SDF anti-aliasing) and the scissor clip is
-            // an AABB, not a pixel-perfect rounded shape. SDF-quality blended
-            // shapes are Phase B.
-            if self.is_axis_aligned_transform() && paint.blend_mode == BlendMode::SrcOver {
-                // Fast path: GPU instancing for axis-aligned rects
-                let top_left = self.apply_transform(Point::new(rect.left(), rect.top()));
-                let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
-                let transformed_rect =
-                    Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-                let instance = self.apply_active_clip(super::instancing::RectInstance::rect(
-                    transformed_rect,
-                    color,
-                ));
-                let _ = self.current_segment.rect_batch.add(instance);
-                DrawSegment::push_scissor_region(
-                    &mut self.current_segment.rect_scissors,
-                    self.state.current_scissor(),
-                );
-            } else {
-                // Slow path: tessellate rotated/skewed rects (or any non-SrcOver
-                // blend mode) as a transformed quad.
-                //
-                // Phase-A quality note: uses the tessellated path → aliased edges
-                // (no SDF AA), AABB scissor clip. SDF-quality blended rects are
-                // Phase B.
-                let tl = self.apply_transform(Point::new(rect.left(), rect.top()));
-                let tr = self.apply_transform(Point::new(rect.right(), rect.top()));
-                let br = self.apply_transform(Point::new(rect.right(), rect.bottom()));
-                let bl = self.apply_transform(Point::new(rect.left(), rect.bottom()));
-                let rgba = color.to_rgba_f32_array();
-                let vertices = vec![
-                    Vertex {
-                        position: [tl.x.0, tl.y.0],
-                        color: rgba,
-                        tex_coord: [0.0, 0.0],
-                    },
-                    Vertex {
-                        position: [tr.x.0, tr.y.0],
-                        color: rgba,
-                        tex_coord: [1.0, 0.0],
-                    },
-                    Vertex {
-                        position: [br.x.0, br.y.0],
-                        color: rgba,
-                        tex_coord: [1.0, 1.0],
-                    },
-                    Vertex {
-                        position: [bl.x.0, bl.y.0],
-                        color: rgba,
-                        tex_coord: [0.0, 1.0],
-                    },
-                ];
-                let indices = vec![0, 1, 2, 0, 2, 3];
-                self.add_tessellated_with_key(
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
-            }
-        } else {
-            // Stroked rect - use tessellator (less common, fallback path)
-            // Paint already contains stroke information (stroke_width, stroke_cap,
-            // stroke_join)
-            self.prime_tessellator_scale();
-            if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
-                self.submit_transformed_geometry(
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
+            if self.dispatch_shader_rect(rect, paint, [0.0; 4]) {
+                return;
             }
         }
+
+        // Non-shader path: delegate to batcher with disjoint field borrows.
+        // Reading opacity to a Copy f32 first frees `compositor` before the call.
+        let opacity = self.compositor.current_opacity();
+        self.batcher.rect(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            opacity,
+            rect,
+            paint,
+        );
     }
 
     pub fn rrect(&mut self, rrect: RRect, paint: &Paint) {
-        if paint.style == PaintStyle::Fill {
-            // Phase-A limit: gradient/shader fills always use the SrcOver
-            // pipeline regardless of `paint.blend_mode`. See the doc comment in
-            // `rect()` for the full rationale. Phase B will add dst-sample support.
-            if paint.has_shader() {
-                if paint.blend_mode != BlendMode::SrcOver {
-                    static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        tracing::warn!(
-                            blend_mode = ?paint.blend_mode,
-                            "gradient/shader rrect fill with blend_mode {:?} is not supported by \
-                             the Phase A fixed-function path; rendering as SrcOver. \
-                             Phase B will add dst-sample blended gradients. (logged once per process)",
-                            paint.blend_mode,
-                        );
-                    }
-                }
-                let corner_radii = [
-                    rrect.top_left.x.0.max(rrect.top_left.y.0),
-                    rrect.top_right.x.0.max(rrect.top_right.y.0),
-                    rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
-                    rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
-                ];
-                if self.dispatch_shader_rect(rrect.bounding_rect(), paint, corner_radii) {
-                    return;
+        // Shader/gradient fill: dispatch_shader_rect handles this and returns.
+        if paint.style == PaintStyle::Fill && paint.has_shader() {
+            if paint.blend_mode != BlendMode::SrcOver {
+                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        blend_mode = ?paint.blend_mode,
+                        "gradient/shader rrect fill with blend_mode {:?} is not supported by \
+                         the Phase A fixed-function path; rendering as SrcOver. \
+                         Phase B will add dst-sample blended gradients. (logged once per process)",
+                        paint.blend_mode,
+                    );
                 }
             }
-
-            // Apply current opacity to color
-            let color = if self.compositor.current_opacity() < 1.0 {
-                let alpha = (f32::from(paint.color.a) * self.compositor.current_opacity()) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
-            } else {
-                paint.color
-            };
-
-            // The instanced fast path renders with a hardcoded SrcOver pipeline.
-            // A non-SrcOver blend mode must route through the tessellated path so
-            // the blend pipeline keyed by `pipeline_key_from_paint` is selected.
-            //
-            // Phase-A quality note: the tessellated fallback produces aliased edges
-            // (no SDF AA) and the scissor clip is an AABB, not the rounded shape.
-            // SDF-quality blended rounded rects are Phase B.
-            if paint.blend_mode != BlendMode::SrcOver {
-                // Tessellate the filled rounded rect in local space, carry the
-                // opacity-adjusted color and the requested blend mode, then bake
-                // the transform via `submit_transformed_geometry`.
-                let fill_paint = Paint::fill(color).with_blend_mode(paint.blend_mode);
-                self.prime_tessellator_scale();
-                match self.tessellator.tessellate_rrect(rrect, &fill_paint) {
-                    Ok((vertices, indices)) => {
-                        let key = pipeline::pipeline_key_from_paint(&fill_paint);
-                        self.submit_transformed_geometry(vertices, &indices, key);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to tessellate blended rrect: {}", e);
-                    }
-                }
+            let corner_radii = [
+                rrect.top_left.x.0.max(rrect.top_left.y.0),
+                rrect.top_right.x.0.max(rrect.top_right.y.0),
+                rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
+                rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
+            ];
+            if self.dispatch_shader_rect(rrect.bounding_rect(), paint, corner_radii) {
                 return;
             }
-
-            // Apply current transform to rect bounds
-            let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
-            let bottom_right =
-                self.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
-            let transformed_rect =
-                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-
-            // Use GPU instancing for filled rounded rects (100x faster!)
-            let instance =
-                self.apply_active_clip(super::instancing::RectInstance::rounded_rect_corners(
-                    transformed_rect,
-                    color,
-                    rrect.top_left.x.0.max(rrect.top_left.y.0),
-                    rrect.top_right.x.0.max(rrect.top_right.y.0),
-                    rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
-                    rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
-                ));
-            let _ = self.current_segment.rect_batch.add(instance);
-            DrawSegment::push_scissor_region(
-                &mut self.current_segment.rect_scissors,
-                self.state.current_scissor(),
-            );
-        } else {
-            // Stroked rounded rect - use tessellator (fallback)
-            self.prime_tessellator_scale();
-            if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
-                self.submit_transformed_geometry(
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
-            }
         }
+
+        let opacity = self.compositor.current_opacity();
+        self.batcher.rrect(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            opacity,
+            rrect,
+            paint,
+        );
     }
 
     pub fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) {
@@ -2017,130 +1738,55 @@ impl WgpuPainter {
             paint
         );
 
-        if paint.style == PaintStyle::Fill {
-            // Phase-A limit: gradient/shader fills always use the SrcOver
-            // pipeline regardless of `paint.blend_mode`. See the doc comment in
-            // `rect()` for the full rationale. Phase B will add dst-sample support.
-            if paint.has_shader() {
-                if paint.blend_mode != BlendMode::SrcOver {
-                    static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        tracing::warn!(
-                            blend_mode = ?paint.blend_mode,
-                            "gradient/shader circle fill with blend_mode {:?} is not supported by \
-                             the Phase A fixed-function path; rendering as SrcOver. \
-                             Phase B will add dst-sample blended gradients. (logged once per process)",
-                            paint.blend_mode,
-                        );
-                    }
-                }
-                let bounds = Rect::from_xywh(
-                    center.x - px(radius),
-                    center.y - px(radius),
-                    px(radius * 2.0),
-                    px(radius * 2.0),
-                );
-                // Use large corner radius to make it circular
-                if self.dispatch_shader_rect(bounds, paint, [radius; 4]) {
-                    return;
+        // Shader/gradient fill: dispatch_shader_rect handles this and returns.
+        if paint.style == PaintStyle::Fill && paint.has_shader() {
+            if paint.blend_mode != BlendMode::SrcOver {
+                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        blend_mode = ?paint.blend_mode,
+                        "gradient/shader circle fill with blend_mode {:?} is not supported by \
+                         the Phase A fixed-function path; rendering as SrcOver. \
+                         Phase B will add dst-sample blended gradients. (logged once per process)",
+                        paint.blend_mode,
+                    );
                 }
             }
-
-            // Apply current opacity to color (needed for both the fast and slow paths).
-            let color = if self.compositor.current_opacity() < 1.0 {
-                let alpha = (f32::from(paint.color.a) * self.compositor.current_opacity()) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
-            } else {
-                paint.color
-            };
-
-            // The instanced fast path renders with a hardcoded SrcOver pipeline;
-            // a non-SrcOver blend mode must route through the tessellated path.
-            if self.is_axis_aligned_transform() && paint.blend_mode == BlendMode::SrcOver {
-                // Fast path: axis-aligned — use GPU instancing (100x faster!).
-                // Apply current transform to center point for translation + scale.
-                let transformed_center = self.apply_transform(center);
-
-                // Extract the per-axis scale from the 2-D part of the matrix.
-                // Off-diagonal elements are ~zero (guarded above), so column
-                // magnitudes equal the axis scales without cross-contamination.
-                let m = self.state.current_transform();
-                let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
-                let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
-
-                let instance = super::instancing::CircleInstance::new(
-                    transformed_center,
-                    radius,
-                    color,
-                    [sx, sy],
-                );
-                let _ = self.current_segment.circle_batch.add(instance);
-                DrawSegment::push_scissor_region(
-                    &mut self.current_segment.circle_scissors,
-                    self.state.current_scissor(),
-                );
-            } else {
-                // Slow path: rotation/shear present, or a non-SrcOver blend mode —
-                // tessellate in local space and bake the full transform into vertex
-                // positions via submit_transformed_geometry. This correctly maps a
-                // circle under arbitrary affine transforms, and routes the blend
-                // mode through `pipeline_key_from_paint`.
-                //
-                // Phase-A quality note: uses the tessellated path → aliased edges
-                // (no SDF AA), AABB scissor clip. SDF-quality blended circles are
-                // Phase B.
-                let fill_paint = Paint {
-                    color,
-                    style: PaintStyle::Fill,
-                    blend_mode: paint.blend_mode,
-                    ..Paint::default()
-                };
-                self.prime_tessellator_scale();
-                match self
-                    .tessellator
-                    .tessellate_circle(center, radius, &fill_paint)
-                {
-                    Ok((vertices, indices)) => {
-                        let key = pipeline::pipeline_key_from_paint(&fill_paint);
-                        self.submit_transformed_geometry(vertices, &indices, key);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to tessellate rotated circle: {}", e);
-                    }
-                }
-            }
-        } else {
-            // Stroked circle - use tessellator (less common, fallback path)
-            self.prime_tessellator_scale();
-            if let Ok((vertices, indices)) =
-                self.tessellator.tessellate_circle(center, radius, paint)
-            {
-                self.submit_transformed_geometry(
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
+            let bounds = Rect::from_xywh(
+                center.x - px(radius),
+                center.y - px(radius),
+                px(radius * 2.0),
+                px(radius * 2.0),
+            );
+            if self.dispatch_shader_rect(bounds, paint, [radius; 4]) {
+                return;
             }
         }
+
+        let opacity = self.compositor.current_opacity();
+        self.batcher.circle(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            opacity,
+            center,
+            radius,
+            paint,
+        );
     }
 
     pub fn oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
 
-        // Tessellate the oval/ellipse
-        let center = rect.center();
-        let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
-
-        self.prime_tessellator_scale();
-        if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
-            self.submit_transformed_geometry(
-                vertices,
-                &indices,
-                pipeline::pipeline_key_from_paint(paint),
-            );
-        }
+        self.batcher.oval(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            rect,
+            paint,
+        );
     }
 
     pub fn draw_arc(
@@ -2182,12 +1828,10 @@ impl WgpuPainter {
             // The instanced fast path renders with a hardcoded SrcOver pipeline;
             // a non-SrcOver blend mode must route through the tessellated path
             // (which selects the blend pipeline via `pipeline_key_from_paint`).
-            if self.is_axis_aligned_transform()
-                && det >= 0.0
-                && paint.blend_mode == BlendMode::SrcOver
+            if self.state.is_axis_aligned() && det >= 0.0 && paint.blend_mode == BlendMode::SrcOver
             {
                 // Fast path: GPU instancing for filled arcs.
-                let transformed_center = self.apply_transform(center);
+                let transformed_center = self.state.apply_transform(center);
                 let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
                 let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
 
@@ -2213,7 +1857,7 @@ impl WgpuPainter {
                 // (no SDF AA), AABB scissor clip. SDF-quality blended arcs are
                 // Phase B.
                 self.prime_tessellator_scale();
-                match self.tessellator.tessellate_arc(
+                match self.batcher.tessellator.tessellate_arc(
                     rect,
                     start_angle,
                     sweep_angle,
@@ -2232,10 +1876,13 @@ impl WgpuPainter {
         } else {
             // Stroked arcs always tessellate (no instanced stroke pipeline).
             self.prime_tessellator_scale();
-            match self
-                .tessellator
-                .tessellate_arc(rect, start_angle, sweep_angle, use_center, paint)
-            {
+            match self.batcher.tessellator.tessellate_arc(
+                rect,
+                start_angle,
+                sweep_angle,
+                use_center,
+                paint,
+            ) {
                 Ok((vertices, indices)) => {
                     self.submit_transformed_geometry(
                         vertices,
@@ -2259,20 +1906,14 @@ impl WgpuPainter {
             paint
         );
 
-        // Tessellate the DRRect (ring with inner cutout)
-        self.prime_tessellator_scale();
-        match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
-            Ok((vertices, indices)) => {
-                self.submit_transformed_geometry(
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
-            }
-            Err(e) => {
-                tracing::error!("Failed to tessellate DRRect: {}", e);
-            }
-        }
+        self.batcher.draw_drrect(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            outer,
+            inner,
+            paint,
+        );
     }
 
     pub fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
@@ -2287,7 +1928,7 @@ impl WgpuPainter {
         // Use tessellator for line stroke
         // Paint already contains stroke information
         self.prime_tessellator_scale();
-        match self.tessellator.tessellate_line(p1, p2, paint) {
+        match self.batcher.tessellator.tessellate_line(p1, p2, paint) {
             Ok((vertices, indices)) => {
                 #[cfg(debug_assertions)]
                 tracing::trace!(
@@ -2315,7 +1956,7 @@ impl WgpuPainter {
             color = ?paint.color,
             "WgpuPainter::text"
         );
-        let transformed_position = self.apply_transform(position);
+        let transformed_position = self.state.apply_transform(position);
         self.text_renderer
             .add_text(text, transformed_position, font_size, paint.color);
     }
@@ -2343,7 +1984,7 @@ impl WgpuPainter {
             ?wrap_width,
             "WgpuPainter::rich_text"
         );
-        let transformed_position = self.apply_transform(position);
+        let transformed_position = self.state.apply_transform(position);
         self.text_renderer.add_rich_text(
             runs,
             transformed_position,
@@ -2383,8 +2024,12 @@ impl WgpuPainter {
         };
 
         // Apply transform to rect
-        let top_left = self.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
-        let bottom_right = self.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
+        let top_left = self
+            .state
+            .apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
+        let bottom_right = self
+            .state
+            .apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
 
         let transformed_rect =
             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
@@ -2407,7 +2052,7 @@ impl WgpuPainter {
         // bakes the transform after tessellation) and to bucket the path cache
         // so scale-1 geometry is never reused at scale 8 (which would facet).
         let max_scale = self.current_max_scale();
-        self.tessellator.set_max_scale(max_scale);
+        self.batcher.tessellator.set_max_scale(max_scale);
 
         // Dashed strokes cannot use the path cache: the dash pattern affects
         // geometry but is not part of compute_path_hash, so caching would
@@ -2416,6 +2061,7 @@ impl WgpuPainter {
             && let Some(ref dash) = paint.dash_pattern
         {
             match self
+                .batcher
                 .tessellator
                 .tessellate_flui_path_dashed_stroke(path, paint, dash)
             {
@@ -2447,7 +2093,7 @@ impl WgpuPainter {
         );
 
         // Check cache for previously tessellated geometry
-        if let Some((positions, cached_indices)) = self.path_cache.get(path_hash) {
+        if let Some((positions, cached_indices)) = self.batcher.path_cache.get(path_hash) {
             // Reconstruct full Vertex data with current paint color.
             // The cache stores UNTRANSFORMED positions; bake the current transform now.
             let rgba = paint.color.to_rgba_f32_array();
@@ -2467,9 +2113,13 @@ impl WgpuPainter {
 
         // Cache miss — tessellate and store
         let result = if paint.style == PaintStyle::Fill {
-            self.tessellator.tessellate_flui_path_fill(path, paint)
+            self.batcher
+                .tessellator
+                .tessellate_flui_path_fill(path, paint)
         } else {
-            self.tessellator.tessellate_flui_path_stroke(path, paint)
+            self.batcher
+                .tessellator
+                .tessellate_flui_path_stroke(path, paint)
         };
 
         match result {
@@ -2478,7 +2128,8 @@ impl WgpuPainter {
                 // The cache stores local (untransformed) positions so that cached
                 // geometry can be re-used across frames with different transforms.
                 let positions: Vec<[f32; 2]> = vertices.iter().map(|v| v.position).collect();
-                self.path_cache
+                self.batcher
+                    .path_cache
                     .insert(path_hash, positions, indices.clone());
 
                 // Bake current_transform into vertices: shape.wgsl has no model matrix.
@@ -2495,8 +2146,12 @@ impl WgpuPainter {
     }
 
     pub fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
-        let top_left = self.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
-        let bottom_right = self.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
+        let top_left = self
+            .state
+            .apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
+        let bottom_right = self
+            .state
+            .apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
         let transformed_rect =
             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
@@ -2981,6 +2636,7 @@ impl WgpuPainter {
             // Route through submit_transformed_geometry so the save()+translate() offset
             // above is actually baked into the vertices (shape.wgsl has no model matrix).
             match self
+                .batcher
                 .tessellator
                 .tessellate_flui_path_fill(path, &shadow_paint)
             {
@@ -3223,8 +2879,12 @@ impl WgpuPainter {
 
             // Apply the current transform to dst corners (translation + scale; rotation
             // collapses to AABB — same accepted limitation as `texture()` and `draw_image`).
-            let top_left = self.apply_transform(Point::new(dst.left(), dst.top()));
-            let bottom_right = self.apply_transform(Point::new(dst.right(), dst.bottom()));
+            let top_left = self
+                .state
+                .apply_transform(Point::new(dst.left(), dst.top()));
+            let bottom_right = self
+                .state
+                .apply_transform(Point::new(dst.right(), dst.bottom()));
             let transformed_dst =
                 Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
@@ -3312,27 +2972,12 @@ impl WgpuPainter {
         rse: &flui_types::geometry::RSuperellipse,
     ) -> flui_types::painting::Path {
         let key = super::superellipse_cache::SuperellipseKey::from_superellipse(rse);
-        if let Some(path) = self.superellipse_cache.get(&key) {
+        if let Some(path) = self.batcher.superellipse_cache.get(&key) {
             return path;
         }
         let path = super::layer_render::generate_superellipse_path(rse);
-        self.superellipse_cache.insert(key, path.clone());
+        self.batcher.superellipse_cache.insert(key, path.clone());
         path
-    }
-
-    /// Apply the currently-active SDF clip (rrect or rsuperellipse) to a
-    /// `RectInstance`.
-    ///
-    /// Branch order: if `current_rsuperellipse_clip` is non-trivial, the
-    /// superellipse clip wins (kind = 2). Otherwise the rrect clip slot
-    /// is used (kind = 1 when non-zero, kind = 0 when both are zero).
-    /// Centralizes the per-instance clip-kind selection so the two
-    /// `rect`/`rrect` batch-build sites don't drift apart.
-    fn apply_active_clip(
-        &self,
-        instance: super::instancing::RectInstance,
-    ) -> super::instancing::RectInstance {
-        self.state.apply_active_clip(instance)
     }
 
     /// Set an SDF rounded-superellipse clip (iOS-squircle).
@@ -5390,6 +5035,114 @@ mod tests {
             center[3], 255,
             "center alpha = {}, expected 255 (GREEN fully covers the cleared frame). \
              alpha=0 means the Clear ran AFTER GREEN and erased it. pixel = {center:?}",
+            center[3]
+        );
+    }
+
+    // ===== T9a Characterisation readback safety-net =====
+    //
+    // Locks down the relocated batcher slow path (non-axis-aligned rect with a
+    // non-SrcOver blend mode).  A regression in the moved branch would pass the
+    // instanced-path tests but silently break the tessellated-path segment seal.
+
+    /// T9a-1: rotated rect with `BlendMode::Clear` seals its segment so a later
+    /// `SrcOver` instanced rect composites correctly.
+    ///
+    /// # What this covers
+    ///
+    /// After T9a extracted `DrawBatcher::rect`, the *slow path* inside that
+    /// method — reached when the transform is NOT axis-aligned OR the blend mode
+    /// is not `SrcOver` — calls `add_tessellated_with_key`, which in turn calls
+    /// `finish_current_segment` for any non-`SrcOver` blend.  This is the moved
+    /// code that had no GPU-readback coverage before this test.
+    ///
+    /// # Draw sequence
+    ///
+    /// 1. Fill frame RED via the fast instanced path (SrcOver, axis-aligned) → S0.
+    /// 2. `save` + `rotate(45°)` so `is_axis_aligned()` returns `false`.
+    ///    Draw an overlapping rect with `BlendMode::Clear` via the batcher slow
+    ///    path.  `add_tessellated_with_key` appends it to S0's tess_batches then
+    ///    seals S0 (non-SrcOver contract), opening S1.  `restore` returns to
+    ///    identity.
+    /// 3. Fill frame GREEN via the fast instanced path (SrcOver, axis-aligned) → S1.
+    ///
+    /// # Correct outcome
+    ///
+    /// - S0 flushes: RED instanced, then Clear tessellated → frame transparent at
+    ///   the rotated quad region.
+    /// - S1 flushes: GREEN instanced on top of (possibly transparent) background →
+    ///   center pixel is GREEN.
+    ///
+    /// # Failure modes caught
+    ///
+    /// - **Slow-path seal missing** (seal removed from `add_tessellated_with_key`):
+    ///   Clear and GREEN end up in the same segment; `flush_segment` runs instanced
+    ///   first (RED+GREEN → GREEN wins), then Clear erases everything → center
+    ///   transparent.  `center[1] > 200` fails.
+    /// - **Slow path not reached** (rotation guard removed, fast path taken):
+    ///   Clear is submitted as an instanced rect, bypasses `add_tessellated_with_key`,
+    ///   no segment seal → same failure mode as above.
+    #[test]
+    fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
+        use flui_painting::Paint;
+        use std::f32::consts::FRAC_PI_4;
+
+        const SIZE: u32 = 64;
+        let (device, queue) = test_device_and_queue();
+
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            let red = flui_types::Color::rgb(255, 0, 0);
+            let green = flui_types::Color::rgb(0, 255, 0);
+
+            // Step 1: fill the frame RED via the fast instanced path.
+            // axis-aligned + SrcOver → S0 rect_batch.
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(red),
+            );
+
+            // Step 2: draw a large rotated rect with BlendMode::Clear.
+            // The 45° rotation makes is_axis_aligned() = false AND blend_mode !=
+            // SrcOver, so DrawBatcher::rect takes the tessellated slow path.
+            // add_tessellated_with_key appends the tess batch then calls
+            // finish_current_segment (non-SrcOver contract), sealing S0 and
+            // opening S1.
+            painter.save();
+            // Rotate around the frame centre so the rotated quad covers centre.
+            let half = SIZE as f32 / 2.0;
+            painter.translate(flui_types::Offset::new(px(half), px(half)));
+            painter.rotate(FRAC_PI_4);
+            painter.translate(flui_types::Offset::new(px(-half), px(-half)));
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(red).with_blend_mode(BlendMode::Clear),
+            );
+            painter.restore();
+
+            // Step 3: fill the frame GREEN via the fast instanced path (SrcOver).
+            // After step 2 sealed S0, this goes into S1.
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(green),
+            );
+        });
+
+        // The center pixel must be GREEN: S1 (GREEN fill) flushed after S0 (which
+        // ended with Clear), so GREEN is drawn on top of whatever Clear left.
+        // Failure = center is transparent or red (Clear ran after GREEN in the same
+        // segment, erasing it), indicating the moved slow-path seal was broken.
+        let center = pixel_at(&rgba, SIZE, SIZE / 2, SIZE / 2);
+        assert!(
+            center[1] > 200 && center[0] < 10 && center[2] < 10,
+            "center pixel = {center:?}, expected GREEN ~(0,255,0,255). \
+             A transparent or red result means the rotated-Clear rect did not seal \
+             its segment before the subsequent SrcOver rect (T9a slow-path seal broken)."
+        );
+        assert_eq!(
+            center[3], 255,
+            "center alpha = {}, expected 255 (GREEN fully covers the frame). \
+             alpha=0 means Clear executed after GREEN (segment seal missing). \
+             pixel = {center:?}",
             center[3]
         );
     }
