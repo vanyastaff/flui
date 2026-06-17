@@ -3334,7 +3334,24 @@ impl WgpuPainter {
         // Save both transform and scissor state
         self.transform_stack.push(self.current_transform);
 
-        // Save current scissor (if any) by pushing to stack
+        // Scissor is saved conditionally: push only when a scissor is active.
+        //
+        // DESIGN INVARIANT (cross-check: Impeller/canvas.cc Save()/Restore()):
+        // scissor_stack.len() ≤ transform_stack.len() at all times.
+        //
+        // When current_scissor=None at save() time nothing is pushed. The matching
+        // restore() will find is_empty() true for the saves that contributed nothing,
+        // and return None — which is exactly the state at entry. This is a lazy/
+        // conditional-push strategy that is semantically equivalent to Impeller's
+        // unified CanvasStackEntry (which always captures clip_height per frame) but
+        // avoids the per-save allocation of the "no scissor" case.
+        //
+        // Proof the invariant holds:
+        //   - save with None → nothing pushed; restore sees stack unchanged, returns None ✓
+        //   - save with Some(S) → S pushed; restore pops S, returns Some(S) ✓
+        //   - nested saves: each restore() pops only what its paired save() pushed,
+        //     because pops are gated inside `if let Some(transform) = …pop()`, so the
+        //     scissor pop count equals the number of saves that were Some, never more.
         if let Some(scissor) = self.current_scissor {
             self.scissor_stack.push(scissor);
         }
@@ -5682,6 +5699,262 @@ mod tests {
             "center alpha = {}, expected 255 (GREEN fully covers the cleared frame). \
              alpha=0 means the Clear ran AFTER GREEN and erased it. pixel = {center:?}",
             center[3]
+        );
+    }
+
+    // ===== T6 Characterisation readback safety-net =====
+    //
+    // These tests lock down the SDF-clip baking (clip_rrect / clip_rsuperellipse
+    // corner cutouts) and the nested save+clip+restore scissor restoration that
+    // had ZERO pixel coverage before T6. They are characterisation tests: they
+    // pass on the current (correct) code and will FAIL if T7 (GpuStateStack
+    // extraction) breaks clip/scissor behaviour.
+    //
+    // Each test discriminates: the assertion would fail if the clip were a plain
+    // axis-aligned square (no SDF applied) or if save/restore leaked the scissor.
+
+    /// T6-1: `clip_rrect` SDF baking removes corner pixels.
+    ///
+    /// A 100×100 target is cleared to BLACK. An 80×80 RRect with 20px uniform
+    /// corner radius is set as the active clip. The entire 80×80 bounding box is
+    /// then filled RED.
+    ///
+    /// The pixel at the TOP-LEFT CORNER of the bounding box (x=0, y=0 relative to
+    /// the rrect) sits inside the axis-aligned bounding box but outside the
+    /// rounded corner arc. The SDF shader discards it; a plain scissor-only clip
+    /// would paint it RED.
+    ///
+    /// Interior pixel (50, 50) is well inside every corner arc — must be RED.
+    /// Corner pixel (10, 10) is inside the bbox but outside the arc — must be BLACK.
+    ///
+    /// Without SDF: corner pixel = RED (clip is merely a square scissor).
+    /// With SDF:    corner pixel = BLACK (fragment discarded by rrect SDF).
+    #[test]
+    fn clip_rrect_sdf_removes_corner_pixels() {
+        use flui_painting::Paint;
+
+        const SIZE: u32 = 100;
+        // The clip rect: 10..90 in both axes (80×80), 20px uniform corner radius.
+        // The corner at (10,10) to (30,30) is a quadrant governed by the arc.
+        // The exact centre of the corner quarter-circle is at (30, 30) screen-space
+        // (i.e. rrect.left + radius, rrect.top + radius).  The pixel at (11, 11) is
+        // 1 pixel past the corner — outside the arc, inside the bbox.
+        const RRECT_LEFT: f32 = 10.0;
+        const RRECT_TOP: f32 = 10.0;
+        const RRECT_RIGHT: f32 = 90.0;
+        const RRECT_BOTTOM: f32 = 90.0;
+        const RADIUS: f32 = 20.0;
+
+        let (device, queue) = test_device_and_queue();
+
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            let rrect = flui_types::RRect::from_rect_circular(
+                Rect::from_xywh(
+                    px(RRECT_LEFT),
+                    px(RRECT_TOP),
+                    px(RRECT_RIGHT - RRECT_LEFT),
+                    px(RRECT_BOTTOM - RRECT_TOP),
+                ),
+                px(RADIUS),
+            );
+            painter.clip_rrect(rrect);
+
+            // Fill the entire canvas RED. Only pixels passing the rrect SDF will
+            // actually be painted; the rest remain BLACK (clear colour).
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(flui_types::Color::rgb(255, 0, 0)),
+            );
+        });
+
+        // Interior pixel at (50, 50) — deep inside the rrect, far from all corners.
+        // Must be RED; if the clip discards everything this test would also fail.
+        let interior = pixel_at(&rgba, SIZE, 50, 50);
+        assert!(
+            interior[0] > 200,
+            "interior pixel (50,50) R={}, expected ~255 (RED fill inside rrect). \
+             clip_rrect is discarding too much — possible SDF radius overclaim. \
+             pixel={interior:?}",
+            interior[0]
+        );
+
+        // Corner pixel: (11, 11) is 1px inside the axis-aligned bbox but inside
+        // the corner arc's quadrant. At radius=20 the SDF for a point at distance
+        // (~13 px) from the corner centre (30,30) is positive (outside the arc).
+        //
+        // Discriminator: a plain scissor-only implementation would paint this RED
+        // (it is inside the 10..90 scissor).  The SDF shader must discard the
+        // draw, leaving the opaque BLACK clear colour.
+        //
+        // The clear colour is wgpu::Color::BLACK = (0.0, 0.0, 0.0, 1.0), so the
+        // pixel is [0, 0, 0, 255]. We check R < 30 (not alpha) to discriminate:
+        //   - SDF applied correctly → R ≈ 0 (BLACK, not painted) ✓
+        //   - SDF missing (scissor-only) → R ≈ 255 (RED fill bleeds into corner)
+        let corner = pixel_at(&rgba, SIZE, 11, 11);
+        assert!(
+            corner[0] < 30,
+            "corner pixel (11,11) R={}, expected ~0 (BLACK — outside rounded corner arc). \
+             A non-zero R means clip_rrect is acting as a plain scissor (no SDF applied). \
+             pixel={corner:?}",
+            corner[0]
+        );
+
+        // Sanity: a pixel strictly outside the bounding box must be BLACK.
+        let outside_bbox = pixel_at(&rgba, SIZE, 5, 5);
+        assert!(
+            outside_bbox[0] < 10,
+            "pixel (5,5) is outside the rrect bbox, R={}, expected 0. \
+             pixel={outside_bbox:?}",
+            outside_bbox[0]
+        );
+    }
+
+    /// T6-2: `clip_rsuperellipse` SDF baking removes corner pixels.
+    ///
+    /// Identical geometry to T6-1 but uses `clip_rsuperellipse` (iOS squircle)
+    /// with the same 20px radii. The superellipse SDF is strictly tighter in the
+    /// corner region than a standard rrect arc, so the corner pixel at (11,11)
+    /// must also be discarded (the squircle corner extends further inward).
+    ///
+    /// Without SDF: corner = RED (scissor only).
+    /// With SDF:    corner = BLACK (superellipse SDF discards the corner).
+    #[test]
+    fn clip_rsuperellipse_sdf_removes_corner_pixels() {
+        use flui_painting::Paint;
+        use flui_types::geometry::RSuperellipse;
+
+        const SIZE: u32 = 100;
+        const RRECT_LEFT: f32 = 10.0;
+        const RRECT_TOP: f32 = 10.0;
+        const RRECT_RIGHT: f32 = 90.0;
+        const RRECT_BOTTOM: f32 = 90.0;
+        const RADIUS: f32 = 20.0;
+
+        let (device, queue) = test_device_and_queue();
+
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            let rse = RSuperellipse::from_ltrb_xy(
+                px(RRECT_LEFT),
+                px(RRECT_TOP),
+                px(RRECT_RIGHT),
+                px(RRECT_BOTTOM),
+                px(RADIUS),
+                px(RADIUS),
+            );
+            painter.clip_rsuperellipse(rse);
+
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(flui_types::Color::rgb(0, 0, 255)),
+            );
+        });
+
+        // Interior pixel must be BLUE (painted inside the superellipse).
+        let interior = pixel_at(&rgba, SIZE, 50, 50);
+        assert!(
+            interior[2] > 200,
+            "interior pixel (50,50) B={}, expected ~255 (BLUE fill inside rsuperellipse). \
+             Superellipse SDF is discarding interior pixels. pixel={interior:?}",
+            interior[2]
+        );
+
+        // Corner pixel (11,11) must remain BLACK — squircle corner discards it.
+        // A scissor-only path would paint it BLUE (non-zero B channel).
+        //
+        // Clear colour is wgpu::Color::BLACK = [0, 0, 0, 255] so we check B < 30:
+        //   - SDF applied → B ≈ 0 (BLACK, fill discarded) ✓
+        //   - SDF missing → B ≈ 255 (BLUE bleeds into corner)
+        let corner = pixel_at(&rgba, SIZE, 11, 11);
+        assert!(
+            corner[2] < 30,
+            "corner pixel (11,11) B={}, expected ~0 (BLACK — outside squircle arc). \
+             A non-zero B means clip_rsuperellipse is acting as a plain scissor. \
+             pixel={corner:?}",
+            corner[2]
+        );
+    }
+
+    /// T6-3: nested `save + clip_rect + paint + restore` correctly removes the scissor.
+    ///
+    /// This test proves the save/restore scissor asymmetry is DESIGN (correct), not
+    /// a bug. See the `save()` comment block for the invariant proof.
+    ///
+    /// Layout (100×100 target, cleared to BLACK):
+    ///   - Paint the full canvas GREEN.
+    ///   - save() → clip_rect to LEFT half (x 0..50) → paint RIGHT half RED.
+    ///   - restore() → the scissor must be gone.
+    ///   - Paint a narrow BLUE column at x=60..62 (right of the clip boundary).
+    ///
+    /// Assertions:
+    ///   A. LEFT interior (x=25, y=50):  GREEN (painted before clip, not touched after).
+    ///   B. RIGHT interior before BLUE (x=55, y=50): GREEN (RED was clipped away).
+    ///   C. BLUE column (x=61, y=50): BLUE — proves restore removed the scissor so
+    ///      the post-restore paint reaches the right half.
+    ///
+    /// Without correct restore: BLUE column = BLACK (scissor still active after restore).
+    /// With correct restore:    BLUE column = BLUE.
+    #[test]
+    fn nested_save_clip_restore_removes_scissor() {
+        use flui_painting::Paint;
+
+        const SIZE: u32 = 100;
+        let (device, queue) = test_device_and_queue();
+
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            let green = flui_types::Color::rgb(0, 255, 0);
+            let red = flui_types::Color::rgb(255, 0, 0);
+            let blue = flui_types::Color::rgb(0, 0, 255);
+
+            // Step 1: paint the full canvas GREEN (baseline for both halves).
+            painter.rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+                &Paint::fill(green),
+            );
+
+            // Step 2: save, clip to left half, try to paint the right half RED.
+            // The RED paint must be clipped (scissor blocks x≥50).
+            painter.save();
+            painter.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(SIZE as f32)));
+            painter.rect(
+                Rect::from_xywh(px(50.0), px(0.0), px(50.0), px(SIZE as f32)),
+                &Paint::fill(red),
+            );
+            painter.restore();
+
+            // Step 3: after restore the scissor must be cleared. Paint a BLUE column
+            // at x=60..62 which is in the right half (would be clipped if scissor leaked).
+            painter.rect(
+                Rect::from_xywh(px(60.0), px(0.0), px(2.0), px(SIZE as f32)),
+                &Paint::fill(blue),
+            );
+        });
+
+        // A. Left half (x=25, y=50): must be GREEN (painted in step 1, unaffected).
+        let left = pixel_at(&rgba, SIZE, 25, 50);
+        assert!(
+            left[1] > 200 && left[0] < 10 && left[2] < 10,
+            "left interior (25,50) expected GREEN, got {left:?}. \
+             Left half should be the original GREEN fill."
+        );
+
+        // B. Right half between clip boundary and blue column (x=55, y=50):
+        // must be GREEN. RED was clipped by the scissor, so GREEN underneath survives.
+        let right_no_blue = pixel_at(&rgba, SIZE, 55, 50);
+        assert!(
+            right_no_blue[1] > 200 && right_no_blue[0] < 30 && right_no_blue[2] < 30,
+            "right interior (55,50) expected GREEN (RED clipped away), got {right_no_blue:?}. \
+             If RED appears the scissor did not clip during save+clip+restore."
+        );
+
+        // C. BLUE column (x=61, y=50): must be BLUE.
+        // Discriminator: if restore() leaked the scissor, x=61 is still clipped and
+        // stays GREEN; only a correct restore allows the post-restore blue paint through.
+        let blue_col = pixel_at(&rgba, SIZE, 61, 50);
+        assert!(
+            blue_col[2] > 200 && blue_col[0] < 10 && blue_col[1] < 30,
+            "blue column (61,50) expected BLUE, got {blue_col:?}. \
+             A non-blue result means restore() left the scissor active (leaked scissor), \
+             blocking the post-restore BLUE paint from reaching the right half."
         );
     }
 }
