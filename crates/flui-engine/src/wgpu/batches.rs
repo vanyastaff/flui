@@ -41,8 +41,10 @@
 
 use flui_painting::{BlendMode, Paint, PaintStyle};
 use flui_types::{
-    Point, Rect,
-    geometry::{Pixels, RRect},
+    Offset, Point, Rect,
+    geometry::{Pixels, RRect, px},
+    painting::path::Path,
+    styling::Color,
 };
 
 use super::{
@@ -569,6 +571,261 @@ impl DrawBatcher {
             Err(e) => {
                 tracing::error!("Failed to tessellate DRRect: {}", e);
             }
+        }
+    }
+
+    // ===== Moved record methods (T9b set) =====
+
+    /// Record a filled or stroked arc (pie-slice or arc segment).
+    ///
+    /// # Instanced fast path
+    ///
+    /// An axis-aligned, non-reflected, `SrcOver` filled arc is submitted as a
+    /// GPU `ArcInstance`. All other cases — rotation, shear, reflection (`det < 0`),
+    /// stroked arcs, or any non-`SrcOver` blend mode — fall through to the
+    /// tessellated path.
+    ///
+    /// The **2-D determinant reflection guard** is preserved exactly:
+    /// `det = m.x_axis.x * m.y_axis.y − m.x_axis.y * m.y_axis.x`.
+    /// `det < 0` means the transform contains a reflection; the arc shader cannot
+    /// represent a reflected wedge, so tessellation is required even when the
+    /// transform is otherwise axis-aligned.
+    ///
+    /// `draw_arc` does not read opacity — no opacity baking is performed.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/draw_order/state are disjoint WgpuPainter fields \
+                  passed as separate borrows; arc geometry parameters are all necessary"
+    )]
+    pub(super) fn draw_arc(
+        &mut self,
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &GpuStateStack,
+        rect: Rect<Pixels>,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: &Paint,
+    ) {
+        let center = rect.center();
+        // Pixels / Pixels = f32 (dimensionless ratio)
+        let radius: f32 = (rect.width() + rect.height()) / px(4.0);
+
+        if paint.style == PaintStyle::Fill {
+            // Filled arc (pie slice when use_center, arc segment when !use_center).
+            // Gate on axis-aligned transform: the arc instance shader only handles
+            // translation + axis-aligned scale; rotation/shear/reflection require
+            // tessellation.
+            //
+            // `is_axis_aligned` already rejects rotation and shear, but it also
+            // returns `true` for a reflection like `scale(-1, 1)` because the
+            // off-diagonal elements are still zero.  A reflection negates the wedge
+            // direction, which the instanced shader cannot represent.  Guard with the
+            // 2D determinant: det < 0 means the transform includes a reflection and
+            // the wedge would be drawn on the wrong side.
+            let m = state.current_transform();
+            let det = m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x;
+            // The instanced fast path renders with a hardcoded SrcOver pipeline;
+            // a non-SrcOver blend mode must route through the tessellated path
+            // (which selects the blend pipeline via `pipeline_key_from_paint`).
+            if state.is_axis_aligned() && det >= 0.0 && paint.blend_mode == BlendMode::SrcOver {
+                // Fast path: GPU instancing for filled arcs.
+                let transformed_center = state.apply_transform(center);
+                let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
+                let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
+
+                let instance = super::instancing::ArcInstance::new(
+                    transformed_center,
+                    radius,
+                    start_angle,
+                    sweep_angle,
+                    paint.color,
+                    [sx, sy],
+                );
+                let _ = segment.arc_batch.add(instance);
+                DrawSegment::push_scissor_region(
+                    &mut segment.arc_scissors,
+                    state.current_scissor(),
+                );
+            } else {
+                // Slow path: rotation, shear, reflection, or non-SrcOver blend
+                // mode — tessellate in local space and bake the full transform
+                // into vertex positions.
+                //
+                // Phase-A quality note: uses the tessellated path → aliased edges
+                // (no SDF AA), AABB scissor clip. SDF-quality blended arcs are
+                // Phase B.
+                self.prime_tessellator_scale(state);
+                match self.tessellator.tessellate_arc(
+                    rect,
+                    start_angle,
+                    sweep_angle,
+                    use_center,
+                    paint,
+                ) {
+                    Ok((vertices, indices)) => {
+                        let key = pipeline::pipeline_key_from_paint(paint);
+                        Self::submit_transformed_geometry(
+                            segment, draw_order, state, vertices, &indices, key,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to tessellate filled arc: {}", e);
+                    }
+                }
+            }
+        } else {
+            // Stroked arcs always tessellate (no instanced stroke pipeline).
+            self.prime_tessellator_scale(state);
+            match self
+                .tessellator
+                .tessellate_arc(rect, start_angle, sweep_angle, use_center, paint)
+            {
+                Ok((vertices, indices)) => {
+                    Self::submit_transformed_geometry(
+                        segment,
+                        draw_order,
+                        state,
+                        vertices,
+                        &indices,
+                        pipeline::pipeline_key_from_paint(paint),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Failed to tessellate stroked arc: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Record a stroked line segment.
+    ///
+    /// Always tessellated (no instanced stroke pipeline).
+    /// `line` does not read opacity — no opacity baking is performed.
+    pub(super) fn line(
+        &mut self,
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &GpuStateStack,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+        paint: &Paint,
+    ) {
+        self.prime_tessellator_scale(state);
+        match self.tessellator.tessellate_line(p1, p2, paint) {
+            Ok((vertices, indices)) => {
+                #[cfg(debug_assertions)]
+                tracing::trace!(
+                    "DrawBatcher::line: {} vertices, {} indices",
+                    vertices.len(),
+                    indices.len()
+                );
+                Self::submit_transformed_geometry(
+                    segment,
+                    draw_order,
+                    state,
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
+            }
+            Err(e) => {
+                tracing::error!("DrawBatcher::line: tessellation failed — {}", e);
+            }
+        }
+    }
+
+    /// Record a multi-layer approximated drop shadow for `path`.
+    ///
+    /// # State mutation
+    ///
+    /// This method takes `state: &mut GpuStateStack` because each blur layer
+    /// applies a per-layer translate via `state.save()` / `state.translate()`
+    /// / `state.restore()`.  The save/restore balance is maintained strictly:
+    /// every iteration pushes exactly one save and pops it before the next
+    /// iteration.  The net depth change across the entire call is zero, so the
+    /// T7 frame-boundary `debug_assert_balanced` remains satisfied.
+    ///
+    /// # Algorithm
+    ///
+    /// Material Design-style multi-pass approximation: the shadow path is
+    /// tessellated `num_layers` times (≤ 8) with geometrically decreasing alpha
+    /// to simulate radial blur.  The tessellator scale is primed **once** before
+    /// the loop — the per-layer `translate` does not change scale, so the
+    /// flatten tolerance captured before the loop is correct for every layer.
+    ///
+    /// `draw_shadow` does not read opacity — no opacity baking is performed.
+    pub(super) fn draw_shadow(
+        &mut self,
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &mut GpuStateStack,
+        path: &Path,
+        color: Color,
+        elevation: f32,
+    ) {
+        let blur_radius = elevation.max(0.0);
+        let offset_y = elevation / 2.0;
+
+        if blur_radius < 0.1 {
+            return;
+        }
+
+        // Max 8 layers for performance.
+        let num_layers = (blur_radius / 2.0).ceil().min(8.0) as usize;
+
+        if num_layers == 0 {
+            return;
+        }
+
+        let alpha_per_layer = f32::from(color.a) / num_layers as f32;
+
+        // Prime the tessellator's flatten tolerance to the current CTM scale so
+        // shadow curves don't facet on HiDPI / scaled frames. The per-layer
+        // `translate` below only shifts the path (no scale change), so the scale
+        // captured here is correct for every layer. Without this, the shadow
+        // path would tessellate at whatever `max_scale` a previous draw left
+        // behind (stale-scale hazard).
+        self.prime_tessellator_scale(state);
+
+        for i in 0..num_layers {
+            let offset_scale = (i as f32 + 1.0) / num_layers as f32;
+            let current_blur = blur_radius * offset_scale;
+
+            let shadow_alpha = (alpha_per_layer * (1.0 - offset_scale * 0.5)) as u8;
+            let shadow_color = Color::rgba(color.r, color.g, color.b, shadow_alpha);
+            let shadow_paint = Paint::fill(shadow_color);
+
+            // Push a per-layer translate so the tessellated geometry is baked
+            // at the offset position (`submit_transformed_geometry` reads the
+            // CTM at call time — shape.wgsl has no model matrix).
+            state.save();
+            state.translate(Offset::new(
+                px(current_blur * 0.5),
+                px(offset_y + current_blur * 0.5),
+            ));
+
+            match self
+                .tessellator
+                .tessellate_flui_path_fill(path, &shadow_paint)
+            {
+                Ok((vertices, indices)) => {
+                    Self::submit_transformed_geometry(
+                        segment,
+                        draw_order,
+                        state,
+                        vertices,
+                        &indices,
+                        PipelineKey::alpha_blend(),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Failed to tessellate shadow path: {}", e);
+                }
+            }
+
+            state.restore();
         }
     }
 }
