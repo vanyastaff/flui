@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 18 refusal triggers (1-18, with #9 numbered for FR-036)
+# Verifies the 19 refusal triggers (1-19, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check. Exits non-zero on the first violation
 # outside the whitelist; prints the offending file:line and the trigger
@@ -10,7 +10,9 @@
 # added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
 # Triggers #15/#16/#17/#18 added in core-0a adversarial-reaudit PR-4 §U5
 # (println!/eprintln!/dbg! ban, module-level allow(unsafe_code) ban,
-# reinvented debug_assert_* ban, key.rs new_unchecked ban).
+# reinvented debug_assert_* ban, key.rs new_unchecked ban). Trigger #19
+# added in engine overhaul T9f (C4: Matrix4 must not appear on the
+# record/pipeline side; convert at the Backend trait boundary).
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -21,7 +23,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 17 triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 19 triggers; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -1200,6 +1202,38 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 19 (engine overhaul T9f) — `Matrix4` in the DrawBatcher record
+# side or `PipelineCache`/`PipelineBuilder` (record/pipeline modules).
+#
+# C4 rule: `Matrix4`↔glam conversions must happen at the `Backend` trait
+# boundary (crates/flui-engine/src/wgpu/backend.rs). The hot record path
+# (`batches/`) and the pipeline-cache module (`pipelines.rs`) must be
+# glam-only; importing or accepting `Matrix4` there leaks the flui-types
+# coordinate type into the GPU plumbing layer and breaks the seam contract
+# established in the engine overhaul spec (T9/T10 split).
+#
+# Allowlist: none. The correct fix is always to extract the needed scalar
+# fields (translation, scale) at the caller in backend.rs / painter.rs and
+# pass primitives down.
+# -----------------------------------------------------------------------------
+trigger19_hits=$(rg --line-number --column '\bMatrix4\b' \
+    crates/flui-engine/src/wgpu/batches crates/flui-engine/src/wgpu/pipelines.rs 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+if [[ -n "${trigger19_hits}" ]]; then
+  echo 'VIOLATION 19: Matrix4 in batches/ or pipelines.rs (record/pipeline side must be glam-only; convert at the trait boundary)'
+  echo "see ${trigger_doc} (trigger 19)"
+  echo "${trigger19_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    19: no Matrix4 in batches/ or pipelines.rs"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1208,7 +1242,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 18 refusal triggers + FR-033 grep clean"
+echo "port-check: all 19 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

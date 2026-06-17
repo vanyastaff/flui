@@ -201,6 +201,18 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 
 **Back-references:** [N-geom polish-pass research §III U1–U12](research/2026-05-24-flui-geometry-polish-pass-research.md), [ROADMAP-TRACKER N-geom block](ROADMAP-TRACKER.md).
 
+### 19. `Matrix4` in the DrawBatcher record side or `PipelineCache`/`PipelineBuilder`
+
+**C4 rule: the `Matrix4`↔glam conversion happens at the `Backend` trait boundary; the record and pipeline modules are glam-only.** `GpuStateStack` stores transforms as `glam::Mat4`. The single structural conversion edge is `current_transform_matrix()` in `painter.rs` (outbound, returning a `Matrix4` to `Backend`/`LayerStateStack`) and `Backend::with_transform` (inbound, converting an incoming `Matrix4` into the glam state). Every record method below that boundary — `batches/{shapes,gradients,paths,images}.rs` — and the pipeline-cache module (`pipelines.rs`) work entirely in glam primitives and pixel-typed geometry.
+
+Importing or accepting `flui_types::Matrix4` on the record/pipeline side leaks the flui-types coordinate abstraction into GPU plumbing, defeats the `GpuStateStack` encapsulation, and couples every record-method caller to both coordinate systems. The correct fix is always to extract the needed scalars (translation, scale) at the `painter.rs` or `backend.rs` call site and pass primitives down.
+
+**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files) and `crates/flui-engine/src/wgpu/pipelines.rs`.
+
+**Allowlist:** none. Doc-comment lines (`//!`, `///`, `//`) are excluded (the rg filter strips them).
+
+**Back-references:** [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](adr/ADR-0006-c-ir-record-replay-seam.md) §Decision 4 (C4 rule); engine-overhaul spec `.rust-studio/specs/flui-engine-overhaul/spec.md` acceptance criterion C4; `crates/flui-engine/ARCHITECTURE.md` §Record-side boundary.
+
 ### Reactive lint promotion
 
 Triggers grow reactively. A new trigger is added to this list when an anti-pattern is caught in review; it does not pre-exist its first observation.
@@ -852,7 +864,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs nine `rg` (ripgrep) passes total — refusal triggers 1–7 plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 19 refusal triggers plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 
