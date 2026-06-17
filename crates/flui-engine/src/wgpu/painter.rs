@@ -882,12 +882,6 @@ impl WgpuPainter {
         self.state.current_transform_matrix()
     }
 
-    /// Prime the tessellator's flatten tolerance from the current CTM max-basis
-    /// length.  Shim that forwards to `DrawBatcher::prime_tessellator_scale`.
-    fn prime_tessellator_scale(&mut self) {
-        self.batcher.prime_tessellator_scale(&self.state);
-    }
-
     /// Seal the current segment and start a fresh one.
     ///
     /// Forwards to `DrawBatcher::finish_current_segment`.  Called explicitly
@@ -1807,94 +1801,16 @@ impl WgpuPainter {
             paint
         );
 
-        let center = rect.center();
-        // Pixels / Pixels = f32 (dimensionless ratio)
-        let radius: f32 = (rect.width() + rect.height()) / px(4.0);
-
-        if paint.style == PaintStyle::Fill {
-            // Filled arc (pie slice when use_center, arc segment when !use_center).
-            // Gate on axis-aligned transform: the arc instance shader only handles
-            // translation + axis-aligned scale; rotation/shear/reflection require
-            // tessellation.
-            //
-            // `is_axis_aligned_transform` already rejects rotation and shear, but it
-            // also returns `true` for a reflection like `scale(-1, 1)` because the
-            // off-diagonal elements are still zero.  A reflection negates the wedge
-            // direction, which the instanced shader cannot represent.  Guard with the
-            // 2D determinant: det < 0 means the transform includes a reflection and
-            // the wedge would be drawn on the wrong side.
-            let m = self.state.current_transform();
-            let det = m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x;
-            // The instanced fast path renders with a hardcoded SrcOver pipeline;
-            // a non-SrcOver blend mode must route through the tessellated path
-            // (which selects the blend pipeline via `pipeline_key_from_paint`).
-            if self.state.is_axis_aligned() && det >= 0.0 && paint.blend_mode == BlendMode::SrcOver
-            {
-                // Fast path: GPU instancing for filled arcs.
-                let transformed_center = self.state.apply_transform(center);
-                let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
-                let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
-
-                let instance = super::instancing::ArcInstance::new(
-                    transformed_center,
-                    radius,
-                    start_angle,
-                    sweep_angle,
-                    paint.color,
-                    [sx, sy],
-                );
-                let _ = self.current_segment.arc_batch.add(instance);
-                DrawSegment::push_scissor_region(
-                    &mut self.current_segment.arc_scissors,
-                    self.state.current_scissor(),
-                );
-            } else {
-                // Slow path: rotation, shear, reflection, or non-SrcOver blend
-                // mode — tessellate in local space and bake the full transform
-                // into vertex positions.
-                //
-                // Phase-A quality note: uses the tessellated path → aliased edges
-                // (no SDF AA), AABB scissor clip. SDF-quality blended arcs are
-                // Phase B.
-                self.prime_tessellator_scale();
-                match self.batcher.tessellator.tessellate_arc(
-                    rect,
-                    start_angle,
-                    sweep_angle,
-                    use_center,
-                    paint,
-                ) {
-                    Ok((vertices, indices)) => {
-                        let key = pipeline::pipeline_key_from_paint(paint);
-                        self.submit_transformed_geometry(vertices, &indices, key);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to tessellate filled arc: {}", e);
-                    }
-                }
-            }
-        } else {
-            // Stroked arcs always tessellate (no instanced stroke pipeline).
-            self.prime_tessellator_scale();
-            match self.batcher.tessellator.tessellate_arc(
-                rect,
-                start_angle,
-                sweep_angle,
-                use_center,
-                paint,
-            ) {
-                Ok((vertices, indices)) => {
-                    self.submit_transformed_geometry(
-                        vertices,
-                        &indices,
-                        pipeline::pipeline_key_from_paint(paint),
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Failed to tessellate stroked arc: {}", e);
-                }
-            }
-        }
+        self.batcher.draw_arc(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            rect,
+            start_angle,
+            sweep_angle,
+            use_center,
+            paint,
+        );
     }
 
     pub fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
@@ -1925,27 +1841,14 @@ impl WgpuPainter {
             paint
         );
 
-        // Use tessellator for line stroke
-        // Paint already contains stroke information
-        self.prime_tessellator_scale();
-        match self.batcher.tessellator.tessellate_line(p1, p2, paint) {
-            Ok((vertices, indices)) => {
-                #[cfg(debug_assertions)]
-                tracing::trace!(
-                    "WgpuPainter::line: Adding {} vertices, {} indices to batch",
-                    vertices.len(),
-                    indices.len()
-                );
-                self.submit_transformed_geometry(
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
-            }
-            Err(e) => {
-                tracing::error!("WgpuPainter::line: Tessellation failed - {}", e);
-            }
-        }
+        self.batcher.line(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            p1,
+            p2,
+            paint,
+        );
     }
 
     pub fn text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint) {
@@ -2586,75 +2489,14 @@ impl WgpuPainter {
             color
         );
 
-        // Calculate blur radius from elevation (Material Design style)
-        // elevation controls both offset and blur amount
-        let blur_radius = elevation.max(0.0);
-        let offset_y = elevation / 2.0; // Shadow offset downwards
-
-        if blur_radius < 0.1 {
-            // No shadow for very small elevations
-            return;
-        }
-
-        // Multi-pass blur approximation
-        // Draw the shadow path multiple times with decreasing alpha to simulate blur
-        let num_layers = (blur_radius / 2.0).ceil().min(8.0) as usize; // Max 8 layers for performance
-
-        if num_layers == 0 {
-            return;
-        }
-
-        let alpha_per_layer = f32::from(color.a) / num_layers as f32;
-
-        // Prime the tessellator's flatten tolerance to the current CTM scale so
-        // shadow curves don't facet on HiDPI / scaled frames. The per-layer
-        // `translate` below only shifts the path (no scale change), so the scale
-        // captured here is correct for every layer. Without this, the shadow
-        // path would tessellate at whatever `max_scale` a previous draw left
-        // behind (stale-scale hazard).
-        self.prime_tessellator_scale();
-
-        for i in 0..num_layers {
-            let offset_scale = (i as f32 + 1.0) / num_layers as f32;
-            let current_blur = blur_radius * offset_scale;
-
-            // Create shadow paint with decreasing alpha
-            let shadow_alpha = (alpha_per_layer * (1.0 - offset_scale * 0.5)) as u8;
-            let shadow_color =
-                flui_types::styling::Color::rgba(color.r, color.g, color.b, shadow_alpha);
-
-            let shadow_paint = Paint::fill(shadow_color);
-
-            // Save transform, apply shadow offset
-            self.save();
-            self.translate(flui_types::Offset::new(
-                px(current_blur * 0.5),
-                px(offset_y + current_blur * 0.5),
-            ));
-
-            // Draw the shadow layer.
-            // Route through submit_transformed_geometry so the save()+translate() offset
-            // above is actually baked into the vertices (shape.wgsl has no model matrix).
-            match self
-                .batcher
-                .tessellator
-                .tessellate_flui_path_fill(path, &shadow_paint)
-            {
-                Ok((vertices, indices)) => {
-                    self.submit_transformed_geometry(
-                        vertices,
-                        &indices,
-                        PipelineKey::alpha_blend(),
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Failed to tessellate shadow path: {}", e);
-                }
-            }
-
-            // Restore transform
-            self.restore();
-        }
+        self.batcher.draw_shadow(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &mut self.state,
+            path,
+            color,
+            elevation,
+        );
     }
 
     /// Draw indexed triangle geometry with per-vertex color + uv.
@@ -3780,7 +3622,7 @@ mod tests {
     /// P3 regression: `draw_arc` fast path must fall back to tessellation when
     /// the current transform includes a reflection (negative determinant).
     ///
-    /// A reflection like `scale(-1, 1)` satisfies `is_axis_aligned_transform()`
+    /// A reflection like `scale(-1, 1)` satisfies `is_axis_aligned()`
     /// (off-diagonals are zero) but would mirror the wedge direction, producing
     /// an arc on the wrong side.  The fix guards on `det >= 0`; reflected arcs
     /// must be routed to `tessellate_arc` which bakes the full matrix.
@@ -5400,6 +5242,79 @@ mod tests {
             "blue column (61,50) expected BLUE, got {blue_col:?}. \
              A non-blue result means restore() left the scissor active (leaked scissor), \
              blocking the post-restore BLUE paint from reaching the right half."
+        );
+    }
+
+    /// Verify that `DrawBatcher::draw_shadow` (T9b) keeps its `save`/`restore`
+    /// calls balanced so the CTM is unchanged after the call returns.
+    ///
+    /// # Discriminating strategy
+    ///
+    /// Draw a shadow, then paint a small 4×4 RED square at a known origin
+    /// (`x=10, y=10`).  Read back the pixel at the square's center.
+    ///
+    /// If `draw_shadow` leaks a `translate` (i.e., restores one fewer time
+    /// than it saves), the CTM after the call carries a residual offset, and
+    /// the red square would be painted at a shifted position — so the expected
+    /// pixel reads as the background color instead of red.
+    ///
+    /// This is a real discriminating assertion, not a tautology: the test
+    /// would fail (background pixel ≠ red) on a build where the batcher's
+    /// `state.restore()` call is removed.
+    #[cfg(feature = "enable-wgpu-tests")]
+    #[test]
+    fn draw_shadow_save_restore_is_balanced() {
+        use flui_painting::Paint;
+        use flui_types::Color;
+
+        const SIZE: u32 = 64;
+        let (device, queue) = test_device_and_queue();
+
+        // Draw a shadow then a small red square at a known absolute origin.
+        let rgba = render_to_rgba(
+            &device,
+            &queue,
+            SIZE,
+            // Black background.
+            wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            |painter| {
+                // Construct a simple closed triangle path.  The exact shape does not
+                // matter for this test — we just need an elevation large enough to
+                // produce at least one shadow layer (elevation=8 → blur_radius=8,
+                // num_layers=4).
+                let mut path = flui_types::painting::path::Path::new();
+                path.move_to(Point::new(px(30.0), px(5.0)));
+                path.line_to(Point::new(px(55.0), px(50.0)));
+                path.line_to(Point::new(px(5.0), px(50.0)));
+                path.close();
+
+                // draw_shadow mutates state (save/translate/restore per layer).
+                // After it returns the CTM must be back at the identity translation.
+                painter.draw_shadow(&path, Color::rgba(0, 0, 0, 180), 8.0);
+
+                // Paint a 4×4 red square at (10, 10) in absolute canvas space.
+                // If CTM has leaked a translation this lands somewhere else and the
+                // pixel at (12, 12) reads black (background), not red.
+                painter.rect(
+                    Rect::from_xywh(px(10.0), px(10.0), px(4.0), px(4.0)),
+                    &Paint::fill(Color::rgba(255, 0, 0, 255)),
+                );
+            },
+        );
+
+        // The center of the red square — pixel (12, 12) — must be red.
+        // A leaked translate shifts the square away: the pixel reads background (black).
+        let center = pixel_at(&rgba, SIZE, 12, 12);
+        assert!(
+            center[0] > 200 && center[1] < 30 && center[2] < 30,
+            "pixel (12,12) expected RED (square at origin 10,10), got {center:?}. \
+             A non-red result means draw_shadow leaked a translate (save/restore imbalance), \
+             shifting the post-shadow rect away from its intended origin."
         );
     }
 }
