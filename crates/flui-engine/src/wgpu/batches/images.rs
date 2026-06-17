@@ -40,11 +40,7 @@ use flui_types::{
 };
 
 use super::{
-    super::{
-        command_ir::DrawSegment,
-        state_stack::GpuStateStack,
-        texture_cache::TextureCache,
-    },
+    super::{command_ir::DrawSegment, state_stack::GpuStateStack, texture_cache::TextureCache},
     DrawBatcher,
 };
 
