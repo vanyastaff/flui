@@ -20,6 +20,7 @@ use wgpu::util::DeviceExt;
 
 use super::{
     pipeline::{self, PipelineCache, PipelineKey},
+    resources::GpuResources,
     tessellator::Tessellator,
     text::TextRenderer,
     vertex::Vertex,
@@ -284,9 +285,9 @@ pub struct WgpuPainter {
     /// Viewport size (width, height)
     size: (u32, u32),
 
-    // ===== Buffer Management =====
-    /// Buffer pool for efficient buffer reuse (10-20% CPU reduction)
-    buffer_pool: super::buffer_pool::BufferPool,
+    // ===== GPU Resource Managers =====
+    /// Facade owning BufferPool, TextureCache, TexturePool, and ExternalTextureRegistry.
+    resources: GpuResources,
 
     // ===== Shape Rendering =====
     /// Pipeline cache for specialized rendering pipelines
@@ -362,12 +363,6 @@ pub struct WgpuPainter {
 
     /// Default texture sampler (linear filtering with repeat)
     default_sampler: wgpu::Sampler,
-
-    /// Texture cache for efficient texture loading and reuse
-    texture_cache: super::texture_cache::TextureCache,
-
-    /// External texture registry for video/camera/platform textures
-    external_texture_registry: super::external_texture_registry::ExternalTextureRegistry,
 
     // ===== Tessellation =====
     /// Lyon-based path tessellator for complex shapes
@@ -446,11 +441,6 @@ pub struct WgpuPainter {
     /// the subtree can be rendered to an offscreen texture and composited
     /// with group opacity.
     layer_stack: Vec<SavedLayer>,
-
-    /// Texture pool for offscreen layer compositing (opacity layers).
-    /// Textures are acquired when `restore_layer` flushes offscreen content
-    /// and returned to the pool when the `PooledTexture` RAII handle is dropped.
-    layer_texture_pool: super::texture_pool::TexturePool,
 
     // ===== Segmented Draw Order =====
     /// Current draw segment accumulating batched commands
@@ -933,9 +923,6 @@ impl WgpuPainter {
         let current_transform = glam::Mat4::IDENTITY;
         let transform_stack = Vec::new();
 
-        // Create buffer pool for efficient buffer reuse
-        let buffer_pool = super::buffer_pool::BufferPool::new();
-
         // ===== Advanced Effects Setup =====
 
         // Create gradient stops buffer and bind group layout
@@ -981,23 +968,15 @@ impl WgpuPainter {
         // No bind group yet (created on first gradient use)
         let gradient_bind_group = None;
 
-        // Create texture cache (uses Arc for safe sharing)
-        let texture_cache = super::texture_cache::TextureCache::new(device.clone(), queue.clone());
-
-        // Create external texture registry for video/camera/platform textures
-        let external_texture_registry =
-            super::external_texture_registry::ExternalTextureRegistry::new(device.clone());
-
-        // Create texture pool for opacity layer offscreen compositing
-        let layer_texture_pool =
-            super::texture_pool::TexturePool::with_capacity(Arc::clone(&device), 4);
+        // Construct all four resource managers as a single facade.
+        let resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
 
         Self {
             device,
             queue,
             surface_format,
             size,
-            buffer_pool,
+            resources,
             pipeline_cache,
             instanced_rect_pipeline,
             viewport_buffer,
@@ -1018,8 +997,6 @@ impl WgpuPainter {
             gradient_bind_group_layout,
             gradient_bind_group,
             default_sampler,
-            texture_cache,
-            external_texture_registry,
             tessellator,
             path_cache: super::path_cache::PathCache::new(512),
             superellipse_cache: super::superellipse_cache::SuperellipsePathCache::new(256),
@@ -1035,7 +1012,6 @@ impl WgpuPainter {
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
             layer_stack: Vec::new(),
-            layer_texture_pool,
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
         }
@@ -1242,7 +1218,7 @@ impl WgpuPainter {
         let text_count = self.text_renderer.text_count();
         let rect_count = self.current_segment.rect_batch.len();
         let circle_count = self.current_segment.circle_batch.len();
-        let buffer_stats = self.buffer_pool.stats();
+        let buffer_stats = self.resources.buffer_pool_mut().stats();
 
         tracing::trace!(
             vertices = self.current_segment.vertices.len(),
@@ -1295,7 +1271,7 @@ impl WgpuPainter {
             .render(&self.device, &self.queue, view, encoder, self.size)?;
 
         // ===== Reset buffer pool for next frame =====
-        self.buffer_pool.reset();
+        self.resources.buffer_pool_mut().reset();
 
         // NOTE: texture-cache maintenance is intentionally NOT done here.
         // `render` runs multiple times per frame — each backdrop-filter flush
@@ -1315,12 +1291,12 @@ impl WgpuPainter {
     /// flushes invoke it mid-frame), so per-call maintenance would reset
     /// use-counters between passes and drop textures still in use this frame.
     pub fn end_frame_maintenance(&mut self) {
-        let maint = self.texture_cache.end_frame_maintenance();
+        let maint = self.resources.texture_cache_mut().end_frame_maintenance();
         if maint.evicted > 0 || maint.atlas_reset {
             tracing::debug!(
                 evicted = maint.evicted,
                 atlas_reset = maint.atlas_reset,
-                memory_bytes = self.texture_cache.memory_bytes(),
+                memory_bytes = self.resources.texture_cache().memory_bytes(),
                 "Texture cache maintenance"
             );
         }
@@ -1380,9 +1356,10 @@ impl WgpuPainter {
         }
 
         // Acquire a pooled offscreen texture
-        let offscreen = self
-            .layer_texture_pool
-            .acquire(vp_w, vp_h, self.surface_format);
+        let offscreen =
+            self.resources
+                .layer_texture_pool_mut()
+                .acquire(vp_w, vp_h, self.surface_format);
         let offscreen_view = offscreen.view();
 
         // Clear the offscreen texture to fully transparent
@@ -1503,14 +1480,17 @@ impl WgpuPainter {
         }
 
         // Upload vertices and indices to GPU (using buffer pool for zero-copy reuse)
-        let (vertex_buffer, index_buffer) = self.buffer_pool.get_vertex_and_index_buffers(
-            &self.device,
-            &self.queue,
-            "Shape Vertex Buffer",
-            bytemuck::cast_slice(&self.current_segment.vertices),
-            "Shape Index Buffer",
-            bytemuck::cast_slice(&self.current_segment.indices),
-        );
+        let (vertex_buffer, index_buffer) = self
+            .resources
+            .buffer_pool_mut()
+            .get_vertex_and_index_buffers(
+                &self.device,
+                &self.queue,
+                "Shape Vertex Buffer",
+                bytemuck::cast_slice(&self.current_segment.vertices),
+                "Shape Index Buffer",
+                bytemuck::cast_slice(&self.current_segment.indices),
+            );
 
         // Render shapes in single pass, switching pipelines per batch
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1613,7 +1593,7 @@ impl WgpuPainter {
     pub fn external_texture_registry(
         &self,
     ) -> &super::external_texture_registry::ExternalTextureRegistry {
-        &self.external_texture_registry
+        self.resources.external_texture_registry()
     }
 
     /// Get a mutable reference to the external texture registry
@@ -1622,7 +1602,7 @@ impl WgpuPainter {
     pub fn external_texture_registry_mut(
         &mut self,
     ) -> &mut super::external_texture_registry::ExternalTextureRegistry {
-        &mut self.external_texture_registry
+        self.resources.external_texture_registry_mut()
     }
 
     // ===== Helper Methods =====
@@ -2011,7 +1991,7 @@ impl WgpuPainter {
         }
 
         // Upload combined buffer (using buffer pool with zero-copy)
-        let instance_buffer = self.buffer_pool.get_vertex_buffer(
+        let instance_buffer = self.resources.buffer_pool_mut().get_vertex_buffer(
             &self.device,
             &self.queue,
             "Combined Instance Buffer",
@@ -2204,7 +2184,7 @@ impl WgpuPainter {
         }
 
         // Upload combined buffer (zero-copy via queue.write_buffer)
-        let instance_buffer = self.buffer_pool.get_vertex_buffer(
+        let instance_buffer = self.resources.buffer_pool_mut().get_vertex_buffer(
             &self.device,
             &self.queue,
             "Gradient Instance Buffer",
@@ -2416,7 +2396,7 @@ impl WgpuPainter {
         });
 
         // Upload instance buffer (using buffer pool for efficient zero-copy reuse)
-        let instance_buffer = self.buffer_pool.get_vertex_buffer(
+        let instance_buffer = self.resources.buffer_pool_mut().get_vertex_buffer(
             &self.device,
             &self.queue,
             "Texture Instance Buffer",
@@ -2502,7 +2482,8 @@ impl WgpuPainter {
                 }
                 active_texture_id = Some(texture_id.clone());
                 active_texture_view = self
-                    .texture_cache
+                    .resources
+                    .texture_cache_mut()
                     .get(&texture_id)
                     .map(|cached| cached.view.clone());
             }
@@ -3148,7 +3129,7 @@ impl WgpuPainter {
 
         // Look up texture in external texture registry and capture the view
         // BEFORE building the instance so we can move `view` into the segment.
-        let view = if let Some(entry) = self.external_texture_registry.get(texture_id) {
+        let view = if let Some(entry) = self.resources.external_texture_registry().get(texture_id) {
             #[cfg(debug_assertions)]
             tracing::trace!(
                 "WgpuPainter::texture: found {:?} ({}x{}, frame={})",
@@ -3290,7 +3271,7 @@ impl WgpuPainter {
         let data = image.data();
 
         // Load or get cached texture (small images are auto-packed into the atlas)
-        match self.texture_cache.load_from_rgba(
+        match self.resources.texture_cache_mut().load_from_rgba(
             texture_id.clone(),
             image.width(),
             image.height(),
@@ -3914,7 +3895,7 @@ impl WgpuPainter {
         let texture_id = super::texture_cache::TextureId::from_ptr(image.data_ptr());
         let cache_id = texture_id.clone();
 
-        match self.texture_cache.load_from_rgba(
+        match self.resources.texture_cache_mut().load_from_rgba(
             texture_id,
             image.width(),
             image.height(),
@@ -3986,7 +3967,7 @@ impl WgpuPainter {
         );
 
         // Look up the external texture in the registry
-        if let Some(entry) = self.external_texture_registry.get(texture_id) {
+        if let Some(entry) = self.resources.external_texture_registry().get(texture_id) {
             // Calculate UV coordinates from source rect
             let src_uv = if let Some(src_rect) = src {
                 // Normalize to texture dimensions

@@ -112,6 +112,7 @@ mod pipeline;
 // outcome is the same — one of the two parallel modules dies.
 mod profiler;
 mod renderer;
+pub(crate) mod resources;
 /// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
 /// blur / morph). Cycle 4 E-7 dropped the module-level
 /// `#[allow(dead_code)]` mask: the only forward-looking helper
