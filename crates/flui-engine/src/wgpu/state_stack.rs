@@ -375,11 +375,11 @@ impl GpuStateStack {
 
         // Intersect with the existing scissor when one is active.
         let new_scissor = if let Some((cur_x, cur_y, cur_w, cur_h)) = self.current_scissor {
-            let ix = x.max(cur_x);
-            let iy = y.max(cur_y);
-            let iw = (x + width).min(cur_x + cur_w).saturating_sub(ix);
-            let ih = (y + height).min(cur_y + cur_h).saturating_sub(iy);
-            (ix, iy, iw, ih)
+            let inter_x = x.max(cur_x);
+            let inter_y = y.max(cur_y);
+            let inter_w = (x + width).min(cur_x + cur_w).saturating_sub(inter_x);
+            let inter_h = (y + height).min(cur_y + cur_h).saturating_sub(inter_y);
+            (inter_x, inter_y, inter_w, inter_h)
         } else {
             (x, y, width, height)
         };
