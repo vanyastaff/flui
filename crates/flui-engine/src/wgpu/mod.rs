@@ -58,6 +58,10 @@
 
 mod atlas;
 mod backend;
+/// Record-side draw accumulation helpers: `DrawBatcher` owns the tessellator,
+/// path cache, and superellipse cache so they can be borrowed independently
+/// from the flush-side state during draw recording.
+mod batches;
 mod buffer_pool;
 /// Command IR data types: `DrawSegment`, `DrawItem`, `SavedLayer`,
 /// `PendingOpacityLayer`, `PendingOffscreenTexture`, and their helpers

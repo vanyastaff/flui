@@ -40,7 +40,7 @@ pub(crate) struct ScissorRegion {
 /// A recorded batch of tessellated geometry sharing the same pipeline key.
 ///
 /// During a frame, each call to
-/// [`super::painter::WgpuPainter::add_tessellated_with_key`] appends
+/// [`super::batches::DrawBatcher::add_tessellated_with_key`] appends
 /// vertices/indices to the global buffers.  When the pipeline key changes a
 /// new batch is started so that the render pass can switch pipelines at the
 /// correct index boundary.
