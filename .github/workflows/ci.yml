@@ -114,6 +114,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The full-workspace debug build of all lib+test targets (incl. the wgpu/
+      # glyphon/lyon/naga GPU stack and criterion/proptest/insta/trybuild dev-
+      # deps, with debug-assertions + debuginfo) exhausted the ~14 GB free on the
+      # default ubuntu runner — `rustc-LLVM ERROR: IO failure on output stream:
+      # No space left on device` mid-build (PRs #236/#242). Reclaim ~25 GB of
+      # preinstalled bloat we don't use BEFORE building. Linux-only guard so the
+      # step is a no-op if Windows/macOS rejoin the matrix.
+      - name: Free disk space (ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
