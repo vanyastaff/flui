@@ -7,18 +7,20 @@
 //! These methods receive disjoint `WgpuPainter` fields as plain borrowed
 //! parameters; see `batches/mod.rs` for the seam contract.
 //!
-//! | Method(s)                                    | Resources borrow         |
-//! |----------------------------------------------|--------------------------|
-//! | `texture`, `draw_texture`                    | `&ExternalTextureRegistry` |
-//! | `draw_image`, `draw_atlas`                   | `&mut TextureCache`      |
-//! | `draw_image_repeat`, `draw_image_nine_slice` | `&mut TextureCache` (delegate to `draw_image`) |
-//! | `draw_image_filtered`                        | `&mut TextureCache` + `&mut Vec<DrawItem>` + `opacity: f32` (inner `rect`/`draw_image` calls) |
+//! | Method(s)                                    | Resources borrow                                  |
+//! |----------------------------------------------|---------------------------------------------------|
+//! | `texture`                                    | none — ID stored directly in IR                   |
+//! | `draw_texture`                               | `Option<(u32, u32)>` (width/height from registry, for src UV normalization only) |
+//! | `draw_image`, `draw_atlas`                   | `&mut TextureCache`                               |
+//! | `draw_image_repeat`, `draw_image_nine_slice` | `&mut TextureCache` (delegate to `draw_image`)    |
+//! | `draw_image_filtered`                        | `&mut TextureCache` + `&mut Vec<DrawItem>` + `opacity: f32` |
 //!
 //! # Invariants preserved
 //!
-//! - `cached_images` entries are `(TextureId, TextureInstance, ScissorRect)`;
-//!   `external_images` entries are `(wgpu::TextureView, TextureInstance,
-//!   ScissorRect)`.  Tuple layout and scissor-at-draw-time capture are unchanged.
+//! - `cached_images` entries are `(TextureId, TextureInstance, ScissorRect)`.
+//! - `external_images` entries are `(flui_types::painting::TextureId, TextureInstance,
+//!   ScissorRect)` — no `wgpu::TextureView` in the IR; resolution to a view
+//!   happens in `flush_segment_external_images` at replay time (T10a).
 //! - The `draw_image_repeat`/`draw_image_nine_slice` → `draw_image` delegation
 //!   produces identical per-tile/per-region calls; loop bounds and dst rects are
 //!   byte-identical to the painter originals.
@@ -38,7 +40,6 @@ use flui_types::{
 use super::{
     super::{
         command_ir::{DrawItem, DrawSegment},
-        external_texture_registry::ExternalTextureRegistry,
         state_stack::GpuStateStack,
         texture_cache::TextureCache,
     },
@@ -55,12 +56,14 @@ use super::{
 impl DrawBatcher {
     /// Record an external texture draw by ID into `external_images`.
     ///
-    /// Looks up the texture in `registry`; if not found, warns and returns
-    /// without recording anything (preserving the original painter behavior).
+    /// The `texture_id` is stored in the IR as-is; resolution to a
+    /// `wgpu::TextureView` happens at replay time in
+    /// `flush_segment_external_images`. A not-found ID at replay emits a
+    /// `tracing::warn!` and skips the draw — identical behavior to before,
+    /// now deferred to the correct side of the record/replay seam.
     pub(in super::super) fn texture(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
-        registry: &ExternalTextureRegistry,
         texture_id: flui_types::painting::TextureId,
         dst_rect: Rect<Pixels>,
     ) {
@@ -70,27 +73,6 @@ impl DrawBatcher {
             texture_id,
             dst_rect
         );
-
-        // Look up texture in external texture registry and capture the view
-        // BEFORE building the instance so we can move `view` into the segment.
-        let view = if let Some(entry) = registry.get(texture_id) {
-            #[cfg(debug_assertions)]
-            tracing::trace!(
-                "DrawBatcher::texture: found {:?} ({}x{}, frame={})",
-                texture_id,
-                entry.width,
-                entry.height,
-                entry.frame_count
-            );
-            entry.view.clone()
-        } else {
-            #[cfg(debug_assertions)]
-            tracing::warn!(
-                "DrawBatcher::texture: texture {:?} not found in registry",
-                texture_id
-            );
-            return;
-        };
 
         // Apply transform to rect.
         let top_left = state.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
@@ -104,11 +86,12 @@ impl DrawBatcher {
             flui_types::Color::WHITE,
         );
 
-        // Route through per-segment external_images (flushed by flush_segment_external_images
-        // which calls flush_texture_batch per entry with the correct view bound).
+        // Store the ID in the IR. Resolution happens at replay time in
+        // flush_segment_external_images, which calls
+        // ExternalTextureRegistry::get(id) immediately before the GPU draw.
         segment
             .external_images
-            .push((view, instance, state.current_scissor()));
+            .push((texture_id, instance, state.current_scissor()));
     }
 
     /// Record an image draw by uploading (or retrieving from cache) its RGBA
@@ -672,19 +655,27 @@ impl DrawBatcher {
     /// optional source UV sub-rect, filter quality hint, and opacity.
     ///
     /// - `src` rect is normalized to the texture dimensions to produce UV
-    ///   coordinates; `None` means full texture (`[0,0,1,1]`).
+    ///   coordinates; `None` means full texture (`[0,0,1,1]`). When `src` is
+    ///   `Some`, the registry is consulted for dimensions at record time (only
+    ///   `width`/`height` — not the view). Dimensions do not change via
+    ///   [`super::super::external_texture_registry::ExternalTextureRegistry::update`],
+    ///   so this read is stable across `update()` calls.
     /// - `opacity` is baked into the tint color alpha.
     /// - `_filter_quality` is accepted for API compatibility but currently unused
     ///   (the sampler is determined at pipeline level, not per-draw).
+    ///
+    /// Resolution of the `texture_id` to a `wgpu::TextureView` happens at
+    /// replay time in `flush_segment_external_images`. A not-found ID at replay
+    /// emits a `tracing::warn!` and skips the draw.
     #[allow(
         clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/state/registry are disjoint WgpuPainter fields; \
+        reason = "borrow-seam design: segment/state/src_uv_registry are disjoint parameters; \
                   src/filter_quality/opacity are distinct per-draw parameters with no natural grouping"
     )]
     pub(in super::super) fn draw_texture(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
-        registry: &ExternalTextureRegistry,
+        src_uv_registry: Option<(u32, u32)>,
         texture_id: flui_types::painting::TextureId,
         dst: Rect<Pixels>,
         src: Option<Rect<Pixels>>,
@@ -700,63 +691,46 @@ impl DrawBatcher {
             opacity
         );
 
-        // Look up the external texture in the registry.
-        if let Some(entry) = registry.get(texture_id) {
-            // Calculate UV coordinates from source rect.
-            let src_uv = if let Some(src_rect) = src {
-                // Normalize to texture dimensions.
-                let tex_width = entry.width as f32;
-                let tex_height = entry.height as f32;
+        // Compute UV coordinates from the source rect.
+        //
+        // `src=None` → full texture `[0,0,1,1]` (no registry needed).
+        // `src=Some(rect)` → normalize using dimensions passed as `src_uv_registry`
+        // (`(width, height)` read by the painter shim from the registry at record
+        // time). Dimensions are stable across `update()` calls. If the texture
+        // wasn't registered at record time, `src_uv_registry` is `None` and we
+        // fall back to full UV; the replay-side not-found warn+skip will fire.
+        let src_uv = match (src, src_uv_registry) {
+            (Some(src_rect), Some((tex_width, tex_height))) => {
+                let w = tex_width as f32;
+                let h = tex_height as f32;
                 [
-                    (src_rect.left() / tex_width).0,
-                    (src_rect.top() / tex_height).0,
-                    (src_rect.right() / tex_width).0,
-                    (src_rect.bottom() / tex_height).0,
+                    (src_rect.left() / w).0,
+                    (src_rect.top() / h).0,
+                    (src_rect.right() / w).0,
+                    (src_rect.bottom() / h).0,
                 ]
-            } else {
-                // Full texture.
-                [0.0, 0.0, 1.0, 1.0]
-            };
+            }
+            // src=None or dimensions unavailable: full UV.
+            _ => [0.0, 0.0, 1.0, 1.0],
+        };
 
-            // Apply opacity via tint color alpha.
-            let tint = flui_types::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
+        // Apply opacity via tint color alpha.
+        let tint = flui_types::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
 
-            // Apply the current transform to dst corners (translation + scale; rotation
-            // collapses to AABB — same accepted limitation as `texture()` and `draw_image`).
-            let top_left = state.apply_transform(Point::new(dst.left(), dst.top()));
-            let bottom_right = state.apply_transform(Point::new(dst.right(), dst.bottom()));
-            let transformed_dst =
-                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+        // Apply the current transform to dst corners (translation + scale; rotation
+        // collapses to AABB — same accepted limitation as `texture()` and `draw_image`).
+        let top_left = state.apply_transform(Point::new(dst.left(), dst.top()));
+        let bottom_right = state.apply_transform(Point::new(dst.right(), dst.bottom()));
+        let transformed_dst =
+            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
-            let instance =
-                super::super::instancing::TextureInstance::with_uv(transformed_dst, src_uv, tint);
-            // Clone the registry view so this segment owns it independently of
-            // the registry lifetime.
-            let view = entry.view.clone();
+        let instance =
+            super::super::instancing::TextureInstance::with_uv(transformed_dst, src_uv, tint);
 
-            #[cfg(debug_assertions)]
-            tracing::trace!(
-                "External texture {} found: {}x{}, frame={}",
-                texture_id.get(),
-                entry.width,
-                entry.height,
-                entry.frame_count
-            );
-
-            // Push into per-segment external_images; flushed in flush_segment
-            // via flush_segment_external_images which binds each view via
-            // flush_texture_batch — identical to the cached-image path.
-            segment
-                .external_images
-                .push((view, instance, state.current_scissor()));
-        } else {
-            // Texture not registered — warn and skip.  Rendering an invisible
-            // placeholder via `texture_batch` (the old code) would orphan the
-            // instance because texture_batch is never drained by flush_segment.
-            tracing::warn!(
-                "External texture {} not registered — skipping draw_texture",
-                texture_id.get()
-            );
-        }
+        // Push the ID into the IR. Resolution to a `wgpu::TextureView` happens
+        // at replay time in flush_segment_external_images.
+        segment
+            .external_images
+            .push((texture_id, instance, state.current_scissor()));
     }
 }

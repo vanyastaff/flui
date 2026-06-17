@@ -622,6 +622,7 @@ impl ShadowInstance {
 /// Batch of instances ready for rendering
 ///
 /// Groups instances by type for efficient rendering.
+#[derive(Debug)]
 pub struct InstanceBatch<T> {
     /// Instance data
     pub instances: Vec<T>,

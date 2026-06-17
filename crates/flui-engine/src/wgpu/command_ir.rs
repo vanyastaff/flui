@@ -9,7 +9,7 @@
 //! `painter.rs`.  These types are re-exported `pub(crate)` so `painter.rs`
 //! and future batcher/compositor modules can import from one place.
 
-use flui_types::{Rect, geometry::Pixels};
+use flui_types::{Rect, geometry::Pixels, painting::TextureId as ExternalTextureId};
 
 use super::{
     effects::GradientStop,
@@ -75,7 +75,8 @@ pub(crate) struct PendingOffscreenTexture {
 /// struct and a fresh segment begins. All subsequent drawing goes into the new
 /// segment. On `restore_layer`, the offscreen content is composited back onto
 /// the parent surface with the layer's opacity applied as a group.
-// `DrawSegment` contains `wgpu::TextureView` fields that are not `Debug`.
+// `saved_draw_order: Vec<DrawItem>` is not `Debug` because `DrawItem::OffscreenTexture`
+// wraps `PooledTexture` which wraps a non-`Debug` `wgpu::Texture`.
 #[allow(missing_debug_implementations)]
 pub(crate) struct SavedLayer {
     /// Previous draw order (restored on pop)
@@ -106,8 +107,7 @@ pub(crate) struct SavedLayer {
 /// a new one starts. This ensures that content drawn before the offscreen
 /// texture renders before it, and content drawn after renders after it,
 /// preserving correct Z-order.
-// `wgpu::TextureView` (inside `external_images`) is not `Debug`.
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub(crate) struct DrawSegment {
     /// Rectangle instance batch
     pub(crate) rect_batch: InstanceBatch<RectInstance>,
@@ -152,13 +152,18 @@ pub(crate) struct DrawSegment {
     pub(crate) cached_images: Vec<(TextureId, TextureInstance, ScissorRect)>,
     /// External-texture draws queued for this segment.
     ///
-    /// Each entry carries the registry's `wgpu::TextureView` alongside the
-    /// instance data so `flush_segment_external_images` can bind each view
-    /// independently — identical to how `flush_segment_cached_images` binds
-    /// per-texture views for the atlas cache.
+    /// Each entry carries the `ExternalTextureId` (a `flui_types::painting::TextureId`)
+    /// so the IR is comparable by value and free of non-`PartialEq` wgpu handles.
+    /// Resolution from ID to `wgpu::TextureView` happens at replay time in
+    /// `flush_segment_external_images`, which calls
+    /// `ExternalTextureRegistry::get(id)` immediately before the draw call.
+    ///
+    /// This means a texture `update()`d between the `draw_texture`/`texture`
+    /// call and the frame flush resolves to the newer view — the latest-frame
+    /// semantics documented in [`super::external_texture_registry`].
     ///
     /// The third element is the scissor rect active at draw time.
-    pub(crate) external_images: Vec<(wgpu::TextureView, TextureInstance, ScissorRect)>,
+    pub(crate) external_images: Vec<(ExternalTextureId, TextureInstance, ScissorRect)>,
 }
 
 impl DrawSegment {
@@ -224,7 +229,8 @@ impl DrawSegment {
 
 /// An item in the draw order list: either a segment of batched commands,
 /// an offscreen texture to composite, or an opacity layer.
-// `DrawSegment` and `PendingOffscreenTexture` are not `Debug`.
+// `PendingOffscreenTexture` (via `OffscreenTexture` variant) is not `Debug`
+// because `PooledTexture` wraps a `wgpu::Texture`.
 #[allow(missing_debug_implementations)]
 pub(crate) enum DrawItem {
     /// A segment of instanced/tessellated/gradient draw commands.
@@ -244,7 +250,7 @@ pub(crate) enum DrawItem {
 /// During [`super::painter::WgpuPainter::render`], the contained segments are
 /// flushed to a pooled offscreen texture, then that texture is composited onto
 /// the main surface with the layer opacity applied as tint alpha.
-// `DrawSegment` (via `DrawItem`) is not `Debug`.
+// `DrawItem` (via the `OffscreenTexture` variant containing `PooledTexture`) is not `Debug`.
 #[allow(missing_debug_implementations)]
 pub(crate) struct PendingOpacityLayer {
     /// Draw items accumulated between save_layer and restore_layer
