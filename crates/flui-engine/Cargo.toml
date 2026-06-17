@@ -31,6 +31,11 @@ assets = ["dep:flui-assets"]
 serialization = ["lyon/serialization"]
 lyon-debugger = ["lyon/debugger"]
 
+# GPU profiling via wgpu-profiler 0.27. OFF by default and excluded from wasm32
+# (wgpu-profiler has no wasm support). Requires TIMESTAMP_QUERY adapter support
+# at runtime; the engine gracefully no-ops when the adapter lacks it.
+gpu-profiler = ["dep:wgpu-profiler"]
+
 # === Test Features ===
 enable-wgpu-tests = []
 
@@ -62,6 +67,9 @@ tracing = { workspace = true }
 
 # Image loading (optional)
 image = { workspace = true, optional = true }
+
+# GPU profiling (optional, feature-gated, excluded from wasm32 via feature design)
+wgpu-profiler = { workspace = true, optional = true }
 
 
 # === Per-platform default GPU backends ===

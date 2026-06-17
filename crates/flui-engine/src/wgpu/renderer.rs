@@ -72,6 +72,17 @@ pub struct GpuCapabilities {
 
     /// Supports ETC2 texture compression (mobile)
     pub supports_etc2_compression: bool,
+
+    /// Supports GPU timestamp queries required for the `gpu-profiler` feature.
+    ///
+    /// `true` only when BOTH `TIMESTAMP_QUERY` AND `TIMESTAMP_QUERY_INSIDE_ENCODERS`
+    /// are present. The encoder-level scopes used by `GpuFrameProfiler` require
+    /// `INSIDE_ENCODERS`; without it wgpu-profiler records 0.0 ms silently.
+    ///
+    /// Typically present on DX12, Vulkan, and Metal. Absent on GLES/WebGL2 and on
+    /// some older/mobile drivers that support the base feature but not the encoder
+    /// variant.
+    pub supports_timestamp_queries: bool,
 }
 
 impl GpuCapabilities {
@@ -92,6 +103,13 @@ impl GpuCapabilities {
             supports_bc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
             supports_astc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
             supports_etc2_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
+            // Encoder-level profiler scopes (used by the gpu-profiler feature) require
+            // TIMESTAMP_QUERY_INSIDE_ENCODERS in addition to the base TIMESTAMP_QUERY.
+            // Without INSIDE_ENCODERS, wgpu-profiler records 0.0 ms for every scope —
+            // it passes tests while measuring nothing. Only set this flag when both
+            // features are present so the profiler is never `Some` on an incapable adapter.
+            supports_timestamp_queries: features.contains(wgpu::Features::TIMESTAMP_QUERY)
+                && features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
         }
     }
 
@@ -145,6 +163,8 @@ struct WindowedGpuStack {
     offscreen: Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>,
     supports_copy_src: bool,
     device_lost: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(feature = "gpu-profiler")]
+    gpu_profiler: Option<super::profiler::GpuFrameProfiler>,
 }
 
 /// Cross-platform GPU renderer
@@ -183,6 +203,10 @@ pub struct Renderer {
     /// Raw display handle stored alongside `raw_window_handle` for recovery.
     /// `None` for offscreen renderers.
     raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
+    /// GPU timestamp profiler. `None` when the `gpu-profiler` feature is off
+    /// or the adapter does not expose `wgpu::Features::TIMESTAMP_QUERY`.
+    #[cfg(feature = "gpu-profiler")]
+    gpu_profiler: Option<super::profiler::GpuFrameProfiler>,
 }
 
 // SAFETY: `Renderer` stores `Option<RawWindowHandle>` and
@@ -266,6 +290,8 @@ impl Renderer {
             occlusion: OcclusionTracker::new(),
             raw_window_handle: Some(raw_window_handle),
             raw_display_handle,
+            #[cfg(feature = "gpu-profiler")]
+            gpu_profiler: stack.gpu_profiler,
         })
     }
 
@@ -390,6 +416,31 @@ impl Renderer {
         );
         let offscreen = Arc::new(parking_lot::Mutex::new(offscreen));
 
+        // Create the GPU profiler if the feature is enabled AND the adapter
+        // exposes TIMESTAMP_QUERY. A creation failure is non-fatal — profiling
+        // is strictly additive and must never abort initialization.
+        #[cfg(feature = "gpu-profiler")]
+        let gpu_profiler = if capabilities.supports_timestamp_queries {
+            match super::profiler::GpuFrameProfiler::new(&device) {
+                Ok(profiler) => {
+                    tracing::info!("GPU profiler enabled (TIMESTAMP_QUERY available)");
+                    Some(profiler)
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = ?err,
+                        "GPU profiler creation failed; profiling disabled for this session"
+                    );
+                    None
+                }
+            }
+        } else {
+            tracing::debug!(
+                "TIMESTAMP_QUERY not available on this adapter; GPU profiling disabled"
+            );
+            None
+        };
+
         Ok(WindowedGpuStack {
             instance,
             adapter,
@@ -402,6 +453,8 @@ impl Renderer {
             offscreen,
             supports_copy_src,
             device_lost,
+            #[cfg(feature = "gpu-profiler")]
+            gpu_profiler,
         })
     }
 
@@ -459,6 +512,10 @@ impl Renderer {
             occlusion: OcclusionTracker::new(),
             raw_window_handle: None,
             raw_display_handle: None,
+            // Offscreen renderers have no surface present, so profiling results
+            // cannot be harvested with process_finished_frame. Disabled here.
+            #[cfg(feature = "gpu-profiler")]
+            gpu_profiler: None,
         })
     }
 
@@ -523,6 +580,12 @@ impl Renderer {
             self.supports_copy_src = stack.supports_copy_src;
             // Replace with a fresh flag — the new device starts healthy.
             self.device_lost = stack.device_lost;
+            // Reset profiler with the fresh device — timestamp queries from the
+            // lost device are invalid and must not be carried over.
+            #[cfg(feature = "gpu-profiler")]
+            {
+                self.gpu_profiler = stack.gpu_profiler;
+            }
             // Force a full repaint so the first recovered frame is complete.
             self.damage_tracker.mark_full_repaint();
         } else {
@@ -654,17 +717,31 @@ impl Renderer {
         });
     }
 
-    /// Required GPU features based on capabilities and adapter support
+    /// Required GPU features based on capabilities and adapter support.
+    ///
+    /// Only requests optional features when the adapter actually exposes them,
+    /// so device creation never regresses on GPUs that lack them.
     fn required_features(capabilities: &GpuCapabilities) -> wgpu::Features {
         let mut features = wgpu::Features::empty();
 
-        // Always enable texture adapter-specific formats
+        // Always enable texture adapter-specific formats.
         features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
 
         // Immediates (formerly push constants): only request if adapter supports them.
         // Some mobile GPUs (especially older Android devices) don't support this.
         if capabilities.supports_push_constants {
             features |= wgpu::Features::IMMEDIATES;
+        }
+
+        // Timestamp queries for GPU profiling: only request when the adapter exposes
+        // BOTH features AND the gpu-profiler cargo feature is enabled. Device creation
+        // must never fail because of an optional profiling feature the adapter lacks.
+        // `supports_timestamp_queries` is already true only when both are present
+        // (see `GpuCapabilities::detect`), so requesting both here is safe.
+        #[cfg(feature = "gpu-profiler")]
+        if capabilities.supports_timestamp_queries {
+            features |=
+                wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         }
 
         features
@@ -814,6 +891,26 @@ impl Renderer {
         self.damage_tracker.has_damage()
     }
 
+    /// The latest completed GPU frame profile, or `None` when the `gpu-profiler`
+    /// feature is off, the adapter lacks `TIMESTAMP_QUERY`, or fewer than
+    /// `PENDING_FRAME_BUFFER_DEPTH` frames have been rendered.
+    ///
+    /// Implements [`Diagnosticable`](flui_foundation::Diagnosticable): call
+    /// `profile.to_diagnostics_node()` to get a human-readable property tree.
+    #[must_use]
+    pub fn latest_gpu_frame_profile(&self) -> Option<&super::profiler::GpuFrameProfile> {
+        #[cfg(feature = "gpu-profiler")]
+        {
+            self.gpu_profiler
+                .as_ref()
+                .and_then(|p| p.latest_completed_frame())
+        }
+        #[cfg(not(feature = "gpu-profiler"))]
+        {
+            None
+        }
+    }
+
     /// Get current surface size as `(width, height)`.
     ///
     /// Returns `(0, 0)` if no surface is configured (e.g., offscreen renderer).
@@ -919,23 +1016,53 @@ impl Renderer {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("FLUI Clear Encoder"),
                     });
+            // Hoist the color attachments array before the #[cfg] split so both
+            // the profiled and non-profiled paths share one definition. The descriptor
+            // borrows `&view`, so the array binding must live at the same scope level.
+            let clear_color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let clear_pass_desc = wgpu::RenderPassDescriptor {
+                label: Some("FLUI Clear Pass"),
+                color_attachments: &clear_color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            };
+            // Profiler scope wraps the clear render pass. The scope borrows
+            // `clear_encoder` exclusively; we access the encoder through
+            // `scope.recorder` so the pass sees the same underlying encoder.
+            // Scope drops at end of block → end_query fires → resolve_queries
+            // copies the result → encoder finishes and is submitted.
+            #[cfg(feature = "gpu-profiler")]
+            if let Some(profiler) = self.gpu_profiler.as_ref() {
+                let mut scope = profiler.scope("clear", &mut clear_encoder);
+                {
+                    let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
+                }
+                // scope drops here → end_query fires
+            } else {
+                // Feature compiled but no capable adapter (gpu_profiler is None):
+                // fall back to the unprofiled clear pass so the surface is still
+                // cleared. Branching on the Option, not just the Cargo feature, is
+                // what makes the documented "graceful no-op" actually graceful.
+                let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+            }
+            #[cfg(not(feature = "gpu-profiler"))]
             {
-                let _pass = clear_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("FLUI Clear Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+                let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+            }
+            // Resolve query results into the GPU buffer before finishing the encoder.
+            #[cfg(feature = "gpu-profiler")]
+            if let Some(profiler) = self.gpu_profiler.as_mut() {
+                profiler.resolve_queries(&mut clear_encoder);
             }
             self.queue.submit(std::iter::once(clear_encoder.finish()));
         }
@@ -1021,8 +1148,33 @@ impl Renderer {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("FLUI Final Render Encoder"),
                     });
-            if let Err(e) = painter.render(&view, &mut final_encoder) {
+            // Profiler scope wraps painter.render. The scope borrows
+            // `final_encoder` exclusively; we pass `scope.recorder` so
+            // painter.render writes into the same underlying encoder.
+            // Scope drops at end of block → end_query fires → resolve_queries
+            // copies the result → encoder finishes and is submitted.
+            // Branch on the Option (runtime), not just the Cargo feature
+            // (compile-time): when the feature is compiled but `gpu_profiler` is
+            // None (incapable adapter), the render must STILL run — otherwise the
+            // frame presents only the clear pass (blank content). This is the
+            // documented graceful no-op.
+            #[cfg(feature = "gpu-profiler")]
+            let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
+                let mut scope = profiler.scope("final_render", &mut final_encoder);
+                painter.render(&view, scope.recorder())
+                // scope drops here → end_query fires
+            } else {
+                painter.render(&view, &mut final_encoder)
+            };
+            #[cfg(not(feature = "gpu-profiler"))]
+            let render_result = painter.render(&view, &mut final_encoder);
+            if let Err(e) = render_result {
                 tracing::error!("Painter render failed: {}", e);
+            }
+            // Resolve before finishing the encoder.
+            #[cfg(feature = "gpu-profiler")]
+            if let Some(profiler) = self.gpu_profiler.as_mut() {
+                profiler.resolve_queries(&mut final_encoder);
             }
             self.queue.submit(std::iter::once(final_encoder.finish()));
 
@@ -1037,6 +1189,16 @@ impl Renderer {
         }
 
         output.present();
+
+        // Signal end of frame to the profiler and harvest the oldest completed
+        // result (if the pipeline has warmed up). Both calls are no-ops when
+        // `gpu_profiler` is `None`.
+        #[cfg(feature = "gpu-profiler")]
+        if let Some(profiler) = self.gpu_profiler.as_mut() {
+            profiler.end_frame();
+            let timestamp_period = self.queue.get_timestamp_period();
+            profiler.process_finished_frame(timestamp_period);
+        }
 
         // Reset damage for next frame
         self.damage_tracker.reset();
@@ -1259,7 +1421,17 @@ impl Renderer {
             return;
         }
 
-        // 1. Flush current painter batches to the surface so pixels are available
+        // 1. Flush current painter batches to the surface so pixels are available.
+        // The encoder also carries copy_texture_to_texture (step 3) before submit,
+        // keeping the flush → copy sequence in one submission (Fix #11 ordering).
+        //
+        // PROFILER-SKIP: this backdrop-flush encoder is intentionally excluded from
+        // the frame profile. Its submit ordering is controlled by the backdrop-filter
+        // logic (not the profiler), and adding a scope here would require threading
+        // `&mut GpuFrameProfiler` through a static fn that has no access to Renderer
+        // state. Backdrop GPU time is therefore absent from the per-frame profile;
+        // the clear-pass and final-render scopes in `render_scene` cover the primary
+        // frame timing. This is an explicit trade-off, not an oversight.
         let mut flush_encoder =
             ctx.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1323,7 +1495,7 @@ impl Renderer {
                 .painter_mut()
                 .queue_offscreen_result(blurred, clamped_composite_rect);
         } else {
-            // No offscreen renderer available — just submit the flush
+            // No offscreen renderer available — just submit the flush.
             ctx.queue.submit(std::iter::once(flush_encoder.finish()));
             tracing::warn!("Backdrop blur skipped: no offscreen renderer available");
         }

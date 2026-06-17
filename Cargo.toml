@@ -115,6 +115,9 @@ tracing-forest = { version = "0.3", features = ["smallvec"] }
 # Update policy: bump within the same minor on security/bug fixes; bump major after
 # verifying API migration on a dedicated branch (see docs/adr/ADR-0002).
 wgpu = { version = "29.0", default-features = false, features = ["wgsl"] }
+# GPU profiling — optional, reused by flui-engine behind the `gpu-profiler` feature.
+# Pins wgpu ^29.0, consistent with the workspace pin above. Excluded from wasm32.
+wgpu-profiler = { version = "0.27", default-features = false }
 winit = "0.30.12"
 raw-window-handle = "0.6"
 pollster = "0.4"
