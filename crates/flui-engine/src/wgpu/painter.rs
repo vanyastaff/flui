@@ -4712,4 +4712,71 @@ mod tests {
             "G={g}: expected G ≈ 0 (unchanged). pixel={px_val:?}"
         );
     }
+
+    /// Two filtered draws of the **same source image** with **different** color
+    /// filters in one frame must not alias in the texture cache.
+    ///
+    /// Each filter produces a short-lived temporary `Image`; filtered draws key
+    /// the cache on a hash of the produced bytes, not the temporary's pointer.
+    /// If they keyed on the pointer (as a plain `draw_image` does), the second
+    /// temporary — frequently reallocated at the just-freed address of the first
+    /// — would collide on key and the cache would return the first filter's
+    /// texture for the second draw (it hits on key alone, never re-comparing
+    /// bytes). Here a white source is modulated RED in the top half and BLUE in
+    /// the bottom half; a collision would paint the bottom half red.
+    #[test]
+    fn draw_image_filtered_distinct_filters_do_not_alias() {
+        use flui_painting::display_list::ColorFilter;
+        use flui_types::{painting::Image, styling::Color};
+
+        const SIZE: u32 = 16;
+        let (device, queue) = test_device_and_queue();
+
+        let white_pixels: Vec<u8> = (0..SIZE * SIZE)
+            .flat_map(|_| [255u8, 255, 255, 255])
+            .collect();
+        let white_image = Image::from_rgba8(SIZE, SIZE, white_pixels);
+
+        let modulate_red = ColorFilter::mode(
+            Color::rgba(255, 0, 0, 255),
+            flui_painting::BlendMode::Modulate,
+        );
+        let modulate_blue = ColorFilter::mode(
+            Color::rgba(0, 0, 255, 255),
+            flui_painting::BlendMode::Modulate,
+        );
+
+        let half = SIZE as f32 / 2.0;
+        let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            // Two separate filtered draws → two short-lived temporaries, the
+            // second likely reusing the first's freed allocation address.
+            painter.draw_image_filtered(
+                &white_image,
+                Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(half)),
+                modulate_red,
+            );
+            painter.draw_image_filtered(
+                &white_image,
+                Rect::from_xywh(px(0.0), px(half), px(SIZE as f32), px(half)),
+                modulate_blue,
+            );
+        });
+
+        let top = pixel_at(&rgba, SIZE, SIZE / 2, SIZE / 4);
+        let bottom = pixel_at(&rgba, SIZE, SIZE / 2, SIZE * 3 / 4);
+
+        // Top half: modulate RED → red.
+        assert!(
+            top[0] >= 200 && top[2] <= 40,
+            "top={top:?}: expected red (R≈255, B≈0) from modulate-RED"
+        );
+        // Bottom half: modulate BLUE → blue. A cache collision with the first
+        // (red) temporary would paint this red instead.
+        assert!(
+            bottom[2] >= 200 && bottom[0] <= 40,
+            "bottom={bottom:?}: expected blue (B≈255, R≈0) from modulate-BLUE. \
+             Red here means the second filtered draw aliased the first in the \
+             texture cache (pointer-identity key on a freed temporary)."
+        );
+    }
 }
