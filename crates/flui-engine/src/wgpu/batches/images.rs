@@ -30,7 +30,7 @@
 
 use flui_painting::Paint;
 use flui_types::{
-    Point, Rect,
+    Offset, Point, Rect,
     geometry::{Pixels, px},
     painting::Image,
 };
@@ -570,13 +570,17 @@ impl DrawBatcher {
 
     /// Record a sprite atlas draw: loads the atlas image once, then pushes one
     /// `cached_images` entry per sprite with the sprite's UV sub-rect and tint.
+    ///
+    /// `sprite_origins` are the per-sprite translation offsets in pixel space,
+    /// already extracted from any transform matrices at the trait-boundary caller.
+    /// The batcher is glam-only; `Matrix4` must not appear on this side of the seam.
     pub(in super::super) fn draw_atlas(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
         sprites: &[Rect<Pixels>],
-        transforms: &[flui_types::Matrix4],
+        sprite_origins: &[Offset<Pixels>],
         colors: Option<&[flui_types::styling::Color]>,
     ) {
         #[cfg(debug_assertions)]
@@ -588,12 +592,12 @@ impl DrawBatcher {
         );
 
         // Validate input.
-        if sprites.len() != transforms.len() {
+        if sprites.len() != sprite_origins.len() {
             #[cfg(debug_assertions)]
             tracing::error!(
-                "DrawAtlas: sprite count ({}) doesn't match transform count ({})",
+                "DrawAtlas: sprite count ({}) doesn't match origin count ({})",
                 sprites.len(),
-                transforms.len()
+                sprite_origins.len()
             );
             return;
         }
@@ -623,8 +627,8 @@ impl DrawBatcher {
                 let image_height = image.height() as f32;
 
                 // Create texture instances for each sprite.
-                for (i, (sprite_rect, transform)) in
-                    sprites.iter().zip(transforms.iter()).enumerate()
+                for (i, (sprite_rect, origin)) in
+                    sprites.iter().zip(sprite_origins.iter()).enumerate()
                 {
                     // Get color tint for this sprite (default to white).
                     let tint = colors
@@ -640,14 +644,12 @@ impl DrawBatcher {
                         (sprite_rect.bottom() / image_height).0,
                     ];
 
-                    // Extract position from transform matrix.
-                    // Matrix4 is column-major: m[12] = x translation, m[13] = y translation.
-                    let dst_x = transform.m[12];
-                    let dst_y = transform.m[13];
-                    let dst_width = sprite_rect.width();
-                    let dst_height = sprite_rect.height();
-
-                    let dst_rect = Rect::from_xywh(px(dst_x), px(dst_y), dst_width, dst_height);
+                    let dst_rect = Rect::from_xywh(
+                        origin.dx,
+                        origin.dy,
+                        sprite_rect.width(),
+                        sprite_rect.height(),
+                    );
 
                     // Create texture instance and route through cached_images so it is
                     // flushed by flush_segment_cached_images (not the orphaned texture_batch).

@@ -1879,13 +1879,23 @@ impl WgpuPainter {
         transforms: &[flui_types::Matrix4],
         colors: Option<&[flui_types::styling::Color]>,
     ) {
+        // Convert Matrix4 transforms to pixel-space origins here, at the
+        // painter boundary, so the batcher stays Matrix4-free (C4 rule).
+        // Each transform is column-major; m[12] = x translation, m[13] = y.
+        let sprite_origins: Vec<Offset<Pixels>> = transforms
+            .iter()
+            .map(|t| Offset {
+                dx: px(t.m[12]),
+                dy: px(t.m[13]),
+            })
+            .collect();
         super::batches::DrawBatcher::draw_atlas(
             &mut self.current_segment,
             &self.state,
             self.resources.texture_cache_mut(),
             image,
             sprites,
-            transforms,
+            &sprite_origins,
             colors,
         );
     }

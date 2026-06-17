@@ -147,6 +147,74 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 
 ---
 
+## Record-side boundary (engine overhaul T7–T9)
+
+This section documents the decomposition of `WgpuPainter` performed in the engine-overhaul series (PRs #231–#232, T9 sub-PRs). The governing decision is recorded in [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](../../docs/adr/ADR-0006-c-ir-record-replay-seam.md).
+
+### WgpuPainter as thin coordinator
+
+`WgpuPainter` is the per-frame coordinator; it no longer owns logic, only state and delegation:
+
+| Field | Owner | Module |
+|---|---|---|
+| `state: GpuStateStack` | transform / scissor / rrect-clip / rsuperellipse stacks; Copy accessors; depth + `Drop` assert | [`src/wgpu/state_stack.rs`](src/wgpu/state_stack.rs) |
+| `compositor: LayerCompositor` | `SavedLayer` + `PendingOpacityLayer` + opacity stack | [`src/wgpu/layer_compositor.rs`](src/wgpu/layer_compositor.rs) |
+| `resources: GpuResources` | `TexturePool` / `BufferPool` / `TextureCache` / `ExternalTextureRegistry` | [`src/wgpu/resources.rs`](src/wgpu/resources.rs) |
+| `pipelines: PipelineSet` | 9 named `RenderPipeline` fields + `PipelineCache` (composition) | [`src/wgpu/pipelines.rs`](src/wgpu/pipelines.rs) |
+| `current_segment: DrawSegment`, `draw_order: Vec<DrawItem>` | Command IR — the record output | [`src/wgpu/command_ir.rs`](src/wgpu/command_ir.rs) |
+
+Record methods (per-primitive draw calls) are owned by `DrawBatcher` in `batches/`:
+
+| Sub-module | Primitive family |
+|---|---|
+| [`src/wgpu/batches/shapes.rs`](src/wgpu/batches/shapes.rs) | rect, rrect, circle, oval, drrect, arc, shadow, line |
+| [`src/wgpu/batches/gradients.rs`](src/wgpu/batches/gradients.rs) | linear gradient, radial gradient, sweep gradient, `dispatch_shader_rect` |
+| [`src/wgpu/batches/paths.rs`](src/wgpu/batches/paths.rs) | `draw_path`, `draw_vertices` |
+| [`src/wgpu/batches/images.rs`](src/wgpu/batches/images.rs) | `draw_image`, `draw_image_repeat`, `draw_image_nine_slice`, `draw_image_filtered`, `draw_atlas`, `draw_texture` |
+
+`text` / `rich_text` remain on `WgpuPainter` pending T11 (the text-vs-IR seam decision).
+
+### Borrow-seam contract
+
+Each `DrawBatcher` record method takes the narrowest set of disjoint borrowed parameters it needs — it never takes `&mut WgpuPainter`. The borrow-checker enforces the data-flow contract:
+
+```text
+fn draw_*(
+    segment: &mut DrawSegment,          // IR write target
+    state: &GpuStateStack,              // Copy accessors only — no borrow aliasing
+    // plus any of:
+    draw_order: &mut Vec<DrawItem>,     // for methods that emit multiple items
+    texture_cache: &mut TextureCache,   // image/atlas paths
+    resources: &ExternalTextureRegistry,
+    opacity: f32,                       // from compositor.current_opacity()
+)
+```
+
+`WgpuPainter::draw_*` methods are thin shims that field-split `self` and delegate to `DrawBatcher`.
+
+### C1 definition — module file size limit
+
+Each module file in `batches/` must stay **< 1 500 non-test LOC**. `/spec-verify` measures non-test LOC (i.e., lines outside `#[cfg(test)]` blocks and `mod tests { … }` sections). The same limit applies to `state_stack.rs`, `layer_compositor.rs`, `resources.rs`, and `pipelines.rs`.
+
+`WgpuPainter` (`painter.rs`) currently sits at ~2 700 non-test LOC after T9. It will drop below 1 500 at T10, when the replay/submit path (`render()` / `flush_segment` / `flush_*`) is extracted into a dedicated replay module.
+
+### C4 rule — Matrix4 must not appear in batches/ or pipelines.rs
+
+`GpuStateStack` stores transforms as `glam::Mat4`. The conversion to/from `flui_types::Matrix4` happens at exactly one structural edge:
+
+- `painter.rs::current_transform_matrix()` — Copy-accessor returning a `Matrix4` to callers outside the engine's wgpu module.
+- `backend.rs::with_transform` and the `render_*` methods — the `CommandRenderer` implementation that converts incoming `Matrix4` arguments into `glam::Mat4` before calling painter record methods.
+
+**`Matrix4` must not appear in `batches/` or `pipelines.rs`** — these modules work entirely in glam primitives. Port-check Trigger 19 (`scripts/port-check.sh`) enforces this with an `rg` grep on every CI run and locally via `just port-check`.
+
+If a record method receives per-sprite transforms (e.g., `draw_atlas`), the conversion to pixel-space origins (`Offset<Pixels>`) happens at the `painter.rs` call site before the batcher is invoked.
+
+### Replay side — pending T10
+
+The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) is still on `WgpuPainter` in the current state. At T10 this path will be extracted into a replay module (`replay.rs` or `renderer/`) that takes `&CommandIR` + `&mut GpuResources` + `&PipelineSet` and produces GPU draw calls. After T10, `WgpuPainter`'s role becomes: record entry point → thin coordinator → delegate to replay. The `painter.rs` non-test LOC will drop below 1 500 at that point.
+
+---
+
 ## Thread safety
 
 `flui-engine` runs on the render thread; wgpu handles its own thread-safety via `Arc<Device>` / `Arc<Queue>` (cheap ref-counted handles, not lock-protected). Per strategy clause "sync hot path, async at edges," neither the layer walk nor the per-command dispatch is multi-threaded; `Renderer::render_scene` is sync. Async only at `Renderer::new` and `Renderer::new_offscreen` (wgpu's `request_adapter` and `request_device` are async at the wgpu boundary).
