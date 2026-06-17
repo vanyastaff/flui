@@ -59,6 +59,11 @@
 mod atlas;
 mod backend;
 mod buffer_pool;
+/// Command IR data types: `DrawSegment`, `DrawItem`, `SavedLayer`,
+/// `PendingOpacityLayer`, `PendingOffscreenTexture`, and their helpers
+/// (`ScissorRect`, `ScissorRegion`, `TessellatedBatch`). Moved here from
+/// `painter.rs` so the future batcher/compositor modules share one type home.
+pub(crate) mod command_ir;
 // Cycle 4 wave 5 E-10: `buffers.rs` deleted. Module hosted
 // `DynamicBuffer` (auto-growing vertex/instance buffer) and
 // `BufferManager` (5-buffer GPU resource bag). Workspace grep
