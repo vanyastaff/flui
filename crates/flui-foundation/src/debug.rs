@@ -21,6 +21,7 @@ use std::{fmt, str::FromStr};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DiagnosticLevel {
     /// Hidden diagnostic level.
@@ -148,6 +149,7 @@ impl std::error::Error for ParseDiagnosticLevelError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DiagnosticsTreeStyle {
     /// A style that is appropriate for displaying sparse trees.
@@ -254,6 +256,7 @@ impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DiagnosticsPropertyKind {
     /// A generic property displayed as `{name}: {value:?}`.
@@ -301,6 +304,274 @@ impl Default for DiagnosticsPropertyKind {
     }
 }
 
+/// The typed value of a [`DiagnosticsProperty`].
+///
+/// Carries the structured data so the inspector's JSON serialization is
+/// faithful (full precision, typed shapes) while the text renderer normalises
+/// at the [`fmt::Display`] boundary only (floats → 2 decimal places,
+/// colors → `#RRGGBBAA`, etc.).
+///
+/// The `Str` variant is the back-compat path: [`DiagnosticsProperty::new`]
+/// always constructs it, so all existing `Diagnosticable` impls continue to
+/// compile and behave identically.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_foundation::DiagnosticsValue;
+///
+/// let v = DiagnosticsValue::Float(0.333_333);
+/// assert_eq!(v.to_string(), "0.33");           // normalised for text
+/// assert_eq!(DiagnosticsValue::Str("hello".into()).to_string(), "hello");
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum DiagnosticsValue {
+    /// Absent / null value.
+    Null,
+    /// Boolean value.
+    Bool(bool),
+    /// Signed 64-bit integer.
+    Int(i64),
+    /// 64-bit float — serialised at full precision; displayed at 2 d.p.
+    Float(f64),
+    /// Generic string (the back-compat variant produced by
+    /// [`DiagnosticsProperty::new`]).
+    Str(String),
+    /// RGBA colour, each channel `0–255`.
+    Color {
+        /// Red channel `0–255`.
+        r: u8,
+        /// Green channel `0–255`.
+        g: u8,
+        /// Blue channel `0–255`.
+        b: u8,
+        /// Alpha channel `0–255` (255 = fully opaque).
+        a: u8,
+    },
+    /// Axis-aligned rectangle: origin (`x`, `y`) + extent (`w`, `h`).
+    Rect {
+        /// Left edge (origin x).
+        x: f64,
+        /// Top edge (origin y).
+        y: f64,
+        /// Width.
+        w: f64,
+        /// Height.
+        h: f64,
+    },
+    /// 2-D offset / point.
+    Offset {
+        /// Horizontal component.
+        x: f64,
+        /// Vertical component.
+        y: f64,
+    },
+    /// 2-D size.
+    Size {
+        /// Width.
+        w: f64,
+        /// Height.
+        h: f64,
+    },
+    /// Ordered list of diagnostic values.
+    List(Vec<DiagnosticsValue>),
+    /// Inline nested properties (for sub-objects that don't warrant a full
+    /// child node).
+    Nested(Vec<DiagnosticsProperty>),
+}
+
+impl fmt::Display for DiagnosticsValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => f.write_str("null"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(i) => write!(f, "{i}"),
+            // Two decimal places for human-readable text; JSON gets full precision
+            // via the typed serialisation.
+            Self::Float(v) => write!(f, "{v:.2}"),
+            Self::Str(s) => f.write_str(s),
+            Self::Color { r, g, b, a } => write!(f, "#{r:02X}{g:02X}{b:02X}{a:02X}"),
+            Self::Rect { x, y, w, h } => write!(f, "({x:.2},{y:.2},{w:.2},{h:.2})"),
+            Self::Offset { x, y } => write!(f, "({x:.2},{y:.2})"),
+            Self::Size { w, h } => write!(f, "{w:.2}×{h:.2}"),
+            Self::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                write!(f, "]")
+            }
+            Self::Nested(props) => {
+                write!(f, "{{")?;
+                for (i, prop) in props.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", prop.name())?;
+                    write!(f, ": {}", prop.value())?;
+                }
+                write!(f, "}}")
+            }
+        }
+    }
+}
+
+impl From<&str> for DiagnosticsValue {
+    fn from(s: &str) -> Self {
+        Self::Str(s.to_owned())
+    }
+}
+
+impl From<String> for DiagnosticsValue {
+    fn from(s: String) -> Self {
+        Self::Str(s)
+    }
+}
+
+impl From<f64> for DiagnosticsValue {
+    fn from(v: f64) -> Self {
+        Self::Float(v)
+    }
+}
+
+impl From<i64> for DiagnosticsValue {
+    fn from(v: i64) -> Self {
+        Self::Int(v)
+    }
+}
+
+impl From<bool> for DiagnosticsValue {
+    fn from(b: bool) -> Self {
+        Self::Bool(b)
+    }
+}
+
+// ---- Geometry / colour conversions (ADR-0005 Decision 1, Task 4.5) ----------
+//
+// Orphan rule: `DiagnosticsValue` is defined in this crate, so `From<ForeignType>`
+// impls are legal here. The direction is flui-types → flui-geometry with no
+// dependency on flui-foundation, so no cycle exists.
+//
+// All `f32` pixel values are widened to `f64` via `f64::from` (lossless for the
+// f32 range that Pixels carries).
+
+impl From<flui_types::geometry::Rect<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts a `Rect<Pixels>` to `DiagnosticsValue::Rect { x, y, w, h }`.
+    ///
+    /// Origin is the min corner; extent is width/height (not the max corner).
+    fn from(r: flui_types::geometry::Rect<flui_types::geometry::Pixels>) -> Self {
+        Self::Rect {
+            x: f64::from(r.left().get()),
+            y: f64::from(r.top().get()),
+            w: f64::from(r.width().get()),
+            h: f64::from(r.height().get()),
+        }
+    }
+}
+
+impl From<flui_types::styling::Color> for DiagnosticsValue {
+    /// Converts a `Color` (RGBA u8 channels) to `DiagnosticsValue::Color`.
+    fn from(c: flui_types::styling::Color) -> Self {
+        Self::Color {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+            a: c.a,
+        }
+    }
+}
+
+impl From<flui_types::geometry::Point<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts a `Point<Pixels>` to `DiagnosticsValue::Offset { x, y }`.
+    ///
+    /// Points and offsets share the same 2-D shape; the inspector renders
+    /// both as `(x, y)`.
+    fn from(p: flui_types::geometry::Point<flui_types::geometry::Pixels>) -> Self {
+        Self::Offset {
+            x: f64::from(p.x.get()),
+            y: f64::from(p.y.get()),
+        }
+    }
+}
+
+impl From<flui_types::geometry::Offset<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts an `Offset<Pixels>` to `DiagnosticsValue::Offset { x, y }`.
+    fn from(o: flui_types::geometry::Offset<flui_types::geometry::Pixels>) -> Self {
+        Self::Offset {
+            x: f64::from(o.dx.get()),
+            y: f64::from(o.dy.get()),
+        }
+    }
+}
+
+impl From<flui_types::geometry::Size<flui_types::geometry::Pixels>> for DiagnosticsValue {
+    /// Converts a `Size<Pixels>` to `DiagnosticsValue::Size { w, h }`.
+    fn from(s: flui_types::geometry::Size<flui_types::geometry::Pixels>) -> Self {
+        Self::Size {
+            w: f64::from(s.width.get()),
+            h: f64::from(s.height.get()),
+        }
+    }
+}
+
+impl From<flui_types::geometry::RRect> for DiagnosticsValue {
+    /// Converts an `RRect` to `DiagnosticsValue::Nested`.
+    ///
+    /// The nested properties are:
+    /// - `"rect"` — the bounding rectangle (`Rect` value)
+    /// - `"r_tl"`, `"r_tr"`, `"r_br"`, `"r_bl"` — per-corner radius, each itself
+    ///   a `Nested` value with `"x"` (horizontal) and `"y"` (vertical) `Float`
+    ///   sub-properties so elliptical radii (`Radius::elliptical(rx, ry)`) are
+    ///   faithfully recorded.
+    ///
+    /// Using `Nested` (rather than flat prefixed names) means each rrect is one
+    /// logical value. When two rrects appear on the same diagnostics node (e.g.
+    /// `DrawDRRect` outer/inner), they each become a `Nested` value under their
+    /// own top-level property name — no collision is possible.
+    fn from(rr: flui_types::geometry::RRect) -> Self {
+        /// Emit a single corner radius as `Nested([x: Float, y: Float])`.
+        fn corner_nested(
+            r: flui_types::geometry::Radius<flui_types::geometry::Pixels>,
+        ) -> DiagnosticsValue {
+            DiagnosticsValue::Nested(vec![
+                DiagnosticsProperty::new_typed("x", DiagnosticsValue::Float(f64::from(r.x.get()))),
+                DiagnosticsProperty::new_typed("y", DiagnosticsValue::Float(f64::from(r.y.get()))),
+            ])
+        }
+
+        let rect_val = DiagnosticsValue::from(rr.rect);
+        let props = vec![
+            DiagnosticsProperty::new_typed("rect", rect_val),
+            DiagnosticsProperty::new_typed("r_tl", corner_nested(rr.top_left)),
+            DiagnosticsProperty::new_typed("r_tr", corner_nested(rr.top_right)),
+            DiagnosticsProperty::new_typed("r_br", corner_nested(rr.bottom_right)),
+            DiagnosticsProperty::new_typed("r_bl", corner_nested(rr.bottom_left)),
+        ];
+        Self::Nested(props)
+    }
+}
+
+impl From<&flui_types::geometry::Matrix4> for DiagnosticsValue {
+    /// Converts a `&Matrix4` to `DiagnosticsValue::List` of 16 `Float` entries
+    /// (column-major, matching the `m` array layout).
+    ///
+    /// By-ref because `Matrix4` is 64 bytes and typically borrowed at call sites
+    /// (the transform field is borrowed, not moved).
+    fn from(m: &flui_types::geometry::Matrix4) -> Self {
+        let items =
+            m.m.iter()
+                .map(|&v| DiagnosticsValue::Float(f64::from(v)))
+                .collect();
+        Self::List(items)
+    }
+}
+
 /// A diagnostic property
 ///
 /// Similar to Flutter's `DiagnosticsProperty`.
@@ -315,11 +586,13 @@ impl Default for DiagnosticsPropertyKind {
 /// assert_eq!(prop.value(), "100");
 /// assert_eq!(prop.to_string(), "width: 100");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct DiagnosticsProperty {
     name: String,
-    value: String,
+    value: DiagnosticsValue,
     #[cfg_attr(feature = "serde", serde(default))]
     level: DiagnosticLevel,
     /// The typed kind of this property, determining how it is displayed.
@@ -332,6 +605,10 @@ pub struct DiagnosticsProperty {
     show_name: bool,
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     show_separator: bool,
+    /// The display string to compare against when checking
+    /// [`DiagnosticsProperty::is_hidden`]. Stored as a plain string so
+    /// callers can pass `"0"` / `"false"` etc. without knowing the typed
+    /// variant.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     default_value: Option<String>,
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
@@ -358,7 +635,7 @@ impl DiagnosticsProperty {
     pub fn new(name: impl Into<String>, value: impl fmt::Display) -> Self {
         Self {
             name: name.into(),
-            value: value.to_string(),
+            value: DiagnosticsValue::Str(value.to_string()),
             level: DiagnosticLevel::Info,
             kind: DiagnosticsPropertyKind::Generic,
             show_name: true,
@@ -368,17 +645,47 @@ impl DiagnosticsProperty {
         }
     }
 
-    /// Returns the property name
+    /// Creates a property with an explicit typed value.
+    ///
+    /// Prefer the typed [`DiagnosticsBuilder`] methods (`add_rect`,
+    /// `add_color_rgba`, etc.) over calling this directly.
+    #[must_use]
+    pub fn new_typed(name: impl Into<String>, value: DiagnosticsValue) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            level: DiagnosticLevel::Info,
+            kind: DiagnosticsPropertyKind::Generic,
+            show_name: true,
+            show_separator: true,
+            default_value: None,
+            tooltip: None,
+        }
+    }
+
+    /// Returns the property name.
     #[must_use]
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Returns the property value as a string
+    /// Returns the property value as a normalised display string.
+    ///
+    /// This is the back-compat accessor: it always returns the same text
+    /// that [`fmt::Display`] would produce for the property line (the
+    /// `name: value` format uses this). For faithful typed access use
+    /// [`value_typed`](Self::value_typed).
     #[must_use]
     #[inline]
-    pub fn value(&self) -> &str {
+    pub fn value(&self) -> String {
+        self.value.to_string()
+    }
+
+    /// Returns the typed value, giving the inspector faithful structured data.
+    #[must_use]
+    #[inline]
+    pub fn value_typed(&self) -> &DiagnosticsValue {
         &self.value
     }
 
@@ -472,13 +779,16 @@ impl DiagnosticsProperty {
         self
     }
 
-    /// Checks if this property is hidden based on its default value
+    /// Checks if this property is hidden based on its default value.
+    ///
+    /// Comparison is against the normalised display string so callers can
+    /// pass `"0"`, `"false"`, etc. without coupling to the typed variant.
     #[must_use]
     #[inline]
     pub fn is_hidden(&self) -> bool {
         self.default_value
             .as_ref()
-            .is_some_and(|default| &self.value == default)
+            .is_some_and(|default| self.value.to_string() == *default)
     }
 
     /// Checks if this property should be displayed at the given level
@@ -504,7 +814,7 @@ impl DiagnosticsProperty {
                         self.name.clone()
                     }
                 } else {
-                    self.value.clone()
+                    self.value()
                 }
             }
             _ => match style {
@@ -516,14 +826,14 @@ impl DiagnosticsProperty {
                             format!("{} {}", self.name, self.value)
                         }
                     } else {
-                        self.value.clone()
+                        self.value()
                     }
                 }
                 _ => {
                     if self.show_name {
                         format!("{}: {}", self.name, self.value)
                     } else {
-                        self.value.clone()
+                        self.value()
                     }
                 }
             },
@@ -595,8 +905,10 @@ impl fmt::Display for DiagnosticsProperty {
 /// assert!(rendered.contains("MyView"));
 /// assert!(rendered.contains("width"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct DiagnosticsNode {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     name: Option<String>,
@@ -668,12 +980,14 @@ impl DiagnosticsNode {
         &mut self.children
     }
 
-    /// Returns the value of the first property named `name`, if present.
+    /// Returns the display string of the first property named `name`, if present.
     ///
-    /// Convenience for structured assertions over a diagnostics tree
-    /// (instead of substring-matching the rendered dump).
+    /// Returns an **owned** `String` because [`DiagnosticsValue`]'s `Display` owns
+    /// its payload with no borrow source. For typed access (avoiding
+    /// allocation) use [`find_property`](Self::find_property) and then
+    /// [`value_typed`](DiagnosticsProperty::value_typed).
     #[must_use]
-    pub fn get_property(&self, name: &str) -> Option<&str> {
+    pub fn get_property(&self, name: &str) -> Option<String> {
         self.properties
             .iter()
             .find(|property| property.name() == name)
@@ -912,81 +1226,6 @@ impl DiagnosticsNode {
     pub fn to_string_deep_at_level(&self, min_level: DiagnosticLevel) -> String {
         self.format_deep_filtered(0, min_level)
     }
-
-    /// Exports this diagnostics tree as a JSON string.
-    ///
-    /// Produces a structured JSON representation suitable for devtools
-    /// consumption. Each node has `name`, `properties`, `children`,
-    /// and `level` fields.
-    ///
-    /// # Example output
-    ///
-    /// ```json
-    /// {
-    ///   "name": "RenderPadding",
-    ///   "level": "info",
-    ///   "properties": {"padding": "16px"},
-    ///   "children": []
-    /// }
-    /// ```
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        fn write_json(node: &DiagnosticsNode, buf: &mut String, indent: usize) -> std::fmt::Result {
-            use std::fmt::Write as _;
-
-            let pad = " ".repeat(indent);
-            writeln!(buf, "{pad}{{")?;
-            writeln!(
-                buf,
-                "{pad}  \"name\": \"{}\",",
-                escape_json(node.name().unwrap_or(""))
-            )?;
-            writeln!(buf, "{pad}  \"level\": \"{}\",", node.level.as_str())?;
-
-            // Properties
-            write!(buf, "{pad}  \"properties\": {{")?;
-            let props = node.properties();
-            for (i, prop) in props.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                buf.push('\n');
-                write!(
-                    buf,
-                    "{pad}    \"{}\": \"{}\"",
-                    escape_json(prop.name()),
-                    escape_json(prop.value())
-                )?;
-            }
-            if !props.is_empty() {
-                buf.push('\n');
-                write!(buf, "{pad}  ")?;
-            }
-            buf.push_str("},\n");
-
-            // Children
-            write!(buf, "{pad}  \"children\": [")?;
-            let children = node.children();
-            for (i, child) in children.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                buf.push('\n');
-                write_json(child, buf, indent + 4)?;
-            }
-            if !children.is_empty() {
-                buf.push('\n');
-                write!(buf, "{pad}  ")?;
-            }
-            buf.push_str("]\n");
-            write!(buf, "{pad}}}")
-        }
-
-        let mut buf = String::with_capacity(256);
-        // Writing to a `String` through `fmt::Write` is infallible.
-        let _ = write_json(self, &mut buf, 0);
-        buf
-    }
 }
 
 impl Default for DiagnosticsNode {
@@ -994,22 +1233,6 @@ impl Default for DiagnosticsNode {
     fn default() -> Self {
         Self::anonymous()
     }
-}
-
-/// Escapes a string for JSON embedding.
-fn escape_json(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 impl fmt::Display for DiagnosticsNode {
@@ -1237,10 +1460,140 @@ impl DiagnosticsBuilder {
         self
     }
 
-    /// Add a color property (RGBA display).
+    /// Add a color property (RGBA display) from a pre-formatted string.
+    ///
+    /// For a typed RGBA value use [`add_color_rgba`](Self::add_color_rgba).
     pub fn add_color(&mut self, name: impl Into<String>, value: impl fmt::Display) -> &mut Self {
         self.properties
             .push(DiagnosticsProperty::new(name, value).with_kind(DiagnosticsPropertyKind::Color));
+        self
+    }
+
+    // ---- Typed-value additions (ADR-0005 Decision 1) -------------------------
+
+    /// Add a typed `f64` property.
+    pub fn add_f64(&mut self, name: impl Into<String>, value: f64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Float(value))
+                .with_kind(DiagnosticsPropertyKind::Double { unit: None }),
+        );
+        self
+    }
+
+    /// Add a typed `i64` property.
+    pub fn add_i64(&mut self, name: impl Into<String>, value: i64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Int(value))
+                .with_kind(DiagnosticsPropertyKind::Int { unit: None }),
+        );
+        self
+    }
+
+    /// Add a typed `bool` property.
+    pub fn add_bool(&mut self, name: impl Into<String>, value: bool) -> &mut Self {
+        self.properties.push(DiagnosticsProperty::new_typed(
+            name,
+            DiagnosticsValue::Bool(value),
+        ));
+        self
+    }
+
+    /// Add a typed RGBA colour property.
+    pub fn add_color_rgba(
+        &mut self,
+        name: impl Into<String>,
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Color { r, g, b, a })
+                .with_kind(DiagnosticsPropertyKind::Color),
+        );
+        self
+    }
+
+    /// Add a typed axis-aligned rectangle property.
+    pub fn add_rect(
+        &mut self,
+        name: impl Into<String>,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Rect { x, y, w, h })
+                .with_kind(DiagnosticsPropertyKind::Rect),
+        );
+        self
+    }
+
+    /// Add a typed 2-D offset property.
+    pub fn add_offset(&mut self, name: impl Into<String>, x: f64, y: f64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Offset { x, y })
+                .with_kind(DiagnosticsPropertyKind::Offset),
+        );
+        self
+    }
+
+    /// Add a typed 2-D size property.
+    ///
+    /// For a display-string size (e.g. `"100 x 50"`) use
+    /// [`add_size`](Self::add_size).
+    pub fn add_size_f64(&mut self, name: impl Into<String>, w: f64, h: f64) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new_typed(name, DiagnosticsValue::Size { w, h })
+                .with_kind(DiagnosticsPropertyKind::Size),
+        );
+        self
+    }
+
+    /// Add a property with an arbitrary typed [`DiagnosticsValue`].
+    pub fn add_typed(&mut self, name: impl Into<String>, value: DiagnosticsValue) -> &mut Self {
+        self.properties
+            .push(DiagnosticsProperty::new_typed(name, value));
+        self
+    }
+
+    /// Add a property whose typed value is derived from any type that implements
+    /// `Into<DiagnosticsValue>`.
+    ///
+    /// This is the uniform entry point for geometry and colour values: pass a
+    /// `Rect<Pixels>`, `Color`, `RRect`, `Size<Pixels>`, etc. directly and the
+    /// correct [`DiagnosticsPropertyKind`] is set automatically from the resulting
+    /// variant:
+    ///
+    /// | Input type          | Resulting variant         | Kind          |
+    /// |---------------------|---------------------------|---------------|
+    /// | `Rect<Pixels>`      | `DiagnosticsValue::Rect`  | `Rect`        |
+    /// | `Color`             | `DiagnosticsValue::Color` | `Color`       |
+    /// | `Point<Pixels>`     | `DiagnosticsValue::Offset`| `Offset`      |
+    /// | `Offset<Pixels>`    | `DiagnosticsValue::Offset`| `Offset`      |
+    /// | `Size<Pixels>`      | `DiagnosticsValue::Size`  | `Size`        |
+    /// | `RRect`             | `DiagnosticsValue::Nested`| `Generic`     |
+    /// | `&Matrix4`          | `DiagnosticsValue::List`  | `Generic`     |
+    /// | `f64`, `i64`, `bool`| typed scalar variants     | `Double`/`Int`|
+    pub fn add_value(
+        &mut self,
+        name: impl Into<String>,
+        value: impl Into<DiagnosticsValue>,
+    ) -> &mut Self {
+        let val = value.into();
+        let kind = match &val {
+            DiagnosticsValue::Rect { .. } => DiagnosticsPropertyKind::Rect,
+            DiagnosticsValue::Color { .. } => DiagnosticsPropertyKind::Color,
+            DiagnosticsValue::Offset { .. } => DiagnosticsPropertyKind::Offset,
+            DiagnosticsValue::Size { .. } => DiagnosticsPropertyKind::Size,
+            DiagnosticsValue::Float(_) => DiagnosticsPropertyKind::Double { unit: None },
+            DiagnosticsValue::Int(_) => DiagnosticsPropertyKind::Int { unit: None },
+            // Nested / List / Bool / Str / Null — no more-specific kind.
+            _ => DiagnosticsPropertyKind::Generic,
+        };
+        self.properties
+            .push(DiagnosticsProperty::new_typed(name, val).with_kind(kind));
         self
     }
 
@@ -1287,12 +1640,27 @@ fn format_double(value: f32, unit: Option<&str>) -> String {
 
 /// Parses a numeric diagnostics property, stripping a typed unit suffix when
 /// present.
+///
+/// For typed `Float`/`Int` variants the value is read directly rather than
+/// parsing text; for `Str` (back-compat path) text parsing with optional unit
+/// stripping is used.
 fn parse_numeric_property_value(property: &DiagnosticsProperty) -> Option<f64> {
+    // Fast path for floats: avoids display-string formatting + re-parsing.
+    // Integers are not short-circuited: i64→f64 loses precision outside
+    // ±2^53; the display-string parse below is exact for the integer
+    // range that diagnostic properties carry.
+    if let DiagnosticsValue::Float(v) = property.value_typed() {
+        return Some(*v);
+    }
+
+    // Back-compat path: display string with optional unit suffix.
     let raw = property.value();
     let numeric = match property.kind() {
         DiagnosticsPropertyKind::Double { unit } | DiagnosticsPropertyKind::Int { unit } => {
             match unit {
-                Some(suffix) if raw.ends_with(suffix.as_ref()) => &raw[..raw.len() - suffix.len()],
+                Some(suffix) if raw.ends_with(suffix.as_ref()) => {
+                    raw[..raw.len() - suffix.len()].to_owned()
+                }
                 _ => raw,
             }
         }
@@ -1605,7 +1973,10 @@ mod tests {
         );
 
         let flex = tree.find_descendant("RenderFlex").expect("flex");
-        assert_eq!(flex.get_property("direction"), Some("Horizontal"));
+        assert_eq!(
+            flex.get_property("direction").as_deref(),
+            Some("Horizontal")
+        );
         assert!(tree.find_descendant("RenderPadding").is_some());
         assert!(tree.find_descendant("Missing").is_none());
     }
@@ -1641,6 +2012,318 @@ mod tests {
         let [property] = builder.build().try_into().ok().unwrap();
         let node = DiagnosticsNode::new("RenderSliverFixedExtentList").with_property(property);
         assert_eq!(node.get_property_f64("item_extent"), Some(25.0));
+    }
+
+    // ---- Task 4.5 geometry/colour From<T> + add_value (TDD: failing first) ----
+
+    #[test]
+    fn rect_into_diagnostics_value() {
+        use flui_types::geometry::{Rect, px};
+
+        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0));
+        let val = DiagnosticsValue::from(rect);
+        assert!(
+            matches!(val, DiagnosticsValue::Rect { w, .. } if (w - 40.0_f64).abs() < 1e-6),
+            "expected Rect{{ w: 40.0, .. }}, got: {val:?}",
+        );
+    }
+
+    #[test]
+    fn color_into_diagnostics_value() {
+        use flui_types::styling::Color;
+
+        let red = Color::rgba(255, 0, 0, 255);
+        let val = DiagnosticsValue::from(red);
+        assert_eq!(
+            val,
+            DiagnosticsValue::Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            },
+            "red Color must convert to DiagnosticsValue::Color{{r:255,g:0,b:0,a:255}}"
+        );
+    }
+
+    // Corner names (r_tl / r_tr / r_br / r_bl) are domain-mandated abbreviations
+    // that intentionally share a directional suffix pattern.
+    #[allow(clippy::similar_names)]
+    #[test]
+    fn rrect_into_diagnostics_value_is_nested() {
+        use flui_types::geometry::{RRect, Radius, Rect, px};
+
+        // Distinct corner radii so the nested values differ.
+        let rrect = RRect::from_rect_and_corners(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Radius::circular(px(10.0)),
+            Radius::circular(px(20.0)),
+            Radius::circular(px(30.0)),
+            Radius::circular(px(40.0)),
+        );
+        let val = DiagnosticsValue::from(rrect);
+        let DiagnosticsValue::Nested(ref props) = val else {
+            panic!("RRect must convert to Nested, got {val:?}")
+        };
+        // Must contain "rect" bounds and four corner radii.
+        assert!(
+            props.iter().any(|p| p.name() == "rect"),
+            "Nested must contain 'rect' property"
+        );
+        // Helper: look up a corner radius by short name; each corner is now
+        // itself a Nested{x, y} value (FIX 2 — elliptical radii faithfully stored).
+        let get_corner_x = |name: &str| -> f64 {
+            let prop = props
+                .iter()
+                .find(|p| p.name() == name)
+                .unwrap_or_else(|| panic!("Nested must contain '{name}'"));
+            match prop.value_typed() {
+                DiagnosticsValue::Nested(sub) => {
+                    let x = sub
+                        .iter()
+                        .find(|p| p.name() == "x")
+                        .unwrap_or_else(|| panic!("corner '{name}' must have 'x' sub-property"));
+                    match x.value_typed() {
+                        DiagnosticsValue::Float(v) => *v,
+                        other => panic!("corner '{name}'.x must be Float, got {other:?}"),
+                    }
+                }
+                other => panic!("corner '{name}' must be Nested{{x,y}}, got {other:?}"),
+            }
+        };
+        // The two corner names share a directional suffix — similar_names is expected here.
+        #[allow(clippy::similar_names)]
+        let (x_tl, x_tr) = (get_corner_x("r_tl"), get_corner_x("r_tr"));
+        // Distinct corner radii must produce distinct x values.
+        assert!(
+            (x_tl - x_tr).abs() > 0.1,
+            "distinct radii must not collide: r_tl.x={x_tl}, r_tr.x={x_tr}"
+        );
+    }
+
+    /// `Radius::elliptical(rx, ry)` with `rx ≠ ry` must record both axes.
+    ///
+    /// Before FIX 2, only `x` was stored and `y` was silently lost.
+    #[test]
+    fn rrect_elliptical_radius_records_both_axes() {
+        use flui_types::geometry::{RRect, Radius, Rect, px};
+
+        let rrect = RRect::from_rect_and_radius(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Radius::elliptical(px(4.0), px(12.0)),
+        );
+        let val = DiagnosticsValue::from(rrect);
+        let DiagnosticsValue::Nested(ref props) = val else {
+            panic!("RRect must convert to Nested, got {val:?}")
+        };
+
+        let r_tl = props
+            .iter()
+            .find(|p| p.name() == "r_tl")
+            .expect("Nested must contain r_tl");
+
+        let DiagnosticsValue::Nested(ref sub) = *r_tl.value_typed() else {
+            panic!("r_tl must be Nested{{x,y}}, got {:?}", r_tl.value_typed())
+        };
+
+        let get_f64 = |name: &str| -> f64 {
+            match sub
+                .iter()
+                .find(|p| p.name() == name)
+                .unwrap_or_else(|| panic!("r_tl must contain '{name}'"))
+                .value_typed()
+            {
+                DiagnosticsValue::Float(v) => *v,
+                other => panic!("r_tl.{name} must be Float, got {other:?}"),
+            }
+        };
+
+        let x = get_f64("x");
+        let y = get_f64("y");
+        assert!(
+            (x - 4.0_f64).abs() < 1e-5,
+            "elliptical rx must be 4.0, got {x}"
+        );
+        assert!(
+            (y - 12.0_f64).abs() < 1e-5,
+            "elliptical ry must be 12.0, got {y}"
+        );
+    }
+
+    #[test]
+    fn add_value_matches_explicit_add_rect() {
+        use flui_types::geometry::{Rect, px};
+
+        let rect = Rect::from_ltrb(px(1.0), px(2.0), px(41.0), px(52.0));
+
+        let mut b1 = DiagnosticsBuilder::new();
+        b1.add_value("r", rect);
+
+        let mut b2 = DiagnosticsBuilder::new();
+        b2.add_rect("r", 1.0, 2.0, 40.0, 50.0);
+
+        let p1 = b1.build();
+        let p2 = b2.build();
+        assert_eq!(
+            p1[0].value_typed(),
+            p2[0].value_typed(),
+            "add_value(rect) must produce same typed value as add_rect(x,y,w,h)"
+        );
+    }
+
+    // ---- Task 3 typed-value tests (TDD: written before implementation) ----
+
+    #[test]
+    fn string_property_back_compat() {
+        let prop = DiagnosticsProperty::new("width", 100);
+        assert_eq!(prop.value(), "100");
+        assert_eq!(prop.to_string(), "width: 100");
+    }
+
+    #[test]
+    fn typed_rect_value_is_structured() {
+        let mut builder = DiagnosticsBuilder::new();
+        builder.add_rect("bounds", 0.0, 0.0, 40.0, 40.0);
+        let props = builder.build();
+        assert_eq!(props.len(), 1);
+        assert_eq!(
+            props[0].value_typed(),
+            &DiagnosticsValue::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0
+            }
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn faithful_vs_display() {
+        let val = DiagnosticsValue::Float(0.333_333);
+        // serde_json serializes with full precision
+        let json = serde_json::to_string(&val).unwrap();
+        assert!(
+            json.contains("0.333333"),
+            "expected full-precision float in JSON, got: {json}"
+        );
+        // Display shows 2 decimal places
+        assert_eq!(val.to_string(), "0.33");
+    }
+
+    /// `DiagnosticsEnvelope::to_json_pretty` must return `Err` when the tree
+    /// contains a non-finite float, not silently emit schema-invalid `null`.
+    ///
+    /// RFC 8259 §6 forbids NaN/±inf in JSON; the schema's `Float` variant
+    /// requires a number. Returning `Err` means the testing harness panics on
+    /// the real broken scene rather than passing with invalid JSON.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn to_json_pretty_rejects_nonfinite_float() {
+        use crate::{DIAGNOSTICS_FORMAT_VERSION, DiagnosticsEnvelope};
+
+        for (label, bad) in [
+            ("NaN", f64::NAN),
+            ("+inf", f64::INFINITY),
+            ("-inf", f64::NEG_INFINITY),
+        ] {
+            let node = DiagnosticsNode::new("Test").with_property(DiagnosticsProperty::new_typed(
+                "v",
+                DiagnosticsValue::Float(bad),
+            ));
+            let env = DiagnosticsEnvelope {
+                format_version: DIAGNOSTICS_FORMAT_VERSION,
+                root: node,
+            };
+            assert!(
+                env.to_json_pretty().is_err(),
+                "{label}: to_json_pretty must return Err for non-finite float, not Ok(invalid JSON)",
+            );
+        }
+    }
+
+    /// The serde wire is a round-trip: serialise an envelope, deserialise it back,
+    /// re-serialise — the result must be byte-identical to the first serialisation.
+    ///
+    /// This proves the "language-agnostic contract" is deserializable, not just
+    /// writable — a devtools client that parses `to_json_pretty` output and sends
+    /// it back must get the same envelope.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn envelope_round_trip_is_idempotent() {
+        use crate::{DIAGNOSTICS_FORMAT_VERSION, DiagnosticsEnvelope};
+
+        let node = DiagnosticsNode::new("RenderPadding")
+            .with_property(DiagnosticsProperty::new_typed(
+                "padding",
+                DiagnosticsValue::Float(16.0),
+            ))
+            .with_property(DiagnosticsProperty::new_typed(
+                "bounds",
+                DiagnosticsValue::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 50.0,
+                },
+            ))
+            .child(DiagnosticsNode::new("RenderConstrainedBox").with_property(
+                DiagnosticsProperty::new_typed("width", DiagnosticsValue::Float(80.0)),
+            ));
+
+        let env = DiagnosticsEnvelope {
+            format_version: DIAGNOSTICS_FORMAT_VERSION,
+            root: node,
+        };
+
+        let json1 = env
+            .to_json_pretty()
+            .expect("all values are finite; to_json_pretty must succeed");
+
+        let env2: DiagnosticsEnvelope = serde_json::from_str(&json1)
+            .expect("to_json_pretty output must be deserializable back to DiagnosticsEnvelope");
+
+        let json2 = env2
+            .to_json_pretty()
+            .expect("re-serialisation of round-tripped envelope must succeed");
+
+        assert_eq!(
+            json1, json2,
+            "to_json_pretty must be idempotent: first and second serialisations must be identical"
+        );
+    }
+
+    /// A `DrawCommand` whose `Matrix4` transform contains a NaN (stored as
+    /// `DiagnosticsValue::List` of 16 floats) must cause `to_json_pretty` to
+    /// return `Err`.
+    ///
+    /// This tests that `find_nonfinite_float_in_value` recurses into `List` —
+    /// the realistic bad-transform path where a NaN propagates through matrix
+    /// arithmetic.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn nonfinite_float_in_list_value_is_detected() {
+        use crate::{DIAGNOSTICS_FORMAT_VERSION, DiagnosticsEnvelope};
+
+        // A Matrix4 transform with a NaN in position [0] (column-major).
+        let mut matrix_floats: Vec<DiagnosticsValue> = (0..16i32)
+            .map(|i| DiagnosticsValue::Float(f64::from(i)))
+            .collect();
+        matrix_floats[0] = DiagnosticsValue::Float(f64::NAN);
+
+        let node = DiagnosticsNode::new("DrawCommand").with_property(
+            DiagnosticsProperty::new_typed("transform", DiagnosticsValue::List(matrix_floats)),
+        );
+
+        let env = DiagnosticsEnvelope {
+            format_version: DIAGNOSTICS_FORMAT_VERSION,
+            root: node,
+        };
+
+        assert!(
+            env.to_json_pretty().is_err(),
+            "NaN inside DiagnosticsValue::List must cause to_json_pretty to return Err"
+        );
     }
 
     #[test]
@@ -1684,6 +2367,125 @@ mod tests {
         let column = &tree.children()[1];
         assert_eq!(column.name().unwrap(), "Column");
         assert_eq!(column.children().len(), 1);
+    }
+}
+
+// ============================================================================
+// DIAGNOSTICS ENVELOPE (ADR-0005 Decision 4, Task 7)
+// ============================================================================
+
+/// The format version embedded in every [`DiagnosticsEnvelope`].
+///
+/// Bump this constant (and regenerate `schema/diagnostics.v<N>.json`) whenever
+/// the shape of [`DiagnosticsNode`] or any of the types reachable from it
+/// changes in a backwards-incompatible way. The committed schema file is the
+/// contract; the CI `schema_stability` test enforces it automatically.
+pub const DIAGNOSTICS_FORMAT_VERSION: u32 = 1;
+
+/// A versioned envelope wrapping a [`DiagnosticsNode`] tree for JSON export.
+///
+/// `format_version` lets tooling (devtools, golden-diff scripts, language
+/// bindings) detect schema evolution without ad-hoc version probing.
+///
+/// # Example
+///
+/// ```rust
+/// # use flui_foundation::{DiagnosticsEnvelope, DiagnosticsNode};
+/// let node = DiagnosticsNode::new("RenderPadding");
+/// let env = DiagnosticsEnvelope::new(node);
+/// assert_eq!(env.format_version, flui_foundation::DIAGNOSTICS_FORMAT_VERSION);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DiagnosticsEnvelope {
+    /// Schema version — always [`DIAGNOSTICS_FORMAT_VERSION`] for freshly
+    /// constructed envelopes. Tooling must check this field before
+    /// interpreting `root`.
+    pub format_version: u32,
+    /// The diagnostics tree root.
+    pub root: DiagnosticsNode,
+}
+
+/// Walk a [`DiagnosticsValue`] tree and return the first non-finite `f64`
+/// encountered, or `None` when all floats are finite.
+///
+/// Checks `Float` scalars and the numeric fields embedded in `Rect`, `Offset`,
+/// and `Size` variants. `List` and `Nested` are recursed. This is O(n) in the
+/// number of values in the tree and is called once per `to_json_pretty`
+/// invocation — the tree is typically small (a few hundred nodes at most).
+#[cfg(feature = "serde")]
+fn find_nonfinite_float_in_value(val: &DiagnosticsValue) -> Option<f64> {
+    match val {
+        DiagnosticsValue::Float(v) if !v.is_finite() => Some(*v),
+        DiagnosticsValue::Rect { x, y, w, h } => {
+            [x, y, w, h].into_iter().copied().find(|v| !v.is_finite())
+        }
+        DiagnosticsValue::Offset { x, y } => [x, y].into_iter().copied().find(|v| !v.is_finite()),
+        DiagnosticsValue::Size { w, h } => [w, h].into_iter().copied().find(|v| !v.is_finite()),
+        DiagnosticsValue::List(items) => items.iter().find_map(find_nonfinite_float_in_value),
+        DiagnosticsValue::Nested(props) => props
+            .iter()
+            .find_map(|p| find_nonfinite_float_in_value(p.value_typed())),
+        // Bool / Int / Str / Color / Null carry no f64.
+        _ => None,
+    }
+}
+
+/// Walk a [`DiagnosticsNode`] tree depth-first and return the first non-finite
+/// `f64` found in any property value, or `None` when the tree is clean.
+#[cfg(feature = "serde")]
+fn find_nonfinite_float_in_node(node: &DiagnosticsNode) -> Option<f64> {
+    node.properties()
+        .iter()
+        .find_map(|p| find_nonfinite_float_in_value(p.value_typed()))
+        .or_else(|| {
+            node.children()
+                .iter()
+                .find_map(find_nonfinite_float_in_node)
+        })
+}
+
+impl DiagnosticsEnvelope {
+    /// Wrap `root` with the current [`DIAGNOSTICS_FORMAT_VERSION`].
+    #[must_use]
+    pub fn new(root: DiagnosticsNode) -> Self {
+        Self {
+            format_version: DIAGNOSTICS_FORMAT_VERSION,
+            root,
+        }
+    }
+
+    /// Serialize this envelope to a pretty-printed JSON string.
+    ///
+    /// Uses `serde_json::to_string_pretty` so the output is human-readable
+    /// and stable for golden-file diffing. The `serde` feature must be active
+    /// (it implies `dep:serde_json`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when any `DiagnosticsValue::Float` in the tree is
+    /// non-finite (`NaN` / `±inf`), because RFC 8259 §6 forbids those values
+    /// and `serde_json` would otherwise silently emit `null` — producing
+    /// schema-invalid JSON while the call returns `Ok`. The pre-serialization
+    /// walk here surfaces the failure explicitly so the testing harness panics
+    /// on the right error and production callers receive a typed `Err`.
+    ///
+    /// Non-finite floats are a sign of a broken render object; callers that
+    /// need a non-fallible debug dump should use `fmt::Display` on the node,
+    /// which renders a human-readable text tree without JSON validation.
+    #[cfg(feature = "serde")]
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        // Pre-flight: reject non-finite floats before serde_json silently
+        // converts them to null (RFC 8259 §6 forbids NaN/±inf in JSON).
+        if let Some(bad) = find_nonfinite_float_in_node(&self.root) {
+            return Err(serde::ser::Error::custom(format!(
+                "non-finite float ({bad}) in DiagnosticsValue: \
+                 fix the render object that produces it"
+            )));
+        }
+        serde_json::to_string_pretty(self)
     }
 }
 

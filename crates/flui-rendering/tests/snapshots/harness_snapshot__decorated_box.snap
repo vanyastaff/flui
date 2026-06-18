@@ -1,10 +1,23 @@
 ---
 source: crates/flui-rendering/tests/harness_snapshot.rs
-assertion_line: 237
 expression: run.snapshot()
 ---
-Offset dx=0.00 dy=0.00
-  Picture bounds=(-4.00,-2.00 92.00x72.00)
-    DrawShadow path_bounds=(2.00,4.00 80.00x60.00) color=#00000080 elev=6.00
-    DrawRect rect=(0.00,0.00 80.00x60.00) fill #FFFFFFFF
-    DrawDRRect outer=(0.00,0.00 80.00x60.00 r=0.00/0.00/0.00/0.00) inner=(2.00,2.00 76.00x56.00 r=0.00/0.00/0.00/0.00) fill #000000FF
+Offset
+  dx: 0.00
+  dy: 0.00
+  Picture
+    bounds: (-4.00,-2.00,92.00,72.00)
+    commands: 3
+    DrawShadow
+      path_bounds: (2.00,4.00,80.00,60.00)
+      color: #00000080
+      elevation: 6.00
+    DrawRect
+      rect: (0.00,0.00,80.00,60.00)
+      color: #FFFFFFFF
+      style: Fill
+    DrawDRRect
+      outer: {rect: (0.00,0.00,80.00,60.00), r_tl: {x: 0.00, y: 0.00}, r_tr: {x: 0.00, y: 0.00}, r_br: {x: 0.00, y: 0.00}, r_bl: {x: 0.00, y: 0.00}}
+      inner: {rect: (2.00,2.00,76.00,56.00), r_tl: {x: 0.00, y: 0.00}, r_tr: {x: 0.00, y: 0.00}, r_br: {x: 0.00, y: 0.00}, r_bl: {x: 0.00, y: 0.00}}
+      color: #000000FF
+      style: Fill

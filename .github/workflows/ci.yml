@@ -65,6 +65,15 @@ jobs:
       - name: scripts/port-check.sh (7 institutional refusal triggers)
         run: bash scripts/port-check.sh -v
 
+      # Verify the committed diagnostics JSON Schema matches what schemars
+      # generates from the current types. schemars output is not semver-stable
+      # across schemars releases, so the committed file at schema/diagnostics.v1.json
+      # is the owned contract — this step catches unintentional drift.
+      # To regenerate after an intentional change: run the gen_schema ignored test
+      # and commit the result alongside a DIAGNOSTICS_FORMAT_VERSION bump.
+      - name: diagnostics schema stability
+        run: cargo test -p flui-foundation --features schemars --test schema_stability -- committed_schema_matches_generated
+
   # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
   # in PARALLEL with test/doc/bench-compile instead of gating them: clippy
