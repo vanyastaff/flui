@@ -747,11 +747,16 @@ impl CommandRenderer for Backend<'_> {
                     multiview_mask: None,
                 });
             }
-            // Render child batches to offscreen texture.
-            // View-only: the shader-mask pipeline reads the texture via its own
-            // bind group (not via `RenderTarget::texture`), so no backdrop
-            // sampling back-reference is needed here.
-            let child_target = super::render_target::RenderTarget::view_only(child_tex.view());
+            // Render child batches to the sampleable offscreen texture.
+            // `child_tex` is a pooled texture that carries COPY_SRC, so passing
+            // `sampleable` here lets any advanced-blend op inside the child
+            // display list dst-read from the child's own offscreen as backdrop,
+            // producing correct Multiply/Screen/etc. output rather than falling
+            // back to SrcOver.
+            let child_target = super::render_target::RenderTarget::sampleable(
+                child_tex.view(),
+                child_tex.texture(),
+            );
             if let Err(e) = temp_painter.render(child_target, &mut encoder) {
                 tracing::error!("Failed to render shader mask child content: {}", e);
             }
@@ -1985,6 +1990,235 @@ mod tests {
             "shader-mask composite rect must be (0,0,200,200) under DPR=2; \
              got {composite_rect:?} — (0,0,600,600) indicates stale prior-rect \
              transform leaked into the mask CTM read"
+        );
+    }
+
+    // ── ShaderMask child with advanced blend: Multiply applies, no panic ─────
+
+    /// Regression test for BLOCKER 2a: a ShaderMask whose child DisplayList
+    /// contains an advanced-blend shape (Multiply) must dst-read from the child's
+    /// own offscreen — NOT fall back to SrcOver and NOT panic.
+    ///
+    /// **Setup:**
+    /// - Child display list: (1) opaque blue rect (SrcOver), (2) opaque orange
+    ///   rect with `BlendMode::Multiply`.  The sampleable child texture means
+    ///   the Multiply shape dst-reads the blue backdrop that step (1) laid down.
+    /// - Solid-white shader mask (passthrough alpha) — the mask does not change
+    ///   the color, so the composited result on the main surface should reflect
+    ///   the advanced blend outcome.
+    ///
+    /// **What this proves:**
+    /// - Pre-fix (`view_only`): advanced shape fell back to SrcOver → orange.
+    /// - Post-fix (`sampleable`): advanced shape dst-reads blue → Multiply(orange,
+    ///   blue) = darker value in R and G channels.
+    ///
+    /// The test asserts no panic, and that the composited center pixel is NOT
+    /// orange-like (SrcOver), but darker (Multiply).
+    #[test]
+    fn shader_mask_child_advanced_blend_uses_sampleable_not_srcover() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_types::{Color, Rect, geometry::Pixels, painting::BlendMode};
+
+        // Use Rgba8Unorm so readback values are straightforward.
+        const W: u32 = 64;
+        const H: u32 = 64;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let bounds = Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(W as f32), Pixels(H as f32));
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (W, H),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        // Build child display list:
+        //   Step 1 — opaque blue rect (SrcOver): establishes child backdrop.
+        //   Step 2 — opaque orange rect (Multiply): must dst-read the blue backdrop.
+        let blue_color = Color::rgba(40, 60, 220, 255);
+        let orange_color = Color::rgba(200, 120, 40, 255);
+        let mut canvas = flui_painting::Canvas::new();
+        canvas.draw_rect(bounds, &Paint::fill(blue_color));
+        canvas.draw_rect(
+            bounds,
+            &Paint::fill(orange_color).with_blend_mode(BlendMode::Multiply),
+        );
+        let child = canvas.finish();
+
+        // Solid-white shader: passthrough — mask does not alter child colors.
+        let shader = flui_painting::Shader::solid(Color::WHITE);
+
+        // Call the method under test — must not panic.
+        backend.render_shader_mask(
+            &child,
+            &shader,
+            bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        // Render the painter onto a sampleable main surface to composite the
+        // queued ShaderMask offscreen result.
+        let main_surface = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ShaderMask Advanced Test Surface"),
+            size: wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let main_view = main_surface.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ShaderMask Advanced Test Encoder"),
+        });
+        // Pre-clear main surface to black (so non-opaque composites are visible).
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Main Surface Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &main_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        // Composite the ShaderMask result onto the main surface.
+        let render_target = RenderTarget::sampleable(&main_view, &main_surface);
+        backend
+            .into_painter()
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Readback center pixel of the main surface.
+        let pixel = {
+            let bytes_per_pixel = 4u32;
+            let unpadded = W * bytes_per_pixel;
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let padded = unpadded.div_ceil(align) * align;
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ShaderMask Advanced Readback"),
+                size: u64::from(padded * H),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut copy_enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ShaderMask Advanced Readback Encoder"),
+            });
+            copy_enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &main_surface,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buf,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded),
+                        rows_per_image: Some(H),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit(std::iter::once(copy_enc.finish()));
+            let slice = buf.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .expect("readback poll must complete");
+            let data = slice.get_mapped_range();
+            let center = (H / 2) as usize * padded as usize + (W / 2) as usize * 4;
+            let px = [
+                data[center],
+                data[center + 1],
+                data[center + 2],
+                data[center + 3],
+            ];
+            drop(data);
+            buf.unmap();
+            px
+        };
+
+        // CPU oracle: Multiply(orange, blue).
+        let blend_result = orange_color.blend(blue_color, BlendMode::Multiply);
+        let [br, bg, bb, ba] = blend_result.to_f32_array();
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped [0,1]*255; truncation safe"
+        )]
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let multiply_oracle = [to_u8(br * ba), to_u8(bg * ba), to_u8(bb * ba), to_u8(ba)];
+
+        // SrcOver of orange over blue: opaque orange wins (R≈200, G≈120, B≈40).
+        let srcover_result = orange_color.blend(blue_color, BlendMode::SrcOver);
+        let [sr, sg, sb, sa] = srcover_result.to_f32_array();
+        let srcover_oracle = [to_u8(sr * sa), to_u8(sg * sa), to_u8(sb * sa), to_u8(sa)];
+
+        let tol = 6i16; // ±6: absorbs shader-mask pipeline quantization
+        let within = |a: u8, b: u8| (i16::from(a) - i16::from(b)).abs() <= tol;
+        let matches_multiply = pixel
+            .iter()
+            .zip(multiply_oracle.iter())
+            .all(|(&a, &b)| within(a, b));
+        let matches_srcover = pixel
+            .iter()
+            .zip(srcover_oracle.iter())
+            .all(|(&a, &b)| within(a, b));
+
+        // Must not be SrcOver (the pre-fix fallback).
+        assert!(
+            !matches_srcover,
+            "ShaderMask child advanced Multiply must NOT fall back to SrcOver; \
+             pixel={pixel:?} matches srcover_oracle={srcover_oracle:?}. \
+             Indicates `child_target` is still `view_only` instead of `sampleable`."
+        );
+
+        // Must match the Multiply oracle (or at least be non-trivially different from SrcOver).
+        assert!(
+            matches_multiply,
+            "ShaderMask child advanced Multiply must match the CPU Multiply oracle; \
+             pixel={pixel:?}, multiply_oracle={multiply_oracle:?}, srcover_oracle={srcover_oracle:?}."
         );
     }
 }
