@@ -267,8 +267,8 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
     ) -> EngineResult<()> {
-        // R1: arm order (Segment / OffscreenTexture / OpacityLayer) is
-        // load-bearing for z-ordering — do not reorder.
+        // R1: arm order (Segment / OffscreenTexture / OpacityLayer /
+        // AdvancedShape) is load-bearing for z-ordering — do not reorder.
         for item in items {
             match item {
                 DrawItem::Segment(mut seg) => {
@@ -324,6 +324,108 @@ impl GpuReplay {
                         encoder,
                         target,
                     );
+                }
+                // ── Advanced (dst-read) shape — DECISION 5 ─────────────────
+                //
+                // Z-correctness: all prior draw_order items have been flushed to
+                // `target.view` earlier in this loop before this arm executes, so
+                // the backdrop copy in `flush_advanced_layer` reads the correct
+                // content-so-far from the surface.
+                //
+                // AA note: tessellated shapes run at sample_count=1 with no SDF
+                // anti-aliasing — edges are aliased.  This is consistent with the
+                // Phase-A quality note in `batches/shapes.rs`.
+                //
+                // Damage-straddle correctness: `flush_advanced_layer` issues its
+                // render pass with `LoadOp::Load` and writes to `op.device_bounds`
+                // on the surface.  The damage scissor (if any) was applied to the
+                // shape's geometry at record time via the GpuStateStack, which
+                // affects the offscreen foreground tessellation.  Outside the
+                // damage region the foreground is transparent, so the blend pass
+                // effectively passes through backdrop pixels — no stale content
+                // is written.  This is correct for all straddling configurations.
+                DrawItem::AdvancedShape(mut op) => {
+                    if let Some(surface_texture) = target.texture {
+                        // Render the shape into a full-viewport offscreen foreground.
+                        let foreground = self.render_segment_to_offscreen(
+                            &mut op.segment,
+                            viewport_size,
+                            surface_format,
+                            device,
+                            queue,
+                            pipelines,
+                            resources,
+                            encoder,
+                        );
+                        let (vp_w, vp_h) = viewport_size;
+                        #[allow(
+                            clippy::cast_precision_loss,
+                            reason = "vp_w/vp_h are u32 viewport dims; \
+                                      precision loss at >16 M pixels is acceptable"
+                        )]
+                        let (viewport_width_f32, viewport_height_f32) = (vp_w as f32, vp_h as f32);
+
+                        let blend_op = AdvancedBlendOp {
+                            foreground,
+                            mode: op.mode,
+                            device_bounds: op.device_bounds,
+                            // Identity tint + full opacity: shape color/alpha is
+                            // already baked into premul vertex colors at record time.
+                            // Applying opacity or tint here would double-apply it.
+                            opacity: 1.0,
+                            tint: [1.0, 1.0, 1.0],
+                            src_uv_min: [
+                                op.device_bounds.left().0 / viewport_width_f32,
+                                op.device_bounds.top().0 / viewport_height_f32,
+                            ],
+                            src_uv_max: [
+                                op.device_bounds.right().0 / viewport_width_f32,
+                                op.device_bounds.bottom().0 / viewport_height_f32,
+                            ],
+                        };
+                        flush_advanced_layer(
+                            blend_op,
+                            surface_texture,
+                            target.view,
+                            surface_format,
+                            viewport_size,
+                            &pipelines.advanced_blend,
+                            resources,
+                            device,
+                            encoder,
+                        );
+                        tracing::trace!(
+                            mode = ?op.mode,
+                            bounds = ?op.device_bounds,
+                            "GpuReplay: advanced shape blended onto surface"
+                        );
+                    } else {
+                        // COPY_SRC-less surface: fall back to drawing the shape
+                        // normally (SrcOver alpha blend) and warn once.
+                        // PR-6 will wire the COPY_SRC-less present path; until then
+                        // this is a correct (if approximate) fallback.
+                        static WARNED: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            tracing::warn!(
+                                mode = ?op.mode,
+                                "Advanced shape: surface lacks COPY_SRC; \
+                                 falling back to SrcOver draw \
+                                 (PR-6 will fix the present path) \
+                                 (logged once per process)"
+                            );
+                        }
+                        self.flush_segment(
+                            &mut op.segment,
+                            viewport_size,
+                            device,
+                            queue,
+                            pipelines,
+                            resources,
+                            encoder,
+                            target.view,
+                        );
+                    }
                 }
             }
         }

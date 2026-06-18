@@ -88,6 +88,16 @@ mod tests {
     /// `DrawSegment` using only CPU-side API to provide the runtime evidence.
     const _DRAW_SEGMENT_IS_CLONE: fn(DrawSegment) -> DrawSegment = |seg| seg.clone();
 
+    /// Companion witness: `AdvancedShapeOp` (the shape-level advanced-blend record
+    /// item) is `Clone` + handle-free. Its fields are `DrawSegment` (witnessed
+    /// above), `BlendMode` (`Copy`), and `Rect<Pixels>` (`Copy`). A future field
+    /// holding a live GPU handle (`Texture`/`TextureView`/`BindGroup`/`Sampler`)
+    /// would make this `const` fail to compile — guarding T11 IR-purity for the
+    /// new variant.
+    const _ADVANCED_SHAPE_OP_IS_CLONE: fn(
+        crate::wgpu::command_ir::AdvancedShapeOp,
+    ) -> crate::wgpu::command_ir::AdvancedShapeOp = |op| op.clone();
+
     /// Runtime IR-purity witness: construct a `DrawSegment` with no GPU context.
     ///
     /// This test creates and clones a `DrawSegment` without ever calling

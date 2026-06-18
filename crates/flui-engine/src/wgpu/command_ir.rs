@@ -238,10 +238,48 @@ impl DrawSegment {
     }
 }
 
+// ─── Advanced-shape op ────────────────────────────────────────────────────────
+
+/// A single tessellated shape that requires a dst-read (advanced) blend.
+///
+/// Created by [`super::batches::DrawBatcher::add_tessellated_with_key`] when
+/// the pipeline key carries an advanced (W3C composite) blend mode.  Instead
+/// of batching the shape into the current `DrawSegment` (which would use
+/// fixed-function blending), the shape's geometry is isolated here and rendered
+/// offscreen at replay time so `flush_advanced_layer` can read the backdrop and
+/// compute the correct non-separable blend.
+///
+/// ## T11 purity contract
+///
+/// `DrawSegment` derives `Clone` as the compile-time IR-purity witness.
+/// `AdvancedShapeOp` also derives `Clone` for the same reason — it must be
+/// cloneable without touching any GPU handle.  The embedded `DrawSegment` is
+/// handle-free by the same invariant.
+///
+/// ## AA note
+///
+/// The tessellated geometry is rendered at `sample_count=1` with no SDF
+/// anti-aliasing, so shape edges are aliased.  This is consistent with the
+/// Phase-A quality note at `batches/shapes.rs`.  Phase B will add SDF AA.
+#[derive(Clone)]
+pub(crate) struct AdvancedShapeOp {
+    /// Tessellated geometry for this shape (vertices already baked to device
+    /// space; indices relative to segment-local base).
+    pub(crate) segment: DrawSegment,
+    /// Advanced blend mode to apply when compositing the shape onto the surface.
+    pub(crate) mode: BlendMode,
+    /// AABB of `segment.vertices[*].position` in device pixels.
+    ///
+    /// Computed from the baked-to-device vertex positions at record time.
+    /// Used by `flush_advanced_layer` for the `device_bounds`, the `src_uv`
+    /// remap, and the damage-straddle guard.
+    pub(crate) device_bounds: Rect<Pixels>,
+}
+
 // ─── Draw item (top-level ordering enum) ─────────────────────────────────────
 
 /// An item in the draw order list: either a segment of batched commands,
-/// an offscreen texture to composite, or an opacity layer.
+/// an offscreen texture to composite, an opacity layer, or an advanced shape.
 // `PendingOffscreenTexture` (via `OffscreenTexture` variant) is not `Debug`
 // because `PooledTexture` wraps a `wgpu::Texture`.
 #[allow(missing_debug_implementations)]
@@ -253,6 +291,12 @@ pub(crate) enum DrawItem {
     /// An opacity layer: a group of draw items to render offscreen and composite
     /// with the given alpha. Created by `save_layer`/`restore_layer`.
     OpacityLayer(PendingOpacityLayer),
+    /// A single tessellated shape drawn with an advanced (dst-read) blend mode.
+    ///
+    /// Isolated from its surrounding `DrawSegment` at record time so that
+    /// `GpuReplay::submit` can render it to an offscreen foreground and call
+    /// `flush_advanced_layer` for the backdrop-compositing pass.
+    AdvancedShape(AdvancedShapeOp),
 }
 
 // ─── Opacity layer ────────────────────────────────────────────────────────────

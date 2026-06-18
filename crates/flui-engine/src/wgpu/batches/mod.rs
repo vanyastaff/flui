@@ -44,9 +44,10 @@
 //! - **No new per-draw heap allocations** vs. the pre-extraction baseline.
 
 use flui_painting::BlendMode;
+use flui_types::{Rect, geometry::Pixels};
 
 use super::{
-    command_ir::{DrawItem, DrawSegment, TessellatedBatch},
+    command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, TessellatedBatch},
     path_cache::PathCache,
     pipeline::PipelineKey,
     state_stack::GpuStateStack,
@@ -131,6 +132,24 @@ impl DrawBatcher {
     /// recorded into the same segment, which is required for destructive modes
     /// (Clear, DstOut, Src, SrcIn, DstIn, SrcOut, SrcATop, DstATop, Xor).
     /// `SrcOver` shapes do not trigger a split; the common path has zero overhead.
+    ///
+    /// # Advanced (dst-read) blend diversion — DECISION 2
+    ///
+    /// Advanced blend modes (W3C compositing modes: Multiply, Screen, Overlay, …)
+    /// cannot be expressed as fixed-function blends and require a backdrop copy at
+    /// replay time.  When `key.blend_mode().is_advanced()` is true:
+    ///
+    /// 1. The current `segment` (prior content) is sealed first so that earlier
+    ///    draws flush to the surface before the backdrop is sampled — preserving
+    ///    Z-order correctness.
+    /// 2. The new shape's geometry is isolated into a fresh `DrawSegment` inside
+    ///    an `AdvancedShapeOp` and pushed as `DrawItem::AdvancedShape`.
+    /// 3. `pipeline_key_from_paint` now returns a `with_blend(mode)` key for
+    ///    advanced modes (carrying the original mode), so `key.blend_mode().is_advanced()`
+    ///    fires here and the key never reaches `PipelineCache::get_or_create`.
+    ///
+    /// Plus and Modulate are Porter-Duff (`is_advanced()` = false) and take the
+    /// existing fixed-function path unchanged.
     pub(super) fn add_tessellated_with_key(
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
@@ -142,6 +161,52 @@ impl DrawBatcher {
         if indices.is_empty() {
             return;
         }
+
+        // ── Advanced (dst-read) diversion — ABOVE the Porter-Duff seal ───────
+        //
+        // Check before appending to `segment` so we can (a) seal prior content
+        // cleanly and (b) build an isolated one-shape DrawSegment without having
+        // to undo an append.
+        if key.blend_mode().is_advanced() {
+            // Step 1: seal whatever content preceded this shape so it lands on
+            // the surface before the backdrop is copied.  Z-order guarantee:
+            // flush_advanced_layer is called AFTER all prior draw_order items
+            // are flushed in the submit loop.
+            Self::finish_current_segment(segment, draw_order);
+
+            // Step 2: compute device-space AABB from the already-baked vertices.
+            // Vertices are in device-pixel coordinates (the CTM was applied by the
+            // caller via apply_transform / submit_transformed_geometry).
+            let device_bounds = vertices_aabb(&vertices);
+
+            // Step 3: build an isolated DrawSegment containing only this shape.
+            let mut shape_segment = DrawSegment::new();
+            // Indices reference vertices[0..], so base_index = 0.
+            shape_segment.vertices.extend_from_slice(&vertices);
+            shape_segment.indices.extend(indices.iter().copied()); // already 0-based
+            shape_segment.current_pipeline_key = Some(key);
+            shape_segment.tess_batches.push(TessellatedBatch {
+                // Use SrcOver alpha-blend pipeline for rendering the shape into
+                // the offscreen foreground texture.  The advanced blend formula
+                // is computed in the WGSL shader (backdrop copy path); the
+                // fixed-function blend stage here just composites the shape over
+                // the transparent offscreen background.
+                pipeline_key: PipelineKey::alpha_blend(),
+                scissor: state.current_scissor(),
+                index_start: 0,
+                index_count: indices.len() as u32,
+            });
+
+            draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
+                segment: shape_segment,
+                mode: key.blend_mode(),
+                device_bounds,
+            }));
+
+            return;
+        }
+
+        // ── Normal path (SrcOver + Porter-Duff) ──────────────────────────────
 
         let base_index = segment.vertices.len() as u32;
         let index_start = segment.indices.len() as u32;
@@ -235,5 +300,507 @@ impl DrawBatcher {
                 super::effects::GradientStop::new(colors[i], position)
             })
             .collect()
+    }
+}
+
+// ─── Module-level helpers ─────────────────────────────────────────────────────
+
+/// Compute the axis-aligned bounding box of a slice of device-space [`Vertex`]
+/// positions.
+///
+/// Returns an empty rect at the origin if `vertices` is empty (cannot happen in
+/// practice: `add_tessellated_with_key` returns early on empty indices before
+/// this is called).
+///
+/// The AABB is used by `flush_advanced_layer` to determine `device_bounds` for
+/// the backdrop-copy region and the `src_uv` remap.
+fn vertices_aabb(vertices: &[Vertex]) -> Rect<Pixels> {
+    if vertices.is_empty() {
+        return Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(0.0), Pixels(0.0));
+    }
+
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+
+    for v in vertices {
+        let x = v.position[0];
+        let y = v.position[1];
+        if x < min_x {
+            min_x = x;
+        }
+        if y < min_y {
+            min_y = y;
+        }
+        if x > max_x {
+            max_x = x;
+        }
+        if y > max_y {
+            max_y = y;
+        }
+    }
+
+    Rect::from_ltrb(Pixels(min_x), Pixels(min_y), Pixels(max_x), Pixels(max_y))
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+//
+// Placed here because they require direct access to `DrawBatcher`,
+// `GpuStateStack`, `Vertex`, and `vertices_aabb` which are `pub(super)` items
+// visible only within the `wgpu` module and its direct children — this file is
+// a direct child of `wgpu`, so all of those items are in scope.
+
+#[cfg(test)]
+mod unit_tests {
+    use flui_painting::BlendMode;
+
+    use super::super::{
+        command_ir::{DrawItem, DrawSegment},
+        state_stack::GpuStateStack,
+    };
+    use super::{DrawBatcher, PipelineKey, Vertex, vertices_aabb};
+
+    // ── Helper: build the minimal geometry for a quad ─────────────────────────
+
+    /// Build the four vertices for an axis-aligned rectangle in device pixels.
+    ///
+    /// The vertices are in the same order that `DrawBatcher::rect` would produce
+    /// for a non-SrcOver fill: TL, TR, BR, BL in CCW winding with `tl.x/y` etc.
+    fn rect_vertices(left: f32, top: f32, right: f32, bottom: f32) -> Vec<Vertex> {
+        let rgba = [1.0_f32, 0.5, 0.2, 1.0]; // arbitrary colour
+        vec![
+            Vertex {
+                position: [left, top],
+                color: rgba,
+                tex_coord: [0.0, 0.0],
+            },
+            Vertex {
+                position: [right, top],
+                color: rgba,
+                tex_coord: [1.0, 0.0],
+            },
+            Vertex {
+                position: [right, bottom],
+                color: rgba,
+                tex_coord: [1.0, 1.0],
+            },
+            Vertex {
+                position: [left, bottom],
+                color: rgba,
+                tex_coord: [0.0, 1.0],
+            },
+        ]
+    }
+
+    fn rect_indices() -> Vec<u32> {
+        vec![0, 1, 2, 0, 2, 3]
+    }
+
+    // ── S1: advanced rect → AdvancedShape ─────────────────────────────────────
+
+    /// S1: `add_tessellated_with_key` must divert into `DrawItem::AdvancedShape`
+    /// when the pipeline key carries an advanced blend mode (`is_advanced()` = true).
+    ///
+    /// **Proves:** the detection branch `if key.blend_mode().is_advanced()` fires
+    /// and pushes `DrawItem::AdvancedShape` to `draw_order`.
+    #[test]
+    fn multiply_key_diverts_to_advanced_shape_draw_item() {
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+        let key = PipelineKey::with_blend(BlendMode::Multiply);
+
+        let vertices = rect_vertices(10.0, 10.0, 50.0, 50.0);
+        let indices = rect_indices();
+
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            vertices,
+            &indices,
+            key,
+        );
+
+        assert_eq!(
+            draw_order.len(),
+            1,
+            "one AdvancedShape item must be pushed for a Multiply key"
+        );
+        assert!(
+            matches!(draw_order[0], DrawItem::AdvancedShape(_)),
+            "draw_order[0] must be AdvancedShape for Multiply key; \
+             got a Segment or other variant instead"
+        );
+    }
+
+    // ── S2: SrcOver key → stays in Segment ────────────────────────────────────
+
+    /// S2: `add_tessellated_with_key` must NOT produce `DrawItem::AdvancedShape`
+    /// for a `SrcOver` (alpha-blend) key — it must stay in `segment.tess_batches`.
+    ///
+    /// **Proves:** the advanced diversion only fires for `is_advanced()` modes;
+    /// the SrcOver path is unchanged.
+    #[test]
+    fn srcover_key_stays_in_segment_not_advanced() {
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+        let key = PipelineKey::alpha_blend(); // SrcOver
+
+        let vertices = rect_vertices(10.0, 10.0, 50.0, 50.0);
+        let indices = rect_indices();
+
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            vertices,
+            &indices,
+            key,
+        );
+
+        assert!(
+            draw_order.is_empty(),
+            "SrcOver key must not push to draw_order (stays in segment)"
+        );
+        assert_eq!(
+            segment.tess_batches.len(),
+            1,
+            "SrcOver key must add one TessellatedBatch to segment"
+        );
+    }
+
+    // ── S3: Plus/Modulate → Segment (Porter-Duff, not advanced) ───────────────
+
+    /// S3: Plus and Modulate are Porter-Duff; `is_advanced()` is false for them.
+    /// `add_tessellated_with_key` must NOT produce `DrawItem::AdvancedShape`.
+    ///
+    /// **Proves:** Plus/Modulate bypass the advanced diversion correctly.
+    #[test]
+    fn plus_and_modulate_keys_are_not_advanced_shape() {
+        for mode in [BlendMode::Plus, BlendMode::Modulate] {
+            let mut segment = DrawSegment::new();
+            let mut draw_order: Vec<DrawItem> = Vec::new();
+            let state = GpuStateStack::new_for_test();
+            let key = PipelineKey::with_blend(mode);
+
+            assert!(
+                !key.blend_mode().is_advanced(),
+                "{mode:?}: is_advanced() must be false (Porter-Duff mode)"
+            );
+
+            let vertices = rect_vertices(10.0, 10.0, 50.0, 50.0);
+            let indices = rect_indices();
+
+            DrawBatcher::add_tessellated_with_key(
+                &mut segment,
+                &mut draw_order,
+                &state,
+                vertices,
+                &indices,
+                key,
+            );
+
+            assert!(
+                !draw_order
+                    .iter()
+                    .any(|item| matches!(item, DrawItem::AdvancedShape(_))),
+                "{mode:?}: must not produce DrawItem::AdvancedShape; \
+                 Plus/Modulate are Porter-Duff (is_advanced() = false)"
+            );
+        }
+    }
+
+    // ── S4: device_bounds AABB ────────────────────────────────────────────────
+
+    /// S4: The `device_bounds` on `AdvancedShapeOp` must be the AABB of the
+    /// input vertices (baked device-space positions).
+    ///
+    /// **Proves:** `vertices_aabb` correctly computes the bounding box and the
+    /// AABB is wired into `AdvancedShapeOp::device_bounds` at diversion time.
+    #[test]
+    fn advanced_shape_device_bounds_is_vertex_aabb() {
+        let left = 20.0_f32;
+        let top = 30.0_f32;
+        let right = 80.0_f32;
+        let bottom = 90.0_f32;
+
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+        let key = PipelineKey::with_blend(BlendMode::Screen);
+
+        let vertices = rect_vertices(left, top, right, bottom);
+        let indices = rect_indices();
+
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            vertices,
+            &indices,
+            key,
+        );
+
+        let DrawItem::AdvancedShape(ref op) = draw_order[0] else {
+            panic!("expected AdvancedShape");
+        };
+
+        assert!(
+            (op.device_bounds.left().0 - left).abs() < 0.01,
+            "device_bounds.left must match vertex left {left}; got {}",
+            op.device_bounds.left().0
+        );
+        assert!(
+            (op.device_bounds.top().0 - top).abs() < 0.01,
+            "device_bounds.top must match vertex top {top}; got {}",
+            op.device_bounds.top().0
+        );
+        assert!(
+            (op.device_bounds.right().0 - right).abs() < 0.01,
+            "device_bounds.right must match vertex right {right}; got {}",
+            op.device_bounds.right().0
+        );
+        assert!(
+            (op.device_bounds.bottom().0 - bottom).abs() < 0.01,
+            "device_bounds.bottom must match vertex bottom {bottom}; got {}",
+            op.device_bounds.bottom().0
+        );
+    }
+
+    // ── S4b: shape segment batch uses alpha_blend (SrcOver) ───────────────────
+
+    /// S4b: The `TessellatedBatch` inside the `AdvancedShapeOp` segment must use
+    /// `PipelineKey::alpha_blend()` (SrcOver), not the original advanced key.
+    ///
+    /// **Proves:** the offscreen foreground renders via the SrcOver pipeline so
+    /// the shape color/alpha composites correctly onto the transparent offscreen.
+    #[test]
+    fn advanced_shape_segment_batch_uses_alpha_blend_pipeline() {
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+        let key = PipelineKey::with_blend(BlendMode::Overlay);
+
+        let vertices = rect_vertices(10.0, 10.0, 50.0, 50.0);
+        let indices = rect_indices();
+
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            vertices,
+            &indices,
+            key,
+        );
+
+        let DrawItem::AdvancedShape(ref op) = draw_order[0] else {
+            panic!("expected AdvancedShape");
+        };
+
+        assert_eq!(
+            op.segment.tess_batches.len(),
+            1,
+            "shape segment must have exactly one TessellatedBatch"
+        );
+        let batch = &op.segment.tess_batches[0];
+        assert!(
+            batch.pipeline_key.is_alpha_blended(),
+            "shape segment batch must use alpha-blend (SrcOver) pipeline; got non-blended key"
+        );
+        assert_eq!(
+            batch.pipeline_key.blend_mode(),
+            BlendMode::SrcOver,
+            "shape segment batch blend mode must be SrcOver; got {:?}",
+            batch.pipeline_key.blend_mode()
+        );
+    }
+
+    // ── S4c: AdvancedShapeOp::mode carries original mode ─────────────────────
+
+    /// S4c: `AdvancedShapeOp::mode` must carry the original advanced blend mode.
+    #[test]
+    fn advanced_shape_op_mode_carries_original_mode() {
+        for mode in [
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Luminosity,
+        ] {
+            let mut segment = DrawSegment::new();
+            let mut draw_order: Vec<DrawItem> = Vec::new();
+            let state = GpuStateStack::new_for_test();
+            let key = PipelineKey::with_blend(mode);
+
+            DrawBatcher::add_tessellated_with_key(
+                &mut segment,
+                &mut draw_order,
+                &state,
+                rect_vertices(0.0, 0.0, 64.0, 64.0),
+                &rect_indices(),
+                key,
+            );
+
+            let DrawItem::AdvancedShape(ref op) = draw_order[0] else {
+                panic!("{mode:?}: expected AdvancedShape");
+            };
+            assert_eq!(
+                op.mode, mode,
+                "AdvancedShapeOp::mode must carry {mode:?}; got {:?}",
+                op.mode
+            );
+        }
+    }
+
+    // ── S4d: all 15 advanced modes produce AdvancedShape ─────────────────────
+
+    /// S4d: All 15 W3C advanced blend modes must divert into `DrawItem::AdvancedShape`.
+    #[test]
+    fn all_15_advanced_modes_produce_advanced_shape() {
+        let advanced_modes = [
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::HardLight,
+            BlendMode::SoftLight,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ];
+        for mode in advanced_modes {
+            let mut segment = DrawSegment::new();
+            let mut draw_order: Vec<DrawItem> = Vec::new();
+            let state = GpuStateStack::new_for_test();
+            let key = PipelineKey::with_blend(mode);
+
+            DrawBatcher::add_tessellated_with_key(
+                &mut segment,
+                &mut draw_order,
+                &state,
+                rect_vertices(0.0, 0.0, 64.0, 64.0),
+                &rect_indices(),
+                key,
+            );
+
+            assert!(
+                draw_order
+                    .iter()
+                    .any(|item| matches!(item, DrawItem::AdvancedShape(_))),
+                "{mode:?}: expected DrawItem::AdvancedShape, got none in draw_order"
+            );
+        }
+    }
+
+    // ── S4e: vertices_aabb is correct ────────────────────────────────────────
+
+    /// S4e: `vertices_aabb` correctly computes the bounding box of a set of vertices.
+    #[test]
+    fn vertices_aabb_is_correct_for_quad() {
+        let vertices = rect_vertices(15.0, 25.0, 70.0, 85.0);
+        let aabb = vertices_aabb(&vertices);
+        assert!(
+            (aabb.left().0 - 15.0).abs() < 0.01,
+            "aabb.left: expected 15.0, got {}",
+            aabb.left().0
+        );
+        assert!(
+            (aabb.top().0 - 25.0).abs() < 0.01,
+            "aabb.top: expected 25.0, got {}",
+            aabb.top().0
+        );
+        assert!(
+            (aabb.right().0 - 70.0).abs() < 0.01,
+            "aabb.right: expected 70.0, got {}",
+            aabb.right().0
+        );
+        assert!(
+            (aabb.bottom().0 - 85.0).abs() < 0.01,
+            "aabb.bottom: expected 85.0, got {}",
+            aabb.bottom().0
+        );
+    }
+
+    // ── S4f: empty vertices_aabb returns origin ───────────────────────────────
+
+    /// S4f: `vertices_aabb` with an empty slice must return the zero-origin empty rect.
+    #[test]
+    fn vertices_aabb_empty_returns_zero_rect() {
+        let aabb = vertices_aabb(&[]);
+        assert!(
+            aabb.left().0.abs() < f32::EPSILON,
+            "empty vertices_aabb: left must be 0.0, got {}",
+            aabb.left().0
+        );
+        assert!(
+            aabb.top().0.abs() < f32::EPSILON,
+            "empty vertices_aabb: top must be 0.0, got {}",
+            aabb.top().0
+        );
+    }
+
+    // ── S4g: seal fires before advancing — prior segment preserved ────────────
+
+    /// S4g: When an advanced shape is drawn after prior SrcOver content, the seal
+    /// step must preserve the SrcOver content as a `DrawItem::Segment` BEFORE
+    /// the `DrawItem::AdvancedShape`.
+    ///
+    /// Z-order guarantee: prior content must appear before the advanced shape in
+    /// `draw_order` so it flushes to the surface before the backdrop is copied.
+    #[test]
+    fn prior_srcover_content_sealed_before_advanced_shape() {
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+
+        // Add SrcOver content first.
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            rect_vertices(0.0, 0.0, 32.0, 32.0),
+            &rect_indices(),
+            PipelineKey::alpha_blend(),
+        );
+        // SrcOver stays in segment — draw_order still empty.
+        assert!(
+            draw_order.is_empty(),
+            "SrcOver must not push to draw_order yet"
+        );
+
+        // Now add an advanced shape — this must seal the prior SrcOver content first.
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            rect_vertices(0.0, 0.0, 64.0, 64.0),
+            &rect_indices(),
+            PipelineKey::with_blend(BlendMode::Multiply),
+        );
+
+        // draw_order must have exactly two items: sealed Segment + AdvancedShape.
+        assert_eq!(
+            draw_order.len(),
+            2,
+            "draw_order must have Segment (sealed prior) + AdvancedShape; got {} items",
+            draw_order.len()
+        );
+        assert!(
+            matches!(draw_order[0], DrawItem::Segment(_)),
+            "draw_order[0] must be the sealed SrcOver Segment; got {:?}",
+            std::mem::discriminant(&draw_order[0])
+        );
+        assert!(
+            matches!(draw_order[1], DrawItem::AdvancedShape(_)),
+            "draw_order[1] must be AdvancedShape; got {:?}",
+            std::mem::discriminant(&draw_order[1])
+        );
     }
 }
