@@ -111,6 +111,16 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    # Complements the `Free disk space` reclaim below by shrinking the build
+    # itself. DWARF is the single largest contributor to debug-target size; the
+    # full workspace (~28 crates + the wgpu/glyphon/lyon/naga stack + dev-deps)
+    # built with full debuginfo is what crept toward the runner's disk ceiling
+    # (PRs #236/#242). `line-tables-only` drops the bulk of DWARF while keeping
+    # file:line in panic backtraces, so CI failures stay diagnosable. Scoped to
+    # this job's env so local `cargo test` debuginfo is unaffected.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v6
 
@@ -126,7 +136,7 @@ jobs:
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
           sudo docker image prune --all --force || true
           df -h /
 
@@ -148,6 +158,13 @@ jobs:
 
       - name: cargo build --workspace
         run: cargo build --workspace --all-targets
+
+      # Confirm the heavy compile (disk peak) left headroom — the reclaim above
+      # measures only around itself, not after the build. If this trends toward
+      # 0, raise the runner or trim further targets.
+      - name: Disk usage after build (ubuntu)
+        if: runner.os == 'Linux'
+        run: df -h /
 
       # `--test-threads=1` guards the documented pre-existing flui-app
       # singleton-state flake (CLAUDE.md). flui-platform tests are excluded
