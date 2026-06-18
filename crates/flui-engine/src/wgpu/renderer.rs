@@ -1158,16 +1158,18 @@ impl Renderer {
             // None (incapable adapter), the render must STILL run — otherwise the
             // frame presents only the clear pass (blank content). This is the
             // documented graceful no-op.
+            let frame_target =
+                super::render_target::RenderTarget::sampleable(&view, &output.texture);
             #[cfg(feature = "gpu-profiler")]
             let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
                 let mut scope = profiler.scope("final_render", &mut final_encoder);
-                painter.render(&view, scope.recorder())
+                painter.render(frame_target, scope.recorder())
                 // scope drops here → end_query fires
             } else {
-                painter.render(&view, &mut final_encoder)
+                painter.render(frame_target, &mut final_encoder)
             };
             #[cfg(not(feature = "gpu-profiler"))]
-            let render_result = painter.render(&view, &mut final_encoder);
+            let render_result = painter.render(frame_target, &mut final_encoder);
             if let Err(e) = render_result {
                 tracing::error!("Painter render failed: {}", e);
             }
@@ -1437,9 +1439,11 @@ impl Renderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Backdrop Flush Encoder"),
                 });
+        let flush_target =
+            super::render_target::RenderTarget::sampleable(surface_view, surface_texture);
         if let Err(e) = backend
             .painter_mut()
-            .render(surface_view, &mut flush_encoder)
+            .render(flush_target, &mut flush_encoder)
         {
             tracing::error!("Backdrop flush failed: {}", e);
         }

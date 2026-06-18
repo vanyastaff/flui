@@ -120,8 +120,14 @@ mod pipeline;
 /// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
 /// `save_layer`/`restore_layer`; GPU emission lives in `GpuReplay`.
 pub(super) mod layer_compositor;
+/// Offscreen-layer render helper: extracted from `flush_opacity_layer` so the
+/// renderer driver can reuse the same routine for backdrop-read compositing.
+pub(super) mod opacity_layer;
 pub(crate) mod pipelines;
 mod profiler;
+/// Frame render-target descriptor: `view` + optional back-reference `texture`
+/// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
+pub(crate) mod render_target;
 mod renderer;
 /// Replay/submit component: owns GPU plumbing fields, the per-frame
 /// `texture_batch` scratch, all six segment-flush phases, the top-level

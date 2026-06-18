@@ -355,7 +355,7 @@ impl WgpuPainter {
             &mut self.resources,
             &mut self.text_renderer,
             encoder,
-            view,
+            super::render_target::RenderTarget::view_only(view),
         )
     }
 
@@ -397,9 +397,9 @@ impl WgpuPainter {
     /// * `encoder` - Command encoder
     #[tracing::instrument(level = "trace", skip_all)]
     #[must_use = "errors must be propagated or handled"]
-    pub fn render(
+    pub(crate) fn render(
         &mut self,
-        view: &wgpu::TextureView,
+        target: super::render_target::RenderTarget<'_>,
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::EngineResult<()> {
         // Advance batcher cache frame counters and evict stale entries.
@@ -441,7 +441,7 @@ impl WgpuPainter {
             &mut self.resources,
             &mut self.text_renderer,
             encoder,
-            view,
+            target,
         )?;
 
         // Reset buffer pool for next frame.
@@ -457,10 +457,26 @@ impl WgpuPainter {
         Ok(())
     }
 
+    /// Convenience wrapper: render to a plain `TextureView` with no backdrop
+    /// sampling back-reference (write-only target).
+    ///
+    /// Use this for benchmarks and callers that do not own a backing
+    /// `wgpu::Texture` to supply.  Internal callers should prefer
+    /// `WgpuPainter::render` directly so they can pass a sampleable
+    /// `RenderTarget` when available.
+    #[must_use = "errors must be propagated or handled"]
+    pub fn render_to_view(
+        &mut self,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> crate::error::EngineResult<()> {
+        self.render(super::render_target::RenderTarget::view_only(view), encoder)
+    }
+
     /// Run end-of-frame texture-cache maintenance: evict over-budget textures,
     /// reclaim a full atlas that holds stale entries, then reset use-counters.
     ///
-    /// Call EXACTLY ONCE per frame, after the final [`Self::render`] flush.
+    /// Call EXACTLY ONCE per frame, after the final `WgpuPainter::render` flush.
     /// `render` must not do this itself — it runs once per pass (backdrop-filter
     /// flushes invoke it mid-frame), so per-call maintenance would reset
     /// use-counters between passes and drop textures still in use this frame.
@@ -1255,6 +1271,7 @@ impl WgpuPainter {
                         opacity: layer_opacity,
                         tint_rgb,
                         bounds: composite_bounds,
+                        blend: flui_types::painting::BlendMode::SrcOver,
                     }));
 
                 tracing::trace!(
@@ -1930,7 +1947,7 @@ mod tests {
 
         draw(&mut painter);
         painter
-            .render(&target_view, &mut encoder)
+            .render_to_view(&target_view, &mut encoder)
             .expect("painter.render must succeed for readback");
 
         // Copy the target into a CPU-readable buffer. `bytes_per_row` must be a
@@ -2050,7 +2067,7 @@ mod tests {
 
         draw(&mut painter);
         painter
-            .render(&target_view, &mut encoder)
+            .render_to_view(&target_view, &mut encoder)
             .expect("painter.render must succeed for readback");
 
         let bytes_per_pixel = 4u32;
@@ -2464,7 +2481,7 @@ mod tests {
             });
         }
         painter
-            .render(&target_view, &mut encoder)
+            .render_to_view(&target_view, &mut encoder)
             .expect("painter.render must succeed");
 
         let bytes_per_pixel = 4u32;
@@ -4084,7 +4101,7 @@ mod tests {
             });
         }
         painter
-            .render(&target_view, &mut encoder)
+            .render_to_view(&target_view, &mut encoder)
             .expect("painter.render must succeed");
 
         // Readback.
@@ -4282,5 +4299,75 @@ mod tests {
              even when a preceding external-texture draw was skipped). \
              R={br_r}, G={br_g}. If R<200, the frame was aborted instead of skip+continue."
         );
+    }
+
+    /// Regression: `flush_opacity_layer` must silently no-op when viewport is zero-sized.
+    ///
+    /// The UV composite inside `flush_opacity_layer` divides by `vp_w` and `vp_h` to
+    /// compute texture coordinates.  Before the guard was restored, submitting an
+    /// `OpacityLayer` at viewport (0, 0) would push `inf`/`NaN` into the texture
+    /// instance buffer.  The guard restores the original behavior: zero GPU work,
+    /// zero mutations.
+    ///
+    /// This test verifies that submitting a scene containing an `OpacityLayer` with a
+    /// zero-size viewport neither panics nor produces a GPU error.
+    #[test]
+    fn opacity_layer_zero_viewport_is_noop() {
+        use flui_painting::Paint;
+
+        let (device, queue) = test_device_and_queue();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+
+        // Construct a painter with viewport (0, 0).
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (0, 0),
+        );
+
+        // Draw inside a save_layer so a PendingOpacityLayer is enqueued.
+        // Use a semi-transparent paint so opacity < 1 (group-opacity layer).
+        painter.save_layer(None, &Paint::fill(flui_types::Color::rgba(255, 0, 0, 128)));
+        painter.rect(
+            flui_types::Rect::from_xywh(px(0.0), px(0.0), px(1.0), px(1.0)),
+            &Paint::fill(flui_types::Color::RED),
+        );
+        painter.restore();
+
+        // A 1×1 texture to serve as the render target (smallest valid view).
+        let target_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("zero-vp test target"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("zero-vp test encoder"),
+        });
+
+        // Must not panic. The zero-viewport guard fires before any GPU commands
+        // are recorded for the OpacityLayer, so the encoder submission is also safe.
+        painter
+            .render_to_view(&target_view, &mut encoder)
+            .expect("render on zero viewport must succeed without panic");
+
+        queue.submit(std::iter::once(encoder.finish()));
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("device poll must complete after zero-viewport render");
     }
 }

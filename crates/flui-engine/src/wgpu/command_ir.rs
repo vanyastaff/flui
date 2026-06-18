@@ -9,7 +9,9 @@
 //! `painter.rs`.  These types are re-exported `pub(crate)` so `painter.rs`
 //! and future batcher/compositor modules can import from one place.
 
-use flui_types::{Rect, geometry::Pixels, painting::TextureId as ExternalTextureId};
+use flui_types::{
+    Rect, geometry::Pixels, painting::BlendMode, painting::TextureId as ExternalTextureId,
+};
 
 use super::{
     effects::GradientStop,
@@ -97,6 +99,15 @@ pub(crate) struct SavedLayer {
     pub(crate) layer_tint_rgb: [f32; 3],
     /// Bounds of the layer in screen space [x, y, w, h], or `None` for full viewport
     pub(crate) bounds: Option<[f32; 4]>,
+    /// Blend mode to apply when compositing this layer onto its parent.
+    ///
+    /// Stored on the record side so the compositor dispatch can read it without
+    /// coupling the flush path to the record path.  Defaults to `SrcOver`.
+    #[allow(
+        dead_code,
+        reason = "written by save_layer; read by the compositor dispatch when blending the layer onto its parent"
+    )]
+    pub(crate) layer_blend: BlendMode,
 }
 
 // ─── Draw segment ─────────────────────────────────────────────────────────────
@@ -270,4 +281,13 @@ pub(crate) struct PendingOpacityLayer {
     pub(crate) tint_rgb: [f32; 3],
     /// Compositing bounds in screen coordinates
     pub(crate) bounds: Rect<Pixels>,
+    /// Blend mode to apply when compositing this layer onto its parent.
+    ///
+    /// Stored on the pending layer so the compositor dispatch can read it without
+    /// coupling the flush path to the record path.  Defaults to `SrcOver`.
+    #[allow(
+        dead_code,
+        reason = "written during layer creation; read by the compositor dispatch when blending the layer onto its parent"
+    )]
+    pub(crate) blend: BlendMode,
 }

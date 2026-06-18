@@ -195,7 +195,7 @@ fn render_throughput(c: &mut Criterion) {
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bench-warmup"),
         });
-        let _ = painter.render(&view, &mut enc);
+        let _ = painter.render_to_view(&view, &mut enc);
         queue.submit([enc.finish()]);
         // wait_indefinitely() blocks until the most recent submission completes.
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
@@ -211,7 +211,7 @@ fn render_throughput(c: &mut Criterion) {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("bench-frame"),
             });
-            let result = painter.render(&view, &mut enc);
+            let result = painter.render_to_view(&view, &mut enc);
             queue.submit([enc.finish()]);
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
             // black_box the result so the compiler cannot prove the render

@@ -197,6 +197,7 @@ impl LayerCompositor {
             layer_opacity,
             layer_tint_rgb,
             bounds,
+            layer_blend: flui_types::painting::BlendMode::SrcOver,
         };
         self.layer_stack.push(saved);
 

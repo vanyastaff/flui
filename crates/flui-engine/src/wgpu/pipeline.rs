@@ -483,6 +483,112 @@ mod blend_logic {
             "different blend modes must hash to different pipeline keys"
         );
     }
+
+    /// Golden lock for the current routing of `pipeline_key_from_paint`.
+    ///
+    /// Asserts the exact key produced for each blend mode so any change to the
+    /// routing is forced to produce a diff here — accidental regressions surface
+    /// as a test failure rather than a silent render change.
+    ///
+    /// ## SrcOver / Porter-Duff record
+    ///
+    /// - `SrcOver` + opaque source → opaque key (no blend stage).
+    /// - `SrcOver` + translucent source → alpha-blend key (`SrcOver` mode).
+    /// - Every other Porter-Duff mode → alpha-blend key keyed to that mode.
+    ///
+    /// ## Advanced-mode record (current: warn-fallback to SrcOver)
+    ///
+    /// All 15 advanced modes currently fall back to the SrcOver heuristic
+    /// (opaque → opaque key, translucent → alpha-blend SrcOver key).  When
+    /// the advanced-blend key is introduced, the routing changes and this
+    /// test must be updated to match.
+    #[test]
+    fn pipeline_key_routing_golden() {
+        let opaque = flui_types::Color::rgb(200, 100, 50); // a == 255
+        let translucent = flui_types::Color::rgba(200, 100, 50, 128);
+
+        // ── SrcOver ─────────────────────────────────────────────────────────
+        let k = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(BlendMode::SrcOver));
+        assert!(!k.is_alpha_blended(), "SrcOver + opaque → opaque key");
+        assert_eq!(k.blend_mode(), BlendMode::SrcOver);
+
+        let k =
+            pipeline_key_from_paint(&Paint::fill(translucent).with_blend_mode(BlendMode::SrcOver));
+        assert!(k.is_alpha_blended(), "SrcOver + translucent → blend key");
+        assert_eq!(k.blend_mode(), BlendMode::SrcOver);
+
+        // ── Porter-Duff modes (all 13 non-SrcOver) ──────────────────────────
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::Dst,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ] {
+            let k = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(mode));
+            assert!(
+                k.is_alpha_blended(),
+                "{mode:?}: Porter-Duff must always use the blend stage"
+            );
+            assert_eq!(
+                k.blend_mode(),
+                mode,
+                "{mode:?}: key must encode the exact mode"
+            );
+        }
+
+        // ── Advanced modes (current fallback: SrcOver-heuristic) ────────────
+        // Opaque source → opaque key; translucent source → alpha-blend SrcOver.
+        // When the advanced-blend key is introduced these assertions must be
+        // updated to match the new dedicated key.
+        for mode in [
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::HardLight,
+            BlendMode::SoftLight,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Multiply,
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ] {
+            let k_opaque = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(mode));
+            assert!(
+                !k_opaque.is_alpha_blended(),
+                "{mode:?} opaque fallback: current routing produces opaque key"
+            );
+            assert_eq!(
+                k_opaque.blend_mode(),
+                BlendMode::SrcOver,
+                "{mode:?} opaque fallback: mode must be SrcOver"
+            );
+
+            let k_trans = pipeline_key_from_paint(&Paint::fill(translucent).with_blend_mode(mode));
+            assert!(
+                k_trans.is_alpha_blended(),
+                "{mode:?} translucent fallback: current routing produces blend key"
+            );
+            assert_eq!(
+                k_trans.blend_mode(),
+                BlendMode::SrcOver,
+                "{mode:?} translucent fallback: mode must be SrcOver"
+            );
+        }
+    }
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
