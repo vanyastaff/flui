@@ -249,17 +249,17 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 
 **Back-references:** [core-0a foundation adversarial reaudit §F2 / SC2](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md) (Rustonomicon §3.2 is the UB basis).
 
-### 19. `Matrix4` in the DrawBatcher record side or `PipelineCache`/`PipelineBuilder`
+### 19. `Matrix4` in the DrawBatcher record side, `PipelineCache`/`PipelineBuilder`, or `GpuReplay` replay side
 
-**C4 rule: the `Matrix4`↔glam conversion happens at the `Backend` trait boundary; the record and pipeline modules are glam-only.** `GpuStateStack` stores transforms as `glam::Mat4`. The single structural conversion edge is `current_transform_matrix()` in `painter.rs` (outbound, returning a `Matrix4` to `Backend`/`LayerStateStack`) and `Backend::with_transform` (inbound, converting an incoming `Matrix4` into the glam state). Every record method below that boundary — `batches/{shapes,gradients,paths,images}.rs` — and the pipeline-cache module (`pipelines.rs`) work entirely in glam primitives and pixel-typed geometry.
+**C4 rule: the `Matrix4`↔glam conversion happens at the `Backend` trait boundary; the record, pipeline, and replay modules are glam-only.** `GpuStateStack` stores transforms as `glam::Mat4`. The single structural conversion edge is `current_transform_matrix()` in `painter.rs` (outbound, returning a `Matrix4` to `Backend`/`LayerStateStack`) and `Backend::with_transform` (inbound, converting an incoming `Matrix4` into the glam state). Every record method below that boundary — `batches/{shapes,gradients,paths,images}.rs` — the pipeline-cache module (`pipelines.rs`), and the replay/submit module (`replay.rs`) work entirely in glam primitives and pixel-typed geometry.
 
-Importing or accepting `flui_types::Matrix4` on the record/pipeline side leaks the flui-types coordinate abstraction into GPU plumbing, defeats the `GpuStateStack` encapsulation, and couples every record-method caller to both coordinate systems. The correct fix is always to extract the needed scalars (translation, scale) at the `painter.rs` or `backend.rs` call site and pass primitives down.
+Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side leaks the flui-types coordinate abstraction into GPU plumbing, defeats the `GpuStateStack` encapsulation, and couples every record-method caller to both coordinate systems. The replay side must stay glam-only for the same reason: the `Matrix4`↔glam conversion must not migrate into the GPU-emit path. The correct fix is always to extract the needed scalars (translation, scale) at the `painter.rs` or `backend.rs` call site and pass primitives down.
 
-**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files) and `crates/flui-engine/src/wgpu/pipelines.rs`.
+**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/pipelines.rs`, and `crates/flui-engine/src/wgpu/replay.rs`. (Extended to `replay.rs` in T10e — the scope tracks the seam contract: wherever the record-IR is consumed, the glam-only rule applies.)
 
 **Allowlist:** none. Doc-comment lines (`//!`, `///`, `//`) are excluded (the rg filter strips them).
 
-**Back-references:** [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](adr/ADR-0006-c-ir-record-replay-seam.md) §Decision 4 (C4 rule); engine-overhaul spec `.rust-studio/specs/flui-engine-overhaul/spec.md` acceptance criterion C4; `crates/flui-engine/ARCHITECTURE.md` §Record-side boundary.
+**Back-references:** [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](adr/ADR-0006-c-ir-record-replay-seam.md) §Decision 4 (C4 rule); engine-overhaul spec `.rust-studio/specs/flui-engine-overhaul/spec.md` acceptance criterion C4; `crates/flui-engine/ARCHITECTURE.md` §Record/replay boundary.
 
 ### Reactive lint promotion
 
