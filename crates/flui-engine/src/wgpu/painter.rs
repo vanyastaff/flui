@@ -756,10 +756,12 @@ impl WgpuPainter {
             paint
         );
 
+        let opacity = self.compositor.current_opacity();
         self.batcher.draw_arc(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
+            opacity,
             rect,
             start_angle,
             sweep_angle,

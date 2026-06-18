@@ -59,6 +59,74 @@ fn inside_rotated_ellipse(px: f32, py: f32, rx: f32, ry: f32, angle_rad: f32) ->
     inside_ellipse(local_x, local_y, rx, ry)
 }
 
+/// Analytic inside-test for an arc sector centered at origin.
+///
+/// A point is inside the arc iff:
+///   1. Its distance from the origin is ≤ `radius` (inside the circle).
+///   2. Its angle falls within the swept sector.
+///
+/// `start_angle` and `sweep_angle` follow screen Y-down convention:
+///   - 0 = +X (right), π/2 = +Y (down), π = left.
+///   - Positive sweep = clockwise; negative = counter-clockwise.
+///
+/// For a `|sweep| ≥ 2π` input this degrades to the full circle test.
+fn inside_arc(px: f32, py: f32, radius: f32, start_angle: f32, sweep_angle: f32) -> bool {
+    // Radial guard.
+    if px * px + py * py > radius * radius {
+        return false;
+    }
+    // Full-circle shortcut.
+    if sweep_angle.abs() >= 2.0 * std::f32::consts::PI {
+        return true;
+    }
+    // Angle of the sample point in [-π, π].
+    let sample_angle = py.atan2(px);
+
+    // Normalise to a canonical [start, start + |sweep|] check.
+    // For negative sweep, swap start and end (test the CCW arc as a CW arc
+    // from `end` to `start`).
+    let (a0, pos_sweep) = if sweep_angle >= 0.0 {
+        (start_angle, sweep_angle)
+    } else {
+        (start_angle + sweep_angle, -sweep_angle)
+    };
+
+    // Wrap the sample angle into the range [a0, a0 + pos_sweep] using modular
+    // arithmetic so we can compare linearly.
+    let tau = 2.0 * std::f32::consts::PI;
+    // Bring sample into [a0, a0 + 2π).
+    let mut wrapped = sample_angle;
+    while wrapped < a0 {
+        wrapped += tau;
+    }
+    while wrapped >= a0 + tau {
+        wrapped -= tau;
+    }
+    wrapped < a0 + pos_sweep
+}
+
+/// Analytic inside-test for a rotated arc sector centered at origin.
+///
+/// `rotation_rad` is applied to the point (inverse of applying it to the arc),
+/// then delegates to [`inside_arc`] with the original `start_angle` / `sweep_angle`.
+/// This tests an arc that has been placed under a rotation transform.
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+fn inside_rotated_arc(
+    px: f32,
+    py: f32,
+    radius: f32,
+    start_angle: f32,
+    sweep_angle: f32,
+    rotation_rad: f32,
+) -> bool {
+    // Inverse-rotate the query point into the arc's local frame.
+    let cos_a = rotation_rad.cos();
+    let sin_a = rotation_rad.sin();
+    let local_x = cos_a * px + sin_a * py;
+    let local_y = -sin_a * px + cos_a * py;
+    inside_arc(local_x, local_y, radius, start_angle, sweep_angle)
+}
+
 /// Analytic inside-test for an axis-aligned rect centered at origin with
 /// half-extents `(half_w, half_h)`.
 fn inside_rect(px: f32, py: f32, half_w: f32, half_h: f32) -> bool {
@@ -238,6 +306,126 @@ mod oracle_unit_tests {
         );
     }
 
+    /// Arc oracle self-check: a pixel fully inside a 270° arc has coverage 1.0.
+    #[test]
+    fn oracle_arc_interior_coverage_is_one() {
+        use super::inside_arc;
+        // 270° arc (3π/2 sweep), radius 40. The arc covers 0 → 3π/2 (right→down→left).
+        // Sample at (-20, 0): angle = π, well into the middle of the arc and far from
+        // both angular edges. All 8×8 sub-samples land inside → coverage must be 1.0.
+        let coverage = analytic_coverage(-20.0, 0.0, |px, py| {
+            inside_arc(px, py, 40.0, 0.0, 3.0 * std::f32::consts::FRAC_PI_2)
+        });
+        #[allow(
+            clippy::float_cmp,
+            reason = "analytic oracle: all sub-samples inside → coverage exactly 1.0"
+        )]
+        {
+            assert_eq!(coverage, 1.0, "arc interior pixel must have full coverage");
+        }
+    }
+
+    /// Arc oracle self-check: a pixel fully outside (beyond radius) has coverage 0.0.
+    #[test]
+    fn oracle_arc_exterior_radial_coverage_is_zero() {
+        use super::inside_arc;
+        // Well outside the arc radially.
+        let coverage = analytic_coverage(60.0, 0.0, |px, py| {
+            inside_arc(px, py, 40.0, 0.0, std::f32::consts::FRAC_PI_2)
+        });
+        #[allow(
+            clippy::float_cmp,
+            reason = "analytic oracle: all sub-samples outside → coverage exactly 0.0"
+        )]
+        {
+            assert_eq!(coverage, 0.0, "arc exterior pixel must have zero coverage");
+        }
+    }
+
+    /// Arc oracle self-check: full-circle arc (|sweep| = 2π) covers all interior
+    /// points (coverage = 1.0 at the center), proving the full-circle shortcut
+    /// in `inside_arc` degrades correctly to a pure radial test.
+    #[test]
+    fn oracle_full_circle_arc_matches_circle() {
+        use super::inside_arc;
+        let r = 30.0_f32;
+        // Full-circle arc with 2π sweep — must behave exactly like a circle.
+        let arc_cov = analytic_coverage(0.0, 0.0, |px, py| {
+            inside_arc(px, py, r, 0.0, 2.0 * std::f32::consts::PI)
+        });
+        // The center pixel is fully inside the circle → coverage must be 1.0.
+        #[allow(
+            clippy::float_cmp,
+            reason = "analytic oracle: all sub-samples inside → coverage exactly 1.0"
+        )]
+        {
+            assert_eq!(
+                arc_cov, 1.0,
+                "full-circle arc (2π sweep) must have full coverage at the center"
+            );
+        }
+    }
+
+    /// Arc oracle self-check: a pixel on the RADIAL boundary of an arc has
+    /// partial coverage (the outer AA fringe is active).
+    #[test]
+    fn oracle_arc_radial_boundary_is_partial() {
+        use super::inside_arc;
+        // Sample right on the radial edge (radius=40, 90° sweep, pixel at (40,0)).
+        let coverage = analytic_coverage(40.0, 0.0, |px, py| {
+            inside_arc(px, py, 40.0, -0.1, std::f32::consts::FRAC_PI_2 + 0.2)
+        });
+        assert!(
+            coverage > 0.0 && coverage < 1.0,
+            "arc radial boundary pixel must have partial coverage; got {coverage}"
+        );
+    }
+
+    /// Arc oracle self-check: a pixel on the ANGULAR boundary of an arc has
+    /// partial coverage — the angular edge is anti-aliased.
+    #[test]
+    fn oracle_arc_angular_boundary_is_partial() {
+        use super::inside_arc;
+        // The angular edge of a 90° arc at start_angle=0 runs along the +X axis.
+        // Sample at pixel center (10, 0): the 8×8 sub-samples span
+        // y ∈ [-0.4375, +0.4375], so roughly half have y>0 (inside the [0,π/2]
+        // arc) and half have y<0 (below the start edge, outside). Coverage must
+        // be strictly between 0 and 1.
+        let coverage = analytic_coverage(10.0, 0.0, |px, py| {
+            // 90° arc (0 to π/2), radius 30. The angular boundary at angle=0 runs
+            // along the +X ray; a pixel centered at y=0 straddles it.
+            inside_arc(px, py, 30.0, 0.0, std::f32::consts::FRAC_PI_2)
+        });
+        // This pixel straddles the angular boundary — coverage must be partial.
+        assert!(
+            coverage > 0.0 && coverage < 1.0,
+            "arc angular boundary pixel must have partial coverage; got {coverage}"
+        );
+    }
+
+    /// CPU oracle: the ≤π / >π sector boundary (the seam where the GPU shader
+    /// flips `min(d_start,d_end)` → `max(...)`) is consistent — a point at angle
+    /// `start + 180.5°` is OUTSIDE a 180° arc but INSIDE a 181° arc. Guards the
+    /// modular-angle logic right at the half-plane intersection→union switch.
+    #[test]
+    fn oracle_arc_sweep_seam_at_180_degrees() {
+        use super::inside_arc;
+        use std::f32::consts::PI;
+        let r = 30.0_f32;
+        // A point at 180.5° from start=0, at radius 15 (well inside the disk).
+        let ang = (180.5_f32).to_radians();
+        let px = 15.0 * ang.cos();
+        let py = 15.0 * ang.sin();
+        assert!(
+            !inside_arc(px, py, r, 0.0, PI),
+            "point at 180.5° must be OUTSIDE a 180° arc"
+        );
+        assert!(
+            inside_arc(px, py, r, 0.0, (181.0_f32).to_radians()),
+            "point at 180.5° must be INSIDE a 181° arc"
+        );
+    }
+
     /// CPU coverage ramp for a 30° rotated rect is monotonically decreasing as
     /// we step outward across the boundary (inside → outside).
     ///
@@ -320,14 +508,14 @@ mod gpu_tests {
     use flui_painting::Paint;
     use flui_types::{
         Color, Rect,
-        geometry::{Pixels, RRect},
+        geometry::{Pixels, RRect, px},
     };
 
     use crate::wgpu::{painter::WgpuPainter, render_target::RenderTarget};
 
     use super::{
-        analytic_coverage, inside_circle, inside_rotated_ellipse, inside_rotated_rect,
-        inside_rotated_rounded_rect, inside_rounded_rect,
+        analytic_coverage, inside_arc, inside_circle, inside_rotated_arc, inside_rotated_ellipse,
+        inside_rotated_rect, inside_rotated_rounded_rect, inside_rounded_rect,
     };
 
     // ── Harness constants ─────────────────────────────────────────────────────
@@ -1636,5 +1824,507 @@ mod gpu_tests {
                  corners (tl,tr,br,bl)=({tl},{tr},{br},{bl})."
             );
         }
+    }
+
+    // ── A1: Arc radial AA is radius-independent ───────────────────────────────
+
+    /// A1: A filled SrcOver arc must have RADIAL boundary pixels that match the
+    /// analytic-coverage oracle within `CALIBRATION_TOLERANCE_U8` at two radii
+    /// spanning a ~4× range: 12 px and 50 px.
+    ///
+    /// ## Red→green proof
+    ///
+    /// The OLD `edge_softness = 0.02` (radius-relative) model produced an AA band
+    /// that scaled with the radius — the same bug class as the old circle shader:
+    ///   - r=12: AA band = 0.02*12*2 = 0.48 px → sub-pixel → nearly aliased.
+    ///   - r=50: AA band = 0.02*50*2 = 2 px → too wide.
+    ///
+    /// The NEW `fwidth(length(unit_pos) - 1.0)` model gives ~1 device-px AA at
+    /// any radius, so both pass the oracle.
+    ///
+    /// The arc used is a 270° sweep (wide arc) so most of the circle boundary
+    /// is present; the angular edges are kept away from the boundary sample pixels.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn a1_arc_radial_aa_is_radius_independent() {
+        for radius in [12.0_f32, 50.0_f32] {
+            let (device, queue) = acquire_test_device_and_queue();
+            let (surface_texture, surface_view) = create_render_surface(&device);
+            clear_surface(&device, &queue, &surface_view);
+
+            let cx = SURFACE_WIDTH as f32 / 2.0;
+            let cy = SURFACE_HEIGHT as f32 / 2.0;
+
+            // 270° arc starting at 0 (right), sweeping CW — large arc so the
+            // radial boundary has many boundary pixels.
+            let start = 0.0_f32;
+            let sweep = 3.0 * std::f32::consts::FRAC_PI_2; // 270°
+
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            let rect = Rect::from_xywh(
+                flui_types::geometry::Pixels(cx - radius),
+                flui_types::geometry::Pixels(cy - radius),
+                px(radius * 2.0),
+                px(radius * 2.0),
+            );
+            painter.draw_arc(rect, start, sweep, true, &Paint::fill(Color::WHITE));
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("A1 Arc Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&surface_view, &surface_texture),
+                    &mut encoder,
+                )
+                .expect("painter.render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+
+            let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+            // Boundary pixels: only the RADIAL edge (exclude angular edge vicinity).
+            // The angular edges are at angle=0 (+X) and angle=3π/2 (+Y rotated back
+            // to 270° = −Y direction = pointing up). Exclude sectors near those edges.
+            // Angular exclusion: skip samples within ±10° of the angular cut edges.
+            let angular_exclusion_rad = 10.0_f32 * std::f32::consts::PI / 180.0;
+            let end_angle = start + sweep;
+            let boundary =
+                boundary_pixel_indices(|px, py| inside_arc(px - cx, py - cy, radius, start, sweep));
+
+            // Filter to radial-only boundary pixels (not near angular edges).
+            let radial_boundary: Vec<(usize, f32)> = boundary
+                .into_iter()
+                .filter(|(pixel_idx, _)| {
+                    let col = (*pixel_idx % SURFACE_WIDTH as usize) as f32 + 0.5 - cx;
+                    let row = (*pixel_idx / SURFACE_WIDTH as usize) as f32 + 0.5 - cy;
+                    // Skip pixels near angular edges.
+                    let sample_angle = row.atan2(col);
+                    let dist_to_start = angle_diff_abs(sample_angle, start);
+                    let dist_to_end = angle_diff_abs(sample_angle, end_angle);
+                    // Only keep pixels whose radial distance is close to the arc edge
+                    // (not near the angular cut).
+                    let r = (col * col + row * row).sqrt();
+                    let near_radial_edge = (r - radius).abs() < 2.0;
+                    near_radial_edge
+                        && dist_to_start > angular_exclusion_rad
+                        && dist_to_end > angular_exclusion_rad
+                })
+                .collect();
+
+            assert!(
+                radial_boundary.len() >= 4,
+                "A1 r={radius}: fewer than 4 radial boundary pixels ({}) — shape may be \
+                 off-screen or oracle broken",
+                radial_boundary.len()
+            );
+
+            let mut failed_count = 0usize;
+            for (pixel_idx, oracle_coverage) in &radial_boundary {
+                let readback_alpha = pixels[*pixel_idx][3];
+                let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
+                let diff =
+                    (i16::from(readback_alpha) - i16::from(oracle_alpha)).unsigned_abs() as u8;
+                if diff > CALIBRATION_TOLERANCE_U8 {
+                    failed_count += 1;
+                }
+            }
+
+            let boundary_count = radial_boundary.len();
+            let max_failures = (boundary_count as f32 * 0.1).ceil() as usize;
+            assert!(
+                failed_count <= max_failures,
+                "A1 FAILED at r={radius}: {failed_count}/{boundary_count} radial boundary pixels \
+                 exceed tolerance {CALIBRATION_TOLERANCE_U8}. The fwidth radial AA must give ~1 \
+                 device-px AA at all radii — old edge_softness=0.02 would fail at r=12 and r=50."
+            );
+        }
+    }
+
+    /// Absolute angle difference wrapping to [0, π].
+    fn angle_diff_abs(a: f32, b: f32) -> f32 {
+        let tau = 2.0 * std::f32::consts::PI;
+        let raw = (a - b).abs() % tau;
+        if raw > std::f32::consts::PI {
+            tau - raw
+        } else {
+            raw
+        }
+    }
+
+    // ── A2: Rotated arc — affine orientation correct ──────────────────────────
+
+    /// A2: A 30° rotated arc must have boundary pixels that match the analytic
+    /// rotated-arc oracle within tolerance.
+    ///
+    /// Proves:
+    /// 1. The full-affine encoding produces a correctly oriented arc in device space.
+    /// 2. `fwidth` radial AA stays ~1 device-px even under rotation.
+    ///
+    /// If the arc routing incorrectly uses the old axis-aligned path (scale+translate
+    /// only), the boundary will be at the wrong position and this test will fail.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn a2_rotated_arc_boundary_matches_oracle() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let angle = PI / 6.0; // 30° rotation applied to the canvas
+        let radius = 35.0_f32;
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let start = 0.0_f32;
+        let sweep = 3.0 * std::f32::consts::FRAC_PI_2; // 270°
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // Translate to center, then rotate.
+        painter.translate(flui_types::Offset::new(
+            flui_types::geometry::Pixels(cx),
+            flui_types::geometry::Pixels(cy),
+        ));
+        painter.rotate(angle);
+        // The arc rect is centered at origin in local space.
+        let rect = Rect::from_xywh(
+            flui_types::geometry::Pixels(-radius),
+            flui_types::geometry::Pixels(-radius),
+            px(radius * 2.0),
+            px(radius * 2.0),
+        );
+        painter.draw_arc(rect, start, sweep, true, &Paint::fill(Color::WHITE));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("A2 Rotated Arc Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Oracle: rotated arc centered at (cx, cy).
+        // The rotation transform applied to the canvas means the arc's own
+        // angles are unchanged in local space; from the device frame, the arc
+        // is rotated by `angle`. We use `inside_rotated_arc` which applies an
+        // inverse rotation to query points.
+        let angular_exclusion_rad = 15.0_f32 * std::f32::consts::PI / 180.0;
+        let end_angle = start + sweep;
+
+        // Boundary pixels near the radial edge (oracle).
+        let radial_boundary: Vec<(usize, f32)> = {
+            let all_boundary = boundary_pixel_indices(|px, py| {
+                inside_rotated_arc(px - cx, py - cy, radius, start, sweep, angle)
+            });
+            all_boundary
+                .into_iter()
+                .filter(|(pixel_idx, _)| {
+                    let col = (*pixel_idx % SURFACE_WIDTH as usize) as f32 + 0.5 - cx;
+                    let row = (*pixel_idx / SURFACE_WIDTH as usize) as f32 + 0.5 - cy;
+                    // Inverse-rotate to get local angle.
+                    let cos_a = angle.cos();
+                    let sin_a = angle.sin();
+                    let lx = cos_a * col + sin_a * row;
+                    let ly = -sin_a * col + cos_a * row;
+                    let local_r = (lx * lx + ly * ly).sqrt();
+                    let local_ang = ly.atan2(lx);
+                    let near_radial = (local_r - radius).abs() < 2.0;
+                    let dist_start = angle_diff_abs(local_ang, start);
+                    let dist_end = angle_diff_abs(local_ang, end_angle);
+                    near_radial
+                        && dist_start > angular_exclusion_rad
+                        && dist_end > angular_exclusion_rad
+                })
+                .collect()
+        };
+
+        assert!(
+            radial_boundary.len() >= 4,
+            "A2: fewer than 4 radial boundary pixels ({}) — shape may be off-screen or oracle broken",
+            radial_boundary.len()
+        );
+
+        let mut failed_count = 0usize;
+        for (pixel_idx, oracle_coverage) in &radial_boundary {
+            let readback_alpha = pixels[*pixel_idx][3];
+            let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
+            let diff = (i16::from(readback_alpha) - i16::from(oracle_alpha)).unsigned_abs() as u8;
+            if diff > CALIBRATION_TOLERANCE_U8 {
+                failed_count += 1;
+            }
+        }
+
+        let boundary_count = radial_boundary.len();
+        let max_failures = (boundary_count as f32 * 0.1).ceil() as usize;
+        assert!(
+            failed_count <= max_failures,
+            "A2 FAILED: {failed_count}/{boundary_count} rotated-arc radial boundary pixels exceed \
+             oracle tolerance {CALIBRATION_TOLERANCE_U8}. Affine orientation or fwidth AA is wrong."
+        );
+
+        // Interior fill check: a 270° sector at radius 35 has a large solid
+        // interior. Count opaque pixels in the mid-radius band (excluding the AA
+        // bands at the radial + angular edges). The arc APEX is intentionally NOT
+        // sampled — a pie apex is only fractionally covered (≈ sweep/2π of the
+        // directions around it), so the exact center pixel is legitimately
+        // partial, not opaque. This check proves the sector is substantially
+        // filled (not hollow / mis-oriented).
+        let mut opaque_interior = 0usize;
+        for row in 0..SURFACE_HEIGHT {
+            for col in 0..SURFACE_WIDTH {
+                let dx = col as f32 + 0.5 - cx;
+                let dy = row as f32 + 0.5 - cy;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < 5.0 || dist > radius - 3.0 {
+                    continue; // skip near-apex and the radial boundary band
+                }
+                let idx = row as usize * SURFACE_WIDTH as usize + col as usize;
+                if pixels[idx][3] > 250 {
+                    opaque_interior += 1;
+                }
+            }
+        }
+        assert!(
+            opaque_interior >= 200,
+            "A2: rotated arc interior is not substantially filled — only {opaque_interior} \
+             opaque pixels in the mid-radius band; the sector fill may be hollow or mis-oriented"
+        );
+    }
+
+    // ── A3: Scaled arc center not double-scaled (PR-2 regression guard) ───────
+
+    /// A3: Under a non-unit canvas scale, an arc's CENTER must land at the
+    /// transformed position — NOT at scale × position.
+    ///
+    /// This is the exact PR-2 double-scale regression guard applied to arcs.
+    /// A circle with `scale(2,2)` at local (32,32) must appear at device (64,64)
+    /// with device radius 20. The old `center_radius.xy`-in-local bug would place
+    /// the center at (128,128) — off this 128² surface — leaving (64,64) empty.
+    ///
+    /// Note: C1–C3 use identity scale and cannot catch this; production hits it on
+    /// every HiDPI (DPR>1) display.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn a3_scaled_arc_center_not_double_scaled() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.scale(2.0, 2.0);
+        // Local arc: center at (32,32), radius=10. Under scale(2,2) the device
+        // center is (64,64) and device radius is 20.
+        let local_radius = 10.0_f32;
+        let rect = Rect::from_xywh(
+            flui_types::geometry::Pixels(32.0 - local_radius),
+            flui_types::geometry::Pixels(32.0 - local_radius),
+            px(local_radius * 2.0),
+            px(local_radius * 2.0),
+        );
+        painter.draw_arc(
+            rect,
+            0.0,
+            3.0 * std::f32::consts::FRAC_PI_2, // 270°
+            true,
+            &Paint::fill(Color::WHITE),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("A3 Scaled Arc Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Expected device geometry: center (64,64), radius 20.
+        let dcx = 64.0_f32;
+        let dcy = 64.0_f32;
+        let dradius = 20.0_f32;
+
+        // The center must be opaque. The double-scale bug placed it at (128,128)
+        // (off-surface), so (64,64) would be transparent → this assertion fails.
+        let center_idx = dcy as usize * SURFACE_WIDTH as usize + dcx as usize;
+        assert!(
+            pixels[center_idx][3] > 200,
+            "A3: scaled arc center must be opaque at device (64,64); got alpha={} — \
+             the baked path likely double-scaled the center (rendered it at scale × position)",
+            pixels[center_idx][3]
+        );
+
+        // The boundary at device center (64,64), radius 20 must have boundary pixels
+        // — proving both correct position AND correct (scaled) radius extent.
+        let start = 0.0_f32;
+        let sweep = 3.0 * std::f32::consts::FRAC_PI_2;
+        let end_angle = start + sweep;
+        let angular_excl = 15.0_f32 * std::f32::consts::PI / 180.0;
+        let radial_boundary: Vec<(usize, f32)> = {
+            let all = boundary_pixel_indices(|px, py| {
+                inside_arc(px - dcx, py - dcy, dradius, start, sweep)
+            });
+            all.into_iter()
+                .filter(|(pixel_idx, _)| {
+                    let col = (*pixel_idx % SURFACE_WIDTH as usize) as f32 + 0.5 - dcx;
+                    let row = (*pixel_idx / SURFACE_WIDTH as usize) as f32 + 0.5 - dcy;
+                    let r = (col * col + row * row).sqrt();
+                    let ang = row.atan2(col);
+                    (r - dradius).abs() < 2.0
+                        && angle_diff_abs(ang, start) > angular_excl
+                        && angle_diff_abs(ang, end_angle) > angular_excl
+                })
+                .collect()
+        };
+
+        assert!(
+            radial_boundary.len() >= 4,
+            "A3: fewer than 4 radial boundary pixels at expected device position ({}) — \
+             the arc is not where the transform says it should be",
+            radial_boundary.len()
+        );
+
+        let mut failed = 0usize;
+        for (pixel_idx, oracle_coverage) in &radial_boundary {
+            let a = pixels[*pixel_idx][3];
+            let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
+            let diff = (i16::from(a) - i16::from(oracle_alpha)).unsigned_abs() as u8;
+            if diff > CALIBRATION_TOLERANCE_U8 {
+                failed += 1;
+            }
+        }
+        let max_failures = (radial_boundary.len() as f32 * 0.1).ceil() as usize;
+        assert!(
+            failed <= max_failures,
+            "A3 FAILED: {failed}/{} radial boundary pixels exceed tolerance at device radius 20 — \
+             the scaled arc's geometry/position is wrong",
+            radial_boundary.len()
+        );
+    }
+
+    // ── A4: Angular edges are anti-aliased (partial alpha) ───────────────────
+
+    /// A4: The two angular edges of a ~90° arc must show partial alpha (anti-
+    /// aliased), not a hard step from 0 to 255.
+    ///
+    /// ## Red→green proof
+    ///
+    /// The OLD `angle_softness = 0.05` rad was a FIXED angular threshold: it
+    /// produced a smoothstep width that was ~0.05 rad ≈ 3° regardless of
+    /// resolution. At a radius of 40 px this width is 40 * 0.05 ≈ 2 pixels —
+    /// already incorrect (too wide at large radius, too narrow at small radius).
+    /// More critically, the old approach first computed a hard `in_arc` boolean
+    /// and then softened only the edges, so any pixel whose center angle fell
+    /// outside the sector got a hard `discard` before the softening.
+    ///
+    /// The NEW approach uses an angular half-plane SDF: `angular_sdf =
+    /// min(d_start, d_end)` for ≤180° sweeps, `max` for >180°. `fwidth` of
+    /// this distance gives ~1 device-px AA at any radius — the angular AA band
+    /// is as wide as the radial AA band, which is the correct behavior.
+    ///
+    /// Test: draw a 90° arc (radius=40) and scan pixels near the angular boundary
+    /// at start_angle=0 (the +X ray). The pixels immediately above and below the
+    /// start ray must have partial alpha — not 0 or 255.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn a4_arc_angular_edges_are_antialiased() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let radius = 40.0_f32;
+        // 90° arc, ROTATED 30° so its angular edges are DIAGONAL (not grid-aligned).
+        // A grid-aligned (axis) edge legitimately has no partial pixels — it falls
+        // on a pixel-row boundary so coverage is 0/1 between rows — so the angular
+        // AA can only be observed on a non-axis-aligned edge.
+        let start = 0.0_f32;
+        let sweep = std::f32::consts::FRAC_PI_2;
+        let rotation = PI / 6.0; // 30°
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.translate(flui_types::Offset::new(
+            flui_types::geometry::Pixels(cx),
+            flui_types::geometry::Pixels(cy),
+        ));
+        painter.rotate(rotation);
+        let rect = Rect::from_xywh(
+            flui_types::geometry::Pixels(-radius),
+            flui_types::geometry::Pixels(-radius),
+            px(radius * 2.0),
+            px(radius * 2.0),
+        );
+        painter.draw_arc(rect, start, sweep, true, &Paint::fill(Color::WHITE));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("A4 Angular AA Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Count partial-alpha pixels along the two angular edges: a partial pixel
+        // in the annulus `5 <= dist < radius-2` can ONLY come from the angular-edge
+        // AA — the radial edge is excluded by the outer bound, and the APEX disk
+        // (`dist < 5`, where the pie tip is legitimately partial regardless of edge
+        // AA) is excluded by the inner bound so it cannot satisfy the count on its
+        // own. Rotation about the center preserves distance, so no inverse transform
+        // is needed. A hard-aliased angular edge produces ZERO such partials; smooth
+        // screen-space AA produces a ~1px band along each of the two diagonal edges.
+        let mut interior_partial = 0usize;
+        for row in 0..SURFACE_HEIGHT {
+            for col in 0..SURFACE_WIDTH {
+                let dx = col as f32 + 0.5 - cx;
+                let dy = row as f32 + 0.5 - cy;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < 5.0 || dist >= radius - 2.0 {
+                    continue; // skip the apex disk and the radial boundary band
+                }
+                let idx = row as usize * SURFACE_WIDTH as usize + col as usize;
+                let alpha = pixels[idx][3];
+                if alpha > 5 && alpha < 250 {
+                    interior_partial += 1;
+                }
+            }
+        }
+
+        assert!(
+            interior_partial >= 10,
+            "A4 FAILED: only {interior_partial} interior partial-alpha pixels (device dist < \
+             radius-2) — the angular sector edges are hard-aliased. The screen-space angular \
+             SDF + fwidth must produce a smooth ~1px band along each diagonal edge."
+        );
     }
 }
