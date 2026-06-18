@@ -67,32 +67,61 @@ impl DrawBatcher {
             // (ALPHA_BLENDING) pipeline. Non-SrcOver blend modes must route
             // through the tessellated path, whose pipeline is selected per
             // `pipeline_key_from_paint` (Phase A fixed-function Porter-Duff).
-            //
-            // Phase-A quality limit: the tessellated path produces aliased edges
-            // at sample_count=1 (no SDF anti-aliasing) and the scissor clip is
-            // an AABB, not a pixel-perfect rounded shape. SDF-quality blended
-            // shapes are Phase B.
-            if state.is_axis_aligned() && paint.blend_mode == BlendMode::SrcOver {
-                // Fast path: GPU instancing for axis-aligned rects.
-                let top_left = state.apply_transform(Point::new(rect.left(), rect.top()));
-                let bottom_right = state.apply_transform(Point::new(rect.right(), rect.bottom()));
-                let transformed_rect =
-                    Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-                let instance = state.apply_active_clip(
-                    super::super::instancing::RectInstance::rect(transformed_rect, color),
-                );
-                let _ = segment.rect_batch.add(instance);
-                DrawSegment::push_scissor_region(
-                    &mut segment.rect_scissors,
-                    state.current_scissor(),
-                );
+            if paint.blend_mode == BlendMode::SrcOver {
+                if state.is_axis_aligned() {
+                    // Baked-AABB fast path: axis-aligned SrcOver — bake the
+                    // transform into the bounds (scale+translate only) and use
+                    // the identity affine. Output is byte-identical to the
+                    // pre-affine instanced path.
+                    let top_left = state.apply_transform(Point::new(rect.left(), rect.top()));
+                    let bottom_right =
+                        state.apply_transform(Point::new(rect.right(), rect.bottom()));
+                    let device_rect =
+                        Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+                    let instance = state.apply_active_clip(
+                        super::super::instancing::RectInstance::rect(device_rect, color),
+                    );
+                    let _ = segment.rect_batch.add(instance);
+                    DrawSegment::push_scissor_region(
+                        &mut segment.rect_scissors,
+                        state.current_scissor(),
+                    );
+                } else {
+                    // Affine instanced path: rotated/skewed SrcOver rect.
+                    //
+                    // Pass the local-space bounds and the full 2×3 affine to
+                    // the GPU. The vertex shader applies `device = M*local + t`;
+                    // the fragment SDF evaluates in local space — `fwidth(dist)`
+                    // then gives ~1-device-px AA under any affine.
+                    let m = state.current_transform();
+                    let linear_cols = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
+                    let translation = [m.w_axis.x, m.w_axis.y];
+                    let local_bounds =
+                        [rect.left().0, rect.top().0, rect.width().0, rect.height().0];
+                    let instance = state.apply_active_clip(
+                        super::super::instancing::RectInstance::with_affine_transform(
+                            local_bounds,
+                            color,
+                            [0.0; 4],
+                            linear_cols,
+                            translation,
+                        ),
+                    );
+                    let _ = segment.rect_batch.add(instance);
+                    // Scissor = the active damage/clip region, exactly as the
+                    // axis-aligned path. The shape is bounded by its own quad +
+                    // SDF; a per-shape AABB scissor is unnecessary and (because
+                    // the quad is expanded by a ~1.5px AA fringe) would clip the
+                    // outer fringe at the shape's extreme corners.
+                    DrawSegment::push_scissor_region(
+                        &mut segment.rect_scissors,
+                        state.current_scissor(),
+                    );
+                }
             } else {
-                // Slow path: tessellate rotated/skewed rects or any non-SrcOver
-                // blend mode as a transformed quad.
+                // Slow path: any non-SrcOver blend mode — tessellate and bake.
                 //
-                // Phase-A quality note: uses the tessellated path → aliased edges
-                // (no SDF AA), AABB scissor clip. SDF-quality blended rects are
-                // Phase B.
+                // Non-SrcOver stays tessellated until the SSAA tile path (PR-3+).
                 let tl = state.apply_transform(Point::new(rect.left(), rect.top()));
                 let tr = state.apply_transform(Point::new(rect.right(), rect.top()));
                 let br = state.apply_transform(Point::new(rect.right(), rect.bottom()));
@@ -191,16 +220,10 @@ impl DrawBatcher {
             };
 
             // The instanced fast path renders with a hardcoded SrcOver pipeline.
-            // A non-SrcOver blend mode must route through the tessellated path so
-            // the blend pipeline keyed by `pipeline_key_from_paint` is selected.
-            //
-            // Phase-A quality note: the tessellated fallback produces aliased edges
-            // (no SDF AA) and the scissor clip is an AABB, not the rounded shape.
-            // SDF-quality blended rounded rects are Phase B.
+            // A non-SrcOver blend mode must route through the tessellated path.
             if paint.blend_mode != BlendMode::SrcOver {
-                // Tessellate the filled rounded rect in local space, carry the
-                // opacity-adjusted color and the requested blend mode, then bake
-                // the transform via `submit_transformed_geometry`.
+                // Non-SrcOver rrect: tessellate and bake via `submit_transformed_geometry`.
+                // Stays tessellated (aliased) until the SSAA tile path (PR-3+).
                 let fill_paint = Paint::fill(color).with_blend_mode(paint.blend_mode);
                 self.prime_tessellator_scale(state);
                 match self.tessellator.tessellate_rrect(rrect, &fill_paint) {
@@ -217,25 +240,80 @@ impl DrawBatcher {
                 return;
             }
 
-            let top_left = state.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
-            let bottom_right =
-                state.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
-            let transformed_rect =
-                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+            // SrcOver rrect: split on axis-alignment.
+            // Per-corner max radius (x and y components of each corner's radii).
+            let radius_top_left = rrect.top_left.x.0.max(rrect.top_left.y.0);
+            let radius_top_right = rrect.top_right.x.0.max(rrect.top_right.y.0);
+            let radius_bottom_right = rrect.bottom_right.x.0.max(rrect.bottom_right.y.0);
+            let radius_bottom_left = rrect.bottom_left.x.0.max(rrect.bottom_left.y.0);
 
-            // GPU instancing for filled rounded rects.
-            let instance = state.apply_active_clip(
-                super::super::instancing::RectInstance::rounded_rect_corners(
-                    transformed_rect,
-                    color,
-                    rrect.top_left.x.0.max(rrect.top_left.y.0),
-                    rrect.top_right.x.0.max(rrect.top_right.y.0),
-                    rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
-                    rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
-                ),
-            );
-            let _ = segment.rect_batch.add(instance);
-            DrawSegment::push_scissor_region(&mut segment.rect_scissors, state.current_scissor());
+            if state.is_axis_aligned() {
+                // Baked-AABB fast path: transform the two diagonal corners to get
+                // the device-space AABB, then use identity affine.
+                // Fixes the pre-existing bug where `apply_transform` of only 2 corners
+                // produced a wrong AABB for a rotated rrect (now gated on axis-aligned).
+                let top_left =
+                    state.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
+                let bottom_right =
+                    state.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
+                let device_rect =
+                    Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+                let instance = state.apply_active_clip(
+                    super::super::instancing::RectInstance::rounded_rect_corners(
+                        device_rect,
+                        color,
+                        radius_top_left,
+                        radius_top_right,
+                        radius_bottom_right,
+                        radius_bottom_left,
+                    ),
+                );
+                let _ = segment.rect_batch.add(instance);
+                DrawSegment::push_scissor_region(
+                    &mut segment.rect_scissors,
+                    state.current_scissor(),
+                );
+            } else {
+                // Affine instanced path: rotated/skewed SrcOver rrect.
+                //
+                // Local-space bounds + full 2×3 affine. The SDF evaluates in local
+                // space with per-corner radii; fwidth gives correct ~1px AA under
+                // rotation/skew. This also fixes the pre-existing bug: previously a
+                // rotated SrcOver rrect fell through to the 2-corner AABB bake,
+                // rendering as a wrong-size axis-aligned box.
+                let m = state.current_transform();
+                let linear_cols = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
+                let translation = [m.w_axis.x, m.w_axis.y];
+                let local_bounds = [
+                    rrect.rect.left().0,
+                    rrect.rect.top().0,
+                    rrect.rect.width().0,
+                    rrect.rect.height().0,
+                ];
+                let instance = state.apply_active_clip(
+                    super::super::instancing::RectInstance::with_affine_transform(
+                        local_bounds,
+                        color,
+                        [
+                            radius_top_left,
+                            radius_top_right,
+                            radius_bottom_right,
+                            radius_bottom_left,
+                        ],
+                        linear_cols,
+                        translation,
+                    ),
+                );
+                let _ = segment.rect_batch.add(instance);
+                // Scissor = the active damage/clip region (same as the axis-aligned
+                // path); the shape is bounded by its own quad + SDF, so a per-shape
+                // AABB scissor is unnecessary and would clip the AA fringe.
+                DrawSegment::push_scissor_region(
+                    &mut segment.rect_scissors,
+                    state.current_scissor(),
+                );
+            }
         } else {
             // Stroked rounded rect — tessellate (fallback).
             self.prime_tessellator_scale(state);

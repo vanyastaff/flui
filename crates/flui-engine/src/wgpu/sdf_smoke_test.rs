@@ -34,10 +34,12 @@
 /// (and the inlined copy in `shaders/rect_instanced.wgsl`).
 fn sd_rounded_box(p: [f32; 2], b: [f32; 2], r: [f32; 4]) -> f32 {
     // Per-corner radius selection (branchless equivalent of WGSL `select`)
+    // (top, bottom) radii for the active horizontal side — see WGSL sdRoundedBox:
+    //   right (p.x>0) → (tr=r[1], br=r[2]); left → (tl=r[0], bl=r[3]).
     let r2 = if p[0] > 0.0 {
-        [r[0], r[1]]
+        [r[1], r[2]]
     } else {
-        [r[3], r[2]]
+        [r[0], r[3]]
     };
     let r3 = if p[1] > 0.0 { r2[1] } else { r2[0] };
 
@@ -53,10 +55,12 @@ fn sd_rounded_box(p: [f32; 2], b: [f32; 2], r: [f32; 4]) -> f32 {
 /// Must stay in sync with [`shaders/common/sdf.wgsl::sdRoundedSuperellipse`]
 /// (and the inlined copy in `shaders/rect_instanced.wgsl`).
 fn sd_rounded_superellipse(p: [f32; 2], b: [f32; 2], r: [f32; 4]) -> f32 {
+    // (top, bottom) radii for the active horizontal side — see WGSL sdRoundedBox:
+    //   right (p.x>0) → (tr=r[1], br=r[2]); left → (tl=r[0], bl=r[3]).
     let r2 = if p[0] > 0.0 {
-        [r[0], r[1]]
+        [r[1], r[2]]
     } else {
-        [r[3], r[2]]
+        [r[0], r[3]]
     };
     let r3 = if p[1] > 0.0 { r2[1] } else { r2[0] };
 
@@ -168,5 +172,31 @@ fn sdf_degenerate_corner_radius_zero() {
         diff < 1e-3,
         "With r=0 the superellipse SDF must fall back to rect SDF: \
          rrect={d_rrect:.6}, superellipse={d_sup:.6}, diff={diff:.6}",
+    );
+}
+
+#[test]
+fn sdf_corner_radius_maps_to_correct_quadrant() {
+    // Pin the [tl, tr, br, bl] → screen-quadrant mapping (Y-down: p.x>0 = right,
+    // p.y>0 = bottom). With ONLY the top-left corner rounded, a point just inside
+    // the TOP-LEFT corner (p.x<0, p.y<0) must be cut away (SDF > 0), while the
+    // sharp BOTTOM-RIGHT corner (p.x>0, p.y>0) stays inside (SDF < 0). The pre-fix
+    // mapping rounded the bottom-right corner instead and would fail here — this
+    // is the CPU mirror of GPU test O7, giving this sync guard teeth against a
+    // corner-index transposition (the existing tests use uniform radii and cannot).
+    let b = [100.0_f32, 100.0];
+    let r = [80.0_f32, 0.0, 0.0, 0.0]; // top-left only
+
+    let top_left = sd_rounded_box([-95.0, -95.0], b, r);
+    let bottom_right = sd_rounded_box([95.0, 95.0], b, r);
+
+    assert!(
+        top_left > 0.0,
+        "top-left corner must be ROUNDED (point cut away → SDF > 0); got {top_left:.3}. \
+         A non-positive value means the [tl,tr,br,bl] → quadrant mapping is transposed."
+    );
+    assert!(
+        bottom_right < 0.0,
+        "bottom-right corner must be SHARP (point inside → SDF < 0); got {bottom_right:.3}."
     );
 }
