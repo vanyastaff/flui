@@ -9,9 +9,10 @@
 //! | `current_opacity` | Accumulated opacity for the current subtree    |
 //! | `layer_stack`     | Save-state for each open opacity layer          |
 //!
-//! All GPU emission and draw-record mutation (`draw_order`, `current_segment`,
-//! `flush_opacity_layer`) stay on `WgpuPainter`.  The compositor only performs
-//! the book-keeping half: snapshot on push, restore + branch decision on pop.
+//! All GPU emission stays in `GpuReplay::submit` / `GpuReplay::flush_opacity_layer`;
+//! draw-record mutation (`draw_order`, `current_segment`) stays on `WgpuPainter`.
+//! The compositor only performs the book-keeping half: snapshot on push,
+//! restore + branch decision on pop.
 //!
 //! # Balance assertion
 //!
@@ -200,7 +201,7 @@ impl LayerCompositor {
         self.layer_stack.push(saved);
 
         // Children inside the layer draw at full opacity; group opacity is
-        // applied at composite time by the painter's flush_opacity_layer path.
+        // applied at composite time by GpuReplay::flush_opacity_layer.
         self.current_opacity = 1.0;
     }
 
