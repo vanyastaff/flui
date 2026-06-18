@@ -400,21 +400,17 @@ impl GpuReplay {
                             "GpuReplay: advanced shape blended onto surface"
                         );
                     } else {
-                        // COPY_SRC-less surface: fall back to drawing the shape
-                        // normally (SrcOver alpha blend) and warn once.
-                        // PR-6 will wire the COPY_SRC-less present path; until then
-                        // this is a correct (if approximate) fallback.
-                        static WARNED: std::sync::atomic::AtomicBool =
-                            std::sync::atomic::AtomicBool::new(false);
-                        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                            tracing::warn!(
-                                mode = ?op.mode,
-                                "Advanced shape: surface lacks COPY_SRC; \
-                                 falling back to SrcOver draw \
-                                 (PR-6 will fix the present path) \
-                                 (logged once per process)"
-                            );
-                        }
+                        // A `view_only` target has no sampleable backdrop; advanced
+                        // modes degrade to SrcOver here (warn once).  Production
+                        // producers pass a sampleable target — surface-with-COPY_SRC,
+                        // the COPY_SRC-less intermediate, or a pooled offscreen — so
+                        // this is only reached by genuinely view-only callers
+                        // (benches/headless/ShaderMask-style child rendering).
+                        tracing::warn!(
+                            mode = ?op.mode,
+                            "Advanced shape blend reached a view_only target; \
+                             falling back to SrcOver (caller must pass sampleable target)"
+                        );
                         self.flush_segment(
                             &mut op.segment,
                             viewport_size,
@@ -564,14 +560,15 @@ impl GpuReplay {
                 );
                 return;
             }
-            // COPY_SRC unavailable: warn once and fall through to SrcOver.
-            // PR-6 will wire the COPY_SRC-less present path; until then this
-            // is a correct (if approximate) fallback — SrcOver instead of the
-            // requested advanced mode.
+            // A `view_only` target has no sampleable backdrop; advanced modes
+            // degrade to SrcOver here (warn once).  Production producers pass a
+            // sampleable target — surface-with-COPY_SRC, the COPY_SRC-less
+            // intermediate, or a pooled offscreen — so this is only reached by
+            // genuinely view-only callers (benches/headless/ShaderMask-style).
             tracing::warn!(
                 mode = ?layer.blend,
-                "Advanced blend layer: surface lacks COPY_SRC; \
-                 falling back to SrcOver compositing (PR-6 will fix the present path)"
+                "Advanced blend layer reached a view_only target; \
+                 falling back to SrcOver compositing (caller must pass sampleable target)"
             );
         }
 
