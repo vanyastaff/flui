@@ -304,6 +304,61 @@ impl WgpuPainter {
             .collect()
     }
 
+    /// Finalise the current segment and drain all recorded draw items, returning them
+    /// as cloned [`DrawSegment`] values.
+    ///
+    /// Only `DrawItem::Segment` variants are exposed; `OffscreenTexture` and
+    /// `OpacityLayer` variants (which carry live GPU handles in `PooledTexture`) are
+    /// skipped because they are not cloneable.  The deterministic-replay test uses a
+    /// draw scene that produces only `Segment` items, so all items in the drain are
+    /// returned.
+    ///
+    /// This accessor exists solely to feed the T11 C5-gate tests.  It is gated to
+    /// `#[cfg(all(test, feature = "enable-wgpu-tests"))]` and must never be called
+    /// from production code.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn drain_segments_for_test(&mut self) -> Vec<DrawSegment> {
+        self.finish_current_segment();
+        self.draw_order
+            .drain(..)
+            .filter_map(|item| match item {
+                DrawItem::Segment(seg) => Some(seg),
+                DrawItem::OffscreenTexture(_) | DrawItem::OpacityLayer(_) => None,
+            })
+            .collect()
+    }
+
+    /// Replay a caller-supplied list of `DrawItem`s onto `view` using `encoder`.
+    ///
+    /// This is a thin wrapper around `GpuReplay::submit` that exposes the replay
+    /// path to the T11 deterministic-replay test.  Two independent calls with
+    /// two independent encoders + views and the **same logical IR** (same content,
+    /// different clones) must produce byte-identical pixel outputs — that is the
+    /// C5 gate assertion.
+    ///
+    /// Production code does not call this: `WgpuPainter::render` drives the
+    /// normal path.  This is gated to `#[cfg(all(test, feature = "enable-wgpu-tests"))]`.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn replay_items_for_test(
+        &mut self,
+        items: Vec<DrawItem>,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> crate::error::EngineResult<()> {
+        self.replay.submit(
+            items,
+            self.size,
+            self.surface_format,
+            &self.device,
+            &self.queue,
+            &mut self.pipelines,
+            &mut self.resources,
+            &mut self.text_renderer,
+            encoder,
+            view,
+        )
+    }
+
     // ===== Offscreen Compositing =====
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.

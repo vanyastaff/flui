@@ -107,7 +107,13 @@ pub(crate) struct SavedLayer {
 /// a new one starts. This ensures that content drawn before the offscreen
 /// texture renders before it, and content drawn after renders after it,
 /// preserving correct Z-order.
-#[derive(Debug)]
+///
+/// `Clone` is derived because all fields are plain CPU data (no GPU handles).
+/// This is the compile-time purity witness: `DrawSegment` can be cloned without
+/// touching any `wgpu::Device`, `wgpu::Queue`, `wgpu::Encoder`, or `wgpu::TextureView`.
+/// The deterministic-replay test (T11) snapshots a `DrawSegment` before replay to assert
+/// the IR is unchanged by `GpuReplay::submit`.
+#[derive(Debug, Clone)]
 pub(crate) struct DrawSegment {
     /// Rectangle instance batch
     pub(crate) rect_batch: InstanceBatch<RectInstance>,

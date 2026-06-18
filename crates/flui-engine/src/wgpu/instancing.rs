@@ -622,7 +622,11 @@ impl ShadowInstance {
 /// Batch of instances ready for rendering
 ///
 /// Groups instances by type for efficient rendering.
-#[derive(Debug)]
+///
+/// `Clone` is derived so that a recorded [`super::command_ir::DrawSegment`] can be
+/// snapshotted before replay — used by the deterministic-replay test (T11) to assert that
+/// `GpuReplay::submit` does not mutate the IR.
+#[derive(Debug, Clone)]
 pub struct InstanceBatch<T> {
     /// Instance data
     pub instances: Vec<T>,
