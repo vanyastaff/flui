@@ -443,79 +443,128 @@ impl CircleInstance {
     }
 }
 
-/// Instance data for an arc (partial circle)
+/// Instance data for an arc (pie sector) rendered via the affine instanced SDF path.
 ///
-/// Used for progress indicators, pie charts, and other arc-based UI elements.
+/// ## Layout and affine design
+///
+/// Mirrors [`CircleInstance`]'s affine path: the vertex shader applies
+/// `device = M * local + t` where:
+/// - `M` is the 2×2 linear part stored column-major in `transform`:
+///   `[a, b, c, d]` → x-column `(a, b)`, y-column `(c, d)`.
+/// - `t` is the translation stored in `transform_translate.xy` — the device
+///   **center**, added AFTER M so the linear part never scales it (the PR-2
+///   double-scale fix applied to arcs).
+/// - `local` is `unit_pos` (origin-centered unit disk; the radius is folded into M).
+///
+/// ## Single (affine) path
+///
+/// Every SrcOver filled arc — axis-aligned or rotated — routes through
+/// [`ArcInstance::with_affine_transform`], which uses `center_radius = [0,0,1,0]`
+/// (unit circle at origin, radius folded into `transform`). `transform` encodes
+/// `M_world * r`:
+///   `linear = [M_w.a*r, M_w.b*r, M_w.c*r, M_w.d*r]`,
+///   `translate = M_w * center_local + t_w`.
+/// The axis-aligned case is just `M_world = diag(sx, sy)`, so a separate baked
+/// constructor is unnecessary.
+///
+/// The fragment evaluates `length(unit_pos) - 1.0` for radial AA and a
+/// screen-space angular SDF for the sector edges; `fwidth` gives ~1-device-px AA
+/// at any radius, scale, or rotation.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct ArcInstance {
-    /// Center point [x, y], radius, and padding [radius, _padding]
+    /// Always `[0, 0, 1, 0]`: unit circle at origin, radius folded into `transform`;
+    /// `.xy` unused (the center lives in `transform_translate`).
     pub center_radius: [f32; 4],
 
-    /// Angles in radians [start_angle, sweep_angle, _padding, _padding]
-    /// start_angle: where the arc begins (0 = right, π/2 = bottom, π = left,
-    /// 3π/2 = top) sweep_angle: how much to sweep (positive = clockwise,
-    /// negative = counter-clockwise)
+    /// Angles in radians `[start_angle, sweep_angle, 0, 0]`.
+    ///
+    /// `start_angle`: where the arc begins (0 = +X right, π/2 = +Y down, π = left).
+    /// `sweep_angle`: how much to sweep (positive = clockwise in screen Y-down space,
+    /// negative = counter-clockwise). A sweep of ±2π or larger means a full circle.
     pub angles: [f32; 4],
 
-    /// Color [r, g, b, a] in 0-1 range
+    /// Color `[r, g, b, a]` in linear 0–1 range.
     pub color: [f32; 4],
 
-    /// Transform (for elliptical arcs: scale_x, scale_y, translate_x,
-    /// translate_y)
+    /// 2×2 linear part of the affine transform, column-major:
+    /// `[a, b, c, d]` → x-column `(a, b)`, y-column `(c, d)`.
+    /// Encodes `M_world * r` (radius folded in); axis-aligned is `diag(sx, sy) * r`.
     pub transform: [f32; 4],
+
+    /// Translation: `[tx, ty, 0, 0]` = the device center `M_w * center_local + t_w`.
+    /// Added AFTER `M` in the shader, so the linear part never scales it.
+    /// The `.zw` lanes are padding for 16-byte vec4 alignment.
+    pub transform_translate: [f32; 4],
 }
 
 impl ArcInstance {
-    /// Create an arc instance.
+    // PR-2b: deleted `ArcInstance::new(center, radius, start, sweep, color, scale_xy)`
+    // (baked-AABB fast path for axis-aligned SrcOver arcs).
+    //
+    // All SrcOver filled arcs now route through `with_affine_transform` regardless
+    // of axis-alignment: the full-affine path is correct for both axis-aligned and
+    // rotated arcs. The old `new` constructor encoded `diag(sx,sy)` as the linear
+    // part and placed the pre-transformed center in `transform_translate` — the
+    // same semantics as `with_affine_transform` with `M_world = diag(sx,sy)` and
+    // `radius` folded separately. `with_affine_transform` handles this uniformly.
+    // Zero callers outside this crate; the unit test is updated below.
+
+    /// Create an arc instance for the full-affine SDF path.
     ///
-    /// `scale_xy` is the per-axis scale `[sx, sy]` extracted from the current
-    /// transform matrix.  Pass `[1.0, 1.0]` for identity / uniform scale.
-    /// The arc shader computes the bounding-quad half-extent as
-    /// `radius * scale_xy`, so non-unit values correctly handle a zoomed
-    /// or non-uniformly scaled canvas.
+    /// Use this for any SrcOver arc that needs rotation or non-uniform scale
+    /// (rotated arcs under a general world transform).
     ///
-    /// # Arguments
-    /// * `center` — Center point of the arc (already in transformed space)
-    /// * `radius` — Radius of the arc before scale is applied
-    /// * `start_angle` — Starting angle in radians (0 = right)
-    /// * `sweep_angle` — Sweep angle in radians (positive = clockwise)
-    /// * `color` — Arc color
-    /// * `scale_xy` — Per-axis canvas scale `[sx, sy]`
+    /// The unit circle at origin is the canonical local shape: `center_radius =
+    /// [0, 0, 1, 0]`. The vertex shader applies `device = M * unit_pos * 1 + t`
+    /// and passes `unit_pos` to the fragment, which evaluates the radial and
+    /// angular SDFs — correct for any affine (fwidth gives ~1-device-px AA).
+    ///
+    /// `linear_cols` encodes `M_world * r` column-major `[a, b, c, d]`:
+    ///   `linear = [M_w.a*r, M_w.b*r, M_w.c*r, M_w.d*r]`
+    ///
+    /// `translation` is `[tx, ty]` = `M_w * center_local + t_w` in device pixels.
     #[must_use]
-    pub fn new(
-        center: Point<Pixels>,
-        radius: f32,
+    pub fn with_affine_transform(
+        linear_cols: [f32; 4],
         start_angle: f32,
         sweep_angle: f32,
         color: Color,
-        scale_xy: [f32; 2],
+        translation: [f32; 2],
     ) -> Self {
         Self {
-            center_radius: [center.x.0, center.y.0, radius, 0.0],
+            // Unit circle at local origin; the affine encodes radius + world transform.
+            center_radius: [0.0, 0.0, 1.0, 0.0],
             angles: [start_angle, sweep_angle, 0.0, 0.0],
             color: color.to_f32_array(),
-            transform: [scale_xy[0], scale_xy[1], 0.0, 0.0],
+            transform: linear_cols,
+            transform_translate: [translation[0], translation[1], 0.0, 0.0],
         }
     }
 
-    // Cycle 4 E-5: deleted `ArcInstance::ellipse(center, radius_x,
-    // radius_y, start_angle, sweep_angle, color)`. Zero call sites —
-    // production paths use `ArcInstance::new` with scale_xy.
-    // Re-lands with a concrete consumer when needed.
+    // Cycle 4 E-5: deleted `ArcInstance::ellipse(...)` (zero call sites).
+    // Re-lands with a concrete consumer when needed. All SrcOver arcs now use
+    // `with_affine_transform`; an elliptical arc folds `M_world * diag(rx, ry)`
+    // into `linear_cols` (mirroring `oval`).
 
-    /// Get wgpu vertex buffer layout for instance data
+    /// Get wgpu vertex buffer layout for instance data.
+    ///
+    /// Locations 2–5 are unchanged from the pre-PR-2b layout. Location 6 is the
+    /// new `transform_translate` field appended at the end of the struct;
+    /// appending keeps all existing field offsets byte-identical.
     #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
-            // Center + radius (location 2)
+            // Center + radius [0, 0, radius, _] (location 2)
             2 => Float32x4,
-            // Angles (location 3)
+            // Angles [start, sweep, 0, 0] (location 3)
             3 => Float32x4,
-            // Color (location 4)
+            // Color [r, g, b, a] (location 4)
             4 => Float32x4,
-            // Transform (location 5)
+            // 2×2 linear affine [a, b, c, d] column-major (location 5)
             5 => Float32x4,
+            // Affine translation [tx, ty, 0, 0] (location 6)
+            6 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -897,11 +946,14 @@ mod tests {
 
     #[test]
     fn test_arc_instance_size() {
-        // Verify struct is tightly packed for GPU
-        assert_eq!(
-            std::mem::size_of::<ArcInstance>(),
-            16 * 4 // 16 floats = 64 bytes
-        );
+        // ArcInstance field layout (all #[repr(C)], tightly packed):
+        //   center_radius:       [f32; 4]  = 16 bytes
+        //   angles:              [f32; 4]  = 16 bytes
+        //   color:               [f32; 4]  = 16 bytes
+        //   transform:           [f32; 4]  = 16 bytes  ← 2×2 linear affine
+        //   transform_translate: [f32; 4]  = 16 bytes  ← appended for affine path
+        //   Total: 80 bytes
+        assert_eq!(std::mem::size_of::<ArcInstance>(), 80);
     }
 
     #[test]
@@ -1182,21 +1234,92 @@ mod tests {
         assert_eq!(instance.transform_translate[3], 0.0, "pad.w");
     }
 
-    /// Regression: ArcInstance::new must propagate scale_xy into the transform
-    /// field so the arc shader sizes the bounding quad correctly.
-    /// Before the fix, transform was always [1.0, 1.0, 0.0, 0.0].
+    /// `ArcInstance::with_affine_transform` encodes the baked axis-aligned path
+    /// via `diag(sx*r, sy*r)` in the 2×2 transform field and carries the device
+    /// center in `transform_translate` (so M never double-scales it).
+    ///
+    /// The old `ArcInstance::new` baked-fast-path stored `[sx, sy, 0, 0]` in
+    /// `transform` (a flat 4-float encode). The PR-2b col-major layout
+    /// `[sx*r, 0, 0, sy*r]` = `diag(sx*r, sy*r)` is equivalent under identity
+    /// rotation and correctly composes with non-unit canvas scale + rotation.
     #[test]
     fn arc_instance_scale_propagates_to_transform() {
-        use flui_types::{Point, geometry::Pixels};
-        let center = Point::new(Pixels(0.0), Pixels(0.0));
-        let identity = ArcInstance::new(center, 10.0, 0.0, 1.0, Color::RED, [1.0, 1.0]);
-        assert_eq!(identity.transform[0], 1.0, "identity sx");
-        assert_eq!(identity.transform[1], 1.0, "identity sy");
+        // Simulate the shapes.rs baked-path encoding: axis-aligned scale(2,2),
+        // center at device (12,34), radius 10.
+        // Translation: M_world * center_local + t_world = diag(2,2)*[6,17]+[0,0] = [12,34].
+        // linear_cols = [sx*r, 0, 0, sy*r] = [2*10, 0, 0, 2*10] = [20, 0, 0, 20].
+        let sx = 2.0_f32;
+        let sy = 2.0_f32;
+        let r = 10.0_f32;
+        let tx = 12.0_f32;
+        let ty = 34.0_f32;
 
-        let scaled = ArcInstance::new(center, 10.0, 0.0, 1.0, Color::RED, [2.5, 3.0]);
-        assert_eq!(scaled.transform[0], 2.5, "scaled sx");
-        assert_eq!(scaled.transform[1], 3.0, "scaled sy");
-        assert_eq!(scaled.transform[2], 0.0, "translate_x always 0");
-        assert_eq!(scaled.transform[3], 0.0, "translate_y always 0");
+        let identity = ArcInstance::with_affine_transform(
+            [1.0 * r, 0.0, 0.0, 1.0 * r], // diag(1,1)*r = identity scale
+            0.0,
+            1.0,
+            Color::RED,
+            [tx, ty],
+        );
+        // diag(1*r,1*r): x-col=(r,0), y-col=(0,r)
+        assert_eq!(identity.transform, [r, 0.0, 0.0, r], "identity diag × r");
+        // Center carried in transform_translate (NOT scaled by M).
+        assert_eq!(identity.transform_translate[0], tx, "tx = center x");
+        assert_eq!(identity.transform_translate[1], ty, "ty = center y");
+        assert_eq!(identity.transform_translate[2], 0.0, "pad z");
+        assert_eq!(identity.transform_translate[3], 0.0, "pad w");
+        // center_radius.xy unused; .z is the unit-circle radius (1).
+        assert_eq!(identity.center_radius[0], 0.0, "cx unused");
+        assert_eq!(identity.center_radius[1], 0.0, "cy unused");
+        assert_eq!(identity.center_radius[2], 1.0, "unit radius");
+
+        let scaled = ArcInstance::with_affine_transform(
+            [sx * r, 0.0, 0.0, sy * r], // diag(sx,sy)*r
+            0.0,
+            1.0,
+            Color::RED,
+            [tx, ty],
+        );
+        // diag(sx*r, sy*r): x-col=(sx*r,0), y-col=(0,sy*r)
+        assert_eq!(scaled.transform, [sx * r, 0.0, 0.0, sy * r], "scaled diag");
+        // Center is still the raw device center — diag(sx*r,sy*r) must NOT scale it.
+        assert_eq!(scaled.transform_translate[0], tx, "tx unscaled by sx");
+        assert_eq!(scaled.transform_translate[1], ty, "ty unscaled by sy");
+    }
+
+    /// `ArcInstance::with_affine_transform` must store a unit circle at origin
+    /// and round-trip the caller's linear + translate without mangling.
+    #[test]
+    fn arc_with_affine_transform_stores_unit_circle_and_affine() {
+        let cos30 = std::f32::consts::FRAC_PI_6.cos();
+        let sin30 = std::f32::consts::FRAC_PI_6.sin();
+        let r = 20.0_f32;
+        // CW screen rotation × radius r: x-col=(cos,-sin)*r, y-col=(sin,cos)*r.
+        let linear = [cos30 * r, -sin30 * r, sin30 * r, cos30 * r];
+        let translation = [64.0_f32, 64.0_f32];
+
+        let instance = ArcInstance::with_affine_transform(
+            linear,
+            0.5,  // start_angle
+            1.57, // sweep_angle
+            Color::BLUE,
+            translation,
+        );
+
+        // center_radius must be the unit circle at origin.
+        assert_eq!(instance.center_radius[0], 0.0, "cx=0");
+        assert_eq!(instance.center_radius[1], 0.0, "cy=0");
+        assert_eq!(instance.center_radius[2], 1.0, "radius=1 (unit circle)");
+        assert_eq!(instance.center_radius[3], 0.0, "padding");
+        // Angles round-trip.
+        assert_eq!(instance.angles[0], 0.5, "start_angle");
+        assert_eq!(instance.angles[1], 1.57, "sweep_angle");
+        // Linear stored verbatim.
+        assert_eq!(instance.transform, linear, "linear 2×2 round-trip");
+        // Translation stored in xy; zw are padding.
+        assert_eq!(instance.transform_translate[0], 64.0, "tx");
+        assert_eq!(instance.transform_translate[1], 64.0, "ty");
+        assert_eq!(instance.transform_translate[2], 0.0, "pad.z");
+        assert_eq!(instance.transform_translate[3], 0.0, "pad.w");
     }
 }

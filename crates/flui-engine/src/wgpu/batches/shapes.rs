@@ -605,20 +605,24 @@ impl DrawBatcher {
 
     /// Record a filled or stroked arc (pie-slice or arc segment).
     ///
-    /// # Instanced fast path
+    /// # Instanced path (PR-2b: full-affine reroute)
     ///
-    /// An axis-aligned, non-reflected, `SrcOver` filled arc is submitted as a
-    /// GPU `ArcInstance`. All other cases — rotation, shear, reflection (`det < 0`),
-    /// stroked arcs, or any non-`SrcOver` blend mode — fall through to the
-    /// tessellated path.
+    /// All SrcOver filled arcs — including rotated and skewed ones — are now
+    /// routed through the affine instanced SDF path, which uses:
+    ///   - fwidth-based radial AA (radius-independent ~1 device-px)
+    ///   - screen-space angular AA via half-plane SDFs (resolution-independent)
     ///
-    /// The **2-D determinant reflection guard** is preserved exactly:
-    /// `det = m.x_axis.x * m.y_axis.y − m.x_axis.y * m.y_axis.x`.
-    /// `det < 0` means the transform contains a reflection; the arc shader cannot
-    /// represent a reflected wedge, so tessellation is required even when the
-    /// transform is otherwise axis-aligned.
+    /// Reflection guard: `det < 0` means the transform contains a reflection,
+    /// which negates the sector direction in the shader (the angular half-planes
+    /// flip). Reflected arcs fall back to tessellation (PR-4 handles non-SrcOver).
     ///
-    /// `draw_arc` does not read opacity — no opacity baking is performed.
+    /// Non-SrcOver blend modes and stroked arcs remain tessellated (aliased)
+    /// until the SSAA tile path (PR-4).
+    ///
+    /// # Opacity
+    ///
+    /// Compositor layer opacity is folded into the color alpha before submission
+    /// (the instanced pipeline has no opacity uniform), mirroring `oval`/`circle`.
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state are disjoint WgpuPainter fields \
@@ -629,6 +633,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
+        opacity: f32,
         rect: Rect<Pixels>,
         start_angle: f32,
         sweep_angle: f32,
@@ -636,39 +641,54 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         let center = rect.center();
-        // Pixels / Pixels = f32 (dimensionless ratio)
-        let radius: f32 = (rect.width() + rect.height()) / px(4.0);
+        let rx = (rect.width() / 2.0).0;
+        let ry = (rect.height() / 2.0).0;
 
         if paint.style == PaintStyle::Fill {
-            // Filled arc (pie slice when use_center, arc segment when !use_center).
-            // Gate on axis-aligned transform: the arc instance shader only handles
-            // translation + axis-aligned scale; rotation/shear/reflection require
-            // tessellation.
-            //
-            // `is_axis_aligned` already rejects rotation and shear, but it also
-            // returns `true` for a reflection like `scale(-1, 1)` because the
-            // off-diagonal elements are still zero.  A reflection negates the wedge
-            // direction, which the instanced shader cannot represent.  Guard with the
-            // 2D determinant: det < 0 means the transform includes a reflection and
-            // the wedge would be drawn on the wrong side.
+            // Fold compositor layer opacity into the color alpha (the instanced
+            // pipeline has no opacity uniform), mirroring `rect`/`circle`/`oval`.
+            let color = if opacity < 1.0 {
+                let alpha = (f32::from(paint.color.a) * opacity) as u8;
+                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            } else {
+                paint.color
+            };
+
+            // Instanced affine SDF path conditions (else → tessellate, correct
+            // shape but aliased until PR-4):
+            // - SrcOver only — the instanced pipeline is hardcoded SrcOver; other
+            //   blend modes route through the tessellated Porter-Duff path.
+            // - `use_center` only — the SDF shader carves a PIE SECTOR through the
+            //   origin. A `use_center == false` arc is a circular SEGMENT (endpoints
+            //   joined by a straight chord, NOT through the center): a different
+            //   shape the shader does not model, so it must tessellate.
+            // - Non-reflected (`det >= 0`) — the angular sector is carved in local
+            //   space and mapped by M; the math handles reflection, but the
+            //   reflected path is untested, so we conservatively tessellate it.
             let m = state.current_transform();
             let det = m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x;
-            // The instanced fast path renders with a hardcoded SrcOver pipeline;
-            // a non-SrcOver blend mode must route through the tessellated path
-            // (which selects the blend pipeline via `pipeline_key_from_paint`).
-            if state.is_axis_aligned() && det >= 0.0 && paint.blend_mode == BlendMode::SrcOver {
-                // Fast path: GPU instancing for filled arcs.
-                let transformed_center = state.apply_transform(center);
-                let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
-                let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
-
-                let instance = super::super::instancing::ArcInstance::new(
-                    transformed_center,
-                    radius,
+            if paint.blend_mode == BlendMode::SrcOver && use_center && det >= 0.0 {
+                // Encode the arc as a unit circle under M_world * diag(rx, ry)
+                // (elliptical when rx != ry, mirroring `oval`). The center goes
+                // into transform_translate (never scaled by M). Angles parameterise
+                // the unit circle, so they map to Flutter's elliptical-arc angles.
+                let linear_cols = [
+                    m.x_axis.x * rx,
+                    m.x_axis.y * rx,
+                    m.y_axis.x * ry,
+                    m.y_axis.y * ry,
+                ];
+                // Translation: M_world * center_local + t_world.
+                let cx = center.x.0;
+                let cy = center.y.0;
+                let tx = m.x_axis.x * cx + m.y_axis.x * cy + m.w_axis.x;
+                let ty = m.x_axis.y * cx + m.y_axis.y * cy + m.w_axis.y;
+                let instance = super::super::instancing::ArcInstance::with_affine_transform(
+                    linear_cols,
                     start_angle,
                     sweep_angle,
-                    paint.color,
-                    [sx, sy],
+                    color,
+                    [tx, ty],
                 );
                 let _ = segment.arc_batch.add(instance);
                 DrawSegment::push_scissor_region(
@@ -676,23 +696,28 @@ impl DrawBatcher {
                     state.current_scissor(),
                 );
             } else {
-                // Slow path: rotation, shear, reflection, or non-SrcOver blend
-                // mode — tessellate in local space and bake the full transform
-                // into vertex positions.
+                // Slow path: non-pie (use_center=false segment), reflection, or
+                // non-SrcOver blend — tessellate in local space and bake the full
+                // transform into vertex positions.
                 //
-                // Phase-A quality note: uses the tessellated path → aliased edges
-                // (no SDF AA), AABB scissor clip. SDF-quality blended arcs are
-                // Phase B.
+                // Phase-A quality note: tessellated path → aliased edges.
+                // SDF-quality coverage for these lands in PR-4 (SSAA tile).
+                let fill_paint = Paint {
+                    color,
+                    style: PaintStyle::Fill,
+                    blend_mode: paint.blend_mode,
+                    ..Paint::default()
+                };
                 self.prime_tessellator_scale(state);
                 match self.tessellator.tessellate_arc(
                     rect,
                     start_angle,
                     sweep_angle,
                     use_center,
-                    paint,
+                    &fill_paint,
                 ) {
                     Ok((vertices, indices)) => {
-                        let key = pipeline::pipeline_key_from_paint(paint);
+                        let key = pipeline::pipeline_key_from_paint(&fill_paint);
                         Self::submit_transformed_geometry(
                             segment, draw_order, state, vertices, &indices, key,
                         );
