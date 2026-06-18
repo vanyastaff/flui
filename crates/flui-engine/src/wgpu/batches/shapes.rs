@@ -375,31 +375,60 @@ impl DrawBatcher {
             };
 
             // The instanced fast path renders with a hardcoded SrcOver pipeline;
-            // a non-SrcOver blend mode must route through the tessellated path.
-            if state.is_axis_aligned() && paint.blend_mode == BlendMode::SrcOver {
-                // Fast path: axis-aligned — use GPU instancing.
-                let transformed_center = state.apply_transform(center);
+            // non-SrcOver blend modes route through tessellation (aliased, until PR-4).
+            if paint.blend_mode == BlendMode::SrcOver {
                 let m = state.current_transform();
-                let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
-                let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
-
-                let instance = super::super::instancing::CircleInstance::new(
-                    transformed_center,
-                    radius,
-                    color,
-                    [sx, sy],
-                );
-                let _ = segment.circle_batch.add(instance);
-                DrawSegment::push_scissor_region(
-                    &mut segment.circle_scissors,
-                    state.current_scissor(),
-                );
+                if state.is_axis_aligned() {
+                    // Baked fast path: axis-aligned SrcOver — pre-bake the device-space
+                    // center and encode the per-axis scale as diag(sx, sy).  Output is
+                    // byte-identical to the pre-affine path.
+                    let transformed_center = state.apply_transform(center);
+                    let sx = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
+                    let sy = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
+                    let instance = super::super::instancing::CircleInstance::new(
+                        transformed_center,
+                        radius,
+                        color,
+                        [sx, sy],
+                    );
+                    let _ = segment.circle_batch.add(instance);
+                    DrawSegment::push_scissor_region(
+                        &mut segment.circle_scissors,
+                        state.current_scissor(),
+                    );
+                } else {
+                    // Affine instanced path: rotated/skewed SrcOver circle.
+                    //
+                    // Encode the circle as a unit sphere (radius=1, center=origin) with
+                    // the full affine M_world * r baked into the linear columns so the
+                    // vertex shader places the device-space circle correctly.
+                    // The fragment evaluates `length(unit_pos) - 1.0`; fwidth gives
+                    // ~1-device-px AA at any scale/rotation.
+                    let linear_cols = [
+                        m.x_axis.x * radius,
+                        m.x_axis.y * radius,
+                        m.y_axis.x * radius,
+                        m.y_axis.y * radius,
+                    ];
+                    // Translation: M_world * center_local + t_world.
+                    // center is already in local space (pre-transform coordinates).
+                    let tx = m.x_axis.x * center.x.0 + m.y_axis.x * center.y.0 + m.w_axis.x;
+                    let ty = m.x_axis.y * center.x.0 + m.y_axis.y * center.y.0 + m.w_axis.y;
+                    let instance = super::super::instancing::CircleInstance::with_affine_transform(
+                        linear_cols,
+                        color,
+                        [tx, ty],
+                    );
+                    let _ = segment.circle_batch.add(instance);
+                    DrawSegment::push_scissor_region(
+                        &mut segment.circle_scissors,
+                        state.current_scissor(),
+                    );
+                }
             } else {
-                // Slow path: rotation/shear or non-SrcOver — tessellate and bake.
+                // Slow path: non-SrcOver — tessellate and bake.
                 //
-                // Phase-A quality note: uses the tessellated path → aliased edges
-                // (no SDF AA), AABB scissor clip. SDF-quality blended circles are
-                // Phase B.
+                // Non-SrcOver stays tessellated (aliased) until the SSAA tile path (PR-3+).
                 let fill_paint = Paint {
                     color,
                     style: PaintStyle::Fill,
@@ -418,7 +447,7 @@ impl DrawBatcher {
                         );
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to tessellate rotated circle: {}", e);
+                        tracing::warn!("Failed to tessellate circle: {}", e);
                     }
                 }
             }
@@ -441,27 +470,108 @@ impl DrawBatcher {
     }
 
     /// Record a filled or stroked oval (ellipse).
+    ///
+    /// SrcOver filled ovals are routed through the affine instanced circle path:
+    /// an ellipse with semi-axes `(rx, ry)` is a unit circle scaled by `diag(rx, ry)`
+    /// in local space, so the combined affine is `M_world * diag(rx, ry)` — exactly
+    /// what `CircleInstance::with_affine_transform` encodes. The fragment evaluates
+    /// `length(unit_pos) - 1.0` on the resulting oriented ellipse; `fwidth` gives
+    /// ~1-device-px AA for circles and moderate-aspect ellipses. (At extreme aspect
+    /// ratios the unit-circle SDF is not the true Euclidean distance to the ellipse,
+    /// so the AA band at the thin tips is slightly wider than 1px — same limitation
+    /// as `rect_instanced`; acceptable for UI shapes.)
+    ///
+    /// Non-SrcOver and stroked ovals remain tessellated (aliased) until PR-4.
+    ///
+    /// Paint-order note: like all instanced shapes (rect, circle), an instanced
+    /// oval flushes in the engine's fixed bucket order, NOT strict painter order
+    /// relative to overlapping *tessellated* SrcOver geometry in the same segment.
+    /// This is a pre-existing engine characteristic (bucket order ≠ draw order),
+    /// now extended consistently to ovals/rotated circles for the AA win; true
+    /// painter-order compositing is a separate, engine-wide concern.
     pub(in super::super) fn oval(
         &mut self,
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
+        opacity: f32,
         rect: Rect<Pixels>,
         paint: &Paint,
     ) {
         let center = rect.center();
-        let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
+        let rx = (rect.width() / 2.0).0;
+        let ry = (rect.height() / 2.0).0;
 
-        self.prime_tessellator_scale(state);
-        if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
-            Self::submit_transformed_geometry(
-                segment,
-                draw_order,
-                state,
-                vertices,
-                &indices,
-                pipeline::pipeline_key_from_paint(paint),
+        // Fold the compositor layer opacity into the color (the instanced pipeline
+        // has no opacity uniform), mirroring `rect`/`rrect`/`circle`.
+        let color = if opacity < 1.0 {
+            let alpha = (f32::from(paint.color.a) * opacity) as u8;
+            flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+        } else {
+            paint.color
+        };
+
+        if paint.style == PaintStyle::Fill && paint.blend_mode == BlendMode::SrcOver {
+            // Instanced affine SDF path: encode the ellipse as a unit circle under
+            // M_world * diag(rx, ry).  Works for both axis-aligned and rotated ovals.
+            let m = state.current_transform();
+
+            // Combined linear: M_w * diag(rx, ry).
+            // x-col of M_w scaled by rx; y-col of M_w scaled by ry.
+            let linear_cols = [
+                m.x_axis.x * rx,
+                m.x_axis.y * rx,
+                m.y_axis.x * ry,
+                m.y_axis.y * ry,
+            ];
+            // Translation: M_w * center_local + t_w.
+            let cx = center.x.0;
+            let cy = center.y.0;
+            let tx = m.x_axis.x * cx + m.y_axis.x * cy + m.w_axis.x;
+            let ty = m.x_axis.y * cx + m.y_axis.y * cy + m.w_axis.y;
+
+            let instance = super::super::instancing::CircleInstance::with_affine_transform(
+                linear_cols,
+                color,
+                [tx, ty],
             );
+            let _ = segment.circle_batch.add(instance);
+            DrawSegment::push_scissor_region(&mut segment.circle_scissors, state.current_scissor());
+        } else if paint.style == PaintStyle::Fill {
+            // Non-SrcOver fill — tessellate (aliased until the SSAA tile path, PR-4),
+            // carrying the opacity-folded color + the requested blend mode.
+            let fill_paint = Paint::fill(color).with_blend_mode(paint.blend_mode);
+            let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
+            self.prime_tessellator_scale(state);
+            if let Ok((vertices, indices)) =
+                self.tessellator
+                    .tessellate_ellipse(center, radii, &fill_paint)
+            {
+                Self::submit_transformed_geometry(
+                    segment,
+                    draw_order,
+                    state,
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(&fill_paint),
+                );
+            }
+        } else {
+            // Stroked oval — tessellate (fallback), unchanged.
+            let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
+            self.prime_tessellator_scale(state);
+            if let Ok((vertices, indices)) =
+                self.tessellator.tessellate_ellipse(center, radii, paint)
+            {
+                Self::submit_transformed_geometry(
+                    segment,
+                    draw_order,
+                    state,
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
+            }
         }
     }
 

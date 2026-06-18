@@ -291,34 +291,124 @@ impl RectInstance {
     }
 }
 
-/// Instance data for a circle
+/// Instance data for a circle or ellipse rendered via the affine instanced SDF path.
+///
+/// ## Layout and affine design
+///
+/// Mirrors [`RectInstance`]: the vertex shader applies `device = M * local + t` where:
+/// - `M` is the 2×2 linear part stored column-major in `transform`:
+///   `[a, b, c, d]` → x-column `(a, b)`, y-column `(c, d)`.
+/// - `t` is the translation stored in `transform_translate.xy`.
+/// - `local` is `unit_pos * radius + [cx, cy]`, where `unit_pos ∈ [-1,1]²`
+///   and `[cx, cy]` is the local-space center from `center_radius.xy`.
+///
+/// ## Baked fast path (axis-aligned SrcOver circles)
+///
+/// [`CircleInstance::new`] produces `transform = diag(sx, sy)`,
+/// `transform_translate = [cx_dev, cy_dev, 0, 0]`, and `center_radius = [0, 0, r, 0]`.
+/// The vertex shader computes `local = unit_pos * radius` (origin-centered) then
+/// `device = diag(sx,sy)*local + center_dev`. The device center lives in the
+/// translation so the scale never multiplies it — matching the pre-affine path,
+/// which added `center` directly and scaled only `normalized_pos * radius`.
+/// (Putting the center inside `local` would double-scale it under any non-unit
+/// CTM scale, e.g. HiDPI DPR>1.)
+///
+/// ## Affine path (rotated circles, ellipses, ovals under a general transform)
+///
+/// [`CircleInstance::with_affine_transform`] uses `center_radius = [0,0,1,0]`
+/// (unit circle at origin). `transform` encodes `M_world * diag(rx, ry)`:
+///   - circle of radius `r` at center `c` under `M_w + t_w`:
+///     `linear = [M_w.a*r, M_w.b*r, M_w.c*r, M_w.d*r]`,
+///     `translate = M_w * c + t_w`.
+///   - ellipse with semi-axes `(rx, ry)`:
+///     `linear = [M_w.a*rx, M_w.b*rx, M_w.c*ry, M_w.d*ry]`.
+///
+/// The SDF fragment evaluates `length(unit_pos) - 1.0`, which is 0 at the unit-circle
+/// edge; `fwidth` gives ~1-device-px AA at any radius, scale, or rotation.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct CircleInstance {
-    /// Center point [x, y] and radius [radius, _padding]
+    /// Radius in `.z`; `.xy` is unused (the center lives in `transform_translate`).
+    ///
+    /// Baked fast path: `[0, 0, radius, 0]`.
+    /// Affine path: `[0, 0, 1, 0]` (radius folded into `transform`).
     pub center_radius: [f32; 4],
 
-    /// Color [r, g, b, a] in 0-1 range
+    /// Color `[r, g, b, a]` in linear 0–1 range.
     pub color: [f32; 4],
 
-    /// Transform (for ellipses: scale_x, scale_y)
+    /// 2×2 linear part of the affine transform, column-major:
+    /// `[a, b, c, d]` → x-column `(a, b)`, y-column `(c, d)`.
+    ///
+    /// Baked fast path: `diag(sx, sy)` (per-axis canvas scale).
+    /// Affine path: `M_world * diag(rx, ry)`.
     pub transform: [f32; 4],
+
+    /// Translation part of the affine transform: `[tx, ty, 0, 0]` = the device
+    /// center. Added AFTER `M` in the shader, so the linear part never scales it.
+    ///
+    /// Baked fast path: `[cx_dev, cy_dev, 0, 0]`.
+    /// Affine path: device-space center = `M_w * center_local + t_w`.
+    /// The `.zw` lanes are padding for 16-byte vec4 alignment.
+    pub transform_translate: [f32; 4],
 }
 
 impl CircleInstance {
-    /// Create a circle instance.
+    /// Create a circle instance (baked fast path).
     ///
-    /// `scale_xy` is the per-axis scale `[sx, sy]` extracted from the current
-    /// transform matrix.  Pass `[1.0, 1.0]` for identity / uniform scale.
-    /// The circle shader computes the bounding-quad half-extent as
-    /// `radius * scale_xy`, so non-unit values correctly handle a zoomed
-    /// or non-uniformly scaled canvas.
+    /// `center` must already be in device pixels (the caller applies the
+    /// current transform). The affine encodes axis-aligned scale as
+    /// `diag(sx, sy)` and carries the device center in the translation, so the
+    /// vertex shader produces `device = diag(sx,sy) * (unit * radius) + center_dev`
+    /// — the scale never multiplies the center (matches the pre-affine path).
+    ///
+    /// `scale_xy` is `[sx, sy]` extracted from the current transform matrix.
+    /// Pass `[1.0, 1.0]` for identity / uniform scale.
     #[must_use]
     pub fn new(center: Point<Pixels>, radius: f32, color: Color, scale_xy: [f32; 2]) -> Self {
         Self {
-            center_radius: [center.x.0, center.y.0, radius, 0.0],
+            // `center` is already in device pixels. It is carried in
+            // `transform_translate` (added AFTER M in the shader) so the scale in
+            // M = diag(sx,sy) never multiplies it — the local shape is the
+            // origin-centered unit circle scaled by `radius`. center_radius.xy is
+            // unused; only .z (radius) is read.
+            center_radius: [0.0, 0.0, radius, 0.0],
             color: color.to_f32_array(),
-            transform: [scale_xy[0], scale_xy[1], 0.0, 0.0],
+            // Baked scale: identity rotation, per-axis scale as diag(sx, sy).
+            // x-col = (sx, 0), y-col = (0, sy).
+            transform: [scale_xy[0], 0.0, 0.0, scale_xy[1]],
+            transform_translate: [center.x.0, center.y.0, 0.0, 0.0],
+        }
+    }
+
+    /// Create a circle or ellipse instance for the full-affine SDF path.
+    ///
+    /// Use this for any SrcOver circle/ellipse that needs rotation, shear,
+    /// or non-uniform scale (rotated circles, oriented ellipses, ovals under
+    /// a general world transform).
+    ///
+    /// The unit circle at origin is the canonical local shape: `center_radius =
+    /// [0, 0, 1, 0]`. The vertex shader applies `device = M * unit_pos + t` and
+    /// passes `unit_pos` to the fragment, which evaluates `length(unit_pos) - 1.0`
+    /// as the signed distance — correct for any affine (fwidth gives ~1-device-px AA).
+    ///
+    /// `linear_cols` encodes `M_world * diag(rx, ry)` column-major `[a, b, c, d]`:
+    ///   - circle radius `r` under `M_w`: `[M_w.a*r, M_w.b*r, M_w.c*r, M_w.d*r]`
+    ///   - ellipse `(rx, ry)` under `M_w`: `[M_w.a*rx, M_w.b*rx, M_w.c*ry, M_w.d*ry]`
+    ///
+    /// `translation` is `[tx, ty]` = `M_w * center_local + t_w` in device pixels.
+    #[must_use]
+    pub fn with_affine_transform(
+        linear_cols: [f32; 4],
+        color: Color,
+        translation: [f32; 2],
+    ) -> Self {
+        Self {
+            // Unit circle at local origin; the affine encodes radius + world transform.
+            center_radius: [0.0, 0.0, 1.0, 0.0],
+            color: color.to_f32_array(),
+            transform: linear_cols,
+            transform_translate: [translation[0], translation[1], 0.0, 0.0],
         }
     }
 
@@ -327,16 +417,22 @@ impl CircleInstance {
     // `CircleInstance::new` with scale_xy. When per-axis radii independent of
     // the canvas scale are needed it relands with a concrete first consumer.
 
-    /// Get wgpu vertex buffer layout for instance data
+    /// Get wgpu vertex buffer layout for instance data.
+    ///
+    /// Locations 2–4 are unchanged from the pre-PR-2 layout. Location 5 is the
+    /// new `transform_translate` field appended at the end of the struct;
+    /// appending keeps all existing field offsets byte-identical.
     #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
-            // Center + radius (location 2)
+            // Center + radius [cx, cy, radius, _] (location 2)
             2 => Float32x4,
-            // Color (location 3)
+            // Color [r, g, b, a] (location 3)
             3 => Float32x4,
-            // Transform (location 4)
+            // 2×2 linear affine [a, b, c, d] column-major (location 4)
             4 => Float32x4,
+            // Affine translation [tx, ty, 0, 0] (location 5)
+            5 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -790,10 +886,13 @@ mod tests {
 
     #[test]
     fn test_circle_instance_size() {
-        assert_eq!(
-            std::mem::size_of::<CircleInstance>(),
-            12 * 4 // 12 floats = 48 bytes
-        );
+        // CircleInstance field layout (all #[repr(C)], tightly packed):
+        //   center_radius:       [f32; 4]  = 16 bytes
+        //   color:               [f32; 4]  = 16 bytes
+        //   transform:           [f32; 4]  = 16 bytes  ← 2×2 linear affine
+        //   transform_translate: [f32; 4]  = 16 bytes  ← appended for affine path
+        //   Total: 64 bytes
+        assert_eq!(std::mem::size_of::<CircleInstance>(), 64);
     }
 
     #[test]
@@ -1020,29 +1119,67 @@ mod tests {
         use flui_types::{Point, geometry::Pixels};
         let center = Point::new(flui_types::geometry::Pixels(50.0), Pixels(75.0));
         let instance = CircleInstance::new(center, 20.0, Color::RED, [1.0, 1.0]);
-        assert_eq!(instance.center_radius[0], 50.0); // x
-        assert_eq!(instance.center_radius[1], 75.0); // y
+        // The device center lives in `transform_translate` (added AFTER M in the
+        // shader) so M = diag(sx,sy) never double-scales it. `center_radius.xy`
+        // is unused; `.z` is the radius. (Unit-level guard for the baked-path
+        // double-scale bug — see GPU test C4.)
+        assert_eq!(instance.center_radius[0], 0.0); // unused
+        assert_eq!(instance.center_radius[1], 0.0); // unused
         assert_eq!(instance.center_radius[2], 20.0); // radius
         assert_eq!(instance.center_radius[3], 0.0); // padding
+        assert_eq!(instance.transform_translate[0], 50.0); // device center x
+        assert_eq!(instance.transform_translate[1], 75.0); // device center y
     }
 
-    /// Regression: CircleInstance::new must propagate scale_xy into the
-    /// transform field so the circle shader sizes the bounding quad correctly.
-    /// Before the fix, transform was always [1.0, 1.0, 0.0, 0.0] regardless
-    /// of the canvas scale, causing scaled circles to render at wrong size.
+    /// `CircleInstance::new` must encode scale_xy as `diag(sx, sy)` in the 2×2
+    /// transform field so the vertex shader computes the correct bounding-quad
+    /// size, and carry the device center in `transform_translate` (so M never
+    /// scales it). A non-origin center proves the center → translate mapping.
     #[test]
     fn circle_instance_scale_propagates_to_transform() {
         use flui_types::{Point, geometry::Pixels};
-        let center = Point::new(Pixels(0.0), Pixels(0.0));
+        let center = Point::new(Pixels(12.0), Pixels(34.0));
         let identity = CircleInstance::new(center, 10.0, Color::RED, [1.0, 1.0]);
-        assert_eq!(identity.transform[0], 1.0, "identity sx");
-        assert_eq!(identity.transform[1], 1.0, "identity sy");
+        // diag(1,1): x-col=(1,0), y-col=(0,1)
+        assert_eq!(identity.transform, [1.0, 0.0, 0.0, 1.0], "identity diag");
+        // Center carried in the translation (NOT scaled by M).
+        assert_eq!(identity.transform_translate[0], 12.0, "tx = center x");
+        assert_eq!(identity.transform_translate[1], 34.0, "ty = center y");
 
         let scaled = CircleInstance::new(center, 10.0, Color::RED, [2.5, 3.0]);
-        assert_eq!(scaled.transform[0], 2.5, "scaled sx");
-        assert_eq!(scaled.transform[1], 3.0, "scaled sy");
-        assert_eq!(scaled.transform[2], 0.0, "translate_x always 0");
-        assert_eq!(scaled.transform[3], 0.0, "translate_y always 0");
+        // diag(2.5, 3.0): x-col=(2.5,0), y-col=(0,3.0)
+        assert_eq!(scaled.transform, [2.5, 0.0, 0.0, 3.0], "scaled diag");
+        // Center is still the raw device center — diag(sx,sy) must NOT multiply it.
+        assert_eq!(scaled.transform_translate[0], 12.0, "tx unscaled by sx");
+        assert_eq!(scaled.transform_translate[1], 34.0, "ty unscaled by sy");
+    }
+
+    /// `CircleInstance::with_affine_transform` must store a unit circle at origin
+    /// and round-trip the caller's linear + translate without mangling.
+    #[test]
+    fn circle_with_affine_transform_stores_unit_circle_and_affine() {
+        // 30° rotation × radius 20 for a circle: col-major M_w*r.
+        let cos30 = std::f32::consts::FRAC_PI_6.cos();
+        let sin30 = std::f32::consts::FRAC_PI_6.sin();
+        let r = 20.0_f32;
+        // CW screen rotation: x-col=(cos,-sin)*r, y-col=(sin,cos)*r (col-major [a,b,c,d]).
+        let linear = [cos30 * r, -sin30 * r, sin30 * r, cos30 * r];
+        let translation = [64.0_f32, 64.0_f32];
+
+        let instance = CircleInstance::with_affine_transform(linear, Color::BLUE, translation);
+
+        // center_radius must be the unit circle at origin.
+        assert_eq!(instance.center_radius[0], 0.0, "cx=0");
+        assert_eq!(instance.center_radius[1], 0.0, "cy=0");
+        assert_eq!(instance.center_radius[2], 1.0, "radius=1 (unit circle)");
+        assert_eq!(instance.center_radius[3], 0.0, "padding");
+        // Linear stored verbatim.
+        assert_eq!(instance.transform, linear, "linear 2×2 round-trip");
+        // Translation stored in xy; zw are padding.
+        assert_eq!(instance.transform_translate[0], 64.0, "tx");
+        assert_eq!(instance.transform_translate[1], 64.0, "ty");
+        assert_eq!(instance.transform_translate[2], 0.0, "pad.z");
+        assert_eq!(instance.transform_translate[3], 0.0, "pad.w");
     }
 
     /// Regression: ArcInstance::new must propagate scale_xy into the transform

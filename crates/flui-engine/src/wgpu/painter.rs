@@ -727,10 +727,12 @@ impl WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
 
+        let opacity = self.compositor.current_opacity();
         self.batcher.oval(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
+            opacity,
             rect,
             paint,
         );

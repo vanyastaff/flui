@@ -27,6 +27,38 @@
 /// Number of sub-samples per pixel axis for the analytic-coverage oracle.
 const ORACLE_GRID: usize = 8;
 
+/// Analytic inside-test for an axis-aligned circle centered at origin with
+/// the given radius.
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+fn inside_circle(px: f32, py: f32, radius: f32) -> bool {
+    px * px + py * py <= radius * radius
+}
+
+/// Analytic inside-test for an axis-aligned ellipse centered at origin with
+/// semi-axes `(rx, ry)`.
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+fn inside_ellipse(px: f32, py: f32, rx: f32, ry: f32) -> bool {
+    // Point is inside the ellipse iff (px/rx)² + (py/ry)² ≤ 1.
+    let nx = px / rx;
+    let ny = py / ry;
+    nx * nx + ny * ny <= 1.0
+}
+
+/// Analytic inside-test for a rotated ellipse centered at origin.
+///
+/// `angle_rad` is the CW rotation of the ellipse's major axis from the +X axis
+/// (screen-space Y-down convention). The test maps the query point into the
+/// ellipse's local frame and delegates to [`inside_ellipse`].
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+fn inside_rotated_ellipse(px: f32, py: f32, rx: f32, ry: f32, angle_rad: f32) -> bool {
+    // Inverse rotation: rotate the query point by -angle into the ellipse frame.
+    let cos_a = angle_rad.cos();
+    let sin_a = angle_rad.sin();
+    let local_x = cos_a * px + sin_a * py;
+    let local_y = -sin_a * px + cos_a * py;
+    inside_ellipse(local_x, local_y, rx, ry)
+}
+
 /// Analytic inside-test for an axis-aligned rect centered at origin with
 /// half-extents `(half_w, half_h)`.
 fn inside_rect(px: f32, py: f32, half_w: f32, half_h: f32) -> bool {
@@ -294,7 +326,8 @@ mod gpu_tests {
     use crate::wgpu::{painter::WgpuPainter, render_target::RenderTarget};
 
     use super::{
-        analytic_coverage, inside_rotated_rect, inside_rotated_rounded_rect, inside_rounded_rect,
+        analytic_coverage, inside_circle, inside_rotated_ellipse, inside_rotated_rect,
+        inside_rotated_rounded_rect, inside_rounded_rect,
     };
 
     // ── Harness constants ─────────────────────────────────────────────────────
@@ -908,6 +941,416 @@ mod gpu_tests {
     }
 
     // ── O5: Byte-identity — axis-aligned SrcOver rect and rrect ──────────────
+
+    // ── C1: Circle AA — fwidth model is radius-independent ───────────────────
+
+    /// C1: A filled SrcOver circle must have boundary pixels that match the
+    /// analytic-coverage oracle within `CALIBRATION_TOLERANCE_U8` at two radii
+    /// spanning a ~4× range: 12 px and 50 px (both fit the 128² test surface).
+    ///
+    /// ## Red→green proof
+    ///
+    /// The OLD `edge_softness = 0.02` (radius-relative) model produced an AA band
+    /// that scaled with the radius, so the two radii diverge sharply:
+    ///   - r=12: AA band = 0.02 * 12 * 2 = 0.48 px → sub-pixel → nearly aliased.
+    ///     The boundary would be mostly 0 or 255, failing the oracle (diff ≈ 127 >> 30).
+    ///   - r=50: AA band = 0.02 * 50 * 2 = 2 px → too wide; boundary pixels sit at
+    ///     coverages the box oracle does not expect.
+    ///
+    /// A single relative-softness value cannot satisfy the oracle at both radii —
+    /// that 4× span is the teeth. The NEW `fwidth`-based model gives ~1 device-px
+    /// AA at any radius, so both pass.
+    ///
+    /// Additionally, the test verifies that the interior is fully opaque and an
+    /// exterior point is transparent (C3 properties), consolidating three checks.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn c1_circle_aa_is_radius_independent() {
+        // We test one radius per isolated surface to keep the test self-contained
+        // and avoid shape overlap. Use r=12 and r=50 on the 128×128 surface (r=200
+        // would not fit, so we use r=50 for the large-radius case — the point of
+        // C1 is radius-independence which is covered by comparing r=12 vs r=50).
+        for radius in [12.0_f32, 50.0_f32] {
+            let (device, queue) = acquire_test_device_and_queue();
+            let (surface_texture, surface_view) = create_render_surface(&device);
+            clear_surface(&device, &queue, &surface_view);
+
+            let cx = SURFACE_WIDTH as f32 / 2.0;
+            let cy = SURFACE_HEIGHT as f32 / 2.0;
+
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            painter.circle(
+                flui_types::Point::new(
+                    flui_types::geometry::Pixels(cx),
+                    flui_types::geometry::Pixels(cy),
+                ),
+                radius,
+                &Paint::fill(Color::WHITE),
+            );
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("C1 Circle Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&surface_view, &surface_texture),
+                    &mut encoder,
+                )
+                .expect("painter.render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+
+            let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+            let boundary = boundary_pixel_indices(|px, py| inside_circle(px - cx, py - cy, radius));
+
+            assert!(
+                boundary.len() >= 4,
+                "C1 r={radius}: fewer than 4 boundary pixels found ({}) — shape may be off-screen \
+                 or oracle broken",
+                boundary.len()
+            );
+
+            let mut failed_count = 0usize;
+            for (pixel_idx, oracle_coverage) in &boundary {
+                let readback_alpha = pixels[*pixel_idx][3];
+                let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
+                let diff =
+                    (i16::from(readback_alpha) - i16::from(oracle_alpha)).unsigned_abs() as u8;
+                if diff > CALIBRATION_TOLERANCE_U8 {
+                    failed_count += 1;
+                }
+            }
+
+            let boundary_count = boundary.len();
+            let max_failures = (boundary_count as f32 * 0.05).ceil() as usize;
+            assert!(
+                failed_count <= max_failures,
+                "C1 FAILED at r={radius}: {failed_count}/{boundary_count} boundary pixels exceed \
+                 oracle tolerance {CALIBRATION_TOLERANCE_U8}. \
+                 The fwidth AA model must give ~1-device-px AA at all radii — \
+                 the old edge_softness=0.02 would fail this at r=12 and r=50."
+            );
+
+            // Interior must be opaque.
+            let interior_col = cx.round() as usize;
+            let interior_row = cy.round() as usize;
+            let interior_idx = interior_row * SURFACE_WIDTH as usize + interior_col;
+            assert!(
+                pixels[interior_idx][3] > 200,
+                "C1 r={radius}: interior pixel must be nearly opaque; got alpha={}",
+                pixels[interior_idx][3]
+            );
+
+            // Exterior (2 px beyond the edge) must be transparent.
+            let exterior_col = (cx + radius + 2.0).min(SURFACE_WIDTH as f32 - 1.0) as usize;
+            let exterior_row = cy.round() as usize;
+            let exterior_idx = exterior_row * SURFACE_WIDTH as usize + exterior_col;
+            assert!(
+                pixels[exterior_idx][3] < CALIBRATION_TOLERANCE_U8,
+                "C1 r={radius}: exterior pixel (2px beyond edge) must be transparent; \
+                 got alpha={} — fringe expansion may be leaking output",
+                pixels[exterior_idx][3]
+            );
+        }
+    }
+
+    // ── C2: Rotated ellipse — affine orientation correct ─────────────────────
+
+    /// C2: A 30° rotated ellipse (rx=35, ry=15) must have boundary pixels that
+    /// match the analytic rotated-ellipse oracle within tolerance.
+    ///
+    /// This proves:
+    /// 1. The affine encoding `M_world * diag(rx, ry)` produces a correctly
+    ///    oriented ellipse in device space.
+    /// 2. `fwidth` gives ~1-device-px AA even for an anisotropic ellipse under
+    ///    rotation (non-uniform scale in local space).
+    ///
+    /// If the oval routing incorrectly treats `rx`/`ry` as a uniform scale or
+    /// uses the wrong local→device mapping, the boundary will be in the wrong
+    /// position and the oracle match will fail.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn c2_rotated_ellipse_boundary_matches_oracle() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let angle = PI / 6.0; // 30°
+        let rx = 35.0_f32;
+        let ry = 15.0_f32;
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+
+        // Draw an oval (axis-aligned in local space) under a 30° rotation.
+        // The bounding rect in local space is [cx-rx, cy-ry, cx+rx, cy+ry].
+        let local_rect = Rect::from_ltrb(
+            Pixels(cx - rx),
+            Pixels(cy - ry),
+            Pixels(cx + rx),
+            Pixels(cy + ry),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // Rotate around the canvas center so the ellipse center stays at (cx, cy).
+        painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+        painter.rotate(angle);
+        painter.translate(flui_types::Offset::new(Pixels(-cx), Pixels(-cy)));
+        painter.oval(local_rect, &Paint::fill(Color::WHITE));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("C2 Rotated Ellipse Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Oracle: rotated ellipse centered at (cx, cy).
+        let boundary = boundary_pixel_indices(|px, py| {
+            inside_rotated_ellipse(px - cx, py - cy, rx, ry, angle)
+        });
+
+        assert!(
+            boundary.len() >= 8,
+            "C2: fewer than 8 boundary pixels found ({}) — shape may be off-screen or oracle broken",
+            boundary.len()
+        );
+
+        let mut failed_count = 0usize;
+        for (pixel_idx, oracle_coverage) in &boundary {
+            let readback_alpha = pixels[*pixel_idx][3];
+            let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
+            let diff = (i16::from(readback_alpha) - i16::from(oracle_alpha)).unsigned_abs() as u8;
+            if diff > CALIBRATION_TOLERANCE_U8 {
+                failed_count += 1;
+            }
+        }
+
+        let boundary_count = boundary.len();
+        let max_failures = (boundary_count as f32 * 0.05).ceil() as usize;
+        assert!(
+            failed_count <= max_failures,
+            "C2 FAILED: {failed_count}/{boundary_count} rotated-ellipse boundary pixels exceed \
+             oracle tolerance {CALIBRATION_TOLERANCE_U8}. \
+             Affine orientation or fwidth AA on the ellipse is wrong."
+        );
+
+        // Interior pixel (ellipse center) must be opaque.
+        let interior_col = cx.round() as usize;
+        let interior_row = cy.round() as usize;
+        let interior_idx = interior_row * SURFACE_WIDTH as usize + interior_col;
+        assert!(
+            pixels[interior_idx][3] > 200,
+            "C2: interior pixel (ellipse center) must be nearly opaque; got alpha={}",
+            pixels[interior_idx][3]
+        );
+    }
+
+    // ── C3: Interior opaque + exterior transparent (fringe leaks nothing) ────
+
+    /// C3: For a filled SrcOver circle:
+    /// 1. Every pixel whose center is ≥2px inside the circle must be fully opaque
+    ///    (interior correctness).
+    /// 2. Every pixel whose center is ≥2px outside the circle must be transparent
+    ///    (fringe expansion must not leak any visible output beyond the AA band).
+    ///
+    /// This guards against the fringe quad expansion producing visible artifacts
+    /// outside the shape boundary.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn c3_circle_interior_opaque_exterior_transparent() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let radius = 40.0_f32;
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.circle(
+            flui_types::Point::new(
+                flui_types::geometry::Pixels(cx),
+                flui_types::geometry::Pixels(cy),
+            ),
+            radius,
+            &Paint::fill(Color::WHITE),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("C3 Circle Interior/Exterior Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        let guard_px = 2.0_f32; // minimum inset/outset from the geometric edge
+
+        let mut interior_failures = 0usize;
+        let mut exterior_failures = 0usize;
+        let mut interior_total = 0usize;
+        let mut exterior_total = 0usize;
+
+        for row in 0..SURFACE_HEIGHT {
+            for col in 0..SURFACE_WIDTH {
+                let px = col as f32 + 0.5 - cx;
+                let py = row as f32 + 0.5 - cy;
+                let dist_from_edge = (px * px + py * py).sqrt() - radius;
+                let idx = row as usize * SURFACE_WIDTH as usize + col as usize;
+                let alpha = pixels[idx][3];
+
+                if dist_from_edge < -guard_px {
+                    // Clearly inside: must be opaque.
+                    interior_total += 1;
+                    if alpha < 200 {
+                        interior_failures += 1;
+                    }
+                } else if dist_from_edge > guard_px {
+                    // Clearly outside: must be transparent.
+                    exterior_total += 1;
+                    if alpha > CALIBRATION_TOLERANCE_U8 {
+                        exterior_failures += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            interior_total > 0,
+            "C3: no interior pixels found — circle may be too small or off-screen"
+        );
+        assert!(
+            exterior_total > 0,
+            "C3: no exterior pixels found — circle may fill the whole surface"
+        );
+
+        assert!(
+            interior_failures == 0,
+            "C3 FAILED: {interior_failures}/{interior_total} interior pixels (≥2px inside the \
+             circle edge) are not fully opaque — interior fill is wrong."
+        );
+        assert!(
+            exterior_failures == 0,
+            "C3 FAILED: {exterior_failures}/{exterior_total} exterior pixels (≥2px outside the \
+             circle edge) are not transparent — fringe expansion is leaking visible output."
+        );
+    }
+
+    // ── C4: Scaled circle center is not double-scaled (baked-path regression) ──
+
+    /// C4: Under a non-unit canvas scale, a circle's CENTER must land at the
+    /// transformed position — NOT at scale × position.
+    ///
+    /// Regression guard for the baked fast-path bug where the device center was
+    /// placed inside the local vector, so `M = diag(sx,sy)` scaled it a second
+    /// time. With `scale(2,2)` and a circle at local (32,32) r=10, the device
+    /// center is (64,64) and device radius 20. The bug rendered the center at
+    /// (128,128) — off this 128² surface — leaving (64,64) empty. C1–C3 use
+    /// identity scale and cannot catch this; production hits it on every HiDPI
+    /// (DPR>1) display, which pushes a root `scale(dpr)` into the painter CTM.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn c4_scaled_circle_center_not_double_scaled() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.scale(2.0, 2.0);
+        painter.circle(
+            flui_types::Point::new(
+                flui_types::geometry::Pixels(32.0),
+                flui_types::geometry::Pixels(32.0),
+            ),
+            10.0,
+            &Paint::fill(Color::WHITE),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("C4 Scaled Circle Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Expected device geometry: center (64,64), radius 20.
+        let dcx = 64.0_f32;
+        let dcy = 64.0_f32;
+        let dradius = 20.0_f32;
+
+        // The center must be opaque. The double-scale bug placed it at (128,128)
+        // (off-surface), so (64,64) would be transparent → this assertion fails.
+        let center_idx = dcy as usize * SURFACE_WIDTH as usize + dcx as usize;
+        assert!(
+            pixels[center_idx][3] > 200,
+            "C4: scaled circle center must be opaque at device (64,64); got alpha={} — \
+             the baked path likely double-scaled the center (rendered it at scale × position)",
+            pixels[center_idx][3]
+        );
+
+        // The boundary at device center (64,64), radius 20 must match the oracle —
+        // proving both correct position AND correct (scaled) radius extent.
+        let boundary = boundary_pixel_indices(|px, py| inside_circle(px - dcx, py - dcy, dradius));
+        assert!(
+            boundary.len() >= 4,
+            "C4: fewer than 4 boundary pixels at the expected device position ({}) — \
+             the circle is not where the transform says it should be",
+            boundary.len()
+        );
+        let mut failed = 0usize;
+        for (pixel_idx, oracle_coverage) in &boundary {
+            let a = pixels[*pixel_idx][3];
+            let oracle_alpha = (oracle_coverage * 255.0).round() as u8;
+            let diff = (i16::from(a) - i16::from(oracle_alpha)).unsigned_abs() as u8;
+            if diff > CALIBRATION_TOLERANCE_U8 {
+                failed += 1;
+            }
+        }
+        let max_failures = (boundary.len() as f32 * 0.05).ceil() as usize;
+        assert!(
+            failed <= max_failures,
+            "C4 FAILED: {failed}/{} boundary pixels exceed tolerance at device radius 20 — \
+             the scaled circle's geometry/position is wrong",
+            boundary.len()
+        );
+    }
 
     /// O5: The axis-aligned SrcOver path is byte-identical to its pre-affine
     /// behavior.
