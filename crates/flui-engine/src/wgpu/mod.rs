@@ -118,14 +118,14 @@ mod pipeline;
 // adds the nine named pipelines previously scattered as painter fields.
 /// Opacity/layer save-state machine: `opacity_stack`, `current_opacity`, and
 /// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
-/// `save_layer`/`restore_layer`; all GPU emission stays on `WgpuPainter`.
+/// `save_layer`/`restore_layer`; GPU emission lives in `GpuReplay`.
 pub(super) mod layer_compositor;
 pub(crate) mod pipelines;
 mod profiler;
 mod renderer;
-/// Texture-batch replay/submit component: owns the per-frame
-/// `texture_batch` scratch and the `flush_texture_batch*` family.
-/// Grows in T10c/d to own the full segment-flush and render loop.
+/// Replay/submit component: owns GPU plumbing fields, the per-frame
+/// `texture_batch` scratch, all six segment-flush phases, the top-level
+/// `submit` dispatch loop, and `flush_opacity_layer` recursion.
 pub(super) mod replay;
 pub(crate) mod resources;
 /// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
