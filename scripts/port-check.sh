@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 19 refusal triggers (1-19, with #9 numbered for FR-036)
+# Verifies the 20 refusal triggers (1-20, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check. Exits non-zero on the first violation
 # outside the whitelist; prints the offending file:line and the trigger
@@ -12,7 +12,9 @@
 # (println!/eprintln!/dbg! ban, module-level allow(unsafe_code) ban,
 # reinvented debug_assert_* ban, key.rs new_unchecked ban). Trigger #19
 # added in engine overhaul T9f (C4: Matrix4 must not appear on the
-# record/pipeline side; convert at the Backend trait boundary).
+# record/pipeline side; convert at the Backend trait boundary). Trigger #20
+# added in advanced-blend PR-5 (gradient/image producers must not regress
+# to SrcOver warn-fallback; deleted strings must not reappear).
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -23,7 +25,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 19 triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 20 triggers; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -1240,6 +1242,43 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 20: no warn-fallback strings for gradient/image producers (PR-5)
+#
+# PR-5 deleted three warn-fallback blocks that previously made gradient and
+# image producers silently fall through to SrcOver for advanced blend modes.
+# If any of these strings reappear in batches/, renderer.rs, or backend.rs,
+# a producer has regressed to the fallback path and advanced blend will
+# silently produce wrong output for those draw calls.
+#
+# replay.rs is excluded: it legitimately uses similar language in its own
+# documentation and is never a producer (it is the replay/submit side).
+#
+# The runtime half of this gate is PipelineCache::get_or_create's
+# debug_assert!(!key.blend_mode().is_advanced(), …) which panics in GPU
+# tests if an advanced mode reaches the pipeline cache.
+# -----------------------------------------------------------------------------
+trigger20_hits=$(rg --line-number --column \
+    -e 'is not supported by the' \
+    -e 'rendering as SrcOver' \
+    crates/flui-engine/src/wgpu/batches \
+    crates/flui-engine/src/wgpu/renderer.rs \
+    crates/flui-engine/src/wgpu/backend.rs 2>/dev/null \
+  || true)
+
+if [[ -n "${trigger20_hits}" ]]; then
+  echo 'VIOLATION 20: gradient/image warn-fallback strings found in batches/, renderer.rs, or backend.rs'
+  echo '  These strings were deleted by PR-5; their reappearance signals a producer has regressed to SrcOver fallback.'
+  echo "see ${trigger_doc} (trigger 20)"
+  echo "${trigger20_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    20: no warn-fallback strings in batches/, renderer.rs, or backend.rs"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1248,7 +1287,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 19 refusal triggers + FR-033 grep clean"
+echo "port-check: all 20 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

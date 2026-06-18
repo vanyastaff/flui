@@ -268,10 +268,16 @@ pub(crate) struct AdvancedShapeOp {
     pub(crate) segment: DrawSegment,
     /// Advanced blend mode to apply when compositing the shape onto the surface.
     pub(crate) mode: BlendMode,
-    /// AABB of `segment.vertices[*].position` in device pixels.
+    /// Device-space AABB of the producer's coverage in device pixels.
     ///
-    /// Computed from the baked-to-device vertex positions at record time.
-    /// Used by `flush_advanced_layer` for the `device_bounds`, the `src_uv`
+    /// For tessellated shapes: computed as the AABB of `segment.vertices[*].position`
+    /// (baked to device space at record time).
+    ///
+    /// For gradient and image producers: the transformed quad/rect or union of
+    /// tile/sprite destination rects in device space (no vertex array is stored for
+    /// these instanced producers).
+    ///
+    /// Used by `flush_advanced_layer` for the backdrop-copy region, the `src_uv`
     /// remap, and the damage-straddle guard.
     pub(crate) device_bounds: Rect<Pixels>,
 }

@@ -44,23 +44,15 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         // Shader/gradient fill — dispatch before any opacity or color work.
-        if paint.style == PaintStyle::Fill && paint.has_shader() {
-            if paint.blend_mode != BlendMode::SrcOver {
-                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    tracing::warn!(
-                        blend_mode = ?paint.blend_mode,
-                        "gradient/shader fill with blend_mode {:?} is not supported by the \
-                         Phase A fixed-function path; rendering as SrcOver. \
-                         Phase B will add dst-sample blended gradients. (logged once per process)",
-                        paint.blend_mode,
-                    );
-                }
-            }
-            if Self::dispatch_shader_rect(segment, state, rect, paint, [0.0; 4]) {
-                return;
-            }
+        // Advanced blend modes are handled inside dispatch_shader_rect (PR-5):
+        // an isolated DrawSegment is pushed as DrawItem::AdvancedShape so the
+        // replay loop can dst-read blend without coupling the gradient path to
+        // the tessellator funnel (add_tessellated_with_key).
+        if paint.style == PaintStyle::Fill
+            && paint.has_shader()
+            && Self::dispatch_shader_rect(segment, draw_order, state, rect, paint, [0.0; 4])
+        {
+            return;
         }
 
         if paint.style == PaintStyle::Fill {
@@ -170,20 +162,8 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         // Shader/gradient fill — dispatch before any opacity or color work.
+        // Advanced blend modes are handled inside dispatch_shader_rect (PR-5).
         if paint.style == PaintStyle::Fill && paint.has_shader() {
-            if paint.blend_mode != BlendMode::SrcOver {
-                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    tracing::warn!(
-                        blend_mode = ?paint.blend_mode,
-                        "gradient/shader rrect fill with blend_mode {:?} is not supported by \
-                         the Phase A fixed-function path; rendering as SrcOver. \
-                         Phase B will add dst-sample blended gradients. (logged once per process)",
-                        paint.blend_mode,
-                    );
-                }
-            }
             let corner_radii = [
                 rrect.top_left.x.0.max(rrect.top_left.y.0),
                 rrect.top_right.x.0.max(rrect.top_right.y.0),
@@ -192,6 +172,7 @@ impl DrawBatcher {
             ];
             if Self::dispatch_shader_rect(
                 segment,
+                draw_order,
                 state,
                 rrect.bounding_rect(),
                 paint,
@@ -294,27 +275,15 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         // Shader/gradient fill — dispatch before any opacity or color work.
+        // Advanced blend modes are handled inside dispatch_shader_rect (PR-5).
         if paint.style == PaintStyle::Fill && paint.has_shader() {
-            if paint.blend_mode != BlendMode::SrcOver {
-                static GRADIENT_BLEND_WARNED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !GRADIENT_BLEND_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    tracing::warn!(
-                        blend_mode = ?paint.blend_mode,
-                        "gradient/shader circle fill with blend_mode {:?} is not supported by \
-                         the Phase A fixed-function path; rendering as SrcOver. \
-                         Phase B will add dst-sample blended gradients. (logged once per process)",
-                        paint.blend_mode,
-                    );
-                }
-            }
             let bounds = Rect::from_xywh(
                 center.x - px(radius),
                 center.y - px(radius),
                 px(radius * 2.0),
                 px(radius * 2.0),
             );
-            if Self::dispatch_shader_rect(segment, state, bounds, paint, [radius; 4]) {
+            if Self::dispatch_shader_rect(segment, draw_order, state, bounds, paint, [radius; 4]) {
                 return;
             }
         }

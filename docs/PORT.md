@@ -22,7 +22,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 
 **Governance layer** (write-time refusal rules, lock-decision matrix, per-crate documentation shape):
 
-- [§Refusal triggers](#refusal-triggers) — 19 anti-patterns the maintainer refuses to introduce, with grep regexes
+- [§Refusal triggers](#refusal-triggers) — 20 anti-patterns the maintainer refuses to introduce, with grep regexes
 - [§Lock decisions](#lock-decisions) — allowed vs forbidden `RwLock`/`Mutex` placements
 - [§Mapping rules](#mapping-rules) — Flutter behaviour primacy + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
 - [§Per-crate `ARCHITECTURE.md` template](#per-crate-architecturemd-template) — required and optional sections per crate
@@ -260,6 +260,26 @@ Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side 
 **Allowlist:** none. Doc-comment lines (`//!`, `///`, `//`) are excluded (the rg filter strips them).
 
 **Back-references:** [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](adr/ADR-0006-c-ir-record-replay-seam.md) §Decision 4 (C4 rule); engine-overhaul spec `.rust-studio/specs/flui-engine-overhaul/spec.md` acceptance criterion C4; `crates/flui-engine/ARCHITECTURE.md` §Record/replay boundary.
+
+### 20. Gradient/image SrcOver warn-fallback strings in producer files
+
+**PR-5 deleted three warn-fallback blocks** that previously made gradient and image producers silently fall through to SrcOver when an advanced (dst-read) blend mode was requested. If any of the deleted strings reappear in `batches/`, `renderer.rs`, or `backend.rs`, a producer has regressed to the fallback path: callers requesting Multiply, Screen, Overlay, etc. will silently receive SrcOver output instead of the correct advanced blend result.
+
+The two sentinel patterns are `"is not supported by the"` and `"rendering as SrcOver"`. Both were exclusive to the deleted warn-fallback blocks; their reappearance on the producer side is unambiguous evidence of regression.
+
+**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/renderer.rs`, `crates/flui-engine/src/wgpu/backend.rs`. `replay.rs` is explicitly excluded — it is the replay/submit side, not a producer, and may legitimately use similar language in its own documentation.
+
+**Runtime companion:** `PipelineCache::get_or_create` contains a `debug_assert!(!key.blend_mode().is_advanced(), …)` that panics in debug/test builds if any advanced mode reaches the pipeline cache instead of diverting to `DrawItem::AdvancedShape`. This is the runtime half of the gate; the static grep above is the compile-time half. Both must remain active.
+
+**Allowlist:** none. A producer genuinely unable to support advanced blend must divert to `DrawItem::AdvancedShape` (reusing `render_segment_to_offscreen` + `flush_advanced_layer`) — not warn and fall through.
+
+**Witnesses — two tiers:**
+
+- **Routing witnesses (CI-runnable, no pixel readback):** CPU unit tests G1-G3 in `crates/flui-engine/src/wgpu/batches/mod.rs` (gradient path); GPU-device structure tests I1-I5 in `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` (image/atlas paths — each asserts exactly one `DrawItem::AdvancedShape` per call with the correct `cached_images.len()`). These are the authoritative routing witnesses for condition 3.
+
+- **Non-panic + non-zero-output witness:** GPU test GI7 (`crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs`) verifies all 15 modes × gradient + image produce valid RGBA output. GI7 does not verify routing (pixel equality alone cannot distinguish an `AdvancedShape` from a lucky SrcOver result); the routing witnesses above provide that guarantee. GI8 covers the atlas producer.
+
+**Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/wgpu/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/wgpu/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
 
 ### Reactive lint promotion
 
@@ -912,7 +932,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 19 refusal triggers plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 20 refusal triggers plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

@@ -261,24 +261,40 @@ impl DrawBatcher {
     }
 
     /// Dispatch a filled rect/rrect/circle with a shader paint to the correct
-    /// gradient pipeline.  Returns `true` if the shader was handled; `false`
-    /// means fall through to solid-color fill.
+    /// gradient pipeline, or divert to an isolated `DrawItem::AdvancedShape`
+    /// when the paint carries an advanced (dst-read) blend mode.
     ///
-    /// Reads `state` for the current-transform (to convert local bounds to
-    /// device space) and calls the appropriate `gradient_rect` /
-    /// `radial_gradient_rect` / `sweep_gradient_rect` associated function.
+    /// Returns `true` if the shader was handled; `false` means fall through to
+    /// solid-color fill.
+    ///
+    /// When `paint.blend_mode.is_advanced()`:
+    ///   1. The current segment is sealed (Z-order guarantee: prior content lands
+    ///      on the surface before the backdrop is copied).
+    ///   2. The gradient instance + its stops are isolated in a fresh
+    ///      `DrawSegment` with stop offsets relative to that fresh buffer.
+    ///   3. The `DrawSegment` is wrapped in `DrawItem::AdvancedShape` and pushed
+    ///      onto `draw_order` — `flush_advanced_layer` picks it up at replay.
+    ///
+    /// The SrcOver path is byte-identical to before this PR.
+    ///
+    /// # AA note
+    ///
+    /// Gradients are shader-AA (analytic SDF), not rasterised geometry; they have
+    /// smooth sub-pixel anti-aliasing independent of the tessellation path.
     ///
     /// Callers must check `paint.has_shader()` **and** `paint.style ==
     /// PaintStyle::Fill` before calling this; it is not rechecked here.
     ///
     /// # Arguments
     /// * `segment`       — current accumulation buffer
+    /// * `draw_order`    — ordered list of sealed segments / advanced ops
     /// * `state`         — read-only transform/scissor queries
     /// * `bounds`        — local-space bounds of the shape
     /// * `paint`         — fill paint carrying the shader
     /// * `corner_radii`  — per-corner radii `[tl, tr, br, bl]`
     pub(in super::super) fn dispatch_shader_rect(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<super::super::command_ir::DrawItem>,
         state: &GpuStateStack,
         bounds: Rect<Pixels>,
         paint: &Paint,
@@ -298,6 +314,126 @@ impl DrawBatcher {
         let top_left = state.apply_transform(Point::new(bounds.left(), bounds.top()));
         let bottom_right = state.apply_transform(Point::new(bounds.right(), bounds.bottom()));
         let transformed = Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+        // ── Advanced (dst-read) diversion ─────────────────────────────────────
+        //
+        // Advanced blend modes cannot be expressed as fixed-function blends and
+        // require a backdrop read.  Isolate the gradient into its own DrawSegment
+        // so flush_advanced_layer can composite it correctly.
+        //
+        // Condition: must divert here because gradients bypass
+        // `add_tessellated_with_key` (they are instanced, not tessellated), so
+        // the diversion in that funnel does not fire.
+        if paint.blend_mode.is_advanced() {
+            // Step 1: seal prior content so it lands on the surface before the
+            // backdrop is sampled.
+            super::DrawBatcher::finish_current_segment(segment, draw_order);
+
+            // Step 2: build an isolated DrawSegment carrying exactly this gradient.
+            // Stop offsets in the fresh segment start at 0.
+            let stop_count = stops.len().min(8);
+            let mut shape_segment = DrawSegment::new();
+            shape_segment
+                .current_gradient_stops
+                .extend_from_slice(&stops[..stop_count]);
+
+            match shader {
+                Shader::LinearGradient { from, to, .. } => {
+                    use super::super::instancing::LinearGradientInstance;
+                    let start =
+                        glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
+                    let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
+                    let instance = LinearGradientInstance::new(
+                        [
+                            transformed.left().0,
+                            transformed.top().0,
+                            transformed.width().0,
+                            transformed.height().0,
+                        ],
+                        start,
+                        end,
+                        corner_radii,
+                        stop_count as u32,
+                    )
+                    .with_stop_offset(0);
+                    let _ = shape_segment.linear_gradient_batch.add(instance);
+                    DrawSegment::push_scissor_region(
+                        &mut shape_segment.linear_grad_scissors,
+                        state.current_scissor(),
+                    );
+                }
+                Shader::RadialGradient { center, radius, .. } => {
+                    use super::super::instancing::RadialGradientInstance;
+                    let c = glam::Vec2::new(
+                        center.dx.0 - bounds.left().0,
+                        center.dy.0 - bounds.top().0,
+                    );
+                    let instance = RadialGradientInstance::new(
+                        [
+                            transformed.left().0,
+                            transformed.top().0,
+                            transformed.width().0,
+                            transformed.height().0,
+                        ],
+                        c,
+                        *radius,
+                        corner_radii,
+                        stop_count as u32,
+                    )
+                    .with_stop_offset(0);
+                    let _ = shape_segment.radial_gradient_batch.add(instance);
+                    DrawSegment::push_scissor_region(
+                        &mut shape_segment.radial_grad_scissors,
+                        state.current_scissor(),
+                    );
+                }
+                Shader::SweepGradient {
+                    center,
+                    start_angle,
+                    end_angle,
+                    ..
+                } => {
+                    use super::super::instancing::SweepGradientInstance;
+                    let c = glam::Vec2::new(
+                        center.dx.0 - bounds.left().0,
+                        center.dy.0 - bounds.top().0,
+                    );
+                    let instance = SweepGradientInstance::new(
+                        [
+                            transformed.left().0,
+                            transformed.top().0,
+                            transformed.width().0,
+                            transformed.height().0,
+                        ],
+                        c,
+                        *start_angle,
+                        *end_angle,
+                        corner_radii,
+                        stop_count as u32,
+                    )
+                    .with_stop_offset(0);
+                    let _ = shape_segment.sweep_gradient_batch.add(instance);
+                    DrawSegment::push_scissor_region(
+                        &mut shape_segment.sweep_grad_scissors,
+                        state.current_scissor(),
+                    );
+                }
+                Shader::Solid { .. } | _ => return false,
+            }
+
+            // Step 3: wrap and push as AdvancedShape.
+            draw_order.push(super::super::command_ir::DrawItem::AdvancedShape(
+                super::super::command_ir::AdvancedShapeOp {
+                    segment: shape_segment,
+                    mode: paint.blend_mode,
+                    device_bounds: transformed,
+                },
+            ));
+
+            return true;
+        }
+
+        // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────────────
 
         match shader {
             Shader::LinearGradient { from, to, .. } => {
