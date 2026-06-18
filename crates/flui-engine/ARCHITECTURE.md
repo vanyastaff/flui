@@ -151,6 +151,48 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 
 This section documents the decomposition of `WgpuPainter` performed in the engine-overhaul series (PRs #231–#232, T9–T10 sub-PRs). The governing decision is recorded in [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](../../docs/adr/ADR-0006-c-ir-record-replay-seam.md).
 
+### Two-level IR contract (T11)
+
+The engine uses two distinct IRs in a strict producer/consumer chain.  Understanding their boundary is load-bearing for any change that touches recording, replay, or testing.
+
+| Level | Name | Home crate | Key types | Who writes | Who reads |
+|---|---|---|---|---|---|
+| **Scene IR** (Level 1) | `DisplayList` / `DrawCommand` | `flui-painting` | `DrawCommand` (30-variant enum), `Paint`, `Path`, `TextSpan` | Widget tree (`flui-view`) via `Canvas` | `Backend` (`CommandRenderer` visitor) in `flui-engine` |
+| **Command IR** (Level 2) | `CommandIR` | `flui-engine` | `DrawSegment`, `DrawItem`, `draw_order: Vec<DrawItem>` | `DrawBatcher` (`batches/`) via record methods | `GpuReplay::submit` (replay/flush path) |
+
+**Level 1 — Scene IR (`DisplayList` / `DrawCommand`).**  Lives in `flui-painting`
+(`crates/flui-painting/src/display_list.rs`).  Produced by the widget tree's
+`Canvas` API; consumed by `Backend` in `flui-engine/src/wgpu/backend.rs`.  Every
+`DrawCommand` variant is high-level and coordinate-system–agnostic: it carries
+`Paint`, logical `Rect`/`Path`/`TextSpan`, and `flui_types::Matrix4` transforms.
+This IR is **not GPU-specific** — it is the contract between the scene-graph layer
+and the engine.  `flui-painting::testing::record` is the reference recorder used
+by the snapshot harness in `flui-rendering`.
+
+**Level 2 — Command IR (`DrawSegment` / `DrawItem`).**  Lives in
+`flui-engine/src/wgpu/command_ir.rs`.  Produced by `DrawBatcher` record methods
+(`batches/{shapes,gradients,paths,images}.rs`) as `Backend` visits each
+`DrawCommand`.  Consumed by `GpuReplay::submit` (`replay.rs`) which drives all
+wgpu encode calls.  This IR is **GPU-lowered** (baked instance arrays, pixel-space
+transforms, `TextureId` opaque handles) but **device-free**: every field is a
+plain CPU value — no `wgpu::Buffer`, `wgpu::Texture`, or `wgpu::TextureView`.
+
+**Purity contract.**  `DrawSegment: Clone` is a compile-time machine-checked
+guarantee of Level-2 purity: `Clone` is only derivable when every field is
+`Clone`, and `wgpu::Buffer` / `wgpu::Texture` / `wgpu::TextureView` /
+`wgpu::BindGroup` are **not** `Clone`.  The T11 deterministic-replay test
+(`src/wgpu/deterministic_replay_tests.rs`) uses this property: it records a scene
+once, clones the resulting `DrawSegment`s, replays two independent clones to two
+independent render targets (encoder A → target A, encoder B → target B), and
+asserts byte-identical pixel output.  This is the non-tautological C5-gate
+assertion — it would fail under any determinism break in the replay path.
+
+**Exception.**  `DrawItem::OffscreenTexture` and `DrawItem::OpacityLayer` hold
+live `PooledTexture` (wrapping `wgpu::Texture`) and are therefore NOT `Clone`.
+These are transient compositing handles, not IR data — they are created and
+consumed within a single `render()` call.  The T8 layer readback suite covers
+their correctness independently.
+
 ### Two-level picture
 
 ```

@@ -159,6 +159,9 @@ pub(crate) mod layer_render;
 #[cfg(test)]
 mod sdf_smoke_test;
 
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod deterministic_replay_tests;
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================

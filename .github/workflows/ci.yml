@@ -92,6 +92,15 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Compile (not run) the feature-gated test module so the IR-purity witness
+      # (`_DRAW_SEGMENT_IS_CLONE` / `DrawSegment: Clone`) and the deterministic-replay
+      # tests are machine-checked in CI even though they require a GPU to execute.
+      # A future field that introduces a non-Clone GPU handle would fail here.
+      # `--tests` ensures the `#[cfg(all(test, feature = "enable-wgpu-tests"))]` block
+      # is compiled; `--no-run` (via clippy) is implicit — clippy only type-checks.
+      - name: cargo clippy flui-engine --features enable-wgpu-tests (IR-purity witness)
+        run: cargo clippy -p flui-engine --all-targets --features enable-wgpu-tests -- -D warnings
+
   # ─────────────────────────────────────────────────────────────────────────
   # test — workspace build + nextest. Matrix: Linux + Windows.
   # Gated on `checks`. macOS deferred until the workspace AppKit code is
