@@ -25,6 +25,7 @@ use super::{
     layer_compositor::{LayerCompositor, RestoreOutcome},
     pipeline::PipelineKey,
     pipelines::PipelineSet,
+    replay::GpuReplay,
     resources::GpuResources,
     state_stack::GpuStateStack,
     text::TextRenderer,
@@ -74,11 +75,16 @@ pub struct WgpuPainter {
     /// Shared unit-quad index buffer (two triangles: 0,1,2 and 0,2,3).
     unit_quad_index_buffer: wgpu::Buffer,
 
-    /// Texture instance batch
-    texture_batch: super::instancing::InstanceBatch<super::instancing::TextureInstance>,
-
     /// Default texture sampler (linear filtering, clamp-to-edge).
     default_sampler: wgpu::Sampler,
+
+    // ===== Texture-batch replay/submit =====
+    /// Owns the per-frame texture-instance scratch batch and the
+    /// `flush_texture_batch*` GPU submit helpers.  Separated from the
+    /// painter so the replay path can be borrowed independently of the
+    /// other flush-side state.  Grows in T10c/d to own the full
+    /// segment-flush and render loop.
+    replay: GpuReplay,
 
     // ===== Record-side draw batcher =====
     /// Owns the tessellator, path cache, and superellipse cache — the three
@@ -207,8 +213,7 @@ impl WgpuPainter {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // ===== Texture instance batch and default sampler =====
-        let texture_batch = super::instancing::InstanceBatch::new(1024);
+        // ===== Default sampler =====
         let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Default Texture Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -241,8 +246,8 @@ impl WgpuPainter {
             viewport_bind_group,
             unit_quad_buffer,
             unit_quad_index_buffer,
-            texture_batch,
             default_sampler,
+            replay: GpuReplay::new(),
             batcher: super::batches::DrawBatcher::new(),
             text_renderer,
             state: GpuStateStack::new(),
@@ -482,7 +487,7 @@ impl WgpuPainter {
                         p.bounds,
                         flui_types::styling::Color::WHITE,
                     );
-                    let _ = self.texture_batch.add(instance);
+                    let _ = self.replay.texture_batch.add(instance);
                     // Offscreen compositing is always full-viewport — no scissor.
                     //
                     // These are shader-mask / backdrop-blur results from
@@ -634,7 +639,7 @@ impl WgpuPainter {
                         p.bounds,
                         flui_types::styling::Color::WHITE,
                     );
-                    let _ = self.texture_batch.add(instance);
+                    let _ = self.replay.texture_batch.add(instance);
                     // Nested offscreen compositing — full-viewport, no scissor.
                     self.flush_texture_batch_premultiplied(
                         encoder,
@@ -687,7 +692,7 @@ impl WgpuPainter {
             [uv_left, uv_top, uv_right, uv_bottom],
             tint,
         );
-        let _ = self.texture_batch.add(instance);
+        let _ = self.replay.texture_batch.add(instance);
         // Opacity-layer composite onto main surface — full-viewport, no scissor.
         // Premultiplied: the offscreen texels are premultiplied (see above).
         self.flush_texture_batch_premultiplied(encoder, main_view, offscreen_view, None);
@@ -1303,15 +1308,15 @@ impl WgpuPainter {
         self.current_segment.sweep_grad_scissors.clear();
     }
 
-    /// Flush texture instance batch with given texture (straight-alpha blend).
+    /// Flush the texture instance batch with straight-alpha blending.
     ///
     /// Renders all batched textures in a single draw call using GPU instancing.
-    /// This is 50-100x faster than individual draw calls for image-heavy UIs.
+    /// This is 50–100× faster than individual draw calls for image-heavy UIs.
     ///
     /// This is the **straight-alpha** entry point used for normal decoded-image
     /// draws, whose samples carry straight (non-premultiplied) alpha. Offscreen
-    /// *layer* composites must instead use `flush_texture_batch_premultiplied`,
-    /// because their texels are premultiplied — see that method and
+    /// *layer* composites must instead use the premultiplied variant — see
+    /// `GpuReplay::flush_texture_batch_premultiplied` and
     /// `flush_opacity_layer`.
     ///
     /// `scissor` is the clip rect to apply for this draw call.  Pass `None` to
@@ -1330,20 +1335,28 @@ impl WgpuPainter {
         texture_view: &wgpu::TextureView,
         scissor: ScissorRect,
     ) {
-        self.flush_texture_batch_with_blend(encoder, view, texture_view, scissor, false);
+        self.replay.flush_texture_batch(
+            &self.device,
+            &self.queue,
+            &self.pipelines,
+            &self.viewport_bind_group,
+            &self.unit_quad_buffer,
+            &self.unit_quad_index_buffer,
+            &self.default_sampler,
+            &mut self.resources,
+            self.size,
+            encoder,
+            view,
+            texture_view,
+            scissor,
+        );
     }
 
-    /// Flush texture instance batch using **premultiplied** source-over blending.
+    /// Flush the texture instance batch using **premultiplied** source-over
+    /// blending.
     ///
-    /// Used to composite offscreen *layer* textures
-    /// (opacity / ColorFilter / ShaderMask / backdrop results). Those offscreens
-    /// are cleared transparent then drawn into with straight `ALPHA_BLENDING`,
-    /// which leaves their texels premultiplied (`rgb = straight_rgb * a`).
-    /// Compositing them with the straight pipeline would re-multiply rgb by
-    /// alpha, darkening translucent/AA content. This routes the batch through
-    /// [`super::pipelines::PipelineSet::instanced_texture_premul`] (src factor `One`) so the
-    /// composite is correct, with the per-channel `tint` carrying group opacity
-    /// and any ColorFilter chroma as `(C.r*O, C.g*O, C.b*O, O)`.
+    /// Thin forwarder to [`GpuReplay::flush_texture_batch_premultiplied`]; the
+    /// GPU plumbing fields stay on `WgpuPainter` until T10c/d.
     fn flush_texture_batch_premultiplied(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1351,107 +1364,21 @@ impl WgpuPainter {
         texture_view: &wgpu::TextureView,
         scissor: ScissorRect,
     ) {
-        self.flush_texture_batch_with_blend(encoder, view, texture_view, scissor, true);
-    }
-
-    /// Shared body for [`Self::flush_texture_batch`] and
-    /// [`Self::flush_texture_batch_premultiplied`].
-    ///
-    /// `premultiplied` selects the blend pipeline: `false` =
-    /// straight-alpha (decoded images), `true` = premultiplied source-over
-    /// (offscreen-layer composites).
-    fn flush_texture_batch_with_blend(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        texture_view: &wgpu::TextureView,
-        scissor: ScissorRect,
-        premultiplied: bool,
-    ) {
-        if self.texture_batch.is_empty() {
-            return;
-        }
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::flush_texture_batch: {} instances",
-            self.texture_batch.len()
-        );
-
-        // Create texture bind group for this batch
-        let texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Instance Bind Group"),
-            layout: &self.pipelines.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.default_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
-                },
-            ],
-        });
-
-        // Upload instance buffer (using buffer pool for efficient zero-copy reuse)
-        let instance_buffer = self.resources.buffer_pool_mut().get_vertex_buffer(
+        self.replay.flush_texture_batch_premultiplied(
             &self.device,
             &self.queue,
-            "Texture Instance Buffer",
-            self.texture_batch.as_bytes(),
+            &self.pipelines,
+            &self.viewport_bind_group,
+            &self.unit_quad_buffer,
+            &self.unit_quad_index_buffer,
+            &self.default_sampler,
+            &mut self.resources,
+            self.size,
+            encoder,
+            view,
+            texture_view,
+            scissor,
         );
-
-        // Create render pass
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Instanced Texture Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // Don't clear - render on top
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        // Set pipeline and buffers. Offscreen-layer composites use the
-        // premultiplied pipeline; normal decoded-image draws use straight alpha.
-        // Selection logic is behavior-preserving (round-5c color-correctness fix).
-        let pipeline = if premultiplied {
-            &self.pipelines.instanced_texture_premul
-        } else {
-            &self.pipelines.instanced_texture
-        };
-        render_pass.set_pipeline(pipeline);
-        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-        render_pass.set_bind_group(1, &texture_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
-        render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        render_pass.set_index_buffer(
-            self.unit_quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
-
-        // Apply scissor rect, mirroring the rect/circle/arc instanced batch pattern.
-        if let Some((x, y, w, h)) = scissor {
-            render_pass.set_scissor_rect(x, y, w, h);
-        } else {
-            render_pass.set_scissor_rect(0, 0, self.size.0, self.size.1);
-        }
-
-        // Draw all instances in ONE draw call.
-        render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
-
-        drop(render_pass);
-
-        // Clear batch for next frame
-        self.texture_batch.clear();
     }
 
     fn flush_segment_cached_images(
@@ -1490,7 +1417,7 @@ impl WgpuPainter {
 
             active_scissor = scissor;
             if let Some(texture_view) = active_texture_view.as_ref()
-                && self.texture_batch.add(instance)
+                && self.replay.texture_batch.add(instance)
             {
                 self.flush_texture_batch(encoder, view, texture_view, active_scissor);
             }
@@ -1549,7 +1476,7 @@ impl WgpuPainter {
                 };
 
             // One instance → one batch-of-one → one draw call.
-            let _ = self.texture_batch.add(instance);
+            let _ = self.replay.texture_batch.add(instance);
             self.flush_texture_batch(encoder, view, &tex_view, scissor);
         }
     }

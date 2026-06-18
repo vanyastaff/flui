@@ -123,6 +123,10 @@ pub(super) mod layer_compositor;
 pub(crate) mod pipelines;
 mod profiler;
 mod renderer;
+/// Texture-batch replay/submit component: owns the per-frame
+/// `texture_batch` scratch and the `flush_texture_batch*` family.
+/// Grows in T10c/d to own the full segment-flush and render loop.
+pub(super) mod replay;
 pub(crate) mod resources;
 /// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
 /// blur / morph). Cycle 4 E-7 dropped the module-level
