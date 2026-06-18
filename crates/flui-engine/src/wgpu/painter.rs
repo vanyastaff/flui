@@ -1154,7 +1154,12 @@ impl WgpuPainter {
         // layers black. Always use a white (no-op) chroma; ColorFilter chroma
         // arrives explicitly via `save_layer_with_tint` from
         // `push_color_filter`.
-        self.save_layer_impl(bounds, layer_opacity, [1.0, 1.0, 1.0]);
+        //
+        // The blend mode IS propagated: an advanced blend mode (e.g. Multiply)
+        // on the saveLayer paint means the entire layer composites onto its
+        // parent with that mode — the dominant real-world use case for
+        // advanced blend.
+        self.save_layer_impl(bounds, layer_opacity, [1.0, 1.0, 1.0], paint.blend_mode);
     }
 
     /// Like [`Self::save_layer`] but applies an explicit per-channel chroma
@@ -1180,17 +1185,25 @@ impl WgpuPainter {
             tint_rgb[1].clamp(0.0, 1.0),
             tint_rgb[2].clamp(0.0, 1.0),
         ];
-        self.save_layer_impl(bounds, layer_opacity, tint);
+        // ColorFilter tint layers always use SrcOver — chroma is encoded via
+        // the tint, not the blend mode.
+        self.save_layer_impl(
+            bounds,
+            layer_opacity,
+            tint,
+            flui_types::painting::BlendMode::SrcOver,
+        );
     }
 
     /// Shared implementation for [`Self::save_layer`] /
     /// [`Self::save_layer_with_tint`]: snapshot the draw state and push a layer
-    /// with the given composite `layer_opacity` and `layer_tint_rgb`.
+    /// with the given composite `layer_opacity`, `layer_tint_rgb`, and `layer_blend`.
     fn save_layer_impl(
         &mut self,
         bounds: Option<Rect<Pixels>>,
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
+        layer_blend: flui_types::painting::BlendMode,
     ) {
         // Convert bounds to [x, y, w, h] if provided.
         let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
@@ -1204,13 +1217,15 @@ impl WgpuPainter {
             saved_segment,
             layer_opacity,
             layer_tint_rgb,
+            layer_blend,
             bounds_array,
         );
 
         tracing::trace!(
-            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, bounds={:?}",
+            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, blend={:?}, bounds={:?}",
             layer_opacity,
             layer_tint_rgb,
+            layer_blend,
             bounds_array
         );
     }
@@ -1243,6 +1258,7 @@ impl WgpuPainter {
                 layer_opacity,
                 tint_rgb,
                 composite_bounds,
+                layer_blend,
                 saved_segment,
                 saved_draw_order,
             } => {
@@ -1255,6 +1271,8 @@ impl WgpuPainter {
                 // flushed to a pooled offscreen texture (premultiplied) and
                 // composited onto the main surface with the tint
                 // `(C.r*O, C.g*O, C.b*O, O)` — correct group opacity AND chroma.
+                // Advanced blend modes are carried via `blend` and dispatched by
+                // `flush_opacity_layer` through the dst-read compositor path.
 
                 // Finalize the current parent segment so the opacity layer is
                 // inserted at the correct Z-position in the draw order.
@@ -1271,14 +1289,15 @@ impl WgpuPainter {
                         opacity: layer_opacity,
                         tint_rgb,
                         bounds: composite_bounds,
-                        blend: flui_types::painting::BlendMode::SrcOver,
+                        blend: layer_blend,
                     }));
 
                 tracing::trace!(
                     "WgpuPainter::restore_layer: queued OpacityLayer \
-                     (opacity={:.3}, tint_rgb={:?}, bounds={:?})",
+                     (opacity={:.3}, tint_rgb={:?}, blend={:?}, bounds={:?})",
                     layer_opacity,
                     tint_rgb,
+                    layer_blend,
                     composite_bounds
                 );
             }

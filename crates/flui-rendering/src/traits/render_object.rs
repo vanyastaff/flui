@@ -66,6 +66,19 @@ pub trait PaintEffectsCapability {
         None
     }
 
+    /// Returns the blend mode for the opacity layer wrapping children.
+    ///
+    /// If `Some(mode)`, the pipeline passes the mode to
+    /// `OpacityLayer::with_blend` so advanced blend modes (Multiply, Screen,
+    /// etc.) are preserved through the layer-tree compositor path.
+    ///
+    /// Returns `None` (= `SrcOver`) for all standard render objects.
+    /// Override in the `RenderOpacity`-family when a saveLayer blend mode
+    /// must propagate to the engine.
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        None
+    }
+
     /// Returns the transform matrix to apply to children.
     ///
     /// If `Some(matrix)`, the painting pipeline wraps children in a

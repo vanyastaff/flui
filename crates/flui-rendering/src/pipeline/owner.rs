@@ -3932,6 +3932,7 @@ impl PipelineOwner<PaintPhase> {
         }
 
         let alpha = render_node.paint_alpha();
+        let layer_blend = render_node.paint_layer_blend();
         let transform = render_node.paint_transform();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
 
@@ -3998,12 +3999,20 @@ impl PipelineOwner<PaintPhase> {
         // implementors draw nothing themselves, so the visible result
         // is identical and the new rule matches Flutter (RenderOpacity
         // wraps its child's whole paint).
+        // Alpha–blend coupling: the layer is emitted only when `paint_alpha()` returns
+        // `Some`.  A render object that overrides `paint_layer_blend() -> Some(mode)`
+        // but leaves `paint_alpha() -> None` will silently drop the blend layer —
+        // the advanced compositor never sees it.  When wiring the first render-tree
+        // consumer of an advanced blend, override BOTH hooks and return `Some(255)`
+        // from `paint_alpha()` for an opaque-blend-only layer.
         let mut effect_layers = 0usize;
         if let Some(alpha) = alpha {
-            composer.push_layer(Layer::Opacity(OpacityLayer::with_offset(
-                f32::from(alpha) / 255.0,
-                Offset::ZERO,
-            )));
+            let alpha_f32 = f32::from(alpha) / 255.0;
+            let opacity_layer = match layer_blend {
+                Some(blend) => OpacityLayer::with_blend(alpha_f32, Offset::ZERO, blend),
+                None => OpacityLayer::with_offset(alpha_f32, Offset::ZERO),
+            };
+            composer.push_layer(Layer::Opacity(opacity_layer));
             effect_layers += 1;
         }
         if let Some(matrix) = transform {

@@ -53,7 +53,7 @@
 //! `&self.gradient_bind_group_layout`. The pattern mirrors
 //! [`super::resources::GpuResources`].
 
-use super::pipeline::PipelineCache;
+use super::{advanced_blend::AdvancedBlendPipeline, pipeline::PipelineCache};
 
 /// Device-scoped collection of all `wgpu::RenderPipeline`s used by [`super::painter::WgpuPainter`].
 ///
@@ -142,6 +142,15 @@ pub(crate) struct PipelineSet {
     /// Recreated each frame by [`Self::refresh_gradient_bind_group`] when
     /// `current_gradient_stops` is non-empty.
     pub(crate) gradient_bind_group: Option<wgpu::BindGroup>,
+
+    // ── Advanced-blend composite pipeline ────────────────────────────────────
+    /// Backdrop-read advanced-blend pipeline used by `flush_opacity_layer`
+    /// (via `flush_advanced_layer` in replay.rs) when a `PendingOpacityLayer`
+    /// carries an advanced (non-Porter-Duff) blend mode.
+    ///
+    /// Format-matched to `surface_format` at construction time; shared across
+    /// every `flush_advanced_layer` call for this painter.
+    pub(crate) advanced_blend: AdvancedBlendPipeline,
 }
 
 impl PipelineSet {
@@ -234,6 +243,8 @@ impl PipelineSet {
             shape_cache.viewport_bind_group_layout(),
         );
 
+        let advanced_blend = AdvancedBlendPipeline::new(device, surface_format);
+
         Self {
             shape_cache,
             instanced_rect,
@@ -249,6 +260,7 @@ impl PipelineSet {
             gradient_bind_group_layout,
             gradient_stops_buffer,
             gradient_bind_group: None,
+            advanced_blend,
         }
     }
 

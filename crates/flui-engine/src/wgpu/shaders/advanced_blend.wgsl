@@ -59,8 +59,14 @@ struct BlendUniforms {
     // Blend mode discriminant; see `mode_to_u32` in pipeline.rs.
     // offset 60, size 4.
     mode:         u32,
-    // Struct-size padding to 80 bytes (multiple of 16). offset 64, size 16.
-    _pad1:        vec4<u32>,
+    // Foreground UV min corner [u_min, v_min] for the src-UV remap.
+    // The unit-quad UV from the VS is remapped to mix(src_uv_min, src_uv_max, uv)
+    // before sampling the foreground texture.  Pass [0,0] for a full-viewport
+    // foreground (identity remap). offset 64, size 8.
+    src_uv_min:   vec2<f32>,
+    // Foreground UV max corner [u_max, v_max].
+    // Pass [1,1] for a full-viewport foreground. offset 72, size 8.
+    src_uv_max:   vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -117,9 +123,16 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOutput {
     let clip_x = (px / blend.viewport_size.x) * 2.0 - 1.0;
     let clip_y = 1.0 - (py / blend.viewport_size.y) * 2.0;
 
+    // Remap the unit-quad UV [0,1] to the foreground texture sub-region
+    // [src_uv_min, src_uv_max].  For a full-viewport foreground (layer path)
+    // src_uv_min=[0,0] and src_uv_max=[1,1] so this is the identity.
+    // For a layer rendered to a full-viewport offscreen but covering only a
+    // sub-region, src_uv_min/max map the quad UV to the covered texel range.
+    let remapped_src_uv = mix(blend.src_uv_min, blend.src_uv_max, uv);
+
     var out: VsOutput;
     out.frag_pos = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
-    out.src_uv   = uv;
+    out.src_uv   = remapped_src_uv;
     return out;
 }
 

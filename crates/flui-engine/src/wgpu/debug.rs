@@ -436,6 +436,13 @@ impl LayerStateStack for DebugBackend {
         self.log_command("push_opacity", &format!("alpha={alpha}"));
     }
 
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+        self.log_command(
+            "push_opacity_blend",
+            &format!("alpha={alpha}, blend={blend:?}"),
+        );
+    }
+
     fn pop_opacity(&mut self) {
         self.log_command("pop_opacity", "");
     }

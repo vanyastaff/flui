@@ -23,6 +23,7 @@
 
 use flui_types::Rect;
 use flui_types::geometry::Pixels;
+use flui_types::painting::BlendMode;
 
 use super::command_ir::{DrawItem, DrawSegment, SavedLayer};
 
@@ -35,8 +36,8 @@ use super::command_ir::{DrawItem, DrawSegment, SavedLayer};
 #[allow(missing_debug_implementations)]
 pub(super) enum RestoreOutcome {
     /// The layer had content AND needs a premultiplied offscreen composite
-    /// (opacity ≠ 1.0 or non-white tint).  The painter should finalize the
-    /// parent segment, then queue a `DrawItem::OpacityLayer`.
+    /// (opacity ≠ 1.0, non-white tint, or advanced blend mode).  The painter
+    /// should finalize the parent segment, then queue a `DrawItem::OpacityLayer`.
     Composite {
         /// Offscreen draw items accumulated inside the layer.
         offscreen_items: Vec<DrawItem>,
@@ -48,6 +49,11 @@ pub(super) enum RestoreOutcome {
         tint_rgb: [f32; 3],
         /// Compositing bounds (provided or viewport-derived, pre-resolved by the painter).
         composite_bounds: Rect<Pixels>,
+        /// Blend mode to apply when compositing this layer onto its parent.
+        ///
+        /// `SrcOver` for plain opacity layers; an advanced mode (e.g. Multiply)
+        /// for layers opened with an explicit blend mode via `save_layer`.
+        layer_blend: BlendMode,
         /// Parent segment saved before `save_layer` — splice back into `current_segment`.
         saved_segment: DrawSegment,
         /// Parent draw order saved before `save_layer` — splice back into `draw_order`.
@@ -179,6 +185,9 @@ impl LayerCompositor {
     /// fields via `mem::take`/`mem::replace` before calling this, then passes
     /// the owned values in so the compositor can store them in the `SavedLayer`.
     ///
+    /// `layer_blend` is `SrcOver` for plain opacity layers and an advanced mode
+    /// (e.g. Multiply) for `saveLayer` calls with an explicit blend mode.
+    ///
     /// After this call `current_opacity` is `1.0`; children inside the layer
     /// draw at full opacity and group opacity is applied during compositing.
     pub(super) fn push_layer(
@@ -187,6 +196,7 @@ impl LayerCompositor {
         saved_segment: DrawSegment,
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
+        layer_blend: BlendMode,
         bounds: Option<[f32; 4]>,
     ) {
         let saved = SavedLayer {
@@ -196,8 +206,8 @@ impl LayerCompositor {
             saved_opacity: self.current_opacity,
             layer_opacity,
             layer_tint_rgb,
+            layer_blend,
             bounds,
-            layer_blend: flui_types::painting::BlendMode::SrcOver,
         };
         self.layer_stack.push(saved);
 
@@ -269,11 +279,18 @@ impl LayerCompositor {
         // unchanged).  A hue-only filter at effective_alpha == 1.0 MUST still go
         // through the offscreen composite path so the premultiplied tint shifts
         // chroma — otherwise the hue shift is silently dropped.  White tint
-        // (plain opacity) at ~1.0 keeps the cheap reintegrate path.
+        // (plain opacity) at ~1.0 AND SrcOver blend keeps the cheap reintegrate path.
+        //
+        // An advanced blend mode (Multiply, Screen, …) ALWAYS forces the composite
+        // path even at opacity=1.0 and white tint, because the reintegrate path
+        // splices children unchanged into the parent draw order — silently dropping
+        // the blend.
         let has_chroma = (saved.layer_tint_rgb[0] - 1.0).abs() > f32::EPSILON
             || (saved.layer_tint_rgb[1] - 1.0).abs() > f32::EPSILON
             || (saved.layer_tint_rgb[2] - 1.0).abs() > f32::EPSILON;
-        let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON || has_chroma;
+        let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON
+            || has_chroma
+            || saved.layer_blend.is_advanced();
 
         if needs_composite {
             RestoreOutcome::Composite {
@@ -282,6 +299,7 @@ impl LayerCompositor {
                 layer_opacity: saved.layer_opacity,
                 tint_rgb: saved.layer_tint_rgb,
                 composite_bounds,
+                layer_blend: saved.layer_blend,
                 saved_segment: saved.saved_segment,
                 saved_draw_order: saved.saved_draw_order,
             }
@@ -330,7 +348,14 @@ mod tests {
     fn debug_assert_balanced_panics_when_layer_stack_is_not_empty() {
         let mut compositor = LayerCompositor::new();
         // Push a layer without popping — simulates a mismatched save_layer/restore_layer.
-        compositor.push_layer(Vec::new(), DrawSegment::new(), 1.0, [1.0, 1.0, 1.0], None);
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            1.0,
+            [1.0, 1.0, 1.0],
+            BlendMode::SrcOver,
+            None,
+        );
         compositor.debug_assert_balanced();
     }
 
@@ -344,7 +369,14 @@ mod tests {
     #[test]
     fn reset_restores_identity_after_open_layer() {
         let mut compositor = LayerCompositor::new();
-        compositor.push_layer(Vec::new(), DrawSegment::new(), 0.5, [1.0, 1.0, 1.0], None);
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            0.5,
+            [1.0, 1.0, 1.0],
+            BlendMode::SrcOver,
+            None,
+        );
         // Inside the layer, children draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
         compositor.reset();
@@ -356,7 +388,14 @@ mod tests {
     fn push_layer_sets_current_opacity_to_full() {
         let mut compositor = LayerCompositor::new();
         compositor.current_opacity = 0.5;
-        compositor.push_layer(Vec::new(), DrawSegment::new(), 0.5, [1.0, 1.0, 1.0], None);
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            0.5,
+            [1.0, 1.0, 1.0],
+            BlendMode::SrcOver,
+            None,
+        );
         // Children inside the layer draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
     }
@@ -365,7 +404,14 @@ mod tests {
     fn pop_layer_restores_parent_opacity() {
         let mut compositor = LayerCompositor::new();
         compositor.current_opacity = 0.8;
-        compositor.push_layer(Vec::new(), DrawSegment::new(), 0.8, [1.0, 1.0, 1.0], None);
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            0.8,
+            [1.0, 1.0, 1.0],
+            BlendMode::SrcOver,
+            None,
+        );
         let _ = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!((compositor.current_opacity() - 0.8).abs() < f32::EPSILON);
     }
@@ -373,7 +419,14 @@ mod tests {
     #[test]
     fn pop_layer_empty_when_no_offscreen_content() {
         let mut compositor = LayerCompositor::new();
-        compositor.push_layer(Vec::new(), DrawSegment::new(), 0.5, [1.0, 1.0, 1.0], None);
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            0.5,
+            [1.0, 1.0, 1.0],
+            BlendMode::SrcOver,
+            None,
+        );
         let outcome = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Empty { .. }));
     }
@@ -386,6 +439,7 @@ mod tests {
             DrawSegment::new(),
             0.5, // not 1.0 → must composite
             [1.0, 1.0, 1.0],
+            BlendMode::SrcOver,
             None,
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
@@ -400,6 +454,7 @@ mod tests {
             DrawSegment::new(),
             1.0,             // opacity ~1.0
             [0.0, 0.0, 1.0], // blue tint → has_chroma
+            BlendMode::SrcOver,
             None,
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
@@ -417,6 +472,7 @@ mod tests {
             DrawSegment::new(),
             1.0,             // opacity ~1.0
             [1.0, 1.0, 1.0], // white tint → no chroma
+            BlendMode::SrcOver,
             None,
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());

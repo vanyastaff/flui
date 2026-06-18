@@ -29,19 +29,27 @@ use flui_types::painting::BlendMode;
 /// - `u32`       → align 4
 /// - Struct size must be a multiple of 16 (largest member alignment).
 ///
-/// | Byte offset | Size | Rust field       | WGSL member                |
-/// |-------------|------|------------------|----------------------------|
-/// | 0           | 16   | `op_bounds`      | `vec4<f32>` (op_bounds)    |
-/// | 16          | 8    | `viewport_size`  | `vec2<f32>`                |
-/// | 24          | 8    | `copy_origin`    | `vec2<f32>`                |
-/// | 32          | 8    | `copy_extent`    | `vec2<f32>`                |
-/// | 40          | 4    | `opacity`        | `f32`                      |
-/// | 44          | 4    | `_pad0`          | `f32` (align gap)          |
-/// | 48          | 12   | `tint_rgb`       | `vec3<f32>` (align 16)     |
-/// | 60          | 4    | `mode`           | `u32`                      |
-/// | 64          | 16   | `_pad1`          | `vec4<u32>` (size pad)     |
+/// | Byte offset | Size | Rust field       | WGSL member                    |
+/// |-------------|------|------------------|--------------------------------|
+/// | 0           | 16   | `op_bounds`      | `vec4<f32>` (op_bounds)        |
+/// | 16          | 8    | `viewport_size`  | `vec2<f32>`                    |
+/// | 24          | 8    | `copy_origin`    | `vec2<f32>`                    |
+/// | 32          | 8    | `copy_extent`    | `vec2<f32>`                    |
+/// | 40          | 4    | `opacity`        | `f32`                          |
+/// | 44          | 4    | `_pad0`          | `f32` (align gap)              |
+/// | 48          | 12   | `tint_rgb`       | `vec3<f32>` (align 16)         |
+/// | 60          | 4    | `mode`           | `u32`                          |
+/// | 64          | 8    | `src_uv_min`     | `vec2<f32>` foreground UV min  |
+/// | 72          | 8    | `src_uv_max`     | `vec2<f32>` foreground UV max  |
 ///
 /// Total = 80 bytes (multiple of 16).
+///
+/// `src_uv_min/max` remap the VS-interpolated unit-quad UV `[0,1]` to the
+/// sub-region of the foreground texture that corresponds to the layer bounds
+/// within the full-viewport offscreen texture.  Pass `[0,0]..[1,1]` for a
+/// full-viewport foreground (the identity remap); pass `layer_bounds/viewport`
+/// for a layer that was rendered to a full-viewport offscreen but only covers
+/// a sub-region.
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub(super) struct BlendUniformData {
@@ -63,9 +71,18 @@ pub(super) struct BlendUniformData {
     pub(super) tint_rgb: [f32; 3],
     /// Blend mode discriminant (see [`mode_to_u32`]).
     pub(super) mode: u32,
-    /// Struct-size padding to reach 80 bytes (next multiple of 16 after 64+12=76).
-    /// Must remain zero.
-    pub(super) _pad1: [u32; 4],
+    /// Foreground UV min corner `[u_min, v_min]` for the src-UV remap.
+    ///
+    /// The VS-interpolated unit-quad UV `[0,1]` is remapped to
+    /// `mix(src_uv_min, src_uv_max, uv)` before sampling the foreground
+    /// texture.  Pass `[0, 0]` for a full-viewport foreground.
+    pub(super) src_uv_min: [f32; 2],
+    /// Foreground UV max corner `[u_max, v_max]` for the src-UV remap.
+    ///
+    /// Pass `[1, 1]` for a full-viewport foreground (identity remap).
+    /// Pass `[bounds_right/vp_w, bounds_bottom/vp_h]` when the layer was
+    /// rendered to a full-viewport offscreen but only covers a sub-region.
+    pub(super) src_uv_max: [f32; 2],
 }
 
 const _BLEND_UNIFORM_SIZE_CHECK: () = {
@@ -159,11 +176,6 @@ pub(crate) struct AdvancedBlendPipeline {
     pub(crate) pipeline: wgpu::RenderPipeline,
 }
 
-#[allow(
-    dead_code,
-    reason = "Driven by the renderer-layer advanced-blend interception; \
-              exercised here by the synthetic-op GPU gate"
-)]
 impl AdvancedBlendPipeline {
     /// Build the pipeline for `surface_format`.
     ///
@@ -234,11 +246,6 @@ impl AdvancedBlendPipeline {
 
 // ── Bind-group layout factory (private) ──────────────────────────────────────
 
-#[allow(
-    dead_code,
-    reason = "Called by AdvancedBlendPipeline::new which is gated behind the \
-              renderer-layer interception; exercised by the synthetic-op GPU gate"
-)]
 fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Advanced Blend Bind Group Layout"),
@@ -348,6 +355,10 @@ mod cpu_tests {
     }
 
     /// The struct size must match the WGSL uniform-block size exactly.
+    ///
+    /// Layout: op_bounds(16) + viewport_size(8) + copy_origin(8) +
+    /// copy_extent(8) + opacity(4) + _pad0(4) + tint_rgb(12) + mode(4) +
+    /// src_uv_min(8) + src_uv_max(8) = 80 bytes.
     ///
     /// This test makes the compile-time assert observable as a test failure
     /// (rather than a build failure) for CI configurations that compile without

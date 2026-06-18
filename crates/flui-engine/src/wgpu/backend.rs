@@ -1476,10 +1476,24 @@ impl LayerStateStack for Backend<'_> {
 
     fn push_opacity(&mut self, alpha: f32) {
         self.flush_active_transform();
-        // Create a layer with opacity (clamped to [0, 255])
+        // Create a layer with opacity (clamped to [0, 255]).
+        // Blend mode defaults to SrcOver via Paint::fill.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
+        self.painter.save_layer(None, &paint);
+    }
+
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+        self.flush_active_transform();
+        // Propagate the explicit blend mode into the saveLayer paint so the
+        // compositor reads it from `paint.blend_mode` and routes the layer
+        // through the dst-read advanced compositor path when needed.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        let paint = Paint::fill(Color::WHITE)
+            .with_alpha(alpha_u8)
+            .with_blend_mode(blend);
         self.painter.save_layer(None, &paint);
     }
 

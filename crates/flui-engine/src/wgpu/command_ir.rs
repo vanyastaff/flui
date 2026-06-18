@@ -103,10 +103,6 @@ pub(crate) struct SavedLayer {
     ///
     /// Stored on the record side so the compositor dispatch can read it without
     /// coupling the flush path to the record path.  Defaults to `SrcOver`.
-    #[allow(
-        dead_code,
-        reason = "written by save_layer; read by the compositor dispatch when blending the layer onto its parent"
-    )]
     pub(crate) layer_blend: BlendMode,
 }
 
@@ -283,11 +279,8 @@ pub(crate) struct PendingOpacityLayer {
     pub(crate) bounds: Rect<Pixels>,
     /// Blend mode to apply when compositing this layer onto its parent.
     ///
-    /// Stored on the pending layer so the compositor dispatch can read it without
-    /// coupling the flush path to the record path.  Defaults to `SrcOver`.
-    #[allow(
-        dead_code,
-        reason = "written during layer creation; read by the compositor dispatch when blending the layer onto its parent"
-    )]
+    /// Stored on the pending layer so the flush path can read it without
+    /// coupling it to the record path.  `SrcOver` for plain opacity layers;
+    /// an advanced mode for `saveLayer` with an explicit blend mode.
     pub(crate) blend: BlendMode,
 }

@@ -605,6 +605,18 @@ impl RenderNode {
         }
     }
 
+    /// Optional blend mode for the opacity layer wrapping children.
+    ///
+    /// Returns the blend mode set by `paint_layer_blend`, or `None` when the
+    /// object uses the default `SrcOver` compositing (most objects).
+    #[inline]
+    pub fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        match self {
+            Self::Box(entry) => entry.render_object().paint_layer_blend(),
+            Self::Sliver(entry) => entry.render_object().paint_layer_blend(),
+        }
+    }
+
     /// Optional paint transform effect for this render object.
     ///
     /// The laid-out size is resolved from

@@ -91,7 +91,12 @@ impl GpuReplay {
 
         // Flush all inner draw items to the offscreen texture.
         // R1: arm order is preserved (Segment / OffscreenTexture / OpacityLayer).
-        let offscreen_target = RenderTarget::view_only(offscreen_view);
+        //
+        // Use `sampleable` so a nested advanced-blend OpacityLayer can dst-read
+        // this offscreen as its backdrop (DECISION 2).  The pool allocates
+        // offscreen textures with TEXTURE_BINDING | COPY_SRC | RENDER_ATTACHMENT
+        // so `sampleable` is always valid here.
+        let offscreen_target = RenderTarget::sampleable(offscreen_view, offscreen.texture());
         for item in layer.items.drain(..) {
             match item {
                 DrawItem::Segment(mut seg) => {
