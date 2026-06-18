@@ -1,54 +1,99 @@
-//! Texture-batch replay/submit component for `WgpuPainter`.
+//! Segment-flush and GPU-plumbing component for `WgpuPainter`.
 //!
-//! `GpuReplay` owns the per-frame texture-instance scratch batch and the
-//! three flush helpers that submit it to the GPU.  This is the **skeleton** of
-//! the record/replay split introduced in T10:
+//! `GpuReplay` owns the five static GPU plumbing fields shared by every flush
+//! method, the per-frame texture-instance scratch batch, and all six segment
+//! flushers that submit recorded `DrawSegment` IR to the GPU.  This completes
+//! the T10c step of the record/replay split started in T10b.
 //!
-//! | T10 step | What moves                                                |
-//! |----------|-----------------------------------------------------------|
-//! | T10b (this) | `texture_batch` field + `flush_texture_batch*` family |
-//! | T10c     | Segment-flush helpers (`flush_segment*`)                  |
-//! | T10d     | Top-level `render()` / `flush_opacity_layer`              |
+//! | T10 step    | What moved                                                     |
+//! |-------------|----------------------------------------------------------------|
+//! | T10b        | `texture_batch` field + `flush_texture_batch*` family          |
+//! | T10c (this) | `viewport_buffer`, `viewport_bind_group`, `unit_quad_buffer`,  |
+//! |             | `unit_quad_index_buffer`, `default_sampler` + the six segment  |
+//! |             | flushers (`flush_segment`, `flush_all_instanced_batches`,       |
+//! |             | `flush_gradient_batches`, `flush_tessellated_geometry`,         |
+//! |             | `flush_segment_cached_images`, `flush_segment_external_images`) |
+//! | T10d        | Top-level `render()` / `flush_opacity_layer`                   |
 //!
-//! ## Borrow-split strategy
+//! ## Flush order — R1 invariant
 //!
-//! The GPU plumbing fields (`device`, `queue`, `pipelines`, `viewport_bind_group`,
-//! `unit_quad_buffer`, `unit_quad_index_buffer`, `default_sampler`) still live on
-//! `WgpuPainter` in T10b.  They are passed as borrowed parameters to each flush
-//! method so that `&mut GpuReplay` and `&WgpuPainter`-owned fields can coexist
-//! in the same call without `&mut self` on the painter.  T10c/d will move those
-//! fields here as the split progresses.
+//! `GpuReplay::flush_segment` orchestrates a fixed five-phase submit order:
 //!
-//! ## Invariants
+//! ```text
+//! 1. flush_all_instanced_batches   (rect / circle / arc / shadow)
+//! 2. flush_gradient_batches        (linear / radial / sweep)
+//! 3. flush_tessellated_geometry    (lyon tessellated paths / vertices)
+//! 4. flush_segment_cached_images   (texture-cache images, grouped by TextureId)
+//! 5. flush_segment_external_images (external textures, resolved at replay time)
+//! ```
 //!
-//! - `texture_batch` is allocated once at construction time with a capacity of
-//!   1 024 instances.  It is cleared at the end of each flush, preserving the
-//!   allocated capacity across frames (no per-frame heap allocation).
-//! - Every `flush_texture_batch*` call leaves the batch empty on return.
-//! - Neither this module nor its callers bring in `flui_types::Matrix4` — the
-//!   C4 rule (port-check Trigger 19) keeps `Matrix4` out of the batches and
-//!   replay path.
+//! This order is **load-bearing** for z-ordering correctness — a reorder
+//! silently corrupts draw results with no compile error.  Do not change it
+//! without an explicit architecture review.
+//!
+//! ## Viewport bind-group layout identity
+//!
+//! `viewport_bind_group` is created in `GpuReplay::new` against
+//! `pipelines.viewport_bind_group_layout()`, the same layout object every
+//! pipeline in `PipelineSet` was built against.  wgpu
+//! requires bind group and pipeline to share the **exact same** layout object —
+//! substituting any structurally-equal-but-distinct layout causes a validation
+//! error.  See the `pipelines.rs` module doc for the full hazard description.
+//!
+//! ## C4 rule — no `Matrix4` in this module
+//!
+//! This module is `Matrix4`-free by port-check Trigger 19 (same rule as
+//! `batches/`).  Transforms live in `GpuStateStack` (glam internally) and cross
+//! the record/replay boundary as baked float arrays in the `DrawSegment` IR.
 
 use std::sync::Arc;
 
+use wgpu::util::DeviceExt;
+
 use super::{
-    command_ir::ScissorRect,
+    command_ir::{DrawSegment, ScissorRect},
     instancing::{InstanceBatch, TextureInstance},
+    pipeline::PipelineKey,
     pipelines::PipelineSet,
     resources::GpuResources,
 };
 
-/// Owns the texture-instance scratch batch and the GPU flush helpers that
-/// submit it.
+/// Owns the five GPU plumbing fields, the per-frame texture-instance scratch
+/// batch, and all segment-flush methods.
 ///
-/// Created once per `WgpuPainter` via [`GpuReplay::new`] and stored as the
-/// `replay` field.  Callers accumulate instances with
-/// `replay.texture_batch.add(instance)` and submit the batch with one of the
-/// three flush methods, passing the GPU plumbing they need as borrowed
-/// parameters.
-// `wgpu::Device` / `wgpu::Queue` do not implement `Debug`.
+/// Created once per `WgpuPainter` via `GpuReplay::new` and stored as the
+/// `replay` field.  The painter retains `device`, `queue`, `pipelines`,
+/// `resources`, and `size`; those are passed as borrowed parameters to each
+/// flush method so that `&mut GpuReplay` and the painter's own fields can
+/// coexist in the same call without an `&mut self` on the painter.
+// `wgpu::Device` / `wgpu::Queue` / `wgpu::Buffer` / `wgpu::BindGroup` /
+// `wgpu::Sampler` are opaque GPU handles with no useful `Debug` impl.
 #[allow(missing_debug_implementations)]
 pub(super) struct GpuReplay {
+    // ── Static GPU plumbing (moved from WgpuPainter in T10c) ─────────────────
+    /// Viewport uniform buffer (updated on resize, read by all instanced
+    /// and gradient pipelines as group 0 binding 0).
+    viewport_buffer: wgpu::Buffer,
+
+    /// Viewport bind group (group 0 for all instanced / gradient / shadow
+    /// pipelines).
+    ///
+    /// Created against `PipelineSet::viewport_bind_group_layout` to satisfy
+    /// the wgpu identity requirement: bind group and pipeline must share the
+    /// exact same layout object.
+    viewport_bind_group: wgpu::BindGroup,
+
+    /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced
+    /// pipelines.
+    unit_quad_buffer: wgpu::Buffer,
+
+    /// Shared unit-quad index buffer (two triangles: 0,1,2 and 0,2,3).
+    unit_quad_index_buffer: wgpu::Buffer,
+
+    /// Default texture sampler (linear filtering, clamp-to-edge).
+    default_sampler: wgpu::Sampler,
+
+    // ── Per-frame texture-instance scratch batch (from T10b) ─────────────────
     /// Per-frame scratch batch for texture instances.
     ///
     /// Allocated once at construction time (1 024-instance capacity) and
@@ -57,15 +102,15 @@ pub(super) struct GpuReplay {
     pub(super) texture_batch: InstanceBatch<TextureInstance>,
 }
 
-// The flush methods temporarily accept GPU plumbing fields (device, queue,
-// pipelines, buffers, sampler, resources) as borrowed parameters because those
-// fields still live on `WgpuPainter` in T10b.  T10c/d will move them here,
-// eliminating the argument lists entirely.  The `too_many_arguments` lint is
-// suppressed for this transitional state only.
+// The flush methods accept `device`, `queue`, `pipelines`, `resources`, and
+// `viewport_size` as borrowed parameters because those live on `WgpuPainter`
+// (the painter retains `size` for record-side methods that also need it).
+// T10d will evaluate whether to move those remaining fields here.
 //
-// `cast_possible_truncation` and `cast_sign_loss` are suppressed for the same
-// reason as in `painter.rs`: GPU rendering converts between numeric types
-// (pixel coords, buffer indices, instance counts) intentionally.
+// `cast_possible_truncation`, `cast_sign_loss`, and `cast_possible_wrap` are
+// suppressed for the same reason as in `painter.rs`: GPU rendering converts
+// between numeric types (pixel coords, buffer indices, instance counts)
+// intentionally.
 #[allow(
     clippy::too_many_arguments,
     clippy::cast_possible_truncation,
@@ -73,56 +118,853 @@ pub(super) struct GpuReplay {
     clippy::cast_possible_wrap
 )]
 impl GpuReplay {
-    /// Create a new [`GpuReplay`] with a pre-allocated texture-instance scratch
-    /// batch.
+    /// Construct a new [`GpuReplay`] with all five GPU plumbing fields initialised.
     ///
-    /// Mirrors the `texture_batch` initialisation that previously lived in
-    /// `WgpuPainter::with_shared_device`.
-    pub(super) fn new() -> Self {
+    /// `pipelines` must already be constructed (it owns the
+    /// `viewport_bind_group_layout`); the bind group created here is built
+    /// against that exact layout object, satisfying the wgpu identity
+    /// requirement.
+    ///
+    /// Mirrors the viewport-buffer / bind-group / unit-quad / sampler
+    /// construction that previously lived inside `WgpuPainter::with_shared_device`.
+    pub(super) fn new(
+        device: &wgpu::Device,
+        pipelines: &PipelineSet,
+        initial_width: u32,
+        initial_height: u32,
+    ) -> Self {
+        // ── Viewport uniform buffer ───────────────────────────────────────────
+        // [width, height, padding, padding] — matches the shader uniform layout.
+        let viewport_data = [
+            initial_width as f32,
+            initial_height as f32,
+            0.0_f32,
+            0.0_f32,
+        ];
+        let viewport_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Viewport Uniform Buffer"),
+            contents: bytemuck::cast_slice(&viewport_data),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // ── Viewport bind group ───────────────────────────────────────────────
+        // Must be built against the layout from `PipelineSet` — see module doc.
+        let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Viewport Bind Group"),
+            layout: pipelines.viewport_bind_group_layout(),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: viewport_buffer.as_entire_binding(),
+            }],
+        });
+
+        // ── Shared unit quad geometry ─────────────────────────────────────────
+        #[rustfmt::skip]
+        let unit_quad_vertices: &[f32] = &[
+            0.0, 0.0,  // Top-left
+            1.0, 0.0,  // Top-right
+            1.0, 1.0,  // Bottom-right
+            0.0, 1.0,  // Bottom-left
+        ];
+        let unit_quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Unit Quad Vertex Buffer"),
+            contents: bytemuck::cast_slice(unit_quad_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let unit_quad_indices: &[u16] = &[
+            0, 1, 2, // Triangle 1
+            0, 2, 3, // Triangle 2
+        ];
+        let unit_quad_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Unit Quad Index Buffer"),
+            contents: bytemuck::cast_slice(unit_quad_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // ── Default texture sampler ───────────────────────────────────────────
+        let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Default Texture Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 100.0,
+            compare: None,
+            anisotropy_clamp: 1,
+            border_color: None,
+        });
+
         Self {
+            viewport_buffer,
+            viewport_bind_group,
+            unit_quad_buffer,
+            unit_quad_index_buffer,
+            default_sampler,
             texture_batch: InstanceBatch::new(1024),
         }
     }
 
+    /// Write new viewport dimensions into the GPU uniform buffer.
+    ///
+    /// Must be called from `WgpuPainter::resize` whenever the window size
+    /// changes.  The write is byte-identical to what the painter previously
+    /// did directly: `[width, height, 0.0, 0.0]` as four `f32` values.
+    pub(super) fn update_viewport(&self, queue: &wgpu::Queue, width: u32, height: u32) {
+        let viewport_data = [width as f32, height as f32, 0.0_f32, 0.0_f32];
+        queue.write_buffer(
+            &self.viewport_buffer,
+            0,
+            bytemuck::cast_slice(&viewport_data),
+        );
+    }
+
+    // =========================================================================
+    // Segment-flush entry point
+    // =========================================================================
+
+    /// Flush a single `DrawSegment` to the GPU in the canonical five-phase order.
+    ///
+    /// ## R1 — flush order invariant
+    ///
+    /// The five phases are executed in this exact sequence.  This order is
+    /// **load-bearing** for z-ordering correctness — a reorder silently corrupts
+    /// draw results with no compile error:
+    ///
+    /// 1. `flush_all_instanced_batches`   — rect / circle / arc / shadow
+    /// 2. `flush_gradient_batches`        — linear / radial / sweep
+    /// 3. `flush_tessellated_geometry`    — lyon tessellated paths / vertices
+    /// 4. `flush_segment_cached_images`   — texture-cache images
+    /// 5. `flush_segment_external_images` — external (registered) textures
+    pub(super) fn flush_segment(
+        &mut self,
+        segment: &mut DrawSegment,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        // R1: five-phase order is load-bearing — do not reorder.
+        self.flush_all_instanced_batches(
+            segment,
+            viewport_size,
+            device,
+            queue,
+            pipelines,
+            resources,
+            encoder,
+            view,
+        );
+        self.flush_gradient_batches(
+            segment,
+            viewport_size,
+            device,
+            queue,
+            pipelines,
+            resources,
+            encoder,
+            view,
+        );
+        self.flush_tessellated_geometry(
+            segment,
+            viewport_size,
+            device,
+            queue,
+            pipelines,
+            resources,
+            encoder,
+            view,
+        );
+        self.flush_segment_cached_images(
+            segment,
+            viewport_size,
+            device,
+            queue,
+            pipelines,
+            resources,
+            encoder,
+            view,
+        );
+        self.flush_segment_external_images(
+            segment,
+            viewport_size,
+            device,
+            queue,
+            pipelines,
+            resources,
+            encoder,
+            view,
+        );
+    }
+
+    // =========================================================================
+    // Phase 1: instanced batches (rect / circle / arc / shadow)
+    // =========================================================================
+
+    /// Flush all instanced batches in a single render pass (Phase 9 optimisation).
+    ///
+    /// Combines shadow → rect → circle → arc into one combined instance buffer
+    /// and one render pass, switching pipelines dynamically.  The shadow
+    /// instances are prepended first for correct z-ordering (background →
+    /// foreground).
+    ///
+    /// Before (Phase 8): 1 buffer upload + 3 render passes + 3 draw calls.
+    /// After  (Phase 9): 1 buffer upload + 1 render pass  + 3 draw calls.
+    fn flush_all_instanced_batches(
+        &mut self,
+        segment: &mut DrawSegment,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        use super::multi_draw::{MultiDrawBatcher, PipelineId};
+
+        let has_rects = !segment.rect_batch.is_empty();
+        let has_circles = !segment.circle_batch.is_empty();
+        let has_arcs = !segment.arc_batch.is_empty();
+        let has_shadows = !segment.shadow_batch.is_empty();
+
+        if !has_rects && !has_circles && !has_arcs && !has_shadows {
+            return;
+        }
+
+        let rect_size =
+            segment.rect_batch.len() * std::mem::size_of::<super::instancing::RectInstance>();
+        let circle_size =
+            segment.circle_batch.len() * std::mem::size_of::<super::instancing::CircleInstance>();
+        let arc_size =
+            segment.arc_batch.len() * std::mem::size_of::<super::instancing::ArcInstance>();
+        let shadow_size =
+            segment.shadow_batch.len() * std::mem::size_of::<super::instancing::ShadowInstance>();
+
+        // IMPORTANT: Shadows FIRST for correct z-ordering (background → foreground).
+        let mut combined_buffer =
+            Vec::with_capacity(shadow_size + rect_size + circle_size + arc_size);
+        let mut multi_batcher = MultiDrawBatcher::new();
+
+        let shadow_offset = combined_buffer.len() as u64;
+        if has_shadows {
+            combined_buffer.extend_from_slice(segment.shadow_batch.as_bytes());
+            multi_batcher.add_quad_draw(
+                PipelineId::Rectangle, // shadow pipeline rendered first for z-order
+                segment.shadow_batch.len() as u32,
+                shadow_offset,
+                shadow_size as u64,
+            );
+        }
+
+        let rect_offset = combined_buffer.len() as u64;
+        if has_rects {
+            combined_buffer.extend_from_slice(segment.rect_batch.as_bytes());
+            multi_batcher.add_quad_draw(
+                PipelineId::Rectangle,
+                segment.rect_batch.len() as u32,
+                rect_offset,
+                rect_size as u64,
+            );
+        }
+
+        let circle_offset = combined_buffer.len() as u64;
+        if has_circles {
+            combined_buffer.extend_from_slice(segment.circle_batch.as_bytes());
+            multi_batcher.add_quad_draw(
+                PipelineId::Circle,
+                segment.circle_batch.len() as u32,
+                circle_offset,
+                circle_size as u64,
+            );
+        }
+
+        let arc_offset = combined_buffer.len() as u64;
+        if has_arcs {
+            combined_buffer.extend_from_slice(segment.arc_batch.as_bytes());
+            multi_batcher.add_quad_draw(
+                PipelineId::Arc,
+                segment.arc_batch.len() as u32,
+                arc_offset,
+                arc_size as u64,
+            );
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let stats = multi_batcher.stats();
+            tracing::trace!(
+                "GpuReplay::flush_all_instanced_batches: draws={}, instances={}, buffer={}B",
+                stats.active_draws,
+                stats.active_instances,
+                combined_buffer.len()
+            );
+        }
+
+        let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(
+            device,
+            queue,
+            "Combined Instance Buffer",
+            &combined_buffer,
+        );
+
+        // ===== SINGLE RENDER PASS FOR ALL PRIMITIVES =====
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Combined Instanced Primitives Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+        render_pass.set_index_buffer(
+            self.unit_quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+
+        let (full_w, full_h) = viewport_size;
+
+        // --- Shadows (rendered first for correct z-ordering) ---
+        if has_shadows {
+            render_pass.set_pipeline(&pipelines.shadow);
+            let buf_start = shadow_offset;
+            let buf_end = buf_start + shadow_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
+            render_pass.set_scissor_rect(0, 0, full_w, full_h);
+            render_pass.draw_indexed(0..6, 0, 0..segment.shadow_batch.len() as u32);
+        }
+
+        // --- Rectangles (per-scissor-region) ---
+        if has_rects {
+            render_pass.set_pipeline(&pipelines.instanced_rect);
+            let buf_start = rect_offset;
+            let buf_end = buf_start + rect_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
+
+            for region in &segment.rect_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        // --- Circles (per-scissor-region) ---
+        if has_circles {
+            render_pass.set_pipeline(&pipelines.instanced_circle);
+            let buf_start = circle_offset;
+            let buf_end = buf_start + circle_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
+
+            for region in &segment.circle_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        // --- Arcs (per-scissor-region) ---
+        if has_arcs {
+            render_pass.set_pipeline(&pipelines.instanced_arc);
+            let buf_start = arc_offset;
+            let buf_end = buf_start + arc_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
+
+            for region in &segment.arc_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        drop(render_pass);
+
+        // Clear batches for next frame.
+        segment.rect_batch.clear();
+        segment.circle_batch.clear();
+        segment.arc_batch.clear();
+        segment.shadow_batch.clear();
+        segment.rect_scissors.clear();
+        segment.circle_scissors.clear();
+        segment.arc_scissors.clear();
+    }
+
+    // =========================================================================
+    // Phase 2: gradient batches (linear / radial / sweep)
+    // =========================================================================
+
+    /// Flush all gradient batches (linear, radial, sweep) in a single render pass.
+    ///
+    /// Uploads gradient stops and the combined instance buffer, then renders
+    /// all three gradient types in one render pass with pipeline switches.
+    fn flush_gradient_batches(
+        &mut self,
+        segment: &mut DrawSegment,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let has_linear = !segment.linear_gradient_batch.is_empty();
+        let has_radial = !segment.radial_gradient_batch.is_empty();
+        let has_sweep = !segment.sweep_gradient_batch.is_empty();
+
+        if !has_linear && !has_radial && !has_sweep {
+            return;
+        }
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "GpuReplay::flush_gradient_batches: linear={}, radial={}, sweep={}, stops={}",
+            segment.linear_gradient_batch.len(),
+            segment.radial_gradient_batch.len(),
+            segment.sweep_gradient_batch.len(),
+            segment.current_gradient_stops.len()
+        );
+
+        // ===== Upload gradient stops to GPU =====
+        if !segment.current_gradient_stops.is_empty() {
+            pipelines.refresh_gradient_bind_group(
+                device,
+                queue,
+                bytemuck::cast_slice(&segment.current_gradient_stops),
+            );
+        }
+
+        let linear_size = segment.linear_gradient_batch.len()
+            * std::mem::size_of::<super::instancing::LinearGradientInstance>();
+        let radial_size = segment.radial_gradient_batch.len()
+            * std::mem::size_of::<super::instancing::RadialGradientInstance>();
+        let sweep_size = segment.sweep_gradient_batch.len()
+            * std::mem::size_of::<super::instancing::SweepGradientInstance>();
+
+        let mut combined_buffer = Vec::with_capacity(linear_size + radial_size + sweep_size);
+
+        let linear_offset = 0;
+        if has_linear {
+            combined_buffer.extend_from_slice(segment.linear_gradient_batch.as_bytes());
+        }
+
+        let radial_offset = combined_buffer.len();
+        if has_radial {
+            combined_buffer.extend_from_slice(segment.radial_gradient_batch.as_bytes());
+        }
+
+        let sweep_offset = combined_buffer.len();
+        if has_sweep {
+            combined_buffer.extend_from_slice(segment.sweep_gradient_batch.as_bytes());
+        }
+
+        let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(
+            device,
+            queue,
+            "Gradient Instance Buffer",
+            &combined_buffer,
+        );
+
+        // ===== SINGLE RENDER PASS FOR ALL GRADIENTS =====
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Gradient Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
+            render_pass.set_bind_group(1, gradient_bind_group, &[]);
+        }
+        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+        render_pass.set_index_buffer(
+            self.unit_quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+
+        let (full_w, full_h) = viewport_size;
+
+        // ===== Draw Linear Gradients (per-scissor-region) =====
+        if has_linear {
+            render_pass.set_pipeline(&pipelines.linear_gradient);
+            // Re-set bind groups after pipeline switch (WebGPU invalidates bind
+            // groups when the new pipeline's PipelineLayout is a different object).
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+            if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
+                render_pass.set_bind_group(1, gradient_bind_group, &[]);
+            }
+
+            let linear_start = linear_offset as u64;
+            let linear_end = linear_start + linear_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(linear_start..linear_end));
+
+            for region in &segment.linear_grad_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        // ===== Draw Radial Gradients (per-scissor-region) =====
+        if has_radial {
+            render_pass.set_pipeline(&pipelines.radial_gradient);
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+            if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
+                render_pass.set_bind_group(1, gradient_bind_group, &[]);
+            }
+
+            let radial_start = radial_offset as u64;
+            let radial_end = radial_start + radial_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(radial_start..radial_end));
+
+            for region in &segment.radial_grad_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        // ===== Draw Sweep Gradients (per-scissor-region) =====
+        if has_sweep {
+            render_pass.set_pipeline(&pipelines.sweep_gradient);
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+            if let Some(ref gradient_bind_group) = pipelines.gradient_bind_group {
+                render_pass.set_bind_group(1, gradient_bind_group, &[]);
+            }
+
+            let sweep_start = sweep_offset as u64;
+            let sweep_end = sweep_start + sweep_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(sweep_start..sweep_end));
+
+            for region in &segment.sweep_grad_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        drop(render_pass);
+
+        // Clear batches for next frame.
+        segment.linear_gradient_batch.clear();
+        segment.radial_gradient_batch.clear();
+        segment.sweep_gradient_batch.clear();
+        segment.current_gradient_stops.clear();
+        segment.linear_grad_scissors.clear();
+        segment.radial_grad_scissors.clear();
+        segment.sweep_grad_scissors.clear();
+    }
+
+    // =========================================================================
+    // Phase 3: tessellated geometry
+    // =========================================================================
+
+    /// Flush tessellated geometry from the segment.
+    ///
+    /// Uploads vertices/indices and renders all recorded tessellated batches in
+    /// a single render pass, switching pipelines as needed.
+    fn flush_tessellated_geometry(
+        &mut self,
+        segment: &mut DrawSegment,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        if segment.vertices.is_empty() || segment.tess_batches.is_empty() {
+            return;
+        }
+
+        let (vertex_buffer, index_buffer) =
+            resources.buffer_pool_mut().get_vertex_and_index_buffers(
+                device,
+                queue,
+                "Shape Vertex Buffer",
+                bytemuck::cast_slice(&segment.vertices),
+                "Shape Index Buffer",
+                bytemuck::cast_slice(&segment.indices),
+            );
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shape Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+        let (full_w, full_h) = viewport_size;
+        let mut active_key: Option<PipelineKey> = None;
+        for batch in &segment.tess_batches {
+            if active_key != Some(batch.pipeline_key) {
+                // `pipelines` and `device` are disjoint from the encoder/render_pass
+                // borrows — no borrow conflict.
+                let pipeline = pipelines
+                    .shape_cache_mut()
+                    .get_or_create(device, batch.pipeline_key);
+                render_pass.set_pipeline(pipeline);
+                active_key = Some(batch.pipeline_key);
+            }
+
+            if let Some((x, y, w, h)) = batch.scissor {
+                render_pass.set_scissor_rect(x, y, w, h);
+            } else {
+                render_pass.set_scissor_rect(0, 0, full_w, full_h);
+            }
+
+            let start = batch.index_start;
+            let end = start + batch.index_count;
+            render_pass.draw_indexed(start..end, 0, 0..1);
+        }
+
+        drop(render_pass);
+
+        segment.vertices.clear();
+        segment.indices.clear();
+        segment.tess_batches.clear();
+        segment.current_pipeline_key = None;
+    }
+
+    // =========================================================================
+    // Phase 4: segment-cached images
+    // =========================================================================
+
+    /// Flush all texture-cache image draws recorded in the segment.
+    ///
+    /// Groups consecutive draws by `TextureId` to minimise draw calls.  When
+    /// a texture-ID change forces an early flush, the previous batch is
+    /// submitted before the new `TextureId` takes over.
+    fn flush_segment_cached_images(
+        &mut self,
+        segment: &mut DrawSegment,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &PipelineSet,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let mut pending_images: Vec<(
+            super::texture_cache::TextureId,
+            super::instancing::TextureInstance,
+            ScissorRect,
+        )> = segment.cached_images.drain(..).collect();
+
+        if pending_images.is_empty() {
+            return;
+        }
+
+        let mut active_texture_id: Option<super::texture_cache::TextureId> = None;
+        let mut active_texture_view: Option<wgpu::TextureView> = None;
+        // Scissor of the most-recently buffered instance — forwarded when a
+        // texture-change forces an early flush.
+        let mut active_scissor: ScissorRect = None;
+
+        for (texture_id, instance, scissor) in pending_images.drain(..) {
+            if active_texture_id.as_ref() != Some(&texture_id) {
+                if let Some(texture_view) = active_texture_view.as_ref() {
+                    self.flush_texture_batch(
+                        device,
+                        queue,
+                        pipelines,
+                        resources,
+                        viewport_size,
+                        encoder,
+                        view,
+                        texture_view,
+                        active_scissor,
+                    );
+                }
+                active_texture_id = Some(texture_id.clone());
+                active_texture_view = resources
+                    .texture_cache_mut()
+                    .get(&texture_id)
+                    .map(|cached| cached.view.clone());
+            }
+
+            active_scissor = scissor;
+            if let Some(texture_view) = active_texture_view.as_ref()
+                && self.texture_batch.add(instance)
+            {
+                self.flush_texture_batch(
+                    device,
+                    queue,
+                    pipelines,
+                    resources,
+                    viewport_size,
+                    encoder,
+                    view,
+                    texture_view,
+                    active_scissor,
+                );
+            }
+        }
+
+        if let Some(texture_view) = active_texture_view.as_ref() {
+            self.flush_texture_batch(
+                device,
+                queue,
+                pipelines,
+                resources,
+                viewport_size,
+                encoder,
+                view,
+                texture_view,
+                active_scissor,
+            );
+        }
+    }
+
+    // =========================================================================
+    // Phase 5: external (registered) textures
+    // =========================================================================
+
+    /// Flush all external-texture draws recorded in the segment.
+    ///
+    /// Each entry carries a `flui_types::painting::TextureId` stored at
+    /// record time.  Here, at replay time, each ID is resolved to a
+    /// `wgpu::TextureView` via the external texture registry.  If an ID is not
+    /// found (texture was unregistered between record and flush), a warning is
+    /// emitted and the entry is skipped — identical behavior to before, now on
+    /// the correct replay side of the record/replay seam.
+    ///
+    /// Because `wgpu::TextureView` is not `PartialEq`, instances are flushed
+    /// individually (one draw call per instance) rather than grouped by view
+    /// equality.  External textures are uncommon in typical UI; the extra draw
+    /// calls are not a hot path.
+    fn flush_segment_external_images(
+        &mut self,
+        segment: &mut DrawSegment,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &PipelineSet,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        if segment.external_images.is_empty() {
+            return;
+        }
+
+        // Drain into a local vec so we can call `&mut self` methods
+        // (`flush_texture_batch`) while iterating without holding a borrow on
+        // `segment.external_images`.
+        let pending: Vec<(
+            flui_types::painting::TextureId,
+            super::instancing::TextureInstance,
+            ScissorRect,
+        )> = segment.external_images.drain(..).collect();
+
+        for (texture_id, instance, scissor) in pending {
+            // Resolve ID → view at replay time.  Clone the view to release the
+            // borrow on `resources` before calling `flush_texture_batch` (which
+            // takes `&mut resources`).  External textures are uncommon; the
+            // clone is not a hot-path concern.
+            let tex_view =
+                if let Some(entry) = resources.external_texture_registry().get(texture_id) {
+                    entry.view.clone()
+                } else {
+                    tracing::warn!(
+                        "External texture {} not found at flush time — skipping draw",
+                        texture_id.get()
+                    );
+                    continue;
+                };
+
+            let _ = self.texture_batch.add(instance);
+            self.flush_texture_batch(
+                device,
+                queue,
+                pipelines,
+                resources,
+                viewport_size,
+                encoder,
+                view,
+                &tex_view,
+                scissor,
+            );
+        }
+    }
+
+    // =========================================================================
+    // Texture-batch flush methods (from T10b, updated: 5 params → self fields)
+    // =========================================================================
+
     /// Flush the texture instance batch with straight-alpha blending.
     ///
-    /// Renders all batched textures in a single draw call using GPU instancing.
-    /// This is 50–100× faster than individual draw calls for image-heavy UIs.
+    /// Used for normal decoded-image draws whose samples carry straight
+    /// (non-premultiplied) alpha.  Offscreen layer composites must use
+    /// `flush_texture_batch_premultiplied` instead.
     ///
-    /// This is the **straight-alpha** entry point used for normal decoded-image
-    /// draws, whose samples carry straight (non-premultiplied) alpha. Offscreen
-    /// *layer* composites must instead use
-    /// [`flush_texture_batch_premultiplied`](Self::flush_texture_batch_premultiplied),
-    /// because their texels are premultiplied — see that method and
-    /// `WgpuPainter::flush_opacity_layer`.
-    ///
-    /// `scissor` is the clip rect to apply for this draw call.  Pass `None` to
-    /// render unclipped (full viewport), matching the behaviour of the
-    /// rect/circle instanced batches when no scissor is active.
-    ///
-    /// # Arguments
-    /// * `device` - wgpu device
-    /// * `queue` - wgpu queue
-    /// * `pipelines` - pipeline collection (selects the straight-alpha pipeline)
-    /// * `viewport_bind_group` - group 0 viewport uniform bind group
-    /// * `unit_quad_buffer` - shared unit-quad vertex buffer
-    /// * `unit_quad_index_buffer` - shared unit-quad index buffer
-    /// * `default_sampler` - linear/clamp-to-edge sampler
-    /// * `resources` - GPU resource managers (buffer pool used for instance upload)
-    /// * `viewport_size` - current viewport `(width, height)` in physical pixels
-    /// * `encoder` - command encoder
-    /// * `view` - render target view
-    /// * `texture_view` - texture to use for all instances in this batch
-    /// * `scissor` - optional scissor rect `(x, y, w, h)` in physical pixels
+    /// `scissor` is the clip rect to apply.  Pass `None` for full-viewport
+    /// (unclipped), matching the rect/circle instanced batches.
     pub(super) fn flush_texture_batch(
         &mut self,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
         pipelines: &PipelineSet,
-        viewport_bind_group: &wgpu::BindGroup,
-        unit_quad_buffer: &wgpu::Buffer,
-        unit_quad_index_buffer: &wgpu::Buffer,
-        default_sampler: &wgpu::Sampler,
         resources: &mut GpuResources,
         viewport_size: (u32, u32),
         encoder: &mut wgpu::CommandEncoder,
@@ -134,10 +976,6 @@ impl GpuReplay {
             device,
             queue,
             pipelines,
-            viewport_bind_group,
-            unit_quad_buffer,
-            unit_quad_index_buffer,
-            default_sampler,
             resources,
             viewport_size,
             encoder,
@@ -151,24 +989,18 @@ impl GpuReplay {
     /// Flush the texture instance batch using **premultiplied** source-over
     /// blending.
     ///
-    /// Used to composite offscreen *layer* textures (opacity / ColorFilter /
-    /// ShaderMask / backdrop results). Those offscreens are cleared transparent
-    /// then drawn into with straight `ALPHA_BLENDING`, which leaves their texels
-    /// premultiplied (`rgb = straight_rgb * a`). Compositing them with the
-    /// straight pipeline would re-multiply rgb by alpha, darkening translucent/AA
-    /// content. This routes the batch through
-    /// [`PipelineSet::instanced_texture_premul`] (src factor `One`) so the
-    /// composite is correct, with the per-channel `tint` carrying group opacity
-    /// and any ColorFilter chroma as `(C.r*O, C.g*O, C.b*O, O)`.
+    /// Used to composite offscreen layer textures (opacity / ColorFilter /
+    /// ShaderMask / backdrop results) whose texels are premultiplied
+    /// (`rgb = straight_rgb * a`).  Compositing with the straight pipeline
+    /// would re-multiply rgb by alpha, darkening translucent/AA content.
+    /// Routes through `PipelineSet::instanced_texture_premul` (src factor
+    /// `One`); the per-channel tint carries group opacity and any ColorFilter
+    /// chroma as `(C.r*O, C.g*O, C.b*O, O)`.
     pub(super) fn flush_texture_batch_premultiplied(
         &mut self,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
         pipelines: &PipelineSet,
-        viewport_bind_group: &wgpu::BindGroup,
-        unit_quad_buffer: &wgpu::Buffer,
-        unit_quad_index_buffer: &wgpu::Buffer,
-        default_sampler: &wgpu::Sampler,
         resources: &mut GpuResources,
         viewport_size: (u32, u32),
         encoder: &mut wgpu::CommandEncoder,
@@ -180,10 +1012,6 @@ impl GpuReplay {
             device,
             queue,
             pipelines,
-            viewport_bind_group,
-            unit_quad_buffer,
-            unit_quad_index_buffer,
-            default_sampler,
             resources,
             viewport_size,
             encoder,
@@ -194,21 +1022,16 @@ impl GpuReplay {
         );
     }
 
-    /// Shared body for [`Self::flush_texture_batch`] and
-    /// [`Self::flush_texture_batch_premultiplied`].
+    /// Shared body for the two public texture-batch flush methods.
     ///
-    /// `premultiplied` selects the blend pipeline: `false` =
-    /// straight-alpha (decoded images), `true` = premultiplied source-over
-    /// (offscreen-layer composites).
+    /// `premultiplied` selects the blend pipeline: `false` = straight-alpha
+    /// (decoded images), `true` = premultiplied source-over (offscreen-layer
+    /// composites).
     fn flush_texture_batch_with_blend(
         &mut self,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
         pipelines: &PipelineSet,
-        viewport_bind_group: &wgpu::BindGroup,
-        unit_quad_buffer: &wgpu::Buffer,
-        unit_quad_index_buffer: &wgpu::Buffer,
-        default_sampler: &wgpu::Sampler,
         resources: &mut GpuResources,
         viewport_size: (u32, u32),
         encoder: &mut wgpu::CommandEncoder,
@@ -227,14 +1050,13 @@ impl GpuReplay {
             self.texture_batch.len()
         );
 
-        // Create texture bind group for this batch
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Texture Instance Bind Group"),
             layout: &pipelines.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(default_sampler),
+                    resource: wgpu::BindingResource::Sampler(&self.default_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -243,7 +1065,6 @@ impl GpuReplay {
             ],
         });
 
-        // Upload instance buffer (using buffer pool for efficient zero-copy reuse)
         let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(
             device,
             queue,
@@ -251,7 +1072,6 @@ impl GpuReplay {
             self.texture_batch.as_bytes(),
         );
 
-        // Create render pass
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Instanced Texture Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -259,7 +1079,7 @@ impl GpuReplay {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // Don't clear - render on top
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -269,34 +1089,33 @@ impl GpuReplay {
             multiview_mask: None,
         });
 
-        // Set pipeline and buffers. Offscreen-layer composites use the
-        // premultiplied pipeline; normal decoded-image draws use straight alpha.
-        // Selection logic is behavior-preserving (round-5c color-correctness fix).
+        // Offscreen-layer composites use the premultiplied pipeline; normal
+        // decoded-image draws use straight alpha.  Selection logic is
+        // behavior-preserving (round-5c color-correctness fix).
         let pipeline = if premultiplied {
             &pipelines.instanced_texture_premul
         } else {
             &pipelines.instanced_texture
         };
         render_pass.set_pipeline(pipeline);
-        render_pass.set_bind_group(0, viewport_bind_group, &[]);
+        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         render_pass.set_bind_group(1, &texture_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, unit_quad_buffer.slice(..));
+        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
         render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        render_pass.set_index_buffer(unit_quad_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_index_buffer(
+            self.unit_quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
 
-        // Apply scissor rect, mirroring the rect/circle/arc instanced batch pattern.
+        let (full_w, full_h) = viewport_size;
         if let Some((x, y, w, h)) = scissor {
             render_pass.set_scissor_rect(x, y, w, h);
         } else {
-            render_pass.set_scissor_rect(0, 0, viewport_size.0, viewport_size.1);
+            render_pass.set_scissor_rect(0, 0, full_w, full_h);
         }
 
-        // Draw all instances in ONE draw call.
         render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
-
         drop(render_pass);
-
-        // Clear batch for next frame
         self.texture_batch.clear();
     }
 }
