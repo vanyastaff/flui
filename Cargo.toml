@@ -282,9 +282,23 @@ serde = [
 [profile.dev]
 opt-level = 1      # Some optimization for faster runtime
 incremental = true # Faster rebuilds
+# `debug = 1` ("limited") keeps file:line in panic backtraces AND variable/scope
+# info for a step-debugger, but drops the DWARF/CodeView *type* info that full
+# `debug = 2` (cargo's dev default) emits. On this wgpu/cosmic-text/lyon/naga
+# workspace that embedded type info is the bulk of the per-crate artifact size
+# in `target/debug/deps`. Same trade-off Zed/gpui ships as its default dev
+# profile. When you need complete type info in the debugger, build `--profile dbg`.
+debug = 1
 
 [profile.dev.package."*"]
 opt-level = 2 # Optimize dependencies (they don't change often)
+
+# Opt-in full-debuginfo profile. Inherits `dev` but restores `debug = 2` so a
+# step-debugger (RustRover / lldb / gdb) sees complete type info. Use sparingly —
+# it re-inflates `target/`: `cargo build --profile dbg`, `cargo test --profile dbg`.
+[profile.dbg]
+inherits = "dev"
+debug = "full"
 
 [profile.release]
 opt-level = 3

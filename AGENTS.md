@@ -202,7 +202,7 @@ CI runs on PR + push to main. Jobs (in dependency order):
 ## Important Config
 
 - **Toolchain:** pinned in `rust-toolchain.toml` to `1.96.0` with `rustfmt` + `clippy` components
-- **Cargo profiles:** dev `opt-level = 1` (faster runtime), deps `opt-level = 2`; release `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`
+- **Cargo profiles:** dev `opt-level = 1` (faster runtime) + `debug = 1` ("limited" — backtraces + debugger vars, no DWARF/CodeView type info, the bulk of `target/debug/deps` size), deps `opt-level = 2`; `dbg` profile (`inherits = "dev"`, `debug = "full"`) is the opt-in full-type-info build for a step-debugger; release `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`. Local disk: the `target/debug/incremental` cache (no size cap) is the largest consumer on a 28-crate wgpu workspace — sweep it periodically. CI sets `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and reclaims ~25 GB of runner bloat before building.
 - **Build jobs:** 8 (set in `.cargo/config.toml`)
 - **Android examples** require `cargo-ndk` + Android NDK (not in workspace default-members)
 - **WASM examples** require `wasm-pack` (not in workspace default-members); use `just web-server` for the dev server
