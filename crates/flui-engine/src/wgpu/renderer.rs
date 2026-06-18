@@ -1158,8 +1158,19 @@ impl Renderer {
             // None (incapable adapter), the render must STILL run — otherwise the
             // frame presents only the clear pass (blank content). This is the
             // documented graceful no-op.
-            let frame_target =
-                super::render_target::RenderTarget::sampleable(&view, &output.texture);
+            // Gate backdrop-sampling on COPY_SRC: advanced-blend layers in
+            // `flush_opacity_layer` check `main_target.texture.is_some()` before
+            // attempting `copy_texture_to_texture`.  On a COPY_SRC-less adapter the
+            // surface texture lacks that usage, so supplying `Some(texture)` here
+            // would bypass the fallback guard and trigger a wgpu validation error.
+            // `view_only` → `texture: None` → the fallback SrcOver+warn path in
+            // `flush_opacity_layer` becomes reachable, giving a correct (if
+            // approximate) result until PR-6 wires the COPY_SRC-less present path.
+            let frame_target = if ctx.supports_copy_src {
+                super::render_target::RenderTarget::sampleable(&view, &output.texture)
+            } else {
+                super::render_target::RenderTarget::view_only(&view)
+            };
             #[cfg(feature = "gpu-profiler")]
             let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
                 let mut scope = profiler.scope("final_render", &mut final_encoder);

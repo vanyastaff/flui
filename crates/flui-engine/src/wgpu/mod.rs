@@ -172,6 +172,12 @@ mod sdf_smoke_test;
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod deterministic_replay_tests;
 
+// layer_blend_tests contains both cfg(test) unit tests and
+// cfg(all(test, feature = "enable-wgpu-tests")) GPU tests.
+// Include the file whenever test compilation is active.
+#[cfg(test)]
+mod layer_blend_tests;
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================

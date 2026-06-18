@@ -216,6 +216,19 @@ impl<'a> SceneBuilder<'a> {
         self.push_layer(Layer::Opacity(OpacityLayer::with_offset(alpha, offset)))
     }
 
+    /// Pushes an opacity layer with an explicit blend mode.
+    ///
+    /// For plain opacity (`SrcOver`) use [`push_opacity`](Self::push_opacity).
+    /// For advanced blend modes (Multiply, Screen, …) use this method; the
+    /// engine will route the layer through the dst-read compositor path.
+    pub fn push_opacity_blend(&mut self, alpha: f32, blend: BlendMode) -> LayerId {
+        self.push_layer(Layer::Opacity(OpacityLayer::with_blend(
+            alpha,
+            flui_types::Offset::ZERO,
+            blend,
+        )))
+    }
+
     /// Pushes a clip rect layer that clips children to a rectangle.
     ///
     /// # Arguments

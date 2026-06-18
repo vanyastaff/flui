@@ -415,20 +415,28 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OpacityLa
         if self.is_invisible() {
             return;
         }
-        if self.is_opaque() {
+        // An opaque SrcOver layer is a no-op composite — skip it entirely.
+        // An opaque advanced-blend layer (opacity=1, non-SrcOver) MUST still be
+        // pushed so the compositor applies the dst-read blend to its children.
+        let is_src_over_opaque = self.is_opaque() && !self.blend().is_advanced();
+        if is_src_over_opaque {
             return;
         }
         if self.has_offset() {
             renderer.push_offset(self.offset());
         }
-        renderer.push_opacity(self.alpha());
+        renderer.push_opacity_blend(self.alpha(), self.blend());
     }
 
     fn cleanup(&self, renderer: &mut R) {
-        if self.is_invisible() || self.is_opaque() {
+        if self.is_invisible() {
             return;
         }
-        // Pop in reverse order: first opacity, then offset
+        let is_src_over_opaque = self.is_opaque() && !self.blend().is_advanced();
+        if is_src_over_opaque {
+            return;
+        }
+        // Pop in reverse order: first opacity, then offset.
         renderer.pop_opacity();
         if self.has_offset() {
             renderer.pop_transform();

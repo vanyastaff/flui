@@ -42,11 +42,6 @@ mod pipeline;
 /// offscreen target (premultiplied RGBA).  Ownership is transferred in so the
 /// caller's `PooledTexture` RAII handle is not dropped until after the render
 /// pass that reads it completes.
-#[allow(
-    dead_code,
-    reason = "Driven by the renderer-layer advanced-blend interception; \
-              exercised here by the synthetic-op gate"
-)]
 pub(crate) struct AdvancedBlendOp {
     /// Pre-rendered foreground layer content (premultiplied RGBA).
     pub(crate) foreground: PooledTexture,
@@ -58,7 +53,19 @@ pub(crate) struct AdvancedBlendOp {
     pub(crate) opacity: f32,
     /// Per-channel RGB tint in [0.0, 1.0] per component.
     pub(crate) tint: [f32; 3],
+    /// Foreground texture UV min corner `[u_min, v_min]`.
+    ///
+    /// The VS-interpolated unit-quad UV `[0,1]` is remapped to
+    /// `mix(src_uv_min, src_uv_max, uv)` before sampling the foreground.
+    /// Pass `[0.0, 0.0]` for a full-viewport foreground (identity).
+    pub(crate) src_uv_min: [f32; 2],
+    /// Foreground texture UV max corner `[u_max, v_max]`.
+    ///
+    /// Pass `[1.0, 1.0]` for a full-viewport foreground (identity).
+    pub(crate) src_uv_max: [f32; 2],
 }
+
+// ── Backdrop copy ─────────────────────────────────────────────────────────────
 
 /// A successfully copied backdrop region ready for shader sampling.
 ///
@@ -91,10 +98,6 @@ pub(crate) struct BackdropSample {
 /// - Derive width/height from the clamped corners (`right.saturating_sub(x)`).
 /// - `max(1)` on width/height prevents a zero-extent copy (wgpu validation requires
 ///   non-zero extent).
-#[allow(
-    dead_code,
-    reason = "Called by flush_advanced_layer; exercised by the synthetic-op gate"
-)]
 pub(crate) fn copy_backdrop_region(
     surface_texture: &wgpu::Texture,
     device_rect: Rect<Pixels>,
@@ -192,16 +195,6 @@ pub(crate) fn copy_backdrop_region(
 /// 3. Issue one render pass over `op.device_bounds` with `LoadOp::Load` (preserving
 ///    existing surface content outside the blend region).
 /// 4. Pooled textures (foreground, backdrop copy) are returned to the pool on drop.
-///
-/// ## No production caller in PR-2
-///
-/// This function is driven by the renderer-layer advanced-blend interception added
-/// in PR-3.  It is exercised in PR-2 exclusively by the synthetic-op GPU gate.
-#[allow(
-    dead_code,
-    reason = "Driven by the renderer-layer advanced-blend interception; \
-              exercised here by the synthetic-op gate"
-)]
 #[allow(clippy::too_many_arguments)]
 #[allow(
     clippy::needless_pass_by_value,
@@ -254,7 +247,8 @@ pub(crate) fn flush_advanced_layer(
         _pad0: 0,
         tint_rgb: op.tint,
         mode: mode_to_u32(op.mode),
-        _pad1: [0; 4],
+        src_uv_min: op.src_uv_min,
+        src_uv_max: op.src_uv_max,
     };
 
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -757,6 +751,9 @@ mod synthetic_op_tests {
                 ),
                 opacity: 1.0,
                 tint: [1.0, 1.0, 1.0],
+                // Full-viewport foreground: identity UV remap.
+                src_uv_min: [0.0, 0.0],
+                src_uv_max: [1.0, 1.0],
             };
 
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -898,6 +895,8 @@ mod synthetic_op_tests {
                 device_bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(1.0), Pixels(1.0)),
                 opacity: 1.0,
                 tint: [1.0, 1.0, 1.0],
+                src_uv_min: [0.0, 0.0],
+                src_uv_max: [1.0, 1.0],
             };
             let mut encoder = device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
@@ -995,6 +994,8 @@ mod synthetic_op_tests {
             device_bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(4.0), Pixels(2.0)),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
+            src_uv_min: [0.0, 0.0],
+            src_uv_max: [1.0, 1.0],
         };
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1135,6 +1136,10 @@ mod synthetic_op_tests {
             ),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
+            // Foreground is 4×SURF_H, not full-viewport (SURF_W=6) — identity
+            // UV within the foreground texture itself (the texture IS 4 wide).
+            src_uv_min: [0.0, 0.0],
+            src_uv_max: [1.0, 1.0],
         };
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1280,6 +1285,8 @@ mod synthetic_op_tests {
             ),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
+            src_uv_min: [0.0, 0.0],
+            src_uv_max: [1.0, 1.0],
         };
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

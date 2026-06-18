@@ -55,6 +55,7 @@ use wgpu::util::DeviceExt;
 use crate::error::EngineResult;
 
 use super::{
+    advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
     command_ir::{DrawItem, DrawSegment, PendingOpacityLayer, ScissorRect},
     instancing::{InstanceBatch, TextureInstance},
     pipeline::PipelineKey,
@@ -395,6 +396,83 @@ impl GpuReplay {
             resources,
             encoder,
         );
+
+        // ── Advanced-blend dispatch (DECISION 1 / CRITICAL GATE) ────────────
+        //
+        // `layer.blend.is_advanced()` is set when the layer carries a W3C
+        // advanced blend mode (Multiply, Screen, Overlay, …, Luminosity).
+        // Advanced blends require a backdrop read from the main surface — they
+        // MUST NOT go through the SrcOver premultiplied composite below, which
+        // would produce a white-over-dst tinted composite instead of the actual
+        // advanced blend.
+        //
+        // The COPY_SRC guard: `main_target.texture` is `Some` only when the
+        // surface was created with COPY_SRC usage.  Without it `copy_backdrop_region`
+        // cannot copy the backdrop, so we fall back to SrcOver + a one-shot warning.
+        if layer.blend.is_advanced() {
+            if let Some(surface_texture) = main_target.texture {
+                let o = layer.opacity.clamp(0.0, 1.0);
+                // UV remap: layer.bounds → [0,1] in viewport space.
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
+                )]
+                let uv_left = layer.bounds.left().0 / vp_w as f32;
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
+                )]
+                let uv_top = layer.bounds.top().0 / vp_h as f32;
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
+                )]
+                let uv_right = layer.bounds.right().0 / vp_w as f32;
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
+                )]
+                let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
+
+                let op = AdvancedBlendOp {
+                    foreground: offscreen,
+                    mode: layer.blend,
+                    device_bounds: layer.bounds,
+                    opacity: o,
+                    tint: layer.tint_rgb,
+                    src_uv_min: [uv_left, uv_top],
+                    src_uv_max: [uv_right, uv_bottom],
+                };
+                flush_advanced_layer(
+                    op,
+                    surface_texture,
+                    main_target.view,
+                    surface_format,
+                    viewport_size,
+                    &pipelines.advanced_blend,
+                    resources,
+                    device,
+                    encoder,
+                );
+                tracing::trace!(
+                    mode = ?layer.blend,
+                    opacity = layer.opacity,
+                    bounds = ?layer.bounds,
+                    "GpuReplay: composited advanced-blend opacity layer"
+                );
+                return;
+            }
+            // COPY_SRC unavailable: warn once and fall through to SrcOver.
+            // PR-6 will wire the COPY_SRC-less present path; until then this
+            // is a correct (if approximate) fallback — SrcOver instead of the
+            // requested advanced mode.
+            tracing::warn!(
+                mode = ?layer.blend,
+                "Advanced blend layer: surface lacks COPY_SRC; \
+                 falling back to SrcOver compositing (PR-6 will fix the present path)"
+            );
+        }
+
         let offscreen_view = offscreen.view();
 
         // Composite the premultiplied offscreen onto the main surface.

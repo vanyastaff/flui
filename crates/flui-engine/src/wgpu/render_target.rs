@@ -32,10 +32,6 @@ pub(crate) struct RenderTarget<'a> {
     ///
     /// Read by the dst-read blend pass when sampling the backdrop region;
     /// `None` targets cannot be sampled and must not be used with advanced modes.
-    #[allow(
-        dead_code,
-        reason = "written at frame-surface and offscreen sites; read by the dst-read blend pass that samples the backdrop region"
-    )]
     pub(crate) texture: Option<&'a wgpu::Texture>,
 }
 

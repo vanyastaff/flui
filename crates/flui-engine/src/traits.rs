@@ -423,6 +423,17 @@ pub trait LayerStateStack {
     /// Push an opacity value onto the effect stack
     fn push_opacity(&mut self, alpha: f32);
 
+    /// Push an opacity layer with an explicit blend mode onto the effect stack.
+    ///
+    /// The default implementation forwards to [`push_opacity`](Self::push_opacity),
+    /// which is correct for command-only backends that do not participate in the
+    /// dst-read compositor path.  The `wgpu` backend overrides this to route
+    /// advanced blend modes through `save_layer` with the blend propagated.
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+        let _ = blend;
+        self.push_opacity(alpha);
+    }
+
     /// Pop the most recent opacity from the effect stack
     fn pop_opacity(&mut self);
 
