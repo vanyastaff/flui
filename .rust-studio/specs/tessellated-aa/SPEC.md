@@ -118,3 +118,57 @@ Optional `examples/` AA demo (rotated shapes + a star path) for visual confirmat
 `rust-builder` (test-first) → `rust-reviewer` + **`ce-kieran`** (soundness, mandatory on this core) →
 **I run the GPU-readback serial on DX12 myself** (the only pixel gate; not in CI). Capture the durable
 decision to the Obsidian vault via `/remember` after the architecture lands.
+
+---
+
+## Progress (as of 2026-06-18)
+
+- **PR-1 MERGED** (#258, `6fd8ae0b`): rect/rrect affine-SDF reroute + AA oracle harness (O1–O7).
+  Caught/fixed in review: missing outer AA fringe (quad-expansion fix), pre-existing `sdRoundedBox`
+  corner-radius scramble (non-uniform radii), doc-CI.
+- **PR-2 MERGED** (#259, `2d3d82ac`): circle/oval affine + `fwidth` AA-model fix (replaced
+  radius-relative `edge_softness=0.02`). Caught/fixed: BLOCKER double-scale of the circle center
+  (HiDPI/DPR>1 broke) — center now in `transform_translate`, never inside the local vector; C4 guards it.
+- **PR-2b MERGED** (#260, `b9f2bf28`): arc affine + `fwidth` radial AA + screen-space angular
+  half-plane SDF. Caught/fixed: doc-CI break (stale `[ArcInstance::new]` links), `use_center=false`
+  shape regression (chord segments now tessellate), elliptical-arc collapse (now folds `diag(rx,ry)`).
+
+**Half 1 (SDF-reroute for all closed-form shapes) is COMPLETE.** Every rect/rrect/circle/oval/arc
+SrcOver shape now anti-aliases correctly under any affine, at any radius/scale/rotation.
+
+**Deferred quality follow-up (own PR, engine-wide):** switch `sdfToAlpha` from `fwidth` (L1/Manhattan,
+over-widens diagonal-edge AA by up to √2) to `length(vec2(dpdx,dpdy))` (L2) across ALL 5 SDF shader
+copies (rect_instanced, circle_instanced, arc_instanced, common/sdf, gradients). Changes existing
+axis-aligned output by ≤1/255 at corners — a deliberate quality improvement, not byte-identical.
+
+## PR-3 implementation map (SSAA offscreen for arbitrary paths) — READY TO BUILD
+
+Scouted; integration points confirmed:
+
+- **Route**: `painter.rs:866 draw_path` → `batches/paths.rs:181 DrawBatcher::draw_path` →
+  `batches/mod.rs:153 add_tessellated_with_key`. Add an SSAA diversion **parallel to the AdvancedShape
+  diversion** (`mod.rs:165-207`): when `paint.style==Fill && blend==SrcOver` AND the geometry is an
+  **arbitrary path/polygon** (NOT a closed-form shape already SDF-routed), seal the prior segment
+  (`finish_current_segment`), render the path's `DrawSegment` to a 2× pooled offscreen, box-downsample
+  to a 1× premultiplied tile, and push `DrawItem::OffscreenTexture(PendingOffscreenTexture{texture,bounds})`.
+- **Reuse `DrawItem::OffscreenTexture`** (`command_ir.rs:62,295`) verbatim — no new variant. It composites
+  via `replay.rs:286` → `flush_texture_batch_premultiplied` (`replay.rs:1434`). Z-order is implicit in
+  `draw_order` position (R1 arm order), so seal+push is Z-correct (same as AdvancedShape).
+- **Offscreen render**: reuse `opacity_layer.rs:60 render_segment_to_offscreen` to draw the segment into
+  a `pool.acquire(vp_w*N, vp_h*N, surface_format)` 2× texture (existing usage flags suffice — no new axis).
+- **Downsample**: NEW `shaders/effects/box_downsample.wgsl` (~20 LOC, 4-tap linear box filter 2×→1×) +
+  a small pipeline; `blit.wgsl` is 1:1 nearest, not reusable as-is. Output a 1× premultiplied tile.
+- **Does NOT need the surface** (unlike advanced blend) → runs at record time in `DrawBatcher` (it has
+  the resources pool), no renderer-layer driver needed.
+- **Anti-MVP**: gate strictly on arbitrary-path SrcOver; assert no closed-form shape is mis-routed here
+  (they stay SDF). A grep/structural guard that the SSAA arm is reached only by paths/polygons.
+- **Tests** (local DX12): P1 polygon fill boundary vs analytic oracle; P2 self-intersecting/holed path
+  (pentagram NonZero vs EvenOdd) — supersampling must be correct on all topologies; P3 scale-invariance
+  (1× vs 8×); P4 anti-MVP all-arbitrary-paths-AA; reuse the `aa_oracle_tests.rs` harness.
+- **Surprises**: `OffscreenTexture` carries only `{texture, bounds}` (Z implicit) → path-tile rides it
+  verbatim. SSAA 2× tile is a distinct pool key (no reuse with 1× tiles) — acceptable; note in benches.
+
+## PR-4 (after PR-3): non-SrcOver + Porter-Duff/advanced arbitrary paths
+Route non-SrcOver basic shapes + Porter-Duff/advanced arbitrary paths through the SSAA tile, composing
+via `OffscreenTexture`(blend) / `AdvancedShape`. Final anti-MVP guard: no real producer permanently
+aliased; document explicit exceptions (e.g. Plus/Modulate).
