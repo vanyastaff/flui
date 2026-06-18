@@ -1559,4 +1559,135 @@ mod tests {
         // Verify default epsilon is 1/255
         assert!((Color::DEFAULT_EPSILON - 1.0 / 255.0).abs() < 1e-10);
     }
+
+    /// Characterization golden for `Color::blend` advanced modes.
+    ///
+    /// Locks the per-pixel output of every advanced (non-Porter-Duff) blend
+    /// mode at representative inputs so the WGSL port (PR-2) has a frozen CPU
+    /// oracle to compare against.  These assertions pass against the EXISTING
+    /// implementation — they must NOT be changed to match a buggy edit.
+    ///
+    /// If an assertion fails after a refactor, the formula changed: verify the
+    /// W3C Compositing and Blending Level 1 spec (§10–11) and fix the code,
+    /// not this test.
+    ///
+    /// ## Inputs
+    ///
+    /// - `WHITE` = `rgb(255,255,255)` — straight, fully opaque (sa=1, cs=1).
+    /// - `BLACK` = `rgb(0,0,0)`       — straight, fully opaque (da=1, cb=0).
+    /// - `MID`   = `rgb(128,128,128)` — achromatic mid-gray, fully opaque.
+    ///
+    /// For fully opaque src + dst (`sa=da=1`) the composite formula collapses
+    /// to `output = B(cb, cs)` (alpha=1), so results are easy to verify by
+    /// hand against the W3C blend function table.
+    #[test]
+    fn blend_advanced_modes_golden() {
+        use crate::painting::BlendMode;
+
+        let white = Color::WHITE; // rgb(255,255,255), a=255
+        let black = Color::BLACK; // rgb(0,0,0),       a=255
+        let mid = Color::GRAY; // rgb(128,128,128),  a=255
+
+        // Helper: assert blend output matches expected RGBA bytes.
+        let check = |src: Color, dst: Color, mode: BlendMode, expected: Color| {
+            let got = src.blend(dst, mode);
+            assert_eq!(
+                got, expected,
+                "blend({src:?}, {dst:?}, {mode:?}) = {got:?}, expected {expected:?}"
+            );
+        };
+
+        // ── Multiply ─────────────────────────────────────────────────────────
+        // B(cb, cs) = cb * cs.
+        // white src (cs=1) + black dst (cb=0): 0*1=0 → black.
+        // white src + white dst: 1*1=1 → white.
+        check(white, black, BlendMode::Multiply, black);
+        check(white, white, BlendMode::Multiply, white);
+
+        // ── Screen ───────────────────────────────────────────────────────────
+        // B(cb, cs) = cb + cs - cb*cs.
+        // white src + black dst: 0+1-0=1 → white.
+        // white src + white dst: 1+1-1=1 → white.
+        check(white, black, BlendMode::Screen, white);
+        check(white, white, BlendMode::Screen, white);
+
+        // ── Overlay ──────────────────────────────────────────────────────────
+        // overlay(cb, cs) = HardLight(cs, cb)  [note the swap].
+        // white src (cs=1), black dst (cb=0):
+        //   HardLight(cb=cs=1, cs=cb=0): cs_hl=0 ≤ 0.5 → 2·cb_hl·cs_hl = 2·1·0 = 0 → black.
+        check(white, black, BlendMode::Overlay, black);
+        // black src (cs=0), white dst (cb=1):
+        //   HardLight(cb_hl=0, cs_hl=1): cs_hl=1 > 0.5 → 1−2·(1−0)·(1−1) = 1 → white.
+        check(black, white, BlendMode::Overlay, white);
+
+        // ── Darken ───────────────────────────────────────────────────────────
+        // B = min(cb, cs). white+black → min(0,1)=0 → black.
+        check(white, black, BlendMode::Darken, black);
+        check(black, white, BlendMode::Darken, black);
+
+        // ── Lighten ──────────────────────────────────────────────────────────
+        // B = max(cb, cs). white+black → max(0,1)=1 → white.
+        check(white, black, BlendMode::Lighten, white);
+        check(black, white, BlendMode::Lighten, white);
+
+        // ── HardLight ────────────────────────────────────────────────────────
+        // hardlight(cb, cs): cs>0.5 → 1-2*(1-cb)*(1-cs).
+        // white(cs=1)+black(cb=0): cs>0.5 → 1-2*(1-0)*(1-1)=1 → white.
+        check(white, black, BlendMode::HardLight, white);
+
+        // ── SoftLight ────────────────────────────────────────────────────────
+        // cs=1(>0.5), cb=0(<=0.25): d=((16*0-12)*0+4)*0=0; result=0+(2*1-1)*(0-0)=0 → black.
+        check(white, black, BlendMode::SoftLight, black);
+
+        // ── Difference ───────────────────────────────────────────────────────
+        // B = |cb - cs|. white+black → |0-1|=1 → white.
+        check(white, black, BlendMode::Difference, white);
+        check(black, white, BlendMode::Difference, white);
+
+        // ── Exclusion ────────────────────────────────────────────────────────
+        // B = cb + cs - 2*cb*cs. white+black → 0+1-0=1 → white.
+        check(white, black, BlendMode::Exclusion, white);
+
+        // ── ColorDodge ───────────────────────────────────────────────────────
+        // cb=0 → B=0 (edge: source cannot dodge a zero-luminosity backdrop).
+        check(white, black, BlendMode::ColorDodge, black);
+        // cb=1, cs=1 → cs>=1 → B=1 → white (edge: fully lit backdrop, any source).
+        check(white, white, BlendMode::ColorDodge, white);
+
+        // ── ColorBurn ────────────────────────────────────────────────────────
+        // cb≥1 guard fires first regardless of cs → B=1 → white.
+        // cs=1(white), cb=1(white): cb≥1 → white.
+        check(white, white, BlendMode::ColorBurn, white);
+        // cs=0(black src), cb=1(white dst): cb≥1 fires first → white.
+        // (Note: cs≤0 → B=0 only applies when cb < 1; with cb=1 the cb≥1 guard wins.)
+        check(black, white, BlendMode::ColorBurn, white);
+        // cs=1(white), cb=0(black dst): cb<1, cs>0 → 1−((1−0)/1).min(1) = 1−1 = 0 → black.
+        check(white, black, BlendMode::ColorBurn, black);
+
+        // ── Non-separable: achromatic flat-triple (src==dst==mid-gray) ───────
+        // When src and dst are achromatic and equal, all four HSL blend modes
+        // must preserve the input: Hue/Saturation/Color/Luminosity all collapse
+        // to set_lum(cb_or_cs, lum_of_same) = same color.
+        for mode in [
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ] {
+            let got = mid.blend(mid, mode);
+            assert_eq!(
+                got.r, mid.r,
+                "{mode:?} achromatic: r channel must be preserved"
+            );
+            assert_eq!(
+                got.g, mid.g,
+                "{mode:?} achromatic: g channel must be preserved"
+            );
+            assert_eq!(
+                got.b, mid.b,
+                "{mode:?} achromatic: b channel must be preserved"
+            );
+            assert_eq!(got.a, 255, "{mode:?} achromatic: alpha must be 1");
+        }
+    }
 }

@@ -59,6 +59,7 @@ use super::{
     instancing::{InstanceBatch, TextureInstance},
     pipeline::PipelineKey,
     pipelines::PipelineSet,
+    render_target::RenderTarget,
     resources::GpuResources,
     text::TextRenderer,
 };
@@ -263,7 +264,7 @@ impl GpuReplay {
         resources: &mut GpuResources,
         text_renderer: &mut TextRenderer,
         encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
+        target: RenderTarget<'_>,
     ) -> EngineResult<()> {
         // R1: arm order (Segment / OffscreenTexture / OpacityLayer) is
         // load-bearing for z-ordering — do not reorder.
@@ -278,7 +279,7 @@ impl GpuReplay {
                         pipelines,
                         resources,
                         encoder,
-                        view,
+                        target.view,
                     );
                 }
                 DrawItem::OffscreenTexture(p) => {
@@ -304,7 +305,7 @@ impl GpuReplay {
                         resources,
                         viewport_size,
                         encoder,
-                        view,
+                        target.view,
                         p.texture.view(),
                         None,
                     );
@@ -320,14 +321,14 @@ impl GpuReplay {
                         pipelines,
                         resources,
                         encoder,
-                        view,
+                        target,
                     );
                 }
             }
         }
 
         // Text is always the global final phase — rendered on top of all geometry.
-        text_renderer.render(device, queue, view, encoder, viewport_size)?;
+        text_renderer.render(device, queue, target.view, encoder, viewport_size)?;
 
         Ok(())
     }
@@ -363,7 +364,7 @@ impl GpuReplay {
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
-    fn flush_opacity_layer(
+    pub(in crate::wgpu) fn flush_opacity_layer(
         &mut self,
         mut layer: PendingOpacityLayer,
         viewport_size: (u32, u32),
@@ -373,112 +374,28 @@ impl GpuReplay {
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
-        main_view: &wgpu::TextureView,
+        main_target: RenderTarget<'_>,
     ) {
+        // Zero-size viewports produce no visible pixels; skip GPU work entirely.
+        // The UV composite below divides by vp_w/vp_h, so proceeding would push
+        // inf/NaN into texture instances.  The pool clamps acquire to 1×1 but
+        // the resulting composite would be meaningless.
         let (vp_w, vp_h) = viewport_size;
         if vp_w == 0 || vp_h == 0 {
             return;
         }
 
-        // Acquire a pooled offscreen texture for the layer's content.
-        let offscreen = resources
-            .layer_texture_pool_mut()
-            .acquire(vp_w, vp_h, surface_format);
+        let offscreen = self.render_layer_to_offscreen(
+            &mut layer,
+            viewport_size,
+            surface_format,
+            device,
+            queue,
+            pipelines,
+            resources,
+            encoder,
+        );
         let offscreen_view = offscreen.view();
-
-        // R3: Clear the offscreen target to fully transparent BEFORE drawing
-        // any layer content.  LoadOp::Clear here; all subsequent passes use Load.
-        {
-            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Opacity Layer Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: offscreen_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            // Pass dropped immediately — just clearing.
-        }
-
-        // Flush all inner draw items to the offscreen texture.
-        // R1: arm order is preserved (Segment / OffscreenTexture / OpacityLayer).
-        for item in layer.items.drain(..) {
-            match item {
-                DrawItem::Segment(mut seg) => {
-                    self.flush_segment(
-                        &mut seg,
-                        viewport_size,
-                        device,
-                        queue,
-                        pipelines,
-                        resources,
-                        encoder,
-                        offscreen_view,
-                    );
-                }
-                DrawItem::OffscreenTexture(p) => {
-                    // A nested OffscreenTexture (shader-mask / backdrop-blur
-                    // result) is itself premultiplied — composite with the
-                    // premultiplied pipeline and an identity tint so it is not
-                    // re-multiplied by its own alpha.
-                    let instance = super::instancing::TextureInstance::new(
-                        p.bounds,
-                        flui_types::styling::Color::WHITE,
-                    );
-                    let _ = self.texture_batch.add(instance);
-                    // R2: flush_texture_batch_premultiplied drains + clears
-                    // texture_batch before returning.
-                    self.flush_texture_batch_premultiplied(
-                        device,
-                        queue,
-                        pipelines,
-                        resources,
-                        viewport_size,
-                        encoder,
-                        offscreen_view,
-                        p.texture.view(),
-                        None,
-                    );
-                }
-                DrawItem::OpacityLayer(nested) => {
-                    // Recursively handle nested opacity layers.
-                    // R2: &mut self serializes access to texture_batch.
-                    self.flush_opacity_layer(
-                        nested,
-                        viewport_size,
-                        surface_format,
-                        device,
-                        queue,
-                        pipelines,
-                        resources,
-                        encoder,
-                        offscreen_view,
-                    );
-                }
-            }
-        }
-
-        // Flush the final segment (content drawn after the last draw-order item).
-        if !layer.final_segment.is_empty() {
-            self.flush_segment(
-                &mut layer.final_segment,
-                viewport_size,
-                device,
-                queue,
-                pipelines,
-                resources,
-                encoder,
-                offscreen_view,
-            );
-        }
 
         // Composite the premultiplied offscreen onto the main surface.
         //
@@ -524,7 +441,7 @@ impl GpuReplay {
             resources,
             viewport_size,
             encoder,
-            main_view,
+            main_target.view,
             offscreen_view,
             None,
         );
@@ -579,7 +496,7 @@ impl GpuReplay {
     /// 3. `flush_tessellated_geometry`    — lyon tessellated paths / vertices
     /// 4. `flush_segment_cached_images`   — texture-cache images
     /// 5. `flush_segment_external_images` — external (registered) textures
-    pub(super) fn flush_segment(
+    pub(in crate::wgpu) fn flush_segment(
         &mut self,
         segment: &mut DrawSegment,
         viewport_size: (u32, u32),
@@ -1301,7 +1218,7 @@ impl GpuReplay {
     ///
     /// `scissor` is the clip rect to apply.  Pass `None` for full-viewport
     /// (unclipped), matching the rect/circle instanced batches.
-    pub(super) fn flush_texture_batch(
+    pub(in crate::wgpu) fn flush_texture_batch(
         &mut self,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
@@ -1337,7 +1254,7 @@ impl GpuReplay {
     /// Routes through `PipelineSet::instanced_texture_premul` (src factor
     /// `One`); the per-channel tint carries group opacity and any ColorFilter
     /// chroma as `(C.r*O, C.g*O, C.b*O, O)`.
-    pub(super) fn flush_texture_batch_premultiplied(
+    pub(in crate::wgpu) fn flush_texture_batch_premultiplied(
         &mut self,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,

@@ -734,8 +734,12 @@ impl CommandRenderer for Backend<'_> {
                     multiview_mask: None,
                 });
             }
-            // Render child batches to offscreen texture
-            if let Err(e) = temp_painter.render(child_tex.view(), &mut encoder) {
+            // Render child batches to offscreen texture.
+            // View-only: the shader-mask pipeline reads the texture via its own
+            // bind group (not via `RenderTarget::texture`), so no backdrop
+            // sampling back-reference is needed here.
+            let child_target = super::render_target::RenderTarget::view_only(child_tex.view());
+            if let Err(e) = temp_painter.render(child_target, &mut encoder) {
                 tracing::error!("Failed to render shader mask child content: {}", e);
             }
             queue.submit(std::iter::once(encoder.finish()));
@@ -1123,7 +1127,9 @@ impl CommandRenderer for Backend<'_> {
         let mut flush_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("DisplayList Backdrop Flush Encoder"),
         });
-        if let Err(e) = self.painter.render(surface_view, &mut flush_encoder) {
+        let flush_target =
+            super::render_target::RenderTarget::sampleable(surface_view, surface_texture);
+        if let Err(e) = self.painter.render(flush_target, &mut flush_encoder) {
             tracing::error!("DisplayList backdrop flush failed: {}", e);
         }
 

@@ -134,7 +134,7 @@ pub async fn main() {
         });
     }
 
-    if let Err(e) = painter.render(&view, &mut encoder) {
+    if let Err(e) = painter.render_to_view(&view, &mut encoder) {
         web_sys::console::error_1(&format!("Painter render error: {e}").into());
     }
 

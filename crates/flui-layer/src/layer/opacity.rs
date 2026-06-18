@@ -78,7 +78,7 @@ impl OpacityLayer {
         }
     }
 
-    /// Creates a fully transparent layer.
+    /// Creates a fully transparent layer with `BlendMode::SrcOver`.
     #[inline]
     pub const fn transparent() -> Self {
         Self {
@@ -87,7 +87,7 @@ impl OpacityLayer {
         }
     }
 
-    /// Creates a fully opaque layer.
+    /// Creates a fully opaque layer with `BlendMode::SrcOver`.
     #[inline]
     pub const fn opaque() -> Self {
         Self {
