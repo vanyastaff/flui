@@ -169,6 +169,11 @@ pub(crate) mod layer_render;
 #[cfg(test)]
 mod sdf_smoke_test;
 
+// aa_oracle_tests contains both CPU unit tests (no GPU) and GPU readback tests.
+// Include whenever test compilation is active.
+#[cfg(test)]
+mod aa_oracle_tests;
+
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod deterministic_replay_tests;
 

@@ -33,25 +33,46 @@ use flui_types::{Point, Rect, geometry::Pixels, styling::Color};
 ///
 /// This is uploaded to GPU as an instance buffer. Each rectangle gets one
 /// instance. The GPU shader reads this data per-instance and transforms a
-/// shared quad.
+/// shared quad via a full 2×3 affine.
+///
+/// ## Affine representation
+///
+/// The vertex shader applies `device = M * local + t` where:
+/// - `M` is the 2×2 linear part stored column-major in `transform`:
+///   `[a, b, c, d]` → `mat2x2(a, b, c, d)` (x_col=(a,b), y_col=(c,d)).
+/// - `t` is the translation stored in `transform_translate.xy`.
+/// - `local` is the vertex position in local shape space (derived from
+///   `bounds` which holds `[x_local, y_local, width_local, height_local]`).
+///
+/// For the baked-AABB fast path (axis-aligned SrcOver rect/rrect), `M` is
+/// the identity matrix and `t` is zero, so `device = local + 0 = local` —
+/// byte-identical to the pre-affine instanced output.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct RectInstance {
-    /// Bounding box [x, y, width, height]
+    /// Local-space bounding box `[x, y, width, height]`.
+    ///
+    /// For the baked-AABB path this is already in device pixels (the CPU
+    /// baked the transform into the bounds before constructing the instance).
+    /// For the affine path this holds the untransformed local-space extent;
+    /// the vertex shader applies `transform` + `transform_translate` to map
+    /// it to device space.
     pub bounds: [f32; 4],
 
-    /// Color [r, g, b, a] in 0-1 range
+    /// Color `[r, g, b, a]` in linear 0–1 range.
     pub color: [f32; 4],
 
-    /// Corner radii [top_left, top_right, bottom_right, bottom_left]
+    /// Corner radii `[top_left, top_right, bottom_right, bottom_left]`.
     pub corner_radii: [f32; 4],
 
-    /// Transform matrix (simplified 2D: [scale_x, scale_y, translate_x,
-    /// translate_y]) Full matrix would be 16 floats, but for UI we only
-    /// need 2D affine
+    /// 2×2 linear part of the affine transform, column-major:
+    /// `[a, b, c, d]` → x-column `(a, b)`, y-column `(c, d)`.
+    ///
+    /// Identity: `[1, 0, 0, 1]`. For the baked-AABB path this is always
+    /// identity (the transform was pre-baked into `bounds`).
     pub transform: [f32; 4],
 
-    /// SDF clip rounded rectangle: [x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]
+    /// SDF clip rounded rectangle: `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
     /// All zeros means no clip active. When non-zero, the fragment shader
     /// uses an SDF test to discard pixels outside this rounded rectangle.
     pub clip_rrect: [f32; 8],
@@ -70,19 +91,32 @@ pub struct RectInstance {
     /// instance attributes. Only the `.x` lane carries the kind; the other
     /// three lanes are padding.
     pub clip_kind: [u32; 4],
+
+    /// Translation part of the affine transform: `[tx, ty, 0, 0]`.
+    ///
+    /// The `.zw` lanes are padding for 16-byte vec4 alignment in the shader.
+    /// For the baked-AABB path this is always `[0, 0, 0, 0]`.
+    pub transform_translate: [f32; 4],
 }
 
 impl RectInstance {
-    /// Create a simple rectangular instance
+    /// Create a simple rectangular instance (baked-AABB fast path).
+    ///
+    /// `rect` must already be in device pixels (the caller bakes the current
+    /// transform into the bounds before calling this). The affine fields are
+    /// set to identity / zero so the vertex shader produces an identical result
+    /// to the pre-affine path.
     #[must_use]
     pub fn rect(rect: Rect<Pixels>, color: Color) -> Self {
         Self {
             bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
             color: color.to_f32_array(),
             corner_radii: [0.0; 4],
-            transform: [1.0, 1.0, 0.0, 0.0], // Identity transform
+            // Identity 2×2: x-col=(1,0), y-col=(0,1).
+            transform: [1.0, 0.0, 0.0, 1.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            transform_translate: [0.0; 4],
         }
     }
 
@@ -90,7 +124,10 @@ impl RectInstance {
     // single_radius)` (uniform-corner shortcut). Zero callsites --
     // production paths use `rounded_rect_corners` (per-corner).
 
-    /// Create an instance with per-corner radii
+    /// Create an instance with per-corner radii (baked-AABB fast path).
+    ///
+    /// `rect` must already be in device pixels. The affine fields are identity /
+    /// zero — byte-identical to the pre-affine baked-AABB path.
     #[must_use]
     pub fn rounded_rect_corners(
         rect: Rect<Pixels>,
@@ -104,9 +141,44 @@ impl RectInstance {
             bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
             color: color.to_f32_array(),
             corner_radii: [top_left, top_right, bottom_right, bottom_left],
-            transform: [1.0, 1.0, 0.0, 0.0],
+            // Identity 2×2: x-col=(1,0), y-col=(0,1).
+            transform: [1.0, 0.0, 0.0, 1.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
+            transform_translate: [0.0; 4],
+        }
+    }
+
+    /// Create an instance for a **rotated or skewed** rect/rrect (affine path).
+    ///
+    /// `local_bounds` is the untransformed local-space bounding box
+    /// `[x, y, width, height]`. The vertex shader applies the full affine
+    /// `device = M * local + t` where `M` is the 2×2 linear part from the
+    /// current transform and `t` is the translation.
+    ///
+    /// `linear_cols` is column-major `[a, b, c, d]`: x-column `(a, b)`,
+    /// y-column `(c, d)`. Use `glam::Mat4::x_axis`/`y_axis` to extract it.
+    ///
+    /// `translation` is `[tx, ty]` from the current device transform.
+    ///
+    /// Corner radii default to zero; call `.with_clip_rrect` /
+    /// `.with_clip_rsuperellipse` afterwards to attach an SDF clip.
+    #[must_use]
+    pub fn with_affine_transform(
+        local_bounds: [f32; 4],
+        color: Color,
+        corner_radii: [f32; 4],
+        linear_cols: [f32; 4],
+        translation: [f32; 2],
+    ) -> Self {
+        Self {
+            bounds: local_bounds,
+            color: color.to_f32_array(),
+            corner_radii,
+            transform: linear_cols,
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
+            transform_translate: [translation[0], translation[1], 0.0, 0.0],
         }
     }
 
@@ -185,17 +257,21 @@ impl RectInstance {
     // -- audit text claimed zero callsites but missed the method-style
     // dispatch on `instance` (vs type-path `RectInstance::`).
 
-    /// Get wgpu vertex buffer layout for instance data
+    /// Get wgpu vertex buffer layout for instance data.
+    ///
+    /// Locations 2–8 are unchanged from the pre-affine layout. Location 9 is
+    /// the new `transform_translate` field appended at the end of the struct;
+    /// appending keeps all existing field offsets byte-identical.
     #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
-            // Bounds (location 2)
+            // Bounds [x, y, width, height] (location 2)
             2 => Float32x4,
-            // Color (location 3)
+            // Color [r, g, b, a] (location 3)
             3 => Float32x4,
-            // Corner radii (location 4)
+            // Corner radii [tl, tr, br, bl] (location 4)
             4 => Float32x4,
-            // Transform (location 5)
+            // 2×2 linear affine [a, b, c, d] column-major (location 5)
             5 => Float32x4,
             // Clip rrect part 1: [x, y, width, height] (location 6)
             6 => Float32x4,
@@ -203,6 +279,8 @@ impl RectInstance {
             7 => Float32x4,
             // Clip kind: [kind, _pad, _pad, _pad] (location 8) — 0=none, 1=rrect, 2=rsuperellipse
             8 => Uint32x4,
+            // Affine translation [tx, ty, 0, 0] (location 9)
+            9 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -699,14 +777,15 @@ mod tests {
     #[test]
     fn test_rect_instance_size() {
         // RectInstance field layout (all #[repr(C)], tightly packed):
-        //   bounds:       [f32; 4]  = 16 bytes
-        //   color:        [f32; 4]  = 16 bytes
-        //   corner_radii: [f32; 4]  = 16 bytes
-        //   transform:    [f32; 4]  = 16 bytes
-        //   clip_rrect:   [f32; 8]  = 32 bytes
-        //   clip_kind:    [u32; 4]  = 16 bytes  ← added with squircle SDF
-        //   Total: 112 bytes
-        assert_eq!(std::mem::size_of::<RectInstance>(), 112);
+        //   bounds:              [f32; 4]  = 16 bytes
+        //   color:               [f32; 4]  = 16 bytes
+        //   corner_radii:        [f32; 4]  = 16 bytes
+        //   transform:           [f32; 4]  = 16 bytes  ← 2×2 linear affine
+        //   clip_rrect:          [f32; 8]  = 32 bytes
+        //   clip_kind:           [u32; 4]  = 16 bytes
+        //   transform_translate: [f32; 4]  = 16 bytes  ← appended for affine path
+        //   Total: 128 bytes
+        assert_eq!(std::mem::size_of::<RectInstance>(), 128);
     }
 
     #[test]
@@ -791,13 +870,81 @@ mod tests {
     fn test_rect_default_clip_is_no_clip() {
         // Plain rect: clip_rrect must be all-zeros and clip_kind must be 0
         // (no SDF clip active). The fragment shader reads clip_kind[0] == 0
-        // as "skip clip test".
+        // as "skip clip test". The affine fields must be identity / zero.
         let instance = RectInstance::rect(
             Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
             Color::RED,
         );
         assert_eq!(instance.clip_rrect, [0.0; 8]);
         assert_eq!(instance.clip_kind, [0u32; 4]);
+        // Identity 2×2 and zero translation — baked-AABB path.
+        assert_eq!(instance.transform, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(instance.transform_translate, [0.0; 4]);
+    }
+
+    /// The baked-AABB `rect` and `rounded_rect_corners` constructors must
+    /// produce identity affine fields so the vertex shader yields
+    /// `device = identity*local + 0 = local` — byte-identical to the
+    /// pre-affine path.
+    #[test]
+    fn baked_aabb_constructors_have_identity_affine() {
+        let r = Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(70.0));
+        let plain = RectInstance::rect(r, Color::RED);
+        assert_eq!(plain.transform, [1.0, 0.0, 0.0, 1.0], "identity 2×2");
+        assert_eq!(plain.transform_translate, [0.0; 4], "zero translation");
+
+        let rounded = RectInstance::rounded_rect_corners(r, Color::RED, 4.0, 4.0, 4.0, 4.0);
+        assert_eq!(
+            rounded.transform,
+            [1.0, 0.0, 0.0, 1.0],
+            "identity 2×2 rrect"
+        );
+        assert_eq!(
+            rounded.transform_translate, [0.0; 4],
+            "zero translation rrect"
+        );
+    }
+
+    /// `with_affine_transform` must round-trip the caller's linear + translate
+    /// components into the corresponding GPU fields without mangling them.
+    #[test]
+    fn with_affine_transform_stores_linear_and_translate() {
+        // 30° rotation: cos30≈0.866, sin30=0.5
+        let cos30 = std::f32::consts::FRAC_PI_6.cos();
+        let sin30 = std::f32::consts::FRAC_PI_6.sin();
+        // Column-major: x-col=(cos,-sin), y-col=(sin,cos) for CCW rotation.
+        // But glam uses x_axis=(cos,sin), y_axis=(-sin,cos) for CW screen rotation;
+        // we just round-trip whatever the caller provides — the math is the
+        // shader's concern.
+        let linear = [cos30, sin30, -sin30, cos30];
+        let translation = [100.0_f32, 200.0_f32];
+        let local_bounds = [0.0_f32, 0.0, 80.0, 40.0];
+        let radii = [5.0_f32, 5.0, 5.0, 5.0];
+
+        let instance = RectInstance::with_affine_transform(
+            local_bounds,
+            Color::BLUE,
+            radii,
+            linear,
+            translation,
+        );
+
+        assert_eq!(instance.bounds, local_bounds);
+        assert_eq!(instance.corner_radii, radii);
+        assert_eq!(instance.transform, linear, "linear 2×2 stored verbatim");
+        assert_eq!(
+            instance.transform_translate[0], translation[0],
+            "tx stored in .x"
+        );
+        assert_eq!(
+            instance.transform_translate[1], translation[1],
+            "ty stored in .y"
+        );
+        assert_eq!(instance.transform_translate[2], 0.0, ".z padding is zero");
+        assert_eq!(instance.transform_translate[3], 0.0, ".w padding is zero");
+        // Default: no clip.
+        assert_eq!(instance.clip_kind, [0u32; 4]);
+        assert_eq!(instance.clip_rrect, [0.0; 8]);
     }
 
     #[test]

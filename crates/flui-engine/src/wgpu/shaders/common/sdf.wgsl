@@ -43,8 +43,11 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // - p.x < 0.0: left side (uses r.x or r.w)
     // - p.y > 0.0: bottom (uses r.z or r.w)
     // - p.y < 0.0: top (uses r.x or r.y)
-    let r2 = select(r.zw, r.xy, p.x > 0.0);  // Select left/right pair
-    let r3 = select(r2.y, r2.x, p.y > 0.0);  // Select top/bottom from pair
+    // r2 = (top, bottom) radii for the active horizontal side:
+    //   right (p.x>0) → (tr=r.y, br=r.z); left → (tl=r.x, bl=r.w).
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    // r3 = bottom (p.y>0) → r2.y; top → r2.x.
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
 
     let q = abs(p) - b + vec2<f32>(r3);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
@@ -68,8 +71,9 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // Per-corner radius selection (identical branchless pattern to
     // sdRoundedBox).
-    let r2 = select(r.zw, r.xy, p.x > 0.0);
-    let r3 = select(r2.y, r2.x, p.y > 0.0);
+    // (top, bottom) radii for the active side — see sdRoundedBox.
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
 
     // `q` is the corner-local distance vector: positive when outside the
     // inner (non-rounded) rect.
