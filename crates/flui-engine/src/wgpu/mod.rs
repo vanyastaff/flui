@@ -178,6 +178,12 @@ mod deterministic_replay_tests;
 #[cfg(test)]
 mod layer_blend_tests;
 
+// shape_blend_tests contains PR-4 GPU acceptance tests for shape-level advanced
+// blend (rect/rrect tessellated path → DrawItem::AdvancedShape).
+// PR-4 unit tests (S1-S4g) are inline in batches/mod.rs.
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod shape_blend_tests;
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================

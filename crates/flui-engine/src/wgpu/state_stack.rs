@@ -101,6 +101,16 @@ impl GpuStateStack {
         }
     }
 
+    /// Construct a pristine `GpuStateStack` for unit tests that need to call
+    /// functions accepting `&GpuStateStack` but do not require a GPU device.
+    ///
+    /// Produces the same state as `new()` (identity transform, no scissor) and
+    /// is gated to `#[cfg(test)]` so it is never reachable from production code.
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        Self::new()
+    }
+
     // =========================================================================
     // Frame boundary
     // =========================================================================

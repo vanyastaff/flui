@@ -323,7 +323,9 @@ impl WgpuPainter {
             .drain(..)
             .filter_map(|item| match item {
                 DrawItem::Segment(seg) => Some(seg),
-                DrawItem::OffscreenTexture(_) | DrawItem::OpacityLayer(_) => None,
+                DrawItem::OffscreenTexture(_)
+                | DrawItem::OpacityLayer(_)
+                | DrawItem::AdvancedShape(_) => None,
             })
             .collect()
     }

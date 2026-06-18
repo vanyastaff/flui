@@ -57,9 +57,11 @@ impl PipelineKey {
     /// Create an alpha-blending pipeline key for a specific fixed-function
     /// [`BlendMode`].
     ///
-    /// The caller is responsible for passing a Porter-Duff mode; advanced
-    /// (dst-read) modes are mapped to `SrcOver` upstream in
-    /// [`pipeline_key_from_paint`].
+    /// Intended for fixed-function Porter-Duff modes. Advanced (dst-read) modes
+    /// may also be passed, but the tessellated record path intercepts them via
+    /// [`BlendMode::is_advanced`] (see `DrawBatcher::add_tessellated_with_key`)
+    /// before the key reaches [`PipelineCache`], so an advanced key never selects
+    /// a fixed-function pipeline.
     pub fn with_blend(mode: BlendMode) -> Self {
         Self {
             bits: Self::ALPHA_BLEND,
@@ -100,11 +102,12 @@ impl PipelineKey {
 ///
 /// `SrcOver` is exactly [`wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING`].
 ///
-/// Advanced (separable/non-separable, dst-reading) modes are *not* handled here
-/// — they are mapped to `SrcOver` in [`pipeline_key_from_paint`] before a key is
-/// built, so this function only ever receives Porter-Duff modes. Any advanced
-/// mode that reaches it (a logic error) falls back to `SrcOver` rather than
-/// panicking.
+/// Advanced (separable/non-separable, dst-reading) modes are *not* handled here:
+/// shape records divert to `DrawItem::AdvancedShape` before a pipeline key is
+/// built (see `DrawBatcher::add_tessellated_with_key`), and
+/// [`PipelineCache::get_or_create`] debug-asserts that no advanced key reaches the
+/// cache. The defensive `_` arm below maps any stray advanced mode to `SrcOver`
+/// in release rather than panicking — but that path is a routing logic error.
 pub fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
     use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
 
@@ -208,6 +211,19 @@ impl PipelineCache {
     /// Returns cached pipeline if available, otherwise creates and caches new
     /// one.
     pub fn get_or_create(&mut self, device: &wgpu::Device, key: PipelineKey) -> &RenderPipeline {
+        // Invariant: advanced (dst-read) modes are NOT fixed-function and must never
+        // build a `PipelineCache` entry — shape records divert to
+        // `DrawItem::AdvancedShape` in `add_tessellated_with_key` before a key is
+        // created. A stray advanced key here is a routing logic error; catch it
+        // loudly in debug/tests (release degrades to the defensive SrcOver arm in
+        // `blend_state_for`). This guards future producers (e.g. gradient/image
+        // advanced blend) from silently rendering SrcOver.
+        debug_assert!(
+            !key.blend_mode().is_advanced(),
+            "advanced blend key {:?} reached PipelineCache; advanced shapes must \
+             divert to DrawItem::AdvancedShape via add_tessellated_with_key",
+            key.blend_mode()
+        );
         // `entry` needs `&mut self.cache`; `create_pipeline` needs `&self.shader` /
         // `self.format` / `self.viewport_bind_group_layout` — disjoint fields.
         // We pre-create on miss, then insert, to keep one logical lookup on hit.
@@ -297,14 +313,16 @@ impl PipelineCache {
 
 /// Helper to determine pipeline key from paint properties.
 ///
-/// Blend-mode routing (Phase A — fixed-function Porter-Duff):
+/// Blend-mode routing (Phase A — fixed-function Porter-Duff; Phase B — advanced):
 /// - A non-`SrcOver` Porter-Duff mode always selects a blended pipeline keyed by
 ///   that mode (the blend stage is required even for fully opaque source, e.g.
 ///   `Clear`/`DstOut` punch-outs and `Plus` additive).
 /// - An advanced (dst-reading) mode — `Screen`, `Multiply`, `Overlay`, the HSL
-///   modes, etc. — is *not* expressible as a fixed-function blend. It is mapped
-///   to `SrcOver` here with a one-shot `tracing::warn!` so the fallback is
-///   observable rather than silent. These land in Phase B.
+///   modes, etc. — is carried through in the key so that
+///   `DrawBatcher::add_tessellated_with_key` can detect `is_advanced()` and divert
+///   the shape into `DrawItem::AdvancedShape` before the key is used for a
+///   pipeline-cache lookup. The advanced key must never reach the cache:
+///   [`PipelineCache::get_or_create`] debug-asserts against it.
 /// - `SrcOver` keeps the legacy fast heuristic: opaque source (`a == 255`) skips
 ///   the blend stage entirely; translucent source uses the SrcOver blend.
 pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
@@ -323,26 +341,20 @@ pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
         // Fixed-function Porter-Duff: dedicated blended pipeline for this mode.
         PipelineKey::with_blend(mode)
     } else {
-        // Advanced / dst-read mode: not representable with fixed-function
-        // blending. Fall back to SrcOver and warn once per process so the gap
-        // is honest and visible (Phase B will implement these via a dst-read
-        // shader pass).
-        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!(
-                blend_mode = ?mode,
-                "shape blend mode {:?} is an advanced (dst-read) mode not supported \
-                 by the Phase A fixed-function path; falling back to SrcOver \
-                 (Phase B) (logged once per process)",
-                mode
-            );
-        }
-        // Preserve the opaque/alpha distinction for the SrcOver fallback.
-        if paint.color.a < 255 {
-            PipelineKey::alpha_blend()
-        } else {
-            PipelineKey::opaque()
-        }
+        // Advanced / dst-read mode: carry the original mode in the key so that
+        // `DrawBatcher::add_tessellated_with_key` can detect `is_advanced()` and
+        // divert the shape into `DrawItem::AdvancedShape` before the key is ever
+        // used for pipeline-cache lookup.
+        //
+        // The advanced key MUST NOT reach `PipelineCache::get_or_create` — the
+        // diversion in `add_tessellated_with_key` fires unconditionally for
+        // `is_advanced()` keys, so the cache never sees them for tessellated shapes.
+        //
+        // Non-tessellated callers (gradients, images — PR-5) that reach
+        // `flush_tessellated_geometry` with an advanced key will hit a pipeline-cache
+        // miss or produce incorrect output; they are guarded by their own Phase-B
+        // routing (to be added in PR-5).
+        PipelineKey::with_blend(mode)
     }
 }
 
@@ -400,8 +412,15 @@ mod blend_logic {
         }
     }
 
+    /// PR-4: advanced modes now carry their original mode in the key so that
+    /// `add_tessellated_with_key` can detect `is_advanced()` and divert the
+    /// shape to `DrawItem::AdvancedShape` before the key reaches `PipelineCache`.
+    ///
+    /// The key is always alpha-blended (`with_blend`) and carries the original
+    /// mode — `PipelineCache` is never consulted for these keys in the
+    /// tessellated path (the diversion in `add_tessellated_with_key` fires first).
     #[test]
-    fn advanced_modes_fall_back_to_srcover() {
+    fn advanced_modes_carry_their_mode_in_key() {
         for mode in [
             BlendMode::Screen,
             BlendMode::Overlay,
@@ -412,12 +431,21 @@ mod blend_logic {
         ] {
             let paint = Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(mode);
             let key = pipeline_key_from_paint(&paint);
-            // Opaque source under the fallback keeps the opaque key (SrcOver).
+            // Advanced modes → alpha-blend key carrying the original mode.
             assert!(
-                !key.is_alpha_blended(),
-                "{mode:?} fallback should reuse the SrcOver heuristic"
+                key.is_alpha_blended(),
+                "{mode:?}: advanced mode must produce an alpha-blend key"
             );
-            assert_eq!(key.blend_mode(), BlendMode::SrcOver);
+            assert_eq!(
+                key.blend_mode(),
+                mode,
+                "{mode:?}: key must carry the original advanced mode (not SrcOver)"
+            );
+            // And is_advanced() fires so the tessellated diversion can detect it.
+            assert!(
+                key.blend_mode().is_advanced(),
+                "{mode:?}: key.blend_mode().is_advanced() must be true"
+            );
         }
     }
 
@@ -496,12 +524,12 @@ mod blend_logic {
     /// - `SrcOver` + translucent source → alpha-blend key (`SrcOver` mode).
     /// - Every other Porter-Duff mode → alpha-blend key keyed to that mode.
     ///
-    /// ## Advanced-mode record (current: warn-fallback to SrcOver)
+    /// ## Advanced-mode record (PR-4: carry original mode in key)
     ///
-    /// All 15 advanced modes currently fall back to the SrcOver heuristic
-    /// (opaque → opaque key, translucent → alpha-blend SrcOver key).  When
-    /// the advanced-blend key is introduced, the routing changes and this
-    /// test must be updated to match.
+    /// All 15 advanced modes produce an alpha-blend key carrying the original mode.
+    /// `add_tessellated_with_key` intercepts the key via `is_advanced()` and
+    /// diverts tessellated shapes into `DrawItem::AdvancedShape` before the key
+    /// reaches `PipelineCache::get_or_create`.
     #[test]
     fn pipeline_key_routing_golden() {
         let opaque = flui_types::Color::rgb(200, 100, 50); // a == 255
@@ -545,10 +573,11 @@ mod blend_logic {
             );
         }
 
-        // ── Advanced modes (current fallback: SrcOver-heuristic) ────────────
-        // Opaque source → opaque key; translucent source → alpha-blend SrcOver.
-        // When the advanced-blend key is introduced these assertions must be
-        // updated to match the new dedicated key.
+        // ── Advanced modes (PR-4: carry original mode in key) ───────────────
+        // Both opaque and translucent sources now produce an alpha-blend key
+        // that carries the original mode.  The tessellated shape path intercepts
+        // this in `add_tessellated_with_key` via `is_advanced()` before the key
+        // reaches `PipelineCache::get_or_create`.
         for mode in [
             BlendMode::Screen,
             BlendMode::Overlay,
@@ -568,24 +597,24 @@ mod blend_logic {
         ] {
             let k_opaque = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(mode));
             assert!(
-                !k_opaque.is_alpha_blended(),
-                "{mode:?} opaque fallback: current routing produces opaque key"
+                k_opaque.is_alpha_blended(),
+                "{mode:?} opaque: advanced key must be alpha-blended"
             );
             assert_eq!(
                 k_opaque.blend_mode(),
-                BlendMode::SrcOver,
-                "{mode:?} opaque fallback: mode must be SrcOver"
+                mode,
+                "{mode:?} opaque: key must carry the original advanced mode"
             );
 
             let k_trans = pipeline_key_from_paint(&Paint::fill(translucent).with_blend_mode(mode));
             assert!(
                 k_trans.is_alpha_blended(),
-                "{mode:?} translucent fallback: current routing produces blend key"
+                "{mode:?} translucent: advanced key must be alpha-blended"
             );
             assert_eq!(
                 k_trans.blend_mode(),
-                BlendMode::SrcOver,
-                "{mode:?} translucent fallback: mode must be SrcOver"
+                mode,
+                "{mode:?} translucent: key must carry the original advanced mode"
             );
         }
     }
