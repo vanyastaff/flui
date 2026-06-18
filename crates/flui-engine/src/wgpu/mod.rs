@@ -56,6 +56,10 @@
 // CORE MODULES
 // ============================================================================
 
+/// Advanced dst-read blend composite driver: backdrop copy, pipeline, and
+/// `flush_advanced_layer`.  No production caller exists yet (wired in PR-3);
+/// the synthetic-op GPU gate in this module is the authoritative WGSL gate.
+pub(crate) mod advanced_blend;
 mod atlas;
 mod backend;
 /// Record-side draw accumulation helpers: `DrawBatcher` owns the tessellator,
