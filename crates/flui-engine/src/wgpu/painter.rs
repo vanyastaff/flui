@@ -291,6 +291,24 @@ impl WgpuPainter {
     /// at the device-space rect (`bounds * dpr`), not the logical rect.
     ///
     /// Returns `(bounds, texture_width, texture_height)`.
+    /// Return all `DrawItem::AdvancedShape` operations in the current draw order.
+    ///
+    /// Used by routing unit tests (I1-I5, GI8) to assert that image/atlas advanced
+    /// blend draws produce exactly one `AdvancedShape` per call rather than zero
+    /// (silent SrcOver fall-through) or more than one (per-tile leak).
+    ///
+    /// Gated to test builds; must never be called from production code.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn advanced_shapes_for_test(&self) -> Vec<&super::command_ir::AdvancedShapeOp> {
+        self.draw_order
+            .iter()
+            .filter_map(|item| match item {
+                DrawItem::AdvancedShape(op) => Some(op),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[cfg(all(test, feature = "enable-wgpu-tests"))]
     pub(crate) fn offscreen_results_for_test(&self) -> Vec<(Rect<Pixels>, u32, u32)> {
         self.draw_order
@@ -851,65 +869,98 @@ impl WgpuPainter {
         );
     }
 
-    pub fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
+    /// Draw an image with an explicit blend mode.
+    ///
+    /// Pass `BlendMode::SrcOver` for the default compositing behaviour (byte-identical
+    /// to pre-PR-5).  When `blend_mode.is_advanced()` the draw is isolated into a
+    /// `DrawItem::AdvancedShape` so `flush_advanced_layer` can dst-read the backdrop.
+    pub fn draw_image(
+        &mut self,
+        image: &flui_types::painting::Image,
+        dst_rect: Rect<Pixels>,
+        blend_mode: flui_painting::BlendMode,
+    ) {
         super::batches::DrawBatcher::draw_image(
             &mut self.current_segment,
+            &mut self.draw_order,
             &self.state,
             self.resources.texture_cache_mut(),
             image,
             dst_rect,
+            blend_mode,
         );
     }
 
+    /// Draw a tiled image with an explicit blend mode.
+    ///
+    /// Pass `BlendMode::SrcOver` for the default tiling behaviour.  When
+    /// `blend_mode.is_advanced()` ALL tiles are collected into ONE
+    /// `DrawItem::AdvancedShape` so every tile reads the original backdrop.
     pub fn draw_image_repeat(
         &mut self,
         image: &flui_types::painting::Image,
         dst: Rect<Pixels>,
         repeat: flui_painting::display_list::ImageRepeat,
+        blend_mode: flui_painting::BlendMode,
     ) {
         super::batches::DrawBatcher::draw_image_repeat(
             &mut self.current_segment,
+            &mut self.draw_order,
             &self.state,
             self.resources.texture_cache_mut(),
             image,
             dst,
             repeat,
+            blend_mode,
         );
     }
 
+    /// Draw a nine-slice image with an explicit blend mode.
+    ///
+    /// Pass `BlendMode::SrcOver` for the default nine-slice behaviour.  When
+    /// `blend_mode.is_advanced()` ALL nine regions are collected into ONE
+    /// `DrawItem::AdvancedShape`.
     pub fn draw_image_nine_slice(
         &mut self,
         image: &flui_types::painting::Image,
         center_slice: Rect<Pixels>,
         dst: Rect<Pixels>,
+        blend_mode: flui_painting::BlendMode,
     ) {
         super::batches::DrawBatcher::draw_image_nine_slice(
             &mut self.current_segment,
+            &mut self.draw_order,
             &self.state,
             self.resources.texture_cache_mut(),
             image,
             center_slice,
             dst,
+            blend_mode,
         );
     }
 
+    /// Draw a color-filtered image with an explicit GPU-level blend mode.
+    ///
+    /// `filter` bakes a per-pixel CPU operation first; `blend_mode` composites the
+    /// result against the framebuffer (GPU).  Pass `BlendMode::SrcOver` for the
+    /// default behaviour — the two blend modes are independent (see
+    /// `DrawBatcher::draw_image_filtered` for the boundary contract).
     pub fn draw_image_filtered(
         &mut self,
         image: &flui_types::painting::Image,
         dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
+        blend_mode: flui_painting::BlendMode,
     ) {
-        // Every filter branch bakes the color filter into the image pixels and
-        // routes the result through `draw_image`, so it shares the cached-image
-        // flush bucket (z-order, scissor, opacity) — no `draw_order`/`opacity`
-        // seam is needed.
         super::batches::DrawBatcher::draw_image_filtered(
             &mut self.current_segment,
+            &mut self.draw_order,
             &self.state,
             self.resources.texture_cache_mut(),
             image,
             dst,
             filter,
+            blend_mode,
         );
     }
 
@@ -970,12 +1021,18 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a sprite atlas with an explicit blend mode.
+    ///
+    /// Pass `BlendMode::SrcOver` for the default per-sprite compositing behaviour.
+    /// When `blend_mode.is_advanced()` ALL sprites are collected into ONE
+    /// `DrawItem::AdvancedShape` so every sprite reads the original backdrop.
     pub fn draw_atlas(
         &mut self,
         image: &flui_types::painting::Image,
         sprites: &[Rect<Pixels>],
         transforms: &[flui_types::Matrix4],
         colors: Option<&[flui_types::styling::Color]>,
+        blend_mode: flui_painting::BlendMode,
     ) {
         // Convert Matrix4 transforms to pixel-space origins here, at the
         // painter boundary, so the batcher stays Matrix4-free (C4 rule).
@@ -989,12 +1046,14 @@ impl WgpuPainter {
             .collect();
         super::batches::DrawBatcher::draw_atlas(
             &mut self.current_segment,
+            &mut self.draw_order,
             &self.state,
             self.resources.texture_cache_mut(),
             image,
             sprites,
             &sprite_origins,
             colors,
+            blend_mode,
         );
     }
 
@@ -2681,6 +2740,7 @@ mod tests {
             painter.draw_image(
                 &red,
                 Rect::from_xywh(px(-64.0), px(0.0), px(192.0), px(128.0)),
+                flui_painting::BlendMode::SrcOver,
             );
             // BLUE packs next → atlas columns immediately right of RED's gutter.
             // Its slot is what an un-guttered bilinear sample of RED's right edge
@@ -2689,6 +2749,7 @@ mod tests {
             painter.draw_image(
                 &blue,
                 Rect::from_xywh(px(120.0), px(120.0), px(8.0), px(8.0)),
+                flui_painting::BlendMode::SrcOver,
             );
         });
 
@@ -2744,7 +2805,11 @@ mod tests {
         let img = Image::from_rgba8(W, H, pixels);
 
         let rgba = render_to_rgba(&device, &queue, W, wgpu::Color::BLACK, |painter| {
-            painter.draw_image(&img, Rect::from_xywh(px(0.0), px(0.0), px(2.0), px(1.0)));
+            painter.draw_image(
+                &img,
+                Rect::from_xywh(px(0.0), px(0.0), px(2.0), px(1.0)),
+                flui_painting::BlendMode::SrcOver,
+            );
         });
 
         let left = pixel_at(&rgba, W, 0, 0);
@@ -3773,6 +3838,7 @@ mod tests {
                 &green_image,
                 Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
                 red_filter,
+                flui_painting::BlendMode::SrcOver,
             );
         });
 
@@ -3838,6 +3904,7 @@ mod tests {
                 &white_image,
                 Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
                 modulate_red,
+                flui_painting::BlendMode::SrcOver,
             );
         });
 
@@ -3894,6 +3961,7 @@ mod tests {
                 &red_image,
                 Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
                 swap_rb,
+                flui_painting::BlendMode::SrcOver,
             );
         });
 
@@ -3958,11 +4026,13 @@ mod tests {
                 &white_image,
                 Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(half)),
                 modulate_red,
+                flui_painting::BlendMode::SrcOver,
             );
             painter.draw_image_filtered(
                 &white_image,
                 Rect::from_xywh(px(0.0), px(half), px(SIZE as f32), px(half)),
                 modulate_blue,
+                flui_painting::BlendMode::SrcOver,
             );
         });
 

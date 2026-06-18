@@ -533,11 +533,14 @@ impl CommandRenderer for Backend<'_> {
         &mut self,
         image: &Image,
         dst: Rect<Pixels>,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        // Thread paint.blend_mode to the GPU-level composite (PR-5).
+        // SrcOver is the correct default when no Paint is supplied.
+        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image(image, dst);
+            painter.draw_image(image, dst, blend_mode);
         });
     }
 
@@ -547,12 +550,15 @@ impl CommandRenderer for Backend<'_> {
         sprites: &[Rect<Pixels>],
         transforms: &[Matrix4],
         colors: Option<&[Color]>,
-        _blend_mode: BlendMode,
+        blend_mode: BlendMode,
         _paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        // Thread blend_mode to the painter so advanced modes divert to
+        // DrawItem::AdvancedShape (PR-5, condition 3). SrcOver takes the
+        // per-sprite cached_images path unchanged.
         self.with_transform(transform, |painter| {
-            painter.draw_atlas(image, sprites, transforms, colors);
+            painter.draw_atlas(image, sprites, transforms, colors, blend_mode);
         });
     }
 
@@ -561,11 +567,12 @@ impl CommandRenderer for Backend<'_> {
         image: &Image,
         dst: Rect<Pixels>,
         repeat: flui_painting::display_list::ImageRepeat,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image_repeat(image, dst, repeat);
+            painter.draw_image_repeat(image, dst, repeat, blend_mode);
         });
     }
 
@@ -574,11 +581,12 @@ impl CommandRenderer for Backend<'_> {
         image: &Image,
         center_slice: Rect<Pixels>,
         dst: Rect<Pixels>,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image_nine_slice(image, center_slice, dst);
+            painter.draw_image_nine_slice(image, center_slice, dst, blend_mode);
         });
     }
 
@@ -587,11 +595,16 @@ impl CommandRenderer for Backend<'_> {
         image: &Image,
         dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        // Thread paint.blend_mode as the GPU-level composite mode (PR-5).
+        // ColorFilter bakes pixels CPU-side; paint.blend_mode composites the
+        // result GPU-side against the framebuffer. These two modes are independent.
+        // See DrawBatcher::draw_image_filtered for the boundary contract.
+        let paint_blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image_filtered(image, dst, filter);
+            painter.draw_image_filtered(image, dst, filter, paint_blend_mode);
         });
     }
 
@@ -794,6 +807,10 @@ impl CommandRenderer for Backend<'_> {
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
+        // SrcOver-by-contract: DrawGradient / DrawGradientRRect display-list commands
+        // carry no Paint upstream, so advanced blend is unreachable for gradient-rect
+        // draws via this path. Shape-with-shader-paint (the gradient advanced blend
+        // producer) is handled by dispatch_shader_rect in batches/gradients.rs.
         self.with_transform(transform, |painter| {
             match shader {
                 flui_painting::Shader::LinearGradient {
@@ -873,6 +890,8 @@ impl CommandRenderer for Backend<'_> {
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
+        // SrcOver-by-contract: DrawGradientRRect carries no Paint upstream, so advanced
+        // blend is unreachable here. See render_gradient for the full rationale.
         self.with_transform(transform, |painter| {
             // Get average corner radius
             let corner_radius =
@@ -982,6 +1001,9 @@ impl CommandRenderer for Backend<'_> {
         _blend_mode: BlendMode,
         transform: &Matrix4,
     ) {
+        // `_blend_mode` is intentionally dropped here. Advanced blend on a
+        // BackdropFilter is a separate future Path-A backdrop-compositor seam,
+        // out of PR-5 scope. PR-5 covers shape/gradient/image producers only.
         use flui_painting::display_list::ImageFilter;
 
         // Helper: dispatch the child display list (or no-op when None)

@@ -15,23 +15,59 @@
 //! | `draw_image_repeat`, `draw_image_nine_slice` | `&mut TextureCache` (delegate to `draw_image`)    |
 //! | `draw_image_filtered`                        | `&mut TextureCache` (all branches CPU-recolor then delegate to `draw_image`) |
 //!
+//! # Advanced (dst-read) blend support (PR-5)
+//!
+//! `draw_image`, `draw_image_repeat`, `draw_image_nine_slice`, and
+//! `draw_image_filtered` accept a `blend_mode: flui_painting::BlendMode`
+//! parameter.  When `blend_mode.is_advanced()`:
+//!
+//! - **`draw_image`** (and the `draw_image_with_id` helper): the current
+//!   segment is sealed, the image is loaded into an isolated `DrawSegment`
+//!   (one `cached_images` entry), and the segment is wrapped in
+//!   `DrawItem::AdvancedShape`.  `flush_advanced_layer` dst-reads the backdrop
+//!   at replay time and applies the advanced blend formula.
+//!
+//! - **`draw_image_repeat` / `draw_image_nine_slice`**: ALL tiles/regions are
+//!   collected into ONE isolated `DrawSegment` before a single `AdvancedShape`
+//!   is pushed.  Per-tile `AdvancedShape` calls would be incorrect: tile N
+//!   would dst-read tile N−1's already-blended result instead of the original
+//!   backdrop — producing wrong output for any non-commutative mode.  The
+//!   SrcOver delegation path stays per-tile (byte-identical).
+//!
+//! - **`draw_image_filtered`**: the `ColorFilter::Mode` branch bakes the filter
+//!   (CPU per-pixel `color.blend(pixel, filter_mode)`) and then passes
+//!   `paint.blend_mode` to `draw_image` for GPU compositing.  The two blend
+//!   modes are independent: the filter transforms pixels first (CPU), then the
+//!   paint's blend mode composites the result against the framebuffer (GPU).
+//!   `draw_image_filtered` delegates to `draw_image`, verifying that the
+//!   delegate receives `paint.blend_mode` — NOT the `ColorFilter` mode.
+//!
+//! # DrawTexture / draw_texture: advanced blend is unreachable here
+//!
+//! `draw_texture` and `texture` record external-texture draws (platform
+//! surfaces registered via `ExternalTextureRegistry`).  Their callers in the
+//! display-list dispatch path carry NO `Paint` — they receive only
+//! `texture_id`, `dst`, `src`, `filter_quality`, and `opacity`.  Therefore
+//! these methods carry no `blend_mode` parameter; any advanced blend is
+//! unreachable by construction.  A comment at each handler site documents this.
+//!
 //! # Invariants preserved
 //!
 //! - `cached_images` entries are `(TextureId, TextureInstance, ScissorRect)`.
 //! - `external_images` entries are `(flui_types::painting::TextureId, TextureInstance,
 //!   ScissorRect)` — no `wgpu::TextureView` in the IR; resolution to a view
 //!   happens in `flush_segment_external_images` at replay time (T10a).
-//! - The `draw_image_repeat`/`draw_image_nine_slice` → `draw_image` delegation
-//!   produces identical per-tile/per-region calls; loop bounds and dst rects are
-//!   byte-identical to the painter originals.
-//! - `draw_image_filtered` bakes every filter (`Mode`, `Matrix`, gamma) into
-//!   the image on the CPU and routes the result through `draw_image`, so the
-//!   filtered pixels share the `cached_images` flush bucket and compositing of
-//!   a plain image draw. No separate overlay rect, so no `draw_order`/`opacity`
-//!   seam is needed.
+//! - The SrcOver `draw_image_repeat`/`draw_image_nine_slice` → `draw_image`
+//!   delegation produces identical per-tile/per-region calls; loop bounds and
+//!   dst rects are byte-identical to the painter originals.
+//! - `draw_image_filtered` bakes every filter into the image pixels on the CPU
+//!   and routes the result through `draw_image`.  `ColorFilter::Mode` CPU-bakes
+//!   per-pixel, then delegates with `paint.blend_mode` for GPU compositing; the
+//!   Matrix / gamma branches delegate with `SrcOver` (no GPU-blend override).
 //! - `texture_batch` is **not touched** by any method here — it remains a
 //!   painter field for T10.
 
+use flui_painting::BlendMode;
 use flui_types::{
     Offset, Point, Rect,
     geometry::{Pixels, px},
@@ -40,7 +76,11 @@ use flui_types::{
 };
 
 use super::{
-    super::{command_ir::DrawSegment, state_stack::GpuStateStack, texture_cache::TextureCache},
+    super::{
+        command_ir::{AdvancedShapeOp, DrawItem, DrawSegment},
+        state_stack::GpuStateStack,
+        texture_cache::TextureCache,
+    },
     DrawBatcher,
 };
 
@@ -59,6 +99,12 @@ impl DrawBatcher {
     /// `flush_segment_external_images`. A not-found ID at replay emits a
     /// `tracing::warn!` and skips the draw — identical behavior to before,
     /// now deferred to the correct side of the record/replay seam.
+    ///
+    /// # Advanced blend note
+    ///
+    /// This method carries no `blend_mode` parameter.  External texture draws
+    /// enter via display-list commands (`DrawTexture`) that carry no `Paint`
+    /// upstream — advanced blend is unreachable here by construction.
     pub(in super::super) fn texture(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
@@ -95,21 +141,42 @@ impl DrawBatcher {
     /// Record an image draw by uploading (or retrieving from cache) its RGBA
     /// pixels into the texture cache, then pushing a `cached_images` entry.
     ///
+    /// When `blend_mode.is_advanced()`, the current segment is sealed and the
+    /// image is isolated into a `DrawItem::AdvancedShape` — `flush_advanced_layer`
+    /// dst-reads the backdrop at replay time.  The SrcOver path is byte-identical
+    /// to pre-PR-5.
+    ///
     /// Keys the cache on the image's `Arc` pointer identity (O(1), no hashing).
     /// This is safe for real images, whose allocation is content-stable for the
     /// lifetime of the `Arc`. **Short-lived temporaries (e.g. CPU-filtered
     /// images) must NOT use this path** — their pointer is freed on drop and can
     /// be reused by a different image, colliding in the cache; route those
     /// through [`Self::draw_image_with_id`] with a content-derived key instead.
+    ///
+    /// # AA note
+    ///
+    /// Images are sampled (no edge anti-aliasing); the image texture provides
+    /// its own sub-pixel quality via the sampler filter.
     pub(in super::super) fn draw_image(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
         dst_rect: Rect<Pixels>,
+        blend_mode: BlendMode,
     ) {
         let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
-        Self::draw_image_with_id(segment, state, texture_cache, texture_id, image, dst_rect);
+        Self::draw_image_with_id(
+            segment,
+            draw_order,
+            state,
+            texture_cache,
+            texture_id,
+            image,
+            dst_rect,
+            blend_mode,
+        );
     }
 
     /// Record an image draw under an explicit cache `texture_id`.
@@ -117,13 +184,24 @@ impl DrawBatcher {
     /// Splits the keying decision out of [`Self::draw_image`] so callers that
     /// generate transient pixel buffers (the CPU color-filter branches) can key
     /// on a stable content hash rather than a soon-to-be-freed pointer.
+    ///
+    /// When `blend_mode.is_advanced()`, the current segment is sealed and the
+    /// image is wrapped in `DrawItem::AdvancedShape`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
+                  WgpuPainter fields; texture_id/image/dst_rect/blend_mode are distinct per-draw \
+                  inputs with no natural grouping"
+    )]
     fn draw_image_with_id(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         texture_id: super::super::texture_cache::TextureId,
         image: &Image,
         dst_rect: Rect<Pixels>,
+        blend_mode: BlendMode,
     ) {
         let top_left = state.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
         let bottom_right = state.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
@@ -150,6 +228,35 @@ impl DrawBatcher {
                     )
                 };
 
+                // ── Advanced (dst-read) diversion ─────────────────────────────
+                //
+                // Images bypass `add_tessellated_with_key` (they are instanced,
+                // not tessellated), so the diversion in that funnel does not fire.
+                // We must divert here before pushing into `cached_images`.
+                if blend_mode.is_advanced() {
+                    // Step 1: seal prior content.
+                    Self::finish_current_segment(segment, draw_order);
+
+                    // Step 2: build an isolated DrawSegment with this one image.
+                    let mut shape_segment = DrawSegment::new();
+                    shape_segment.cached_images.push((
+                        texture_id,
+                        instance,
+                        state.current_scissor(),
+                    ));
+
+                    // Step 3: push as AdvancedShape.
+                    draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
+                        segment: shape_segment,
+                        mode: blend_mode,
+                        device_bounds: transformed_rect,
+                    }));
+
+                    return;
+                }
+
+                // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────
+
                 // Keep cached image draws in segment order for correct layer compositing.
                 // Capture the active scissor so flush_segment_cached_images can clip
                 // images that live inside a clip_rect region.
@@ -174,34 +281,58 @@ impl DrawBatcher {
     /// lets identical filtered output reuse its cached texture across frames.
     #[allow(
         clippy::too_many_arguments,
-        reason = "borrow-seam design: segment/state/texture_cache are disjoint WgpuPainter fields; \
-                  width/height/pixels/dst are the distinct filtered-image inputs"
+        reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
+                  WgpuPainter fields; width/height/pixels/dst/blend_mode are the distinct \
+                  filtered-image inputs"
     )]
     fn draw_filtered_pixels(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         width: u32,
         height: u32,
         pixels: Vec<u8>,
         dst: Rect<Pixels>,
+        blend_mode: BlendMode,
     ) {
         let texture_id = super::super::texture_cache::TextureId::from_data(&pixels);
         let filtered = Image::from_rgba8(width, height, pixels);
-        Self::draw_image_with_id(segment, state, texture_cache, texture_id, &filtered, dst);
+        Self::draw_image_with_id(
+            segment,
+            draw_order,
+            state,
+            texture_cache,
+            texture_id,
+            &filtered,
+            dst,
+            blend_mode,
+        );
     }
 
     /// Record a tiled image draw by delegating to `draw_image` for each tile.
     ///
-    /// Loop bounds and dst rects are byte-identical to the original painter
-    /// implementation.
+    /// **Advanced blend mode handling (PR-5):** when `blend_mode.is_advanced()`,
+    /// ALL tiles are collected into ONE isolated `DrawSegment` and a single
+    /// `DrawItem::AdvancedShape` is pushed.  Per-tile `AdvancedShape` would be
+    /// incorrect: tile N would dst-read tile N−1's already-blended pixels instead
+    /// of the original backdrop, producing wrong output for non-commutative modes.
+    ///
+    /// The SrcOver delegation path is byte-identical to pre-PR-5.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
+                  WgpuPainter fields; image/dst/repeat/blend_mode are distinct per-draw inputs"
+    )]
     pub(in super::super) fn draw_image_repeat(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
         dst: Rect<Pixels>,
         repeat: flui_painting::display_list::ImageRepeat,
+        blend_mode: BlendMode,
     ) {
         use flui_painting::display_list::ImageRepeat;
 
@@ -211,10 +342,148 @@ impl DrawBatcher {
             return;
         }
 
+        if blend_mode.is_advanced() {
+            // ── Advanced: collect all tiles into one segment → one AdvancedShape ──
+            //
+            // Seal prior content first (Z-order guarantee).
+            Self::finish_current_segment(segment, draw_order);
+
+            let mut shape_segment = DrawSegment::new();
+            let mut overall_bounds: Option<Rect<Pixels>> = None;
+
+            // Helper: load the image into the texture cache and push one tile
+            // entry into shape_segment.
+            let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
+
+            match texture_cache.load_from_rgba(
+                texture_id.clone(),
+                image.width(),
+                image.height(),
+                image.data(),
+            ) {
+                Ok(cached_texture) => {
+                    // Build a closure capturing shape_segment by &mut.
+                    let add_tile = |shape_seg: &mut DrawSegment,
+                                    bounds: &mut Option<Rect<Pixels>>,
+                                    tile_dst: Rect<Pixels>| {
+                        let top_left =
+                            state.apply_transform(Point::new(tile_dst.left(), tile_dst.top()));
+                        let bottom_right =
+                            state.apply_transform(Point::new(tile_dst.right(), tile_dst.bottom()));
+                        let tr =
+                            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+                        let instance = if let Some(uv_rect) = cached_texture.uv_rect {
+                            super::super::instancing::TextureInstance::with_uv(
+                                tr,
+                                uv_rect,
+                                Color::WHITE,
+                            )
+                        } else {
+                            super::super::instancing::TextureInstance::new(tr, Color::WHITE)
+                        };
+                        shape_seg.cached_images.push((
+                            texture_id.clone(),
+                            instance,
+                            state.current_scissor(),
+                        ));
+
+                        // Grow overall AABB.
+                        *bounds = Some(match *bounds {
+                            None => tr,
+                            Some(prev) => Rect::from_ltrb(
+                                prev.left().min(tr.left()),
+                                prev.top().min(tr.top()),
+                                prev.right().max(tr.right()),
+                                prev.bottom().max(tr.bottom()),
+                            ),
+                        });
+                    };
+
+                    match repeat {
+                        ImageRepeat::NoRepeat => {
+                            add_tile(&mut shape_segment, &mut overall_bounds, dst);
+                        }
+                        ImageRepeat::Repeat => {
+                            let mut y = dst.top().0;
+                            while y < dst.bottom().0 {
+                                let mut x = dst.left().0;
+                                while x < dst.right().0 {
+                                    let tw = img_w.min(dst.right().0 - x);
+                                    let th = img_h.min(dst.bottom().0 - y);
+                                    add_tile(
+                                        &mut shape_segment,
+                                        &mut overall_bounds,
+                                        Rect::from_xywh(px(x), px(y), px(tw), px(th)),
+                                    );
+                                    x += img_w;
+                                }
+                                y += img_h;
+                            }
+                        }
+                        ImageRepeat::RepeatX => {
+                            let th = img_h.min(dst.height().0);
+                            let mut x = dst.left().0;
+                            while x < dst.right().0 {
+                                let tw = img_w.min(dst.right().0 - x);
+                                add_tile(
+                                    &mut shape_segment,
+                                    &mut overall_bounds,
+                                    Rect::from_xywh(px(x), dst.top(), px(tw), px(th)),
+                                );
+                                x += img_w;
+                            }
+                        }
+                        ImageRepeat::RepeatY => {
+                            let tw = img_w.min(dst.width().0);
+                            let mut y = dst.top().0;
+                            while y < dst.bottom().0 {
+                                let th = img_h.min(dst.bottom().0 - y);
+                                add_tile(
+                                    &mut shape_segment,
+                                    &mut overall_bounds,
+                                    Rect::from_xywh(dst.left(), px(y), px(tw), px(th)),
+                                );
+                                y += img_h;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load repeat image texture: {}", e);
+                    return;
+                }
+            }
+
+            if shape_segment.cached_images.is_empty() {
+                return;
+            }
+
+            let device_bounds = overall_bounds
+                .expect("invariant: non-empty cached_images implies overall_bounds is Some");
+            draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
+                segment: shape_segment,
+                mode: blend_mode,
+                device_bounds,
+            }));
+
+            return;
+        }
+
+        // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────────────
+
         match repeat {
             ImageRepeat::NoRepeat => {
                 // Single draw, no tiling.
-                Self::draw_image(segment, state, texture_cache, image, dst);
+                Self::draw_image(
+                    segment,
+                    draw_order,
+                    state,
+                    texture_cache,
+                    image,
+                    dst,
+                    blend_mode,
+                );
             }
             ImageRepeat::Repeat => {
                 // Tile in both directions.
@@ -225,7 +494,15 @@ impl DrawBatcher {
                         let tile_w = img_w.min(dst.right().0 - x);
                         let tile_h = img_h.min(dst.bottom().0 - y);
                         let tile_dst = Rect::from_xywh(px(x), px(y), px(tile_w), px(tile_h));
-                        Self::draw_image(segment, state, texture_cache, image, tile_dst);
+                        Self::draw_image(
+                            segment,
+                            draw_order,
+                            state,
+                            texture_cache,
+                            image,
+                            tile_dst,
+                            blend_mode,
+                        );
                         x += img_w;
                     }
                     y += img_h;
@@ -238,7 +515,15 @@ impl DrawBatcher {
                 while x < dst.right().0 {
                     let tile_w = img_w.min(dst.right().0 - x);
                     let tile_dst = Rect::from_xywh(px(x), dst.top(), px(tile_w), px(tile_h));
-                    Self::draw_image(segment, state, texture_cache, image, tile_dst);
+                    Self::draw_image(
+                        segment,
+                        draw_order,
+                        state,
+                        texture_cache,
+                        image,
+                        tile_dst,
+                        blend_mode,
+                    );
                     x += img_w;
                 }
             }
@@ -249,7 +534,15 @@ impl DrawBatcher {
                 while y < dst.bottom().0 {
                     let tile_h = img_h.min(dst.bottom().0 - y);
                     let tile_dst = Rect::from_xywh(dst.left(), px(y), px(tile_w), px(tile_h));
-                    Self::draw_image(segment, state, texture_cache, image, tile_dst);
+                    Self::draw_image(
+                        segment,
+                        draw_order,
+                        state,
+                        texture_cache,
+                        image,
+                        tile_dst,
+                        blend_mode,
+                    );
                     y += img_h;
                 }
             }
@@ -259,19 +552,32 @@ impl DrawBatcher {
     /// Record a nine-slice image draw by extracting and delegating each of the
     /// nine sub-image regions to `draw_image`.
     ///
+    /// **Advanced blend mode handling (PR-5):** when `blend_mode.is_advanced()`,
+    /// ALL nine regions are collected into ONE isolated `DrawSegment` and a
+    /// single `DrawItem::AdvancedShape` is pushed — same rationale as
+    /// `draw_image_repeat` (per-region AdvancedShapes would read back the
+    /// wrong backdrop).
+    ///
     /// Sub-image extraction and slice boundaries are byte-identical to the
     /// original painter implementation.
     #[allow(
         clippy::type_complexity,
         reason = "nine-slice src/dst tuple layout is local detail; refactoring into a named type adds no clarity"
     )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
+                  WgpuPainter fields; image/center_slice/dst/blend_mode are distinct per-draw inputs"
+    )]
     pub(in super::super) fn draw_image_nine_slice(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
         center_slice: Rect<Pixels>,
         dst: Rect<Pixels>,
+        blend_mode: BlendMode,
     ) {
         let img_w = image.width() as f32;
         let img_h = image.height() as f32;
@@ -440,13 +746,100 @@ impl DrawBatcher {
             ),
         ];
 
+        if blend_mode.is_advanced() {
+            // ── Advanced: collect all slices into one segment → one AdvancedShape ──
+            Self::finish_current_segment(segment, draw_order);
+
+            let mut shape_segment = DrawSegment::new();
+            let mut overall_bounds: Option<Rect<Pixels>> = None;
+
+            for (sx, sy, sw, sh, dx, dy, dw, dh) in slices {
+                if dw <= 0.0 || dh <= 0.0 || sw <= 0.0 || sh <= 0.0 {
+                    continue;
+                }
+                if let Some(sub_image) = extract(sx, sy, sw, sh) {
+                    let tile_dst = Rect::from_xywh(px(dx), px(dy), px(dw), px(dh));
+
+                    let top_left =
+                        state.apply_transform(Point::new(tile_dst.left(), tile_dst.top()));
+                    let bottom_right =
+                        state.apply_transform(Point::new(tile_dst.right(), tile_dst.bottom()));
+                    let tr =
+                        Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+                    let texture_id =
+                        super::super::texture_cache::TextureId::from_data(sub_image.data());
+                    match texture_cache.load_from_rgba(
+                        texture_id.clone(),
+                        sub_image.width(),
+                        sub_image.height(),
+                        sub_image.data(),
+                    ) {
+                        Ok(cached_texture) => {
+                            let instance = if let Some(uv_rect) = cached_texture.uv_rect {
+                                super::super::instancing::TextureInstance::with_uv(
+                                    tr,
+                                    uv_rect,
+                                    Color::WHITE,
+                                )
+                            } else {
+                                super::super::instancing::TextureInstance::new(tr, Color::WHITE)
+                            };
+                            shape_segment.cached_images.push((
+                                texture_id,
+                                instance,
+                                state.current_scissor(),
+                            ));
+
+                            overall_bounds = Some(match overall_bounds {
+                                None => tr,
+                                Some(prev) => Rect::from_ltrb(
+                                    prev.left().min(tr.left()),
+                                    prev.top().min(tr.top()),
+                                    prev.right().max(tr.right()),
+                                    prev.bottom().max(tr.bottom()),
+                                ),
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load nine-slice region: {}", e);
+                        }
+                    }
+                }
+            }
+
+            if shape_segment.cached_images.is_empty() {
+                return;
+            }
+
+            let device_bounds = overall_bounds
+                .expect("invariant: non-empty cached_images implies overall_bounds is Some");
+            draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
+                segment: shape_segment,
+                mode: blend_mode,
+                device_bounds,
+            }));
+
+            return;
+        }
+
+        // ── SrcOver path (byte-identical to pre-PR-5) ─────────────────────────
+
         for (sx, sy, sw, sh, dx, dy, dw, dh) in slices {
             if dw <= 0.0 || dh <= 0.0 || sw <= 0.0 || sh <= 0.0 {
                 continue;
             }
             if let Some(sub_image) = extract(sx, sy, sw, sh) {
                 let tile_dst = Rect::from_xywh(px(dx), px(dy), px(dw), px(dh));
-                Self::draw_image(segment, state, texture_cache, &sub_image, tile_dst);
+                Self::draw_image(
+                    segment,
+                    draw_order,
+                    state,
+                    texture_cache,
+                    &sub_image,
+                    tile_dst,
+                    blend_mode,
+                );
             }
         }
     }
@@ -456,33 +849,68 @@ impl DrawBatcher {
     /// Every branch bakes the filter into the image pixels on the CPU and then
     /// delegates to [`Self::draw_image`], so the filtered result lives in the
     /// same `cached_images` flush bucket as a plain image draw — correct
-    /// z-order, scissor, and opacity for free. The `Mode` branch composites
-    /// each pixel as `blend_mode(src = color, dst = pixel)`, matching
-    /// `ui.ColorFilter.mode`; the `Matrix` / gamma branches apply their
-    /// per-pixel transform the same way.
+    /// z-order, scissor, and opacity for free.
+    ///
+    /// # ColorFilter vs. Paint.blend_mode boundary (PR-5, condition 5)
+    ///
+    /// These two blend modes are at different levels of the pipeline and must
+    /// NOT be confused:
+    ///
+    /// - `ColorFilter::Mode { color, blend_mode: filter_mode }` — CPU per-pixel
+    ///   operation.  Each image pixel is composited as
+    ///   `filter_mode(src = color, dst = pixel)` BEFORE the image merges with
+    ///   its background.  This is a pixel-transform, not a layer composite.
+    ///
+    /// - `paint.blend_mode` — GPU framebuffer compositing.  The (already
+    ///   filtered) image is blended against the current surface using this mode.
+    ///
+    /// Order: `ColorFilter` bakes pixels first (CPU), then `paint.blend_mode`
+    /// composites the result against the backdrop (GPU).  `draw_image_filtered`
+    /// delegates to `draw_image` passing `paint.blend_mode` — NOT the filter's
+    /// mode.  The Matrix / gamma filter branches carry no per-pixel blend mode
+    /// and always delegate with `SrcOver` (the paint's default).
     #[allow(
         clippy::many_single_char_names,
         reason = "w/h/r/g/b/a are idiomatic in CPU-side color-matrix pixel loops"
     )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
+                  WgpuPainter fields; image/dst/filter/paint_blend_mode are distinct inputs"
+    )]
     pub(in super::super) fn draw_image_filtered(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
         dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
+        // `paint_blend_mode` is the GPU-level composite mode (Paint.blend_mode).
+        // It is independent of the filter's own blend_mode (CPU per-pixel
+        // operation). See the method doc for the boundary explanation.
+        paint_blend_mode: BlendMode,
     ) {
         use flui_painting::display_list::ColorFilter;
 
         match filter {
-            ColorFilter::Mode { color, blend_mode } => {
-                // `ColorFilter.mode(color, blend_mode)` composites each pixel as
-                // `blend_mode(src = color, dst = pixel)` before the layer merges
+            ColorFilter::Mode {
+                color,
+                blend_mode: filter_mode,
+            } => {
+                // `ColorFilter.mode(color, filter_mode)` composites each pixel as
+                // `filter_mode(src = color, dst = pixel)` before the layer merges
                 // with its background. Bake it per-pixel and draw the result —
                 // the same path as the Matrix / gamma branches below. (The old
                 // implementation overlaid a half-alpha rect, which the segment
                 // flush order draws *beneath* the image, so it was fully
                 // occluded for an opaque image and ignored the blend mode.)
+                //
+                // After this CPU bake, the image is passed to `draw_image` with
+                // `paint_blend_mode` (NOT `filter_mode`). The filter bake is
+                // complete; the GPU blend is Paint-level compositing vs. the
+                // framebuffer. These two modes are independent — see the method
+                // doc for the boundary contract.
                 let data = image.data();
                 let w = image.width();
                 let h = image.height();
@@ -490,18 +918,33 @@ impl DrawBatcher {
 
                 for pixel in data.chunks_exact(4) {
                     let dst_pixel = Color::rgba(pixel[0], pixel[1], pixel[2], pixel[3]);
-                    let blended = color.blend(dst_pixel, blend_mode);
+                    let blended = color.blend(dst_pixel, filter_mode);
                     new_data.extend_from_slice(&[blended.r, blended.g, blended.b, blended.a]);
                 }
 
-                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
+                // Delegate with `paint_blend_mode` — NOT the filter's mode.
+                Self::draw_filtered_pixels(
+                    segment,
+                    draw_order,
+                    state,
+                    texture_cache,
+                    w,
+                    h,
+                    new_data,
+                    dst,
+                    paint_blend_mode,
+                );
 
                 tracing::debug!(
-                    "draw_image_filtered: Mode filter baked per-pixel (color={color:?}, mode={blend_mode:?})"
+                    "draw_image_filtered: Mode filter baked per-pixel \
+                     (filter_color={color:?}, filter_mode={filter_mode:?}, \
+                     paint_blend_mode={paint_blend_mode:?})"
                 );
             }
             ColorFilter::Matrix(matrix) => {
                 // Apply color matrix to image pixel data on CPU.
+                // Matrix / gamma branches carry no per-pixel blend mode and
+                // always delegate with the paint's blend mode unchanged.
                 let data = image.data();
                 let w = image.width();
                 let h = image.height();
@@ -538,7 +981,17 @@ impl DrawBatcher {
                     new_data.push((na * 255.0) as u8);
                 }
 
-                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
+                Self::draw_filtered_pixels(
+                    segment,
+                    draw_order,
+                    state,
+                    texture_cache,
+                    w,
+                    h,
+                    new_data,
+                    dst,
+                    paint_blend_mode,
+                );
 
                 tracing::debug!("draw_image_filtered: Matrix filter applied via CPU");
             }
@@ -562,7 +1015,17 @@ impl DrawBatcher {
                     new_data.push(pixel[3]); // Alpha unchanged.
                 }
 
-                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
+                Self::draw_filtered_pixels(
+                    segment,
+                    draw_order,
+                    state,
+                    texture_cache,
+                    w,
+                    h,
+                    new_data,
+                    dst,
+                    paint_blend_mode,
+                );
 
                 tracing::debug!("draw_image_filtered: LinearToSrgbGamma applied via CPU");
             }
@@ -586,7 +1049,17 @@ impl DrawBatcher {
                     new_data.push(pixel[3]); // Alpha unchanged.
                 }
 
-                Self::draw_filtered_pixels(segment, state, texture_cache, w, h, new_data, dst);
+                Self::draw_filtered_pixels(
+                    segment,
+                    draw_order,
+                    state,
+                    texture_cache,
+                    w,
+                    h,
+                    new_data,
+                    dst,
+                    paint_blend_mode,
+                );
 
                 tracing::debug!("draw_image_filtered: SrgbToLinearGamma applied via CPU");
             }
@@ -599,21 +1072,43 @@ impl DrawBatcher {
     /// `sprite_origins` are the per-sprite translation offsets in pixel space,
     /// already extracted from any transform matrices at the trait-boundary caller.
     /// The batcher is glam-only; `Matrix4` must not appear on this side of the seam.
+    ///
+    /// # Advanced (dst-read) blend handling (PR-5, condition 3)
+    ///
+    /// When `blend_mode.is_advanced()`, ALL sprites are collected into ONE isolated
+    /// `DrawSegment` and a single `DrawItem::AdvancedShape` is pushed — the same
+    /// rationale as `draw_image_repeat`/`draw_image_nine_slice`: per-sprite
+    /// `AdvancedShape` calls would dst-read sprite N−1's already-blended result
+    /// instead of the original backdrop, producing wrong output for any
+    /// non-commutative mode.
+    ///
+    /// `device_bounds` for the `AdvancedShapeOp` is the union AABB of all
+    /// sprite destination rects in device space.  The SrcOver path is the
+    /// existing per-sprite `cached_images` push (byte-identical to pre-PR-5).
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "borrow-seam design: segment/draw_order/state/texture_cache are disjoint \
+                  WgpuPainter fields; image/sprites/sprite_origins/colors/blend_mode are distinct \
+                  per-draw inputs with no natural grouping"
+    )]
     pub(in super::super) fn draw_atlas(
         segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
         sprites: &[Rect<Pixels>],
         sprite_origins: &[Offset<Pixels>],
         colors: Option<&[flui_types::styling::Color]>,
+        blend_mode: BlendMode,
     ) {
         #[cfg(debug_assertions)]
         tracing::trace!(
-            "DrawBatcher::draw_atlas: image={}x{}, sprites={}",
+            "DrawBatcher::draw_atlas: image={}x{}, sprites={}, blend_mode={:?}",
             image.width(),
             image.height(),
-            sprites.len()
+            sprites.len(),
+            blend_mode,
         );
 
         // Validate input.
@@ -641,15 +1136,133 @@ impl DrawBatcher {
 
         // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels.
         // Clone the id: `load_from_rgba` takes ownership, but we need the same key
-        // for per-sprite `cached_images` pushes in the success branch below.
+        // for per-sprite `cached_images` pushes below.
         let texture_id = super::super::texture_cache::TextureId::from_ptr(image.data_ptr());
         let cache_id = texture_id.clone();
 
         match texture_cache.load_from_rgba(texture_id, image.width(), image.height(), image.data())
         {
-            Ok(_cached_texture) => {
+            Ok(cached_texture) => {
                 let image_width = image.width() as f32;
                 let image_height = image.height() as f32;
+
+                // When the image is packed into the shared texture atlas, the
+                // cache entry carries a `uv_rect = Some([au0, av0, au1, av1])`
+                // that maps the image's `[0,1]×[0,1]` UV space into the atlas.
+                // Sprite UVs (computed relative to the atlas-image dimensions)
+                // must be remapped through this rect before being passed to the
+                // GPU.  Without the remap, `src_uv = [0,0,1,1]` would sample the
+                // entire 2048×2048 atlas texture, which is mostly transparent, so
+                // the sprite would not appear in the foreground offscreen and the
+                // advanced blend would leave the backdrop unchanged.
+                //
+                // Remap: atlas_uv = au0 + sprite_uv * (au1 - au0)
+                // For a standalone texture (uv_rect = None) the remap is identity.
+                let atlas_uv_rect = cached_texture.uv_rect;
+
+                // Helper: remap sprite-local UV [0,1] into the shared atlas UV.
+                let remap_sprite_uv = |sprite_uv: [f32; 4]| -> [f32; 4] {
+                    match atlas_uv_rect {
+                        Some([au0, av0, au1, av1]) => {
+                            let uw = au1 - au0;
+                            let vh = av1 - av0;
+                            [
+                                au0 + sprite_uv[0] * uw,
+                                av0 + sprite_uv[1] * vh,
+                                au0 + sprite_uv[2] * uw,
+                                av0 + sprite_uv[3] * vh,
+                            ]
+                        }
+                        None => sprite_uv,
+                    }
+                };
+
+                if blend_mode.is_advanced() {
+                    // ── Advanced: collect all sprites into one segment → one AdvancedShape ──
+                    //
+                    // Seal prior content first (Z-order guarantee: earlier draws flush to the
+                    // surface before the backdrop is copied for the atlas blend).
+                    Self::finish_current_segment(segment, draw_order);
+
+                    let mut shape_segment = DrawSegment::new();
+                    let mut overall_bounds: Option<Rect<Pixels>> = None;
+
+                    for (i, (sprite_rect, origin)) in
+                        sprites.iter().zip(sprite_origins.iter()).enumerate()
+                    {
+                        let tint = colors
+                            .and_then(|c| c.get(i))
+                            .copied()
+                            .unwrap_or(flui_types::styling::Color::WHITE);
+
+                        // Sprite UV relative to the atlas image [0,1]×[0,1].
+                        let sprite_uv = [
+                            (sprite_rect.left() / image_width).0,
+                            (sprite_rect.top() / image_height).0,
+                            (sprite_rect.right() / image_width).0,
+                            (sprite_rect.bottom() / image_height).0,
+                        ];
+                        // Remap through atlas UV if packed into the shared atlas.
+                        let src_uv = remap_sprite_uv(sprite_uv);
+
+                        let dst_rect = Rect::from_xywh(
+                            origin.dx,
+                            origin.dy,
+                            sprite_rect.width(),
+                            sprite_rect.height(),
+                        );
+                        // Transform to device space (matches draw_image_with_id).
+                        let top_left =
+                            state.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
+                        let bottom_right =
+                            state.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
+                        let transformed_dst =
+                            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+                        let instance = super::super::instancing::TextureInstance::with_uv(
+                            transformed_dst,
+                            src_uv,
+                            tint,
+                        );
+                        shape_segment.cached_images.push((
+                            cache_id.clone(),
+                            instance,
+                            state.current_scissor(),
+                        ));
+
+                        // Grow the union AABB in device space.
+                        overall_bounds = Some(match overall_bounds {
+                            None => transformed_dst,
+                            Some(prev) => Rect::from_ltrb(
+                                prev.left().min(transformed_dst.left()),
+                                prev.top().min(transformed_dst.top()),
+                                prev.right().max(transformed_dst.right()),
+                                prev.bottom().max(transformed_dst.bottom()),
+                            ),
+                        });
+                    }
+
+                    if shape_segment.cached_images.is_empty() {
+                        return;
+                    }
+
+                    let device_bounds = overall_bounds.expect(
+                        "invariant: non-empty cached_images implies overall_bounds is Some",
+                    );
+                    draw_order.push(DrawItem::AdvancedShape(AdvancedShapeOp {
+                        segment: shape_segment,
+                        mode: blend_mode,
+                        device_bounds,
+                    }));
+
+                    return;
+                }
+
+                // ── SrcOver path ──────────────────────────────────────────────
+                //
+                // Atlas UV remapping applies here too: without it, a sprite inside
+                // the shared atlas would sample UV [0,1]×[0,1] of the entire
+                // 2048×2048 atlas texture instead of the image's sub-region.
 
                 // Create texture instances for each sprite.
                 for (i, (sprite_rect, origin)) in
@@ -661,13 +1274,15 @@ impl DrawBatcher {
                         .copied()
                         .unwrap_or(flui_types::styling::Color::WHITE);
 
-                    // Calculate UV coordinates from sprite rect.
-                    let src_uv = [
+                    // Calculate UV coordinates from sprite rect, then remap
+                    // through the atlas UV if the image is atlas-packed.
+                    let sprite_uv = [
                         (sprite_rect.left() / image_width).0,
                         (sprite_rect.top() / image_height).0,
                         (sprite_rect.right() / image_width).0,
                         (sprite_rect.bottom() / image_height).0,
                     ];
+                    let src_uv = remap_sprite_uv(sprite_uv);
 
                     let dst_rect = Rect::from_xywh(
                         origin.dx,
@@ -709,6 +1324,12 @@ impl DrawBatcher {
     /// Resolution of the `texture_id` to a `wgpu::TextureView` happens at
     /// replay time in `flush_segment_external_images`. A not-found ID at replay
     /// emits a `tracing::warn!` and skips the draw.
+    ///
+    /// # Advanced blend note
+    ///
+    /// `draw_texture` carries no `blend_mode` parameter. External-texture draws
+    /// enter via the `DrawTexture` display-list command which carries no `Paint`
+    /// upstream — advanced blend is unreachable here by construction.
     #[allow(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/state/src_uv_registry are disjoint parameters; \

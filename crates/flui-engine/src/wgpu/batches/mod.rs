@@ -354,12 +354,32 @@ fn vertices_aabb(vertices: &[Vertex]) -> Rect<Pixels> {
 #[cfg(test)]
 mod unit_tests {
     use flui_painting::BlendMode;
+    use flui_types::Rect;
 
     use super::super::{
         command_ir::{DrawItem, DrawSegment},
         state_stack::GpuStateStack,
     };
     use super::{DrawBatcher, PipelineKey, Vertex, vertices_aabb};
+
+    /// All 15 W3C advanced blend modes — used by gradient diversion tests G1-G3.
+    const ALL_ADVANCED_MODES: [BlendMode; 15] = [
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Darken,
+        BlendMode::Lighten,
+        BlendMode::ColorDodge,
+        BlendMode::ColorBurn,
+        BlendMode::HardLight,
+        BlendMode::SoftLight,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::Hue,
+        BlendMode::Saturation,
+        BlendMode::Color,
+        BlendMode::Luminosity,
+    ];
 
     // ── Helper: build the minimal geometry for a quad ─────────────────────────
 
@@ -743,6 +763,417 @@ mod unit_tests {
             aabb.top().0.abs() < f32::EPSILON,
             "empty vertices_aabb: top must be 0.0, got {}",
             aabb.top().0
+        );
+    }
+
+    // ── G1: linear gradient advanced mode → AdvancedShape ───────────────────
+
+    /// G1: `dispatch_shader_rect` with a linear gradient and an advanced blend mode
+    /// must push `DrawItem::AdvancedShape` to `draw_order` and NOT accumulate
+    /// gradient instances in the main segment.
+    ///
+    /// **Proves:** the advanced diversion branch in `dispatch_shader_rect` fires
+    /// and produces an isolated `DrawItem::AdvancedShape`.  The gradient instance
+    /// goes into `AdvancedShapeOp::segment`, not the main segment's batch.
+    #[test]
+    fn linear_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_painting::Paint;
+        use flui_types::{
+            geometry::{Offset, px},
+            painting::{Shader, TileMode},
+        };
+
+        for mode in ALL_ADVANCED_MODES {
+            let mut segment = DrawSegment::new();
+            let mut draw_order: Vec<DrawItem> = Vec::new();
+            let state = GpuStateStack::new_for_test();
+
+            let bounds = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
+            let paint = Paint {
+                blend_mode: mode,
+                shader: Some(Shader::LinearGradient {
+                    from: Offset::new(px(10.0), px(10.0)),
+                    to: Offset::new(px(60.0), px(10.0)),
+                    colors: vec![
+                        flui_types::Color::rgba(255, 0, 0, 255),
+                        flui_types::Color::rgba(0, 0, 255, 255),
+                    ],
+                    stops: None,
+                    tile_mode: TileMode::Clamp,
+                }),
+                ..Default::default()
+            };
+
+            let handled = DrawBatcher::dispatch_shader_rect(
+                &mut segment,
+                &mut draw_order,
+                &state,
+                bounds,
+                &paint,
+                [0.0; 4],
+            );
+
+            assert!(
+                handled,
+                "{mode:?}: dispatch_shader_rect must return true for linear gradient"
+            );
+            assert_eq!(
+                draw_order.len(),
+                1,
+                "{mode:?}: exactly one AdvancedShape must be pushed; got {}",
+                draw_order.len()
+            );
+            assert!(
+                matches!(draw_order[0], DrawItem::AdvancedShape(_)),
+                "{mode:?}: draw_order[0] must be AdvancedShape; got Segment or other"
+            );
+            // Main segment must hold no gradient instances — they went into the
+            // isolated AdvancedShapeOp segment.
+            assert_eq!(
+                segment.linear_gradient_batch.len(),
+                0,
+                "{mode:?}: main segment must have 0 linear gradient instances; got {}",
+                segment.linear_gradient_batch.len()
+            );
+        }
+    }
+
+    // ── G2: radial gradient advanced mode → AdvancedShape ────────────────────
+
+    /// G2: `dispatch_shader_rect` with a radial gradient and an advanced blend
+    /// mode must push `DrawItem::AdvancedShape`.  Mirror of G1 for the radial path.
+    #[test]
+    fn radial_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_painting::Paint;
+        use flui_types::{
+            geometry::{Offset, px},
+            painting::{Shader, TileMode},
+        };
+
+        for mode in ALL_ADVANCED_MODES {
+            let mut segment = DrawSegment::new();
+            let mut draw_order: Vec<DrawItem> = Vec::new();
+            let state = GpuStateStack::new_for_test();
+
+            let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+            let paint = Paint {
+                blend_mode: mode,
+                shader: Some(Shader::RadialGradient {
+                    center: Offset::new(px(32.0), px(32.0)),
+                    radius: 32.0,
+                    colors: vec![
+                        flui_types::Color::rgba(255, 255, 0, 255),
+                        flui_types::Color::rgba(0, 255, 0, 255),
+                    ],
+                    stops: None,
+                    tile_mode: TileMode::Clamp,
+                    focal: None,
+                    focal_radius: None,
+                }),
+                ..Default::default()
+            };
+
+            let handled = DrawBatcher::dispatch_shader_rect(
+                &mut segment,
+                &mut draw_order,
+                &state,
+                bounds,
+                &paint,
+                [0.0; 4],
+            );
+
+            assert!(
+                handled,
+                "{mode:?}: dispatch_shader_rect must return true for radial gradient"
+            );
+            assert!(
+                draw_order
+                    .iter()
+                    .any(|item| matches!(item, DrawItem::AdvancedShape(_))),
+                "{mode:?}: draw_order must contain AdvancedShape for radial gradient"
+            );
+            assert_eq!(
+                segment.radial_gradient_batch.len(),
+                0,
+                "{mode:?}: main segment must have 0 radial gradient instances"
+            );
+        }
+    }
+
+    // ── G3: sweep gradient advanced mode → AdvancedShape ─────────────────────
+
+    /// G3: `dispatch_shader_rect` with a sweep gradient and an advanced blend
+    /// mode must push `DrawItem::AdvancedShape`.  Mirror of G1/G2 for sweep.
+    #[test]
+    fn sweep_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_painting::Paint;
+        use flui_types::{
+            geometry::{Offset, px},
+            painting::{Shader, TileMode},
+        };
+
+        for mode in ALL_ADVANCED_MODES {
+            let mut segment = DrawSegment::new();
+            let mut draw_order: Vec<DrawItem> = Vec::new();
+            let state = GpuStateStack::new_for_test();
+
+            let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+            let paint = Paint {
+                blend_mode: mode,
+                shader: Some(Shader::SweepGradient {
+                    center: Offset::new(px(32.0), px(32.0)),
+                    start_angle: 0.0,
+                    end_angle: std::f32::consts::TAU,
+                    colors: vec![
+                        flui_types::Color::rgba(200, 100, 50, 255),
+                        flui_types::Color::rgba(50, 100, 200, 255),
+                    ],
+                    stops: None,
+                    tile_mode: TileMode::Clamp,
+                }),
+                ..Default::default()
+            };
+
+            let handled = DrawBatcher::dispatch_shader_rect(
+                &mut segment,
+                &mut draw_order,
+                &state,
+                bounds,
+                &paint,
+                [0.0; 4],
+            );
+
+            assert!(
+                handled,
+                "{mode:?}: dispatch_shader_rect must return true for sweep gradient"
+            );
+            assert!(
+                draw_order
+                    .iter()
+                    .any(|item| matches!(item, DrawItem::AdvancedShape(_))),
+                "{mode:?}: draw_order must contain AdvancedShape for sweep gradient"
+            );
+            assert_eq!(
+                segment.sweep_gradient_batch.len(),
+                0,
+                "{mode:?}: main segment must have 0 sweep gradient instances"
+            );
+        }
+    }
+
+    // ── G4: SrcOver gradient stays in main segment ────────────────────────────
+
+    /// G4: `dispatch_shader_rect` with a linear gradient and `SrcOver` must NOT
+    /// produce `DrawItem::AdvancedShape`.  The SrcOver path is byte-identical to
+    /// pre-PR-5.
+    ///
+    /// **Proves:** the advanced diversion gate (`is_advanced()`) correctly rejects
+    /// SrcOver, leaving the gradient in the main segment's gradient batch.
+    #[test]
+    fn srcover_gradient_stays_in_main_segment() {
+        use flui_painting::Paint;
+        use flui_types::{
+            geometry::{Offset, px},
+            painting::{Shader, TileMode},
+        };
+
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let paint = Paint {
+            blend_mode: BlendMode::SrcOver,
+            shader: Some(Shader::LinearGradient {
+                from: Offset::new(px(0.0), px(0.0)),
+                to: Offset::new(px(64.0), px(0.0)),
+                colors: vec![
+                    flui_types::Color::rgba(255, 0, 0, 255),
+                    flui_types::Color::rgba(0, 0, 255, 255),
+                ],
+                stops: None,
+                tile_mode: TileMode::Clamp,
+            }),
+            ..Default::default()
+        };
+
+        let handled = DrawBatcher::dispatch_shader_rect(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            bounds,
+            &paint,
+            [0.0; 4],
+        );
+
+        assert!(
+            handled,
+            "SrcOver linear gradient: dispatch_shader_rect must return true"
+        );
+        // SrcOver stays in main segment — no AdvancedShape pushed.
+        assert!(
+            draw_order.is_empty(),
+            "SrcOver gradient must not push to draw_order; got {} items",
+            draw_order.len()
+        );
+        assert_eq!(
+            segment.linear_gradient_batch.len(),
+            1,
+            "SrcOver gradient must accumulate one instance in main segment; got {}",
+            segment.linear_gradient_batch.len()
+        );
+    }
+
+    // ── G5: isolated segment stop_offset is 0 ────────────────────────────────
+
+    /// G5: The gradient instance inside an `AdvancedShapeOp` must use
+    /// `stop_offset = 0`, relative to the isolated segment's own stop buffer.
+    ///
+    /// **Proves:** the isolated segment starts from zero prior stops, not from the
+    /// main segment's cumulative stop count.  A non-zero stop_offset would index
+    /// out-of-range stops in the isolated buffer and produce corrupt GPU output.
+    #[test]
+    fn advanced_gradient_isolated_segment_stop_offset_is_zero() {
+        use flui_painting::Paint;
+        use flui_types::{
+            geometry::{Offset, px},
+            painting::{Shader, TileMode},
+        };
+
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+
+        // Pre-populate the main segment with stops so that a bug using the main
+        // segment's stop count would produce stop_offset = 2 (wrong).
+        let placeholder_stop = super::super::effects::GradientStop::new(
+            flui_types::Color::rgba(128, 128, 128, 255),
+            0.5,
+        );
+        segment.current_gradient_stops.push(placeholder_stop);
+        segment.current_gradient_stops.push(placeholder_stop);
+        // main segment now has 2 stops.
+
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let paint = Paint {
+            blend_mode: BlendMode::Multiply,
+            shader: Some(Shader::LinearGradient {
+                from: Offset::new(px(0.0), px(0.0)),
+                to: Offset::new(px(64.0), px(0.0)),
+                colors: vec![
+                    flui_types::Color::rgba(255, 0, 0, 255),
+                    flui_types::Color::rgba(0, 0, 255, 255),
+                ],
+                stops: None,
+                tile_mode: TileMode::Clamp,
+            }),
+            ..Default::default()
+        };
+
+        DrawBatcher::dispatch_shader_rect(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            bounds,
+            &paint,
+            [0.0; 4],
+        );
+
+        let DrawItem::AdvancedShape(ref isolated_op) = draw_order[draw_order.len() - 1] else {
+            panic!("last draw_order item must be AdvancedShape (G5)");
+        };
+
+        // The isolated segment must hold exactly the gradient's 2 stops — NOT the
+        // main segment's 2 placeholder stops plus 2 gradient stops (4 total).
+        // stop_offset = 0 is the structural guarantee: the isolated segment always
+        // starts empty, so the gradient's stops are at index 0.
+        assert_eq!(
+            isolated_op.segment.current_gradient_stops.len(),
+            2,
+            "isolated segment must have exactly 2 gradient stops (from the gradient itself); \
+             got {} — stop_offset = 0 invariant may be broken",
+            isolated_op.segment.current_gradient_stops.len()
+        );
+        assert_eq!(
+            isolated_op.segment.linear_gradient_batch.len(),
+            1,
+            "isolated segment must have exactly 1 linear gradient instance"
+        );
+    }
+
+    // ── G6: Z-seal fires for gradient advanced mode ───────────────────────────
+
+    /// G6: Prior SrcOver content in the main segment must be sealed into
+    /// `draw_order` BEFORE the `DrawItem::AdvancedShape` is pushed.
+    ///
+    /// Mirror of S4g for the gradient path: verifies `finish_current_segment`
+    /// fires at the top of the advanced branch in `dispatch_shader_rect`.
+    #[test]
+    fn prior_content_sealed_before_gradient_advanced_shape() {
+        use flui_painting::Paint;
+        use flui_types::{
+            geometry::{Offset, px},
+            painting::{Shader, TileMode},
+        };
+
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+
+        // Add SrcOver tessellated content to the main segment first.
+        DrawBatcher::add_tessellated_with_key(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            rect_vertices(0.0, 0.0, 32.0, 32.0),
+            &rect_indices(),
+            PipelineKey::alpha_blend(),
+        );
+        assert!(
+            draw_order.is_empty(),
+            "SrcOver must not push to draw_order yet"
+        );
+
+        // Dispatch a gradient with an advanced blend mode — this must seal the
+        // prior SrcOver content before pushing the AdvancedShape.
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let paint = Paint {
+            blend_mode: BlendMode::Multiply,
+            shader: Some(Shader::LinearGradient {
+                from: Offset::new(px(0.0), px(0.0)),
+                to: Offset::new(px(64.0), px(0.0)),
+                colors: vec![
+                    flui_types::Color::rgba(200, 100, 50, 255),
+                    flui_types::Color::rgba(50, 100, 200, 255),
+                ],
+                stops: None,
+                tile_mode: TileMode::Clamp,
+            }),
+            ..Default::default()
+        };
+        DrawBatcher::dispatch_shader_rect(
+            &mut segment,
+            &mut draw_order,
+            &state,
+            bounds,
+            &paint,
+            [0.0; 4],
+        );
+
+        // draw_order must be: [0] sealed Segment (prior SrcOver) + [1] AdvancedShape.
+        assert_eq!(
+            draw_order.len(),
+            2,
+            "draw_order must contain a sealed Segment followed by AdvancedShape; got {}",
+            draw_order.len()
+        );
+        assert!(
+            matches!(draw_order[0], DrawItem::Segment(_)),
+            "draw_order[0] must be the sealed SrcOver Segment (Z-seal before gradient advanced)"
+        );
+        assert!(
+            matches!(draw_order[1], DrawItem::AdvancedShape(_)),
+            "draw_order[1] must be the AdvancedShape (gradient advanced)"
         );
     }
 
