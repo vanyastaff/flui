@@ -56,7 +56,7 @@ use crate::error::EngineResult;
 
 use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
-    command_ir::{DrawItem, DrawSegment, PendingOpacityLayer, ScissorRect},
+    command_ir::{DrawItem, DrawSegment, ScissorRect},
     instancing::{InstanceBatch, TextureInstance},
     pipeline::PipelineKey,
     pipelines::PipelineSet,
@@ -99,7 +99,11 @@ pub(super) struct GpuReplay {
     unit_quad_index_buffer: wgpu::Buffer,
 
     /// Default texture sampler (linear filtering, clamp-to-edge).
-    default_sampler: wgpu::Sampler,
+    ///
+    /// `pub(super)` so the sibling `ssaa` module's `impl GpuReplay` block can
+    /// reuse this sampler for the box-downsample bind group without adding a
+    /// second sampler field.  The `wgpu` module boundary is `super` here.
+    pub(super) default_sampler: wgpu::Sampler,
 
     // ── Per-frame texture-instance scratch batch (from T10b) ─────────────────
     /// Per-frame scratch batch for texture instances.
@@ -423,6 +427,30 @@ impl GpuReplay {
                         );
                     }
                 }
+                // ── SSAA-supersampled arbitrary path — PR-3 ────────────────
+                //
+                // Z-correctness: all prior draw_order items have been flushed
+                // before this arm executes (loop order), so the SSAA tile
+                // composites on top of prior content — correct SrcOver stacking.
+                //
+                // Surface stays sample_count=1; the 2× size is a normal texture.
+                DrawItem::SsaaPath(mut op) => {
+                    self.render_ssaa_path(
+                        &mut op,
+                        viewport_size,
+                        surface_format,
+                        device,
+                        queue,
+                        pipelines,
+                        resources,
+                        encoder,
+                        target.view,
+                    );
+                    tracing::trace!(
+                        bounds = ?op.device_bounds,
+                        "GpuReplay: SSAA path tile composited"
+                    );
+                }
             }
         }
 
@@ -430,206 +458,6 @@ impl GpuReplay {
         text_renderer.render(device, queue, target.view, encoder, viewport_size)?;
 
         Ok(())
-    }
-
-    // =========================================================================
-    // Opacity-layer recursion (T10d)
-    // =========================================================================
-
-    /// Render an opacity layer's content to an offscreen texture and composite
-    /// the result onto `main_view` with group opacity.
-    ///
-    /// Correct group opacity: all children are rendered at full opacity into an
-    /// offscreen texture, then the entire texture is composited with the layer's
-    /// alpha. This avoids the incorrect per-primitive alpha that would result
-    /// from blending each child independently.
-    ///
-    /// ## R3 — LoadOp correctness
-    ///
-    /// - The offscreen clear pass uses `LoadOp::Clear(TRANSPARENT)` so only
-    ///   actually-drawn pixels contribute to the composite.
-    /// - All other render passes (flush_segment, flush_texture_batch) use
-    ///   `LoadOp::Load` — preserving prior content in the target.
-    ///   A Clear↔Load swap here would blank or ghost a layer.
-    ///
-    /// ## R2 — `texture_batch` invariant in recursion
-    ///
-    /// `&mut self` serializes the recursion.  Every `flush_texture_batch*`
-    /// call drains and clears `self.texture_batch` before returning, so a
-    /// depth-N+1 flush cannot leave instances that appear in the depth-N
-    /// composite.
-    #[allow(
-        clippy::too_many_arguments,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    pub(in crate::wgpu) fn flush_opacity_layer(
-        &mut self,
-        mut layer: PendingOpacityLayer,
-        viewport_size: (u32, u32),
-        surface_format: wgpu::TextureFormat,
-        device: &Arc<wgpu::Device>,
-        queue: &Arc<wgpu::Queue>,
-        pipelines: &mut PipelineSet,
-        resources: &mut GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-        main_target: RenderTarget<'_>,
-    ) {
-        // Zero-size viewports produce no visible pixels; skip GPU work entirely.
-        // The UV composite below divides by vp_w/vp_h, so proceeding would push
-        // inf/NaN into texture instances.  The pool clamps acquire to 1×1 but
-        // the resulting composite would be meaningless.
-        let (vp_w, vp_h) = viewport_size;
-        if vp_w == 0 || vp_h == 0 {
-            return;
-        }
-
-        let offscreen = self.render_layer_to_offscreen(
-            &mut layer,
-            viewport_size,
-            surface_format,
-            device,
-            queue,
-            pipelines,
-            resources,
-            encoder,
-        );
-
-        // ── Advanced-blend dispatch (DECISION 1 / CRITICAL GATE) ────────────
-        //
-        // `layer.blend.is_advanced()` is set when the layer carries a W3C
-        // advanced blend mode (Multiply, Screen, Overlay, …, Luminosity).
-        // Advanced blends require a backdrop read from the main surface — they
-        // MUST NOT go through the SrcOver premultiplied composite below, which
-        // would produce a white-over-dst tinted composite instead of the actual
-        // advanced blend.
-        //
-        // The COPY_SRC guard: `main_target.texture` is `Some` only when the
-        // surface was created with COPY_SRC usage.  Without it `copy_backdrop_region`
-        // cannot copy the backdrop, so we fall back to SrcOver + a one-shot warning.
-        if layer.blend.is_advanced() {
-            if let Some(surface_texture) = main_target.texture {
-                let o = layer.opacity.clamp(0.0, 1.0);
-                // UV remap: layer.bounds → [0,1] in viewport space.
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
-                let uv_left = layer.bounds.left().0 / vp_w as f32;
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
-                let uv_top = layer.bounds.top().0 / vp_h as f32;
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
-                let uv_right = layer.bounds.right().0 / vp_w as f32;
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "vp_w/vp_h are u32 viewport dims; precision loss at >16 M pixels is acceptable"
-                )]
-                let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
-
-                let op = AdvancedBlendOp {
-                    foreground: offscreen,
-                    mode: layer.blend,
-                    device_bounds: layer.bounds,
-                    opacity: o,
-                    tint: layer.tint_rgb,
-                    src_uv_min: [uv_left, uv_top],
-                    src_uv_max: [uv_right, uv_bottom],
-                };
-                flush_advanced_layer(
-                    op,
-                    surface_texture,
-                    main_target.view,
-                    surface_format,
-                    viewport_size,
-                    &pipelines.advanced_blend,
-                    resources,
-                    device,
-                    encoder,
-                );
-                tracing::trace!(
-                    mode = ?layer.blend,
-                    opacity = layer.opacity,
-                    bounds = ?layer.bounds,
-                    "GpuReplay: composited advanced-blend opacity layer"
-                );
-                return;
-            }
-            // A `view_only` target has no sampleable backdrop; advanced modes
-            // degrade to SrcOver here (warn once).  Production producers pass a
-            // sampleable target — surface-with-COPY_SRC, the COPY_SRC-less
-            // intermediate, or a pooled offscreen — so this is only reached by
-            // genuinely view-only callers (benches/headless/ShaderMask-style).
-            tracing::warn!(
-                mode = ?layer.blend,
-                "Advanced blend layer reached a view_only target; \
-                 falling back to SrcOver compositing (caller must pass sampleable target)"
-            );
-        }
-
-        let offscreen_view = offscreen.view();
-
-        // Composite the premultiplied offscreen onto the main surface.
-        //
-        // The offscreen texel `T` is premultiplied: `T.rgb = straight_rgb * a`,
-        // `T.a = a`.  With group opacity `O` and ColorFilter chroma `C`
-        // (white = no-op), the correct result is premultiplied source-over of
-        // `T * (C.r*O, C.g*O, C.b*O, O)` — every premultiplied channel scaled
-        // by its tint, then OVER the destination.  The shader applies
-        // `tex * tint` and the premultiplied pipeline (src factor `One`)
-        // performs the OVER.
-        //
-        // - White tint, O<1  → tint (O,O,O,O): uniform group opacity (BUG 2 fix).
-        // - Chroma tint       → modulates hue while preserving premultiplication
-        //                       (BUG 3 fix).
-        let o = layer.opacity.clamp(0.0, 1.0);
-        let tint = [
-            layer.tint_rgb[0] * o,
-            layer.tint_rgb[1] * o,
-            layer.tint_rgb[2] * o,
-            o,
-        ];
-
-        // Use layer bounds as the destination rect; UV coordinates map the
-        // bounds region from the full-viewport texture.
-        let uv_left = layer.bounds.left().0 / vp_w as f32;
-        let uv_top = layer.bounds.top().0 / vp_h as f32;
-        let uv_right = layer.bounds.right().0 / vp_w as f32;
-        let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
-
-        let instance = super::instancing::TextureInstance::with_uv_tint_f32(
-            layer.bounds,
-            [uv_left, uv_top, uv_right, uv_bottom],
-            tint,
-        );
-        let _ = self.texture_batch.add(instance);
-        // Opacity-layer composite onto main surface — full-viewport, no scissor.
-        // Premultiplied: offscreen texels are premultiplied (see above).
-        // R2: flush_texture_batch_premultiplied drains + clears texture_batch.
-        self.flush_texture_batch_premultiplied(
-            device,
-            queue,
-            pipelines,
-            resources,
-            viewport_size,
-            encoder,
-            main_target.view,
-            offscreen_view,
-            None,
-        );
-
-        tracing::trace!(
-            opacity = layer.opacity,
-            bounds = ?layer.bounds,
-            "GpuReplay: composited opacity layer"
-        );
-
-        // offscreen texture returned to pool when `offscreen` is dropped here.
     }
 
     /// Re-integrate offscreen draw content back into the parent draw order.

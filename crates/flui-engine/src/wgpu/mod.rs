@@ -148,6 +148,10 @@ pub(crate) mod resources;
 /// method existed -- only `clear`.
 mod shader_compiler;
 mod shaders;
+/// SSAA (2× supersampled) path anti-aliasing: downsample pipeline and replay
+/// helper `GpuReplay::render_ssaa_path` / `GpuReplay::downsample_ssaa_tile`.
+/// Handles Fill + SrcOver arbitrary paths that were diverted by `draw_path`.
+pub(crate) mod ssaa;
 /// GPU draw-state stack: the four paired transform/scissor/SDF-clip stacks
 /// and their cached current values, extracted from `WgpuPainter` so they can
 /// be owned and delegated as a unit. Owned by `WgpuPainter` via the `state`

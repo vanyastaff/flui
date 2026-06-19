@@ -1,6 +1,6 @@
 //! Path, vertices, line, and shadow record methods: draw_path, draw_vertices, line, draw_shadow.
 
-use flui_painting::{Paint, PaintStyle};
+use flui_painting::{BlendMode, Paint, PaintStyle};
 use flui_types::{
     Offset, Point,
     geometry::{Pixels, px},
@@ -220,6 +220,27 @@ impl DrawBatcher {
             return;
         }
 
+        // Determine whether this path fill should be SSAA-routed:
+        //   - Fill style (not stroke).
+        //   - SrcOver blend (non-SrcOver paths go to PR-4's path).
+        //   - Path AABB area ≥ SSAA_AREA_THRESHOLD_PX²: tiny paths (icon
+        //     sub-elements, micro-decorations) yield no visible AA benefit and
+        //     pay 5 render passes + 2 texture acquisitions for nothing.  Below
+        //     the threshold they join the batched tessellated draw call instead
+        //     (same quality as pre-PR-3 for those sizes), preserving the engine's
+        //     draw-batching design for the common small-path case.
+        //
+        // Closed-form shapes (rect/rrect/circle/oval/arc) never reach `draw_path`
+        // — they go through `batches/shapes.rs` → instanced SDF.  So any Fill
+        // arriving here IS an arbitrary path.
+        //
+        // The AABB is computed lazily (only when style==Fill && mode==SrcOver)
+        // so the check adds no cost to the stroke / non-SrcOver paths.
+        //
+        let is_srcover_fill = paint.style == PaintStyle::Fill
+            && paint.blend_mode == BlendMode::SrcOver
+            && path_aabb_area_device_px_sq(path, state) >= SSAA_AREA_THRESHOLD_PX_SQ;
+
         // Compute cache key from path geometry + paint tessellation parameters
         // + the quantized world scale (so a scale-1 entry is not reused at a
         // larger scale with scale-1 chord density).
@@ -232,7 +253,7 @@ impl DrawBatcher {
             max_scale,
         );
 
-        // Check cache for previously tessellated geometry
+        // Check cache for previously tessellated geometry.
         if let Some((positions, cached_indices)) = self.path_cache.get(path_hash) {
             // Reconstruct full Vertex data with current paint color.
             // The cache stores UNTRANSFORMED positions; bake the current transform now.
@@ -242,19 +263,26 @@ impl DrawBatcher {
                 .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
                 .collect();
             let indices: Vec<u32> = cached_indices.to_vec();
-            // Bake current_transform into vertices: shape.wgsl has no model matrix.
-            Self::submit_transformed_geometry(
-                segment,
-                draw_order,
-                state,
-                vertices,
-                &indices,
-                pipeline::pipeline_key_from_paint(paint),
-            );
+
+            if is_srcover_fill {
+                Self::submit_transformed_and_divert_to_ssaa(
+                    segment, draw_order, state, vertices, &indices,
+                );
+            } else {
+                // Bake current_transform into vertices: shape.wgsl has no model matrix.
+                Self::submit_transformed_geometry(
+                    segment,
+                    draw_order,
+                    state,
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
+            }
             return;
         }
 
-        // Cache miss — tessellate and store
+        // Cache miss — tessellate and store.
         let result = if paint.style == PaintStyle::Fill {
             self.tessellator.tessellate_flui_path_fill(path, paint)
         } else {
@@ -270,20 +298,45 @@ impl DrawBatcher {
                 self.path_cache
                     .insert(path_hash, positions, indices.clone());
 
-                // Bake current_transform into vertices: shape.wgsl has no model matrix.
-                Self::submit_transformed_geometry(
-                    segment,
-                    draw_order,
-                    state,
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
+                if is_srcover_fill {
+                    Self::submit_transformed_and_divert_to_ssaa(
+                        segment, draw_order, state, vertices, &indices,
+                    );
+                } else {
+                    // Bake current_transform into vertices: shape.wgsl has no model matrix.
+                    Self::submit_transformed_geometry(
+                        segment,
+                        draw_order,
+                        state,
+                        vertices,
+                        &indices,
+                        pipeline::pipeline_key_from_paint(paint),
+                    );
+                }
             }
             Err(e) => {
                 tracing::warn!("Failed to tessellate path: {}", e);
             }
         }
+    }
+
+    /// Transform vertices by the current CTM, then divert to SSAA.
+    ///
+    /// Factored out of `draw_path` so the transform+divert sequence is identical
+    /// for cache-hit and cache-miss paths.
+    fn submit_transformed_and_divert_to_ssaa(
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &GpuStateStack,
+        mut vertices: Vec<Vertex>,
+        indices: &[u32],
+    ) {
+        let transform = state.current_transform();
+        for v in &mut vertices {
+            let transformed = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
+            v.position = [transformed.x, transformed.y];
+        }
+        Self::divert_path_to_ssaa(segment, draw_order, state, &vertices, indices);
     }
 
     /// Draw indexed triangle geometry with per-vertex color + uv.
@@ -381,6 +434,208 @@ impl DrawBatcher {
             gpu_vertices,
             &gpu_indices,
             pipeline::pipeline_key_from_paint(paint),
+        );
+    }
+}
+
+// ─── Module-level helpers ─────────────────────────────────────────────────────
+
+/// Minimum path AABB area (in device-pixel²) that qualifies for SSAA routing.
+///
+/// Paths whose bounding-box area is below this threshold are rendered via the
+/// normal batched tessellated draw call (shared GPU pass, zero offscreen
+/// overhead).  Paths at or above the threshold are routed to SSAA (5 render
+/// passes, 2 pooled-texture acquisitions) for proper sub-pixel AA on visible
+/// diagonal edges.
+///
+/// 256 px² ≈ 16 × 16 device pixels.  Empirically, paths smaller than this
+/// produce aliasing that is imperceptible at typical DPR and viewing distances;
+/// the SSAA cost is not justified.
+pub(in super::super) const SSAA_AREA_THRESHOLD_PX_SQ: f32 = 256.0;
+
+/// Compute the device-pixel² area of a path's axis-aligned bounding box,
+/// scaled by the current CTM (so the area reflects actual screen size).
+///
+/// Uses `path.compute_bounds()` — a pure computation over path commands with
+/// no tessellation.  The CTM scale is applied as `area × max_scale²` because
+/// the AABB in local space must be scaled to device pixels.
+///
+/// Used exclusively by `draw_path` to decide SSAA eligibility.
+fn path_aabb_area_device_px_sq(path: &Path, state: &GpuStateStack) -> f32 {
+    let local_bounds = path.compute_bounds();
+    let w = local_bounds.width().0.max(0.0);
+    let h = local_bounds.height().0.max(0.0);
+    // Scale each edge by max_scale to get device-pixel extent.
+    let scale = state.max_scale();
+    let device_w = w * scale;
+    let device_h = h * scale;
+    device_w * device_h
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod threshold_tests {
+    use flui_painting::{BlendMode, Paint, PaintStyle};
+    use flui_types::{geometry::px, painting::path::Path};
+
+    use super::{
+        super::super::{
+            command_ir::{DrawItem, DrawSegment},
+            state_stack::GpuStateStack,
+        },
+        DrawBatcher, SSAA_AREA_THRESHOLD_PX_SQ,
+    };
+
+    fn make_batcher() -> DrawBatcher {
+        DrawBatcher::new()
+    }
+
+    fn rect_path(w: f32, h: f32) -> Path {
+        use flui_types::Rect;
+        Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(w), px(h)))
+    }
+
+    // ── T1: path below threshold → batched tessellated (no SsaaPath) ─────────
+
+    /// T1: A SrcOver fill path whose AABB area is BELOW `SSAA_AREA_THRESHOLD_PX_SQ`
+    /// must NOT produce `DrawItem::SsaaPath`.  It must join the batched tessellated
+    /// path (zero offscreen overhead).
+    ///
+    /// Without the threshold gate, every SrcOver fill — including a 1px dot —
+    /// issued 5 render passes, breaking the engine's draw-batching model.
+    ///
+    /// The path is a 15×15 square → area = 225 px² < 256 px² (threshold).
+    #[test]
+    fn small_path_below_threshold_does_not_produce_ssaa_path() {
+        let mut batcher = make_batcher();
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test(); // identity CTM, scale=1
+
+        let path = rect_path(15.0, 15.0); // area = 225 px² < 256 threshold
+        const { assert!(15.0_f32 * 15.0 < SSAA_AREA_THRESHOLD_PX_SQ) };
+
+        let paint = Paint {
+            style: PaintStyle::Fill,
+            blend_mode: BlendMode::SrcOver,
+            ..Default::default()
+        };
+
+        batcher.draw_path(&mut segment, &mut draw_order, &state, &path, &paint);
+
+        // No SsaaPath item must appear in draw_order.
+        let ssaa_count = draw_order
+            .iter()
+            .filter(|item| matches!(item, DrawItem::SsaaPath(_)))
+            .count();
+        assert_eq!(
+            ssaa_count, 0,
+            "15×15 path (below threshold) must not produce SsaaPath; \
+             got {ssaa_count} SsaaPath items"
+        );
+    }
+
+    // ── T2: path at or above threshold → SsaaPath ────────────────────────────
+
+    /// T2: A SrcOver fill path whose AABB area is AT OR ABOVE
+    /// `SSAA_AREA_THRESHOLD_PX_SQ` must produce `DrawItem::SsaaPath`.
+    ///
+    /// The path is a 17×17 square → area = 289 px² ≥ 256 px² (threshold).
+    ///
+    /// Without the threshold gate all paths produced SsaaPath unconditionally,
+    /// but with it, only sufficiently large paths do — this test ensures the
+    /// threshold is not accidentally over-conservative.
+    #[test]
+    fn large_path_at_or_above_threshold_produces_ssaa_path() {
+        let mut batcher = make_batcher();
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test(); // identity CTM, scale=1
+
+        let path = rect_path(17.0, 17.0); // area = 289 px² ≥ 256 threshold
+        const { assert!(17.0_f32 * 17.0 >= SSAA_AREA_THRESHOLD_PX_SQ) };
+
+        let paint = Paint {
+            style: PaintStyle::Fill,
+            blend_mode: BlendMode::SrcOver,
+            ..Default::default()
+        };
+
+        batcher.draw_path(&mut segment, &mut draw_order, &state, &path, &paint);
+
+        let ssaa_count = draw_order
+            .iter()
+            .filter(|item| matches!(item, DrawItem::SsaaPath(_)))
+            .count();
+        assert_eq!(
+            ssaa_count, 1,
+            "17×17 path (at threshold) must produce exactly one SsaaPath; \
+             got {ssaa_count}"
+        );
+    }
+
+    // ── T3: stroke path is never SSAA-routed ─────────────────────────────────
+
+    /// T3: A stroked path (PaintStyle::Stroke) must NEVER produce
+    /// `DrawItem::SsaaPath`, regardless of size.  SSAA is only for fills.
+    #[test]
+    fn stroke_path_never_produces_ssaa_path() {
+        let mut batcher = make_batcher();
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+
+        // Large enough that it would be SSAA-routed if this were a fill.
+        let path = rect_path(100.0, 100.0);
+
+        let paint = Paint {
+            style: PaintStyle::Stroke,
+            blend_mode: BlendMode::SrcOver,
+            stroke_width: 2.0,
+            ..Default::default()
+        };
+
+        batcher.draw_path(&mut segment, &mut draw_order, &state, &path, &paint);
+
+        let ssaa_count = draw_order
+            .iter()
+            .filter(|item| matches!(item, DrawItem::SsaaPath(_)))
+            .count();
+        assert_eq!(
+            ssaa_count, 0,
+            "stroke path must never produce SsaaPath; got {ssaa_count}"
+        );
+    }
+
+    // ── T4: non-SrcOver fill is never SSAA-routed ────────────────────────────
+
+    /// T4: A non-SrcOver fill (e.g. SrcOut) must NEVER produce
+    /// `DrawItem::SsaaPath`.  SSAA is SrcOver-only in PR-3.
+    #[test]
+    fn non_srcover_fill_never_produces_ssaa_path() {
+        let mut batcher = make_batcher();
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+
+        let path = rect_path(200.0, 200.0); // large — would SSAA if SrcOver
+
+        let paint = Paint {
+            style: PaintStyle::Fill,
+            blend_mode: BlendMode::SrcOut,
+            ..Default::default()
+        };
+
+        batcher.draw_path(&mut segment, &mut draw_order, &state, &path, &paint);
+
+        let ssaa_count = draw_order
+            .iter()
+            .filter(|item| matches!(item, DrawItem::SsaaPath(_)))
+            .count();
+        assert_eq!(
+            ssaa_count, 0,
+            "non-SrcOver fill must never produce SsaaPath; got {ssaa_count}"
         );
     }
 }
