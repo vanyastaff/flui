@@ -1,6 +1,6 @@
 # SPEC — Engine-wide anti-aliasing for tessellated geometry (flui-engine)
 
-Status: **APPROVED-PENDING** (design settled via design-panel + 2 adversarial reshapes + user scope decisions). Successor effort to Phase B (advanced dst-read blend, #251–257).
+Status: **COMPLETE** — all PRs merged (#258, #259, #260, #261, #262, #263). Every tessellated producer is now anti-aliased (closed-form shapes via affine-SDF; arbitrary/non-SrcOver geometry via the SSAA tile), except the documented coverage-destructive Porter-Duff exception (correct-but-aliased). Design settled via design-panel + 2 adversarial reshapes + user scope decisions. Successor effort to Phase B (advanced dst-read blend, #251–257).
 
 ## Problem
 
@@ -172,3 +172,39 @@ Scouted; integration points confirmed:
 Route non-SrcOver basic shapes + Porter-Duff/advanced arbitrary paths through the SSAA tile, composing
 via `OffscreenTexture`(blend) / `AdvancedShape`. Final anti-MVP guard: no real producer permanently
 aliased; document explicit exceptions (e.g. Plus/Modulate).
+
+---
+
+## Completion (2026-06-19) — EFFORT COMPLETE
+
+- **PR-3 MERGED** (#262, `ce11a653`): SSAA-offscreen AA for arbitrary SrcOver paths
+  (`DrawItem::SsaaPath`, 2× tile + box-downsample, compose via `OffscreenTexture`
+  seam). No-silent-truncation fallback for paths exceeding the device tile cap.
+- **PR-4 MERGED** (#263, `a54a627b`): non-SrcOver path/shape AA via the SSAA tile +
+  per-mode composite. `is_tile_safe_for_ssaa` classifies modes: tile-safe Porter-Duff
+  → fixed-function `blend_state_for`; advanced → `flush_advanced_layer` foreground;
+  coverage-destructive Porter-Duff (Clear/Src/SrcIn/DstIn/SrcOut/DstATop/Modulate) →
+  tessellated (aliased) **documented exception**. drrect fills now AA'd too.
+
+**Result:** every tessellated SrcOver producer is AA'd (SDF or SSAA); non-SrcOver is
+AA'd for tile-safe + advanced modes. Final DX12 GPU-readback: 338 passed / 0 / 7
+ignored. The whole maintainer-conditions list holds; the coverage-destructive set is
+the sole documented aliased exception (it is coverage-correct, only the 1px edge band
+is aliased).
+
+### Deferred follow-ups (backlog — not blocking; recorded so they aren't lost)
+1. **L1→L2 AA norm** (engine-wide): switch `sdfToAlpha` from `fwidth` (L1, over-widens
+   diagonal-edge AA by ≤√2) to `length(vec2(dpdx,dpdy))` (L2) across all 5 SDF shader
+   copies. Sharper diagonal AA; changes axis-aligned output ≤1/255 at corners.
+2. **SSAA area-threshold** uses `max_scale` → spurious SSAA routing for shapes small in
+   device space but large in local space under anisotropic scale (perf, not correctness).
+   Use the device-space vertex AABB or `sqrt(sx*sy)`.
+3. **SSAA-tile pool** size-bucketing (quantize tile dims) so odd per-path tile sizes
+   don't evict reusable full-viewport layer textures; reuse the unit-quad buffer in the
+   downsample pass.
+4. A shared `ssaa_eligible_for(mode, area)` helper (the eligibility predicate is
+   reconstructed at ~6 sites; arc has an extra SrcOver guard).
+5. Table-driven destructive-mode routing guard; an advanced view-only-fallback test
+   (the fallback matches the Phase B AdvancedShape graceful-degrade pattern).
+6. SDF-AA for the few remaining aliased paths is N/A (they're SSAA'd); external
+   real-Flutter gamma validation of the advanced-blend space remains a Phase-B follow-up.
