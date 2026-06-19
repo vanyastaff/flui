@@ -26,14 +26,20 @@
 //! the path accumulates premultiplied values over transparent. The box downsample
 //! averages premultiplied values, which is linear-correct (premultiplied colour is
 //! linear in coverage). The 1× tile is then composited via
-//! `flush_texture_batch_premultiplied` (src factor `One`) — no double-multiply.
+//! `flush_texture_batch_premultiplied_with_mode` using the exact blend factors
+//! for `op.blend` (src factor `One` for all tile-safe premultiplied modes).
 
 use std::sync::Arc;
 
 use flui_types::{Rect, geometry::Pixels};
 
 use super::{
-    command_ir::SsaaPathOp, pipelines::PipelineSet, replay::GpuReplay, resources::GpuResources,
+    advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
+    command_ir::SsaaPathOp,
+    pipeline::is_tile_safe_for_ssaa,
+    pipelines::PipelineSet,
+    replay::GpuReplay,
+    resources::GpuResources,
     texture_pool::PooledTexture,
 };
 
@@ -157,8 +163,25 @@ impl SsaaDownsamplePipeline {
 #[allow(clippy::too_many_arguments)]
 impl GpuReplay {
     /// Replay a `DrawItem::SsaaPath`: render the path into a 2× tile,
-    /// box-downsample to a premultiplied 1× tile, then composite via the
-    /// premultiplied texture batch.
+    /// box-downsample to a premultiplied 1× tile, then composite onto the target.
+    ///
+    /// ## Composite step (Step 5) — PR-4 blend routing
+    ///
+    /// After producing the AA'd 1× tile, the composite is selected by `op.blend`:
+    ///
+    /// - **tile-safe** (`is_tile_safe_for_ssaa(op.blend)` = true): composite via
+    ///   `flush_texture_batch_premultiplied` with `blend_state_for(op.blend)`.
+    ///   Transparent SSAA padding is a no-op for these modes (dst preserved).
+    ///   This is an extension over PR-3 (SrcOver-only); now handles Dst, DstOver,
+    ///   DstOut, SrcATop, Xor, Plus as well.
+    ///
+    /// - **advanced** (`op.blend.is_advanced()` = true): composite via
+    ///   `flush_advanced_layer` with the 1× tile as foreground.  Requires a
+    ///   sampleable `surface_texture`; falls back to tile-safe SrcOver if absent.
+    ///
+    /// Coverage-destructive modes (Clear, Src, SrcIn, DstIn, SrcOut, DstATop,
+    /// Modulate) never reach `render_ssaa_path` — they are kept on the tessellated
+    /// (aliased) path in the record-side batchers.
     ///
     /// ## Algorithm
     ///
@@ -172,8 +195,7 @@ impl GpuReplay {
     ///      the 1× geometry fills the full 2× texture → 2× supersampled.
     /// 4. Acquire a 1× pooled texture `(tile_w, tile_h)`.  Clear to transparent.
     ///    Run `SsaaDownsamplePipeline` to box-average the 2× → 1×.
-    /// 5. Push the 1× tile into `texture_batch` and composite via
-    ///    `flush_texture_batch_premultiplied` at `device_bounds` on the target.
+    /// 5. Composite the 1× tile using the routing above.
     ///
     /// Both pooled textures are RAII (return to pool on drop).  The 2× tile is
     /// dropped before the composite step; the 1× tile drops after the composite.
@@ -188,6 +210,9 @@ impl GpuReplay {
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
+        // Surface texture for advanced (dst-read) blend composite.
+        // Pass `None` for view-only targets (advanced falls back to SrcOver).
+        surface_texture: Option<&wgpu::Texture>,
     ) {
         let (vp_w, vp_h) = viewport_size;
 
@@ -436,6 +461,11 @@ impl GpuReplay {
         drop(super_tex);
 
         // ── Step 5: composite the 1× tile onto the target ────────────────────
+        //
+        // PR-4 blend routing (see function doc):
+        //   - tile-safe → fixed-function premul blend (SrcOver pipeline for now)
+        //   - advanced   → flush_advanced_layer (dst-read W3C composite)
+        //   - SrcOver (PR-3 baseline) → tile-safe path
 
         let composite_bounds = Rect::from_xywh(
             Pixels(tile_x as f32),
@@ -444,25 +474,100 @@ impl GpuReplay {
             Pixels(tile_h as f32),
         );
 
-        let instance = super::instancing::TextureInstance::new(
-            composite_bounds,
-            flui_types::styling::Color::WHITE,
-        );
-        let _ = self.texture_batch.add(instance);
-
-        self.flush_texture_batch_premultiplied(
-            device,
-            queue,
-            pipelines,
-            resources,
-            viewport_size,
-            encoder,
-            target_view,
-            one_x_tile.view(),
-            None, // no scissor for tile composite
-        );
-
-        // 1× tile drops here → returns to pool (RAII).
+        if op.blend.is_advanced() {
+            // Advanced (dst-read) composite: route through flush_advanced_layer,
+            // same as AdvancedShape. The 1× SSAA tile is the AA'd foreground.
+            if let Some(surf_tex) = surface_texture {
+                let blend_op = AdvancedBlendOp {
+                    foreground: one_x_tile,
+                    mode: op.blend,
+                    device_bounds: composite_bounds,
+                    opacity: 1.0,
+                    tint: [1.0, 1.0, 1.0],
+                    // 1× tile exactly covers composite_bounds; UV is identity.
+                    src_uv_min: [0.0, 0.0],
+                    src_uv_max: [1.0, 1.0],
+                };
+                flush_advanced_layer(
+                    blend_op,
+                    surf_tex,
+                    target_view,
+                    surface_format,
+                    viewport_size,
+                    &pipelines.advanced_blend,
+                    resources,
+                    device,
+                    encoder,
+                );
+                tracing::trace!(
+                    mode = ?op.blend,
+                    bounds = ?composite_bounds,
+                    "GpuReplay: SSAA path tile → advanced composite"
+                );
+                // one_x_tile was moved into AdvancedBlendOp.foreground;
+                // it returns to pool when AdvancedBlendOp is dropped inside
+                // flush_advanced_layer.
+            } else {
+                // View-only target has no sampleable backdrop; fall back to SrcOver.
+                // Same fallback as AdvancedShape in replay.rs.
+                tracing::warn!(
+                    mode = ?op.blend,
+                    "SSAA path advanced blend reached a view_only target; \
+                     falling back to SrcOver (caller must pass sampleable target)"
+                );
+                let instance = super::instancing::TextureInstance::new(
+                    composite_bounds,
+                    flui_types::styling::Color::WHITE,
+                );
+                let _ = self.texture_batch.add(instance);
+                self.flush_texture_batch_premultiplied(
+                    device,
+                    queue,
+                    pipelines,
+                    resources,
+                    viewport_size,
+                    encoder,
+                    target_view,
+                    one_x_tile.view(),
+                    None,
+                );
+                // one_x_tile drops here → returns to pool.
+            }
+        } else {
+            // Tile-safe: fixed-function premul composite with the exact blend mode.
+            //
+            // All tile-safe modes satisfy: blend(transparent_src, dst) == dst,
+            // so the SSAA tile's transparent border pixels do not corrupt dst.
+            //
+            // `flush_texture_batch_premultiplied_with_mode` selects (or lazily
+            // creates) a pipeline whose `wgpu::BlendState` matches `op.blend`
+            // exactly, so DstOut, Plus, DstOver, Xor, SrcATop, Dst, and SrcOver
+            // all composite the 1× tile with their correct factors.
+            debug_assert!(
+                is_tile_safe_for_ssaa(op.blend),
+                "non-advanced, non-tile-safe mode {:?} reached SSAA tile composite — \
+                 coverage-destructive modes must stay on the tessellated path",
+                op.blend
+            );
+            let instance = super::instancing::TextureInstance::new(
+                composite_bounds,
+                flui_types::styling::Color::WHITE,
+            );
+            let _ = self.texture_batch.add(instance);
+            self.flush_texture_batch_premultiplied_with_mode(
+                op.blend,
+                device,
+                queue,
+                pipelines,
+                resources,
+                viewport_size,
+                encoder,
+                target_view,
+                one_x_tile.view(),
+                None, // no scissor — tile exactly covers composite_bounds
+            );
+            // one_x_tile drops here → returns to pool (RAII).
+        }
     }
 
     /// Box-downsample a 2× pooled `source_texture` into a fresh 1× tile.
@@ -607,6 +712,7 @@ mod unit_tests {
         let op = SsaaPathOp {
             segment: seg,
             device_bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),
+            blend: flui_types::painting::BlendMode::SrcOver,
         };
 
         let cloned = op.clone();
@@ -643,6 +749,7 @@ mod unit_tests {
             &state,
             &vertices,
             &indices,
+            flui_types::painting::BlendMode::SrcOver,
         );
 
         assert_eq!(draw_order.len(), 1, "one SsaaPath item must be pushed");
@@ -690,6 +797,7 @@ mod unit_tests {
                 make_vertex(10.0, 15.0),
             ],
             &[0, 1, 2],
+            flui_types::painting::BlendMode::SrcOver,
         );
 
         assert_eq!(
@@ -727,6 +835,7 @@ mod unit_tests {
                 make_vertex(17.5, 40.0),
             ],
             &[0, 1, 2],
+            flui_types::painting::BlendMode::SrcOver,
         );
 
         let DrawItem::SsaaPath(ref op) = draw_order[0] else {
@@ -770,6 +879,7 @@ mod unit_tests {
             &state,
             &[make_vertex(0.0, 0.0), make_vertex(10.0, 0.0)],
             &[], // empty indices
+            flui_types::painting::BlendMode::SrcOver,
         );
 
         assert!(

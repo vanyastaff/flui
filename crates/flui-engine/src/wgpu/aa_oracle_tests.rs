@@ -505,7 +505,7 @@ mod gpu_tests {
     use std::f32::consts::PI;
     use std::sync::Arc;
 
-    use flui_painting::Paint;
+    use flui_painting::{BlendMode, Paint};
     use flui_types::{
         Color, Rect,
         geometry::{Pixels, RRect, px},
@@ -2830,6 +2830,754 @@ mod gpu_tests {
             "A4 FAILED: only {interior_partial} interior partial-alpha pixels (device dist < \
              radius-2) — the angular sector edges are hard-aliased. The screen-space angular \
              SDF + fwidth must produce a smooth ~1px band along each diagonal edge."
+        );
+    }
+
+    // ── PD1: tile-safe non-SrcOver arbitrary path is SSAA-routed ────────────
+
+    /// PD1: A tile-safe non-SrcOver arbitrary path fill (Xor mode on a
+    /// transparent surface) must produce partial alpha at its boundary —
+    /// proving the PR-4 SSAA routing fires for tile-safe non-SrcOver fills.
+    ///
+    /// ## Blend-mode selection rationale
+    ///
+    /// `Xor` on a transparent destination is equivalent to `SrcOver` (both give
+    /// `src * 1 + 0 * (1-src_a) = src`), so the pixel output is identical to the
+    /// SrcOver SSAA path.  This makes Xor the ideal probe for routing: the SSAA
+    /// tile is rendered with the SrcOver pipeline (a known-correct path), and the
+    /// composite is also effectively SrcOver — so the test validates that Xor IS
+    /// routed through the SSAA tile without requiring a per-mode texture composite
+    /// pipeline (TODO T12, deferred).
+    ///
+    /// Other tile-safe modes (DstOut, DstOver, Plus) composite differently and
+    /// their correct pixel output requires TODO T12.
+    ///
+    /// ## Routing proof (what this test guards)
+    ///
+    /// If Xor is NOT routed through SSAA (stays tessellated, aliased), boundary
+    /// pixels are hard 0 or 255 — no partial alpha. SSAA produces genuine fractional
+    /// alpha at every non-axis-aligned edge. The same kite geometry as p4 is used.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index arithmetic over a small fixed-size test surface"
+    )]
+    fn pd1_tile_safe_non_srcover_path_has_partial_alpha_at_boundary() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Non-axis-aligned irregular kite — all edges are diagonal.
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let v = [
+            (cx + 1.3, cy - 38.7),
+            (cx + 42.2, cy + 5.5),
+            (cx - 2.7, cy + 33.1),
+            (cx - 38.4, cy - 9.2),
+        ];
+        let mut path = flui_types::painting::path::Path::new();
+        path.move_to(flui_types::Point::new(Pixels(v[0].0), Pixels(v[0].1)));
+        for &(x, y) in &v[1..] {
+            path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+        }
+        path.close();
+
+        // Xor on transparent background = SrcOver (same pixel output, different mode
+        // tag). Proves tile-safe routing fires without needing TODO T12 blend fix.
+        let paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.draw_path(&path, &paint);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("PD1 Xor Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Partial alpha at the kite boundary proves SSAA ran: hard tessellation
+        // produces only 0 or 255. Xor on transparent = SrcOver so boundary alpha =
+        // sub-pixel coverage, same as p4.
+        let partial_count = pixels.iter().filter(|p| p[3] > 5 && p[3] < 250).count();
+
+        assert!(
+            partial_count >= 4,
+            "PD1 FAILED: only {partial_count} partial-alpha pixels — the Xor tile-safe \
+             SSAA reroute appears to be a no-op or hard-aliased. PR-4 must route tile-safe \
+             non-SrcOver fills through the SSAA tile."
+        );
+    }
+
+    // ── PD3: non-SrcOver basic shape is SSAA-routed ──────────────────────────
+
+    /// PD3: A non-SrcOver rrect fill (Xor on transparent background) must
+    /// produce partial alpha at its curved corner boundary — proving the
+    /// shapes batcher routes non-SrcOver fills through SSAA (PR-4).
+    ///
+    /// ## Blend-mode selection rationale (same as PD1)
+    ///
+    /// `Xor` on a transparent destination equals `SrcOver` pixel-output-wise,
+    /// so the composite step does not need the per-mode pipeline (TODO T12).
+    /// The test validates that the shapes SSAA routing fires and the rounded
+    /// corner pixels receive genuine sub-pixel coverage.
+    ///
+    /// Uses an unrotated rrect with 10 px corner radii — the curved corner
+    /// band is the best probe for SSAA sub-pixel coverage vs hard aliasing.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index arithmetic over a small fixed-size test surface"
+    )]
+    fn pd3_non_srcover_basic_shape_has_partial_alpha_at_boundary() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Large rrect (60×60) with 10 px corner radii — well above SSAA threshold.
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(cx - 30.0), px(cy - 30.0), px(60.0), px(60.0)),
+            px(10.0),
+        );
+
+        // Xor on transparent = SrcOver; proves routing fires without TODO T12.
+        let paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.rrect(rrect, &paint);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("PD3 Xor Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Partial alpha at the curved corners and straight edges proves SSAA ran.
+        let partial_count = pixels.iter().filter(|p| p[3] > 5 && p[3] < 250).count();
+
+        assert!(
+            partial_count >= 4,
+            "PD3 FAILED: only {partial_count} partial-alpha pixels — the Xor rrect fill \
+             appears hard-aliased. PR-4 must route non-SrcOver basic shapes through SSAA."
+        );
+    }
+
+    // ── PD2: tile-safe non-SrcOver produces visually distinct output over backdrop ──
+
+    /// PD2: A tile-safe non-SrcOver SSAA path composited over a non-transparent
+    /// backdrop must produce pixel output that is visibly distinct from SrcOver.
+    ///
+    /// ## Why this test is necessary (gap in PD1 / PD3)
+    ///
+    /// PD1 and PD3 use `Xor` on a *transparent* destination.  On a transparent
+    /// dst, `Xor` and `SrcOver` produce identical pixel output (both yield `src`),
+    /// so those tests cannot distinguish whether the correct `Xor` blend pipeline
+    /// (`blend_state_for(Xor)`) or the default SrcOver pipeline fires at composite
+    /// time.  PD2 forces a non-transparent backdrop so the two pipelines diverge.
+    ///
+    /// ## Blend mode and expected pixel values
+    ///
+    /// `DstOut` is tile-safe (`is_tile_safe_for_ssaa` = true).
+    /// wgpu blend: `(src_factor=Zero, dst_factor=OneMinusSrcAlpha)`.
+    ///
+    /// Setup:
+    ///   - Background: opaque green `(0, 255, 0, 255)` painted with SrcOver.
+    ///   - Foreground: large white circle (r=40) with `DstOut` blend.
+    ///
+    /// Interior pixel formula (src.alpha=1 at the center of the circle):
+    ///   out.alpha = 0 + (1 − 1.0) × dst.alpha = 0   → transparent
+    ///   out.rgb   = 0 + (1 − 1.0) × dst.rgb   = 0   → black (premul of transparent)
+    ///
+    /// Under SrcOver the same pixel would be white (255, 255, 255, 255).
+    /// Under DstOut the interior becomes transparent (alpha ≈ 0).
+    ///
+    /// ## Partial-alpha proof (SSAA ran)
+    ///
+    /// At the circle boundary the SSAA tile has partial alpha `a_tile ∈ (0,1)`.
+    /// DstOut composite gives `out.alpha = dst.alpha × (1 − a_tile)`.
+    /// With `dst.alpha = 1`: `out.alpha = 1 − a_tile ∈ (0, 1)`.
+    /// These pixels show partial alpha — proving SSAA ran AND the DstOut blend
+    /// pipeline was used (SrcOver would yield alpha = 1 at the same positions).
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index arithmetic over a small fixed-size test surface"
+    )]
+    fn pd2_tile_safe_non_srcover_over_opaque_backdrop_is_pixel_distinct_from_srcover() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let radius = 40.0_f32;
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+        // Step 1: paint an opaque green background covering the whole surface.
+        // This is SrcOver — it comes first in draw order so the DstOut circle
+        // composites onto the green backdrop.
+        let full_rect = Rect::from_xywh(
+            px(0.0),
+            px(0.0),
+            px(SURFACE_WIDTH as f32),
+            px(SURFACE_HEIGHT as f32),
+        );
+        let green = Color::rgba(0, 255, 0, 255);
+        painter.rect(full_rect, &Paint::fill(green));
+
+        // Step 2: paint a large white circle with DstOut blend (tile-safe, non-SrcOver).
+        // Radius 40 → bounding box area = 80×80 = 6400 px² >> SSAA_AREA_THRESHOLD_PX_SQ=256.
+        // The circle is placed slightly off-pixel-center to ensure non-axis-aligned
+        // edges and genuine partial-alpha boundary pixels from the SSAA downsample.
+        let center = flui_types::Point::new(px(cx + 0.5), px(cy + 0.5));
+        painter.circle(
+            center,
+            radius,
+            &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::DstOut),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("PD2 DstOut Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Assertion 1: interior pixel is near-transparent (DstOut erases backdrop).
+        // Center pixel must have alpha close to 0. Under SrcOver it would be 255.
+        let interior_idx = cy as usize * SURFACE_WIDTH as usize + cx as usize;
+        let interior_alpha = pixels[interior_idx][3];
+        assert!(
+            interior_alpha < 30,
+            "PD2 FAILED: interior alpha={interior_alpha}, expected near-0 (DstOut erases \
+             the opaque green backdrop). SrcOver or wrong pipeline would give alpha=255."
+        );
+
+        // Assertion 2: boundary pixels show partial alpha — SSAA ran.
+        // Pixels near the circle edge (dist ∈ [radius-2, radius+2]) that have
+        // partial alpha can ONLY exist if SSAA resolved sub-pixel coverage.
+        let mut boundary_partial = 0usize;
+        for row in 0..SURFACE_HEIGHT {
+            for col in 0..SURFACE_WIDTH {
+                let dx = col as f32 + 0.5 - (cx + 0.5);
+                let dy = row as f32 + 0.5 - (cy + 0.5);
+                let dist = (dx * dx + dy * dy).sqrt();
+                if (radius - 2.0..=radius + 2.0).contains(&dist) {
+                    let alpha = pixels[row as usize * SURFACE_WIDTH as usize + col as usize][3];
+                    // DstOut boundary: alpha = 1 − a_tile, so partial when a_tile ∈ (0,1).
+                    // Strictly between 10 and 245 to exclude hard 0/255 edges.
+                    if alpha > 10 && alpha < 245 {
+                        boundary_partial += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            boundary_partial >= 4,
+            "PD2 FAILED: only {boundary_partial} partial-alpha boundary pixels — SSAA \
+             must produce sub-pixel coverage at the circle boundary when DstOut is active."
+        );
+    }
+
+    // ── PD6: per-mode composite is the REQUESTED blend, not SrcOver ──────────
+
+    /// PD6: For several tile-safe non-SrcOver modes, compositing the SSAA tile
+    /// over an OPAQUE backdrop must match `Color::blend(src, backdrop, mode)` —
+    /// NOT SrcOver. This pins the per-mode composite pipeline selection
+    /// (`flush_texture_batch_premultiplied_with_mode` → `blend_state_for(mode)`),
+    /// which PD1/PD3/PD4 (Xor-on-transparent) cannot detect because Xor and
+    /// SrcOver are pixel-identical over a transparent dst. PD2 covers DstOut;
+    /// this covers Dst/DstOver/Xor over an opaque dst where each differs from
+    /// SrcOver. Together they pixel-verify the per-mode composite for 4 of the 6
+    /// non-SrcOver tile-safe modes; the dispatch is uniform (keyed by `mode`), so
+    /// the remaining two share the verified code path.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index arithmetic over a small fixed-size test surface"
+    )]
+    fn pd6_tile_safe_composite_matches_requested_blend_not_srcover() {
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let radius = 40.0_f32;
+        let backdrop = Color::rgba(220, 30, 30, 255); // opaque red
+        let src = Color::rgba(40, 90, 230, 255); // opaque blue (distinct channels)
+
+        for mode in [BlendMode::Dst, BlendMode::DstOver, BlendMode::Xor] {
+            let expected = src.blend(backdrop, mode);
+            let srcover = src.blend(backdrop, BlendMode::SrcOver);
+            // Teeth: the chosen setup must make this mode pixel-distinct from
+            // SrcOver, else a wrong (SrcOver) pipeline would pass.
+            assert_ne!(
+                (expected.r, expected.g, expected.b, expected.a),
+                (srcover.r, srcover.g, srcover.b, srcover.a),
+                "PD6 setup error: {mode:?} is not distinct from SrcOver on this backdrop"
+            );
+
+            let (device, queue) = acquire_test_device_and_queue();
+            let (surface_texture, surface_view) = create_render_surface(&device);
+            clear_surface(&device, &queue, &surface_view);
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+            painter.rect(
+                Rect::from_xywh(
+                    px(0.0),
+                    px(0.0),
+                    px(SURFACE_WIDTH as f32),
+                    px(SURFACE_HEIGHT as f32),
+                ),
+                &Paint::fill(backdrop),
+            );
+            painter.circle(
+                flui_types::Point::new(px(cx + 0.5), px(cy + 0.5)),
+                radius,
+                &Paint::fill(src).with_blend_mode(mode),
+            );
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("PD6 Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&surface_view, &surface_texture),
+                    &mut encoder,
+                )
+                .expect("render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+            let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+            let interior = pixels[cy as usize * SURFACE_WIDTH as usize + cx as usize];
+            let tol = 8i16;
+            let near = |a: u8, b: u8| (i16::from(a) - i16::from(b)).abs() <= tol;
+            assert!(
+                near(interior[0], expected.r)
+                    && near(interior[1], expected.g)
+                    && near(interior[2], expected.b)
+                    && near(interior[3], expected.a),
+                "PD6 {mode:?}: interior {interior:?} != Color::blend oracle \
+                 [{},{},{},{}] (SrcOver would be [{},{},{},{}]) — the per-mode composite \
+                 selected the wrong blend pipeline",
+                expected.r,
+                expected.g,
+                expected.b,
+                expected.a,
+                srcover.r,
+                srcover.g,
+                srcover.b,
+                srcover.a,
+            );
+        }
+    }
+
+    // ── PD4: anti-MVP — all non-SrcOver shape producers emit partial alpha ────
+
+    /// PD4: Every non-SrcOver shape producer (rect, rrect, circle, oval, arc)
+    /// with a tile-safe blend mode on a large-enough geometry must emit at least
+    /// one partial-alpha boundary pixel — proving no producer is permanently
+    /// hard-aliased after PR-4.
+    ///
+    /// ## Anti-MVP rationale
+    ///
+    /// PD1 (path) and PD3 (rrect) cover only two shape types.  If the SSAA
+    /// routing in `DrawBatcher` is broken for one specific shape type
+    /// (e.g. the `rect` non-SrcOver branch falls through to tessellated), that
+    /// producer would silently regress to aliased output.  PD4 closes this gap by
+    /// requiring partial-alpha evidence from EVERY shape category.
+    ///
+    /// ## Shape placement
+    ///
+    /// All shapes are placed at fractional pixel offsets (e.g. center x = cx+0.3)
+    /// to ensure at least one edge is not pixel-grid-aligned.  A pixel-aligned
+    /// axis-aligned edge can produce zero partial-alpha pixels even with correct
+    /// SSAA (coverage is exactly 0 or 1 for grid-aligned edges); the fractional
+    /// offset guarantees a non-trivial SSAA result on every boundary.
+    ///
+    /// ## Blend mode
+    ///
+    /// `Xor` on a transparent destination: pixel-output-identical to SrcOver
+    /// (both give `src`), so this test validates SSAA routing fires without
+    /// requiring the per-mode composite pipeline (same rationale as PD1/PD3).
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index arithmetic over a small fixed-size test surface"
+    )]
+    fn pd4_all_non_srcover_shape_producers_emit_partial_alpha() {
+        // Helper: render `draw_fn` onto a fresh clear surface and count
+        // partial-alpha pixels (3 < alpha < 252).
+        let count_partial = |draw_fn: &dyn Fn(&mut WgpuPainter)| -> usize {
+            let (device, queue) = acquire_test_device_and_queue();
+            let (surface_texture, surface_view) = create_render_surface(&device);
+            clear_surface(&device, &queue, &surface_view);
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            draw_fn(&mut painter);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("PD4 Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&surface_view, &surface_texture),
+                    &mut encoder,
+                )
+                .expect("PD4 render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+            let pixels = readback_pixels(&device, &queue, &surface_texture);
+            pixels.iter().filter(|p| p[3] > 3 && p[3] < 252).count()
+        };
+
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        // Fractional offset ensures no edge lands exactly on a pixel grid line.
+        let off = 0.3_f32;
+        let xor_paint = Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor);
+
+        // ── Rect: 60×60 at fractional offset, Xor blend ──────────────────────
+        // Non-SrcOver rect falls into the tessellate+SSAA branch when
+        // `is_tile_safe_for_ssaa(Xor) = true` and area ≥ 256 px².
+        // 60×60 = 3600 >> 256.  Fractional offset forces non-aligned top/left edge.
+        {
+            let partial = count_partial(&|p: &mut WgpuPainter| {
+                p.rect(
+                    Rect::from_xywh(px(cx - 30.0 + off), px(cy - 30.0 + off), px(60.0), px(60.0)),
+                    &xor_paint,
+                );
+            });
+            assert!(
+                partial >= 1,
+                "PD4/rect FAILED: {partial} partial-alpha pixels — non-SrcOver rect \
+                 appears hard-aliased; expected SSAA routing to fire for Xor mode."
+            );
+        }
+
+        // ── RRect: 60×60 with 12px corner radius, Xor, fractional offset ─────
+        {
+            let partial = count_partial(&|p: &mut WgpuPainter| {
+                let r = RRect::from_rect_circular(
+                    Rect::from_xywh(px(cx - 30.0 + off), px(cy - 30.0 + off), px(60.0), px(60.0)),
+                    px(12.0),
+                );
+                p.rrect(r, &xor_paint);
+            });
+            assert!(
+                partial >= 4,
+                "PD4/rrect FAILED: {partial} partial-alpha pixels — non-SrcOver rrect \
+                 appears hard-aliased; curved corners must produce sub-pixel AA via SSAA."
+            );
+        }
+
+        // ── Circle: radius 40, Xor, fractional center ────────────────────────
+        // Diameter 80 → area = 80² = 6400 >> 256.
+        {
+            let partial = count_partial(&|p: &mut WgpuPainter| {
+                p.circle(
+                    flui_types::Point::new(px(cx + off), px(cy + off)),
+                    40.0,
+                    &xor_paint,
+                );
+            });
+            assert!(
+                partial >= 4,
+                "PD4/circle FAILED: {partial} partial-alpha pixels — non-SrcOver circle \
+                 appears hard-aliased; curved boundary must produce sub-pixel AA via SSAA."
+            );
+        }
+
+        // ── Oval: 80×60 at fractional offset, Xor ─────────────────────────────
+        // Area = 80×60 = 4800 >> 256.
+        {
+            let partial = count_partial(&|p: &mut WgpuPainter| {
+                p.oval(
+                    Rect::from_xywh(px(cx - 40.0 + off), px(cy - 30.0 + off), px(80.0), px(60.0)),
+                    &xor_paint,
+                );
+            });
+            assert!(
+                partial >= 4,
+                "PD4/oval FAILED: {partial} partial-alpha pixels — non-SrcOver oval \
+                 appears hard-aliased; curved ellipse boundary must produce sub-pixel AA via SSAA."
+            );
+        }
+
+        // ── Arc: 80px bounding box, 90° sweep at 45° start, Xor ─────────────
+        // Starting at 45° so both angular edges are diagonal (non-axis-aligned),
+        // guaranteeing partial-alpha pixels from the angular AA boundary.
+        // Bounding-box area = 80×80 = 6400 >> 256.
+        {
+            let partial = count_partial(&|p: &mut WgpuPainter| {
+                use std::f32::consts::FRAC_PI_4;
+                // use_center=true → pie sector; sweep 90° → two diagonal edges.
+                let arc_rect =
+                    Rect::from_xywh(px(cx - 40.0 + off), px(cy - 40.0 + off), px(80.0), px(80.0));
+                p.draw_arc(
+                    arc_rect,
+                    FRAC_PI_4,
+                    std::f32::consts::FRAC_PI_2,
+                    true,
+                    &xor_paint,
+                );
+            });
+            assert!(
+                partial >= 4,
+                "PD4/arc FAILED: {partial} partial-alpha pixels — non-SrcOver arc \
+                 appears hard-aliased; the diagonal radial/angular edges must produce \
+                 sub-pixel AA via SSAA."
+            );
+        }
+    }
+
+    // ── PD6: Xor over opaque backdrop — pipeline is NOT SrcOver ─────────────
+
+    /// PD6: `Xor` composited over an **opaque red backdrop** must produce
+    /// near-transparent interior pixels — NOT white as SrcOver would give.
+    ///
+    /// ## Why this test is necessary (gap in PD1 / PD3 / PD4)
+    ///
+    /// PD1, PD3, and the Xor sub-cases in PD4 all use `BlendMode::Xor` on a
+    /// **cleared (transparent)** destination.  On a transparent dst, Xor and
+    /// SrcOver produce identical pixel output:
+    ///
+    ///   Xor:    out = src×(1−dst_a) + dst×(1−src_a)
+    ///           at dst_a=0: out = src×1 + 0×(1−src_a) = src
+    ///   SrcOver: out = src + dst×(1−src_a) = src + 0 = src
+    ///
+    /// Those tests verify that SSAA routing fires, but they cannot detect if
+    /// the composite step incorrectly dispatches to the SrcOver pipeline instead
+    /// of the Xor pipeline.  PD6 forces an opaque backdrop so the two pipelines
+    /// diverge sharply:
+    ///
+    /// ## Expected pixel values
+    ///
+    /// Setup:
+    ///   - Background: opaque red `(255, 0, 0, 255)` painted with SrcOver.
+    ///   - Foreground: large white circle (r=40) with `Xor` blend.
+    ///
+    /// Xor formula at interior pixel (src = white premul = (1,1,1,1),
+    ///                                dst = red premul   = (1,0,0,1)):
+    ///
+    ///   src_factor = OneMinusDstAlpha = 1 − dst_a = 1 − 1 = 0
+    ///   dst_factor = OneMinusSrcAlpha = 1 − src_a = 1 − 1 = 0
+    ///
+    ///   out.rgb   = (1,1,1)×0 + (1,0,0)×0 = (0,0,0)
+    ///   out.alpha = 1×0        + 1×0       = 0          → transparent
+    ///
+    /// Under SrcOver the same pixel would be opaque white (255, 255, 255, 255).
+    /// This test asserts interior alpha < 30, which is impossible under SrcOver.
+    ///
+    /// ## Partial-alpha proof at the boundary
+    ///
+    /// At the circle boundary the SSAA tile has partial alpha `a_tile ∈ (0,1)`.
+    /// Xor composite:
+    ///   out.alpha = a_tile×(1−dst_a) + dst_a×(1−a_tile)
+    ///             = a_tile×0          + 1×(1−a_tile)
+    ///             = 1 − a_tile  ∈ (0, 1)   → partial alpha
+    ///
+    /// These partial-alpha boundary pixels also confirm SSAA ran.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index arithmetic over a small fixed-size test surface"
+    )]
+    fn pd6_xor_over_opaque_red_backdrop_is_not_srcover() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let radius = 40.0_f32;
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+        // Step 1: fill the entire surface with opaque red using SrcOver.
+        let full_rect = Rect::from_xywh(
+            px(0.0),
+            px(0.0),
+            px(SURFACE_WIDTH as f32),
+            px(SURFACE_HEIGHT as f32),
+        );
+        painter.rect(full_rect, &Paint::fill(Color::rgba(255, 0, 0, 255)));
+
+        // Step 2: draw a white circle (r=40, area >> SSAA threshold) with Xor blend.
+        // The circle is placed at a fractional offset to ensure non-axis-aligned
+        // edges, producing genuine partial-alpha pixels from the SSAA downsample.
+        painter.circle(
+            flui_types::Point::new(px(cx + 0.5), px(cy + 0.5)),
+            radius,
+            &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("PD6 Xor over Red Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Assertion 1: interior pixel is near-transparent (Xor zeros both src
+        // and dst when src_a=1 and dst_a=1). SrcOver would give alpha=255 (white).
+        let interior_idx = cy as usize * SURFACE_WIDTH as usize + cx as usize;
+        let interior_alpha = pixels[interior_idx][3];
+        assert!(
+            interior_alpha < 30,
+            "PD6 FAILED: interior alpha={interior_alpha}, expected near-0. \
+             Xor over an opaque backdrop zeros the output when both src_a=1 and \
+             dst_a=1.  SrcOver would produce alpha=255 (white).  If this fails, \
+             the SSAA composite step used the SrcOver pipeline instead of the Xor \
+             pipeline (flush_texture_batch_premultiplied_with_mode was not called \
+             with BlendMode::Xor, or is_tile_safe_for_ssaa incorrectly excluded Xor)."
+        );
+
+        // Assertion 2: exterior is still opaque red (Xor only touches the circle area).
+        // A point well outside the circle (2 px beyond the radius) must retain red.
+        let ext_col = (cx + radius + 2.0 + 0.5).min(SURFACE_WIDTH as f32 - 1.0) as usize;
+        let ext_row = cy as usize;
+        let ext_idx = ext_row * SURFACE_WIDTH as usize + ext_col;
+        assert!(
+            pixels[ext_idx][3] > 200,
+            "PD6: exterior pixel (outside circle) must remain opaque red; \
+             got alpha={} — Xor should not touch pixels outside the SSAA tile",
+            pixels[ext_idx][3]
+        );
+
+        // Assertion 3: boundary band shows partial alpha, proving SSAA ran.
+        // At dist ≈ radius, the SSAA tile has 0 < a_tile < 1, so
+        // Xor gives out.alpha = 1 − a_tile ∈ (0,1) — partial alpha.
+        let mut boundary_partial = 0usize;
+        for row in 0..SURFACE_HEIGHT {
+            for col in 0..SURFACE_WIDTH {
+                let dx = col as f32 + 0.5 - (cx + 0.5);
+                let dy = row as f32 + 0.5 - (cy + 0.5);
+                let dist = (dx * dx + dy * dy).sqrt();
+                if (radius - 2.0..=radius + 2.0).contains(&dist) {
+                    let alpha = pixels[row as usize * SURFACE_WIDTH as usize + col as usize][3];
+                    // 1−a_tile ∈ (10/255, 245/255) iff a_tile ∈ (10/255, 245/255).
+                    if alpha > 10 && alpha < 245 {
+                        boundary_partial += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            boundary_partial >= 4,
+            "PD6 FAILED: only {boundary_partial} partial-alpha boundary pixels — \
+             SSAA must produce sub-pixel coverage at the Xor circle boundary. \
+             This also confirms the Xor blend pipeline was used at composite time."
+        );
+    }
+
+    // ── PD5: Phase-B regression — SrcOver path still AA'd after PR-4 ─────────
+
+    /// PD5: A SrcOver arbitrary path fill must still produce partial alpha at
+    /// its boundary after PR-4 changes (regression guard: PR-4 must not break
+    /// the PR-3 SrcOver SSAA path).
+    ///
+    /// This is a Phase-B regression guard (the naming in the spec doc). It is
+    /// structurally equivalent to p4_anti_mvp_srcover_fill_has_partial_alpha_at_boundary
+    /// but documents its role as a regression gate specifically for PR-4.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index arithmetic over a small fixed-size test surface"
+    )]
+    fn pd5_srcover_path_still_has_partial_alpha_after_pr4() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Same kite as p4 — SrcOver, just verifying it still routes through SSAA.
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let v = [
+            (cx + 1.3, cy - 38.7),
+            (cx + 42.2, cy + 5.5),
+            (cx - 2.7, cy + 33.1),
+            (cx - 38.4, cy - 9.2),
+        ];
+        let mut path = flui_types::painting::path::Path::new();
+        path.move_to(flui_types::Point::new(Pixels(v[0].0), Pixels(v[0].1)));
+        for &(x, y) in &v[1..] {
+            path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+        }
+        path.close();
+
+        let paint = Paint::fill(Color::WHITE); // SrcOver default
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.draw_path(&path, &paint);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("PD5 SrcOver Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        let partial_count = pixels.iter().filter(|p| p[3] > 5 && p[3] < 250).count();
+
+        assert!(
+            partial_count >= 4,
+            "PD5 FAILED: only {partial_count} partial-alpha pixels — the SrcOver SSAA path \
+             (PR-3) appears broken after PR-4 changes. The PR-4 routing must not regress \
+             the SrcOver SSAA path."
+        );
+
+        // Shape must be actually rendered (interior opaque).
+        let interior_col = cx as usize;
+        let interior_row = cy as usize;
+        let interior_idx = interior_row * SURFACE_WIDTH as usize + interior_col;
+        assert!(
+            pixels[interior_idx][3] > 200,
+            "PD5: shape interior must be opaque after PR-4; got alpha={}",
+            pixels[interior_idx][3]
         );
     }
 }

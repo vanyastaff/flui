@@ -427,13 +427,19 @@ impl GpuReplay {
                         );
                     }
                 }
-                // ── SSAA-supersampled arbitrary path — PR-3 ────────────────
+                // ── SSAA-supersampled path — PR-3 (SrcOver) / PR-4 (all modes) ──
                 //
                 // Z-correctness: all prior draw_order items have been flushed
                 // before this arm executes (loop order), so the SSAA tile
-                // composites on top of prior content — correct SrcOver stacking.
+                // composites on top of prior content — correct stacking for all
+                // blend modes.
                 //
-                // Surface stays sample_count=1; the 2× size is a normal texture.
+                // Surface stays sample_count=1; the 2× texture is a normal texture.
+                //
+                // Advanced-blend composite (PR-4): `target.texture` is the sampleable
+                // surface required by flush_advanced_layer for the backdrop copy.
+                // View-only targets pass `None` → advanced falls back to SrcOver
+                // (same fallback as AdvancedShape; warns once in that case).
                 DrawItem::SsaaPath(mut op) => {
                     self.render_ssaa_path(
                         &mut op,
@@ -445,8 +451,10 @@ impl GpuReplay {
                         resources,
                         encoder,
                         target.view,
+                        target.texture,
                     );
                     tracing::trace!(
+                        mode = ?op.blend,
                         bounds = ?op.device_bounds,
                         "GpuReplay: SSAA path tile composited"
                     );
@@ -1360,6 +1368,112 @@ impl GpuReplay {
         } else {
             &pipelines.instanced_texture
         };
+        render_pass.set_pipeline(pipeline);
+        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        render_pass.set_bind_group(1, &texture_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+        render_pass.set_index_buffer(
+            self.unit_quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+
+        let (full_w, full_h) = viewport_size;
+        if let Some((x, y, w, h)) = scissor {
+            render_pass.set_scissor_rect(x, y, w, h);
+        } else {
+            render_pass.set_scissor_rect(0, 0, full_w, full_h);
+        }
+
+        render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
+        drop(render_pass);
+        self.texture_batch.clear();
+    }
+
+    /// Flush the texture instance batch with the **exact blend mode** specified.
+    ///
+    /// Unlike [`Self::flush_texture_batch_premultiplied`] (which always uses the
+    /// SrcOver premultiplied pipeline), this method uses
+    /// [`PipelineSet::ensure_ssaa_tile_composite`] /
+    /// [`PipelineSet::ssaa_tile_composite_for`] to obtain a pipeline whose
+    /// `wgpu::BlendState` matches `mode` exactly.
+    ///
+    /// Used by [`Self::render_ssaa_path`] to composite the
+    /// SSAA 1× tile with the correct blend mode. The source texel is
+    /// premultiplied (box-downsample output), so `src_factor = One` is correct
+    /// for all tile-safe variants.
+    ///
+    /// Takes `pipelines: &mut PipelineSet` because lazy pipeline creation may
+    /// be needed on the first call for a given mode.
+    pub(in crate::wgpu) fn flush_texture_batch_premultiplied_with_mode(
+        &mut self,
+        mode: flui_types::painting::BlendMode,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        viewport_size: (u32, u32),
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        texture_view: &wgpu::TextureView,
+        scissor: ScissorRect,
+    ) {
+        if self.texture_batch.is_empty() {
+            return;
+        }
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            ?mode,
+            "GpuReplay::flush_texture_batch_premultiplied_with_mode: {} instances",
+            self.texture_batch.len()
+        );
+
+        // Ensure the per-mode pipeline is in the cache. The `&mut` borrow of
+        // `pipelines` ends at the semicolon; subsequent accesses are `&`.
+        pipelines.ensure_ssaa_tile_composite(device, mode);
+
+        // Both of these are now `&pipelines` (shared) borrows — no conflict.
+        let pipeline = pipelines.ssaa_tile_composite_for(mode);
+        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SSAA Tile Composite Bind Group"),
+            layout: &pipelines.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.default_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture_view),
+                },
+            ],
+        });
+
+        let instance_buffer = resources.buffer_pool_mut().get_vertex_buffer(
+            device,
+            queue,
+            "SSAA Tile Composite Instance Buffer",
+            self.texture_batch.as_bytes(),
+        );
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSAA Tile Composite Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
         render_pass.set_pipeline(pipeline);
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         render_pass.set_bind_group(1, &texture_bind_group, &[]);

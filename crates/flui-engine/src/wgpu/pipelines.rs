@@ -53,8 +53,14 @@
 //! `&self.gradient_bind_group_layout`. The pattern mirrors
 //! [`super::resources::GpuResources`].
 
+use std::collections::HashMap;
+
+use flui_types::painting::BlendMode;
+
 use super::{
-    advanced_blend::AdvancedBlendPipeline, pipeline::PipelineCache, ssaa::SsaaDownsamplePipeline,
+    advanced_blend::AdvancedBlendPipeline,
+    pipeline::{PipelineCache, blend_state_for},
+    ssaa::SsaaDownsamplePipeline,
 };
 
 /// Device-scoped collection of all `wgpu::RenderPipeline`s used by [`super::painter::WgpuPainter`].
@@ -160,6 +166,28 @@ pub(crate) struct PipelineSet {
     /// Used by `GpuReplay::render_ssaa_path` to box-average a 2× supersampled
     /// offscreen tile into a premultiplied 1× tile before compositing.
     pub(crate) ssaa_downsample: SsaaDownsamplePipeline,
+
+    // ── SSAA tile composite pipeline cache ───────────────────────────────────
+    //
+    // Holds per-blend-mode premultiplied texture composite pipelines used by
+    // `GpuReplay::render_ssaa_path` when the SSAA tile must be composited with
+    // a tile-safe non-SrcOver mode (e.g. Plus, DstOver, Xor, DstOut).
+    //
+    // SrcOver uses `instanced_texture_premul` (pre-baked); other tile-safe
+    // modes are created on first use and cached here.  Only 6 variants exist.
+    /// Shared layout for the SSAA tile composite pipelines.
+    ///
+    /// Stored at construction so that on-demand pipeline creation in
+    /// [`Self::ensure_ssaa_tile_composite`] does not need to recreate it.
+    ssaa_tile_composite_layout: wgpu::PipelineLayout,
+
+    /// Surface format stored for on-demand composite pipeline creation.
+    ssaa_tile_surface_format: wgpu::TextureFormat,
+
+    /// Cache of premultiplied SSAA tile composite pipelines keyed by blend mode.
+    ///
+    /// Populated lazily on the first encounter of each tile-safe non-SrcOver mode.
+    ssaa_tile_composite_cache: HashMap<BlendMode, wgpu::RenderPipeline>,
 }
 
 impl PipelineSet {
@@ -255,6 +283,21 @@ impl PipelineSet {
         let advanced_blend = AdvancedBlendPipeline::new(device, surface_format);
         let ssaa_downsample = SsaaDownsamplePipeline::new(device, surface_format);
 
+        // ── SSAA tile composite: shared layout + lazy pipeline cache ──────────
+        //
+        // The layout is identical to `texture_pipeline_layout` (same bind groups),
+        // but we store it separately so we can create new per-blend-mode pipelines
+        // later without holding the temporary `texture_pipeline_layout` borrow.
+        let ssaa_tile_composite_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("SSAA Tile Composite Pipeline Layout"),
+                bind_group_layouts: &[
+                    Some(shape_cache.viewport_bind_group_layout()),
+                    Some(&texture_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
+
         Self {
             shape_cache,
             instanced_rect,
@@ -272,6 +315,9 @@ impl PipelineSet {
             gradient_bind_group: None,
             advanced_blend,
             ssaa_downsample,
+            ssaa_tile_composite_layout,
+            ssaa_tile_surface_format: surface_format,
+            ssaa_tile_composite_cache: HashMap::new(),
         }
     }
 
@@ -323,6 +369,76 @@ impl PipelineSet {
                 resource: self.gradient_stops_buffer.as_entire_binding(),
             }],
         }));
+    }
+
+    // ── SSAA tile composite pipeline cache ────────────────────────────────────
+
+    /// Ensure the premultiplied composite pipeline for `mode` is in the cache.
+    ///
+    /// For `SrcOver`, this is a no-op: the pre-baked `instanced_texture_premul`
+    /// is always available.  For other tile-safe modes the pipeline is created
+    /// on first call and stored in `ssaa_tile_composite_cache`.
+    ///
+    /// This is intentionally separate from [`Self::ssaa_tile_composite_for`] so
+    /// that callers can split the `&mut self` (creation) and `&self` (lookup)
+    /// borrows at a statement boundary, avoiding a borrow-checker conflict when
+    /// `flush_texture_batch_premultiplied_with_mode` also needs `&self` fields
+    /// such as `texture_bind_group_layout` in the same expression.
+    ///
+    /// # Panics (debug)
+    ///
+    /// Debug-panics if `mode` is not tile-safe. Coverage-destructive and advanced
+    /// modes must never reach the SSAA tile composite path.
+    pub(crate) fn ensure_ssaa_tile_composite(&mut self, device: &wgpu::Device, mode: BlendMode) {
+        debug_assert!(
+            super::pipeline::is_tile_safe_for_ssaa(mode),
+            "ensure_ssaa_tile_composite called for non-tile-safe mode {mode:?}; \
+             advanced modes must use flush_advanced_layer, coverage-destructive \
+             modes must stay on the tessellated path",
+        );
+
+        if mode == BlendMode::SrcOver {
+            // SrcOver is served by the pre-baked `instanced_texture_premul`;
+            // no cache entry is needed.
+            return;
+        }
+
+        // `HashMap::entry` does a single lookup on both miss and hit paths.
+        self.ssaa_tile_composite_cache
+            .entry(mode)
+            .or_insert_with(|| {
+                let blend_state = blend_state_for(mode);
+                create_instanced_texture_with_blend_state(
+                    device,
+                    self.ssaa_tile_surface_format,
+                    &self.ssaa_tile_composite_layout,
+                    blend_state,
+                )
+            });
+    }
+
+    /// Return the premultiplied composite pipeline for `mode`.
+    ///
+    /// For `SrcOver`, returns `instanced_texture_premul` directly. For other
+    /// modes, returns the pipeline previously inserted by
+    /// [`Self::ensure_ssaa_tile_composite`].
+    ///
+    /// # Panics (debug)
+    ///
+    /// Debug-panics if `mode` is not `SrcOver` and the cache entry is missing.
+    /// Call `ensure_ssaa_tile_composite` before calling this method.
+    pub(crate) fn ssaa_tile_composite_for(&self, mode: BlendMode) -> &wgpu::RenderPipeline {
+        if mode == BlendMode::SrcOver {
+            return &self.instanced_texture_premul;
+        }
+        self.ssaa_tile_composite_cache
+            .get(&mode)
+            .unwrap_or_else(|| {
+                panic!(
+                    "ssaa_tile_composite_for: no cached pipeline for {mode:?}; \
+                 call ensure_ssaa_tile_composite first"
+                )
+            })
     }
 }
 
@@ -603,6 +719,58 @@ fn create_instanced_texture_premul_pipeline(
                 // premultiplied-alpha texel correctly. This is the defining
                 // distinction from `create_instanced_texture_pipeline`.
                 blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: instanced_quad_primitive_state(),
+        depth_stencil: None,
+        multisample: single_sample_multisample_state(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Creates a premultiplied-source texture composite pipeline with an arbitrary
+/// `blend_state`.
+///
+/// Used by [`PipelineSet::ensure_ssaa_tile_composite`] to build
+/// per-blend-mode variants for SSAA 1× tile compositing.  The SSAA tile is
+/// always premultiplied (box-downsample averages premultiplied values), so the
+/// shader is the same as `TEXTURE_INSTANCED`; only the wgpu `blend_state`
+/// changes.
+///
+/// `blend_state` must be appropriate for premultiplied source — callers should
+/// derive it from [`super::pipeline::blend_state_for`] using the desired
+/// [`flui_types::painting::BlendMode`].
+fn create_instanced_texture_with_blend_state(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    layout: &wgpu::PipelineLayout,
+    blend_state: wgpu::BlendState,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("SSAA Tile Composite Shader"),
+        source: wgpu::ShaderSource::Wgsl(super::shaders::TEXTURE_INSTANCED.into()),
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("SSAA Tile Composite Pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[
+                unit_quad_vertex_buffer_layout(),
+                super::instancing::TextureInstance::desc(),
+            ],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend_state),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
