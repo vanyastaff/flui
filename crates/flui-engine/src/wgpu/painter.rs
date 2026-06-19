@@ -341,6 +341,11 @@ impl WgpuPainter {
             .drain(..)
             .filter_map(|item| match item {
                 DrawItem::Segment(seg) => Some(seg),
+                // SsaaPath carries the path's tessellated DrawSegment internally;
+                // surface it so the T11 deterministic-replay drain covers path
+                // geometry too (rather than silently omitting it if a future test
+                // scene adds a SrcOver arbitrary-path fill).
+                DrawItem::SsaaPath(op) => Some(op.segment),
                 DrawItem::OffscreenTexture(_)
                 | DrawItem::OpacityLayer(_)
                 | DrawItem::AdvancedShape(_) => None,

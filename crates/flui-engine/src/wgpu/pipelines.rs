@@ -53,7 +53,9 @@
 //! `&self.gradient_bind_group_layout`. The pattern mirrors
 //! [`super::resources::GpuResources`].
 
-use super::{advanced_blend::AdvancedBlendPipeline, pipeline::PipelineCache};
+use super::{
+    advanced_blend::AdvancedBlendPipeline, pipeline::PipelineCache, ssaa::SsaaDownsamplePipeline,
+};
 
 /// Device-scoped collection of all `wgpu::RenderPipeline`s used by [`super::painter::WgpuPainter`].
 ///
@@ -151,6 +153,13 @@ pub(crate) struct PipelineSet {
     /// Format-matched to `surface_format` at construction time; shared across
     /// every `flush_advanced_layer` call for this painter.
     pub(crate) advanced_blend: AdvancedBlendPipeline,
+
+    // ── SSAA box-downsample pipeline ─────────────────────────────────────────
+    /// 2×→1× box-filter downsample pipeline for SSAA path anti-aliasing.
+    ///
+    /// Used by `GpuReplay::render_ssaa_path` to box-average a 2× supersampled
+    /// offscreen tile into a premultiplied 1× tile before compositing.
+    pub(crate) ssaa_downsample: SsaaDownsamplePipeline,
 }
 
 impl PipelineSet {
@@ -244,6 +253,7 @@ impl PipelineSet {
         );
 
         let advanced_blend = AdvancedBlendPipeline::new(device, surface_format);
+        let ssaa_downsample = SsaaDownsamplePipeline::new(device, surface_format);
 
         Self {
             shape_cache,
@@ -261,6 +271,7 @@ impl PipelineSet {
             gradient_stops_buffer,
             gradient_bind_group: None,
             advanced_blend,
+            ssaa_downsample,
         }
     }
 

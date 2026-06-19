@@ -282,10 +282,50 @@ pub(crate) struct AdvancedShapeOp {
     pub(crate) device_bounds: Rect<Pixels>,
 }
 
+// ─── SSAA-path op ────────────────────────────────────────────────────────────
+
+/// A single arbitrary-path fill (SrcOver) routed to the SSAA offscreen tile
+/// for anti-aliased compositing.
+///
+/// Created by `DrawBatcher::draw_path` (in `batches/paths.rs`) when an
+/// arbitrary path fill with SrcOver blend is recorded.  Instead of batching the
+/// tessellated geometry directly into the main `DrawSegment` (which renders
+/// aliased at `sample_count=1`), the geometry is isolated here and rendered at
+/// replay time into a 2× supersampled pooled offscreen, box-downsampled to a
+/// premultiplied 1× tile, and composited via the existing premultiplied texture
+/// path — giving smooth ~1-device-px AA on every edge.
+///
+/// ## Scope
+///
+/// Only arbitrary SrcOver path **fills** take this path.  Closed-form shapes
+/// (rect/rrect/circle/oval/arc) are rerouted to the instanced affine-SDF path
+/// (PR-1/PR-2/PR-2b) and must **not** reach this variant.  Non-SrcOver paths
+/// stay on the tessellated path (PR-4 will handle them).
+///
+/// ## T11 purity contract
+///
+/// `SsaaPathOp` derives `Clone` — it is handle-free (no `wgpu::*` fields),
+/// matching the [`AdvancedShapeOp`] invariant.  The embedded [`DrawSegment`]
+/// carries only CPU data.  All GPU work happens at replay time in
+/// `GpuReplay::submit`.
+#[derive(Clone)]
+pub(crate) struct SsaaPathOp {
+    /// Tessellated geometry for this path (vertices already baked to device
+    /// space; indices relative to a fresh segment starting at base 0).
+    pub(crate) segment: DrawSegment,
+    /// Device-space AABB of the path's coverage in device pixels.
+    ///
+    /// Used to size the SSAA tile: `ceil(device_bounds.width) × ceil(device_bounds.height)`,
+    /// clamped to `[1, viewport]`.  Computed as the AABB of
+    /// `segment.vertices[*].position` at record time.
+    pub(crate) device_bounds: Rect<Pixels>,
+}
+
 // ─── Draw item (top-level ordering enum) ─────────────────────────────────────
 
 /// An item in the draw order list: either a segment of batched commands,
-/// an offscreen texture to composite, an opacity layer, or an advanced shape.
+/// an offscreen texture to composite, an opacity layer, or an advanced shape,
+/// or an SSAA-supersampled path tile.
 // `PendingOffscreenTexture` (via `OffscreenTexture` variant) is not `Debug`
 // because `PooledTexture` wraps a `wgpu::Texture`.
 #[allow(missing_debug_implementations)]
@@ -303,6 +343,14 @@ pub(crate) enum DrawItem {
     /// `GpuReplay::submit` can render it to an offscreen foreground and call
     /// `flush_advanced_layer` for the backdrop-compositing pass.
     AdvancedShape(AdvancedShapeOp),
+    /// An arbitrary SrcOver path fill rendered via SSAA (2× supersample →
+    /// box-downsample → premultiplied tile composite).
+    ///
+    /// Isolated from the surrounding `DrawSegment` at record time so that
+    /// `GpuReplay::submit` can execute the 2× render + downsample + composite
+    /// sequence at replay time.  Z-order is the insertion position in
+    /// `draw_order` (R1 arm order).
+    SsaaPath(SsaaPathOp),
 }
 
 // ─── Opacity layer ────────────────────────────────────────────────────────────

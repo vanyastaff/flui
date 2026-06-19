@@ -2222,6 +2222,511 @@ mod gpu_tests {
         );
     }
 
+    // ── P1–P4: SSAA path anti-aliasing (PR-3) ────────────────────────────────
+
+    // ── CPU oracle helpers for polygon tests ─────────────────────────────────
+
+    /// Half-plane inside-test for a single edge from `a` to `b`.
+    ///
+    /// Returns `true` when `p` is on the left side (positive cross-product)
+    /// of the directed edge `a→b`.  Used by `inside_triangle` / `inside_polygon`.
+    fn half_plane_inside(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> bool {
+        (bx - ax) * (py - ay) - (by - ay) * (px - ax) >= 0.0
+    }
+
+    /// Analytic inside-test for a CW-oriented triangle (a, b, c) in device coords.
+    ///
+    /// Uses three half-plane tests.  The winding order must be consistent —
+    /// either all CCW or all CW — so that the signs agree.  The oracle
+    /// tests both orientations and accepts if either fires.
+    #[allow(clippy::too_many_arguments)]
+    fn inside_triangle(
+        px: f32,
+        py: f32,
+        ax: f32,
+        ay: f32,
+        bx: f32,
+        by: f32,
+        cx: f32,
+        cy: f32,
+    ) -> bool {
+        // Try CCW orientation.
+        let ccw = half_plane_inside(px, py, ax, ay, bx, by)
+            && half_plane_inside(px, py, bx, by, cx, cy)
+            && half_plane_inside(px, py, cx, cy, ax, ay);
+        // Try CW orientation (flip edge directions).
+        let cw = half_plane_inside(px, py, bx, by, ax, ay)
+            && half_plane_inside(px, py, cx, cy, bx, by)
+            && half_plane_inside(px, py, ax, ay, cx, cy);
+        ccw || cw
+    }
+
+    // ── P1: polygon fill boundary pixels have partial alpha (real SSAA AA) ────
+
+    /// P1: A SrcOver-filled triangle path must have partial-alpha pixels on its
+    /// boundary (analytic oracle says so) — proving SSAA produces real AA, not
+    /// binary hard-aliased output.
+    ///
+    /// ## Red→green proof
+    ///
+    /// Without the SSAA reroute, a tessellated triangle would be drawn with
+    /// `shape.wgsl` / `ALPHA_BLENDING` and no SDF distance field — producing
+    /// hard-aliased edges (every boundary pixel is either fully covered or not,
+    /// giving alpha ∈ {0, 255} at the edge).  With the SSAA reroute the
+    /// 2×-supersampled render resolves sub-pixel edge crossings and the boundary
+    /// band has partial alpha values.
+    ///
+    /// Test: render a ~70×50 triangle centered in the 128² surface.  The oracle
+    /// identifies boundary pixels (0 < coverage < 1).  After SSAA rendering all
+    /// of those pixels must carry partial alpha (> 5, < 250) — the strict
+    /// majority (>50%) guarantees the assertion cannot be vacuous.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn p1_ssaa_polygon_boundary_has_partial_alpha() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // A triangle off-axis so its edges are not pixel-row/column aligned.
+        // Device-space vertices (centered in the 128² surface, intentionally
+        // non-axis-aligned so every edge produces boundary pixels).
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        // Equilateral-ish triangle: apex top-center, base at bottom.
+        let ax = cx;
+        let ay = cy - 40.0;
+        let bx = cx + 35.0;
+        let by = cy + 25.0;
+        let dx = cx - 35.0;
+        let dy = cy + 25.0;
+
+        let mut path = flui_types::painting::path::Path::new();
+        path.move_to(flui_types::Point::new(Pixels(ax), Pixels(ay)));
+        path.line_to(flui_types::Point::new(Pixels(bx), Pixels(by)));
+        path.line_to(flui_types::Point::new(Pixels(dx), Pixels(dy)));
+        path.close();
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.draw_path(&path, &Paint::fill(Color::WHITE));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("P1 SSAA Triangle Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Oracle: boundary pixels of the triangle.
+        let boundary =
+            boundary_pixel_indices(|px, py| inside_triangle(px, py, ax, ay, bx, by, dx, dy));
+
+        assert!(
+            boundary.len() >= 8,
+            "P1: fewer than 8 triangle boundary pixels found ({}) — \
+             oracle or path construction is wrong",
+            boundary.len()
+        );
+
+        // Count how many boundary pixels have partial alpha (SSAA produces
+        // partial coverage; hard-aliased rendering would give only 0/255).
+        let partial_count = boundary
+            .iter()
+            .filter(|(idx, _)| {
+                let a = pixels[*idx][3];
+                a > 5 && a < 250
+            })
+            .count();
+
+        let boundary_count = boundary.len();
+        let min_partial = (boundary_count as f32 * 0.5).ceil() as usize;
+
+        assert!(
+            partial_count >= min_partial,
+            "P1 FAILED: only {partial_count}/{boundary_count} triangle boundary pixels have \
+             partial alpha (expected ≥{min_partial} for SSAA AA). \
+             Hard-aliased rendering would give 0 partial pixels — SSAA reroute may be a no-op."
+        );
+
+        // Interior sanity: the centroid must be fully opaque.
+        let centroid_x = ((ax + bx + dx) / 3.0) as usize;
+        let centroid_y = ((ay + by + dy) / 3.0) as usize;
+        let centroid_idx = centroid_y * SURFACE_WIDTH as usize + centroid_x;
+        assert!(
+            pixels[centroid_idx][3] > 200,
+            "P1: triangle centroid must be opaque (got alpha={}); \
+             the SSAA tile may not be composited correctly",
+            pixels[centroid_idx][3]
+        );
+    }
+
+    // ── P2: fill rule (NonZero solid / EvenOdd hollow) both AA'd ─────────────
+
+    /// P2: A star polygon drawn with NonZero fill (solid) vs EvenOdd fill (hollow
+    /// center) must both produce partial-alpha pixels on their boundaries, proving
+    /// the SSAA reroute works for both fill rules.
+    ///
+    /// Additionally, the center of the star is sampled to discriminate fill rules:
+    /// - NonZero: center must be opaque (filled in by the non-zero winding).
+    /// - EvenOdd: center must be transparent (punched out by even crossings).
+    ///
+    /// This guards against the SSAA path ignoring the `PathFillType` carried by
+    /// the tessellated geometry (which lives in the `SsaaPathOp::segment`).
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn p2_ssaa_fill_rule_honored_nonzero_vs_evenodd() {
+        use flui_types::painting::PathFillType;
+
+        // Self-intersecting pentagram (★) centered at (cx, cy) with outer radius 40.
+        //
+        // A pentagram connects the 5 tips in skip-2 order: tip[0]→tip[2]→tip[4]→
+        // tip[1]→tip[3]→close.  The 5 diagonals cross through the center, creating
+        // a region with winding count +2 (NonZero → filled, EvenOdd → hole).
+        //
+        // The simple 10-vertex star polygon (alternating outer/inner radii) is
+        // NOT self-intersecting and therefore gives identical results under both
+        // fill rules — it cannot discriminate them.  The pentagram IS self-
+        // intersecting and IS the correct geometry for fill-rule discrimination.
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let outer_r = 40.0_f32;
+
+        // 5 tip positions, tip[i] at angle (i*72° - 90°).
+        let tips: Vec<(f32, f32)> = (0..5)
+            .map(|i| {
+                let angle = (i as f32 * 2.0 * PI / 5.0) - PI / 2.0;
+                (cx + outer_r * angle.cos(), cy + outer_r * angle.sin())
+            })
+            .collect();
+
+        // Skip-2 connection order: [0, 2, 4, 1, 3] → self-intersecting pentagram.
+        let pentagram_order = [0usize, 2, 4, 1, 3];
+
+        let build_star_path = |fill_type: PathFillType| {
+            let mut path = flui_types::painting::path::Path::with_fill_type(fill_type);
+            let (first_x, first_y) = tips[pentagram_order[0]];
+            path.move_to(flui_types::Point::new(Pixels(first_x), Pixels(first_y)));
+            for &idx in &pentagram_order[1..] {
+                let (x, y) = tips[idx];
+                path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+            }
+            path.close();
+            path
+        };
+
+        let (device, queue) = acquire_test_device_and_queue();
+
+        // Render NonZero star.
+        let (surface_nz, view_nz) = create_render_surface(&device);
+        clear_surface(&device, &queue, &view_nz);
+        {
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            painter.draw_path(
+                &build_star_path(PathFillType::NonZero),
+                &Paint::fill(Color::WHITE),
+            );
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("P2 NonZero Star Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&view_nz, &surface_nz),
+                    &mut encoder,
+                )
+                .expect("painter.render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        // Render EvenOdd star.
+        let (surface_eo, view_eo) = create_render_surface(&device);
+        clear_surface(&device, &queue, &view_eo);
+        {
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            painter.draw_path(
+                &build_star_path(PathFillType::EvenOdd),
+                &Paint::fill(Color::WHITE),
+            );
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("P2 EvenOdd Star Encoder"),
+            });
+            painter
+                .render(
+                    RenderTarget::sampleable(&view_eo, &surface_eo),
+                    &mut encoder,
+                )
+                .expect("painter.render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        let pixels_nz = readback_pixels(&device, &queue, &surface_nz);
+        let pixels_eo = readback_pixels(&device, &queue, &surface_eo);
+
+        // Both renders must produce partial-alpha pixels in the outer boundary band
+        // (the 5 outer tips of the star) — proving SSAA is active for both fill rules.
+        for (label, pixels) in [("NonZero", &pixels_nz), ("EvenOdd", &pixels_eo)] {
+            let partial_outer = pixels
+                .iter()
+                .enumerate()
+                .filter(|(idx, p)| {
+                    let col = (idx % SURFACE_WIDTH as usize) as f32 + 0.5 - cx;
+                    let row = (idx / SURFACE_WIDTH as usize) as f32 + 0.5 - cy;
+                    let dist = (col * col + row * row).sqrt();
+                    // Only consider pixels in the outer tip boundary band.
+                    let in_outer_band = dist >= outer_r - 3.0 && dist <= outer_r + 3.0;
+                    in_outer_band && p[3] > 5 && p[3] < 250
+                })
+                .count();
+
+            assert!(
+                partial_outer >= 4,
+                "P2 {label}: fewer than 4 partial-alpha pixels in the outer boundary band \
+                 ({partial_outer}) — SSAA may not be active for this fill rule"
+            );
+        }
+
+        // Fill-rule discrimination: center of the star (at the exact center pixel).
+        // NonZero: winding number is +2 (all edges wind the same) → interior → opaque.
+        // EvenOdd: crossing count is 2 (even) → hole → transparent.
+        let center_idx = cy as usize * SURFACE_WIDTH as usize + cx as usize;
+        assert!(
+            pixels_nz[center_idx][3] > 150,
+            "P2: NonZero star center must be filled (got alpha={}); \
+             fill rule may not be flowing through the SSAA segment",
+            pixels_nz[center_idx][3]
+        );
+        assert!(
+            pixels_eo[center_idx][3] < 100,
+            "P2: EvenOdd star center must be transparent (got alpha={}); \
+             fill rule may not be flowing through the SSAA segment",
+            pixels_eo[center_idx][3]
+        );
+    }
+
+    // ── P3: SSAA scale-invariance — AA band stays ~1 device-px ───────────────
+
+    /// P3: A triangle path rendered at 1× world scale and at 4× world scale
+    /// must both produce comparable numbers of partial-alpha boundary pixels,
+    /// proving the SSAA box-downsample produces a ~1-device-px AA band
+    /// regardless of the local-space scale factor.
+    ///
+    /// ## Why this matters
+    ///
+    /// SSAA samples the 2× texture at sub-pixel positions and averages.  The AA
+    /// band width in device pixels is set by the 2× factor and is scale-
+    /// invariant (the 2× texture always captures 2 sub-pixels per output pixel
+    /// regardless of how large the shape is in local space).  At 4× canvas
+    /// scale the local-space triangle is 4× smaller to produce the same device
+    /// footprint, but the tile is still 2× the output resolution → same band.
+    ///
+    /// A hard-aliased fallback would produce binary (0/255) pixels at any scale
+    /// and would have zero partial-alpha pixels — this test would catch that.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn p3_ssaa_aa_band_scale_invariant() {
+        // Same device-space triangle at two scales.
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+
+        // Device triangle (same for both renders):
+        let ax = cx;
+        let ay = cy - 35.0;
+        let bx = cx + 30.0;
+        let by = cy + 20.0;
+        let dx = cx - 30.0;
+        let dy = cy + 20.0;
+
+        let render_triangle_at_scale = |scale: f32| -> Vec<[u8; 4]> {
+            let (device, queue) = acquire_test_device_and_queue();
+            let (surface, view) = create_render_surface(&device);
+            clear_surface(&device, &queue, &view);
+
+            // Shrink local coords by `scale` so the device footprint stays the same.
+            let lax = (ax - cx) / scale + cx;
+            let lay = (ay - cy) / scale + cy;
+            let lbx = (bx - cx) / scale + cx;
+            let lby = (by - cy) / scale + cy;
+            let ldx = (dx - cx) / scale + cx;
+            let ldy = (dy - cy) / scale + cy;
+
+            let mut path = flui_types::painting::path::Path::new();
+            path.move_to(flui_types::Point::new(Pixels(lax), Pixels(lay)));
+            path.line_to(flui_types::Point::new(Pixels(lbx), Pixels(lby)));
+            path.line_to(flui_types::Point::new(Pixels(ldx), Pixels(ldy)));
+            path.close();
+
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            // Apply the compensating world scale so device geometry = target triangle.
+            painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+            painter.scale(scale, scale);
+            painter.translate(flui_types::Offset::new(Pixels(-cx), Pixels(-cy)));
+            painter.draw_path(&path, &Paint::fill(Color::WHITE));
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("P3 Scale Encoder"),
+            });
+            painter
+                .render(RenderTarget::sampleable(&view, &surface), &mut encoder)
+                .expect("painter.render must succeed");
+            queue.submit(std::iter::once(encoder.finish()));
+
+            readback_pixels(&device, &queue, &surface)
+        };
+
+        let pixels_1x = render_triangle_at_scale(1.0);
+        let pixels_4x = render_triangle_at_scale(4.0);
+
+        // Count partial-alpha boundary pixels (the SSAA AA band).
+        let partial_1x = pixels_1x.iter().filter(|p| p[3] > 5 && p[3] < 250).count();
+        let partial_4x = pixels_4x.iter().filter(|p| p[3] > 5 && p[3] < 250).count();
+
+        assert!(
+            partial_1x > 0,
+            "P3: 1× render must have partial-alpha boundary pixels"
+        );
+        assert!(
+            partial_4x > 0,
+            "P3: 4× render must have partial-alpha boundary pixels — SSAA must produce AA at \
+             any canvas scale"
+        );
+
+        // The two band widths must be close: the device footprint is IDENTICAL at
+        // both scales (local coords are pre-shrunk by `scale`), so a scale-invariant
+        // SSAA band should yield near-identical partial-pixel counts — well within
+        // 2×. A hard-aliased renderer has zero partials; a band that collapses at
+        // high scale (e.g. a missing CTM update) pushes the ratio past 2×.
+        let ratio = if partial_1x > partial_4x {
+            partial_1x as f32 / partial_4x as f32
+        } else {
+            partial_4x as f32 / partial_1x as f32
+        };
+        assert!(
+            ratio < 2.0,
+            "P3: AA band width differs too much between 1× ({partial_1x} pixels) and \
+             4× ({partial_4x} pixels) — ratio {ratio:.1}×. SSAA should give ~1 device-px AA \
+             at any scale; a large ratio means the band is collapsing at high scale."
+        );
+    }
+
+    // ── P4: anti-MVP — SrcOver Fill path must emit ≥1 partial-alpha pixel ────
+
+    /// P4: A SrcOver-filled arbitrary path (the canonical SSAA target) must
+    /// emit at least one partial-alpha pixel on its geometric boundary —
+    /// proving the SSAA reroute actually executes the GPU path rather than
+    /// silently being a no-op or returning a stub opaque tile.
+    ///
+    /// ## Anti-MVP rationale (Definition of Done §anti-cheating)
+    ///
+    /// A minimum-viable implementation that tessellates the path and submits it
+    /// directly (bypassing SSAA) would pass P1–P3 only if the tessellated geometry
+    /// happens to be AA'd by some other mechanism.  P4 is a targeted falsification:
+    /// it checks the ONE property that a fake SSAA implementation without a real
+    /// 2× render cannot produce — partial alpha at the exact pixel positions the
+    /// oracle identifies as boundary, EVEN for a shape that is far from axis-aligned.
+    ///
+    /// A non-axis-aligned triangle rendered without SSAA or SDF produces hard edges
+    /// (boundary pixels are either 0 or 255) because `shape.wgsl` has no distance
+    /// field for tessellated geometry.  With SSAA the 2× offscreen capture resolves
+    /// sub-pixel coverage and the downsample produces genuine fractional alpha.
+    ///
+    /// Test structure: explicitly disabled oracle (we do NOT check oracle closeness
+    /// here — only existence of partial alpha), so it cannot degenerate to "check
+    /// nothing" even if the oracle boundary is small.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "pixel index/coordinate arithmetic over a small fixed-size test surface"
+    )]
+    fn p4_anti_mvp_srcover_fill_has_partial_alpha_at_boundary() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Deliberately non-axis-aligned irregular quadrilateral so that EVERY
+        // edge is diagonal and thus has fractional-coverage boundary pixels under
+        // 2× SSAA.  An axis-aligned rectangle edge falls on a pixel row/column and
+        // can produce zero partial pixels (all boundary pixels round to 0 or 255).
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        // Irregular kite: four vertices, none axis-aligned relative to each other.
+        let v = [
+            (cx + 1.3, cy - 38.7), // near-top, slightly off-center
+            (cx + 42.2, cy + 5.5), // right
+            (cx - 2.7, cy + 33.1), // near-bottom
+            (cx - 38.4, cy - 9.2), // left
+        ];
+
+        let mut path = flui_types::painting::path::Path::new();
+        path.move_to(flui_types::Point::new(Pixels(v[0].0), Pixels(v[0].1)));
+        for &(x, y) in &v[1..] {
+            path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+        }
+        path.close();
+
+        // SrcOver fill — the ONLY variant that the SSAA reroute handles.
+        let paint = Paint::fill(Color::WHITE); // blend_mode defaults to SrcOver
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.draw_path(&path, &paint);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("P4 Anti-MVP Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Count partial-alpha pixels anywhere on the surface.
+        // Any partial-alpha pixel is evidence of sub-pixel coverage resolution —
+        // it is impossible to produce with a hard-aliased (0/255) tessellated renderer.
+        let partial_count = pixels.iter().filter(|p| p[3] > 5 && p[3] < 250).count();
+
+        assert!(
+            partial_count >= 4,
+            "P4 FAILED: only {partial_count} partial-alpha pixels in the frame — the SSAA \
+             reroute appears to be a no-op or hard-aliased. A real 2× SSAA box-downsample \
+             MUST produce sub-pixel coverage (partial alpha) on EVERY non-axis-aligned edge."
+        );
+
+        // Also confirm the shape is actually rendered (interior is opaque, not blank).
+        let interior_col = cx as usize;
+        let interior_row = cy as usize;
+        let interior_idx = interior_row * SURFACE_WIDTH as usize + interior_col;
+        assert!(
+            pixels[interior_idx][3] > 200,
+            "P4: shape interior (cx, cy) must be opaque; got alpha={} — \
+             the SSAA composite path may be broken",
+            pixels[interior_idx][3]
+        );
+    }
+
     // ── A4: Angular edges are anti-aliased (partial alpha) ───────────────────
 
     /// A4: The two angular edges of a ~90° arc must show partial alpha (anti-

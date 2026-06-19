@@ -47,7 +47,7 @@ use flui_painting::BlendMode;
 use flui_types::{Rect, geometry::Pixels};
 
 use super::{
-    command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, TessellatedBatch},
+    command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, SsaaPathOp, TessellatedBatch},
     path_cache::PathCache,
     pipeline::PipelineKey,
     state_stack::GpuStateStack,
@@ -237,6 +237,59 @@ impl DrawBatcher {
         if key.blend_mode() != BlendMode::SrcOver {
             Self::finish_current_segment(segment, draw_order);
         }
+    }
+
+    /// Divert an arbitrary SrcOver path fill into a `DrawItem::SsaaPath` for
+    /// SSAA-based anti-aliasing.
+    ///
+    /// Called exclusively from `DrawBatcher::draw_path` (in `batches/paths.rs`)
+    /// when the path is a fill (`PaintStyle::Fill`) and the blend mode is
+    /// `SrcOver`.  Closed-form shapes (rect/rrect/circle/oval/arc, which route to
+    /// the instanced affine-SDF path) must **not** call this method.
+    ///
+    /// ## What this does
+    ///
+    /// 1. Seals the current `segment` so prior content flushes before the SSAA
+    ///    tile (Z-order correctness, same as the advanced-shape diversion).
+    /// 2. Builds an isolated `DrawSegment` containing only this path's geometry.
+    /// 3. Computes the device-space AABB of the already-transformed vertices.
+    /// 4. Pushes `DrawItem::SsaaPath(SsaaPathOp { segment, device_bounds })`.
+    ///
+    /// All GPU work (2× render + box downsample + composite) happens at replay
+    /// time in `GpuReplay::submit`.
+    pub(super) fn divert_path_to_ssaa(
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &GpuStateStack,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) {
+        if indices.is_empty() {
+            return;
+        }
+
+        // Step 1: seal prior content so it appears below the SSAA tile.
+        Self::finish_current_segment(segment, draw_order);
+
+        // Step 2: compute the device-space AABB from the baked (transformed) vertices.
+        let device_bounds = vertices_aabb(vertices);
+
+        // Step 3: build an isolated DrawSegment for this path only.
+        let mut path_segment = DrawSegment::new();
+        path_segment.vertices.extend_from_slice(vertices);
+        path_segment.indices.extend(indices.iter().copied());
+        path_segment.current_pipeline_key = Some(PipelineKey::alpha_blend());
+        path_segment.tess_batches.push(TessellatedBatch {
+            pipeline_key: PipelineKey::alpha_blend(),
+            scissor: state.current_scissor(),
+            index_start: 0,
+            index_count: indices.len() as u32,
+        });
+
+        draw_order.push(DrawItem::SsaaPath(SsaaPathOp {
+            segment: path_segment,
+            device_bounds,
+        }));
     }
 
     /// Apply the current world transform to every vertex position in `vertices`
