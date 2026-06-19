@@ -239,13 +239,22 @@ impl DrawBatcher {
         }
     }
 
-    /// Divert an arbitrary SrcOver path fill into a `DrawItem::SsaaPath` for
-    /// SSAA-based anti-aliasing.
+    /// Divert a geometry fill into a `DrawItem::SsaaPath` for SSAA-based
+    /// anti-aliasing.
     ///
-    /// Called exclusively from `DrawBatcher::draw_path` (in `batches/paths.rs`)
-    /// when the path is a fill (`PaintStyle::Fill`) and the blend mode is
-    /// `SrcOver`.  Closed-form shapes (rect/rrect/circle/oval/arc, which route to
-    /// the instanced affine-SDF path) must **not** call this method.
+    /// Called from:
+    /// - `DrawBatcher::draw_path` (in `batches/paths.rs`) for arbitrary path fills
+    ///   whose blend mode is tile-safe or advanced.
+    /// - `batches/shapes.rs` non-SrcOver branches for rect/rrect/circle/oval/arc
+    ///   fills whose blend mode is tile-safe or advanced.
+    ///
+    /// Closed-form SrcOver shapes (rect/rrect/circle/oval/arc) route to the
+    /// instanced affine-SDF path and must **not** call this method.
+    ///
+    /// Coverage-destructive Porter-Duff modes (Clear, Src, SrcIn, DstIn, SrcOut,
+    /// DstATop, Modulate) must NOT call this method — they keep the tessellated
+    /// path so transparent tile padding does not destructively write to the
+    /// destination outside the geometry boundary.
     ///
     /// ## What this does
     ///
@@ -253,16 +262,17 @@ impl DrawBatcher {
     ///    tile (Z-order correctness, same as the advanced-shape diversion).
     /// 2. Builds an isolated `DrawSegment` containing only this path's geometry.
     /// 3. Computes the device-space AABB of the already-transformed vertices.
-    /// 4. Pushes `DrawItem::SsaaPath(SsaaPathOp { segment, device_bounds })`.
+    /// 4. Pushes `DrawItem::SsaaPath(SsaaPathOp { segment, device_bounds, blend })`.
     ///
     /// All GPU work (2× render + box downsample + composite) happens at replay
-    /// time in `GpuReplay::submit`.
+    /// time in `GpuReplay::render_ssaa_path`.
     pub(super) fn divert_path_to_ssaa(
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         vertices: &[Vertex],
         indices: &[u32],
+        blend: BlendMode,
     ) {
         if indices.is_empty() {
             return;
@@ -275,6 +285,9 @@ impl DrawBatcher {
         let device_bounds = vertices_aabb(vertices);
 
         // Step 3: build an isolated DrawSegment for this path only.
+        // The internal pipeline is always SrcOver (alpha-blend): the geometry is
+        // rendered into a transparent offscreen tile.  The SSAA blend mode is stored
+        // in `SsaaPathOp::blend` and applied at composite time, not at raster time.
         let mut path_segment = DrawSegment::new();
         path_segment.vertices.extend_from_slice(vertices);
         path_segment.indices.extend(indices.iter().copied());
@@ -289,6 +302,7 @@ impl DrawBatcher {
         draw_order.push(DrawItem::SsaaPath(SsaaPathOp {
             segment: path_segment,
             device_bounds,
+            blend,
         }));
     }
 

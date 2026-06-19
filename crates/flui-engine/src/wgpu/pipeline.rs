@@ -161,6 +161,67 @@ pub fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
     }
 }
 
+/// Classify a blend mode as "tile-safe" for SSAA compositing.
+///
+/// A mode is tile-safe iff compositing a **transparent-source** tile (src alpha=0,
+/// src color=0) onto any destination leaves the destination unchanged:
+///
+///   `blend(transparent_src, dst, mode) == dst`   for ALL dst values.
+///
+/// Derivation from `blend_state_for` with src=(0,0,0,0):
+///
+/// | Mode      | src-factor × 0 + dst-factor × dst | tile-safe? |
+/// |-----------|-----------------------------------|-----------|
+/// | SrcOver   | 0 + (1-0)·dst = dst               | ✓         |
+/// | Dst       | 0 + 1·dst = dst                   | ✓         |
+/// | DstOver   | 0 + 1·dst = dst                   | ✓         |
+/// | DstOut    | 0 + (1-0)·dst = dst               | ✓         |
+/// | SrcATop   | 0 + (1-0)·dst = dst               | ✓         |
+/// | Xor       | 0 + (1-0)·dst = dst               | ✓         |
+/// | Plus      | 0 + 1·dst = dst                   | ✓         |
+/// | Clear     | 0 + 0·dst = 0                     | ✗ (kills dst) |
+/// | Src       | 0 + 0·dst = 0                     | ✗         |
+/// | SrcIn     | dst_a·0 + 0·dst = 0               | ✗         |
+/// | DstIn     | 0 + src_a(=0)·dst = 0             | ✗         |
+/// | SrcOut    | (1-dst_a)·0 + 0·dst = 0           | ✗         |
+/// | DstATop   | dst_a·0 + src_a(=0)·dst = 0       | ✗         |
+/// | Modulate  | dst·0 + dst·src_a(=0) = 0         | ✗         |
+///
+/// (Rows where a dst-factor depends on `src_a` — DstIn, DstATop, Modulate —
+/// vanish only *because* `src_a = 0` here; they are state-dependent factors, not
+/// the constant `Zero`. `is_tile_safe_for_ssaa_agrees_with_color_blend` pins the
+/// whole partition to `Color::blend` so this hand-derivation can't drift.)
+///
+/// Advanced (dst-read) modes are NOT tile-safe by this definition, but they are
+/// handled separately via `flush_advanced_layer` (not fixed-function blend).
+/// Use `blend.is_advanced()` to detect them before calling this function.
+///
+/// ## Coverage-destructive exception set
+///
+/// The following modes are NOT tile-safe and NOT advanced (Porter-Duff modes
+/// that destroy the destination where the SSAA tile is transparent):
+///
+///   Clear, Src, SrcIn, DstIn, SrcOut, DstATop, Modulate
+///
+/// These modes KEEP the existing tessellated (aliased) render path for fills.
+/// This is an explicit, justified exception: routing them through the SSAA tile
+/// would apply the blend to the transparent padding, incorrectly writing zeros
+/// to destination pixels outside the shape's geometric boundary.
+/// The aliased result is COMPLETE and CORRECT in coverage region — only the
+/// 1px edge band is aliased, which is the same quality as the pre-PR-3 engine.
+pub fn is_tile_safe_for_ssaa(mode: BlendMode) -> bool {
+    matches!(
+        mode,
+        BlendMode::SrcOver
+            | BlendMode::Dst
+            | BlendMode::DstOver
+            | BlendMode::DstOut
+            | BlendMode::SrcATop
+            | BlendMode::Xor
+            | BlendMode::Plus
+    )
+}
+
 /// Pipeline cache managing specialized pipeline variants
 ///
 /// Automatically creates and caches pipelines on-demand based on PipelineKey.
@@ -386,6 +447,53 @@ mod blend_logic {
         assert_eq!(key.blend_mode(), BlendMode::SrcOver);
     }
 
+    /// The SSAA tile-safe gate must agree with the canonical blend evaluator
+    /// `Color::blend`: a Porter-Duff mode is tile-safe iff compositing a fully
+    /// TRANSPARENT source leaves the destination unchanged for every dst (so the
+    /// SSAA tile's transparent padding cannot corrupt dst outside the shape).
+    /// This ties the hand-written `matches!` list to the source of truth, so a
+    /// future mode or a `blend_state_for` change cannot silently desync them and
+    /// route a coverage-destructive mode through the tile.
+    #[test]
+    fn is_tile_safe_for_ssaa_agrees_with_color_blend() {
+        use flui_types::Color;
+        let transparent = Color::TRANSPARENT;
+        let dsts = [
+            Color::rgba(200, 80, 40, 255),
+            Color::rgba(30, 150, 220, 128),
+            Color::rgba(255, 255, 255, 60),
+        ];
+        // Every Porter-Duff (non-advanced) mode. Advanced modes are routed via
+        // `flush_advanced_layer`, not this gate, so they are out of scope here.
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::Dst,
+            BlendMode::SrcOver,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ] {
+            let transparent_src_is_noop =
+                dsts.iter().all(|&dst| transparent.blend(dst, mode) == dst);
+            assert_eq!(
+                is_tile_safe_for_ssaa(mode),
+                transparent_src_is_noop,
+                "{mode:?}: is_tile_safe_for_ssaa()={} but (transparent-src is a no-op)={} — \
+                 the SSAA tile-safe classification desynced from Color::blend",
+                is_tile_safe_for_ssaa(mode),
+                transparent_src_is_noop,
+            );
+        }
+    }
+
     #[test]
     fn porter_duff_modes_select_their_own_pipeline() {
         // Even an opaque source must take the blend stage for non-SrcOver modes
@@ -510,6 +618,114 @@ mod blend_logic {
             k_plus, k_clear,
             "different blend modes must hash to different pipeline keys"
         );
+    }
+
+    /// Exhaustive oracle cross-check: `is_tile_safe_for_ssaa` must agree with
+    /// the derivation from `blend_state_for` for every Porter-Duff mode.
+    ///
+    /// A mode is tile-safe iff compositing a fully-transparent source tile
+    /// (src = (0, 0, 0, 0)) leaves the destination unchanged for ALL dst:
+    ///
+    ///   out = src_factor × src_color + dst_factor × dst_color
+    ///       = src_factor × 0         + dst_factor × dst_color
+    ///       = dst_factor × dst_color
+    ///
+    /// The destination is preserved when `dst_factor` evaluates to `One` (or any
+    /// expression that equals 1 when src_alpha = 0): `One`,
+    /// `OneMinusSrcAlpha` (= 1 − 0 = 1), and `OneMinusDstAlpha` (= 1 − dst_a,
+    /// which is NOT necessarily 1 — so DstATop/Modulate/SrcIn/DstIn/SrcOut are
+    /// dst_alpha-dependent and may zero out dst for opaque destinations).
+    ///
+    /// This test evaluates the classification by substituting src = (0,0,0,0):
+    ///
+    /// | Mode      | color dst_factor         | a=0 ⟹ dst_factor=?  | tile-safe |
+    /// |-----------|--------------------------|----------------------|-----------|
+    /// | SrcOver   | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | Dst       | One                      | 1                    | ✓         |
+    /// | DstOver   | One                      | 1                    | ✓         |
+    /// | DstOut    | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | SrcATop   | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | Xor       | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | Plus      | One                      | 1                    | ✓         |
+    /// | Clear     | Zero                     | 0                    | ✗         |
+    /// | Src       | Zero                     | 0                    | ✗         |
+    /// | SrcIn     | Zero (DstAlpha×0=0)      | 0                    | ✗         |
+    /// | DstIn     | SrcAlpha (=0)            | 0                    | ✗         |
+    /// | SrcOut    | Zero                     | 0                    | ✗         |
+    /// | DstATop   | SrcAlpha (=0)            | 0                    | ✗         |
+    /// | Modulate  | Zero (Dst×0=0) / DstAlpha×0 | 0               | ✗         |
+    ///
+    /// Any future addition or reclassification of a Porter-Duff mode will
+    /// break this test, forcing a deliberate review of the safety gate.
+    #[test]
+    fn is_tile_safe_for_ssaa_matches_blend_state_for_all_porter_duff_modes() {
+        use wgpu::BlendFactor;
+
+        /// Evaluate `dst_factor` at src_alpha = 0, dst_alpha = arbitrary.
+        ///
+        /// Returns `None` when the factor depends on `dst_alpha` (and thus
+        /// `is_tile_safe` cannot be determined by src_alpha alone for all dst);
+        /// returns `Some(is_one)` when the factor is unconditionally 1 (safe)
+        /// or unconditionally 0 (destructive) at src_alpha = 0.
+        fn dst_factor_is_one_at_zero_src(factor: BlendFactor) -> Option<bool> {
+            match factor {
+                // `One` = always 1; `OneMinusSrcAlpha` = 1 − 0 = 1.
+                // Both unconditionally preserve dst at src_alpha = 0.
+                BlendFactor::One | BlendFactor::OneMinusSrcAlpha => Some(true),
+                // `Zero` = always 0; `SrcAlpha` = 0 at src_alpha = 0.
+                // Both unconditionally zero dst at src_alpha = 0.
+                BlendFactor::Zero | BlendFactor::SrcAlpha => Some(false),
+                // `OneMinusDstAlpha`, `DstAlpha`, `Dst`, and any other factor
+                // depend on the destination value, so tile-safety cannot be
+                // determined from src_alpha alone — classified as dst-dependent.
+                _ => None,
+            }
+        }
+
+        /// Compute whether `blend_state_for(mode)` at src=(0,0,0,0) preserves
+        /// the destination — i.e., both color and alpha dst_factor evaluate to 1.
+        fn tile_safe_from_blend_state(mode: BlendMode) -> bool {
+            let state = blend_state_for(mode);
+            // Both color and alpha dst_factor must evaluate to 1 unconditionally
+            // when src_alpha = 0. If either factor depends on dst_alpha (returns
+            // None), the mode is NOT guaranteed to be tile-safe for all dst.
+            matches!(
+                (
+                    dst_factor_is_one_at_zero_src(state.color.dst_factor),
+                    dst_factor_is_one_at_zero_src(state.alpha.dst_factor),
+                ),
+                (Some(true), Some(true))
+            )
+        }
+
+        let porter_duff_modes = [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::SrcOver,
+            BlendMode::Dst,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ];
+
+        for mode in porter_duff_modes {
+            let expected = tile_safe_from_blend_state(mode);
+            let actual = is_tile_safe_for_ssaa(mode);
+            assert_eq!(
+                actual, expected,
+                "is_tile_safe_for_ssaa({mode:?}) = {actual} but \
+                 blend_state_for derivation says it should be {expected}. \
+                 Either the safety gate or the blend-state table is wrong — \
+                 update both together to keep them in sync."
+            );
+        }
     }
 
     /// Golden lock for the current routing of `pipeline_key_from_paint`.

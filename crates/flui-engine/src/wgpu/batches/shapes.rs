@@ -119,9 +119,11 @@ impl DrawBatcher {
                     );
                 }
             } else {
-                // Slow path: any non-SrcOver blend mode — tessellate and bake.
+                // Slow path: any non-SrcOver blend mode.
                 //
-                // Non-SrcOver stays tessellated until the SSAA tile path (PR-3+).
+                // PR-4 routing: tile-safe and advanced modes → SSAA tile (AA'd);
+                // coverage-destructive modes → tessellated (aliased, correct).
+                // See `pipeline::is_tile_safe_for_ssaa` for the mode table.
                 let tl = state.apply_transform(Point::new(rect.left(), rect.top()));
                 let tr = state.apply_transform(Point::new(rect.right(), rect.top()));
                 let br = state.apply_transform(Point::new(rect.right(), rect.bottom()));
@@ -150,14 +152,30 @@ impl DrawBatcher {
                     },
                 ];
                 let indices = [0u32, 1, 2, 0, 2, 3];
-                Self::add_tessellated_with_key(
-                    segment,
-                    draw_order,
-                    state,
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
+                let mode = paint.blend_mode;
+                let scale = state.max_scale();
+                let device_area = rect.width().0 * scale * rect.height().0 * scale;
+                if (pipeline::is_tile_safe_for_ssaa(mode) || mode.is_advanced())
+                    && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ
+                {
+                    // Vertices are already in device-pixel space (apply_transform was
+                    // called above). Pass them directly to divert_path_to_ssaa.
+                    Self::divert_path_to_ssaa(
+                        segment, draw_order, state, &vertices, &indices, mode,
+                    );
+                } else {
+                    // Coverage-destructive modes or sub-threshold rects: tessellated path.
+                    // Coverage-destructive: Clear/Src/SrcIn/DstIn/SrcOut/DstATop/Modulate
+                    // — routing through SSAA tile would zero dst pixels in the tile border.
+                    Self::add_tessellated_with_key(
+                        segment,
+                        draw_order,
+                        state,
+                        vertices,
+                        &indices,
+                        pipeline::pipeline_key_from_paint(paint),
+                    );
+                }
             }
         } else {
             // Stroked rect — tessellate (less common, fallback path).
@@ -222,16 +240,43 @@ impl DrawBatcher {
             // The instanced fast path renders with a hardcoded SrcOver pipeline.
             // A non-SrcOver blend mode must route through the tessellated path.
             if paint.blend_mode != BlendMode::SrcOver {
-                // Non-SrcOver rrect: tessellate and bake via `submit_transformed_geometry`.
-                // Stays tessellated (aliased) until the SSAA tile path (PR-3+).
-                let fill_paint = Paint::fill(color).with_blend_mode(paint.blend_mode);
+                // Non-SrcOver rrect (PR-4 routing):
+                // - tile-safe or advanced + above area threshold → SSAA tile (AA'd)
+                // - coverage-destructive or sub-threshold → tessellated (aliased, correct)
+                let mode = paint.blend_mode;
+                let fill_paint = Paint::fill(color).with_blend_mode(mode);
                 self.prime_tessellator_scale(state);
                 match self.tessellator.tessellate_rrect(rrect, &fill_paint) {
                     Ok((vertices, indices)) => {
-                        let key = pipeline::pipeline_key_from_paint(&fill_paint);
-                        Self::submit_transformed_geometry(
-                            segment, draw_order, state, vertices, &indices, key,
-                        );
+                        let scale = state.max_scale();
+                        let device_area = rrect.bounding_rect().width().0
+                            * scale
+                            * rrect.bounding_rect().height().0
+                            * scale;
+                        let ssaa_eligible = (pipeline::is_tile_safe_for_ssaa(mode)
+                            || mode.is_advanced())
+                            && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                        if ssaa_eligible {
+                            // Bake current transform into vertices before divert.
+                            // `divert_path_to_ssaa` expects pre-transformed device-px coords.
+                            let transform = state.current_transform();
+                            let mut baked = vertices;
+                            for v in &mut baked {
+                                let p =
+                                    transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
+                                v.position = [p.x, p.y];
+                            }
+                            Self::divert_path_to_ssaa(
+                                segment, draw_order, state, &baked, &indices, mode,
+                            );
+                        } else {
+                            // Coverage-destructive or sub-threshold: tessellated path.
+                            // `submit_transformed_geometry` applies the CTM itself.
+                            let key = pipeline::pipeline_key_from_paint(&fill_paint);
+                            Self::submit_transformed_geometry(
+                                segment, draw_order, state, vertices, &indices, key,
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("Failed to tessellate blended rrect: {}", e);
@@ -426,13 +471,12 @@ impl DrawBatcher {
                     );
                 }
             } else {
-                // Slow path: non-SrcOver — tessellate and bake.
-                //
-                // Non-SrcOver stays tessellated (aliased) until the SSAA tile path (PR-3+).
+                // Slow path: non-SrcOver — tessellate and maybe divert to SSAA (PR-4).
+                let mode = paint.blend_mode;
                 let fill_paint = Paint {
                     color,
                     style: PaintStyle::Fill,
-                    blend_mode: paint.blend_mode,
+                    blend_mode: mode,
                     ..Paint::default()
                 };
                 self.prime_tessellator_scale(state);
@@ -441,10 +485,29 @@ impl DrawBatcher {
                     .tessellate_circle(center, radius, &fill_paint)
                 {
                     Ok((vertices, indices)) => {
-                        let key = pipeline::pipeline_key_from_paint(&fill_paint);
-                        Self::submit_transformed_geometry(
-                            segment, draw_order, state, vertices, &indices, key,
-                        );
+                        let scale = state.max_scale();
+                        let diameter = radius * 2.0 * scale;
+                        let device_area = diameter * diameter;
+                        let ssaa_eligible = (pipeline::is_tile_safe_for_ssaa(mode)
+                            || mode.is_advanced())
+                            && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                        if ssaa_eligible {
+                            let transform = state.current_transform();
+                            let mut baked = vertices;
+                            for v in &mut baked {
+                                let p =
+                                    transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
+                                v.position = [p.x, p.y];
+                            }
+                            Self::divert_path_to_ssaa(
+                                segment, draw_order, state, &baked, &indices, mode,
+                            );
+                        } else {
+                            let key = pipeline::pipeline_key_from_paint(&fill_paint);
+                            Self::submit_transformed_geometry(
+                                segment, draw_order, state, vertices, &indices, key,
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("Failed to tessellate circle: {}", e);
@@ -538,23 +601,38 @@ impl DrawBatcher {
             let _ = segment.circle_batch.add(instance);
             DrawSegment::push_scissor_region(&mut segment.circle_scissors, state.current_scissor());
         } else if paint.style == PaintStyle::Fill {
-            // Non-SrcOver fill — tessellate (aliased until the SSAA tile path, PR-4),
-            // carrying the opacity-folded color + the requested blend mode.
-            let fill_paint = Paint::fill(color).with_blend_mode(paint.blend_mode);
+            // Non-SrcOver fill — PR-4: tile-safe and advanced modes → SSAA (AA'd);
+            // coverage-destructive modes → tessellated (aliased, correct).
+            let mode = paint.blend_mode;
+            let fill_paint = Paint::fill(color).with_blend_mode(mode);
             let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
             self.prime_tessellator_scale(state);
             if let Ok((vertices, indices)) =
                 self.tessellator
                     .tessellate_ellipse(center, radii, &fill_paint)
             {
-                Self::submit_transformed_geometry(
-                    segment,
-                    draw_order,
-                    state,
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(&fill_paint),
-                );
+                let scale = state.max_scale();
+                let device_area = rect.width().0 * scale * rect.height().0 * scale;
+                let ssaa_eligible = (pipeline::is_tile_safe_for_ssaa(mode) || mode.is_advanced())
+                    && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                if ssaa_eligible {
+                    let transform = state.current_transform();
+                    let mut baked = vertices;
+                    for v in &mut baked {
+                        let p = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
+                        v.position = [p.x, p.y];
+                    }
+                    Self::divert_path_to_ssaa(segment, draw_order, state, &baked, &indices, mode);
+                } else {
+                    Self::submit_transformed_geometry(
+                        segment,
+                        draw_order,
+                        state,
+                        vertices,
+                        &indices,
+                        pipeline::pipeline_key_from_paint(&fill_paint),
+                    );
+                }
             }
         } else {
             // Stroked oval — tessellate (fallback), unchanged.
@@ -588,14 +666,34 @@ impl DrawBatcher {
         self.prime_tessellator_scale(state);
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
-                Self::submit_transformed_geometry(
-                    segment,
-                    draw_order,
-                    state,
-                    vertices,
-                    &indices,
-                    pipeline::pipeline_key_from_paint(paint),
-                );
+                // drrect is a compound (outer minus inner) tessellated fill with no
+                // closed-form SDF, so — like arbitrary paths (PR-3) — SrcOver +
+                // tile-safe + advanced FILLS route to the SSAA tile for AA;
+                // coverage-destructive modes and strokes keep the coverage-correct
+                // tessellated (aliased) path. (Without this, a SrcOver ring/border —
+                // a common UI element — would render aliased.)
+                let mode = paint.blend_mode;
+                let scale = state.max_scale();
+                let device_area = outer.width().0 * scale * outer.height().0 * scale;
+                if paint.style == PaintStyle::Fill
+                    && (mode == BlendMode::SrcOver
+                        || pipeline::is_tile_safe_for_ssaa(mode)
+                        || mode.is_advanced())
+                    && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ
+                {
+                    Self::submit_transformed_and_divert_to_ssaa(
+                        segment, draw_order, state, vertices, &indices, mode,
+                    );
+                } else {
+                    Self::submit_transformed_geometry(
+                        segment,
+                        draw_order,
+                        state,
+                        vertices,
+                        &indices,
+                        pipeline::pipeline_key_from_paint(paint),
+                    );
+                }
             }
             Err(e) => {
                 tracing::error!("Failed to tessellate DRRect: {}", e);
@@ -700,12 +798,14 @@ impl DrawBatcher {
                 // non-SrcOver blend — tessellate in local space and bake the full
                 // transform into vertex positions.
                 //
-                // Phase-A quality note: tessellated path → aliased edges.
-                // SDF-quality coverage for these lands in PR-4 (SSAA tile).
+                // PR-4: tile-safe and advanced modes → SSAA (AA'd edges).
+                // Coverage-destructive modes + use_center=false + reflections remain
+                // tessellated (aliased).
+                let mode = paint.blend_mode;
                 let fill_paint = Paint {
                     color,
                     style: PaintStyle::Fill,
-                    blend_mode: paint.blend_mode,
+                    blend_mode: mode,
                     ..Paint::default()
                 };
                 self.prime_tessellator_scale(state);
@@ -717,10 +817,32 @@ impl DrawBatcher {
                     &fill_paint,
                 ) {
                     Ok((vertices, indices)) => {
-                        let key = pipeline::pipeline_key_from_paint(&fill_paint);
-                        Self::submit_transformed_geometry(
-                            segment, draw_order, state, vertices, &indices, key,
-                        );
+                        let scale = state.max_scale();
+                        // Arc bounding area ≈ rect area (conservative upper bound).
+                        let device_area = rect.width().0 * scale * rect.height().0 * scale;
+                        // Only route to SSAA for non-SrcOver modes; SrcOver arcs
+                        // that reach this branch (reflection fallback) are already
+                        // tessellated — a second SSAA path for them is not needed.
+                        let ssaa_eligible = mode != BlendMode::SrcOver
+                            && (pipeline::is_tile_safe_for_ssaa(mode) || mode.is_advanced())
+                            && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                        if ssaa_eligible {
+                            let transform = state.current_transform();
+                            let mut baked = vertices;
+                            for v in &mut baked {
+                                let p =
+                                    transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
+                                v.position = [p.x, p.y];
+                            }
+                            Self::divert_path_to_ssaa(
+                                segment, draw_order, state, &baked, &indices, mode,
+                            );
+                        } else {
+                            let key = pipeline::pipeline_key_from_paint(&fill_paint);
+                            Self::submit_transformed_geometry(
+                                segment, draw_order, state, vertices, &indices, key,
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Failed to tessellate filled arc: {}", e);

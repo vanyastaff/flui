@@ -284,30 +284,39 @@ pub(crate) struct AdvancedShapeOp {
 
 // ─── SSAA-path op ────────────────────────────────────────────────────────────
 
-/// A single arbitrary-path fill (SrcOver) routed to the SSAA offscreen tile
-/// for anti-aliased compositing.
+/// A single geometry fill routed to the SSAA offscreen tile for anti-aliased
+/// compositing.
 ///
-/// Created by `DrawBatcher::draw_path` (in `batches/paths.rs`) when an
-/// arbitrary path fill with SrcOver blend is recorded.  Instead of batching the
-/// tessellated geometry directly into the main `DrawSegment` (which renders
-/// aliased at `sample_count=1`), the geometry is isolated here and rendered at
-/// replay time into a 2× supersampled pooled offscreen, box-downsampled to a
-/// premultiplied 1× tile, and composited via the existing premultiplied texture
-/// path — giving smooth ~1-device-px AA on every edge.
+/// Created by:
+/// - `DrawBatcher::draw_path` (in `batches/paths.rs`) for arbitrary path fills
+///   (SrcOver, tile-safe Porter-Duff, and advanced blend modes).
+/// - `batches/shapes.rs` non-SrcOver branches for rect/rrect/circle/oval/arc fills
+///   when the blend mode is tile-safe or advanced.
 ///
-/// ## Scope
+/// Instead of batching the tessellated geometry directly into the main
+/// `DrawSegment` (which renders aliased at `sample_count=1`), the geometry is
+/// isolated here and rendered at replay time into a 2× supersampled pooled
+/// offscreen, box-downsampled to a premultiplied 1× tile, and composited via
+/// one of three paths depending on `blend`:
 ///
-/// Only arbitrary SrcOver path **fills** take this path.  Closed-form shapes
-/// (rect/rrect/circle/oval/arc) are rerouted to the instanced affine-SDF path
-/// (PR-1/PR-2/PR-2b) and must **not** reach this variant.  Non-SrcOver paths
-/// stay on the tessellated path (PR-4 will handle them).
+/// - **SrcOver / tile-safe Porter-Duff** (`is_tile_safe_for_ssaa(blend)` = true):
+///   premultiplied texture composite with `blend_state_for(blend)` fixed-function
+///   blend.  Transparent-padding pixels are a no-op on the destination.
+/// - **Advanced (dst-read)** (`blend.is_advanced()` = true):
+///   `flush_advanced_layer` with the 1× tile as the foreground texture.
+///   W3C composite with correct coverage.
+/// - **Coverage-destructive Porter-Duff** (all other non-advanced modes):
+///   NOT routed here — these keep the existing tessellated (aliased) path because
+///   the transparent tile padding would destructively modify the destination
+///   outside the geometry boundary.  See the coverage-destructive exception list
+///   in `batches/shapes.rs` and `batches/paths.rs`.
 ///
 /// ## T11 purity contract
 ///
 /// `SsaaPathOp` derives `Clone` — it is handle-free (no `wgpu::*` fields),
-/// matching the [`AdvancedShapeOp`] invariant.  The embedded [`DrawSegment`]
-/// carries only CPU data.  All GPU work happens at replay time in
-/// `GpuReplay::submit`.
+/// matching the [`AdvancedShapeOp`] invariant.  `BlendMode` is `Copy`.
+/// The embedded [`DrawSegment`] carries only CPU data.  All GPU work happens at
+/// replay time in `GpuReplay::submit`.
 #[derive(Clone)]
 pub(crate) struct SsaaPathOp {
     /// Tessellated geometry for this path (vertices already baked to device
@@ -319,6 +328,12 @@ pub(crate) struct SsaaPathOp {
     /// clamped to `[1, viewport]`.  Computed as the AABB of
     /// `segment.vertices[*].position` at record time.
     pub(crate) device_bounds: Rect<Pixels>,
+    /// Blend mode to use when compositing the SSAA 1× tile onto the surface.
+    ///
+    /// Determines the composite strategy in `GpuReplay::render_ssaa_path`:
+    /// tile-safe → fixed-function premul blend; advanced → `flush_advanced_layer`.
+    /// Coverage-destructive modes never reach this struct (they stay tessellated).
+    pub(crate) blend: BlendMode,
 }
 
 // ─── Draw item (top-level ordering enum) ─────────────────────────────────────

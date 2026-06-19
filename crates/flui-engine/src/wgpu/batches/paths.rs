@@ -220,26 +220,36 @@ impl DrawBatcher {
             return;
         }
 
-        // Determine whether this path fill should be SSAA-routed:
-        //   - Fill style (not stroke).
-        //   - SrcOver blend (non-SrcOver paths go to PR-4's path).
-        //   - Path AABB area ≥ SSAA_AREA_THRESHOLD_PX²: tiny paths (icon
-        //     sub-elements, micro-decorations) yield no visible AA benefit and
-        //     pay 5 render passes + 2 texture acquisitions for nothing.  Below
-        //     the threshold they join the batched tessellated draw call instead
-        //     (same quality as pre-PR-3 for those sizes), preserving the engine's
-        //     draw-batching design for the common small-path case.
+        // Determine whether this path fill should be SSAA-routed.
         //
         // Closed-form shapes (rect/rrect/circle/oval/arc) never reach `draw_path`
         // — they go through `batches/shapes.rs` → instanced SDF.  So any Fill
         // arriving here IS an arbitrary path.
         //
-        // The AABB is computed lazily (only when style==Fill && mode==SrcOver)
-        // so the check adds no cost to the stroke / non-SrcOver paths.
+        // SSAA eligibility (PR-3 + PR-4):
+        //   1. Fill style (not stroke).
+        //   2. The blend mode must be either:
+        //      - tile-safe (SrcOver, Dst, DstOver, DstOut, SrcATop, Xor, Plus):
+        //        transparent SSAA padding is a no-op → composite with fixed-function
+        //        premul blend at `blend_state_for(mode)`.
+        //      - advanced (is_advanced()): dst-reading separable/non-separable modes
+        //        → composite via `flush_advanced_layer` with the 1× tile as foreground.
+        //      Coverage-destructive modes (Clear, Src, SrcIn, DstIn, SrcOut, DstATop,
+        //      Modulate) are kept on the tessellated (aliased) path: routing them
+        //      through the SSAA tile would destroy destination pixels in the
+        //      transparent tile border, corrupting content outside the shape boundary.
+        //   3. Path AABB area ≥ SSAA_AREA_THRESHOLD_PX²: tiny paths yield no
+        //      visible AA benefit and pay 5 render passes + 2 texture acquisitions.
         //
-        let is_srcover_fill = paint.style == PaintStyle::Fill
-            && paint.blend_mode == BlendMode::SrcOver
-            && path_aabb_area_device_px_sq(path, state) >= SSAA_AREA_THRESHOLD_PX_SQ;
+        // The AABB is computed lazily (only when style==Fill and the mode qualifies).
+        let ssaa_blend: Option<BlendMode> = if paint.style == PaintStyle::Fill
+            && (pipeline::is_tile_safe_for_ssaa(paint.blend_mode) || paint.blend_mode.is_advanced())
+            && path_aabb_area_device_px_sq(path, state) >= SSAA_AREA_THRESHOLD_PX_SQ
+        {
+            Some(paint.blend_mode)
+        } else {
+            None
+        };
 
         // Compute cache key from path geometry + paint tessellation parameters
         // + the quantized world scale (so a scale-1 entry is not reused at a
@@ -264,9 +274,9 @@ impl DrawBatcher {
                 .collect();
             let indices: Vec<u32> = cached_indices.to_vec();
 
-            if is_srcover_fill {
+            if let Some(blend) = ssaa_blend {
                 Self::submit_transformed_and_divert_to_ssaa(
-                    segment, draw_order, state, vertices, &indices,
+                    segment, draw_order, state, vertices, &indices, blend,
                 );
             } else {
                 // Bake current_transform into vertices: shape.wgsl has no model matrix.
@@ -298,9 +308,9 @@ impl DrawBatcher {
                 self.path_cache
                     .insert(path_hash, positions, indices.clone());
 
-                if is_srcover_fill {
+                if let Some(blend) = ssaa_blend {
                     Self::submit_transformed_and_divert_to_ssaa(
-                        segment, draw_order, state, vertices, &indices,
+                        segment, draw_order, state, vertices, &indices, blend,
                     );
                 } else {
                     // Bake current_transform into vertices: shape.wgsl has no model matrix.
@@ -324,19 +334,27 @@ impl DrawBatcher {
     ///
     /// Factored out of `draw_path` so the transform+divert sequence is identical
     /// for cache-hit and cache-miss paths.
-    fn submit_transformed_and_divert_to_ssaa(
+    ///
+    /// `blend` is forwarded to `SsaaPathOp` and determines how the 1× tile is
+    /// composited at replay time: tile-safe → `flush_texture_batch_premultiplied`
+    /// with `blend_state_for(blend)`; advanced → `flush_advanced_layer`.
+    ///
+    /// `pub(super)` so the sibling `shapes` module (e.g. `draw_drrect`) can reuse
+    /// the identical transform+divert sequence for tessellated fills.
+    pub(super) fn submit_transformed_and_divert_to_ssaa(
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         mut vertices: Vec<Vertex>,
         indices: &[u32],
+        blend: BlendMode,
     ) {
         let transform = state.current_transform();
         for v in &mut vertices {
             let transformed = transform * glam::vec4(v.position[0], v.position[1], 0.0, 1.0);
             v.position = [transformed.x, transformed.y];
         }
-        Self::divert_path_to_ssaa(segment, draw_order, state, &vertices, indices);
+        Self::divert_path_to_ssaa(segment, draw_order, state, &vertices, indices, blend);
     }
 
     /// Draw indexed triangle geometry with per-vertex color + uv.
@@ -610,10 +628,13 @@ mod threshold_tests {
 
     // ── T4: non-SrcOver fill is never SSAA-routed ────────────────────────────
 
-    /// T4: A non-SrcOver fill (e.g. SrcOut) must NEVER produce
-    /// `DrawItem::SsaaPath`.  SSAA is SrcOver-only in PR-3.
+    /// T4: A coverage-destructive fill (e.g. SrcOut) must NEVER produce
+    /// `DrawItem::SsaaPath`.  SrcOut has `dst_factor=Zero` — compositing a
+    /// transparent SSAA tile would zero out destination pixels outside the shape,
+    /// corrupting content.  PR-4 routes only tile-safe and advanced modes to SSAA;
+    /// coverage-destructive modes remain on the tessellated (aliased) path.
     #[test]
-    fn non_srcover_fill_never_produces_ssaa_path() {
+    fn coverage_destructive_fill_never_produces_ssaa_path() {
         let mut batcher = make_batcher();
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
@@ -635,7 +656,49 @@ mod threshold_tests {
             .count();
         assert_eq!(
             ssaa_count, 0,
-            "non-SrcOver fill must never produce SsaaPath; got {ssaa_count}"
+            "coverage-destructive SrcOut fill must never produce SsaaPath; got {ssaa_count}"
         );
+    }
+
+    // ── T5: tile-safe non-SrcOver fill is SSAA-routed ────────────────────────
+
+    /// T5: A tile-safe non-SrcOver fill (e.g. DstOut) on a large path MUST
+    /// produce `DrawItem::SsaaPath` (PR-4).  `DstOut` has `dst_factor=OneMinusSrcAlpha`
+    /// — transparent SSAA padding (src_a=0 → factor=1) leaves dst unchanged, so
+    /// compositing the SSAA tile is safe.
+    #[test]
+    fn tile_safe_non_srcover_large_fill_produces_ssaa_path() {
+        let mut batcher = make_batcher();
+        let mut segment = DrawSegment::new();
+        let mut draw_order: Vec<DrawItem> = Vec::new();
+        let state = GpuStateStack::new_for_test();
+
+        let path = rect_path(200.0, 200.0); // well above threshold
+
+        let paint = Paint {
+            style: PaintStyle::Fill,
+            blend_mode: BlendMode::DstOut, // tile-safe
+            ..Default::default()
+        };
+
+        batcher.draw_path(&mut segment, &mut draw_order, &state, &path, &paint);
+
+        let ssaa_count = draw_order
+            .iter()
+            .filter(|item| matches!(item, DrawItem::SsaaPath(_)))
+            .count();
+        assert_eq!(
+            ssaa_count, 1,
+            "tile-safe DstOut fill must produce exactly one SsaaPath; got {ssaa_count}"
+        );
+
+        // Verify the recorded blend mode is DstOut, not coerced to SrcOver.
+        if let Some(DrawItem::SsaaPath(op)) = draw_order.first() {
+            assert_eq!(
+                op.blend,
+                BlendMode::DstOut,
+                "SsaaPathOp.blend must preserve DstOut, not coerce to SrcOver"
+            );
+        }
     }
 }

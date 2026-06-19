@@ -324,6 +324,19 @@ impl GpuReplay {
                 DrawItem::SsaaPath(mut op) => {
                     // Composite the SSAA tile onto the layer's offscreen texture
                     // at the correct Z position (R1 arm order).
+                    //
+                    // Pass `offscreen_target.texture` (a pool texture with
+                    // COPY_SRC | TEXTURE_BINDING — DECISION 2) so that advanced
+                    // (dst-read) blend modes on SSAA paths nested inside a layer
+                    // can dst-read the offscreen as their backdrop.  This mirrors
+                    // the AdvancedShape arm above (lines 246-301) which also passes
+                    // `offscreen_target.texture` for the same reason.
+                    //
+                    // The SSAA 1× tile is a SEPARATE pooled texture from the
+                    // offscreen, so there is no read/write aliasing: the backdrop
+                    // copy reads from `offscreen_target.texture` while the SSAA
+                    // tile is written to the same offscreen via `offscreen_view`
+                    // only AFTER the copy completes (sequential encoder commands).
                     self.render_ssaa_path(
                         &mut op,
                         viewport_size,
@@ -334,8 +347,10 @@ impl GpuReplay {
                         resources,
                         encoder,
                         offscreen_view,
+                        offscreen_target.texture, // sampleable pool texture for advanced dst-read
                     );
                     tracing::trace!(
+                        mode = ?op.blend,
                         bounds = ?op.device_bounds,
                         "GpuReplay: SSAA path tile composited onto layer offscreen"
                     );
