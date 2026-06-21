@@ -17,6 +17,16 @@
 // Averaging premultiplied values is correct: premultiplied colour is linear in
 // coverage, so the mean of four coverage-weighted colours equals the
 // coverage-weighted mean colour — no artefact at transparent edges.
+//
+// ## Bucketed pool support (crop_uv)
+//
+// When the 2× texture is acquired from a pool bucket that is LARGER than the
+// exact supersample dimensions (rounded up to the nearest 64px), the shader
+// must only sample the content region. `crop_uv` is `(supersample_w/bucket_w,
+// supersample_h/bucket_h)`. The quad always covers NDC [-1,1], but UVs are
+// scaled to [0, crop_uv] so only the actual content is read. When the bucket
+// exactly equals the supersample (no padding), crop_uv = (1, 1) and the shader
+// is identical to the original.
 
 struct VertexInput {
     @location(0) position: vec2<f32>,
@@ -28,23 +38,34 @@ struct VertexOutput {
     @location(0)       uv:       vec2<f32>,
 }
 
+// Crop-UV uniform: scale applied to vertex UV so that only the content region
+// of a pooled bucket texture is sampled. (1.0, 1.0) = no padding, full texture.
+struct CropUv {
+    uv: vec2<f32>,
+    _pad: vec2<f32>,
+}
+
 @group(0) @binding(0)
 var source_texture: texture_2d<f32>;
 
 @group(0) @binding(1)
 var linear_sampler: sampler;
 
+@group(0) @binding(2)
+var<uniform> crop: CropUv;
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.position = vec4<f32>(in.position, 0.0, 1.0);
-    out.uv = in.uv;
+    // Scale UV into the content region of the (possibly oversized) bucket texture.
+    out.uv = in.uv * crop.uv;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Source dimensions in texels.
+    // Source dimensions in texels (the full bucket, not the content region).
     let src_dim = vec2<f32>(textureDimensions(source_texture));
 
     // Half a sub-texel offset in UV space: sub-texel = 1/src_dim texels,

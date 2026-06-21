@@ -307,11 +307,30 @@ impl GpuStateStack {
     /// Mirrors Impeller `Matrix::GetMaxBasisLengthXY`: the larger of the two
     /// column-vector lengths of the upper-left 2×2. The tessellator uses this
     /// to budget curve-flattening tolerance at the correct magnification.
+    ///
+    /// **Do not use this for device-area thresholds.** Under anisotropic scale
+    /// (e.g. `scale(0.5, 10)`) `max_scale()` returns 10, squaring to 100,
+    /// while the true area scale is 5. Use [`Self::area_scale`] for area thresholds.
     pub(super) fn max_scale(&self) -> f32 {
         let m = self.current_transform;
         let col_x = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
         let col_y = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
         col_x.max(col_y)
+    }
+
+    /// Absolute determinant of the CTM's 2D linear part — the device-pixel² area
+    /// scale factor (`area_device = area_local × area_scale`).
+    ///
+    /// Mirrors Impeller `Matrix::GetDeterminant` (upper-left 2×2 only):
+    ///   `|det(M)| = |m.x_axis.x * m.y_axis.y − m.x_axis.y * m.y_axis.x|`
+    ///
+    /// This is rotation- and shear-invariant: a pure rotation has `|det|=1`;
+    /// `diag(sx, sy)` gives `|sx*sy|`. For device-area thresholds this is
+    /// more accurate than `max_scale²`, which overestimates under anisotropic
+    /// scale (e.g. `scale(0.5, 10)` → `area_scale=5`, `max_scale²=100`).
+    pub(super) fn area_scale(&self) -> f32 {
+        let m = self.current_transform;
+        (m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x).abs()
     }
 
     // =========================================================================
@@ -678,6 +697,82 @@ mod tests {
             "reset() must restore identity CTM"
         );
         assert_eq!(stack.depth(), 0, "reset() must clear all stacks");
+    }
+
+    // =========================================================================
+    // P1: area_scale() correctness
+    // =========================================================================
+
+    /// diag(sx, sy) → |sx * sy|.
+    ///
+    /// Confirms the determinant formula on a pure axis-aligned scale.
+    /// max_scale() returns `max(sx, sy)` = sy; squaring gives sy² ≠ sx*sy,
+    /// which is the overestimate this fix closes.
+    #[test]
+    fn area_scale_diagonal_equals_product_of_scales() {
+        let sx = 3.0_f32;
+        let sy = 7.0_f32;
+        let mut stack = identity_stack();
+        stack.scale(sx, sy);
+        let area = stack.area_scale();
+        assert!(
+            (area - sx * sy).abs() < 1e-5,
+            "area_scale() for diag({sx}, {sy}) should be {expected}, got {area}",
+            expected = sx * sy
+        );
+        // Document the overestimate max_scale² closes.
+        let max_s = stack.max_scale();
+        assert!(
+            (max_s - sy).abs() < 1e-5,
+            "max_scale() for diag({sx}, {sy}) should be {sy}, got {max_s}"
+        );
+        assert!(
+            max_s * max_s > area * 1.01,
+            "max_scale²={} should exceed area_scale={} for anisotropic scale",
+            max_s * max_s,
+            area
+        );
+    }
+
+    /// Pure 45° rotation → area_scale == 1.0 (rotation preserves area).
+    ///
+    /// `max_scale()` also returns 1.0 here, so this is a parity check.
+    #[test]
+    fn area_scale_pure_rotation_is_one() {
+        let angle = std::f32::consts::FRAC_PI_4; // 45°
+        let mut stack = identity_stack();
+        stack.rotate(angle);
+        let area = stack.area_scale();
+        assert!(
+            (area - 1.0).abs() < 1e-5,
+            "45° rotation must preserve area: area_scale={area}"
+        );
+    }
+
+    /// Anisotropic scale(0.5, 10) → area_scale == 5.0; max_scale == 10.0.
+    ///
+    /// This is the canonical case the fix closes: max_scale² = 100 (4× over),
+    /// while area_scale = 5 is the correct threshold multiplier.
+    #[test]
+    fn area_scale_anisotropic_closes_max_scale_overestimate() {
+        let mut stack = identity_stack();
+        stack.scale(0.5, 10.0);
+        let area = stack.area_scale();
+        let max_s = stack.max_scale();
+        assert!(
+            (area - 5.0).abs() < 1e-5,
+            "area_scale() for scale(0.5, 10) should be 5.0, got {area}"
+        );
+        assert!(
+            (max_s - 10.0).abs() < 1e-5,
+            "max_scale() for scale(0.5, 10) should be 10.0, got {max_s}"
+        );
+        // max_scale² = 100.0 vs area_scale = 5.0 — documents the 20× overestimate.
+        let overestimate_ratio = (max_s * max_s) / area;
+        assert!(
+            overestimate_ratio > 15.0,
+            "expected ≥15× overestimate for scale(0.5, 10), got {overestimate_ratio:.1}×"
+        );
     }
 
     /// Additional: save/restore round-trips the scissor correctly when it IS

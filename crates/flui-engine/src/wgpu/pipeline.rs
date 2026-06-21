@@ -222,6 +222,41 @@ pub fn is_tile_safe_for_ssaa(mode: BlendMode) -> bool {
     )
 }
 
+/// Minimum device-pixel² area a shape must have before SSAA is eligible.
+///
+/// A 16×16 px² shape (256 px²) is the crossover below which SSAA overhead
+/// (2× texture allocation + downsample pass) is not worth the quality gain.
+/// Shapes smaller than this fall back to the tessellated (SDF-AA) path.
+///
+/// Previously declared in `batches/paths.rs` (private to that module);
+/// centralised here so all batch modules share one constant.
+pub const SSAA_AREA_THRESHOLD_PX_SQ: f32 = 256.0;
+
+/// Returns `true` when SSAA tiling is both blend-safe and large enough to
+/// justify the 2× oversample overhead.
+///
+/// A shape is SSAA-eligible when:
+/// 1. `is_tile_safe_for_ssaa(mode)` — transparent padding in the tile cannot
+///    destroy destination pixels (no coverage-destructive Porter-Duff mode).
+/// 2. OR `mode.is_advanced()` — advanced (dst-read) modes are handled via
+///    the GPU compositor path which is inherently tile-aware.
+/// 3. AND `device_area >= SSAA_AREA_THRESHOLD_PX_SQ` — shape is large enough
+///    to amortise the tile's allocation and downsample cost.
+///
+/// ## Shape-specific prefix rules
+///
+/// Most shapes call this directly. Two shapes have additional prefix guards
+/// that must be evaluated BY THE CALLER:
+///
+/// - **arc** (`batches/shapes.rs`): must KEEP an outer `mode != BlendMode::SrcOver &&`
+///   guard — SrcOver arcs reach the non-SrcOver reflection-fallback branch and
+///   must stay on the tessellated path.
+/// - **drrect** (`batches/shapes.rs`): the `mode == BlendMode::SrcOver ||`
+///   prefix was dropped (it is subsumed by `is_tile_safe_for_ssaa(SrcOver)` == `true`).
+pub fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
+    (is_tile_safe_for_ssaa(mode) || mode.is_advanced()) && device_area >= SSAA_AREA_THRESHOLD_PX_SQ
+}
+
 /// Pipeline cache managing specialized pipeline variants
 ///
 /// Automatically creates and caches pipelines on-demand based on PipelineKey.
@@ -831,6 +866,97 @@ mod blend_logic {
                 k_trans.blend_mode(),
                 mode,
                 "{mode:?} translucent: key must carry the original advanced mode"
+            );
+        }
+    }
+
+    // =========================================================================
+    // H1: ssaa_eligible_for() behaviour tests
+    // =========================================================================
+
+    /// SrcOver at a large device area is eligible (tile-safe + above threshold).
+    #[test]
+    fn ssaa_eligible_for_srcover_large_area_is_true() {
+        assert!(
+            ssaa_eligible_for(BlendMode::SrcOver, 300.0),
+            "SrcOver at 300 px² must be SSAA-eligible"
+        );
+    }
+
+    /// Every destructive Porter-Duff mode is ineligible regardless of area.
+    ///
+    /// These modes zero the destination where the SSAA tile is transparent,
+    /// so routing them through the tile would corrupt pixels outside the shape.
+    #[test]
+    fn ssaa_eligible_for_destructive_modes_are_ineligible_at_max_area() {
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstATop,
+            BlendMode::Modulate,
+        ] {
+            assert!(
+                !is_tile_safe_for_ssaa(mode),
+                "{mode:?} should NOT be tile-safe"
+            );
+            assert!(!mode.is_advanced(), "{mode:?} should NOT be advanced");
+            assert!(
+                !ssaa_eligible_for(mode, f32::MAX),
+                "{mode:?} must never be SSAA-eligible (destructive padding)"
+            );
+        }
+    }
+
+    /// Below-threshold area is always ineligible even for tile-safe modes.
+    #[test]
+    fn ssaa_eligible_for_srcover_below_threshold_is_false() {
+        assert!(
+            !ssaa_eligible_for(BlendMode::SrcOver, 255.9),
+            "SrcOver at 255.9 px² (below 256.0 threshold) must not be SSAA-eligible"
+        );
+    }
+
+    /// Pin the destructive set to Color::blend oracle: for every Porter-Duff mode,
+    /// `!is_tile_safe_for_ssaa(mode)` must agree with the color-blend oracle for
+    /// a canonical opaque dst. (Mirrors the existing `is_tile_safe_for_ssaa_agrees_with_color_blend`
+    /// check but scoped specifically to the destructive modes documented in H2.)
+    #[test]
+    fn destructive_modes_are_never_ssaa_eligible() {
+        use flui_types::Color;
+        let transparent = Color::TRANSPARENT;
+        let opaque_dst = Color::rgba(200, 80, 40, 255);
+
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstATop,
+            BlendMode::Modulate,
+        ] {
+            // Oracle: transparent src changes dst → destructive → not tile-safe.
+            let transparent_src_changes_dst = transparent.blend(opaque_dst, mode) != opaque_dst;
+            assert!(
+                transparent_src_changes_dst,
+                "{mode:?}: Color::blend oracle says transparent src does NOT change dst \
+                 — this mode should be tile-safe, not in the destructive list"
+            );
+            // The H2 table: all three classifiers agree.
+            assert!(
+                !is_tile_safe_for_ssaa(mode),
+                "{mode:?}: is_tile_safe_for_ssaa should be false for a destructive mode"
+            );
+            assert!(
+                !mode.is_advanced(),
+                "{mode:?}: is_advanced should be false for a plain Porter-Duff mode"
+            );
+            assert!(
+                !ssaa_eligible_for(mode, f32::MAX),
+                "{mode:?}: ssaa_eligible_for must be false regardless of area"
             );
         }
     }

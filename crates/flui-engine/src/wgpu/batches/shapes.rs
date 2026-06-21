@@ -153,11 +153,8 @@ impl DrawBatcher {
                 ];
                 let indices = [0u32, 1, 2, 0, 2, 3];
                 let mode = paint.blend_mode;
-                let scale = state.max_scale();
-                let device_area = rect.width().0 * scale * rect.height().0 * scale;
-                if (pipeline::is_tile_safe_for_ssaa(mode) || mode.is_advanced())
-                    && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ
-                {
+                let device_area = rect.width().0 * rect.height().0 * state.area_scale();
+                if pipeline::ssaa_eligible_for(mode, device_area) {
                     // Vertices are already in device-pixel space (apply_transform was
                     // called above). Pass them directly to divert_path_to_ssaa.
                     Self::divert_path_to_ssaa(
@@ -248,14 +245,10 @@ impl DrawBatcher {
                 self.prime_tessellator_scale(state);
                 match self.tessellator.tessellate_rrect(rrect, &fill_paint) {
                     Ok((vertices, indices)) => {
-                        let scale = state.max_scale();
                         let device_area = rrect.bounding_rect().width().0
-                            * scale
                             * rrect.bounding_rect().height().0
-                            * scale;
-                        let ssaa_eligible = (pipeline::is_tile_safe_for_ssaa(mode)
-                            || mode.is_advanced())
-                            && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                            * state.area_scale();
+                        let ssaa_eligible = pipeline::ssaa_eligible_for(mode, device_area);
                         if ssaa_eligible {
                             // Bake current transform into vertices before divert.
                             // `divert_path_to_ssaa` expects pre-transformed device-px coords.
@@ -485,12 +478,10 @@ impl DrawBatcher {
                     .tessellate_circle(center, radius, &fill_paint)
                 {
                     Ok((vertices, indices)) => {
-                        let scale = state.max_scale();
-                        let diameter = radius * 2.0 * scale;
-                        let device_area = diameter * diameter;
-                        let ssaa_eligible = (pipeline::is_tile_safe_for_ssaa(mode)
-                            || mode.is_advanced())
-                            && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                        // Circle local-space AABB: (2r)×(2r) = 4r²; area_scale converts to device px².
+                        let local_area = (radius * 2.0) * (radius * 2.0);
+                        let device_area = local_area * state.area_scale();
+                        let ssaa_eligible = pipeline::ssaa_eligible_for(mode, device_area);
                         if ssaa_eligible {
                             let transform = state.current_transform();
                             let mut baked = vertices;
@@ -611,10 +602,8 @@ impl DrawBatcher {
                 self.tessellator
                     .tessellate_ellipse(center, radii, &fill_paint)
             {
-                let scale = state.max_scale();
-                let device_area = rect.width().0 * scale * rect.height().0 * scale;
-                let ssaa_eligible = (pipeline::is_tile_safe_for_ssaa(mode) || mode.is_advanced())
-                    && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                let device_area = rect.width().0 * rect.height().0 * state.area_scale();
+                let ssaa_eligible = pipeline::ssaa_eligible_for(mode, device_area);
                 if ssaa_eligible {
                     let transform = state.current_transform();
                     let mut baked = vertices;
@@ -673,13 +662,11 @@ impl DrawBatcher {
                 // tessellated (aliased) path. (Without this, a SrcOver ring/border —
                 // a common UI element — would render aliased.)
                 let mode = paint.blend_mode;
-                let scale = state.max_scale();
-                let device_area = outer.width().0 * scale * outer.height().0 * scale;
-                if paint.style == PaintStyle::Fill
-                    && (mode == BlendMode::SrcOver
-                        || pipeline::is_tile_safe_for_ssaa(mode)
-                        || mode.is_advanced())
-                    && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ
+                // `mode == BlendMode::SrcOver` prefix dropped: SrcOver is tile-safe by
+                // definition (`is_tile_safe_for_ssaa(SrcOver) == true`), so
+                // `ssaa_eligible_for` subsumes it.
+                let device_area = outer.width().0 * outer.height().0 * state.area_scale();
+                if paint.style == PaintStyle::Fill && pipeline::ssaa_eligible_for(mode, device_area)
                 {
                     Self::submit_transformed_and_divert_to_ssaa(
                         segment, draw_order, state, vertices, &indices, mode,
@@ -817,15 +804,14 @@ impl DrawBatcher {
                     &fill_paint,
                 ) {
                     Ok((vertices, indices)) => {
-                        let scale = state.max_scale();
                         // Arc bounding area ≈ rect area (conservative upper bound).
-                        let device_area = rect.width().0 * scale * rect.height().0 * scale;
-                        // Only route to SSAA for non-SrcOver modes; SrcOver arcs
-                        // that reach this branch (reflection fallback) are already
-                        // tessellated — a second SSAA path for them is not needed.
+                        let device_area = rect.width().0 * rect.height().0 * state.area_scale();
+                        // Only route to SSAA for non-SrcOver modes; SrcOver arcs that reach
+                        // this reflection-fallback branch are already tessellated — routing
+                        // them through SSAA again would be redundant. The `mode != SrcOver`
+                        // guard is load-bearing and must NOT be folded into ssaa_eligible_for.
                         let ssaa_eligible = mode != BlendMode::SrcOver
-                            && (pipeline::is_tile_safe_for_ssaa(mode) || mode.is_advanced())
-                            && device_area >= super::paths::SSAA_AREA_THRESHOLD_PX_SQ;
+                            && pipeline::ssaa_eligible_for(mode, device_area);
                         if ssaa_eligible {
                             let transform = state.current_transform();
                             let mut baked = vertices;

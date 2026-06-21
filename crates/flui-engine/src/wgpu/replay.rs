@@ -1025,6 +1025,20 @@ impl GpuReplay {
         render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
         let (full_w, full_h) = viewport_size;
+
+        // Pin the viewport to (full_w, full_h) so that NDC [-1,+1] always maps to
+        // exactly the requested viewport extent, regardless of the wgpu attachment
+        // size.  Without this explicit set, wgpu's default viewport equals the
+        // attachment dimensions — which diverges from full_w/full_h when rendering
+        // into an oversized pool-bucket texture (e.g. SSAA bucket-aligned tiles).
+        // Setting it explicitly is a no-op for the normal case where attachment ==
+        // viewport, but is load-bearing for SSAA bucket rendering.
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "full_w/full_h are small surface dimensions; f32 is sufficient"
+        )]
+        render_pass.set_viewport(0.0, 0.0, full_w as f32, full_h as f32, 0.0, 1.0);
+
         let mut active_key: Option<PipelineKey> = None;
         for batch in &segment.tess_batches {
             if active_key != Some(batch.pipeline_key) {
