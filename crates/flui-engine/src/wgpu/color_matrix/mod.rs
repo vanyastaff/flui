@@ -2,15 +2,15 @@
 //! premultiplied layer offscreen, writing the filtered result into a 2nd
 //! pooled texture (ping-pong).
 //!
-//! The only public entry point is [`apply_color_matrix`], called by
-//! `GpuReplay::flush_opacity_layer` when a [`super::command_ir::LayerFilter::ColorMatrix`]
+//! The only public entry point is `apply_color_matrix`, called by
+//! `GpuReplay::flush_opacity_layer` when a `LayerFilter::ColorMatrix`
 //! is present on the pending layer.
 //!
 //! ## Correctness contract
 //!
 //! - The source texture is premultiplied RGBA.
 //! - The matrix operates on straight (un-premultiplied) RGBA — the WGSL shader
-//!   unpremultiplies, applies the matrix, clamps [0,1] per channel, and
+//!   unpremultiplies, applies the matrix, clamps to `[0, 1]` per channel, and
 //!   re-premultiplies before writing.  This is bit-identical to
 //!   [`flui_types::painting::ColorMatrix::apply`] on the straight color.
 //! - The output texture is rendered with `LoadOp::Clear(TRANSPARENT)` so
