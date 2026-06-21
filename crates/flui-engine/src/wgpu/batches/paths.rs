@@ -243,9 +243,10 @@ impl DrawBatcher {
         //
         // The AABB is computed lazily (only when style==Fill and the mode qualifies).
         let ssaa_blend: Option<BlendMode> = if paint.style == PaintStyle::Fill
-            && (pipeline::is_tile_safe_for_ssaa(paint.blend_mode) || paint.blend_mode.is_advanced())
-            && path_aabb_area_device_px_sq(path, state) >= SSAA_AREA_THRESHOLD_PX_SQ
-        {
+            && pipeline::ssaa_eligible_for(
+                paint.blend_mode,
+                path_aabb_area_device_px_sq(path, state),
+            ) {
             Some(paint.blend_mode)
         } else {
             None
@@ -458,36 +459,23 @@ impl DrawBatcher {
 
 // ─── Module-level helpers ─────────────────────────────────────────────────────
 
-/// Minimum path AABB area (in device-pixel²) that qualifies for SSAA routing.
-///
-/// Paths whose bounding-box area is below this threshold are rendered via the
-/// normal batched tessellated draw call (shared GPU pass, zero offscreen
-/// overhead).  Paths at or above the threshold are routed to SSAA (5 render
-/// passes, 2 pooled-texture acquisitions) for proper sub-pixel AA on visible
-/// diagonal edges.
-///
-/// 256 px² ≈ 16 × 16 device pixels.  Empirically, paths smaller than this
-/// produce aliasing that is imperceptible at typical DPR and viewing distances;
-/// the SSAA cost is not justified.
-pub(in super::super) const SSAA_AREA_THRESHOLD_PX_SQ: f32 = 256.0;
-
 /// Compute the device-pixel² area of a path's axis-aligned bounding box,
 /// scaled by the current CTM (so the area reflects actual screen size).
 ///
 /// Uses `path.compute_bounds()` — a pure computation over path commands with
-/// no tessellation.  The CTM scale is applied as `area × max_scale²` because
-/// the AABB in local space must be scaled to device pixels.
+/// no tessellation. The CTM area scale is applied via `state.area_scale()` (the
+/// absolute determinant of the 2D linear part of the CTM), which is correct for
+/// anisotropic transforms. Under uniform scale `s`, `area_scale() == s²`.
 ///
 /// Used exclusively by `draw_path` to decide SSAA eligibility.
 fn path_aabb_area_device_px_sq(path: &Path, state: &GpuStateStack) -> f32 {
     let local_bounds = path.compute_bounds();
     let w = local_bounds.width().0.max(0.0);
     let h = local_bounds.height().0.max(0.0);
-    // Scale each edge by max_scale to get device-pixel extent.
-    let scale = state.max_scale();
-    let device_w = w * scale;
-    let device_h = h * scale;
-    device_w * device_h
+    // area_scale() = |det(M_2d)| maps local area → device-pixel² area correctly
+    // under rotation, shear, and anisotropic scale. max_scale² overestimates for
+    // anisotropic scale (e.g. scale(0.5, 10) → max_scale²=100, area_scale=5).
+    w * h * state.area_scale()
 }
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
@@ -500,9 +488,10 @@ mod threshold_tests {
     use super::{
         super::super::{
             command_ir::{DrawItem, DrawSegment},
+            pipeline::SSAA_AREA_THRESHOLD_PX_SQ,
             state_stack::GpuStateStack,
         },
-        DrawBatcher, SSAA_AREA_THRESHOLD_PX_SQ,
+        DrawBatcher,
     };
 
     fn make_batcher() -> DrawBatcher {

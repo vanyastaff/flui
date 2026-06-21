@@ -5,7 +5,7 @@
 //
 // SDF advantages:
 // - Branchless execution (no if/else in fragment shader)
-// - Adaptive antialiasing via fwidth()
+// - Adaptive antialiasing via L2 screen-space gradient (length(dpdx, dpdy))
 // - CSG operations (union, subtraction, intersection)
 // - Resolution-independent rendering
 //
@@ -142,15 +142,17 @@ fn sdEllipse(p: vec2<f32>, ab: vec2<f32>) -> f32 {
 // =============================================================================
 
 /// Convert SDF distance to alpha value with adaptive antialiasing
-/// Uses screen-space derivatives (fwidth) for resolution-independent AA
+/// Uses screen-space derivatives (L2: length(dpdx, dpdy)) for resolution-independent AA
 ///
 /// dist: signed distance from SDF function
 /// Returns: alpha value [0.0, 1.0] for blending
 fn sdfToAlpha(dist: f32) -> f32 {
-    // fwidth(dist) = abs(dFdx(dist)) + abs(dFdy(dist))
-    // This gives us the rate of change across the pixel, allowing
-    // adaptive antialiasing that works at any zoom level
-    let edge_width = fwidth(dist) * 0.5;
+    // L2 (Euclidean) gradient magnitude: length(∇dist) = sqrt(dpdx²+dpdy²).
+    // Compared to L1/fwidth (|dpdx|+|dpdy|), L2 is correct for isotropic 1-px
+    // AA at any orientation: on a ±45° diagonal L1 overestimates by √2 (~41%),
+    // giving a wider AA band on rounded corners under rotation/skew.
+    // Axis-aligned straight edges are numerically identical (one partial is 0).
+    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
 
     // smoothstep from -edge to +edge creates smooth transition
     return 1.0 - smoothstep(-edge_width, edge_width, dist);

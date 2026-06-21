@@ -15,9 +15,10 @@
 //   device    = M * local_pos + transform_translate.xy
 //
 // The SDF fragment evaluates distance in LOCAL space (via `uv` / `rect_size`);
-// `fwidth(dist)` measures the screen-space derivative of that local distance,
-// yielding ~1-device-px AA under ANY affine (rotation/skew/anisotropic scale)
-// with no fragment-shader change.
+// the L2 screen-space gradient `length(vec2(dpdx(dist), dpdy(dist)))` measures the
+// derivative of that local distance, yielding ~1-device-px AA under ANY affine
+// (rotation/skew/anisotropic scale) with no fragment-shader change; L1/fwidth
+// would overestimate diagonal edges by up to √2.
 //
 // For the baked-AABB fast path (axis-aligned SrcOver):
 //   transform           = [1, 0, 0, 1]   (identity 2×2)
@@ -26,7 +27,7 @@
 //
 // Performance:
 // - 30-40% faster fragment shader (branchless SDF)
-// - Adaptive antialiasing via fwidth() — correct at any zoom AND under rotation
+// - Adaptive antialiasing via L2 screen-space gradient — correct at any zoom AND under rotation
 // - SDF-based rounded rect clipping (no stencil buffer needed)
 
 // Vertex input (shared unit quad: [0,0] to [1,1])
@@ -114,10 +115,11 @@ fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return (n_norm - 1.0) * r3;
 }
 
-/// Convert SDF distance to alpha with adaptive antialiasing
+/// Convert SDF distance to alpha with adaptive antialiasing.
+/// Uses the L2 (Euclidean) gradient magnitude so a diagonal/rotated edge
+/// receives ~1-device-px AA exactly, not ~1.41× as with L1/fwidth.
 fn sdfToAlpha(dist: f32) -> f32 {
-    // fwidth gives us screen-space gradient for resolution-independent AA
-    let edge_width = fwidth(dist) * 0.5;
+    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
     return 1.0 - smoothstep(-edge_width, edge_width, dist);
 }
 
@@ -187,8 +189,8 @@ fn vs_main(
     // the SDF distance measured to the true rect regardless of quad expansion.
     out.uv = exp_pos;
     // rect_size = local width × height; the SDF evaluates distance in this space.
-    // Under any affine, fwidth(dist) correctly measures the screen-space
-    // derivative of the LOCAL distance → ~1 device-px AA band.
+    // Under any affine, the L2 gradient length(dpdx(dist), dpdy(dist)) correctly
+    // measures the screen-space derivative of the LOCAL distance → ~1 device-px AA band.
     out.rect_size = instance.bounds.zw;
     out.corner_radii = instance.corner_radii;
     // world_pos is the device-pixel position, used by the SDF clip test.
@@ -214,7 +216,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist = sdRoundedBox(p, in.rect_size * 0.5, in.corner_radii);
 
     // Convert distance to alpha with adaptive antialiasing
-    // fwidth() automatically adjusts AA based on zoom level and pixel density
+    // The L2 screen-space gradient automatically adjusts AA based on zoom level and pixel density
     let alpha = sdfToAlpha(dist);
 
     // --- SDF Clip Test ---

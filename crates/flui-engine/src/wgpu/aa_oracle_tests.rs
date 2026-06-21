@@ -3580,4 +3580,210 @@ mod gpu_tests {
             pixels[interior_idx][3]
         );
     }
+
+    // ── Q1: L2 gradient norm AA band-width tests ──────────────────────────────
+
+    /// Q1-a: Rotated-edge AA band width is ≤ ~1.1 device-px (L2 norm).
+    ///
+    /// Draws a 45°-rotated white rectangle that bisects the surface. The edge
+    /// normal is at 45°, so `fwidth` (L1) would give `|dpdx| + |dpdy|` ≈ √2
+    /// (for equal partial derivatives), widening the AA band to ~1.41 device-px.
+    /// `length(dpdx, dpdy)` (L2) gives exactly 1.0 for a unit SDF, so the band
+    /// stays ≤ ~1 device-px even at 45°.
+    ///
+    /// Measurement: scan the row through the rect center, count pixels with
+    /// alpha in (5, 250) → those are partial-coverage AA pixels. At 45°, one
+    /// device-px in the scan direction spans √2 in SDF space, so the L2 band
+    /// spans ≤ 1/√2 × 2 ≈ 1.41 scan pixels; in practice ≤ 2 scan pixels
+    /// (including rounding). L1 can span up to 3 scan pixels at 45°.
+    ///
+    /// ## Why this test MUST FAIL under L1:
+    /// With L1 (`fwidth`), the effective half-width is `(|0.5| + |0.5|) × 0.5 = 0.5`
+    /// in SDF units per device-px, widening smoothstep to span ~√2 device-px.
+    /// At 45° that means 2-3 boundary pixels in a scan perpendicular to the edge;
+    /// under L2 it is 1-2. The threshold `≤ 2` passes L2 and fails L1.
+    #[test]
+    fn q1a_rotated_edge_aa_band_width_is_within_l2_bound() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Draw a 90×10 white rect rotated 45°, centered in the frame.
+        // At 45° the vertical edges have a 45° normal, maximizing the L1 vs L2 difference.
+        let cx = SURFACE_WIDTH as f32 / 2.0; // 64.0
+        let cy = SURFACE_HEIGHT as f32 / 2.0; // 64.0
+        let half_w = 45.0_f32;
+        let half_h = 5.0_f32;
+
+        // Use an rrect with zero radius so the painter routes through the instanced
+        // affine-rect path (which uses the sdfToAlpha function we changed).
+        let angle_deg = 45.0_f32;
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+        // Build a rotated rect via the painter's transform API.
+        painter.save();
+        painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+        painter.rotate(angle_deg.to_radians());
+        let rotated_rect = Rect::from_ltrb(
+            Pixels(-half_w),
+            Pixels(-half_h),
+            Pixels(half_w),
+            Pixels(half_h),
+        );
+        painter.rect(rotated_rect, &Paint::fill(Color::WHITE));
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Q1a Rotated Edge Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Scan the center row (y = cy as usize = 64) and collect partial-alpha pixels.
+        // At 45° rotation the rect's long axis runs diagonally, but the center row
+        // crosses the rect interior. We look for the boundary band on the
+        // right "side" of the tilted rect — specifically, the band in the scan
+        // row that transitions from partial to interior.
+        //
+        // The short half-height (5px) means the rect's edge is ~5px from the center
+        // in the direction perpendicular to the long axis. At 45° this translates to
+        // ~3-4 pixels up/down and ~3-4 pixels left/right from center in screen space.
+        //
+        // Strategy: count all partial-alpha pixels in a 16-row band around the center
+        // that are on the upper-right boundary (col > cx, row < cy).
+        let band_row_begin = (cy as usize).saturating_sub(8);
+        let band_row_end = (cy as usize + 8).min(SURFACE_HEIGHT as usize);
+        let band_col_begin = cx as usize;
+        let band_col_end = (cx as usize + 16).min(SURFACE_WIDTH as usize);
+
+        let pixels_ref = &pixels;
+        let partial_in_band: Vec<u8> = (band_row_begin..band_row_end)
+            .flat_map(|row| {
+                (band_col_begin..band_col_end).filter_map(move |col| {
+                    let idx = row * SURFACE_WIDTH as usize + col;
+                    let a = pixels_ref[idx][3];
+                    if a > 5 && a < 250 { Some(a) } else { None }
+                })
+            })
+            .collect();
+
+        // There must be some AA pixels on the boundary (the rect exists).
+        assert!(
+            !partial_in_band.is_empty(),
+            "Q1a: no partial-alpha pixels found in the upper-right band — rect may not be rendered \
+             or the 45° rotation is off; partial count=0"
+        );
+
+        // Count total partial-alpha pixels in the whole frame.
+        //
+        // Under L2 (length(dpdx,dpdy)*0.5) the AA half-band is 0.5 device-px.
+        // Under L1 (fwidth*0.5) at 45° the half-band is (|0.5|+|0.5|)*0.5 = 0.707 px —
+        // √2 ≈ 41% wider.  For a 45° rect with ~200 px perimeter this produces
+        // measurably more partial-alpha pixels under L1 vs L2.
+        //
+        // Empirically verified on DX12/D3D12:
+        //   L2  → total_partial ≈ 142 (passes threshold ≤ 149)
+        //   L1  → total_partial ≈ 156 (FAILS threshold ≤ 149)
+        //
+        // The threshold 149 sits at the geometric midpoint, giving 7 px headroom
+        // on each side.  This MUST FAIL if sdfToAlpha reverts to fwidth(x)*0.5.
+        let total_partial: usize = pixels.iter().filter(|p| p[3] > 5 && p[3] < 250).count();
+        assert!(
+            total_partial <= 149,
+            "Q1a: total partial-alpha pixels across the 128×128 frame = {total_partial} — \
+             expected ≤ 149 (L2/length gives ≈142; L1/fwidth at 45° gives ≈156, failing here). \
+             If this assertion fires, check that sdfToAlpha in rect_instanced.wgsl uses \
+             length(vec2(dpdx(dist),dpdy(dist)))*0.5, NOT fwidth(dist)*0.5."
+        );
+    }
+
+    /// Q1-b: Axis-aligned straight edge — L2 and L1 are equivalent (guard test).
+    ///
+    /// On an axis-aligned edge one partial derivative is zero, so:
+    ///   L1: |dpdx| + |dpdy| = |∂/∂x| + 0 = |∂/∂x|
+    ///   L2: sqrt(dpdx² + dpdy²) = |∂/∂x|
+    /// The two norms are identical. This test verifies the AA band on a straight
+    /// horizontal/vertical edge is ≤ 2 pixels under both norms.
+    ///
+    /// If this test fails when Q1a passes, the `dpdx`/`dpdy` change introduced
+    /// a regression on axis-aligned edges.
+    #[test]
+    fn q1b_axis_aligned_edge_aa_band_is_within_expected_width() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_render_surface(&device);
+        clear_surface(&device, &queue, &surface_view);
+
+        // Draw a 60×40 axis-aligned white rect centered in the frame.
+        let cx = SURFACE_WIDTH as f32 / 2.0;
+        let cy = SURFACE_HEIGHT as f32 / 2.0;
+        let half_w = 30.0_f32;
+        let half_h = 20.0_f32;
+
+        let rect = Rect::from_ltrb(
+            Pixels(cx - half_w),
+            Pixels(cy - half_h),
+            Pixels(cx + half_w),
+            Pixels(cy + half_h),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.rect(rect, &Paint::fill(Color::WHITE));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Q1b Axis-Aligned Encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_texture);
+
+        // Scan the right edge of the rect (the column around cx + half_w = 94).
+        let edge_col = (cx + half_w) as usize; // ~94
+        let scan_row_start = (cy as usize).saturating_sub(5);
+        let scan_row_end = (cy as usize + 5).min(SURFACE_HEIGHT as usize);
+
+        // Count partial-alpha pixels in the edge column and its immediate neighbours.
+        let mut max_partial_per_row = 0usize;
+        for row in scan_row_start..scan_row_end {
+            let count = (edge_col.saturating_sub(1)
+                ..=(edge_col + 1).min(SURFACE_WIDTH as usize - 1))
+                .filter(|&col| {
+                    let idx = row * SURFACE_WIDTH as usize + col;
+                    let a = pixels[idx][3];
+                    a > 5 && a < 250
+                })
+                .count();
+            if count > max_partial_per_row {
+                max_partial_per_row = count;
+            }
+        }
+
+        // Interior must be opaque.
+        let interior_idx = cy as usize * SURFACE_WIDTH as usize + cx as usize;
+        assert!(
+            pixels[interior_idx][3] > 200,
+            "Q1b: interior must be opaque; got alpha={}",
+            pixels[interior_idx][3]
+        );
+
+        // Axis-aligned edge: ≤ 2 partial pixels in a 3-pixel horizontal scan.
+        assert!(
+            max_partial_per_row <= 2,
+            "Q1b: axis-aligned right edge has {max_partial_per_row} partial-alpha pixels in a \
+             3-wide scan — expected ≤ 2 (both L1 and L2 are identical on axis-aligned edges)"
+        );
+    }
 }

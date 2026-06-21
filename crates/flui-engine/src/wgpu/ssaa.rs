@@ -45,6 +45,38 @@ use super::{
 
 // ─── Downsample pipeline ───────────────────────────────────────────────────────
 
+/// Alignment multiple for SSAA source-texture bucket dimensions.
+///
+/// Bucket dimensions are rounded UP to the next multiple of this value so that
+/// the texture pool can reuse the same allocation across tiles whose exact
+/// supersample sizes differ only by a few pixels. When the bucket equals the
+/// supersample exactly (no padding) `crop_uv` = (1, 1) and the shader output
+/// is bit-identical to the unbucketed path.
+///
+/// 64 was chosen as the minimum power-of-two that amortises pool fragmentation
+/// while keeping wasted texels below ~4× for typical (>16 px) tiles.
+const SSAA_BUCKET_ALIGNMENT: u32 = 64;
+
+/// Fullscreen quad for the 2×→1× downsample pass.
+///
+/// Two triangles covering NDC [-1,1]×[-1,1]. UV (0,0) = top-left, (1,1) =
+/// bottom-right (wgpu top-left origin). The vertex shader scales UV by
+/// `crop_uv` to address only the content region inside a bucket allocation.
+///
+/// Hoisted to a module-level const so the buffer is created ONCE in
+/// `SsaaDownsamplePipeline::new` and reused for every frame — avoid per-draw
+/// `create_buffer_init` (allocation + upload on every path AA draw call).
+#[rustfmt::skip]
+const SSAA_QUAD_VERTICES: &[f32] = &[
+    // position (x,y)   UV (u,v)
+    -1.0,  1.0,         0.0, 0.0, // top-left
+    -1.0, -1.0,         0.0, 1.0, // bottom-left
+     1.0, -1.0,         1.0, 1.0, // bottom-right
+    -1.0,  1.0,         0.0, 0.0, // top-left
+     1.0, -1.0,         1.0, 1.0, // bottom-right
+     1.0,  1.0,         1.0, 0.0, // top-right
+];
+
 /// Pipeline for the 2×→1× box-filter downsample pass used by SSAA path AA.
 ///
 /// The pipeline samples a 2× supersampled source texture (premultiplied RGBA)
@@ -58,8 +90,11 @@ use super::{
 pub(crate) struct SsaaDownsamplePipeline {
     /// Render pipeline for the 4-tap box downsample.
     pub(crate) pipeline: wgpu::RenderPipeline,
-    /// Bind group layout: binding 0 = source texture, binding 1 = linear sampler.
+    /// Bind group layout: binding 0 = source texture, binding 1 = linear sampler,
+    /// binding 2 = crop_uv uniform buffer.
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
+    /// Fullscreen quad vertex buffer, created once and reused every draw call.
+    pub(crate) quad_vertex_buffer: wgpu::Buffer,
 }
 
 impl SsaaDownsamplePipeline {
@@ -95,6 +130,18 @@ impl SsaaDownsamplePipeline {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // binding 2: crop_uv uniform — scales vertex UVs to the content
+                // region of the (possibly padded) pool bucket texture.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -151,11 +198,42 @@ impl SsaaDownsamplePipeline {
             cache: None,
         });
 
+        // Create the fullscreen quad vertex buffer ONCE — reused for every
+        // SSAA downsample draw call within this pipeline's lifetime.
+        let quad_vertex_buffer = {
+            use wgpu::util::DeviceExt as _;
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("SSAA Downsample Quad VB"),
+                contents: bytemuck::cast_slice(SSAA_QUAD_VERTICES),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        };
+
         Self {
             pipeline,
             bind_group_layout,
+            quad_vertex_buffer,
         }
     }
+}
+
+// ─── Pool-bucketing arithmetic ─────────────────────────────────────────────────
+
+/// Round `value` up to the next multiple of `alignment`.
+///
+/// `alignment` must be non-zero; panics in debug builds if it is.
+/// Saturating addition prevents overflow for extreme values (though pool
+/// dimensions are bounded by `max_tex_dim` before this function is called).
+///
+/// # Examples
+/// ```ignore
+/// assert_eq!(round_up_to_alignment(130, 64), 192);
+/// assert_eq!(round_up_to_alignment(128, 64), 128); // already aligned
+/// assert_eq!(round_up_to_alignment(1, 64), 64);
+/// ```
+fn round_up_to_alignment(value: u32, alignment: u32) -> u32 {
+    debug_assert!(alignment > 0, "alignment must be non-zero");
+    value.saturating_add(alignment - 1) / alignment * alignment
 }
 
 // ─── Replay helper ─────────────────────────────────────────────────────────────
@@ -298,18 +376,26 @@ impl GpuReplay {
             return;
         }
 
-        // ── Step 2: acquire a 2× pooled texture ───────────────────────────────
+        // ── Step 2: acquire a 2× pooled texture (bucketed) ───────────────────
         //
         // tile_w ≤ max_tile_half = max_tex_dim/2 (guaranteed by the fallback
         // above), so tile_w*2 ≤ max_tex_dim. No wgpu create_texture error.
         let supersample_w = tile_w * 2;
         let supersample_h = tile_h * 2;
 
-        let super_tex = resources.layer_texture_pool_mut().acquire(
-            supersample_w,
-            supersample_h,
-            surface_format,
-        );
+        // Pool bucketing: round supersample dims UP to the next multiple of
+        // SSAA_BUCKET_ALIGNMENT, capped at max_tex_dim.  This promotes texture
+        // reuse across paths with slightly different sizes (e.g. two tiles of
+        // 130×132 and 126×128 both acquire the 192×192 bucket rather than two
+        // distinct sizes).  When the bucket equals the supersample exactly,
+        // crop_uv = (1,1) and the shader output is bit-identical.
+        let bucket_w = round_up_to_alignment(supersample_w, SSAA_BUCKET_ALIGNMENT).min(max_tex_dim);
+        let bucket_h = round_up_to_alignment(supersample_h, SSAA_BUCKET_ALIGNMENT).min(max_tex_dim);
+
+        let super_tex =
+            resources
+                .layer_texture_pool_mut()
+                .acquire(bucket_w, bucket_h, surface_format);
         let super_view = super_tex.view();
 
         // ── Step 3: clear + render into the 2× tile ───────────────────────────
@@ -444,11 +530,14 @@ impl GpuReplay {
         );
 
         // ── Step 4: box-downsample 2× → 1× premultiplied tile ────────────────
+        //
+        // Pass the exact supersample dims (not the bucket) so the function can
+        // compute crop_uv = supersample/bucket correctly.
 
         let one_x_tile = self.downsample_ssaa_tile(
             &super_tex,
-            tile_w,
-            tile_h,
+            supersample_w,
+            supersample_h,
             surface_format,
             device,
             pipelines,
@@ -572,19 +661,37 @@ impl GpuReplay {
 
     /// Box-downsample a 2× pooled `source_texture` into a fresh 1× tile.
     ///
-    /// Returns the 1× [`PooledTexture`]; the caller is responsible for
-    /// compositing it before dropping.
+    /// ## Pool bucketing
+    ///
+    /// The `source_tex` was acquired at the exact supersample dimensions
+    /// `(supersample_w, supersample_h)`, but the pool may have returned a
+    /// larger bucket (next multiple of [`SSAA_BUCKET_ALIGNMENT`], capped at
+    /// the device max texture dimension). The `crop_uv` uniform
+    /// `(supersample_w/bucket_w, supersample_h/bucket_h)` scales vertex UVs
+    /// so only the content region is sampled.
+    ///
+    /// When the bucket equals the supersample (no padding, or exact multiple),
+    /// `crop_uv` = (1.0, 1.0) and the output is bit-identical to the
+    /// pre-bucketing path.
+    ///
+    /// Returns the 1× [`PooledTexture`]; the caller composites then drops it.
     fn downsample_ssaa_tile(
         &mut self,
         source_tex: &PooledTexture,
-        output_w: u32,
-        output_h: u32,
+        supersample_w: u32,
+        supersample_h: u32,
         output_format: wgpu::TextureFormat,
         device: &Arc<wgpu::Device>,
         pipelines: &PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
     ) -> PooledTexture {
+        // ── Output (1×) dimensions ─────────────────────────────────────────
+        // The logical output is half the supersample size (which is always the
+        // original tile_w/tile_h from render_ssaa_path step 2).
+        let output_w = supersample_w / 2;
+        let output_h = supersample_h / 2;
+
         // Acquire the 1× output tile and clear it to transparent.
         let one_x_tile =
             resources
@@ -611,7 +718,41 @@ impl GpuReplay {
             });
         }
 
-        // Build the bind group: source 2× texture + linear sampler.
+        // ── crop_uv: ratio of content to bucket ────────────────────────────
+        //
+        // The source texture returned by the pool has bucket dimensions
+        // `(bucket_w, bucket_h)` — the actual allocated wgpu texture size.
+        // We can query these from the PooledTexture; for now we derive them
+        // from the supersample dimensions (which the caller passed): the pool
+        // always returns a texture ≥ (supersample_w, supersample_h), so we
+        // read the actual texture dimensions from the wgpu handle.
+        //
+        // SAFETY: `source_tex.texture()` is the live wgpu handle. Its width/
+        // height reflect the actual bucket the pool allocated.
+        let bucket_w = source_tex.width();
+        let bucket_h = source_tex.height();
+
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "bucket/supersample dims are small u32 values; f32 is sufficient for UV ratios"
+        )]
+        let crop_uv_x = supersample_w as f32 / bucket_w as f32;
+        #[allow(clippy::cast_precision_loss, reason = "same as above")]
+        let crop_uv_y = supersample_h as f32 / bucket_h as f32;
+
+        // crop_uv uniform: [x, y, pad, pad] — matches the WGSL struct layout.
+        let crop_uv_data: [f32; 4] = [crop_uv_x, crop_uv_y, 0.0, 0.0];
+
+        let crop_uv_buffer = {
+            use wgpu::util::DeviceExt as _;
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("SSAA Crop UV Uniform"),
+                contents: bytemuck::cast_slice(&crop_uv_data),
+                usage: wgpu::BufferUsages::UNIFORM,
+            })
+        };
+
+        // Build the bind group: source 2× texture + linear sampler + crop_uv.
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("SSAA Downsample Bind Group"),
             layout: &pipelines.ssaa_downsample.bind_group_layout,
@@ -625,32 +766,14 @@ impl GpuReplay {
                     // `default_sampler` uses Linear filtering — correct for the 4-tap box average.
                     resource: wgpu::BindingResource::Sampler(&self.default_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: crop_uv_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        // Fullscreen quad in NDC: two triangles covering [-1,1] × [-1,1].
-        // UV (0,0) = top-left, (1,1) = bottom-right to match wgpu's top-left origin.
-        #[rustfmt::skip]
-        let quad_vertices: &[f32] = &[
-            // position (x,y)   UV (u,v)
-            -1.0,  1.0,         0.0, 0.0, // top-left
-            -1.0, -1.0,         0.0, 1.0, // bottom-left
-             1.0, -1.0,         1.0, 1.0, // bottom-right
-            -1.0,  1.0,         0.0, 0.0, // top-left
-             1.0, -1.0,         1.0, 1.0, // bottom-right
-             1.0,  1.0,         1.0, 0.0, // top-right
-        ];
-
-        let vertex_buffer = {
-            use wgpu::util::DeviceExt as _;
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("SSAA Downsample Quad VB"),
-                contents: bytemuck::cast_slice(quad_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
-        };
-
-        // Run the downsample pass.
+        // Run the downsample pass using the cached quad vertex buffer.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("SSAA Box Downsample Pass"),
@@ -671,7 +794,8 @@ impl GpuReplay {
 
             pass.set_pipeline(&pipelines.ssaa_downsample.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            // Cached VB — no per-draw allocation.
+            pass.set_vertex_buffer(0, pipelines.ssaa_downsample.quad_vertex_buffer.slice(..));
             pass.draw(0..6, 0..1);
         }
 
@@ -1079,5 +1203,440 @@ mod unit_tests {
             (supersample_w, supersample_h, 1, 1),
             "scissor entirely outside tile must produce the fully-clipped sentinel; got {remapped:?}"
         );
+    }
+
+    // ── P2: round_up_to_alignment (pool bucket quantize) ────────────────────
+
+    /// P2-a: `round_up_to_alignment` correctly rounds up to multiples of 64.
+    ///
+    /// This is the arithmetic backing the SSAA tile bucket: a 2× supersample of
+    /// arbitrary size is rounded up to the next 64px multiple so the pool can
+    /// reuse the same allocation for nearby sizes.
+    #[test]
+    fn round_up_to_alignment_correctness() {
+        use super::round_up_to_alignment;
+
+        // Already-aligned value stays the same.
+        assert_eq!(
+            round_up_to_alignment(128, 64),
+            128,
+            "128 is already a multiple of 64"
+        );
+        // One over → next bucket.
+        assert_eq!(
+            round_up_to_alignment(129, 64),
+            192,
+            "129 rounds up to 192 (next 64-multiple)"
+        );
+        // Typical small tile: 130px → 192.
+        assert_eq!(round_up_to_alignment(130, 64), 192);
+        // Minimum case.
+        assert_eq!(round_up_to_alignment(1, 64), 64);
+        // Zero → 0 (aligned at any alignment).
+        assert_eq!(round_up_to_alignment(0, 64), 0);
+        // Exact multiple: 256 → 256.
+        assert_eq!(round_up_to_alignment(256, 64), 256);
+        // Just below a larger bucket: 191 → 192.
+        assert_eq!(round_up_to_alignment(191, 64), 192);
+        // Just at the boundary: 192 → 192.
+        assert_eq!(round_up_to_alignment(192, 64), 192);
+        // Cap via .min(max) is caller responsibility; test with a large dim.
+        let max_tex_dim: u32 = 8192;
+        let bucket = round_up_to_alignment(8000, 64).min(max_tex_dim);
+        assert_eq!(bucket, 8000_u32.div_ceil(64) * 64);
+    }
+
+    /// P2-b: when bucket > supersample, crop_uv is in (0, 1) exclusive.
+    ///
+    /// Structural arithmetic check: `supersample / bucket` must be < 1 when
+    /// the bucket is larger, ensuring the shader samples only the content region.
+    #[test]
+    fn crop_uv_is_less_than_one_when_bucket_is_larger() {
+        use super::round_up_to_alignment;
+
+        // A 130px supersample gets a 192px bucket.
+        let supersample = 130_u32;
+        let bucket = round_up_to_alignment(supersample, 64);
+        assert_eq!(bucket, 192, "130 → 192 bucket");
+
+        let crop_uv = supersample as f32 / bucket as f32;
+        assert!(
+            crop_uv > 0.0 && crop_uv < 1.0,
+            "crop_uv must be in (0, 1) when bucket > supersample; got {crop_uv}"
+        );
+        // Sanity: the shader must not over-sample beyond bucket_w.
+        let sampled_max = crop_uv * bucket as f32;
+        assert!(
+            (sampled_max - supersample as f32).abs() < 0.001,
+            "crop_uv × bucket_w must equal supersample_w; got {sampled_max}"
+        );
+    }
+
+    /// P2-c: when bucket == supersample (already aligned), crop_uv == 1.0.
+    #[test]
+    fn crop_uv_is_one_when_bucket_equals_supersample() {
+        use super::round_up_to_alignment;
+
+        let supersample = 128_u32; // already a multiple of 64
+        let bucket = round_up_to_alignment(supersample, 64);
+        assert_eq!(
+            bucket, supersample,
+            "128 is already aligned → bucket == supersample"
+        );
+
+        let crop_uv = supersample as f32 / bucket as f32;
+        assert!(
+            (crop_uv - 1.0).abs() < f32::EPSILON,
+            "crop_uv must be exactly 1.0 when bucket == supersample; got {crop_uv}"
+        );
+    }
+}
+
+// ─── GPU tests (require a real wgpu adapter) ─────────────────────────────────
+
+/// H2(b): The view-only fallback (advanced blend with `surface_texture = None`)
+/// composites the SSAA tile via SrcOver and must leave visible, AA'd pixels.
+///
+/// ## Failure mode if the fallback branch is deleted
+///
+/// Without the else-branch in `render_ssaa_path` (lines 599–624 of ssaa.rs),
+/// `one_x_tile` is dropped without being composited → the target remains
+/// transparent → `interior_alpha == 0` and `partial_count == 0`.  This test
+/// would then fire on the interior assertion, proving the branch is load-bearing.
+///
+/// ## What the test does
+///
+/// 1. Paints a triangle with `BlendMode::Multiply` (an advanced/dst-read mode).
+/// 2. Renders to `RenderTarget::view_only` — passes `surface_texture = None`
+///    to `render_ssaa_path`, triggering the warn + SrcOver fallback.
+/// 3. Reads back the pixels.
+/// 4. Asserts:
+///    - Interior pixel is opaque (tile was composited, not discarded).
+///    - ≥ 50% of triangle boundary pixels have partial alpha (SSAA AA present).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod gpu_tests {
+    use std::sync::Arc;
+
+    use flui_painting::{BlendMode, Paint};
+    use flui_types::{Color, geometry::Pixels};
+
+    use crate::wgpu::{painter::WgpuPainter, render_target::RenderTarget};
+
+    // ── harness constants ─────────────────────────────────────────────────────
+
+    const SURFACE_W: u32 = 128;
+    const SURFACE_H: u32 = 128;
+    const SURFACE_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+    // ── harness helpers ───────────────────────────────────────────────────────
+
+    fn acquire_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("GPU adapter required for ssaa::gpu_tests");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("SSAA GPU Test Device"),
+            ..Default::default()
+        }))
+        .expect("GPU device required for ssaa::gpu_tests");
+        (Arc::new(device), Arc::new(queue))
+    }
+
+    fn make_render_surface(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("SSAA GPU Test Surface"),
+            size: wgpu::Extent3d {
+                width: SURFACE_W,
+                height: SURFACE_H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: SURFACE_FMT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    fn clear_to_transparent(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("SSAA GPU Test Clear"),
+        });
+        {
+            let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSAA GPU Test Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// Read all SURFACE_W × SURFACE_H pixels, returning row-major RGBA bytes.
+    fn readback_rgba(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Vec<[u8; 4]> {
+        let bytes_per_pixel = 4_u32;
+        let unpadded_row = SURFACE_W * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_row = unpadded_row.div_ceil(align) * align;
+        let staging_size = u64::from(padded_row * SURFACE_H);
+
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SSAA GPU Test Readback"),
+            size: staging_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("SSAA GPU Test Readback Encoder"),
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(SURFACE_H),
+                },
+            },
+            wgpu::Extent3d {
+                width: SURFACE_W,
+                height: SURFACE_H,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(enc.finish()));
+
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("GPU readback poll must complete within the test timeout");
+
+        let raw = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((SURFACE_W * SURFACE_H) as usize);
+        for row in 0..SURFACE_H {
+            let row_start = (row * padded_row) as usize;
+            for col in 0..SURFACE_W {
+                let offset = row_start + col as usize * 4;
+                pixels.push([
+                    raw[offset],
+                    raw[offset + 1],
+                    raw[offset + 2],
+                    raw[offset + 3],
+                ]);
+            }
+        }
+        pixels
+    }
+
+    // ── H2(b): view-only fallback exercises the warn + SrcOver composite ──────
+
+    /// H2(b): `render_ssaa_path` view-only advanced-blend fallback composites
+    /// the SSAA tile via SrcOver and must produce opaque interior + AA boundary.
+    ///
+    /// This test FAILS if the `else` branch inside `render_ssaa_path`
+    /// (the `surface_texture.is_none()` path for advanced blends) is deleted:
+    /// without it `one_x_tile` is silently dropped and the target stays transparent.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "small fixed-size test surface; pixel-coordinate arithmetic is safe"
+    )]
+    fn h2b_view_only_advanced_blend_fallback_composites_via_src_over() {
+        let (device, queue) = acquire_device_and_queue();
+        // Create a render surface: hold `surface_tex` for readback; derive `surface_view`
+        // for rendering.  `RenderTarget::view_only` omits the &Texture reference from the
+        // render-target struct — that is what triggers `surface_texture = None` inside
+        // `render_ssaa_path` — but the wgpu texture itself remains alive and readable.
+        let (surface_tex, surface_view) = make_render_surface(&device);
+        clear_to_transparent(&device, &queue, &surface_view);
+
+        // A 45° right triangle centered in the 128×128 surface.  Non-axis-aligned
+        // edges produce partial-alpha boundary pixels under SSAA.
+        let cx = SURFACE_W as f32 / 2.0;
+        let cy = SURFACE_H as f32 / 2.0;
+        let half_side = 36.0_f32;
+        let apex_x = cx;
+        let apex_y = cy - half_side;
+        let right_x = cx + half_side;
+        let right_y = cy + half_side;
+        let left_x = cx - half_side;
+        let left_y = cy + half_side;
+
+        let mut path = flui_types::painting::path::Path::new();
+        path.move_to(flui_types::Point::new(Pixels(apex_x), Pixels(apex_y)));
+        path.line_to(flui_types::Point::new(Pixels(right_x), Pixels(right_y)));
+        path.line_to(flui_types::Point::new(Pixels(left_x), Pixels(left_y)));
+        path.close();
+
+        // BlendMode::Multiply is an advanced (dst-read) blend mode.
+        // RenderTarget::view_only → `surface_texture = None` in render_ssaa_path →
+        // the warn + SrcOver fallback branch fires.
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            SURFACE_FMT,
+            (SURFACE_W, SURFACE_H),
+        );
+        painter.draw_path(
+            &path,
+            &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Multiply),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("H2b Fallback Encoder"),
+        });
+        painter
+            .render(RenderTarget::view_only(&surface_view), &mut encoder)
+            .expect("render must succeed even on a view-only target");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // `surface_tex` was always alive; we can read it back directly.
+        let pixels = readback_rgba(&device, &queue, &surface_tex);
+
+        // ── Assert 1: interior pixel is opaque ───────────────────────────────
+        //
+        // ── Assert 1: interior pixel is opaque ───────────────────────────────
+        //
+        // If the fallback branch is deleted, one_x_tile is dropped without being
+        // composited → target stays fully transparent → interior_alpha == 0.
+        let centroid_x = ((apex_x + right_x + left_x) / 3.0) as usize;
+        let centroid_y = ((apex_y + right_y + left_y) / 3.0) as usize;
+        let interior_pixel_index = centroid_y * SURFACE_W as usize + centroid_x;
+        let interior_alpha = pixels[interior_pixel_index][3];
+        assert!(
+            interior_alpha > 200,
+            "H2b FAILED: triangle interior (centroid at ({centroid_x},{centroid_y})) \
+             has alpha={interior_alpha} — expected > 200. \
+             The view-only SrcOver fallback in render_ssaa_path did not composite \
+             the 1× SSAA tile (one_x_tile was dropped without drawing)."
+        );
+
+        // ── Assert 2: boundary pixels have SSAA partial alpha ────────────────
+        //
+        // Boundary pixels of a triangle rendered via SSAA must have partial alpha
+        // (0 < alpha < 255).  Hard-aliased rendering gives only 0 or 255.
+        // If the fallback composites to the wrong region or is a no-op, this fires.
+        //
+        // The boundary set below is the 4-neighbour GEOMETRIC boundary, ~2-3 px
+        // wide per edge, so it overcounts the ~1 px AA band — especially on the
+        // triangle's axis-aligned bottom edge. Measured ground truth on DX12: a
+        // correct SrcOver-fallback SSAA composite makes ~34% of these geometric-
+        // boundary pixels partial; a hard-aliased or wrong-region composite gives
+        // ~0%. The 25% floor cleanly separates the two with margin; the no-op case
+        // is already caught by Assert 1 (transparent interior).
+        let boundary_pixel_indices: Vec<usize> = (0..SURFACE_H)
+            .flat_map(|row| {
+                let row = row as usize;
+                (0..SURFACE_W as usize).filter_map(move |col| {
+                    // Pixel-center sample point in device coordinates.
+                    let sample_x = col as f32 + 0.5;
+                    let sample_y = row as f32 + 0.5;
+                    let center_inside = point_in_triangle(
+                        (sample_x, sample_y),
+                        (apex_x, apex_y),
+                        (right_x, right_y),
+                        (left_x, left_y),
+                    );
+                    // A boundary pixel has at least one cardinal neighbor with the
+                    // opposite inside/outside classification.
+                    let on_boundary = [
+                        (sample_x - 1.0, sample_y),
+                        (sample_x + 1.0, sample_y),
+                        (sample_x, sample_y - 1.0),
+                        (sample_x, sample_y + 1.0),
+                    ]
+                    .into_iter()
+                    .any(|(nx, ny)| {
+                        point_in_triangle(
+                            (nx, ny),
+                            (apex_x, apex_y),
+                            (right_x, right_y),
+                            (left_x, left_y),
+                        ) != center_inside
+                    });
+                    on_boundary.then_some(row * SURFACE_W as usize + col)
+                })
+            })
+            .collect();
+
+        assert!(
+            boundary_pixel_indices.len() >= 8,
+            "H2b: fewer than 8 boundary pixels found ({}) — oracle or path geometry is wrong",
+            boundary_pixel_indices.len()
+        );
+
+        let partial_boundary_count = boundary_pixel_indices
+            .iter()
+            .filter(|&&pixel_index| {
+                let alpha = pixels[pixel_index][3];
+                alpha > 5 && alpha < 250
+            })
+            .count();
+        let min_partial_required = (boundary_pixel_indices.len() as f32 * 0.25).ceil() as usize;
+
+        assert!(
+            partial_boundary_count >= min_partial_required,
+            "H2b FAILED: only {partial_boundary_count}/{} boundary pixels have partial \
+             alpha (expected ≥{min_partial_required}). \
+             Hard-aliased rendering gives ~0 partial pixels; a correct SSAA \
+             fallback gives ~34% of the (overcounted) geometric boundary. \
+             The fallback composite may be a no-op or compositing the wrong region.",
+            boundary_pixel_indices.len()
+        );
+    }
+
+    /// Return true if `(query_x, query_y)` is inside or on the edge of the
+    /// triangle `(ax,ay)-(bx,by)-(cx,cy)` using the sign-of-cross-product test.
+    fn point_in_triangle(query: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+        let (query_x, query_y) = query;
+        let (ax, ay) = a;
+        let (bx, by) = b;
+        let (cx, cy) = c;
+        let signed_area = |ox: f32, oy: f32, ex: f32, ey: f32| -> f32 {
+            (ex - ox) * (query_y - oy) - (ey - oy) * (query_x - ox)
+        };
+        let d0 = signed_area(ax, ay, bx, by);
+        let d1 = signed_area(bx, by, cx, cy);
+        let d2 = signed_area(cx, cy, ax, ay);
+        let has_neg = d0 < 0.0 || d1 < 0.0 || d2 < 0.0;
+        let has_pos = d0 > 0.0 || d1 > 0.0 || d2 > 0.0;
+        !(has_neg && has_pos)
     }
 }

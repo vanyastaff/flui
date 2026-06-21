@@ -331,8 +331,35 @@ impl Renderer {
         let backends = Self::select_backend();
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
 
+        // DX12 presentation system: route through DirectComposition
+        // (`CreateSwapChainForComposition` + an auto-created `IDCompositionVisual`)
+        // instead of the default `CreateSwapChainForHwnd` redirection-bitmap path.
+        //
+        // The HWND redirection bitmap + flip-model swapchain have no synchronization
+        // between the swapchain flip and the window-rect change during a live resize,
+        // so DWM stretches the in-flight back buffer to the new rect — the root cause
+        // of resize "wobble" (confirmed: not fixable via present_mode / frame_latency /
+        // DwmFlush / WM_SIZE timing — see winit#786, wgpu#2869, and the hardcoded
+        // `DXGI_SCALING_STRETCH` in wgpu-hal dx12). Compositing through a DComp visual
+        // lets DWM own the transform, which removes the stretch and gives smooth resize.
+        //
+        // Opt out with `FLUI_DX12_NO_DCOMP=1` (RenderDoc cannot capture a composition
+        // swapchain, so GPU-debugging the present path needs the plain HWND path).
+        let dx12_options = if std::env::var_os("FLUI_DX12_NO_DCOMP").is_some() {
+            tracing::debug!("DX12 DComp presentation disabled via FLUI_DX12_NO_DCOMP");
+            wgpu::Dx12BackendOptions::default()
+        } else {
+            wgpu::Dx12BackendOptions {
+                presentation_system: wgpu::Dx12SwapchainKind::DxgiFromVisual,
+                ..Default::default()
+            }
+        };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
+            backend_options: wgpu::BackendOptions {
+                dx12: dx12_options,
+                ..Default::default()
+            },
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
@@ -415,7 +442,11 @@ impl Renderer {
             present_mode: Self::select_present_mode(&surface_caps),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            // 1 (not 2): during a live resize the displayed frame must track the
+            // window size as tightly as possible. A latency of 2 lets the present
+            // queue hold frames rendered for an older size, which the compositor
+            // then stretches to the current window → visible resize jitter.
+            desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
 
@@ -874,7 +905,11 @@ impl Renderer {
 
     /// Select present mode based on capabilities
     fn select_present_mode(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
-        // Prefer Mailbox (triple buffering, low latency) > Fifo (vsync)
+        // Prefer Mailbox (triple buffering, low latency) > Fifo (vsync).
+        // NB: neither cures live-resize wobble — Mailbox stretches the in-flight
+        // frame, Fifo blocks on vsync and ghosts a stale frame during the modal
+        // resize loop. The wobble is inherent flip-model DWM compositing; the only
+        // real fix is DXGI_SCALING_NONE, which wgpu 29 does not expose.
         if surface_caps
             .present_modes
             .contains(&wgpu::PresentMode::Mailbox)
@@ -1061,6 +1096,25 @@ impl Renderer {
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Observability: the acquired swapchain texture must match the configured
+        // surface size, which is the size the geometry was laid out / the viewport
+        // uniform was written against. A divergence means a resize landed between
+        // `surface.configure` and `get_current_texture` (or the OS handed back a
+        // stale backbuffer) — the frame would then be presented stretched, which
+        // reads as resize "jitter". Warn (don't spam): only when they actually differ.
+        if let Some(config) = self.config.as_ref() {
+            let attachment = (output.texture.width(), output.texture.height());
+            let configured = (config.width, config.height);
+            if attachment != configured {
+                tracing::warn!(
+                    ?attachment,
+                    ?configured,
+                    "render_scene: swapchain texture size != configured surface size \
+                     (resize transient — frame will present stretched)"
+                );
+            }
+        }
 
         // Determine whether this frame should go through the intermediate-texture
         // path (COPY_SRC-less adapters, or forced in tests).
