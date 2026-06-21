@@ -25,7 +25,7 @@ use flui_types::Rect;
 use flui_types::geometry::Pixels;
 use flui_types::painting::BlendMode;
 
-use super::command_ir::{DrawItem, DrawSegment, SavedLayer};
+use super::command_ir::{DrawItem, DrawSegment, LayerFilter, SavedLayer};
 
 /// Outcome returned by [`LayerCompositor::pop_layer`].
 ///
@@ -54,6 +54,11 @@ pub(super) enum RestoreOutcome {
         /// `SrcOver` for plain opacity layers; an advanced mode (e.g. Multiply)
         /// for layers opened with an explicit blend mode via `save_layer`.
         layer_blend: BlendMode,
+        /// Optional per-pixel GPU filter applied before compositing.
+        ///
+        /// Forwarded from [`SavedLayer::filter`] so the painter can pass it into
+        /// [`super::command_ir::PendingOpacityLayer`] without coupling the flush path.
+        layer_filter: Option<LayerFilter>,
         /// Parent segment saved before `save_layer` — splice back into `current_segment`.
         saved_segment: DrawSegment,
         /// Parent draw order saved before `save_layer` — splice back into `draw_order`.
@@ -190,6 +195,12 @@ impl LayerCompositor {
     ///
     /// After this call `current_opacity` is `1.0`; children inside the layer
     /// draw at full opacity and group opacity is applied during compositing.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "all arguments are load-bearing: draw-order snapshot, opacity, tint, blend, \
+                  bounds, and filter must all be stored on the SavedLayer; the alternative \
+                  (a builder struct) adds complexity without a semantic boundary"
+    )]
     pub(super) fn push_layer(
         &mut self,
         saved_draw_order: Vec<DrawItem>,
@@ -198,6 +209,7 @@ impl LayerCompositor {
         layer_tint_rgb: [f32; 3],
         layer_blend: BlendMode,
         bounds: Option<[f32; 4]>,
+        filter: Option<LayerFilter>,
     ) {
         let saved = SavedLayer {
             saved_draw_order,
@@ -208,6 +220,7 @@ impl LayerCompositor {
             layer_tint_rgb,
             layer_blend,
             bounds,
+            filter,
         };
         self.layer_stack.push(saved);
 
@@ -285,12 +298,18 @@ impl LayerCompositor {
         // path even at opacity=1.0 and white tint, because the reintegrate path
         // splices children unchanged into the parent draw order — silently dropping
         // the blend.
+        //
+        // A LayerFilter ALWAYS forces the composite path: the filter must run on
+        // the rendered offscreen before pixels reach the parent, which the
+        // reintegrate path cannot do (it inserts content directly into the parent
+        // draw order without an offscreen round-trip).
         let has_chroma = (saved.layer_tint_rgb[0] - 1.0).abs() > f32::EPSILON
             || (saved.layer_tint_rgb[1] - 1.0).abs() > f32::EPSILON
             || (saved.layer_tint_rgb[2] - 1.0).abs() > f32::EPSILON;
         let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON
             || has_chroma
-            || saved.layer_blend.is_advanced();
+            || saved.layer_blend.is_advanced()
+            || saved.filter.is_some();
 
         if needs_composite {
             RestoreOutcome::Composite {
@@ -300,6 +319,7 @@ impl LayerCompositor {
                 tint_rgb: saved.layer_tint_rgb,
                 composite_bounds,
                 layer_blend: saved.layer_blend,
+                layer_filter: saved.filter,
                 saved_segment: saved.saved_segment,
                 saved_draw_order: saved.saved_draw_order,
             }
@@ -355,6 +375,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         compositor.debug_assert_balanced();
     }
@@ -376,6 +397,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         // Inside the layer, children draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
@@ -395,6 +417,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         // Children inside the layer draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
@@ -411,6 +434,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         let _ = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!((compositor.current_opacity() - 0.8).abs() < f32::EPSILON);
@@ -426,6 +450,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Empty { .. }));
@@ -441,6 +466,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Composite { .. }));
@@ -456,6 +482,7 @@ mod tests {
             [0.0, 0.0, 1.0], // blue tint → has_chroma
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(
@@ -474,6 +501,7 @@ mod tests {
             [1.0, 1.0, 1.0], // white tint → no chroma
             BlendMode::SrcOver,
             None,
+            None, // no LayerFilter
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(

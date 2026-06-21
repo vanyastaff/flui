@@ -25,6 +25,34 @@ use super::{
     vertex::Vertex,
 };
 
+// ─── Layer filter ────────────────────────────────────────────────────────────
+
+/// A pixel-level filter applied to the rendered content of an offscreen layer
+/// before it is composited onto its parent surface.
+///
+/// The filter is applied during `flush_opacity_layer`, immediately after
+/// `render_layer_to_offscreen` completes, by a full-screen quad pass that reads
+/// the layer offscreen and writes into a separate pooled texture (ping-pong
+/// avoiding read/write aliasing).  The filtered texture is then forwarded into
+/// both composite arms in place of the raw offscreen.
+///
+/// ## Correctness invariant — premultiplied alpha
+///
+/// The layer offscreen is premultiplied RGBA.  The `ColorMatrix` variant stores
+/// values that operate on **straight** (un-premultiplied) RGBA, matching
+/// [`flui_types::painting::ColorMatrix::apply`].  The GPU shader MUST
+/// unpremultiply before the matrix, clamp each output channel to `[0, 1]`,
+/// and repremultiply before writing, producing the identical result the CPU oracle
+/// would return for each pixel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum LayerFilter {
+    /// A 5×4 row-major color matrix applied per-pixel on un-premultiplied color.
+    ///
+    /// Layout mirrors [`flui_types::painting::ColorMatrix::values`]:
+    /// rows R/G/B/A × columns `[m0..m3, offset]`.
+    ColorMatrix([f32; 20]),
+}
+
 // ─── Primitive helpers ────────────────────────────────────────────────────────
 
 /// Scissor rect type (x, y, width, height) in physical pixels.
@@ -104,6 +132,12 @@ pub(crate) struct SavedLayer {
     /// Stored on the record side so the compositor dispatch can read it without
     /// coupling the flush path to the record path.  Defaults to `SrcOver`.
     pub(crate) layer_blend: BlendMode,
+    /// Optional per-pixel filter applied to the rendered layer before compositing.
+    ///
+    /// `None` = today's behavior (premultiplied tint-only composite).
+    /// `Some(LayerFilter::ColorMatrix(_))` routes the rendered offscreen through
+    /// the color-matrix GPU pass before the composite step.
+    pub(crate) filter: Option<LayerFilter>,
 }
 
 // ─── Draw segment ─────────────────────────────────────────────────────────────
@@ -396,4 +430,9 @@ pub(crate) struct PendingOpacityLayer {
     /// coupling it to the record path.  `SrcOver` for plain opacity layers;
     /// an advanced mode for `saveLayer` with an explicit blend mode.
     pub(crate) blend: BlendMode,
+    /// Optional per-pixel filter applied to the rendered layer before compositing.
+    ///
+    /// Forwarded from [`SavedLayer::filter`] at restore time.  `None` = plain
+    /// tint-only composite (existing behavior).
+    pub(crate) filter: Option<LayerFilter>,
 }
