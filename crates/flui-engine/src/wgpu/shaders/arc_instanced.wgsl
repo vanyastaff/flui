@@ -26,14 +26,16 @@
 //   transform           = M_world * r     (col-major [a,b,c,d])
 //   transform_translate = M_world * center_local + t_world
 //
-// ## Radial AA (fwidth — radius-independent)
+// ## Radial AA (L2 screen-space gradient — radius-independent)
 //
 // Previous shader used `edge_softness = 0.02` (radius-RELATIVE — wrong).
-// New model: `d_r = length(unit_pos) - 1.0`, `aa_r = fwidth(d_r) * 0.5`.
-// `fwidth(d_r)` measures the screen-space derivative of the unit-circle SDF,
-// yielding ~1 device-px AA at ANY radius, rotation, or anisotropic scale.
+// New model: `d_r = length(unit_pos) - 1.0`,
+// `aa_r = length(vec2(dpdx(d_r), dpdy(d_r))) * 0.5`.
+// The L2 (Euclidean) gradient measures the screen-space derivative of the
+// unit-circle SDF, yielding ~1 device-px AA at ANY radius, rotation, or
+// anisotropic scale (L1/fwidth would overestimate diagonal edges by up to √2).
 //
-// ## Angular AA (screen-space fwidth — resolution-independent)
+// ## Angular AA (L2 screen-space gradient — resolution-independent)
 //
 // Previous shader used `angle_softness = 0.05` rad (fixed ~3° — wrong at any
 // but one radius). New model uses an SDF of the two radial half-planes that
@@ -66,7 +68,7 @@
 //
 // For negative sweep (counter-clockwise): flip sign of both d_start and d_end.
 //
-// `fwidth` of the resulting angular_sdf gives screen-space ~1 device-px AA
+// The L2 gradient of the resulting angular_sdf gives screen-space ~1 device-px AA
 // at the sector edges at ANY radius or scale.
 //
 // ## Outer-fringe quad expansion
@@ -77,8 +79,8 @@
 //
 // ## AA model improvement over previous arc shader
 //
-// - Radial: `edge_softness=0.02` (radius-relative) → `fwidth(dist)` (radius-independent).
-// - Angular: `angle_softness=0.05` rad (fixed ~3°) → `fwidth(angular_sdf)` (~1px device).
+// - Radial: `edge_softness=0.02` (radius-relative) → L2 `length(dpdx, dpdy)` (radius-independent).
+// - Angular: `angle_softness=0.05` rad (fixed ~3°) → L2 gradient of `angular_sdf` (~1px device).
 // - No fixed `angle_softness` threshold remains.
 // - The `in_arc` boolean + angular smoothstep is replaced by a signed-distance
 //   approach that computes continuous partial-alpha at the sector edges.
@@ -102,7 +104,7 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     // Unit-disk coordinate: `unit_pos = expanded_unit_quad * 2 - 1`, scaled by
     // the fringe expansion. SDF evaluates `length(unit_pos) - 1.0`. Passed to
-    // the fragment so `fwidth` measures the screen-space derivative correctly.
+    // the fragment so the L2 gradient (dpdx/dpdy) measures the screen-space derivative correctly.
     @location(1) unit_pos: vec2<f32>,
     @location(2) start_angle: f32,
     @location(3) sweep_angle: f32,
@@ -185,15 +187,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let start    = in.start_angle;
     let sweep    = in.sweep_angle;
 
-    // ── Radial SDF (fwidth-based, radius-independent) ─────────────────────
+    // ── Radial SDF (L2-gradient, radius-independent) ──────────────────────
     //
     // Signed distance to the unit-circle edge:
     //   d < 0 → inside the circle
     //   d = 0 → on the edge
     //   d > 0 → outside
-    // `fwidth(d)` gives ~1 device-px AA at ANY radius, rotation, or scale.
+    // The L2 gradient of `d` gives ~1 device-px AA at ANY radius, rotation, or scale.
     let d_radial = length(unit_pos) - 1.0;
-    let aa_radial = fwidth(d_radial) * 0.5;
+    // L2 gradient magnitude: ~1-device-px AA at any angle/scale (no L1 overestimate).
+    let aa_radial = length(vec2<f32>(dpdx(d_radial), dpdy(d_radial))) * 0.5;
     let radial_alpha = 1.0 - smoothstep(-aa_radial, aa_radial, d_radial);
 
     // Discard pixels fully outside the circle (fringe expansion safety).
@@ -201,7 +204,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    // ── Angular SDF (screen-space fwidth, sector half-planes) ────────────
+    // ── Angular SDF (L2 screen-space gradient, sector half-planes) ───────
     //
     // Full-circle shortcut: |sweep| ≥ 2π → no angular cut, pure circle.
     let tau = 6.28318530718; // 2π
@@ -262,8 +265,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         angular_sdf = max(d_start_hp, d_end_hp);
     }
 
-    // Screen-space AA width for the angular edge: ~1 device-px.
-    let aa_angular = fwidth(angular_sdf) * 0.5;
+    // Screen-space AA width for the angular edge: ~1 device-px via L2 gradient.
+    let aa_angular = length(vec2<f32>(dpdx(angular_sdf), dpdy(angular_sdf))) * 0.5;
     let angular_alpha = smoothstep(-aa_angular, aa_angular, angular_sdf);
 
     // Discard pixels fully outside the angular sector.

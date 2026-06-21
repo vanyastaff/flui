@@ -22,9 +22,10 @@
 //   transform_translate = M_world * center_local + t_world
 //
 // The SDF fragment evaluates `length(unit_pos) - 1.0` (0 at the unit-circle
-// edge). `fwidth(dist)` measures the screen-space derivative of that local
-// distance, yielding ~1-device-px AA under ANY affine (rotation/shear/
-// anisotropic scale).
+// edge). The L2 screen-space gradient `length(vec2(dpdx(dist), dpdy(dist)))`
+// measures the derivative of that local distance, yielding ~1-device-px AA under
+// ANY affine (rotation/shear/anisotropic scale); L1/fwidth would overestimate
+// diagonal edges by up to √2.
 //
 // ## Baked fast path (axis-aligned SrcOver circles)
 //
@@ -44,7 +45,7 @@
 // ## AA quality fix
 //
 // Previous shader used `edge_softness = 0.02` (radius-RELATIVE): a 200px circle
-// got 4px AA; a 5px circle got 0.1px. The new `fwidth`-based model gives exactly
+// got 4px AA; a 5px circle got 0.1px. The new L2-gradient model gives exactly
 // ~1 device-px AA at ANY radius and any affine — the same model as rect_instanced.
 
 // Vertex input (shared unit quad: [0,0] to [1,1])
@@ -66,8 +67,8 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     // Unit-circle coordinate passed from the vertex shader to the fragment.
     // For the unit-circle local shape: `unit_pos = (local_pos - center) / radius`.
-    // The SDF evaluates `length(unit_pos) - 1.0`; fwidth gives correct screen-space
-    // AA width regardless of the affine applied in the vertex shader.
+    // The SDF evaluates `length(unit_pos) - 1.0`; the L2 gradient (dpdx/dpdy) gives
+    // correct screen-space AA width regardless of the affine applied in the vertex shader.
     @location(1) unit_pos: vec2<f32>,
 }
 
@@ -162,7 +163,7 @@ fn vs_main(
 }
 
 // =============================================================================
-// Fragment Shader (SDF-based with screen-space fwidth AA)
+// Fragment Shader (SDF-based with L2 screen-space gradient AA)
 // =============================================================================
 
 @fragment
@@ -175,15 +176,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // `length(unit_pos) - 1.0` is the exact SDF of the unit circle in the
     // coordinate space passed from the vertex shader. Because the vertex shader
     // maps local→device via the full affine M (which is M_world * diag(rx,ry)),
-    // `fwidth(d)` measures the screen-space gradient of this distance, giving
-    // ~1 device-px AA at ANY radius, rotation, or anisotropic scale — correct
-    // for circles, rotated circles, and oriented ellipses.
+    // The L2 gradient `length(vec2(dpdx(d), dpdy(d)))` measures the screen-space
+    // gradient of this distance, giving ~1 device-px AA at ANY radius, rotation,
+    // or anisotropic scale — correct for circles, rotated circles, and oriented
+    // ellipses.
     let d = length(in.unit_pos) - 1.0;
 
-    // Adaptive AA: half-pixel-width in local SDF units, derived from fwidth.
+    // Adaptive AA: L2 gradient magnitude = sqrt(dpdx²+dpdy²), half width.
+    // L2 gives exactly ~1-device-px AA at any angle; L1/fwidth overestimates
+    // by up to √2 on ±45° diagonals, widening the band at rotated edges.
     // smoothstep maps [-aa, aa] → [1, 0]: fragments inside are fully opaque,
     // outside fully transparent, and the boundary band is anti-aliased.
-    let aa = fwidth(d) * 0.5;
+    let aa = length(vec2<f32>(dpdx(d), dpdy(d))) * 0.5;
     let alpha = 1.0 - smoothstep(-aa, aa, d);
 
     // Discard fully transparent pixels to reduce overdraw on expanded fringe.
