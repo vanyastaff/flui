@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 
 use std::sync::Arc;
 
-use super::painter::WgpuPainter;
+use super::{command_ir::LayerFilter, painter::WgpuPainter};
 use crate::{
     commands::dispatch_command,
     traits::{CommandRenderer, LayerStateStack},
@@ -1409,27 +1409,6 @@ impl CommandRenderer for Backend<'_> {
 // receiving trait differs. See `crates/flui-engine/src/traits.rs`
 // for the trait-split rationale.
 
-// ColorMatrix row-major layout: `[r0-r4, g0-g4, b0-b4, a0-a4]`.
-// Each row holds (R-coeff, G-coeff, B-coeff, A-coeff, offset) for one
-// output channel: `out = m0*R + m1*G + m2*B + m3*A + m4`.
-// The alpha row sits at indices 15-19; the alpha-out coefficient on
-// alpha-in (`a3`, alpha scaling) is index 18, the alpha offset (`a4`)
-// is index 19. Naming these out keeps the push_color_filter +
-// ImageFilter::Matrix call sites readable (PR #115 review fix).
-const COLOR_MATRIX_ALPHA_SCALE_IDX: usize = 18;
-const COLOR_MATRIX_ALPHA_OFFSET_IDX: usize = 19;
-
-/// Extract (alpha_scale, alpha_offset, effective_alpha) from a
-/// `ColorMatrix`'s alpha row. All three values are clamped to `[0, 1]`.
-/// Helper shared by `push_color_filter` and the
-/// `ImageFilter::Matrix` branch of `push_image_filter`.
-fn color_matrix_effective_alpha(values: &[f32; 20]) -> (f32, f32, f32) {
-    let alpha_scale = values[COLOR_MATRIX_ALPHA_SCALE_IDX].clamp(0.0, 1.0);
-    let alpha_offset = values[COLOR_MATRIX_ALPHA_OFFSET_IDX].clamp(0.0, 1.0);
-    let effective = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
-    (alpha_scale, alpha_offset, effective)
-}
-
 impl LayerStateStack for Backend<'_> {
     // Cycle 4 wave 5 PR #117 review (Codex P1): every method on
     // this trait must call `self.flush_active_transform()` BEFORE
@@ -1531,44 +1510,30 @@ impl LayerStateStack for Backend<'_> {
 
     fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
         self.flush_active_transform();
-        // Check if the matrix is identity (no transformation needed)
+
+        // Identity fast-path: no-op layer keeps push/pop balanced.
+        // Exact f32 comparison is correct: `ColorMatrix::identity()` is
+        // built from bit-exact 0.0/1.0 literals, so a transitive equality
+        // check correctly skips the GPU pass without ULP slop.
         let identity = flui_types::painting::ColorMatrix::identity();
-        // Exact f32 array comparison is intentional: ColorMatrix::identity()
-        // is built from bit-exact 0.0/1.0 literals, so a transitive equality
-        // check correctly fast-paths the no-op case without ULP slop.
         #[expect(
             clippy::float_cmp,
             reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
         )]
         if filter.values == identity.values {
-            // Identity matrix: use a plain save so pop_color_filter stays balanced
             self.painter.save_layer(None, &Paint::fill(Color::WHITE));
-            tracing::trace!("push_color_filter: identity matrix, no-op layer");
+            tracing::trace!("push_color_filter: identity matrix — no-op layer");
             return;
         }
 
-        // Pragmatic approximation: extract opacity and tint from the
-        // color matrix. The alpha-row coefficient layout
-        // (`a3` = scale, `a4` = offset) lives in
-        // `color_matrix_effective_alpha`; see the helper comment
-        // above for the row-major index mapping.
-        let (_alpha_scale, _alpha_offset, effective_alpha) =
-            color_matrix_effective_alpha(&filter.values);
-        let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
-
-        // Pass the chroma explicitly. `save_layer` ignores its paint's RGB (a
-        // saveLayer paint's color is not a tint — opacity comes from alpha,
-        // chroma only from a ColorFilter), so the filter's RGB must go through
-        // the dedicated tint entry point or it would be dropped.
+        // Real color-matrix: open a filter layer.  The GPU shader applies the
+        // full 5×4 matrix per-pixel (unpremul → matrix → clamp → repremul),
+        // so no approximation is needed here.
         self.painter
-            .save_layer_with_tint(None, effective_alpha, [tinted[0], tinted[1], tinted[2]]);
-
-        tracing::debug!(
-            "push_color_filter: approximation tint=({:.3},{:.3},{:.3}) alpha={:.2}",
-            tinted[0],
-            tinted[1],
-            tinted[2],
-            effective_alpha
+            .save_layer_with_filter(None, LayerFilter::ColorMatrix(filter.values));
+        tracing::trace!(
+            matrix = ?filter.values,
+            "push_color_filter: GPU color-matrix filter layer"
         );
     }
 
@@ -1616,34 +1581,22 @@ impl LayerStateStack for Backend<'_> {
                 );
             }
             ImageFilter::Matrix(matrix) => {
-                let (_alpha_scale, _alpha_offset, effective_alpha) =
-                    color_matrix_effective_alpha(&matrix.values);
-                let tinted = matrix.apply([1.0, 1.0, 1.0, 1.0]);
-
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let tint_color = Color::rgba(
-                    (tinted[0] * 255.0) as u8,
-                    (tinted[1] * 255.0) as u8,
-                    (tinted[2] * 255.0) as u8,
-                    (effective_alpha * 255.0) as u8,
-                );
-                let paint = Paint::fill(tint_color);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Matrix): approximation tint=({},{},{}) alpha={:.2}",
-                    tint_color.r,
-                    tint_color.g,
-                    tint_color.b,
-                    effective_alpha,
+                // Full GPU color-matrix pass — no approximation.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(matrix.values));
+                tracing::trace!(
+                    matrix = ?matrix.values,
+                    "push_image_filter(Matrix): GPU color-matrix filter layer"
                 );
             }
             ImageFilter::ColorAdjust(adjustment) => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(ColorAdjust): save_layer for {:?} \
-                     (GPU color adjust not yet implemented)",
-                    adjustment,
+                // Promote to a color matrix so the same GPU pass handles it.
+                let matrix = adjustment.to_color_matrix();
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(matrix.values));
+                tracing::trace!(
+                    ?adjustment,
+                    "push_image_filter(ColorAdjust): GPU color-matrix filter layer"
                 );
             }
             ImageFilter::Compose(filters) => {

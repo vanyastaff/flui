@@ -279,6 +279,38 @@ impl ColorMatrix {
         ])
     }
 
+    /// Create a matrix that scales only the alpha channel by `opacity`.
+    ///
+    /// RGB rows are identity; alpha row is `[0, 0, 0, opacity, 0]`.
+    /// Used to lower a layer's group opacity via the color-matrix GPU pass
+    /// without touching hue or saturation.
+    #[inline]
+    pub fn opacity(opacity: f32) -> Self {
+        Self::new([
+            1.0, 0.0, 0.0, 0.0, 0.0, // R
+            0.0, 1.0, 0.0, 0.0, 0.0, // G
+            0.0, 0.0, 1.0, 0.0, 0.0, // B
+            0.0, 0.0, 0.0, opacity, 0.0, // A
+        ])
+    }
+
+    /// Linearly interpolate between the identity matrix and `other` by `t ∈ [0, 1]`.
+    ///
+    /// `t = 0` → identity; `t = 1` → `other`.  Values are not clamped;
+    /// callers supplying a `t` outside `[0, 1]` get extrapolation.
+    ///
+    /// Used by `ColorAdjustment::to_color_matrix` for the strength-parameterised
+    /// Grayscale/Sepia/Invert variants.
+    #[inline]
+    pub fn lerp_from_identity(other: &ColorMatrix, t: f32) -> Self {
+        let identity = ColorMatrix::identity();
+        let mut values = [0.0f32; 20];
+        for (i, v) in values.iter_mut().enumerate() {
+            *v = identity.values[i] + (other.values[i] - identity.values[i]) * t;
+        }
+        Self::new(values)
+    }
+
     /// Apply this color matrix to a color.
     ///
     /// # Arguments
@@ -348,6 +380,45 @@ impl Default for ColorMatrix {
     #[inline]
     fn default() -> Self {
         Self::identity()
+    }
+}
+
+impl ColorAdjustment {
+    /// Convert this high-level color adjustment to an equivalent [`ColorMatrix`].
+    ///
+    /// The returned matrix is applied to straight (un-premultiplied) RGBA in `[0, 1]`,
+    /// identical to the GPU color-matrix pass.  CPU callers can use
+    /// [`ColorMatrix::apply`] as the oracle for verifying GPU output.
+    ///
+    /// ## Variant mapping
+    ///
+    /// | Variant | Matrix constructor |
+    /// |---------|-------------------|
+    /// | `Brightness(a)` | `ColorMatrix::brightness(a)` |
+    /// | `Contrast(a)` | `ColorMatrix::contrast(a)` |
+    /// | `Saturation(a)` | `ColorMatrix::saturation(a)` |
+    /// | `HueRotate(deg)` | `ColorMatrix::hue_rotate(deg)` |
+    /// | `Grayscale(t)` | `lerp_from_identity(grayscale, t)` |
+    /// | `Sepia(t)` | `lerp_from_identity(sepia, t)` |
+    /// | `Invert(t)` | `lerp_from_identity(invert, t)` |
+    /// | `Opacity(o)` | `ColorMatrix::opacity(o)` |
+    /// | `Matrix(m)` | `m` verbatim |
+    pub fn to_color_matrix(&self) -> ColorMatrix {
+        match self {
+            ColorAdjustment::Brightness(amount) => ColorMatrix::brightness(*amount),
+            ColorAdjustment::Contrast(amount) => ColorMatrix::contrast(*amount),
+            ColorAdjustment::Saturation(amount) => ColorMatrix::saturation(*amount),
+            ColorAdjustment::HueRotate(degrees) => ColorMatrix::hue_rotate(*degrees),
+            ColorAdjustment::Grayscale(t) => {
+                ColorMatrix::lerp_from_identity(&ColorMatrix::grayscale(), *t)
+            }
+            ColorAdjustment::Sepia(t) => ColorMatrix::lerp_from_identity(&ColorMatrix::sepia(), *t),
+            ColorAdjustment::Invert(t) => {
+                ColorMatrix::lerp_from_identity(&ColorMatrix::invert(), *t)
+            }
+            ColorAdjustment::Opacity(opacity) => ColorMatrix::opacity(*opacity),
+            ColorAdjustment::Matrix(matrix) => matrix.clone(),
+        }
     }
 }
 
@@ -684,5 +755,223 @@ mod tests {
         assert_eq!(options.cap, StrokeCap::Round);
         assert_eq!(options.join, StrokeJoin::Round);
         assert!(options.dash_pattern.is_some());
+    }
+
+    // ── ColorMatrix new helpers ─────────────────────────────────────────────
+
+    /// `ColorMatrix::opacity(o)` only scales the alpha channel; RGB is passthrough.
+    #[test]
+    fn opacity_matrix_scales_alpha_only() {
+        let m = ColorMatrix::opacity(0.5);
+        let input = [0.8, 0.6, 0.4, 1.0];
+        let output = m.apply(input);
+        // RGB must be unchanged.
+        assert!((output[0] - 0.8).abs() < 1e-6, "R unchanged");
+        assert!((output[1] - 0.6).abs() < 1e-6, "G unchanged");
+        assert!((output[2] - 0.4).abs() < 1e-6, "B unchanged");
+        // Alpha halved.
+        assert!((output[3] - 0.5).abs() < 1e-6, "A halved");
+    }
+
+    /// `lerp_from_identity(m, 0.0)` == identity applied to any colour.
+    #[test]
+    fn lerp_from_identity_at_zero_is_identity() {
+        let grayscale = ColorMatrix::grayscale();
+        let lerped = ColorMatrix::lerp_from_identity(&grayscale, 0.0);
+        let color = [0.3, 0.5, 0.9, 0.7];
+        let result = lerped.apply(color);
+        for i in 0..4 {
+            assert!(
+                (result[i] - color[i]).abs() < 1e-5,
+                "channel {i}: expected {}, got {}",
+                color[i],
+                result[i]
+            );
+        }
+    }
+
+    /// `lerp_from_identity(m, 1.0)` == `m` applied to any colour.
+    #[test]
+    fn lerp_from_identity_at_one_equals_full_matrix() {
+        let grayscale = ColorMatrix::grayscale();
+        let lerped = ColorMatrix::lerp_from_identity(&grayscale, 1.0);
+        let color = [1.0, 0.0, 0.0, 1.0]; // red
+        let direct = grayscale.apply(color);
+        let via_lerp = lerped.apply(color);
+        for i in 0..4 {
+            assert!(
+                (via_lerp[i] - direct[i]).abs() < 1e-5,
+                "channel {i}: lerp(1)={} vs direct={}",
+                via_lerp[i],
+                direct[i]
+            );
+        }
+    }
+
+    // ── ColorAdjustment::to_color_matrix ──────────────────────────────────────
+
+    /// Every `ColorAdjustment` variant produces a `ColorMatrix` that materially
+    /// transforms the expected input color in the expected direction.
+    ///
+    /// These are behavioral assertions, not just "no panic" smoke tests.
+    #[test]
+    fn color_adjustment_to_color_matrix_all_variants_have_correct_effect() {
+        // Saturation(0) = grayscale: opaque red → uniform gray ≈ (0.2126, …, 1.0).
+        {
+            let m = ColorAdjustment::Saturation(0.0).to_color_matrix();
+            let out = m.apply([1.0, 0.0, 0.0, 1.0]);
+            assert!(
+                (out[0] - 0.2126).abs() < 1e-4,
+                "Saturation(0) on red: R ≈ 0.2126, got {:.6}",
+                out[0]
+            );
+            assert!(
+                (out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4,
+                "Saturation(0) on red must produce equal RGB channels (gray)"
+            );
+            assert!((out[3] - 1.0).abs() < 1e-6, "alpha unchanged");
+        }
+
+        // HueRotate(90) on red must not leave R unchanged (it rotates the hue).
+        {
+            let m = ColorAdjustment::HueRotate(90.0).to_color_matrix();
+            let out = m.apply([1.0, 0.0, 0.0, 1.0]);
+            assert!(
+                (out[0] - 1.0).abs() > 0.01,
+                "HueRotate(90) on red: R must change, got {:.6}",
+                out[0]
+            );
+            assert!((out[3] - 1.0).abs() < 1e-6, "alpha unchanged");
+        }
+
+        // Sepia(1.0) on mid-gray (0.5,0.5,0.5): produces warm brownish tint (R > G > B).
+        // Avoids white input where sepia R and G rows sum > 1 and get clamped.
+        {
+            let m = ColorAdjustment::Sepia(1.0).to_color_matrix();
+            let out = m.apply([0.5, 0.5, 0.5, 1.0]);
+            // Sepia on mid-gray: R ≈ 0.675, G ≈ 0.601, B ≈ 0.469.
+            // Sepia warm-tint ordering must hold: R > G > B.
+            assert!(
+                out[0] > out[1] && out[1] > out[2],
+                "Sepia(1) on mid-gray: must produce warm tint R>G>B, got R={:.3} G={:.3} B={:.3}",
+                out[0],
+                out[1],
+                out[2]
+            );
+            // Verify channels are not equal (sepia is non-identity and asymmetric).
+            assert!(
+                (out[0] - out[2]).abs() > 0.1,
+                "Sepia(1): R and B must differ significantly (brown tint), got R={:.3} B={:.3}",
+                out[0],
+                out[2]
+            );
+            assert!((out[3] - 1.0).abs() < 1e-6, "alpha unchanged");
+        }
+
+        // Brightness(+0.3) on mid-gray must increase all channels.
+        {
+            let m = ColorAdjustment::Brightness(0.3).to_color_matrix();
+            let input = [0.5, 0.5, 0.5, 1.0];
+            let out = m.apply(input);
+            assert!(out[0] > input[0], "Brightness(+0.3): R must increase");
+            assert!(out[1] > input[1], "Brightness(+0.3): G must increase");
+            assert!(out[2] > input[2], "Brightness(+0.3): B must increase");
+            assert!((out[3] - 1.0).abs() < 1e-6, "alpha unchanged");
+        }
+
+        // Contrast(2.0) on mid-gray (0.5) must move channels away from 0.5.
+        {
+            let m = ColorAdjustment::Contrast(2.0).to_color_matrix();
+            let input = [0.3, 0.5, 0.7, 1.0];
+            let out = m.apply(input);
+            // Contrast > 1: values below 0.5 decrease, above 0.5 increase.
+            assert!(out[0] < input[0], "Contrast(2) on 0.3: R must decrease");
+            assert!(out[2] > input[2], "Contrast(2) on 0.7: B must increase");
+            assert!((out[3] - 1.0).abs() < 1e-6, "alpha unchanged");
+        }
+
+        // Remaining variants: confirm no panic and alpha is preserved.
+        for (label, variant) in [
+            ("Grayscale(0.5)", ColorAdjustment::Grayscale(0.5)),
+            ("Invert(0.3)", ColorAdjustment::Invert(0.3)),
+            ("Opacity(0.6)", ColorAdjustment::Opacity(0.6)),
+            (
+                "Matrix(identity)",
+                ColorAdjustment::Matrix(ColorMatrix::identity()),
+            ),
+        ] {
+            let m = variant.to_color_matrix();
+            let out = m.apply([0.5, 0.5, 0.5, 1.0]);
+            assert!(
+                out.iter().all(|v| v.is_finite()),
+                "{label}: output must be finite"
+            );
+        }
+    }
+
+    /// `Grayscale(1.0)` must produce the same matrix as `ColorMatrix::grayscale()`.
+    #[test]
+    fn grayscale_full_strength_matches_grayscale_constructor() {
+        let via_adjustment = ColorAdjustment::Grayscale(1.0).to_color_matrix();
+        let direct = ColorMatrix::grayscale();
+        for i in 0..20 {
+            assert!(
+                (via_adjustment.values[i] - direct.values[i]).abs() < 1e-6,
+                "index {i}: via_adjustment={} vs direct={}",
+                via_adjustment.values[i],
+                direct.values[i]
+            );
+        }
+    }
+
+    /// `Grayscale(0.0)` must produce the identity matrix (no effect).
+    #[test]
+    fn grayscale_zero_strength_is_identity() {
+        let via_adjustment = ColorAdjustment::Grayscale(0.0).to_color_matrix();
+        let identity = ColorMatrix::identity();
+        for i in 0..20 {
+            assert!(
+                (via_adjustment.values[i] - identity.values[i]).abs() < 1e-6,
+                "index {i}: expected identity {}, got {}",
+                identity.values[i],
+                via_adjustment.values[i]
+            );
+        }
+    }
+
+    /// `Opacity(0.5)` applied to a fully opaque red halves the alpha.
+    #[test]
+    fn opacity_adjustment_halves_alpha() {
+        let m = ColorAdjustment::Opacity(0.5).to_color_matrix();
+        let out = m.apply([1.0, 0.0, 0.0, 1.0]);
+        assert!((out[0] - 1.0).abs() < 1e-6, "R unchanged");
+        assert!((out[1] - 0.0).abs() < 1e-6, "G unchanged");
+        assert!((out[2] - 0.0).abs() < 1e-6, "B unchanged");
+        assert!((out[3] - 0.5).abs() < 1e-6, "A halved to 0.5");
+    }
+
+    /// `Matrix(m)` round-trips the matrix unchanged.
+    #[test]
+    fn matrix_adjustment_roundtrips_values() {
+        let original = ColorMatrix::grayscale();
+        let via_adjustment = ColorAdjustment::Matrix(original.clone()).to_color_matrix();
+        assert_eq!(original.values, via_adjustment.values);
+    }
+
+    /// `Invert(0.5)` applied to a color is a linear blend between identity and full invert.
+    #[test]
+    fn invert_half_is_halfway_between_identity_and_full_invert() {
+        let half = ColorAdjustment::Invert(0.5).to_color_matrix();
+        let identity_out = ColorMatrix::identity().apply([0.8, 0.4, 0.2, 1.0]);
+        let invert_out = ColorMatrix::invert().apply([0.8, 0.4, 0.2, 1.0]);
+        let half_out = half.apply([0.8, 0.4, 0.2, 1.0]);
+        for i in 0..4 {
+            let expected_mid = f32::midpoint(identity_out[i], invert_out[i]);
+            assert!(
+                (half_out[i] - expected_mid).abs() < 1e-5,
+                "channel {i}: expected mid {expected_mid:.6}, got {:.6}",
+                half_out[i]
+            );
+        }
     }
 }

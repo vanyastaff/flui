@@ -59,6 +59,7 @@ use flui_types::painting::BlendMode;
 
 use super::{
     advanced_blend::AdvancedBlendPipeline,
+    color_matrix::ColorMatrixPipeline,
     pipeline::{PipelineCache, blend_state_for},
     ssaa::SsaaDownsamplePipeline,
 };
@@ -159,6 +160,14 @@ pub(crate) struct PipelineSet {
     /// Format-matched to `surface_format` at construction time; shared across
     /// every `flush_advanced_layer` call for this painter.
     pub(crate) advanced_blend: AdvancedBlendPipeline,
+
+    // ── Color-matrix filter pipeline ─────────────────────────────────────────
+    /// Per-pixel 5×4 color-matrix filter pipeline used by `flush_opacity_layer`
+    /// when a `PendingOpacityLayer` carries a `LayerFilter::ColorMatrix`.
+    ///
+    /// Format-matched to `surface_format` at construction time; shared across
+    /// every `apply_color_matrix` call for this painter.
+    pub(crate) color_matrix: ColorMatrixPipeline,
 
     // ── SSAA box-downsample pipeline ─────────────────────────────────────────
     /// 2×→1× box-filter downsample pipeline for SSAA path anti-aliasing.
@@ -281,6 +290,7 @@ impl PipelineSet {
         );
 
         let advanced_blend = AdvancedBlendPipeline::new(device, surface_format);
+        let color_matrix = ColorMatrixPipeline::new(device, surface_format);
         let ssaa_downsample = SsaaDownsamplePipeline::new(device, surface_format);
 
         // ── SSAA tile composite: shared layout + lazy pipeline cache ──────────
@@ -314,6 +324,7 @@ impl PipelineSet {
             gradient_stops_buffer,
             gradient_bind_group: None,
             advanced_blend,
+            color_matrix,
             ssaa_downsample,
             ssaa_tile_composite_layout,
             ssaa_tile_surface_format: surface_format,

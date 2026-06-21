@@ -34,7 +34,8 @@ use std::sync::Arc;
 
 use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
-    command_ir::{DrawItem, DrawSegment, PendingOpacityLayer},
+    color_matrix::apply_color_matrix,
+    command_ir::{DrawItem, DrawSegment, LayerFilter, PendingOpacityLayer},
     pipelines::PipelineSet,
     render_target::RenderTarget,
     replay::GpuReplay,
@@ -427,7 +428,7 @@ impl GpuReplay {
             return;
         }
 
-        let offscreen = self.render_layer_to_offscreen(
+        let layer_tex = self.render_layer_to_offscreen(
             &mut layer,
             viewport_size,
             surface_format,
@@ -437,6 +438,35 @@ impl GpuReplay {
             resources,
             encoder,
         );
+
+        // ── Color-matrix filter pass (ping-pong) ─────────────────────────────
+        //
+        // If the layer carries a `LayerFilter::ColorMatrix`, apply it now:
+        // `layer_tex` (premultiplied offscreen) → `offscreen` (filtered premultiplied).
+        // The shader unpremultiplies, applies the 5×4 matrix, clamps, re-premultiplies.
+        // The original `layer_tex` is dropped here (returns to pool).
+        //
+        // If no filter is present, `offscreen` aliases `layer_tex` directly —
+        // zero-cost (no copy, no extra texture acquisition).
+        let offscreen = if let Some(LayerFilter::ColorMatrix(matrix_values)) = layer.filter {
+            tracing::trace!(
+                bounds = ?layer.bounds,
+                "GpuReplay: applying color-matrix filter before composite"
+            );
+            apply_color_matrix(
+                matrix_values,
+                &layer_tex,
+                viewport_size,
+                surface_format,
+                &pipelines.color_matrix,
+                resources,
+                device,
+                encoder,
+            )
+            // layer_tex dropped here — returns to pool.
+        } else {
+            layer_tex
+        };
 
         // ── Advanced-blend dispatch (DECISION 1 / CRITICAL GATE) ────────────
         //

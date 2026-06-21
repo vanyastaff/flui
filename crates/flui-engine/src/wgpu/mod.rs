@@ -67,6 +67,12 @@ mod backend;
 /// from the flush-side state during draw recording.
 mod batches;
 mod buffer_pool;
+/// Per-pixel 5×4 color-matrix filter pass: [`color_matrix::apply_color_matrix`]
+/// applies a [`command_ir::LayerFilter::ColorMatrix`] to a premultiplied layer
+/// offscreen via ping-pong into a 2nd pooled texture, then returns the filtered
+/// texture for compositing.  [`color_matrix::ColorMatrixPipeline`] owns the
+/// pipeline and bind-group layout.
+pub(crate) mod color_matrix;
 /// Command IR data types: `DrawSegment`, `DrawItem`, `SavedLayer`,
 /// `PendingOpacityLayer`, `PendingOffscreenTexture`, and their helpers
 /// (`ScissorRect`, `ScissorRegion`, `TessellatedBatch`). Moved here from
@@ -198,6 +204,11 @@ mod shape_blend_tests;
 // PR-5 unit tests (G1-G6) are inline in batches/mod.rs.
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gradient_image_blend_tests;
+
+// color_matrix_filter_tests contains F1-F3 GPU readback tests for the
+// color-matrix filter pass (identity, swap-R↔B, translucent premul roundtrip).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod color_matrix_filter_tests;
 
 // ============================================================================
 // PUBLIC API

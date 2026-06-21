@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use super::{
     command_ir::{
-        DrawItem, DrawSegment, PendingOffscreenTexture, PendingOpacityLayer, ScissorRect,
+        DrawItem, DrawSegment, LayerFilter, PendingOffscreenTexture, PendingOpacityLayer,
+        ScissorRect,
     },
     layer_compositor::{LayerCompositor, RestoreOutcome},
     pipelines::PipelineSet,
@@ -1229,7 +1230,13 @@ impl WgpuPainter {
         // on the saveLayer paint means the entire layer composites onto its
         // parent with that mode — the dominant real-world use case for
         // advanced blend.
-        self.save_layer_impl(bounds, layer_opacity, [1.0, 1.0, 1.0], paint.blend_mode);
+        self.save_layer_impl(
+            bounds,
+            layer_opacity,
+            [1.0, 1.0, 1.0],
+            paint.blend_mode,
+            None,
+        );
     }
 
     /// Like [`Self::save_layer`] but applies an explicit per-channel chroma
@@ -1262,18 +1269,50 @@ impl WgpuPainter {
             layer_opacity,
             tint,
             flui_types::painting::BlendMode::SrcOver,
+            None, // no LayerFilter — tint carries the color
+        );
+    }
+
+    /// Like [`Self::save_layer`] but routes the layer through a per-pixel GPU
+    /// filter (currently only [`LayerFilter::ColorMatrix`]) before compositing.
+    ///
+    /// The filter is applied AFTER `render_layer_to_offscreen` and BEFORE the
+    /// composite step, so it receives the fully-rendered premultiplied offscreen
+    /// and emits a filtered premultiplied texture.  Opacity and blend mode carry
+    /// through normally.
+    ///
+    /// Used by `push_color_filter` and the `Matrix`/`ColorAdjust` branches of
+    /// `push_image_filter` in `backend.rs`.
+    pub(crate) fn save_layer_with_filter(
+        &mut self,
+        bounds: Option<Rect<Pixels>>,
+        filter: LayerFilter,
+    ) {
+        // Filter layers composite with white tint and SrcOver.  `effective_layer_opacity(1.0)`
+        // multiplies 1.0 by the current ancestor opacity, so a filter layer nested inside an
+        // outer opacity layer correctly inherits that opacity — matching Flutter semantics where
+        // a color-filter saveLayer respects the parent's opacity.
+        let layer_opacity = self.compositor.effective_layer_opacity(1.0);
+        self.save_layer_impl(
+            bounds,
+            layer_opacity,
+            [1.0, 1.0, 1.0],
+            flui_types::painting::BlendMode::SrcOver,
+            Some(filter),
         );
     }
 
     /// Shared implementation for [`Self::save_layer`] /
-    /// [`Self::save_layer_with_tint`]: snapshot the draw state and push a layer
-    /// with the given composite `layer_opacity`, `layer_tint_rgb`, and `layer_blend`.
+    /// [`Self::save_layer_with_tint`] / [`Self::save_layer_with_filter`]:
+    /// snapshot the draw state and push a layer with the given composite
+    /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, and optional GPU filter.
     fn save_layer_impl(
         &mut self,
         bounds: Option<Rect<Pixels>>,
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
         layer_blend: flui_types::painting::BlendMode,
+        filter: Option<LayerFilter>,
     ) {
         // Convert bounds to [x, y, w, h] if provided.
         let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
@@ -1289,13 +1328,16 @@ impl WgpuPainter {
             layer_tint_rgb,
             layer_blend,
             bounds_array,
+            filter,
         );
 
         tracing::trace!(
-            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, blend={:?}, bounds={:?}",
+            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, blend={:?}, \
+             filter={:?}, bounds={:?}",
             layer_opacity,
             layer_tint_rgb,
             layer_blend,
+            filter,
             bounds_array
         );
     }
@@ -1329,6 +1371,7 @@ impl WgpuPainter {
                 tint_rgb,
                 composite_bounds,
                 layer_blend,
+                layer_filter,
                 saved_segment,
                 saved_draw_order,
             } => {
@@ -1343,6 +1386,7 @@ impl WgpuPainter {
                 // `(C.r*O, C.g*O, C.b*O, O)` — correct group opacity AND chroma.
                 // Advanced blend modes are carried via `blend` and dispatched by
                 // `flush_opacity_layer` through the dst-read compositor path.
+                // `filter` carries the color-matrix GPU pass when set.
 
                 // Finalize the current parent segment so the opacity layer is
                 // inserted at the correct Z-position in the draw order.
@@ -1360,14 +1404,16 @@ impl WgpuPainter {
                         tint_rgb,
                         bounds: composite_bounds,
                         blend: layer_blend,
+                        filter: layer_filter,
                     }));
 
                 tracing::trace!(
                     "WgpuPainter::restore_layer: queued OpacityLayer \
-                     (opacity={:.3}, tint_rgb={:?}, blend={:?}, bounds={:?})",
+                     (opacity={:.3}, tint_rgb={:?}, blend={:?}, filter={:?}, bounds={:?})",
                     layer_opacity,
                     tint_rgb,
                     layer_blend,
+                    layer_filter,
                     composite_bounds
                 );
             }
