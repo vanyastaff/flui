@@ -38,6 +38,8 @@ use super::{
     command_ir::{
         DrawItem, DrawSegment, ImageFilterPass, LayerFilter, LayerFilterChain, PendingOpacityLayer,
     },
+    gamma::apply_gamma,
+    mode::apply_mode,
     morphology::apply_morphology,
     pipelines::PipelineSet,
     render_target::RenderTarget,
@@ -733,8 +735,40 @@ fn fold_layer_filter_chain(
                     device,
                     encoder,
                 )
-            } // Slice 2: LayerFilter::Mode { .. } => apply_mode(..),
-              // Slice 3: LayerFilter::Gamma(..) => apply_gamma(..),
+            }
+            LayerFilter::Mode { color, blend_mode } => {
+                tracing::trace!(
+                    blend_mode = ?blend_mode,
+                    "fold_layer_filter_chain: applying Mode pass"
+                );
+                apply_mode(
+                    *color,
+                    *blend_mode,
+                    &acc,
+                    viewport_size,
+                    surface_format,
+                    &pipelines.mode,
+                    resources,
+                    device,
+                    encoder,
+                )
+            }
+            LayerFilter::Gamma(direction) => {
+                tracing::trace!(
+                    direction = ?direction,
+                    "fold_layer_filter_chain: applying Gamma pass"
+                );
+                apply_gamma(
+                    *direction,
+                    &acc,
+                    viewport_size,
+                    surface_format,
+                    &pipelines.gamma,
+                    resources,
+                    device,
+                    encoder,
+                )
+            }
         };
         // `acc` (the source for this pass) is dropped here, returning to the pool.
         acc = next;
