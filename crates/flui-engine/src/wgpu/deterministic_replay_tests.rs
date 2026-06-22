@@ -513,6 +513,8 @@ mod tests {
             passes: smallvec![ImageFilterPass::Identity],
             content_bounds,
             grown_bounds: content_bounds, // Identity grows by 0
+            fb_origin: (10, 10),          // floor(grown.left/top) — integer-aligned (Task 6)
+            fb_dim: (20, 20),             // ceil(grown.right/bottom) - fb_origin (Task 6)
         };
 
         vec![DrawItem::Filter(op)]
@@ -761,6 +763,8 @@ mod tests {
                 passes: smallvec::SmallVec::new(), // empty fold — same round-trip, zero passes
                 content_bounds,
                 grown_bounds: content_bounds,
+                fb_origin: (10, 10), // floor(grown.left/top) — integer-aligned (Task 6)
+                fb_dim: (20, 20),    // ceil(grown.right/bottom) - fb_origin (Task 6)
             }
         };
         let (target_d, view_d) = make_render_target(&device);

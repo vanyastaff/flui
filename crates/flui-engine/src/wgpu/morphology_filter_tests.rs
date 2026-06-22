@@ -1104,6 +1104,9 @@ mod gpu_tests {
             .rect_batch
             .add(RectInstance::rect(content_rect, source_color));
         DrawSegment::push_scissor_region(&mut segment.rect_scissors, None);
+        // grown = [20, 44) × [20, 44); all integer-aligned.
+        // fb_origin = (floor(20), floor(20)) = (20, 20)
+        // fb_dim    = (ceil(44) - 20, ceil(44) - 20) = (24, 24)
         let op = FilterOp {
             input: segment,
             passes: smallvec![ImageFilterPass::Morph {
@@ -1112,6 +1115,8 @@ mod gpu_tests {
             }],
             content_bounds: content_rect,
             grown_bounds: grown,
+            fb_origin: (20, 20),
+            fb_dim: (24, 24),
         };
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1194,6 +1199,9 @@ mod gpu_tests {
             .rect_batch
             .add(RectInstance::rect(content_rect, source_color));
         DrawSegment::push_scissor_region(&mut segment.rect_scissors, None);
+        // Erode does not grow content; grown_bounds == content_rect = [22, 42) × [22, 42).
+        // fb_origin = (floor(22), floor(22)) = (22, 22)
+        // fb_dim    = (ceil(42) - 22, ceil(42) - 22) = (20, 20)
         let op = FilterOp {
             input: segment,
             passes: smallvec![ImageFilterPass::Morph {
@@ -1201,8 +1209,9 @@ mod gpu_tests {
                 op: MorphOp::Erode,
             }],
             content_bounds: content_rect,
-            // Erode does not grow content; the composite rect is the content rect.
             grown_bounds: content_rect,
+            fb_origin: (22, 22),
+            fb_dim: (20, 20),
         };
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));

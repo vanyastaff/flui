@@ -1235,6 +1235,276 @@ impl WgpuPainter {
         )
     }
 
+    /// Compute the integer-aligned offscreen frame rectangle for a filter intermediate.
+    ///
+    /// ## Integer-grid composite invariant (Task 6)
+    ///
+    /// The texture-batch composite sampler is **bilinear** (`default_sampler` Linear
+    /// in `replay.rs`).  Production `grown_bounds` may have fractional edges after
+    /// AABB-expansion and viewport intersection.  Compositing a fractional-origin
+    /// grown texture at its fractional dst_rect keeps the texel grid aligned with
+    /// the device-pixel grid — a valid 1:1 aligned blit.
+    ///
+    /// Shrinking to a smaller intermediate but compositing at the same fractional
+    /// `grown_bounds` would offset the two grids by `frac(grown_left)`, shifting
+    /// every pixel by a sub-texel.  To avoid this, BOTH the intermediate size and
+    /// the composite dst_rect MUST share one integer grid:
+    ///
+    /// ```text
+    /// fb_origin = (floor(grown.left), floor(grown.top))
+    /// fb_far    = (ceil(grown.right),  ceil(grown.bottom))   // clamped to viewport
+    /// fb_dim    = fb_far - fb_origin
+    /// composite: dst_rect = Rect(fb_origin, fb_far),  src_uv = [0, 0, 1, 1]
+    /// ```
+    ///
+    /// For the entire readback test suite (all integer-aligned margins) floor/ceil
+    /// are no-ops → fb rect == grown_bounds → bit-identical output → zero re-baseline.
+    ///
+    /// ## Return value
+    ///
+    /// `(fb_origin, fb_dim)` where both components are `(u32, u32)` integer pixel
+    /// coordinates.  `fb_dim` is clamped to `[1, viewport]` per axis so the pool
+    /// acquire is always valid.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "grown_bounds coords are in [0, vp_dim] after viewport intersection; \
+                  floor/ceil of non-negative f32 ≤ u32::MAX fits safely in u32"
+    )]
+    fn filter_fb_rect(&self, grown_bounds: Rect<Pixels>) -> ((u32, u32), (u32, u32)) {
+        let (vp_w, vp_h) = self.size;
+
+        // Integer-grid origin: floor the fractional grown-bounds top-left.
+        let origin_x = grown_bounds.left().0.floor() as u32;
+        let origin_y = grown_bounds.top().0.floor() as u32;
+
+        // Integer-grid far corner: ceil the fractional grown-bounds bottom-right,
+        // then clamp to the viewport so we never allocate past the surface edge.
+        let far_x = (grown_bounds.right().0.ceil() as u32).min(vp_w);
+        let far_y = (grown_bounds.bottom().0.ceil() as u32).min(vp_h);
+
+        // Dimension: must be at least 1×1 (pool acquire contract).
+        let dim_x = far_x.saturating_sub(origin_x).max(1);
+        let dim_y = far_y.saturating_sub(origin_y).max(1);
+
+        ((origin_x, origin_y), (dim_x, dim_y))
+    }
+
+    /// Compute a conservative device-space content AABB from a `DrawSegment`.
+    ///
+    /// Returns the union of all geometry bounding boxes in the segment, in device
+    /// pixels.  Returns `None` when the segment is empty OR when any geometry kind
+    /// cannot be conservatively bounded (the caller falls back to the full viewport).
+    ///
+    /// ## Conservative-or-fallback contract (CRITICAL)
+    ///
+    /// This function MUST NEVER return an AABB smaller than the true device-space
+    /// content extent.  An under-estimate would clip drawn pixels — a visible
+    /// correctness regression worse than no win at all.  Over-estimation is always
+    /// safe (it merely reduces the VRAM benefit).
+    ///
+    /// When in doubt about a geometry kind, return `None` so the caller falls back
+    /// to the viewport.  The fallback is correct; it only forgoes the VRAM saving.
+    ///
+    /// ## Repositionable vs. fallback kinds
+    ///
+    /// Grown-bounds rendering (`render_segment_to_grown_offscreen`) currently
+    /// repositions only:
+    ///
+    /// - tessellated vertices (`segment.vertices`)
+    /// - `RectInstance`, `CircleInstance`, `ArcInstance` (instanced batches)
+    ///
+    /// Segments containing **shadows, gradients, or images** fall back to the
+    /// full-viewport path (correct, no VRAM win) because those kinds are not
+    /// repositioned by the grown-offscreen renderer.  Repositioning them is a
+    /// tracked follow-up.  Returning `None` here causes the caller's
+    /// `.unwrap_or(viewport)` to select `fb_dim == viewport`, which makes
+    /// `render_segment_to_grown_offscreen`'s remap an identity transform —
+    /// rendering is correct with zero VRAM saving.
+    ///
+    /// ## Geometry kinds covered when returning `Some`
+    ///
+    /// | Kind | Bound source |
+    /// |------|-------------|
+    /// | `vertices` | Exact min/max of `Vertex::position` (device px) |
+    /// | `RectInstance` baked (identity M, zero t) | `bounds [x,y,w,h]` in device px |
+    /// | `RectInstance` affine | 4 corners transformed by M+t, convex hull |
+    /// | `CircleInstance` / `ArcInstance` | center ± (‖col_x‖₁ + ‖col_y‖₁) (conservative) |
+    fn content_aabb(segment: &DrawSegment) -> Option<Rect<Pixels>> {
+        // ── Fallback gate (P0 regression fix) ────────────────────────────────
+        //
+        // Shadows, gradients, and images cannot be repositioned by
+        // `render_segment_to_grown_offscreen`.  Returning `None` here forces the
+        // caller's `.unwrap_or(viewport)` to select `composite_bounds = viewport`
+        // → `fb_dim == viewport` → the remap in the grown renderer is the identity
+        // transform → those kinds render at the correct position.
+        //
+        // This is a conservative-or-fallback: the only cost is forgoing the VRAM
+        // optimisation for layers that contain these kinds.  Correctness is fully
+        // preserved.  Repositioning shadows/gradients/images in the grown
+        // intermediate is a tracked follow-up.
+        if !segment.shadow_batch.is_empty()
+            || !segment.linear_gradient_batch.is_empty()
+            || !segment.radial_gradient_batch.is_empty()
+            || !segment.sweep_gradient_batch.is_empty()
+            || !segment.cached_images.is_empty()
+            || !segment.external_images.is_empty()
+        {
+            return None;
+        }
+
+        // Running AABB accumulators.
+        // Initialised to sentinel values: min→+∞, max→−∞.
+        // After the loops, `min_x <= max_x` iff at least one point was unioned.
+        let mut min_x: f32 = f32::MAX;
+        let mut min_y: f32 = f32::MAX;
+        let mut max_x: f32 = f32::NEG_INFINITY;
+        let mut max_y: f32 = f32::NEG_INFINITY;
+
+        /// Inline helper: union a device-px point into the running AABB.
+        ///
+        /// Does NOT set a `has_any` flag — emptiness is detected at the end by
+        /// checking `min_x <= max_x` (which is only true when at least one point
+        /// was unioned into an initially-sentinel accumulator).
+        macro_rules! union_pt {
+            ($x:expr, $y:expr) => {{
+                let x: f32 = $x;
+                let y: f32 = $y;
+                if x < min_x {
+                    min_x = x;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+            }};
+        }
+
+        // ── 1. Tessellated vertices (device px, exact) ────────────────────────
+        for v in &segment.vertices {
+            let [x, y] = v.position;
+            union_pt!(x, y);
+        }
+
+        // ── 2. RectInstance ──────────────────────────────────────────────────
+        //
+        // `bounds = [x, y, w, h]` in local-space.
+        // Baked (M = identity, t = zero): bounds are already device px.
+        // Affine: bounds are local-space; apply `device = M * local_corner + t`.
+        //
+        // M is stored column-major as `transform = [a, b, c, d]`:
+        //   x_col = (a, b), y_col = (c, d).
+        // t is `transform_translate = [tx, ty, _, _]`.
+        //
+        // We check identity M exactly (all RectInstance::rect / ::rounded_rect_corners
+        // constructions set `[1,0,0,1]`); a non-identity M triggers the affine path.
+        for instance in &segment.rect_batch.instances {
+            let [lx, ly, lw, lh] = instance.bounds;
+            let [a, b, c, d] = instance.transform;
+            let [tx, ty, _, _] = instance.transform_translate;
+
+            // Exact bit-equality check against the identity 2×2.
+            // These are the only values written by `RectInstance::rect` and
+            // `::rounded_rect_corners` — never computed via arithmetic, so
+            // ULP slop is not a concern.
+            #[expect(
+                clippy::float_cmp,
+                reason = "exact comparison against the bit-exact identity matrix [1,0,0,1] \
+                          written by RectInstance::rect / ::rounded_rect_corners; \
+                          never produced by arithmetic"
+            )]
+            let is_identity_m = a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0;
+
+            // Exact bit comparison against zero is clippy-exempt (literal `0.0`).
+            let is_zero_t = tx == 0.0 && ty == 0.0;
+
+            if is_identity_m && is_zero_t {
+                // Baked path: bounds are device px.
+                union_pt!(lx, ly);
+                union_pt!(lx + lw, ly);
+                union_pt!(lx + lw, ly + lh);
+                union_pt!(lx, ly + lh);
+            } else {
+                // Affine path: transform 4 corners of the local rect.
+                // device = M * (lx_corner, ly_corner) + (tx, ty)
+                // where M = [[a,c],[b,d]] (column-major: x_col=(a,b), y_col=(c,d)).
+                let corners = [(lx, ly), (lx + lw, ly), (lx + lw, ly + lh), (lx, ly + lh)];
+                for (cx, cy) in corners {
+                    let dx = a * cx + c * cy + tx;
+                    let dy = b * cx + d * cy + ty;
+                    union_pt!(dx, dy);
+                }
+            }
+        }
+
+        // ── 3. CircleInstance ────────────────────────────────────────────────
+        //
+        // Center in `transform_translate.xy` (device px, added AFTER M).
+        // M encodes `M_world * diag(rx, ry)` or `M_world * r` (column-major).
+        //
+        // Conservative bounding box: the axis-aligned box of the transformed
+        // unit circle at origin is `center ± (‖col_x‖₂ , ‖col_y‖₂)`, but we
+        // use the L1-norm of columns as a simple over-estimate that avoids sqrt:
+        //   half_x = |col_x|_max ≤ actually |col_x|_2
+        // Wait — we need an OVER-estimate, not an under-estimate.
+        // The true half-extents of M*unit_circle are the singular values of M.
+        // Conservative upper bound: ‖col_x‖₁ + ‖col_y‖₁ ≥ σ₁ (max singular value).
+        // This is always safe (never clips content).
+        for instance in &segment.circle_batch.instances {
+            let [center_x, center_y, _, _] = instance.transform_translate;
+            let [a, b, c, d] = instance.transform;
+            // `center_radius[2]` is the radius factor:
+            //   - Baked path (`CircleInstance::new`):  radius stored here; transform = diag(sx,sy).
+            //     Device half-extent = radius * sx (X), radius * sy (Y).
+            //   - Affine path (`with_affine_transform`): center_radius[2] = 1.0; radius folded
+            //     into transform columns. Multiplying by 1.0 is a safe no-op.
+            // Without this factor the baked path produces half_x = sx (missing `* radius`),
+            // which clips a circle of radius R at scale 1 to a ~2×2 box around its center.
+            let radius_factor = instance.center_radius[2];
+            let half_x = radius_factor * (a.abs() + c.abs());
+            let half_y = radius_factor * (b.abs() + d.abs());
+            union_pt!(center_x - half_x, center_y - half_y);
+            union_pt!(center_x + half_x, center_y + half_y);
+        }
+
+        // ── 4. ArcInstance ───────────────────────────────────────────────────
+        //
+        // Same layout as CircleInstance (unit circle at origin, center in
+        // `transform_translate`).  Conservative: use the full circle box (we
+        // never under-estimate a swept arc by using the enclosing circle).
+        // `center_radius[2]` is always 1.0 for arcs (radius folded into transform),
+        // so multiplying is a safe no-op that keeps the two loops structurally uniform.
+        for instance in &segment.arc_batch.instances {
+            let [center_x, center_y, _, _] = instance.transform_translate;
+            let [a, b, c, d] = instance.transform;
+            let radius_factor = instance.center_radius[2];
+            let half_x = radius_factor * (a.abs() + c.abs());
+            let half_y = radius_factor * (b.abs() + d.abs());
+            union_pt!(center_x - half_x, center_y - half_y);
+            union_pt!(center_x + half_x, center_y + half_y);
+        }
+
+        // ── 5. (Shadow / gradient / image kinds) ─────────────────────────────
+        //
+        // These kinds are excluded by the early-return gate above.  If any of
+        // them is non-empty, `None` has already been returned, so none of these
+        // loops can have instances to iterate.  The loops are omitted; the gate
+        // is the single authoritative location.
+
+        // Sentinel check: if no point was ever unioned, min_x > max_x still
+        // holds (f32::MAX > f32::NEG_INFINITY) — return None for the empty case.
+        if min_x > max_x {
+            return None;
+        }
+
+        Some(Rect::from_ltrb(px(min_x), px(min_y), px(max_x), px(max_y)))
+    }
+
     // ===== Layer Operations (Opacity) =====
 
     pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
@@ -1486,6 +1756,21 @@ impl WgpuPainter {
                         // the group opacity is effectively 1.0 at this stage.
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
+                        // Override composite_bounds for the image-filter path: use the
+                        // content AABB of the drawn segment (conservative device-space
+                        // union) rather than the full viewport.  This is the producer wiring
+                        // that makes grown-bounds VRAM reduction real: when bounds=None was
+                        // passed to save_layer_with_image_filter, composite_bounds was
+                        // previously always the full viewport (the inert façade that Task 6
+                        // identified and this code fixes).  content_aabb falls back to the
+                        // viewport if the segment is empty or contains an un-boundable kind.
+                        let composite_bounds = {
+                            let vp = self.viewport_bounds();
+                            Self::content_aabb(&offscreen_final_segment)
+                                .and_then(|aabb| aabb.intersect(&vp))
+                                .unwrap_or(vp)
+                        };
+
                         // Growth via the shared helper (one source of truth for Morph).
                         let single_pass = ImageFilterPass::Morph { radius, op };
                         let growth_px = px(cumulative_growth(std::slice::from_ref(&single_pass)));
@@ -1494,11 +1779,18 @@ impl WgpuPainter {
                         let grown_bounds =
                             grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
 
+                        // Compute the integer-aligned offscreen frame rectangle so BOTH
+                        // composite arms (replay.rs + opacity_layer.rs nested Filter arm)
+                        // share one authoritative value and cannot drift (non-negotiable #4).
+                        let (fb_origin, fb_dim) = self.filter_fb_rect(grown_bounds);
+
                         tracing::trace!(
                             radius,
                             op = ?op,
                             content_bounds = ?composite_bounds,
                             grown_bounds = ?grown_bounds,
+                            fb_origin = ?fb_origin,
+                            fb_dim = ?fb_dim,
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Morph)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
@@ -1506,6 +1798,8 @@ impl WgpuPainter {
                             passes: smallvec![single_pass],
                             content_bounds: composite_bounds,
                             grown_bounds,
+                            fb_origin,
+                            fb_dim,
                         }));
                     }
                     Some(ImageFilterSpec::Blur { sigma_x, sigma_y }) => {
@@ -1525,6 +1819,14 @@ impl WgpuPainter {
                         }
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
+                        // Content-AABB override (same rationale as the Morph arm above).
+                        let composite_bounds = {
+                            let vp = self.viewport_bounds();
+                            Self::content_aabb(&offscreen_final_segment)
+                                .and_then(|aabb| aabb.intersect(&vp))
+                                .unwrap_or(vp)
+                        };
+
                         let single_pass = ImageFilterPass::Blur { sigma_x, sigma_y };
                         let halo_px = px(cumulative_growth(std::slice::from_ref(&single_pass)));
                         let grown = composite_bounds.expand(halo_px);
@@ -1532,11 +1834,16 @@ impl WgpuPainter {
                         let grown_bounds =
                             grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
 
+                        // Integer-aligned fb rect — one home for both composite arms.
+                        let (fb_origin, fb_dim) = self.filter_fb_rect(grown_bounds);
+
                         tracing::trace!(
                             sigma_x,
                             sigma_y,
                             content_bounds = ?composite_bounds,
                             grown_bounds = ?grown_bounds,
+                            fb_origin = ?fb_origin,
+                            fb_dim = ?fb_dim,
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Blur)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
@@ -1544,6 +1851,8 @@ impl WgpuPainter {
                             passes: smallvec![single_pass],
                             content_bounds: composite_bounds,
                             grown_bounds,
+                            fb_origin,
+                            fb_dim,
                         }));
                     }
                     Some(ImageFilterSpec::Chain(passes)) => {
@@ -1563,6 +1872,14 @@ impl WgpuPainter {
                         }
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
+                        // Content-AABB override (same rationale as the Morph/Blur arms above).
+                        let composite_bounds = {
+                            let vp = self.viewport_bounds();
+                            Self::content_aabb(&offscreen_final_segment)
+                                .and_then(|aabb| aabb.intersect(&vp))
+                                .unwrap_or(vp)
+                        };
+
                         // Cumulative growth = Σ per-pass radii (ColorMatrix/Identity = 0).
                         let growth_px = px(cumulative_growth(&passes));
                         let grown = composite_bounds.expand(growth_px);
@@ -1570,10 +1887,15 @@ impl WgpuPainter {
                         let grown_bounds =
                             grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
 
+                        // Integer-aligned fb rect — one home for both composite arms.
+                        let (fb_origin, fb_dim) = self.filter_fb_rect(grown_bounds);
+
                         tracing::trace!(
                             pass_count = passes.len(),
                             content_bounds = ?composite_bounds,
                             grown_bounds = ?grown_bounds,
+                            fb_origin = ?fb_origin,
+                            fb_dim = ?fb_dim,
                             "WgpuPainter::restore_layer: queued DrawItem::Filter (Chain)"
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
@@ -1581,6 +1903,8 @@ impl WgpuPainter {
                             passes,
                             content_bounds: composite_bounds,
                             grown_bounds,
+                            fb_origin,
+                            fb_dim,
                         }));
                     }
                     None => {

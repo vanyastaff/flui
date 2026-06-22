@@ -474,11 +474,15 @@ impl GpuReplay {
                 // to the pool. The `apply_image_filter_passes` fold maintains ≤2
                 // live textures regardless of chain length.
                 DrawItem::Filter(mut op) => {
-                    // 1. Render the isolated input segment to a full-viewport
-                    //    premultiplied offscreen — same primitive the AdvancedShape
-                    //    arm uses (replay.rs:354).
-                    let content_tex = self.render_segment_to_offscreen(
+                    // 1. Render the isolated input segment to a GROWN-BOUNDS offscreen
+                    //    (Task 6): sized to fb_dim instead of the full viewport.
+                    //    Vertex positions are pre-transformed to fb-local NDC so that
+                    //    dividing by the unchanged viewport uniform yields correct NDC
+                    //    inside the smaller render target (non-negotiable #2).
+                    let content_tex = self.render_segment_to_grown_offscreen(
                         &mut op.input,
+                        op.fb_origin,
+                        op.fb_dim,
                         viewport_size,
                         surface_format,
                         device,
@@ -488,15 +492,16 @@ impl GpuReplay {
                         encoder,
                     );
 
-                    // 2. Fold the pass chain. Task 0: Identity → returns content_tex
-                    //    unchanged (zero extra acquire — same discipline as the
-                    //    empty-chain fast-path in fold_layer_filter_chain).
+                    // 2. Fold the pass chain over the grown-bounds intermediate.
+                    //    Task 0: Identity → returns content_tex unchanged.
+                    //    Blur/Morph: each sub-pass acquires a fb_dim texture and uses
+                    //    fb-local UV for the content_rect decal (non-negotiable #3).
                     let filtered_tex = apply_image_filter_passes(
                         &op.passes,
                         content_tex,
                         op.content_bounds,
-                        op.grown_bounds,
-                        viewport_size,
+                        op.fb_origin,
+                        op.fb_dim,
                         surface_format,
                         pipelines,
                         resources,
@@ -504,25 +509,31 @@ impl GpuReplay {
                         encoder,
                     );
 
-                    // 3. Composite at grown_bounds via the EXISTING premultiplied
-                    //    texture-batch composite seam (same call the OffscreenTexture
-                    //    arm uses, replay.rs:306). Zero new composite code.
-                    //    `filtered_tex` is FULL-VIEWPORT with the result at its true
-                    //    viewport position, so src_uv maps the grown_bounds dst rect
-                    //    to the matching sub-region of the texture — NOT [0,1], which
-                    //    would stretch the whole viewport onto grown_bounds when they
-                    //    differ (only equal under the current bounds=None producer).
-                    let (vp_w, vp_h) = viewport_size;
-                    let g = op.grown_bounds;
-                    let src_uv = [
-                        g.left().0 / vp_w as f32,
-                        g.top().0 / vp_h as f32,
-                        g.right().0 / vp_w as f32,
-                        g.bottom().0 / vp_h as f32,
-                    ];
+                    // 3. Integer-grid composite (non-negotiable #1):
+                    //    dst_rect = Rect(fb_origin, fb_far); src_uv = [0, 0, 1, 1].
+                    //
+                    //    `filtered_tex` is fb_dim-sized with content at pixel (0,0).
+                    //    src_uv=[0,1] maps the full fb texture onto dst_rect — a
+                    //    pixel-aligned 1:1 blit via the bilinear composite sampler.
+                    //
+                    //    Using fractional grown_bounds as dst_rect over an integer-
+                    //    origin texture would shift every pixel by frac(grown_left)
+                    //    (the composite-grid shift, risk #1 in the Task 6 spec).
+                    let (fb_origin_x, fb_origin_y) = op.fb_origin;
+                    let (fb_w, fb_h) = op.fb_dim;
+                    #[allow(
+                        clippy::cast_precision_loss,
+                        reason = "fb coords are u32 pixel dims ≤ viewport; f32 precision is sufficient"
+                    )]
+                    let dst_rect = flui_types::Rect::from_xywh(
+                        flui_types::geometry::px(fb_origin_x as f32),
+                        flui_types::geometry::px(fb_origin_y as f32),
+                        flui_types::geometry::px(fb_w as f32),
+                        flui_types::geometry::px(fb_h as f32),
+                    );
                     let instance = super::instancing::TextureInstance::with_uv(
-                        op.grown_bounds,
-                        src_uv,
+                        dst_rect,
+                        [0.0, 0.0, 1.0, 1.0],
                         flui_types::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
@@ -540,7 +551,8 @@ impl GpuReplay {
                     // filtered_tex (and content_tex if distinct) dropped here → pool.
                     tracing::trace!(
                         content_bounds = ?op.content_bounds,
-                        grown_bounds = ?op.grown_bounds,
+                        fb_origin = ?op.fb_origin,
+                        fb_dim = ?op.fb_dim,
                         pass_count = op.passes.len(),
                         "GpuReplay: image filter composited"
                     );

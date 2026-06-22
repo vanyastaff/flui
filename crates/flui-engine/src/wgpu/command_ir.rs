@@ -303,6 +303,25 @@ pub(crate) enum ImageFilterPass {
 ///
 /// Textures are acquired at REPLAY time (never held in the IR), matching the
 /// discipline of `AdvancedShapeOp` and `SsaaPathOp`.
+///
+/// ## Integer-grid composite (Task 6 — grown-bounds intermediate sizing)
+///
+/// The intermediate offscreen is sized to the integer-aligned bounding box of
+/// `grown_bounds` (floor origin, ceil far corner, clamped to viewport) rather
+/// than the full viewport. This reduces VRAM peak from `vp_area` to `grown_area`
+/// × nesting depth.
+///
+/// The integer alignment is REQUIRED because the texture-batch composite sampler
+/// is bilinear (`default_sampler` Linear in `replay.rs`): compositing a
+/// full-viewport intermediate at a fractional `grown_bounds` is self-consistent
+/// (texel grid == device-pixel grid → aligned blit), but compositing an
+/// integer-origin `fb`-sized intermediate at a fractional dst_rect offsets the
+/// two grids by `frac(grown_left)`, shifting every pixel by a sub-texel.
+///
+/// `fb_origin` and `fb_dim` are computed at **record time** in `painter.rs`
+/// `restore_layer` and stored here so BOTH composite arms (top-level in
+/// `replay.rs` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
+/// arm-drift (risk #4 in the Task 6 spec).
 #[derive(Debug, Clone)]
 pub(crate) struct FilterOp {
     /// Foreground content the filter consumes, rendered to an offscreen
@@ -319,7 +338,30 @@ pub(crate) struct FilterOp {
     /// the layer bounds. For Task 0 this equals `content_bounds` (Identity
     /// grows bounds by 0 pixels). Slice 4 computes the real growth via
     /// `kernel_radius(sigma)`.
+    ///
+    /// The composite uses `fb_origin`/`fb_dim` (integer-aligned) rather than
+    /// `grown_bounds` directly (Task 6 non-negotiable #1). `grown_bounds` is
+    /// retained for diagnostics, tracing, and future tooling (e.g. damage-region
+    /// tracking or spec-verify audits that check halo extent in floating-point).
+    // Retained for diagnostics: the composite arms now use fb_origin/fb_dim but
+    // grown_bounds documents the fractional halo extent pre-quantisation and will
+    // be needed by damage-tracking or future floating-point halo assertions.
+    #[allow(dead_code)]
     pub(crate) grown_bounds: Rect<Pixels>,
+    /// Integer-grid top-left of the offscreen intermediate in device pixels.
+    ///
+    /// Computed as `(floor(grown_bounds.left), floor(grown_bounds.top))`.
+    /// Integer-aligned so the bilinear composite produces an aligned texel blit
+    /// (no sub-pixel shift). Stored on the IR so both composite arms share one
+    /// authoritative value (Task 6 non-negotiable #4).
+    pub(crate) fb_origin: (u32, u32),
+    /// Integer-aligned dimensions of the offscreen intermediate in device pixels.
+    ///
+    /// Computed as `(ceil(far.x) - fb_origin.x, ceil(far.y) - fb_origin.y)`,
+    /// clamped so `fb_origin + fb_dim ≤ viewport`. This is the exact size passed
+    /// to `pool.acquire` and used as `texture_size` in all filter sub-passes
+    /// (Task 6 non-negotiables #2 and #3).
+    pub(crate) fb_dim: (u32, u32),
 }
 
 // ─── Primitive helpers ────────────────────────────────────────────────────────
@@ -777,6 +819,8 @@ mod task0_ir_witnesses {
             passes: smallvec![ImageFilterPass::Identity],
             content_bounds: bounds,
             grown_bounds: bounds,
+            fb_origin: (0, 0),
+            fb_dim: (64, 64),
         }
     }
 
@@ -881,6 +925,8 @@ mod task0_ir_witnesses {
             }],
             content_bounds: bounds,
             grown_bounds: bounds,
+            fb_origin: (0, 0),
+            fb_dim: (64, 64),
         };
         let cloned = op.clone();
         assert_eq!(cloned.passes.len(), 1);
@@ -923,6 +969,8 @@ mod task0_ir_witnesses {
             }],
             content_bounds: bounds,
             grown_bounds: bounds,
+            fb_origin: (0, 0),
+            fb_dim: (64, 64),
         };
         let cloned = op.clone();
         assert_eq!(cloned.passes.len(), 1);
