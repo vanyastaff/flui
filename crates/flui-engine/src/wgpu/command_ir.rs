@@ -12,6 +12,7 @@
 use flui_types::{
     Rect, geometry::Pixels, painting::BlendMode, painting::TextureId as ExternalTextureId,
 };
+use smallvec::SmallVec;
 
 use super::{
     effects::GradientStop,
@@ -51,6 +52,74 @@ pub(crate) enum LayerFilter {
     /// Layout mirrors [`flui_types::painting::ColorMatrix::values`]:
     /// rows R/G/B/A × columns `[m0..m3, offset]`.
     ColorMatrix([f32; 20]),
+}
+
+/// An inline-storage chain of [`LayerFilter`]s folded in `flush_opacity_layer`.
+///
+/// Inline capacity N=2 covers the overwhelmingly common cases:
+/// - 1 filter (a single `ColorMatrix`), and
+/// - 2 filters (a Mode+Gamma pair).
+///
+/// Image-filter Compose depth (where 4 is realistic) rides `FilterOp::passes`
+/// (a different chain). `LayerFilter` stays `Copy`, so push/iterate are cheap.
+///
+/// `Default` = empty chain = the no-filter fast-path state.
+pub(crate) type LayerFilterChain = SmallVec<[LayerFilter; 2]>;
+
+// ─── Image-filter IR ─────────────────────────────────────────────────────────
+
+/// A lowered, flattened image-filter pass. Bounds-GROWING ops only.
+///
+/// Task 0 ships only the `Identity` arm; `Blur`/`Morph` payloads land in later
+/// slices. Adding a new variant requires adding a match arm in
+/// `apply_image_filter_passes` — the compiler enforces this (no `_` catch-all).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ImageFilterPass {
+    /// Passthrough: render the input segment and copy it through unchanged.
+    ///
+    /// Exercises the `DrawItem::Filter` seam end-to-end with zero filter math
+    /// (Task 0). Grows `FilterOp::grown_bounds` by 0 pixels.
+    ///
+    /// Future slices add: `Morph { radius: f32, op: MorphOp }` (Slice 1),
+    /// `Blur { sigma_x: f32, sigma_y: f32 }` (Slice 4).
+    // Constructed by the CI-visible `task0_ir_witnesses` tests below; there is no
+    // production producer until Slice 1 wires a public painter API. So the variant
+    // is genuinely unconstructed only in NON-test builds — scope the allow to those
+    // (the lint stays live under `cfg(test)`, where the witnesses construct it).
+    #[cfg_attr(not(test), allow(dead_code))]
+    Identity,
+}
+
+/// A bounds-GROWING image-filter operation, isolated at record time.
+///
+/// `Clone` + GPU-resource-free (T11 purity witness): `input` is a `DrawSegment`
+/// (already witnessed `Clone`), `passes` are POD, bounds are `Copy`. The repo
+/// represents an owned GPU texture as `PooledTexture`, which is `!Clone` (it
+/// reclaims its pool slot on `Drop`); adding such a field would break the
+/// `const _FILTER_OP_IS_CLONE` witness — enforcing "acquire textures at replay,
+/// never store them in the IR". (Raw `wgpu::Texture`/`TextureView` are `Clone`
+/// in wgpu 29, so `Clone` alone does not bar them — the discipline is to use
+/// `PooledTexture` for all owned GPU textures, which the witness then catches.)
+///
+/// Textures are acquired at REPLAY time (never held in the IR), matching the
+/// discipline of `AdvancedShapeOp` and `SsaaPathOp`.
+#[derive(Debug, Clone)]
+pub(crate) struct FilterOp {
+    /// Foreground content the filter consumes, rendered to an offscreen
+    /// intermediate at replay time.
+    pub(crate) input: DrawSegment,
+    /// Flattened pass chain, applied left-to-right (index 0 = innermost pass).
+    ///
+    /// Inline capacity 4 covers realistic Compose depth
+    /// (e.g. Blur∘Mode∘Morph∘Identity). Heap-spills beyond 4 are correct.
+    pub(crate) passes: SmallVec<[ImageFilterPass; 4]>,
+    /// Pre-filter content AABB in physical pixels (record-time geometry bound).
+    pub(crate) content_bounds: Rect<Pixels>,
+    /// `content_bounds` expanded by the accumulated pass radius, clipped to
+    /// the layer bounds. For Task 0 this equals `content_bounds` (Identity
+    /// grows bounds by 0 pixels). Slice 4 computes the real growth via
+    /// `kernel_radius(sigma)`.
+    pub(crate) grown_bounds: Rect<Pixels>,
 }
 
 // ─── Primitive helpers ────────────────────────────────────────────────────────
@@ -132,12 +201,14 @@ pub(crate) struct SavedLayer {
     /// Stored on the record side so the compositor dispatch can read it without
     /// coupling the flush path to the record path.  Defaults to `SrcOver`.
     pub(crate) layer_blend: BlendMode,
-    /// Optional per-pixel filter applied to the rendered layer before compositing.
+    /// Color-filter chain applied to the rendered layer before compositing.
     ///
-    /// `None` = today's behavior (premultiplied tint-only composite).
-    /// `Some(LayerFilter::ColorMatrix(_))` routes the rendered offscreen through
-    /// the color-matrix GPU pass before the composite step.
-    pub(crate) filter: Option<LayerFilter>,
+    /// Empty chain = premultiplied tint-only composite (the common fast-path).
+    /// A non-empty chain is folded left-to-right in `flush_opacity_layer`:
+    /// each filter reads the previous output and writes into a fresh pooled
+    /// texture (ping-pong, ≤2 live textures regardless of chain length N).
+    /// `LayerFilter::ColorMatrix(_)` routes through the color-matrix GPU pass.
+    pub(crate) filters: LayerFilterChain,
 }
 
 // ─── Draw segment ─────────────────────────────────────────────────────────────
@@ -400,6 +471,23 @@ pub(crate) enum DrawItem {
     /// sequence at replay time.  Z-order is the insertion position in
     /// `draw_order` (R1 arm order).
     SsaaPath(SsaaPathOp),
+    /// A bounds-GROWING image filter over an isolated content segment.
+    ///
+    /// The content segment is rendered to a full-viewport pooled offscreen at
+    /// replay time, the pass chain is applied (ping-pong, ≤2 live textures),
+    /// and the filtered result is composited at `grown_bounds` via the existing
+    /// premultiplied offscreen composite seam (`flush_texture_batch_premultiplied`).
+    ///
+    /// Z-order is the insertion position in `draw_order` (R1 arm order). This
+    /// arm is placed LAST in `GpuReplay::submit` so all prior draw-order items
+    /// are flushed to the target before the filter result is composited on top.
+    // Constructed by the CI-visible `task0_ir_witnesses` tests below; there is no
+    // production producer until Slice 1 wires a public painter API (e.g.
+    // `push_image_filter`). The variant is genuinely unconstructed only in
+    // NON-test builds, so scope the allow there (the lint stays live under
+    // `cfg(test)`, where the witnesses construct + match it).
+    #[cfg_attr(not(test), allow(dead_code))]
+    Filter(FilterOp),
 }
 
 // ─── Opacity layer ────────────────────────────────────────────────────────────
@@ -430,9 +518,81 @@ pub(crate) struct PendingOpacityLayer {
     /// coupling it to the record path.  `SrcOver` for plain opacity layers;
     /// an advanced mode for `saveLayer` with an explicit blend mode.
     pub(crate) blend: BlendMode,
-    /// Optional per-pixel filter applied to the rendered layer before compositing.
+    /// Color-filter chain applied to the rendered layer before compositing.
     ///
-    /// Forwarded from [`SavedLayer::filter`] at restore time.  `None` = plain
-    /// tint-only composite (existing behavior).
-    pub(crate) filter: Option<LayerFilter>,
+    /// Forwarded from [`SavedLayer::filters`] at restore time. Empty chain =
+    /// plain tint-only composite (the common fast-path). Folded left-to-right
+    /// in `flush_opacity_layer` via ping-pong texture acquire/drop.
+    pub(crate) filters: LayerFilterChain,
+}
+
+// ─── Task 0 IR-purity witnesses (CI-visible) ──────────────────────────────────
+//
+// These run in the standard CI `cargo nextest --lib` pass — a PLAIN `#[cfg(test)]`
+// module in a non-feature-gated file (NOT under `feature = "enable-wgpu-tests"`),
+// unlike the GPU readback A/B test. They:
+//   1. construct `FilterOp` / `DrawItem::Filter` from CPU data only — exercising
+//      the new variants under `cfg(test)` so `dead_code` stays satisfied there
+//      (the `#[cfg_attr(not(test), allow(dead_code))]` on the variants covers only
+//      the non-test build, where no production producer exists until Slice 1); and
+//   2. assert the new IR is `Clone` + handle-free (T11 purity), so any future field
+//      holding a live GPU handle fails to compile — guarding IR purity in CI.
+#[cfg(test)]
+mod task0_ir_witnesses {
+    use flui_types::{Rect, geometry::px};
+    use smallvec::smallvec;
+
+    use super::{DrawItem, DrawSegment, FilterOp, ImageFilterPass, LayerFilterChain};
+
+    /// Compile-time proof that `FilterOp` is `Clone`.
+    ///
+    /// Fields: `input: DrawSegment` (Clone-witnessed), `passes` (POD),
+    /// `content_bounds`/`grown_bounds: Rect<Pixels>` (Copy). The guard catches a
+    /// future `!Clone` field — notably `PooledTexture` (the repo's owned GPU-texture
+    /// handle, `!Clone` by Drop-returns-to-pool). Storing one in the IR would make
+    /// this fail to compile, enforcing "textures acquired at replay, never in the IR".
+    const _FILTER_OP_IS_CLONE: fn(FilterOp) -> FilterOp = |op| op.clone();
+
+    /// Compile-time proof that `ImageFilterPass` is `Clone` (Blur/Morph variants
+    /// from later slices must keep deriving it; this catches a regression).
+    const _IMAGE_FILTER_PASS_IS_CLONE: fn(ImageFilterPass) -> ImageFilterPass = |p| p.clone();
+
+    fn identity_op() -> FilterOp {
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));
+        FilterOp {
+            input: DrawSegment::new(),
+            passes: smallvec![ImageFilterPass::Identity],
+            content_bounds: bounds,
+            grown_bounds: bounds,
+        }
+    }
+
+    /// Runtime purity witness: a `FilterOp` is constructable + clonable with no GPU
+    /// context. Constructing the value also exercises the variant under `cfg(test)`.
+    #[test]
+    fn filter_op_is_pure_cpu_data() {
+        let op = identity_op();
+        let cloned = op.clone();
+        assert_eq!(cloned.passes.len(), 1);
+    }
+
+    /// The `DrawItem::Filter` variant is constructable + pattern-matchable in plain
+    /// CPU code (no GPU feature) — the CI-visible construction that keeps the
+    /// variant non-dead under `cfg(test)`.
+    #[test]
+    fn draw_item_filter_variant_is_reachable() {
+        match DrawItem::Filter(identity_op()) {
+            DrawItem::Filter(inner) => {
+                assert_eq!(inner.passes.len(), 1);
+                assert!(matches!(inner.passes[0], ImageFilterPass::Identity));
+            }
+            _ => panic!("constructed DrawItem::Filter must match its own variant"),
+        }
+    }
+
+    /// `LayerFilterChain::default()` is empty — the no-filter fast-path state.
+    #[test]
+    fn layer_filter_chain_default_is_empty() {
+        assert!(LayerFilterChain::new().is_empty());
+    }
 }
