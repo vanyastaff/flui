@@ -1487,6 +1487,49 @@ impl WgpuPainter {
                             grown_bounds,
                         }));
                     }
+                    Some(ImageFilterSpec::Blur { sigma_x, sigma_y }) => {
+                        // Gaussian blur via two H/V sub-passes (separable, anisotropic).
+                        // Identical seam to Morph: grow by kernel_radius(max(σx,σy))
+                        // on each side, clip to viewport, emit DrawItem::Filter.
+                        //
+                        // `kernel_radius` uses Impeller's √3·σ rule.  A conservative
+                        // per-axis pad of max(σx,σy) ensures both H and V halos fit.
+                        if !offscreen_items.is_empty() {
+                            tracing::debug!(
+                                item_count = offscreen_items.len(),
+                                "restore_layer(Blur): offscreen_items discarded; \
+                                 FilterOp::input only captures the final DrawSegment. \
+                                 Nested opacity layers inside a blur layer are not yet supported."
+                            );
+                        }
+                        let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
+
+                        let max_sigma = sigma_x.max(sigma_y);
+                        #[allow(
+                            clippy::cast_precision_loss,
+                            reason = "kernel_radius returns u32 ≤ a few thousand for any realistic \
+                                      sigma; cast to f32 is exact for values this small"
+                        )]
+                        let halo_px = px(super::effects::kernel_radius(max_sigma) as f32);
+                        let grown = composite_bounds.expand(halo_px);
+                        let viewport_rect = self.viewport_bounds();
+                        let grown_bounds =
+                            grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
+
+                        tracing::trace!(
+                            sigma_x,
+                            sigma_y,
+                            content_bounds = ?composite_bounds,
+                            grown_bounds = ?grown_bounds,
+                            "WgpuPainter::restore_layer: queued DrawItem::Filter (Blur)"
+                        );
+                        self.draw_order.push(DrawItem::Filter(FilterOp {
+                            input: offscreen_final_segment,
+                            passes: smallvec![ImageFilterPass::Blur { sigma_x, sigma_y }],
+                            content_bounds: composite_bounds,
+                            grown_bounds,
+                        }));
+                    }
                     None => {
                         // Plain opacity/tint/blend-mode composite — existing path.
                         tracing::trace!(

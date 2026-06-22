@@ -163,8 +163,7 @@ pub(crate) enum MorphOp {
 /// record time.
 ///
 /// Stored in `SavedLayer::image_filter` so `restore_layer` can choose between
-/// the `OpacityLayer` and `DrawItem::Filter` paths. The `Morph` variant is the
-/// first real payload; `Blur` joins in Task 4.
+/// the `OpacityLayer` and `DrawItem::Filter` paths.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ImageFilterSpec {
     /// Morphological dilate or erode with the given per-axis radius in physical
@@ -177,12 +176,30 @@ pub(crate) enum ImageFilterSpec {
         /// (erode).
         op: MorphOp,
     },
+    /// Separable Gaussian blur with independent horizontal and vertical sigma.
+    ///
+    /// ## PINNED #2 — premultiplied-direct, sRGB-encoded
+    ///
+    /// The Gaussian kernel operates on premultiplied RGBA in sRGB-encoded space.
+    /// NO unpremultiply step, NO linearise. Matching Impeller
+    /// `gaussian_blur_filter_contents.cc:935` (`apply_unpremultiply=false`).
+    ///
+    /// ## √3·sigma kernel extent
+    ///
+    /// Half-radius = `ceil(sigma × √3)` per [`super::effects::kernel_radius`].
+    /// The `grown_bounds` expansion in `restore_layer` uses
+    /// `kernel_radius(max(sigma_x, sigma_y))` as a conservative per-axis pad.
+    Blur {
+        /// Gaussian sigma for the horizontal sub-pass.
+        sigma_x: f32,
+        /// Gaussian sigma for the vertical sub-pass.
+        sigma_y: f32,
+    },
 }
 
 /// A lowered, flattened image-filter pass. Bounds-GROWING ops only.
 ///
-/// Task 0 ships only the `Identity` arm; `Blur`/`Morph` payloads land in later
-/// slices. Adding a new variant requires adding a match arm in
+/// Adding a new variant requires adding a match arm in
 /// `apply_image_filter_passes` — the compiler enforces this (no `_` catch-all).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ImageFilterPass {
@@ -207,6 +224,27 @@ pub(crate) enum ImageFilterPass {
         radius: f32,
         /// Dilate (max) or erode (min).
         op: MorphOp,
+    },
+    /// Separable Gaussian blur: H pass (sigma_x) then V pass (sigma_y).
+    ///
+    /// The two sub-passes are internal to `apply_blur` — callers see a single
+    /// `Blur` pass.  `sigma_x` / `sigma_y` are in physical pixels.
+    ///
+    /// ## PINNED #2 — premultiplied-direct, sRGB-encoded
+    ///
+    /// The Gaussian kernel operates on premultiplied RGBA in sRGB-encoded space.
+    /// NO unpremultiply step, NO linearise.
+    ///
+    /// ## Kernel extent
+    ///
+    /// Half-radius = `ceil(sigma × √3)` per [`super::effects::kernel_radius`].
+    /// Grows `FilterOp::grown_bounds` by `kernel_radius(max(sigma_x, sigma_y))`
+    /// pixels on each side (conservative per-axis pad).
+    Blur {
+        /// Gaussian sigma for the horizontal sub-pass.
+        sigma_x: f32,
+        /// Gaussian sigma for the vertical sub-pass.
+        sigma_y: f32,
     },
 }
 
@@ -809,6 +847,48 @@ mod task0_ir_witnesses {
             ImageFilterPass::Morph {
                 radius: _,
                 op: MorphOp::Erode
+            }
+        ));
+    }
+
+    /// `ImageFilterSpec::Blur` and `ImageFilterPass::Blur` are constructable and
+    /// comparable — exercises both under `cfg(test)` so the variants are not
+    /// dead code in the test cfg.
+    #[test]
+    fn blur_ir_variants_are_constructable() {
+        let spec = ImageFilterSpec::Blur {
+            sigma_x: 4.0,
+            sigma_y: 2.0,
+        };
+        assert!(matches!(spec, ImageFilterSpec::Blur { .. }));
+
+        let pass = ImageFilterPass::Blur {
+            sigma_x: 4.0,
+            sigma_y: 2.0,
+        };
+        assert!(matches!(pass, ImageFilterPass::Blur { .. }));
+    }
+
+    /// `FilterOp` carrying a `Blur` pass is still `Clone` (T11 purity witness).
+    #[test]
+    fn filter_op_with_blur_pass_is_pure_cpu_data() {
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));
+        let op = FilterOp {
+            input: DrawSegment::new(),
+            passes: smallvec![ImageFilterPass::Blur {
+                sigma_x: 4.0,
+                sigma_y: 2.0,
+            }],
+            content_bounds: bounds,
+            grown_bounds: bounds,
+        };
+        let cloned = op.clone();
+        assert_eq!(cloned.passes.len(), 1);
+        assert!(matches!(
+            cloned.passes[0],
+            ImageFilterPass::Blur {
+                sigma_x: _,
+                sigma_y: _
             }
         ));
     }

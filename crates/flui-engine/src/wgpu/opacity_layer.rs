@@ -34,6 +34,7 @@ use std::sync::Arc;
 
 use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
+    blur::apply_blur,
     color_matrix::apply_color_matrix,
     command_ir::{
         DrawItem, DrawSegment, ImageFilterPass, LayerFilter, LayerFilterChain, PendingOpacityLayer,
@@ -812,8 +813,6 @@ pub(in crate::wgpu) fn apply_image_filter_passes(
     device: &Arc<wgpu::Device>,
     encoder: &mut wgpu::CommandEncoder,
 ) -> PooledTexture {
-    let _ = grown_bounds; // consumed by Slice 4 (Blur); unused until then
-
     // Fold left-to-right; `acc` owns the current intermediate texture.
     let mut acc = input_tex;
     for pass in passes {
@@ -837,8 +836,37 @@ pub(in crate::wgpu) fn apply_image_filter_passes(
                 )
                 // `acc` drops here after `apply_morphology` returns, returning
                 // the prior intermediate to the pool.
-            } // Slice 4: ImageFilterPass::Blur { .. } => apply_blur(..),
+            }
+
+            ImageFilterPass::Blur { sigma_x, sigma_y } => {
+                // Two separable sub-passes (H then V) inside apply_blur.
+                // The H pass decals at `content_bounds` — the pre-filter content
+                // AABB — so samples outside the source geometry contribute
+                // transparent black (decal semantics). The V pass decals at the
+                // texture edge [0,1] to read the full H halo (diagonal corners
+                // included). `grown_bounds` is computed at `restore_layer` and
+                // drives the final composite rect; it is not needed here.
+                apply_blur(
+                    *sigma_x,
+                    *sigma_y,
+                    &acc,
+                    content_bounds,
+                    viewport_size,
+                    surface_format,
+                    &pipelines.blur,
+                    resources,
+                    device,
+                    encoder,
+                )
+                // `acc` drops here after `apply_blur` returns, returning the
+                // prior intermediate (the content offscreen) to the pool.
+            }
         };
     }
+    // `grown_bounds` is threaded into this function for signature symmetry with
+    // the morphology path and future multi-pass chains.  The Blur pass does not
+    // require it here (the `grown_bounds` composite rect is applied by the caller
+    // in `flush_opacity_layer`/`render_layer_to_offscreen`). Suppress dead_code.
+    let _ = grown_bounds;
     acc
 }

@@ -66,6 +66,13 @@ mod backend;
 /// path cache, and superellipse cache so they can be borrowed independently
 /// from the flush-side state during draw recording.
 mod batches;
+/// Separable Gaussian blur filter: two H/V sub-passes with `exp(-0.5·i²/σ²)`
+/// running-sum renormalisation. Premultiplied-direct, sRGB-encoded (PINNED #2).
+/// [`blur::apply_blur`] is called by `apply_image_filter_passes` for
+/// `ImageFilterPass::Blur`. [`blur::BlurPipeline`] owns the pipeline and
+/// bind-group layout. Uses `FilterMode::Linear` (bilinear) — distinct from the
+/// morphology pipeline (`NonFiltering` nearest).
+pub(crate) mod blur;
 mod buffer_pool;
 /// Per-pixel 5×4 color-matrix filter pass: [`color_matrix::apply_color_matrix`]
 /// applies a [`command_ir::LayerFilter::ColorMatrix`] to a premultiplied layer
@@ -248,6 +255,12 @@ mod mode_filter_tests;
 // translucent alpha unchanged, round-trip ≈ identity, black/white boundary).
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gamma_filter_tests;
+
+// blur_filter_tests contains B1-B5 GPU readback tests for the Gaussian blur
+// filter pass (no-dark-halo premul discriminator, anisotropy, oracle match,
+// zero-sigma identity, grown_bounds halo extent).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod blur_filter_tests;
 
 // ============================================================================
 // PUBLIC API

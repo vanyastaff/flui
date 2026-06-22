@@ -1550,19 +1550,19 @@ impl LayerStateStack for Backend<'_> {
 
         self.flush_active_transform();
 
-        // Pragmatic approximation: full GPU image filters (blur, dilate, erode)
-        // require render-to-texture + compute shader post-processing which needs
-        // offscreen infrastructure not yet available. Instead, we use save_layer
-        // to isolate the filtered content for future GPU pass integration.
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Blur): save_layer for blur sigma_x={:.2}, sigma_y={:.2} \
-                     (GPU blur not yet implemented)",
+                // Full GPU separable Gaussian blur via two H/V sub-passes
+                // (PINNED #2: premultiplied-direct, sRGB-encoded, √3·σ kernel).
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Blur {
+                        sigma_x: *sigma_x,
+                        sigma_y: *sigma_y,
+                    });
+                tracing::trace!(
                     sigma_x,
                     sigma_y,
+                    "push_image_filter(Blur): GPU Gaussian blur layer opened"
                 );
             }
             ImageFilter::Dilate { radius } => {

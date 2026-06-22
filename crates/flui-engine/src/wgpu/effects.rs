@@ -378,29 +378,25 @@ impl ShadowInstance {
 /// Value: √3 ≈ 1.732 050 8. Chosen so the Gaussian evaluated at ±radius drops
 /// below ½ of its peak value — the Impeller standard for "sufficient tap coverage".
 ///
-/// NOTE: the orphaned `blur_horizontal.wgsl` used `ceil(sigma * 3.0)` — a
-/// divergence from Impeller's √3 factor. This constant pins the correct value;
-/// Slice 4 consumes it and removes the 3.0 hardcode from the shader.
-// Consumed transitively by `kernel_radius`, exercised by `kernel_radius_tests` under
-// `cfg(test)`. No production consumer until Slice 4 wires the GPU blur driver, so it is
-// dead only in NON-test builds — scope the allow there (lint stays live in the test cfg).
-#[cfg_attr(not(test), allow(dead_code))]
+/// (Impeller's exact formula is `(sigma - 0.5) × √3`; we omit the `−0.5` as a
+/// conservative over-estimate documented in the spec.)
 const KERNEL_RADIUS_PER_SIGMA: f32 = 1.732_050_8;
 
 /// Gaussian-blur kernel radius (in source pixels) for a given Gaussian sigma.
 ///
 /// Computes `ceil(sigma × √3)` — Impeller's `CalculateBlurRadius` from
-/// `impeller/geometry/sigma.h:24`. The integer result is the tap count for
-/// a one-sided Gaussian blur kernel: the full kernel spans
-/// `2 × kernel_radius + 1` taps.
+/// `impeller/geometry/sigma.h:24`. The integer result is both:
+///
+/// - the **sampling extent** per sub-pass (H or V scans `[-r..=r]` texels), and
+/// - the **coverage radius** for `grown_bounds` expansion in `restore_layer`.
+///
+/// The full kernel spans `2 × kernel_radius + 1` taps.
 ///
 /// Returns `0` for non-positive sigma (degenerate / no blur).
 ///
-/// One home for the blur-pass driver (Slice 4) and its CPU oracle — do NOT
-/// compute `ceil(sigma * N)` inline at other call sites.
-// No production consumer until Slice 4 wires the GPU blur driver; the `kernel_radius_tests`
-// exercise it under `cfg(test)`, so it is dead only in NON-test builds — scope the allow there.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Single authoritative home for the blur-pass driver (`apply_blur`) and the
+/// CPU oracle in `blur_filter_tests` — do NOT compute `ceil(sigma * N)` inline
+/// at other call sites.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
