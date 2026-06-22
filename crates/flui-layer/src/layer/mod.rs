@@ -345,10 +345,10 @@ impl Layer {
 
     /// Returns true if this layer is known to be fully opaque.
     ///
-    /// Conservative check used by `OcclusionTracker` to register opaque regions.
-    /// Only returns `true` for leaf layers that are guaranteed to draw solid
-    /// content with no transparency: `Canvas` and `Picture` layers (which always
-    /// fill their bounds), and `Texture` layers with opacity >= 1.0.
+    /// Conservative check: only returns `true` for leaf layers that are
+    /// guaranteed to draw solid content with no transparency — `Canvas` and
+    /// `Picture` layers (which always fill their bounds), and `Texture` layers
+    /// with opacity >= 1.0.
     ///
     /// Container/effect layers (clips, transforms, opacity, filters) return
     /// `false` because their visual output depends on their children.
