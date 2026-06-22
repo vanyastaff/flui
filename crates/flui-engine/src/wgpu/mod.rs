@@ -262,6 +262,12 @@ mod gamma_filter_tests;
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod blur_filter_tests;
 
+// compose_filter_tests contains C1-C5 acceptance tests for ImageFilter::Compose
+// flatten + Chain execution: order-matters discriminator (C1), nesting structure
+// (C2), deep-chain heap-spill (C3), cumulative bounds (C4), degenerate cases (C5).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod compose_filter_tests;
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================

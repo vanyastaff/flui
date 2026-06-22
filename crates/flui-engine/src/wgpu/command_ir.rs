@@ -164,7 +164,12 @@ pub(crate) enum MorphOp {
 ///
 /// Stored in `SavedLayer::image_filter` so `restore_layer` can choose between
 /// the `OpacityLayer` and `DrawItem::Filter` paths.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// `Copy` has been intentionally removed: the `Chain` variant holds a
+/// `SmallVec<[ImageFilterPass; 4]>` which is `Clone` but not `Copy`.  All
+/// eight production call sites pass the spec by value or match by reference, so
+/// removing `Copy` has no impact on them.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ImageFilterSpec {
     /// Morphological dilate or erode with the given per-axis radius in physical
     /// pixels.
@@ -195,9 +200,25 @@ pub(crate) enum ImageFilterSpec {
         /// Gaussian sigma for the vertical sub-pass.
         sigma_y: f32,
     },
+    /// A pre-flattened ordered chain of [`ImageFilterPass`]es produced by
+    /// `flatten_compose` in `backend.rs` for `ImageFilter::Compose`.
+    ///
+    /// The passes are already in execution order (index 0 = innermost = applied
+    /// first), and `restore_layer` emits a single `DrawItem::Filter` carrying
+    /// the full chain.  The `cumulative_growth` helper in `painter.rs` sums the
+    /// per-pass radius contributions to produce the expanded `grown_bounds`.
+    ///
+    /// Inline capacity 4 covers realistic `Compose` depth; heap-spills beyond 4
+    /// are correct.
+    Chain(SmallVec<[ImageFilterPass; 4]>),
 }
 
-/// A lowered, flattened image-filter pass. Bounds-GROWING ops only.
+/// A lowered, flattened image-filter pass.
+///
+/// Passes are either bounds-GROWING (Morph, Blur) or bounds-PRESERVING
+/// (ColorMatrix, Identity).  The `cumulative_growth` helper in `painter.rs`
+/// returns the correct growth for each variant; `ColorMatrix` and `Identity`
+/// contribute 0.
 ///
 /// Adding a new variant requires adding a match arm in
 /// `apply_image_filter_passes` — the compiler enforces this (no `_` catch-all).
@@ -246,6 +267,27 @@ pub(crate) enum ImageFilterPass {
         /// Gaussian sigma for the vertical sub-pass.
         sigma_y: f32,
     },
+    /// 5×4 row-major color matrix applied per-pixel on un-premultiplied color.
+    ///
+    /// Bounds-PRESERVING: grows `FilterOp::grown_bounds` by **0** pixels.
+    ///
+    /// Reuses `apply_color_matrix` in `opacity_layer.rs` — the same function
+    /// the `LayerFilter::ColorMatrix` fold arm uses.  The matrix is applied
+    /// full-viewport (REPLACE semantics, `LoadOp::Clear(TRANSPARENT)`).
+    ///
+    /// Layout mirrors [`flui_types::painting::ColorMatrix::values`]:
+    /// rows R/G/B/A × columns `[m0..m3, offset]`.
+    ///
+    /// ## Two-route rule
+    ///
+    /// A standalone `ImageFilter::Matrix`/`ColorAdjust` (not inside a `Compose`)
+    /// still routes to the `LayerFilter::ColorMatrix` seam.  Only
+    /// `ImageFilter::Compose` produces this variant — the flatten at record time
+    /// (`flatten_compose` in `backend.rs`) promotes Matrix/ColorAdjust inside a
+    /// Compose to `ImageFilterPass::ColorMatrix` so the ordered fold can interleave
+    /// them with growing passes.  Both routes call `apply_color_matrix` underneath,
+    /// so the pixel output is identical.
+    ColorMatrix([f32; 20]),
 }
 
 /// A bounds-GROWING image-filter operation, isolated at record time.

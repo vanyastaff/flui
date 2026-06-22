@@ -861,6 +861,29 @@ pub(in crate::wgpu) fn apply_image_filter_passes(
                 // `acc` drops here after `apply_blur` returns, returning the
                 // prior intermediate (the content offscreen) to the pool.
             }
+
+            ImageFilterPass::ColorMatrix(matrix) => {
+                // Full-viewport color-matrix pass (bounds-PRESERVING: grows 0 px).
+                //
+                // Reuses `apply_color_matrix` — the same function the
+                // `LayerFilter::ColorMatrix` fold arm in `fold_layer_filter_chain`
+                // calls.  REPLACE semantics: the output texture is cleared to
+                // TRANSPARENT before the pass writes into it (LoadOp::Clear inside
+                // `apply_color_matrix`), so no prior halo leaks through.
+                //
+                // `acc` drops after `apply_color_matrix` returns, returning the
+                // prior intermediate to the pool (≤2-live ping-pong preserved).
+                apply_color_matrix(
+                    *matrix,
+                    &acc,
+                    viewport_size,
+                    surface_format,
+                    &pipelines.color_matrix,
+                    resources,
+                    device,
+                    encoder,
+                )
+            }
         };
     }
     // `grown_bounds` is threaded into this function for signature symmetry with
