@@ -67,11 +67,16 @@ mod pipeline;
 ///
 /// - `sigma_x` — Gaussian sigma for the horizontal pass.
 /// - `sigma_y` — Gaussian sigma for the vertical pass.
-/// - `source_tex` — premultiplied RGBA offscreen from `render_segment_to_offscreen`.
-/// - `content_bounds` — AABB of the content in physical pixels; used to compute
-///   the H-pass decal UV rect (samples beyond content → `vec4(0.0)`).
-/// - `viewport_size` — `(width, height)` in physical pixels; the output and
-///   intermediate textures share this size.
+/// - `source_tex` — premultiplied RGBA offscreen from `render_segment_to_grown_offscreen`.
+/// - `content_bounds` — AABB of the content in **full-frame** physical pixels; rebased
+///   to fb-local UV by subtracting `fb_origin` before dividing by `fb_dim`.
+/// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels
+///   (computed in `painter.rs`). Used to rebase `content_bounds` to fb-local UV
+///   (non-negotiable #3: `content_rect_uv = (content_bounds - fb_origin) / fb_dim`).
+/// - `fb_dim` — integer dimensions `(width, height)` of the source texture and all
+///   intermediate textures acquired here. The blur shader's `texture_size` uniform
+///   MUST be `fb_dim`, not `viewport_size` (non-negotiable #2: denominator is integer
+///   fb_dim to avoid the SSAA-tile-denominator bug class).
 /// - `surface_format` — texture format of the render target.
 /// - `pipeline` — the blur pipeline (bind-group layout + render pipeline).
 /// - `resources` — mutable GPU resource manager (texture pool).
@@ -92,25 +97,34 @@ pub(crate) fn apply_blur(
     sigma_y: f32,
     source_tex: &PooledTexture,
     content_bounds: Rect<Pixels>,
-    viewport_size: (u32, u32),
+    fb_origin: (u32, u32),
+    fb_dim: (u32, u32),
     surface_format: wgpu::TextureFormat,
     pipeline: &BlurPipeline,
     resources: &mut GpuResources,
     device: &Arc<wgpu::Device>,
     encoder: &mut wgpu::CommandEncoder,
 ) -> PooledTexture {
-    let (viewport_w, viewport_h) = viewport_size;
+    let (fb_w, fb_h) = fb_dim;
+    let (fb_origin_x, fb_origin_y) = fb_origin;
 
-    // Normalise the content AABB to UV coordinates [0, 1] × [0, 1].
-    // The H pass decals against the content rect (samples beyond it are
-    // transparent black). Inside the texture but outside content, the source is
-    // already transparent (cleared by `render_segment_to_offscreen`), so this is
-    // equivalent to a texture-edge decal — but it keeps the content edge explicit.
+    // Rebase the content AABB to fb-local UV coordinates (non-negotiable #3).
+    //
+    // The source texture is fb_dim-sized, with pixel (0,0) = fb_origin in device
+    // space. The H-pass decal guard compares sample UV against content_rect_uv;
+    // without subtracting fb_origin the guard is in viewport UV space, which is
+    // correct for a full-viewport source but WRONG for a fb_dim-sized source —
+    // every content UV would be shifted by fb_origin/viewport, landing outside [0,1]
+    // for off-origin content and clipping the blur decal to the wrong region.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "fb coords and content_bounds are ≤ viewport ≤ ~16 M px; f32 precision is sufficient"
+    )]
     let content_rect_uv_h = [
-        content_bounds.left().0 / viewport_w as f32,
-        content_bounds.top().0 / viewport_h as f32,
-        content_bounds.right().0 / viewport_w as f32,
-        content_bounds.bottom().0 / viewport_h as f32,
+        (content_bounds.left().0 - fb_origin_x as f32) / fb_w as f32,
+        (content_bounds.top().0 - fb_origin_y as f32) / fb_h as f32,
+        (content_bounds.right().0 - fb_origin_x as f32) / fb_w as f32,
+        (content_bounds.bottom().0 - fb_origin_y as f32) / fb_h as f32,
     ];
     // The V pass reads the H-pass output whose content extent has already grown
     // horizontally into the halo. Decaling the V pass at the original content
@@ -121,12 +135,22 @@ pub(crate) fn apply_blur(
     let content_rect_uv_v = [0.0_f32, 0.0, 1.0, 1.0];
 
     // ── H pass: source_tex → h_tex ──────────────────────────────────────────
+    //
+    // texture_size = fb_dim, NOT viewport_size (non-negotiable #2):
+    // The blur shader divides sample offsets by texture_size to get UV steps.
+    // Using the full viewport size for a fb_dim-sized texture scales the kernel
+    // offsets down by (fb/vp), effectively widening the blur to (sigma * vp/fb)
+    // texels — incorrect. The shader must see the actual texture dimensions.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "fb_w/fb_h are u32 texture dims ≤ viewport; f32 precision is sufficient"
+    )]
     let h_tex = resources
         .layer_texture_pool_mut()
-        .acquire(viewport_w, viewport_h, surface_format);
+        .acquire(fb_w, fb_h, surface_format);
     run_blur_sub_pass(
         &BlurUniform {
-            texture_size: [viewport_w as f32, viewport_h as f32],
+            texture_size: [fb_w as f32, fb_h as f32],
             sigma: sigma_x,
             direction: 0.0, // horizontal
             content_rect_uv: content_rect_uv_h,
@@ -142,10 +166,10 @@ pub(crate) fn apply_blur(
     // ── V pass: h_tex → v_tex ───────────────────────────────────────────────
     let v_tex = resources
         .layer_texture_pool_mut()
-        .acquire(viewport_w, viewport_h, surface_format);
+        .acquire(fb_w, fb_h, surface_format);
     run_blur_sub_pass(
         &BlurUniform {
-            texture_size: [viewport_w as f32, viewport_h as f32],
+            texture_size: [fb_w as f32, fb_h as f32],
             sigma: sigma_y,
             direction: 1.0, // vertical
             content_rect_uv: content_rect_uv_v,

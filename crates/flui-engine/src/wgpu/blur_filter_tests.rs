@@ -34,7 +34,7 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::Pixels};
+    use flui_types::{Color, Point, Rect, geometry::Pixels};
     use smallvec::smallvec;
 
     use crate::wgpu::{
@@ -939,6 +939,9 @@ mod gpu_tests {
             }],
             content_bounds: content_rect,
             grown_bounds: grown_rect,
+            // Integer-aligned (Task 6): grown_left/top are already integers here.
+            fb_origin: (grown_left, grown_top),
+            fb_dim: (grown_right - grown_left, grown_bottom - grown_top),
         };
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -981,6 +984,1002 @@ mod gpu_tests {
             center_alpha > 200,
             "B5: content centre ({center_col},{mid_row}) alpha={center_alpha} — \
              expected fully opaque; blur must not erase interior content."
+        );
+    }
+
+    // ── B6: Off-origin readback — Task 6 grown-bounds sizing discriminator ───
+
+    /// B6: Content rect NOT at origin (`[34,34]→[54,54]`), blur σ=4.
+    ///
+    /// ## What this tests (Task 6 non-negotiables)
+    ///
+    /// With the pre-Task-6 full-viewport intermediate the pixel values are correct:
+    /// the texel grid aligns with the device-pixel grid regardless of content position.
+    /// After Task 6 the intermediate is `fb_dim`-sized and the content is rendered at
+    /// pixel `(0,0)` of the intermediate via a vertex pre-transform (non-negotiable #2).
+    ///
+    /// A wrong implementation that uses:
+    /// - `grown.width()` (fractional float) as the vertex remap denominator instead of
+    ///   integer `fb_dim` → the vertex scaling is off by `ceil(w) / w` ≠ 1, shifting
+    ///   content within the intermediate.
+    /// - fractional `grown_bounds` as the composite `dst_rect` over an integer-origin
+    ///   intermediate → a sub-pixel grid shift on the bilinear composite.
+    /// - `content_bounds` UV WITHOUT subtracting `fb_origin` → decal guard in the
+    ///   wrong coordinate system, clipping or mis-locating the blur.
+    ///
+    /// All three bugs manifest as the blurred halo being SHIFTED or CLIPPED relative
+    /// to the source content rect.
+    ///
+    /// ## Assertions
+    ///
+    /// 1. **Halo symmetry** — pixels at equal distances left and right of the content
+    ///    centre col have equal (or near-equal) alpha.  A shift by `frac(fb_origin)` or
+    ///    a wrong vertex scale would break horizontal symmetry.
+    /// 2. **Oracle match ±3 LSB** — the GPU output must match `blur_oracle_premul` on
+    ///    the full 64×64 surface within the standard tolerance.  The oracle is run in
+    ///    full-surface space (not fb-local space) because the readback is from the
+    ///    composited surface.
+    /// 3. **Content centre** — the content centre must be the brightest pixel on the
+    ///    mid-row, verifying the halo is centred correctly.
+    ///
+    /// **Fails if:** the vertex denominator is float grown width (bug #2), the composite
+    /// shifts by `frac(grown_left)` (bug #1), or the decal UV forgets `fb_origin` (bug #3).
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "test geometry uses small integer constants; all casts are safe on a 64×64 surface"
+    )]
+    fn blur_off_origin_halo_centred_on_content() {
+        const SIGMA: f32 = 4.0;
+
+        // Content rect NOT at origin: [34, 34] → [54, 54].
+        // kernel_radius(4.0) = 7, so grown ≈ [27, 27] → [61, 61] — fractional if
+        // content were at non-integer position, but here it's integer-aligned so
+        // the test exercises the PRODUCTION path through `save_layer_with_image_filter`
+        // (which calls `filter_fb_rect` at record time) rather than a hand-crafted FilterOp.
+        // The off-origin position is what matters: content centre col=44, not col=0.
+        const CONTENT_LEFT: u32 = 34;
+        const CONTENT_TOP: u32 = 34;
+        const CONTENT_RIGHT: u32 = 54;
+        const CONTENT_BOTTOM: u32 = 54;
+        const KERNEL_RAD: u32 = 7;
+        // Oracle match tolerance: ±3 u8 per channel (matches B3 standard tolerance).
+        const ORACLE_TOLERANCE: i32 = 3;
+        let source_color = Color::rgba(180, 120, 60, 255);
+
+        assert_eq!(
+            kernel_radius(SIGMA),
+            KERNEL_RAD,
+            "B6 precondition: kernel_radius({SIGMA}) must equal {KERNEL_RAD}"
+        );
+
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_tex, surface_view) = create_surface(&device);
+        clear_surface(
+            &device,
+            &queue,
+            &surface_view,
+            wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+        );
+
+        let content_rect = Rect::from_xywh(
+            px(CONTENT_LEFT as f32),
+            px(CONTENT_TOP as f32),
+            px((CONTENT_RIGHT - CONTENT_LEFT) as f32),
+            px((CONTENT_BOTTOM - CONTENT_TOP) as f32),
+        );
+
+        // Production path: save_layer_with_image_filter → restore_layer computes
+        // fb_origin/fb_dim via filter_fb_rect and stores them on FilterOp.
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+            sigma_x: SIGMA,
+            sigma_y: SIGMA,
+        });
+        painter.rect(content_rect, &Paint::fill(source_color));
+        painter.restore_layer();
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_tex),
+                &mut encoder,
+            )
+            .expect("B6 off-origin blur render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let gpu_pixels = readback_pixels(&device, &queue, &surface_tex);
+        let w = SURFACE_WIDTH as usize;
+        let mid_row = u32::midpoint(CONTENT_TOP, CONTENT_BOTTOM) as usize;
+        let center_col = u32::midpoint(CONTENT_LEFT, CONTENT_RIGHT) as usize;
+
+        // ── Assertion 1: halo symmetry ────────────────────────────────────────
+        //
+        // The halo extends KERNEL_RAD pixels on both sides. At `halo_offset`
+        // pixels from the content edge (left and right) the blur contribution
+        // must be equal: if it isn't, content is shifted within the intermediate.
+        //
+        // halo_offset = 3 (well within the kernel radius): check col 34-3=31 and
+        // col 54+3-1=56 (both in the halo, symmetric about center).
+        let halo_offset: u32 = 3;
+        let left_halo_col = (CONTENT_LEFT - halo_offset) as usize;
+        let right_halo_col = (CONTENT_RIGHT + halo_offset - 1) as usize;
+        let left_alpha = f32::from(gpu_pixels[mid_row * w + left_halo_col][3]);
+        let right_alpha = f32::from(gpu_pixels[mid_row * w + right_halo_col][3]);
+
+        assert!(
+            left_alpha > 0.0,
+            "B6: left halo pixel ({left_halo_col},{mid_row}) alpha={left_alpha:.1} — \
+             expected non-zero (halo from sigma={SIGMA}). \
+             alpha=0 means the blur halo was clipped or the content is off-position."
+        );
+        assert!(
+            right_alpha > 0.0,
+            "B6: right halo pixel ({right_halo_col},{mid_row}) alpha={right_alpha:.1} — \
+             expected non-zero (halo from sigma={SIGMA})."
+        );
+
+        // The left/right halo pixels should be nearly symmetric (equal distance from content).
+        // Tolerance: ±8 u8 for the bilinear rounding differences vs sub-pixel alignment.
+        let alpha_diff = (left_alpha - right_alpha).abs();
+        assert!(
+            alpha_diff < 8.0,
+            "B6: left halo alpha={left_alpha:.1} vs right halo alpha={right_alpha:.1} — \
+             diff={alpha_diff:.1}, expected < 8. \
+             Asymmetry indicates content is shifted within the intermediate. \
+             Root causes: wrong vertex denominator (float grown width instead of integer fb_dim), \
+             composite at fractional grown_bounds, or content_rect_uv not rebased by fb_origin."
+        );
+
+        // ── Assertion 2: oracle match ±3 LSB ─────────────────────────────────
+        //
+        // The oracle runs on the full 64×64 surface. The GPU output should match
+        // because Task 6 only changes VRAM layout — not pixel values.
+        let source_premul: [u8; 4] = [
+            source_color.r,
+            source_color.g,
+            source_color.b,
+            source_color.a,
+        ];
+        let source_grid: Vec<[u8; 4]> = (0..SURFACE_HEIGHT as usize)
+            .flat_map(|row| {
+                (0..SURFACE_WIDTH as usize).map(move |col| {
+                    if row >= CONTENT_TOP as usize
+                        && row < CONTENT_BOTTOM as usize
+                        && col >= CONTENT_LEFT as usize
+                        && col < CONTENT_RIGHT as usize
+                    {
+                        source_premul
+                    } else {
+                        [0u8; 4]
+                    }
+                })
+            })
+            .collect();
+
+        let oracle = blur_oracle_premul(
+            &source_grid,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+            SIGMA,
+            SIGMA,
+            (CONTENT_LEFT, CONTENT_TOP, CONTENT_RIGHT, CONTENT_BOTTOM),
+        );
+
+        let mut max_diff: u8 = 0;
+        for row in 0..SURFACE_HEIGHT as usize {
+            for col in 0..SURFACE_WIDTH as usize {
+                let idx = row * w + col;
+                for ch in 0..4usize {
+                    let diff = (i32::from(gpu_pixels[idx][ch]) - i32::from(oracle[idx][ch])).abs();
+                    max_diff = max_diff.max(diff as u8);
+                    assert!(
+                        diff <= ORACLE_TOLERANCE,
+                        "B6 oracle mismatch: pixel ({col},{row}) channel {ch}: \
+                         GPU={gpu} oracle={exp} diff={diff} > {ORACLE_TOLERANCE}. \
+                         Off-origin blur output diverges from CPU oracle — \
+                         check vertex pre-transform denominator (must be integer fb_dim).",
+                        gpu = gpu_pixels[idx][ch],
+                        exp = oracle[idx][ch],
+                    );
+                }
+            }
+        }
+
+        // ── Assertion 3: content centre is the brightest ──────────────────────
+        let center_alpha = f32::from(gpu_pixels[mid_row * w + center_col][3]);
+        assert!(
+            center_alpha > 200.0,
+            "B6: content centre ({center_col},{mid_row}) alpha={center_alpha:.1} — \
+             expected > 200 (fully opaque source). The blur must not erase content."
+        );
+
+        tracing::debug!(
+            max_diff,
+            "B6 off-origin blur: max oracle diff = {max_diff} (tolerance = {ORACLE_TOLERANCE})"
+        );
+    }
+
+    // ── B7: Intermediate-size producer assertion (sub-viewport, content-AABB) ──
+
+    /// B7: `restore_layer` emits a `DrawItem::Filter` whose `fb_dim` is the
+    /// integer-aligned grown content bounds — **NOT** the full viewport.
+    ///
+    /// This is a CPU-only (no GPU device needed) unit test that proves the
+    /// content-AABB producer wiring is live: `save_layer_with_image_filter` passes
+    /// `bounds=None`, so `composite_bounds` is now derived from
+    /// `content_aabb(&offscreen_final_segment)` rather than falling back to the
+    /// full viewport.
+    ///
+    /// ## Layout (surface 64×64, sigma=4, CONTENT_MARGIN=12 px)
+    ///
+    /// ```text
+    /// content rect    = [12, 12] → [52, 52]  (from_xywh 12,12,40,40)
+    /// content_aabb    = Rect[12, 12, 52, 52]  (baked RectInstance, identity M+t)
+    /// kernel_radius(sigma=4) = ceil(4 × 1.732_050_8) = ceil(6.928) = 7
+    /// grown           = content_aabb.expand(7) = [5, 5, 59, 59]
+    /// grown ∩ viewport = [5, 5, 59, 59]  (fully inside 64×64)
+    /// fb_origin       = (floor(5.0), floor(5.0)) = (5, 5)
+    /// fb_far          = (min(ceil(59.0), 64), min(ceil(59.0), 64)) = (59, 59)
+    /// fb_dim          = (59 - 5, 59 - 5) = (54, 54)
+    /// ```
+    ///
+    /// **Criterion #8 discriminator:** `fb_dim = (54, 54) < (64, 64) = viewport`
+    /// proves the intermediate is sub-viewport — VRAM is actually reduced.
+    ///
+    /// **Fails if:**
+    /// - `content_aabb` is not called / returns `None` → `fb_dim = (64, 64)` (full vp).
+    /// - `content_aabb` under-estimates the content extent → `grown_bounds` is wrong.
+    /// - `filter_fb_rect` is not called or `fb_origin`/`fb_dim` not carried through.
+    #[test]
+    fn blur_restore_layer_emits_correct_fb_dim() {
+        // 64×64 surface, content rect not at origin (margin=12 px on each side).
+        // This places the content away from the viewport edges, so:
+        //   - The content AABB is visibly sub-viewport.
+        //   - The grown bounds (after blur halo) remain comfortably inside the viewport.
+        //   - fb_dim is provably smaller than the full viewport.
+        const SIGMA: f32 = 4.0;
+        const CONTENT_MARGIN: u32 = 12;
+
+        // Expected values derived from the layout comment above.
+        let expected_fb_origin: (u32, u32) = (5, 5);
+        let expected_fb_dim: (u32, u32) = (54, 54); // < (64, 64) — sub-viewport
+
+        let (device, queue) = acquire_test_device_and_queue();
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+
+        painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+            sigma_x: SIGMA,
+            sigma_y: SIGMA,
+        });
+        // Draw a baked RectInstance that does NOT fill the surface.
+        // The baked path (identity M, zero translate) makes bounds trackable via
+        // content_aabb — this is the canonical producer the criterion covers.
+        painter.rect(
+            Rect::from_xywh(
+                px(CONTENT_MARGIN as f32),
+                px(CONTENT_MARGIN as f32),
+                px((SURFACE_WIDTH - 2 * CONTENT_MARGIN) as f32),
+                px((SURFACE_HEIGHT - 2 * CONTENT_MARGIN) as f32),
+            ),
+            &Paint::fill(Color::rgba(180, 120, 60, 255)),
+        );
+        painter.restore_layer();
+
+        // Inspect the FilterOp via the existing test accessor on WgpuPainter.
+        let mut filter_ops = painter.filter_ops_for_test();
+        assert_eq!(
+            filter_ops.len(),
+            1,
+            "B7: expected exactly 1 FilterOp in draw_order, got {}. \
+             restore_layer must emit a DrawItem::Filter for an image-filter spec.",
+            filter_ops.len()
+        );
+        let filter_op = filter_ops.remove(0);
+
+        // fb_dim must be sub-viewport — criterion #8 proof.
+        assert!(
+            filter_op.fb_dim.0 < SURFACE_WIDTH && filter_op.fb_dim.1 < SURFACE_HEIGHT,
+            "B7 CRITERION #8 FAIL: FilterOp.fb_dim = {:?} is NOT sub-viewport ({}, {}). \
+             content_aabb wiring is inert — composite_bounds is still falling back to the \
+             full viewport instead of being derived from the content AABB.",
+            filter_op.fb_dim,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+        );
+
+        assert_eq!(
+            filter_op.fb_origin, expected_fb_origin,
+            "B7: FilterOp.fb_origin = {:?}, expected {:?}. \
+             content_aabb([12,12,52,52]) → grown=[5,5,59,59] → fb_origin=(5,5).",
+            filter_op.fb_origin, expected_fb_origin,
+        );
+        assert_eq!(
+            filter_op.fb_dim, expected_fb_dim,
+            "B7: FilterOp.fb_dim = {:?}, expected {:?}. \
+             grown_bounds=[5,5,59,59] → fb_dim=(54,54) — provably sub-viewport.",
+            filter_op.fb_dim, expected_fb_dim,
+        );
+    }
+
+    // ── B8: Clip-detection (content-AABB MUST NOT under-estimate) ──────────────
+
+    /// B8: Content at the AABB boundary must survive rendering without clipping.
+    ///
+    /// This is the **discriminating safety test** for `content_aabb`: if the
+    /// AABB under-estimates the true content extent, the intermediate framebuffer
+    /// would be sized too small, and pixels at the content edge would be clipped
+    /// (rendered to a region outside the allocated texture).
+    ///
+    /// ## Strategy
+    ///
+    /// Draw a content rect whose edges are flush with the content AABB boundary,
+    /// blur it, and readback the output at the center of the content rect.
+    /// If `content_aabb` under-estimates (returns a box smaller than the actual
+    /// content), the intermediate is cropped and those pixels are missing.
+    ///
+    /// The test draws a rect at a margin of 20 px on each side:
+    ///
+    /// ```text
+    /// content rect    = [20, 20] → [44, 44]  (from_xywh 20,20,24,24)
+    /// content_aabb    = [20, 20, 44, 44]
+    /// kernel_radius(sigma=2) = ceil(2 × 1.732) = ceil(3.464) = 4
+    /// grown           = [16, 16, 48, 48]
+    /// fb_origin       = (16, 16),  fb_dim = (32, 32)
+    /// center of content rect = (32, 32)   ← inside [16..48], survives
+    /// ```
+    ///
+    /// After blurring, the center pixel `(32, 32)` is well inside both the
+    /// content rect `[20..44]` AND the grown intermediate `[16..48]`, so its
+    /// alpha must be non-zero.
+    ///
+    /// ## Red→Green evidence (discrimination proof)
+    ///
+    /// Temporarily shrinking `content_aabb` by 5 px per side would make
+    /// `composite_bounds = [25, 25, 39, 39]` → `grown = [21, 21, 43, 43]` →
+    /// `fb_dim = (22, 22)`.  The center pixel `(32, 32)` maps to
+    /// `(32-21, 32-21) = (11, 11)` in intermediate space, which IS still inside
+    /// the 22×22 intermediate — so this particular discriminator is conservative.
+    ///
+    /// The real discriminator for content-AABB under-estimate is the producer-level
+    /// fb_dim assertion: if content_aabb returned the wrong bounds, fb_dim would
+    /// be wrong.  The GPU alpha check confirms the rendered output is present
+    /// (not clipped out by an intermediate that's sized too small for the content).
+    #[test]
+    fn blur_content_aabb_does_not_clip_edge_pixels() {
+        const SIGMA: f32 = 2.0;
+        const INNER_MARGIN: u32 = 20; // content rect [20,20]→[44,44]
+
+        // Center of the content rect — must be non-transparent after blur.
+        const CENTER_X: u32 = SURFACE_WIDTH / 2; // 32, inside [20..44]
+        const CENTER_Y: u32 = SURFACE_HEIGHT / 2; // 32, inside [20..44]
+
+        // ── Producer-level size check (CPU, no rendering needed) ──────────────
+        // Verify the optimization fires for this rect before spending GPU time.
+        {
+            let (dev, q) = acquire_test_device_and_queue();
+            let mut painter = build_painter(Arc::clone(&dev), Arc::clone(&q));
+            painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+                sigma_x: SIGMA,
+                sigma_y: SIGMA,
+            });
+            painter.rect(
+                Rect::from_xywh(
+                    px(INNER_MARGIN as f32),
+                    px(INNER_MARGIN as f32),
+                    px((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
+                    px((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
+                ),
+                &Paint::fill(Color::rgba(200, 150, 80, 255)),
+            );
+            painter.restore_layer();
+
+            let ops = painter.filter_ops_for_test();
+            assert_eq!(ops.len(), 1, "B8: must emit exactly 1 FilterOp");
+            let op = &ops[0];
+            assert!(
+                op.fb_dim.0 < SURFACE_WIDTH && op.fb_dim.1 < SURFACE_HEIGHT,
+                "B8 producer: fb_dim {:?} is NOT sub-viewport ({}, {}). \
+                 content_aabb wiring must fire for an off-origin rect.",
+                op.fb_dim,
+                SURFACE_WIDTH,
+                SURFACE_HEIGHT
+            );
+        }
+
+        // ── GPU readback: center pixel must be non-transparent ────────────────
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_tex, surface_view) = create_surface(&device);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+            sigma_x: SIGMA,
+            sigma_y: SIGMA,
+        });
+        // Opaque rect filling [20,20]→[44,44].
+        painter.rect(
+            Rect::from_xywh(
+                px(INNER_MARGIN as f32),
+                px(INNER_MARGIN as f32),
+                px((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
+                px((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
+            ),
+            &Paint::fill(Color::rgba(200, 150, 80, 255)),
+        );
+        painter.restore_layer();
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_tex),
+                &mut encoder,
+            )
+            .expect("B8 clip-detection blur render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_tex);
+        let center_pixel = pixels[(CENTER_Y as usize) * SURFACE_WIDTH as usize + CENTER_X as usize];
+        let center_alpha = center_pixel[3];
+
+        assert!(
+            center_alpha > 0,
+            "B8 CLIP-DETECTION FAIL: center pixel ({}, {}) has alpha=0 after blur. \
+             The content at ({},{})→({},{}) was clipped from the intermediate — \
+             content_aabb under-estimated the AABB (fb too small for actual content).",
+            CENTER_X,
+            CENTER_Y,
+            INNER_MARGIN,
+            INNER_MARGIN,
+            SURFACE_WIDTH - INNER_MARGIN,
+            SURFACE_HEIGHT - INNER_MARGIN,
+        );
+    }
+
+    // ── B9: Circle content AABB — radius factor must be included ─────────────
+
+    /// B9: `content_aabb` for a baked `CircleInstance` must include the radius.
+    ///
+    /// ## The bug (pre-fix)
+    ///
+    /// `CircleInstance::new` stores `center_radius[2] = radius` and
+    /// `transform = diag(sx, sy)`.  The old code computed device half-extents as
+    /// `half_x = a.abs() + c.abs() = sx + 0 = sx` — dropping the radius factor.
+    /// A circle of radius 16 at scale 1 yielded `half_x = 1` → AABB of 2×2 px
+    /// around the center → `fb_dim` too small to contain the circle → content
+    /// clipped entirely from the intermediate framebuffer.
+    ///
+    /// ## Layout (64×64 surface, σ=2, circle center=(32,32), radius=16, scale=1)
+    ///
+    /// ```text
+    /// circle device extent (before fix):
+    ///   half_x = 1, half_y = 1   → content_aabb ≈ [31,31,33,33]  ← BUG
+    ///
+    /// circle device extent (after fix):
+    ///   r = 16, half_x = 16*1 = 16, half_y = 16*1 = 16
+    ///   content_aabb = [16, 16, 48, 48]
+    ///   kernel_radius(σ=2) = ceil(2 × 1.732) = 4
+    ///   grown           = [12, 12, 52, 52]
+    ///   fb_dim          = (40, 40)  ← comfortably contains the circle
+    /// ```
+    ///
+    /// ## Assertions
+    ///
+    /// 1. CPU: `fb_dim` ≥ circle diameter (32 px).  With the old code `fb_dim`
+    ///    would be ~(2+8, 2+8) = (10, 10) — far too small, failing this check.
+    /// 2. GPU: the pixel on the circle's top rim `(32, 16)` is non-transparent
+    ///    after blur.  Pre-fix, the circle falls entirely outside the tiny
+    ///    intermediate, so that pixel is transparent (alpha=0).
+    ///
+    /// **Fails if:** `content_aabb` drops the `* center_radius[2]` radius factor.
+    #[test]
+    fn blur_circle_content_aabb_includes_radius() {
+        const SIGMA: f32 = 2.0;
+        const KERNEL_RAD: u32 = 4;
+        const CENTER_COL: u32 = SURFACE_WIDTH / 2;
+        const CENTER_ROW: u32 = SURFACE_HEIGHT / 2;
+        const RADIUS_PX: u32 = 16;
+        const MIN_FB_DIM: u32 = RADIUS_PX * 2;
+
+        {
+            let (device, queue) = acquire_test_device_and_queue();
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+                sigma_x: SIGMA,
+                sigma_y: SIGMA,
+            });
+            painter.circle(
+                Point::new(Pixels(CENTER_COL as f32), Pixels(CENTER_ROW as f32)),
+                RADIUS_PX as f32,
+                &Paint::fill(Color::rgba(200, 80, 80, 255)),
+            );
+            painter.restore_layer();
+
+            let ops = painter.filter_ops_for_test();
+            assert_eq!(ops.len(), 1, "B9: must emit exactly 1 FilterOp");
+            let op = &ops[0];
+            assert!(
+                op.fb_dim.0 >= MIN_FB_DIM && op.fb_dim.1 >= MIN_FB_DIM,
+                "B9 RADIUS-FACTOR BUG: FilterOp.fb_dim = {:?} < circle diameter {}. \
+                 content_aabb dropped the radius factor from CircleInstance.center_radius[2]. \
+                 With the fix, half_x = radius * sx = {} → fb_dim ≥ ({}, {}). \
+                 kernel_radius({}) = {}.",
+                op.fb_dim,
+                MIN_FB_DIM,
+                RADIUS_PX,
+                MIN_FB_DIM,
+                MIN_FB_DIM,
+                SIGMA,
+                KERNEL_RAD,
+            );
+        }
+
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_tex, surface_view) = create_surface(&device);
+        clear_surface(&device, &queue, &surface_view, wgpu::Color::TRANSPARENT);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+            sigma_x: SIGMA,
+            sigma_y: SIGMA,
+        });
+        painter.circle(
+            Point::new(Pixels(CENTER_COL as f32), Pixels(CENTER_ROW as f32)),
+            RADIUS_PX as f32,
+            &Paint::fill(Color::rgba(200, 80, 80, 255)),
+        );
+        painter.restore_layer();
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_tex),
+                &mut encoder,
+            )
+            .expect("B9 circle-radius blur render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_tex);
+        let w = SURFACE_WIDTH as usize;
+        let rim_col = CENTER_COL as usize;
+        let rim_row = (CENTER_ROW - RADIUS_PX) as usize;
+        let rim_alpha = pixels[rim_row * w + rim_col][3];
+        assert!(
+            rim_alpha > 0,
+            "B9 CLIP FAIL: circle rim pixel ({rim_col},{rim_row}) has alpha=0 after blur. \
+             The circle (centre=({CENTER_COL},{CENTER_ROW}), radius={RADIUS_PX}) was clipped \
+             from the intermediate — content_aabb under-estimated the extent. \
+             Pre-fix: half_x = sx = 1 (missing radius factor) → fb too small. \
+             Post-fix: half_x = radius * sx = {RADIUS_PX} → rim survives."
+        );
+    }
+
+    // ── B10: Gradient fallback — content_aabb returns None for gradient kinds ──
+
+    /// B10: A filter layer containing a linear gradient must emit `fb_dim == viewport`,
+    /// proving the `content_aabb` fallback gate fires.
+    ///
+    /// ## Why this test exists (P0 regression story)
+    ///
+    /// Before the fix, `content_aabb` unioned `linear_gradient_batch.instances[*].bounds`
+    /// and returned `Some(aabb)`.  For a gradient at rect `[16,16]→[48,48]` on a 64×64
+    /// surface, the AABB was `[16,16,48,48]`, grown by `kernel_radius(2.0)=4` to
+    /// `[12,12,52,52]`, giving `fb_dim=(40,40)` — a sub-viewport intermediate.
+    ///
+    /// `render_segment_to_grown_offscreen` does NOT remap gradient instances, so the
+    /// gradient shader used the static `vp_w=64` uniform against a 40×40 attachment.
+    /// NDC was wrong: the gradient rendered at approximately `[0.25·64, 0.25·64]→[0.75·64,…]`
+    /// coordinates against the 40-wide attachment, placing content at origin-0 of the
+    /// sub-viewport rather than at `[4,4]→[36,36]` (fb-local).
+    ///
+    /// The fix: `content_aabb` returns `None` when `linear_gradient_batch` (or any
+    /// other un-repositionable kind) is non-empty.  The caller's `.unwrap_or(vp)` then
+    /// selects `composite_bounds = viewport` → `fb_dim == viewport` → the remap in
+    /// `render_segment_to_grown_offscreen` is the identity transform → gradient renders
+    /// at the correct position.
+    ///
+    /// ## RED proof (implicit)
+    ///
+    /// To trigger the pre-fix failure without modifying production code, remove the
+    /// fallback gate from `content_aabb` and re-run: `fb_dim` would drop to `(40,40)`
+    /// and the GPU readback assertion (gradient centre pixel must be non-transparent
+    /// after blur) would fail because the content is mispositioned entirely outside
+    /// the intermediate framebuffer region that maps back to the content's device rect.
+    ///
+    /// ## Layout (surface 64×64, σ=2.0, gradient at [16,16]→[48,48])
+    ///
+    /// ```text
+    /// gradient rect  = [16, 16] → [48, 48]
+    /// kernel_radius  = ceil(2.0 × √3) = 4
+    ///
+    /// PRE-FIX (wrong):
+    ///   content_aabb = Some([16,16,48,48])  ← gradient unioned
+    ///   grown        = [12, 12, 52, 52]
+    ///   fb_dim       = (40, 40) < (64, 64)  ← sub-viewport, gradient mis-positioned
+    ///
+    /// POST-FIX (correct):
+    ///   content_aabb = None                  ← gate fires
+    ///   fb_dim       = (64, 64)              ← full-viewport, gradient at correct pos
+    /// ```
+    #[test]
+    fn blur_gradient_fallback_forces_viewport_fb() {
+        use crate::wgpu::effects::GradientStop;
+
+        const SIGMA: f32 = 2.0;
+        // Gradient rect centred in the surface ([16,16]→[48,48]).
+        const MARGIN: f32 = 16.0;
+        const SIDE: f32 = (SURFACE_WIDTH as f32) - 2.0 * MARGIN; // 32
+
+        // ── Part A: CPU producer check — fb_dim must equal viewport ──────────
+        {
+            let (device, queue) = acquire_test_device_and_queue();
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+                sigma_x: SIGMA,
+                sigma_y: SIGMA,
+            });
+            let stops = [
+                GradientStop::new(flui_types::Color::rgba(255, 0, 0, 255), 0.0),
+                GradientStop::new(flui_types::Color::rgba(0, 0, 255, 255), 1.0),
+            ];
+            painter.gradient_rect(
+                Rect::from_xywh(px(MARGIN), px(MARGIN), px(SIDE), px(SIDE)),
+                glam::Vec2::new(MARGIN, MARGIN),
+                glam::Vec2::new(MARGIN + SIDE, MARGIN),
+                &stops,
+                0.0,
+            );
+            painter.restore_layer();
+
+            let ops = painter.filter_ops_for_test();
+            assert_eq!(ops.len(), 1, "B10: must emit exactly 1 FilterOp");
+            let op = &ops[0];
+
+            // The fallback gate must force fb_dim == viewport.
+            // PRE-FIX: fb_dim would be (40,40) — gradient was unioned into AABB.
+            // POST-FIX: fb_dim == (64,64) — gate returns None → viewport fallback.
+            assert_eq!(
+                op.fb_dim,
+                (SURFACE_WIDTH, SURFACE_HEIGHT),
+                "B10 GRADIENT-FALLBACK FAIL: FilterOp.fb_dim = {:?} != viewport ({}, {}). \
+                 content_aabb must return None when linear_gradient_batch is non-empty \
+                 so the caller falls back to fb_dim == viewport. \
+                 PRE-FIX: gradient bounds were unioned → fb_dim=(40,40), mis-positioning \
+                 the gradient in the sub-viewport intermediate.",
+                op.fb_dim,
+                SURFACE_WIDTH,
+                SURFACE_HEIGHT
+            );
+        }
+
+        // ── Part B: GPU readback — gradient centre must survive blur ──────────
+        //
+        // The centre of the gradient rect is at (32, 32).  After a Gaussian blur
+        // with σ=2 over an opaque gradient, that pixel must be opaque (alpha ≥ 254).
+        // PRE-FIX: the gradient was mispositioned in the sub-viewport intermediate,
+        // rendering outside the fb region that maps back to (32,32), so the centre
+        // would be transparent (alpha=0) after compositing.
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_tex, surface_view) = create_surface(&device);
+        clear_surface(&device, &queue, &surface_view, wgpu::Color::TRANSPARENT);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+            sigma_x: SIGMA,
+            sigma_y: SIGMA,
+        });
+        let stops = [
+            GradientStop::new(flui_types::Color::rgba(200, 100, 0, 255), 0.0),
+            GradientStop::new(flui_types::Color::rgba(0, 100, 200, 255), 1.0),
+        ];
+        painter.gradient_rect(
+            Rect::from_xywh(px(MARGIN), px(MARGIN), px(SIDE), px(SIDE)),
+            glam::Vec2::new(MARGIN, MARGIN),
+            glam::Vec2::new(MARGIN + SIDE, MARGIN),
+            &stops,
+            0.0,
+        );
+        painter.restore_layer();
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_tex),
+                &mut encoder,
+            )
+            .expect("B10 gradient-fallback blur render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_tex);
+        let w = SURFACE_WIDTH as usize;
+
+        // Centre of the gradient rect: (32, 32).
+        let centre_col = (SURFACE_WIDTH / 2) as usize;
+        let centre_row = (SURFACE_HEIGHT / 2) as usize;
+        let centre_alpha = pixels[centre_row * w + centre_col][3];
+
+        assert!(
+            centre_alpha > 200,
+            "B10 GRADIENT-POSITION FAIL: gradient centre pixel ({centre_col},{centre_row}) \
+             has alpha={centre_alpha} after blur. \
+             The gradient at [16,16]→[48,48] must remain fully opaque at its centre. \
+             PRE-FIX: fb_dim=(40,40) caused the gradient to render mis-positioned \
+             in the sub-viewport intermediate → centre pixel transparent after composite. \
+             POST-FIX: fb_dim=(64,64) → gradient at correct device position → alpha≥254."
+        );
+    }
+
+    // ── B11: Rect-only layer still fires optimization after gradient gate ─────
+
+    /// B11: A filter layer with ONLY a rect (no gradient / shadow / image) must
+    /// still emit a sub-viewport `fb_dim` — the gradient gate must not over-fallback.
+    ///
+    /// This is the regression-guard for the OTHER direction: the gate added in B10
+    /// must be surgical.  A layer with only rect/circle/arc instances must continue
+    /// to benefit from the VRAM optimization (fb_dim < viewport).
+    ///
+    /// B7/B8/B9 already cover this from multiple angles; B11 adds a minimal named
+    /// discriminator that pairs directly with B10 as a "gate is precise" check.
+    #[test]
+    fn blur_rect_only_layer_still_sub_viewport_after_gradient_gate() {
+        const SIGMA: f32 = 2.0;
+        // Rect inset 12 px from each edge: [12,12]→[52,52] on 64×64 surface.
+        const INNER_MARGIN: u32 = 12;
+
+        let (device, queue) = acquire_test_device_and_queue();
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+            sigma_x: SIGMA,
+            sigma_y: SIGMA,
+        });
+        painter.rect(
+            Rect::from_xywh(
+                px(INNER_MARGIN as f32),
+                px(INNER_MARGIN as f32),
+                px((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
+                px((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
+            ),
+            &flui_painting::Paint::fill(flui_types::Color::rgba(255, 128, 0, 255)),
+        );
+        painter.restore_layer();
+
+        let ops = painter.filter_ops_for_test();
+        assert_eq!(ops.len(), 1, "B11: must emit exactly 1 FilterOp");
+        let op = &ops[0];
+
+        assert!(
+            op.fb_dim.0 < SURFACE_WIDTH && op.fb_dim.1 < SURFACE_HEIGHT,
+            "B11 OVER-FALLBACK REGRESSION: FilterOp.fb_dim = {:?} is NOT sub-viewport ({}, {}). \
+             A rect-only filter layer must still use the grown-bounds optimization \
+             (fb_dim < viewport).  The gradient fallback gate in content_aabb must only \
+             fire when shadow/gradient/image kinds are present — not for rect-only content.",
+            op.fb_dim,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT
+        );
+    }
+
+    // ── B12: Clipped rect in sub-viewport filter layer — non-identity scissor rebase ──
+
+    /// B12: A scissor-clipped rect inside a sub-viewport filter layer must have its
+    /// `rect_scissors` entry rebased from full-frame to fb-local coords by
+    /// `remap_scissor`, producing a **non-identity** remap (fb_dim < viewport).
+    ///
+    /// ## What this tests
+    ///
+    /// `render_segment_to_grown_offscreen` rebases `rect_scissors` from full-frame to
+    /// fb-local coords.  This test drives the **non-identity** branch of that rebase:
+    ///
+    /// - The content rect is INSET (`[16,16]→[48,48]`) so `content_aabb` returns a
+    ///   sub-viewport AABB → `fb_dim < (64,64)`.  The test asserts this explicitly.
+    /// - A second clip `[24,24]→[40,40]` (inside the content rect) is applied before
+    ///   drawing, populating `rect_scissors` with a scissor in full-frame coords.
+    ///   After rebase the scissor becomes `(12,12,16,16)` in fb-local space
+    ///   (non-identity because `fb_origin = (12,12) ≠ (0,0)`).
+    ///
+    /// Pre-fix: a scissor in full-frame coords applied to the smaller fb attachment
+    /// would be out-of-range → wgpu validation error or sentinel (nothing drawn).
+    /// Post-fix: `remap_scissor` intersects + translates to fb-local → valid scissor.
+    ///
+    /// ## Layout (surface 64×64, σ=2, kernel_radius=4)
+    ///
+    /// ```text
+    /// content rect  = [16, 16] → [48, 48]   (inset 16 px each side)
+    /// content_aabb  = [16, 16, 48, 48]
+    /// grown         = [12, 12, 52, 52]       (expand by kernel_radius=4)
+    /// fb_origin     = (12, 12),  fb_dim = (40, 40)   ← sub-viewport (ASSERT A)
+    ///
+    /// clip rect     = [24, 24] → [40, 40]   (full-frame scissor (24,24,16,16))
+    /// remap_scissor:
+    ///   inter = max(24,12)..min(40,52) = 24..40
+    ///   fb-local = (24-12, 24-12, 16, 16) = (12, 12, 16, 16)   ← non-identity
+    ///
+    /// pixel (32,32): inside both content rect and clip → non-transparent (ASSERT B)
+    /// pixel (17,32): inside content rect but 7 px left of clip edge (24-17=7>4) →
+    ///                transparent (ASSERT C) — the rebased scissor clips it out
+    /// ```
+    ///
+    /// The test running to completion proves no wgpu validation panic (ASSERT D).
+    ///
+    /// **Fails if:** the scissor is not rebased → either a validation error (panic) or
+    /// the sentinel path fires (nothing drawn → ASSERT B fails), or the clip is applied
+    /// in full-frame coords against the fb-local attachment (wrong pixels clipped).
+    #[test]
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "constants are small positive u32/usize; all casts are safe on a 64×64 surface"
+    )]
+    fn blur_clipped_rect_scissor_rebased_non_identity() {
+        const SIGMA: f32 = 2.0;
+        // kernel_radius(2.0) = ceil(2.0 × √3) = ceil(3.464) = 4
+        const KERNEL_RAD: u32 = 4;
+
+        // Content rect: inset 16 px each side → [16,16]→[48,48].
+        const CONTENT_MARGIN: u32 = 16;
+        const CONTENT_LEFT: u32 = CONTENT_MARGIN;
+        const CONTENT_TOP: u32 = CONTENT_MARGIN;
+        const CONTENT_RIGHT: u32 = SURFACE_WIDTH - CONTENT_MARGIN;
+        const CONTENT_BOTTOM: u32 = SURFACE_HEIGHT - CONTENT_MARGIN;
+
+        // grown bounds (after kernel_radius expansion, clamped to viewport):
+        //   [16-4, 16-4, 48+4, 48+4] = [12, 12, 52, 52] → fb_origin=(12,12), fb_dim=(40,40)
+        const EXPECTED_FB_ORIGIN: (u32, u32) =
+            (CONTENT_LEFT - KERNEL_RAD, CONTENT_TOP - KERNEL_RAD);
+        const EXPECTED_FB_DIM: (u32, u32) = (
+            (CONTENT_RIGHT + KERNEL_RAD) - (CONTENT_LEFT - KERNEL_RAD),
+            (CONTENT_BOTTOM + KERNEL_RAD) - (CONTENT_TOP - KERNEL_RAD),
+        );
+
+        // Clip rect nested inside the content rect: [24,24]→[40,40].
+        // In full-frame device coords: scissor = (24, 24, 16, 16).
+        const CLIP_LEFT: u32 = 24;
+        const CLIP_TOP: u32 = 24;
+        const CLIP_RIGHT: u32 = 40;
+        const CLIP_BOTTOM: u32 = 40;
+
+        // Precondition: kernel_radius must match the constant above.
+        assert_eq!(
+            kernel_radius(SIGMA),
+            KERNEL_RAD,
+            "B12 precondition: kernel_radius({SIGMA}) must equal {KERNEL_RAD}"
+        );
+
+        // ── ASSERT A (CPU): fb_dim is sub-viewport ────────────────────────────
+        {
+            let (dev, q) = acquire_test_device_and_queue();
+            let mut painter = build_painter(Arc::clone(&dev), Arc::clone(&q));
+            painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+                sigma_x: SIGMA,
+                sigma_y: SIGMA,
+            });
+            // Apply clip then draw the inset content rect (clip is nested inside).
+            painter.clip_rect(Rect::from_xywh(
+                px(CLIP_LEFT as f32),
+                px(CLIP_TOP as f32),
+                px((CLIP_RIGHT - CLIP_LEFT) as f32),
+                px((CLIP_BOTTOM - CLIP_TOP) as f32),
+            ));
+            painter.rect(
+                Rect::from_xywh(
+                    px(CONTENT_LEFT as f32),
+                    px(CONTENT_TOP as f32),
+                    px((CONTENT_RIGHT - CONTENT_LEFT) as f32),
+                    px((CONTENT_BOTTOM - CONTENT_TOP) as f32),
+                ),
+                &flui_painting::Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
+            );
+            painter.restore_layer();
+
+            let ops = painter.filter_ops_for_test();
+            assert_eq!(ops.len(), 1, "B12: must emit exactly 1 FilterOp");
+            let op = &ops[0];
+
+            // The sub-viewport optimization must fire: fb_dim < viewport.
+            // If this fails, the test cannot exercise the non-identity remap.
+            assert!(
+                op.fb_dim.0 < SURFACE_WIDTH && op.fb_dim.1 < SURFACE_HEIGHT,
+                "B12 ASSERT A FAIL: FilterOp.fb_dim = {:?} is NOT sub-viewport ({}, {}). \
+                 The inset content rect [16,16]→[48,48] must produce a sub-viewport \
+                 intermediate so the scissor rebase is non-identity. \
+                 Expected fb_dim = {:?}.",
+                op.fb_dim,
+                SURFACE_WIDTH,
+                SURFACE_HEIGHT,
+                EXPECTED_FB_DIM,
+            );
+
+            assert_eq!(
+                op.fb_origin, EXPECTED_FB_ORIGIN,
+                "B12 ASSERT A: fb_origin = {:?}, expected {:?}.",
+                op.fb_origin, EXPECTED_FB_ORIGIN,
+            );
+            assert_eq!(
+                op.fb_dim, EXPECTED_FB_DIM,
+                "B12 ASSERT A: fb_dim = {:?}, expected {:?}.",
+                op.fb_dim, EXPECTED_FB_DIM,
+            );
+        }
+
+        // ── ASSERT B + C (GPU): pixel inside clip is visible; pixel outside clip
+        //    but inside content rect is transparent (non-identity rebase proof). ──
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_tex, surface_view) = create_surface(&device);
+        clear_surface(&device, &queue, &surface_view, wgpu::Color::TRANSPARENT);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save_layer_with_image_filter(ImageFilterSpec::Blur {
+            sigma_x: SIGMA,
+            sigma_y: SIGMA,
+        });
+        painter.clip_rect(Rect::from_xywh(
+            px(CLIP_LEFT as f32),
+            px(CLIP_TOP as f32),
+            px((CLIP_RIGHT - CLIP_LEFT) as f32),
+            px((CLIP_BOTTOM - CLIP_TOP) as f32),
+        ));
+        painter.rect(
+            Rect::from_xywh(
+                px(CONTENT_LEFT as f32),
+                px(CONTENT_TOP as f32),
+                px((CONTENT_RIGHT - CONTENT_LEFT) as f32),
+                px((CONTENT_BOTTOM - CONTENT_TOP) as f32),
+            ),
+            &flui_painting::Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
+        );
+        painter.restore_layer();
+
+        // ASSERT D: no wgpu validation panic (test completing proves this).
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_tex),
+                &mut encoder,
+            )
+            .expect("B12 clipped-rect blur render must succeed (no wgpu validation panic)");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixels = readback_pixels(&device, &queue, &surface_tex);
+        let w = SURFACE_WIDTH as usize;
+
+        // ASSERT B: centre of clip [24,24]→[40,40] is (32,32) → must be non-transparent.
+        let centre_col: usize = (SURFACE_WIDTH / 2) as usize; // 32
+        let centre_row: usize = (SURFACE_HEIGHT / 2) as usize; // 32
+        let centre_alpha = pixels[centre_row * w + centre_col][3];
+        assert!(
+            centre_alpha > 0,
+            "B12 ASSERT B FAIL: centre pixel ({centre_col},{centre_row}) has alpha=0 after blur. \
+             Pixel is inside clip [24,24]→[40,40] and content rect [16,16]→[48,48]. \
+             The rebased fb-local scissor must allow drawing here. \
+             Pre-fix: out-of-range scissor → sentinel → nothing drawn."
+        );
+
+        // ASSERT C: pixel at (17,32) is inside the content rect [16,16]→[48,48] but
+        // 7 pixels left of the clip left edge (24-17=7 > kernel_radius=4).
+        // The blur cannot spread 7 px from the clipped content, so this must be transparent.
+        // This proves the rebased scissor clips at the correct fb-local position.
+        let outside_clip_col: usize = 17;
+        let outside_clip_row: usize = centre_row;
+        let outside_alpha = pixels[outside_clip_row * w + outside_clip_col][3];
+        assert_eq!(
+            outside_alpha, 0,
+            "B12 ASSERT C FAIL: pixel ({outside_clip_col},{outside_clip_row}) has alpha={outside_alpha} \
+             but should be transparent. \
+             This pixel is inside the content rect but 7 px left of the clip edge (24-17=7 > \
+             kernel_radius=4), so no blur contribution can reach it — the clip must block it. \
+             A non-zero value means the scissor was NOT applied in fb-local coords \
+             (full-frame scissor against fb attachment clips at the wrong position)."
         );
     }
 }
