@@ -360,6 +360,26 @@ impl WgpuPainter {
             .collect()
     }
 
+    /// Return clones of all [`FilterOp`]s in the current draw order.
+    ///
+    /// Used by structural tests (flatten-nesting, cumulative-bounds) to inspect
+    /// the `passes` and `grown_bounds` fields emitted by `restore_layer` without
+    /// needing GPU execution.  Finalises the current segment first so that any
+    /// in-progress content is in the draw order.
+    ///
+    /// Gated to test builds; must never be called from production code.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn filter_ops_for_test(&mut self) -> Vec<super::command_ir::FilterOp> {
+        self.finish_current_segment();
+        self.draw_order
+            .iter()
+            .filter_map(|item| match item {
+                DrawItem::Filter(op) => Some(op.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Replay a caller-supplied list of `DrawItem`s onto `view` using `encoder`.
     ///
     /// This is a thin wrapper around `GpuReplay::submit` that exposes the replay
@@ -1323,7 +1343,8 @@ impl WgpuPainter {
     /// `save_layer_with_filter`.  The `image_filter` field on the top `SavedLayer`
     /// is then set so `restore_layer` can detect the bounds-growing path.
     ///
-    /// Used by `push_image_filter` in `backend.rs` for `Dilate` and `Erode`.
+    /// Used by `push_image_filter` in `backend.rs` for `Dilate`, `Erode`, `Blur`,
+    /// and `Compose` (the latter via a pre-flattened `ImageFilterSpec::Chain`).
     pub(crate) fn save_layer_with_image_filter(&mut self, spec: ImageFilterSpec) {
         // Inherit the current ancestor opacity (same as `save_layer_with_filter`).
         let layer_opacity = self.compositor.effective_layer_opacity(1.0);
@@ -1336,11 +1357,13 @@ impl WgpuPainter {
         );
         // Mark the freshly-pushed SavedLayer with the image filter spec so that
         // `restore_layer` knows to emit DrawItem::Filter instead of OpacityLayer.
-        self.compositor.set_top_image_filter(spec);
+        // Log before the move so that the trace can capture `?spec` without needing
+        // `Copy` on `ImageFilterSpec` (which was removed when `Chain` was added).
         tracing::trace!(
             ?spec,
             "WgpuPainter::save_layer_with_image_filter: image filter layer opened"
         );
+        self.compositor.set_top_image_filter(spec);
     }
 
     /// Shared implementation for [`Self::save_layer`] /
@@ -1463,12 +1486,10 @@ impl WgpuPainter {
                         // the group opacity is effectively 1.0 at this stage.
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
-                        // `content_bounds` = the resolved composite rect (viewport fallback
-                        // applied by the painter before pop_layer).
-                        // `grown_bounds` = content expanded by ceil(radius), clipped to the
-                        // viewport so the composite instance rect stays in-bounds.
-                        let ceil_radius = px(radius.ceil());
-                        let grown = composite_bounds.expand(ceil_radius);
+                        // Growth via the shared helper (one source of truth for Morph).
+                        let single_pass = ImageFilterPass::Morph { radius, op };
+                        let growth_px = px(cumulative_growth(std::slice::from_ref(&single_pass)));
+                        let grown = composite_bounds.expand(growth_px);
                         let viewport_rect = self.viewport_bounds();
                         let grown_bounds =
                             grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
@@ -1482,7 +1503,7 @@ impl WgpuPainter {
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
                             input: offscreen_final_segment,
-                            passes: smallvec![ImageFilterPass::Morph { radius, op }],
+                            passes: smallvec![single_pass],
                             content_bounds: composite_bounds,
                             grown_bounds,
                         }));
@@ -1492,8 +1513,8 @@ impl WgpuPainter {
                         // Identical seam to Morph: grow by kernel_radius(max(σx,σy))
                         // on each side, clip to viewport, emit DrawItem::Filter.
                         //
-                        // `kernel_radius` uses Impeller's √3·σ rule.  A conservative
-                        // per-axis pad of max(σx,σy) ensures both H and V halos fit.
+                        // Growth via the shared `cumulative_growth` helper (one source
+                        // of truth for Blur; `kernel_radius` uses Impeller's √3·σ rule).
                         if !offscreen_items.is_empty() {
                             tracing::debug!(
                                 item_count = offscreen_items.len(),
@@ -1504,13 +1525,8 @@ impl WgpuPainter {
                         }
                         let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
 
-                        let max_sigma = sigma_x.max(sigma_y);
-                        #[allow(
-                            clippy::cast_precision_loss,
-                            reason = "kernel_radius returns u32 ≤ a few thousand for any realistic \
-                                      sigma; cast to f32 is exact for values this small"
-                        )]
-                        let halo_px = px(super::effects::kernel_radius(max_sigma) as f32);
+                        let single_pass = ImageFilterPass::Blur { sigma_x, sigma_y };
+                        let halo_px = px(cumulative_growth(std::slice::from_ref(&single_pass)));
                         let grown = composite_bounds.expand(halo_px);
                         let viewport_rect = self.viewport_bounds();
                         let grown_bounds =
@@ -1525,7 +1541,44 @@ impl WgpuPainter {
                         );
                         self.draw_order.push(DrawItem::Filter(FilterOp {
                             input: offscreen_final_segment,
-                            passes: smallvec![ImageFilterPass::Blur { sigma_x, sigma_y }],
+                            passes: smallvec![single_pass],
+                            content_bounds: composite_bounds,
+                            grown_bounds,
+                        }));
+                    }
+                    Some(ImageFilterSpec::Chain(passes)) => {
+                        // Multi-pass Compose chain: the passes vec is already flattened
+                        // at record time by `flatten_compose` in `backend.rs`.
+                        //
+                        // Identical offscreen_items guard as Morph/Blur arms above.
+                        if !offscreen_items.is_empty() {
+                            tracing::debug!(
+                                item_count = offscreen_items.len(),
+                                pass_count = passes.len(),
+                                "restore_layer(Chain): offscreen_items discarded; \
+                                 FilterOp::input only captures the final DrawSegment. \
+                                 Nested opacity layers inside a Compose chain layer are \
+                                 not yet supported."
+                            );
+                        }
+                        let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
+
+                        // Cumulative growth = Σ per-pass radii (ColorMatrix/Identity = 0).
+                        let growth_px = px(cumulative_growth(&passes));
+                        let grown = composite_bounds.expand(growth_px);
+                        let viewport_rect = self.viewport_bounds();
+                        let grown_bounds =
+                            grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
+
+                        tracing::trace!(
+                            pass_count = passes.len(),
+                            content_bounds = ?composite_bounds,
+                            grown_bounds = ?grown_bounds,
+                            "WgpuPainter::restore_layer: queued DrawItem::Filter (Chain)"
+                        );
+                        self.draw_order.push(DrawItem::Filter(FilterOp {
+                            input: offscreen_final_segment,
+                            passes,
                             content_bounds: composite_bounds,
                             grown_bounds,
                         }));
@@ -1772,6 +1825,48 @@ impl WgpuPainter {
             params,
         );
     }
+}
+
+// ─── Shared growth helper ─────────────────────────────────────────────────────
+
+/// Compute the total grown-bounds expansion in pixels for a pass chain.
+///
+/// Each growing pass expands the filter halo by its radius; bounds-preserving
+/// passes contribute 0.  Summing the per-pass contributions is the correct
+/// conservative bound: each growing pass enlarges the halo of the result of all
+/// prior passes, so radii compose additively (matches Flutter
+/// `dl_compose_image_filter.cc:33-51` inner→outer bounds chaining).
+///
+/// ## Exhaustiveness
+///
+/// The `match` has **no `_` catch-all** — the compiler forces a new arm here
+/// whenever a new [`ImageFilterPass`] variant is added (same discipline as
+/// `apply_image_filter_passes` in `opacity_layer.rs`).
+///
+/// ## Formulas
+///
+/// - [`ImageFilterPass::Blur`] → `kernel_radius(max(sigma_x, sigma_y)) as f32`
+///   (the conservative per-axis pad used by the standalone Blur arm, PINNED #2).
+/// - [`ImageFilterPass::Morph`] → `radius.ceil()` (pixel expansion per `restore_layer`).
+/// - [`ImageFilterPass::ColorMatrix`] → `0.0` (full-viewport REPLACE, no growth).
+/// - [`ImageFilterPass::Identity`] → `0.0` (passthrough, no growth).
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "kernel_radius returns u32 ≤ a few thousand for any realistic sigma; \
+              cast to f32 is exact for values this small"
+)]
+pub(super) fn cumulative_growth(passes: &[ImageFilterPass]) -> f32 {
+    passes
+        .iter()
+        .map(|pass| match pass {
+            ImageFilterPass::Blur { sigma_x, sigma_y } => {
+                super::effects::kernel_radius(sigma_x.max(*sigma_y)) as f32
+            }
+            ImageFilterPass::Morph { radius, .. } => radius.ceil(),
+            // Both are bounds-PRESERVING: neither grows the filter extent.
+            ImageFilterPass::ColorMatrix(_) | ImageFilterPass::Identity => 0.0,
+        })
+        .sum()
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]

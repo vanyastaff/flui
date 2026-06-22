@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 
 use super::{
-    command_ir::{ImageFilterSpec, LayerFilter, MorphOp},
+    command_ir::{ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
     painter::WgpuPainter,
 };
 use crate::{
@@ -1607,13 +1607,31 @@ impl LayerStateStack for Backend<'_> {
                 );
             }
             ImageFilter::Compose(filters) => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Compose): save_layer for {} chained filters \
-                     (GPU compose not yet implemented)",
-                    filters.len(),
-                );
+                // Flatten the AST at record time (depth-first, left-to-right =
+                // inner-first, PINNED #4).  The resulting flat `passes` vec is
+                // carried by `ImageFilterSpec::Chain` and handed to `restore_layer`,
+                // which emits a single `DrawItem::Filter` with `cumulative_growth`
+                // bounds and the full ordered chain.
+                let mut passes: SmallVec<[ImageFilterPass; 4]> = SmallVec::new();
+                flatten_compose(filters, &mut passes);
+
+                if passes.is_empty() {
+                    // Degenerate empty Compose — no filter math to apply.  Open a
+                    // plain group layer so that save/restore remains balanced without
+                    // emitting a `DrawItem::Filter` for a zero-length chain.
+                    let paint = Paint::fill(Color::WHITE);
+                    self.painter.save_layer(None, &paint);
+                    tracing::trace!(
+                        "push_image_filter(Compose): empty Compose — opened plain group"
+                    );
+                } else {
+                    self.painter
+                        .save_layer_with_image_filter(ImageFilterSpec::Chain(passes));
+                    tracing::trace!(
+                        "push_image_filter(Compose): {} flattened passes",
+                        filters.len(),
+                    );
+                }
             }
             #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator {
@@ -1635,6 +1653,87 @@ impl LayerStateStack for Backend<'_> {
     fn pop_image_filter(&mut self) {
         self.flush_active_transform();
         self.painter.restore_layer();
+    }
+}
+
+// ─── Compose flatten ──────────────────────────────────────────────────────────
+
+/// Flatten a `Compose(Vec<ImageFilter>)` AST into an ordered `ImageFilterPass` vec.
+///
+/// Traverses `filters` depth-first, left-to-right (index 0 = innermost = applied
+/// first, PINNED #4 verified against Flutter `dl_compose_image_filter.cc:33-51`).
+/// Nested `Compose` nodes are recursed into at record time — the resulting `out`
+/// vec is flat with no GPU-side recursion and no nested IR.
+///
+/// ## Variant mapping
+///
+/// - `Blur{σx,σy}` → [`ImageFilterPass::Blur`]
+/// - `Dilate{r}` → [`ImageFilterPass::Morph`] (op: Dilate)
+/// - `Erode{r}` → [`ImageFilterPass::Morph`] (op: Erode)
+/// - `Matrix(m)` → [`ImageFilterPass::ColorMatrix`] (`m.values`)
+/// - `ColorAdjust(a)` → [`ImageFilterPass::ColorMatrix`] (`a.to_color_matrix().values`)
+/// - nested `Compose(inner)` → recurse (depth-first, index order preserved)
+/// - `OverflowIndicator` (debug only) → [`ImageFilterPass::Identity`] + `tracing::debug!`
+///   (index-faithful: never elide, never shift sibling positions)
+///
+/// ## No `_` catch-all
+///
+/// The inner `match` is exhaustive: adding a new `ImageFilter` variant forces
+/// a compile error here, ensuring the flatten stays up-to-date.
+pub(crate) fn flatten_compose(
+    filters: &[flui_painting::display_list::ImageFilter],
+    out: &mut SmallVec<[ImageFilterPass; 4]>,
+) {
+    use flui_painting::display_list::ImageFilter;
+    for filter in filters {
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                out.push(ImageFilterPass::Blur {
+                    sigma_x: *sigma_x,
+                    sigma_y: *sigma_y,
+                });
+            }
+            ImageFilter::Dilate { radius } => {
+                out.push(ImageFilterPass::Morph {
+                    radius: *radius,
+                    op: MorphOp::Dilate,
+                });
+            }
+            ImageFilter::Erode { radius } => {
+                out.push(ImageFilterPass::Morph {
+                    radius: *radius,
+                    op: MorphOp::Erode,
+                });
+            }
+            ImageFilter::Matrix(matrix) => {
+                out.push(ImageFilterPass::ColorMatrix(matrix.values));
+            }
+            ImageFilter::ColorAdjust(adjustment) => {
+                out.push(ImageFilterPass::ColorMatrix(
+                    adjustment.to_color_matrix().values,
+                ));
+            }
+            ImageFilter::Compose(inner_filters) => {
+                // Depth-first recursion: inner_filters[0] is innermost at this level.
+                flatten_compose(inner_filters, out);
+            }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator {
+                overflow_h,
+                overflow_v,
+                ..
+            } => {
+                // Push Identity to preserve index positions — eliding would shift
+                // sibling filter positions, changing the fold order (PINNED #4).
+                out.push(ImageFilterPass::Identity);
+                tracing::debug!(
+                    overflow_h,
+                    overflow_v,
+                    "flatten_compose(OverflowIndicator): no GPU pass for overflow \
+                     indicator inside Compose; pushing Identity to preserve chain indices"
+                );
+            }
+        }
     }
 }
 
