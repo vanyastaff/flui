@@ -68,6 +68,47 @@ pub(crate) type LayerFilterChain = SmallVec<[LayerFilter; 2]>;
 
 // ─── Image-filter IR ─────────────────────────────────────────────────────────
 
+/// Morphological operation: dilate (max) or erode (min).
+///
+/// Determines the per-channel accumulation init value and reduction function
+/// in the morphology GPU shader:
+/// - `Dilate`: init `vec4(0)`, accumulate `max` — expands bright/opaque areas.
+/// - `Erode`:  init `vec4(1)`, accumulate `min` — contracts bright/opaque areas.
+///
+/// ## Premultiplied-direct invariant (PINNED #1)
+///
+/// The shader applies max/min directly to premultiplied RGBA. No unpremultiply
+/// step is performed — this is the correct semantics for morphological filters
+/// per Impeller `morphology_filter.frag`. The CPU oracle in the test module
+/// follows the same premultiplied-direct contract.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum MorphOp {
+    /// Dilate: per-channel maximum — expands bright/opaque regions.
+    Dilate,
+    /// Erode: per-channel minimum — contracts bright/opaque regions.
+    Erode,
+}
+
+/// Specification of the image-filter to emit at `save_layer`/`restore_layer`
+/// record time.
+///
+/// Stored in `SavedLayer::image_filter` so `restore_layer` can choose between
+/// the `OpacityLayer` and `DrawItem::Filter` paths. The `Morph` variant is the
+/// first real payload; `Blur` joins in Task 4.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ImageFilterSpec {
+    /// Morphological dilate or erode with the given per-axis radius in physical
+    /// pixels.
+    Morph {
+        /// Kernel half-radius in physical pixels: the shader samples
+        /// `[-ceil(radius)..=ceil(radius)]` texels in each direction.
+        radius: f32,
+        /// Whether to accumulate the per-channel maximum (dilate) or minimum
+        /// (erode).
+        op: MorphOp,
+    },
+}
+
 /// A lowered, flattened image-filter pass. Bounds-GROWING ops only.
 ///
 /// Task 0 ships only the `Identity` arm; `Blur`/`Morph` payloads land in later
@@ -79,15 +120,24 @@ pub(crate) enum ImageFilterPass {
     ///
     /// Exercises the `DrawItem::Filter` seam end-to-end with zero filter math
     /// (Task 0). Grows `FilterOp::grown_bounds` by 0 pixels.
-    ///
-    /// Future slices add: `Morph { radius: f32, op: MorphOp }` (Slice 1),
-    /// `Blur { sigma_x: f32, sigma_y: f32 }` (Slice 4).
     // Constructed by the CI-visible `task0_ir_witnesses` tests below; there is no
     // production producer until Slice 1 wires a public painter API. So the variant
     // is genuinely unconstructed only in NON-test builds — scope the allow to those
     // (the lint stays live under `cfg(test)`, where the witnesses construct it).
     #[cfg_attr(not(test), allow(dead_code))]
     Identity,
+    /// Morphological filter: separable H then V pass with the given radius and op.
+    ///
+    /// The H and V sub-passes are internal to `apply_morphology` — callers see a
+    /// single `Morph` pass. `radius` is in physical pixels; `op` selects
+    /// dilate/erode. Grows `FilterOp::grown_bounds` by `ceil(radius)` pixels on
+    /// each side before clipping to the viewport.
+    Morph {
+        /// Kernel half-radius in physical pixels.
+        radius: f32,
+        /// Dilate (max) or erode (min).
+        op: MorphOp,
+    },
 }
 
 /// A bounds-GROWING image-filter operation, isolated at record time.
@@ -209,6 +259,14 @@ pub(crate) struct SavedLayer {
     /// texture (ping-pong, ≤2 live textures regardless of chain length N).
     /// `LayerFilter::ColorMatrix(_)` routes through the color-matrix GPU pass.
     pub(crate) filters: LayerFilterChain,
+    /// Image filter (bounds-GROWING) to apply via `DrawItem::Filter` instead of
+    /// the normal `DrawItem::OpacityLayer` path.
+    ///
+    /// When `Some`, `restore_layer` emits a `DrawItem::Filter` carrying the
+    /// isolated offscreen content and the pass chain derived from this spec.
+    /// The `Reintegrate` fast-path is gated on `image_filter.is_none()` — a
+    /// filter layer always routes through the offscreen composite path (G3).
+    pub(crate) image_filter: Option<ImageFilterSpec>,
 }
 
 // ─── Draw segment ─────────────────────────────────────────────────────────────
@@ -542,7 +600,10 @@ mod task0_ir_witnesses {
     use flui_types::{Rect, geometry::px};
     use smallvec::smallvec;
 
-    use super::{DrawItem, DrawSegment, FilterOp, ImageFilterPass, LayerFilterChain};
+    use super::{
+        DrawItem, DrawSegment, FilterOp, ImageFilterPass, ImageFilterSpec, LayerFilterChain,
+        MorphOp,
+    };
 
     /// Compile-time proof that `FilterOp` is `Clone`.
     ///
@@ -594,5 +655,56 @@ mod task0_ir_witnesses {
     #[test]
     fn layer_filter_chain_default_is_empty() {
         assert!(LayerFilterChain::new().is_empty());
+    }
+
+    /// `MorphOp` is `Copy`/`Clone`/`PartialEq`/`Debug` — exercised here so it is
+    /// never dead under `cfg(test)`.
+    #[test]
+    fn morph_op_is_copy_and_clone() {
+        let dilate = MorphOp::Dilate;
+        let erode = MorphOp::Erode;
+        assert_ne!(dilate, erode);
+        assert_eq!(dilate, dilate.clone());
+    }
+
+    /// `ImageFilterSpec::Morph` and `ImageFilterPass::Morph` are constructable and
+    /// comparable — exercises both under `cfg(test)`.
+    #[test]
+    fn morph_ir_variants_are_constructable() {
+        let spec = ImageFilterSpec::Morph {
+            radius: 3.0,
+            op: MorphOp::Dilate,
+        };
+        assert!(matches!(spec, ImageFilterSpec::Morph { .. }));
+
+        let pass = ImageFilterPass::Morph {
+            radius: 3.0,
+            op: MorphOp::Dilate,
+        };
+        assert!(matches!(pass, ImageFilterPass::Morph { .. }));
+    }
+
+    /// `FilterOp` carrying a `Morph` pass is still `Clone` (T11 purity witness).
+    #[test]
+    fn filter_op_with_morph_pass_is_pure_cpu_data() {
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));
+        let op = FilterOp {
+            input: DrawSegment::new(),
+            passes: smallvec![ImageFilterPass::Morph {
+                radius: 4.0,
+                op: MorphOp::Erode,
+            }],
+            content_bounds: bounds,
+            grown_bounds: bounds,
+        };
+        let cloned = op.clone();
+        assert_eq!(cloned.passes.len(), 1);
+        assert!(matches!(
+            cloned.passes[0],
+            ImageFilterPass::Morph {
+                radius: _,
+                op: MorphOp::Erode
+            }
+        ));
     }
 }

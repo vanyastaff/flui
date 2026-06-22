@@ -14,7 +14,10 @@ use smallvec::SmallVec;
 
 use std::sync::Arc;
 
-use super::{command_ir::LayerFilter, painter::WgpuPainter};
+use super::{
+    command_ir::{ImageFilterSpec, LayerFilter, MorphOp},
+    painter::WgpuPainter,
+};
 use crate::{
     commands::dispatch_command,
     traits::{CommandRenderer, LayerStateStack},
@@ -1563,21 +1566,25 @@ impl LayerStateStack for Backend<'_> {
                 );
             }
             ImageFilter::Dilate { radius } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Dilate): save_layer for dilate radius={:.2} \
-                     (GPU morphology not yet implemented)",
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Morph {
+                        radius: *radius,
+                        op: MorphOp::Dilate,
+                    });
+                tracing::trace!(
                     radius,
+                    "push_image_filter(Dilate): GPU morphology dilate layer opened"
                 );
             }
             ImageFilter::Erode { radius } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Erode): save_layer for erode radius={:.2} \
-                     (GPU morphology not yet implemented)",
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Morph {
+                        radius: *radius,
+                        op: MorphOp::Erode,
+                    });
+                tracing::trace!(
                     radius,
+                    "push_image_filter(Erode): GPU morphology erode layer opened"
                 );
             }
             ImageFilter::Matrix(matrix) => {

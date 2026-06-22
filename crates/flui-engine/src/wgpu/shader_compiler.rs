@@ -34,10 +34,9 @@ pub enum ShaderType {
     DualKawaseDownsample,
     /// Dual Kawase blur upsample pass shader
     DualKawaseUpsample,
-    /// Morphological dilate (max filter) shader
-    MorphDilate,
-    /// Morphological erode (min filter) shader
-    MorphErode,
+    // MorphDilate / MorphErode removed: morphology filters now use their own
+    // pipeline in `morphology/pipeline.rs` (MorphologyPipeline) and embed
+    // their WGSL via `include_str!` directly — not through ShaderCache.
 }
 
 impl ShaderType {
@@ -60,8 +59,6 @@ impl ShaderType {
             ShaderType::DualKawaseUpsample => {
                 include_str!("shaders/effects/blur_upsample.wgsl")
             }
-            ShaderType::MorphDilate => include_str!("shaders/effects/dilate.wgsl"),
-            ShaderType::MorphErode => include_str!("shaders/effects/erode.wgsl"),
         }
     }
 
@@ -76,8 +73,6 @@ impl ShaderType {
             ShaderType::GaussianBlurVertical => "Gaussian Blur Vertical Shader",
             ShaderType::DualKawaseDownsample => "Dual Kawase Downsample",
             ShaderType::DualKawaseUpsample => "Dual Kawase Upsample",
-            ShaderType::MorphDilate => "Morphological Dilate Shader",
-            ShaderType::MorphErode => "Morphological Erode Shader",
         }
     }
 

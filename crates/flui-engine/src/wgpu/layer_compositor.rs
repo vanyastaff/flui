@@ -25,7 +25,7 @@ use flui_types::Rect;
 use flui_types::geometry::Pixels;
 use flui_types::painting::BlendMode;
 
-use super::command_ir::{DrawItem, DrawSegment, LayerFilterChain, SavedLayer};
+use super::command_ir::{DrawItem, DrawSegment, ImageFilterSpec, LayerFilterChain, SavedLayer};
 
 /// Outcome returned by [`LayerCompositor::pop_layer`].
 ///
@@ -59,6 +59,13 @@ pub(super) enum RestoreOutcome {
         /// Forwarded from [`SavedLayer::filters`] so the painter can pass it into
         /// [`super::command_ir::PendingOpacityLayer`] without coupling the flush path.
         layer_filter: LayerFilterChain,
+        /// Image filter (bounds-GROWING) to apply via `DrawItem::Filter` instead of
+        /// the normal `DrawItem::OpacityLayer` path.
+        ///
+        /// When `Some`, the painter emits `DrawItem::Filter` with the offscreen content
+        /// and a `Morph` pass derived from this spec, rather than `DrawItem::OpacityLayer`.
+        /// Forwarded from [`SavedLayer::image_filter`].
+        image_filter: Option<ImageFilterSpec>,
         /// Parent segment saved before `save_layer` — splice back into `current_segment`.
         saved_segment: DrawSegment,
         /// Parent draw order saved before `save_layer` — splice back into `draw_order`.
@@ -221,6 +228,7 @@ impl LayerCompositor {
             layer_blend,
             bounds,
             filters,
+            image_filter: None, // set by save_layer_with_image_filter after push
         };
         self.layer_stack.push(saved);
 
@@ -236,6 +244,22 @@ impl LayerCompositor {
     /// Returns `None` when the stack is empty (underflow is handled by `pop_layer`).
     pub(super) fn peek_layer_bounds(&self) -> Option<[f32; 4]> {
         self.layer_stack.last().and_then(|saved| saved.bounds)
+    }
+
+    /// Mark the top-of-stack `SavedLayer` with an image filter spec.
+    ///
+    /// Called by `WgpuPainter::save_layer_with_image_filter` immediately after
+    /// `save_layer_impl` pushes the new entry.  Panics in debug mode if the stack
+    /// is empty (which would indicate a caller ordering bug — `push_layer` must
+    /// precede this call).
+    pub(super) fn set_top_image_filter(&mut self, spec: ImageFilterSpec) {
+        debug_assert!(
+            !self.layer_stack.is_empty(),
+            "LayerCompositor::set_top_image_filter called on empty layer_stack"
+        );
+        if let Some(top) = self.layer_stack.last_mut() {
+            top.image_filter = Some(spec);
+        }
     }
 
     /// Pop the top layer, restore parent opacity, and decide the compositing branch.
@@ -306,10 +330,15 @@ impl LayerCompositor {
         let has_chroma = (saved.layer_tint_rgb[0] - 1.0).abs() > f32::EPSILON
             || (saved.layer_tint_rgb[1] - 1.0).abs() > f32::EPSILON
             || (saved.layer_tint_rgb[2] - 1.0).abs() > f32::EPSILON;
+        // G3 guardrail: an image_filter ALWAYS forces the composite path so the
+        // Morph (or future Blur) pass can run on the rendered offscreen before
+        // pixels reach the parent.  The Reintegrate fast-path splices children
+        // directly into the parent draw order and CANNOT apply an image filter.
         let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON
             || has_chroma
             || saved.layer_blend.is_advanced()
-            || !saved.filters.is_empty();
+            || !saved.filters.is_empty()
+            || saved.image_filter.is_some();
 
         if needs_composite {
             RestoreOutcome::Composite {
@@ -320,6 +349,7 @@ impl LayerCompositor {
                 composite_bounds,
                 layer_blend: saved.layer_blend,
                 layer_filter: saved.filters,
+                image_filter: saved.image_filter,
                 saved_segment: saved.saved_segment,
                 saved_draw_order: saved.saved_draw_order,
             }
@@ -551,5 +581,42 @@ mod tests {
         compositor.current_opacity = 0.5;
         let effective = compositor.effective_layer_opacity(0.4);
         assert!((effective - 0.2).abs() < 1e-6);
+    }
+
+    /// G3 guardrail: a layer with `image_filter: Some(_)` MUST route through
+    /// `RestoreOutcome::Composite`, not `Reintegrate`, even when opacity≈1.0 and
+    /// tint is white (conditions that would otherwise pick Reintegrate).
+    ///
+    /// The Reintegrate fast-path splices children directly into the parent draw
+    /// order without an offscreen round-trip — it CANNOT apply an image filter.
+    /// If this test fails, the Morph pass is silently dropped.
+    #[test]
+    fn pop_layer_composite_when_image_filter_set_even_at_full_opacity_white_tint() {
+        use super::super::command_ir::{ImageFilterSpec, MorphOp};
+
+        let mut compositor = LayerCompositor::new();
+        // Push a layer that would normally Reintegrate (opacity=1.0, white tint,
+        // SrcOver, no color-filters) — but we mark it with an image filter.
+        compositor.push_layer(
+            Vec::new(),
+            DrawSegment::new(),
+            1.0,             // opacity ~1.0 — would ordinarily Reintegrate
+            [1.0, 1.0, 1.0], // white tint — no chroma
+            BlendMode::SrcOver,
+            None,
+            LayerFilterChain::new(),
+        );
+        // Set the image filter on the top-of-stack entry.
+        compositor.set_top_image_filter(ImageFilterSpec::Morph {
+            radius: 2.0,
+            op: MorphOp::Dilate,
+        });
+
+        // Pop with actual content so we don't fall through to Empty.
+        let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
+        assert!(
+            matches!(outcome, RestoreOutcome::Composite { .. }),
+            "image_filter=Some(_) must force Composite outcome (G3 guardrail)"
+        );
     }
 }

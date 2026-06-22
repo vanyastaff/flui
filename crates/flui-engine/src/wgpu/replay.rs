@@ -491,14 +491,38 @@ impl GpuReplay {
                     // 2. Fold the pass chain. Task 0: Identity → returns content_tex
                     //    unchanged (zero extra acquire — same discipline as the
                     //    empty-chain fast-path in fold_layer_filter_chain).
-                    let filtered_tex =
-                        apply_image_filter_passes(&op.passes, content_tex, op.grown_bounds);
+                    let filtered_tex = apply_image_filter_passes(
+                        &op.passes,
+                        content_tex,
+                        op.content_bounds,
+                        op.grown_bounds,
+                        viewport_size,
+                        surface_format,
+                        pipelines,
+                        resources,
+                        device,
+                        encoder,
+                    );
 
                     // 3. Composite at grown_bounds via the EXISTING premultiplied
                     //    texture-batch composite seam (same call the OffscreenTexture
                     //    arm uses, replay.rs:306). Zero new composite code.
-                    let instance = super::instancing::TextureInstance::new(
+                    //    `filtered_tex` is FULL-VIEWPORT with the result at its true
+                    //    viewport position, so src_uv maps the grown_bounds dst rect
+                    //    to the matching sub-region of the texture — NOT [0,1], which
+                    //    would stretch the whole viewport onto grown_bounds when they
+                    //    differ (only equal under the current bounds=None producer).
+                    let (vp_w, vp_h) = viewport_size;
+                    let g = op.grown_bounds;
+                    let src_uv = [
+                        g.left().0 / vp_w as f32,
+                        g.top().0 / vp_h as f32,
+                        g.right().0 / vp_w as f32,
+                        g.bottom().0 / vp_h as f32,
+                    ];
+                    let instance = super::instancing::TextureInstance::with_uv(
                         op.grown_bounds,
+                        src_uv,
                         flui_types::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);

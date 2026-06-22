@@ -35,7 +35,10 @@ use std::sync::Arc;
 use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
     color_matrix::apply_color_matrix,
-    command_ir::{DrawItem, DrawSegment, LayerFilter, LayerFilterChain, PendingOpacityLayer},
+    command_ir::{
+        DrawItem, DrawSegment, ImageFilterPass, LayerFilter, LayerFilterChain, PendingOpacityLayer,
+    },
+    morphology::apply_morphology,
     pipelines::PipelineSet,
     render_target::RenderTarget,
     replay::GpuReplay,
@@ -341,10 +344,32 @@ impl GpuReplay {
                         resources,
                         encoder,
                     );
-                    let filtered_tex =
-                        apply_image_filter_passes(&op.passes, content_tex, op.grown_bounds);
-                    let instance = super::instancing::TextureInstance::new(
+                    let filtered_tex = apply_image_filter_passes(
+                        &op.passes,
+                        content_tex,
+                        op.content_bounds,
                         op.grown_bounds,
+                        viewport_size,
+                        surface_format,
+                        pipelines,
+                        resources,
+                        device,
+                        encoder,
+                    );
+                    // `filtered_tex` is FULL-VIEWPORT; src_uv maps the grown_bounds
+                    // dst rect to the matching texture sub-region (NOT [0,1], which
+                    // would stretch the whole viewport onto grown_bounds). See replay.rs.
+                    let (vp_w, vp_h) = viewport_size;
+                    let g = op.grown_bounds;
+                    let src_uv = [
+                        g.left().0 / vp_w as f32,
+                        g.top().0 / vp_h as f32,
+                        g.right().0 / vp_w as f32,
+                        g.bottom().0 / vp_h as f32,
+                    ];
+                    let instance = super::instancing::TextureInstance::with_uv(
+                        op.grown_bounds,
+                        src_uv,
                         flui_types::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
@@ -719,44 +744,66 @@ fn fold_layer_filter_chain(
 
 // ─── Image-filter pass chain fold (DrawItem::Filter) ─────────────────────────
 
-/// Apply a chain of [`ImageFilterPass`](crate::wgpu::command_ir::ImageFilterPass)es
-/// to `input_tex`, returning the result.
-/// Folds the chain for [`DrawItem::Filter`] replay.
+/// Apply a chain of [`ImageFilterPass`]es to `input_tex`, returning the result.
 ///
-/// ## Task 0 — Identity passthrough
-///
-/// The only pass variant is `Identity`. Its body is a no-op: the accumulated
-/// texture is passed through unchanged. No new texture is acquired per Identity
-/// pass. The compiler enforces exhaustiveness: Slice 1 (`Morph`) and Slice 4
-/// (`Blur`) must add explicit arms — there is no `_ =>` catch-all.
-///
-/// ## Future slices
-///
-/// Non-identity passes will acquire a fresh destination texture, render into it
-/// with the pass parameters, and drop the prior `acc` (returning it to the pool),
-/// maintaining the ≤2-live-textures ping-pong discipline of
+/// Folds the chain for [`DrawItem::Filter`] replay. Each arm acquires a fresh
+/// destination texture, renders the pass, and drops the prior `acc` (returning
+/// it to the pool) — the ≤2-live-textures ping-pong discipline, identical to
 /// `fold_layer_filter_chain`.
 ///
-/// The `grown_bounds` parameter is accepted now so Slice 1/4 arms can size their
-/// grown intermediates without a signature change at that time.
+/// The match has **no `_ =>` catch-all**: Slice 4 (`Blur`) is compiler-forced to
+/// add an arm when its variant is introduced.
+///
+/// ## Parameters shared across all arms
+///
+/// - `content_bounds` — AABB of the content in physical pixels; used by the
+///   morphology pass to compute the decal UV guard (samples outside `content_bounds`
+///   return the neutral element rather than the clamped edge texel).
+/// - `viewport_size`, `surface_format`, `pipelines`, `resources`, `device`,
+///   `encoder` — GPU context forwarded unchanged to every GPU pass arm.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "GPU pass fold threads device/encoder/pipeline/resources to every arm; \
+              a context struct would add indirection without a semantic boundary"
+)]
 pub(in crate::wgpu) fn apply_image_filter_passes(
-    passes: &[super::command_ir::ImageFilterPass],
+    passes: &[ImageFilterPass],
     input_tex: PooledTexture,
-    _grown_bounds: flui_types::Rect<flui_types::geometry::Pixels>,
+    content_bounds: flui_types::Rect<flui_types::geometry::Pixels>,
+    grown_bounds: flui_types::Rect<flui_types::geometry::Pixels>,
+    viewport_size: (u32, u32),
+    surface_format: wgpu::TextureFormat,
+    pipelines: &mut PipelineSet,
+    resources: &mut GpuResources,
+    device: &Arc<wgpu::Device>,
+    encoder: &mut wgpu::CommandEncoder,
 ) -> PooledTexture {
-    use super::command_ir::ImageFilterPass;
+    let _ = grown_bounds; // consumed by Slice 4 (Blur); unused until then
 
-    // Fold left-to-right; `acc` owns the current intermediate texture. Each arm
-    // moves `acc` and the result is rebound, so a future pass simply returns a
-    // fresh acquire (dropping its input back to the pool — the ≤2-live-texture
-    // ping-pong, identical to `fold_layer_filter_chain`). The match has NO `_ =>`
-    // arm: Slice 1 (`Morph`) and Slice 4 (`Blur`) are compiler-forced to add theirs.
+    // Fold left-to-right; `acc` owns the current intermediate texture.
     let mut acc = input_tex;
     for pass in passes {
         acc = match pass {
-            ImageFilterPass::Identity => acc, // no-op: pass the texture through unchanged
-                                              // Slice 1: ImageFilterPass::Morph { .. } => apply_morph(acc, ..),
-                                              // Slice 4: ImageFilterPass::Blur { .. } => apply_blur(acc, ..),
+            ImageFilterPass::Identity => acc, // no-op: pass texture through unchanged
+
+            ImageFilterPass::Morph { radius, op } => {
+                // Two separable sub-passes (H then V) inside apply_morphology.
+                // Drops `acc` (the prior intermediate) before returning v_tex.
+                apply_morphology(
+                    *radius,
+                    *op,
+                    &acc,
+                    content_bounds,
+                    viewport_size,
+                    surface_format,
+                    &pipelines.morphology,
+                    resources,
+                    device,
+                    encoder,
+                )
+                // `acc` drops here after `apply_morphology` returns, returning
+                // the prior intermediate to the pool.
+            } // Slice 4: ImageFilterPass::Blur { .. } => apply_blur(..),
         };
     }
     acc
