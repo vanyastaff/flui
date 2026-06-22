@@ -122,7 +122,7 @@ Engine-internal — **0 external semver impact**. `LayerFilter` and the new IR a
 
 - **Crate ownership** — correct. GPU passes over GPU textures belong in flui-engine; the *type* + *oracle* live in flui-types/flui-painting. The one thing that could cross into `flui-rendering` (render-tree bounds growth) is explicitly **out of scope** (Fork 1 = engine-local).
 - **Sibling reuse** — strong; the split *increases* reuse (color filters keep the whole PR #266 path; `DrawItem::Filter` rides the existing offscreen-composite seam). Strict-maintainer rejection if: `srgb_to_linear` is cloned into a shader constant instead of extracted (DRY); `kernel_radius` defined twice (pass vs test).
-- **Pre-empted rejections** — no silent box≈gaussian (cut); no ClampToEdge where Impeller uses Decal (PINNED); no unpremultiply morphology (PINNED premul); no full-viewport clip of grown blur (split to bounds-aware item); no untested seam refactor (A/B replay test required); morphology is one variant + op field, not two.
+- **Preempted rejections** — no silent box≈gaussian (cut); no ClampToEdge where Impeller uses Decal (PINNED); no unpremultiply morphology (PINNED premul); no full-viewport clip of grown blur (split to bounds-aware item); no untested seam refactor (A/B replay test required); morphology is one variant + op field, not two.
 - **Allowed breaking changes** — none needed (`LayerFilter` stays `Copy`).
 
 ## Acceptance criteria

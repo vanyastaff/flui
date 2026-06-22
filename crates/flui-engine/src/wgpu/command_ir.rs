@@ -567,7 +567,7 @@ mod task0_ir_witnesses {
         }
     }
 
-    /// Runtime purity witness: a `FilterOp` is constructable + clonable with no GPU
+    /// Runtime purity witness: a `FilterOp` is constructible + cloneable with no GPU
     /// context. Constructing the value also exercises the variant under `cfg(test)`.
     #[test]
     fn filter_op_is_pure_cpu_data() {
