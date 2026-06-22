@@ -28,6 +28,32 @@ use super::{
 
 // ─── Layer filter ────────────────────────────────────────────────────────────
 
+/// Direction of the sRGB gamma transfer function.
+///
+/// Used by [`LayerFilter::Gamma`] to select which transfer direction the GPU
+/// shader applies per RGB channel (alpha is always passed through unchanged).
+///
+/// The underlying transfer functions are the `pub` helpers
+/// [`flui_types::styling::color::srgb_to_linear`] and
+/// [`flui_types::styling::color::linear_to_srgb`] — the same functions used by
+/// the CPU oracle in the GPU readback tests, ensuring one authoritative home for
+/// the IEC 61966-2-1 piecewise formula.
+///
+/// Under **Scope A** this type is constructed only from `cfg(test)` GPU readback
+/// tests (no production `push_color_filter` → `LayerFilter::Gamma` wiring yet).
+/// The `#[cfg_attr]` gates dead_code away in non-test builds only; under `cfg(test)`
+/// the lint stays live so regressions surface immediately.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GammaDirection {
+    /// sRGB → linear light: apply the electro-optical transfer function
+    /// (gamma-decode each channel).  Corresponds to `srgb_to_linear`.
+    SrgbToLinear,
+    /// Linear light → sRGB: apply the opto-electronic transfer function
+    /// (gamma-encode each channel).  Corresponds to `linear_to_srgb`.
+    LinearToSrgb,
+}
+
 /// A pixel-level filter applied to the rendered content of an offscreen layer
 /// before it is composited onto its parent surface.
 ///
@@ -39,12 +65,14 @@ use super::{
 ///
 /// ## Correctness invariant — premultiplied alpha
 ///
-/// The layer offscreen is premultiplied RGBA.  The `ColorMatrix` variant stores
-/// values that operate on **straight** (un-premultiplied) RGBA, matching
-/// [`flui_types::painting::ColorMatrix::apply`].  The GPU shader MUST
-/// unpremultiply before the matrix, clamp each output channel to `[0, 1]`,
-/// and repremultiply before writing, producing the identical result the CPU oracle
-/// would return for each pixel.
+/// The layer offscreen is premultiplied RGBA.  The `ColorMatrix` and `Mode`
+/// variants operate on **straight** (un-premultiplied) RGBA: the GPU shader
+/// MUST unpremultiply before the operation, clamp each output channel to
+/// `[0, 1]`, and repremultiply before writing, producing a result that matches
+/// the CPU oracle applied to the straight color.
+///
+/// The `Gamma` variant also unpremultiplies first, applies the transfer function
+/// per RGB channel (alpha is untouched), clamps, and repremultiplies.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum LayerFilter {
     /// A 5×4 row-major color matrix applied per-pixel on un-premultiplied color.
@@ -52,6 +80,48 @@ pub(crate) enum LayerFilter {
     /// Layout mirrors [`flui_types::painting::ColorMatrix::values`]:
     /// rows R/G/B/A × columns `[m0..m3, offset]`.
     ColorMatrix([f32; 20]),
+
+    /// Porter-Duff / W3C blend of a solid filter color over each layer pixel,
+    /// applied in straight sRGB space.
+    ///
+    /// `color` is the **filter** color in straight sRGB `[f32; 4]` (pre-converted
+    /// from [`flui_types::Color`] via [`flui_types::Color::to_f32_array`] at the
+    /// call site).  The GPU shader unpremultiplies the layer pixel, computes
+    /// `blend(src=color, dst=straight_pixel, mode)`, clamps to `[0, 1]`, and
+    /// repremultiplies.
+    ///
+    /// Mirrors [`flui_types::Color::blend`] (`self` = filter color = src,
+    /// `dst` = layer pixel): the CPU oracle for the GPU readback tests.
+    ///
+    /// Constructed only from `#[cfg(test)]` paths under **Scope A** (no
+    /// production `push_color_filter` → `LayerFilter::Mode` wiring yet).
+    // Scope A: no production producer of this variant yet — it is constructed
+    // only in `cfg(test)` GPU readback tests. The `apply_mode` function and
+    // `ModePipeline` that consume it are live (referenced in the fold arm),
+    // so only the *variant construction sites* need the dead_code gate.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Mode {
+        /// Filter color in straight sRGB `[r, g, b, a]` (values in `[0, 1]`).
+        color: [f32; 4],
+        /// Blend mode — selects the Porter-Duff or W3C blend function.
+        blend_mode: flui_types::painting::BlendMode,
+    },
+
+    /// Per-channel sRGB ↔ linear-light transfer function, applied per RGB channel
+    /// with alpha untouched.
+    ///
+    /// The direction is selected by [`GammaDirection`]; the underlying formula is
+    /// the IEC 61966-2-1 piecewise function implemented in
+    /// [`flui_types::styling::color::srgb_to_linear`] /
+    /// [`flui_types::styling::color::linear_to_srgb`].
+    ///
+    /// The GPU shader unpremultiplies, applies the transfer per R/G/B, clamps to
+    /// `[0, 1]`, and repremultiplies; alpha is left unchanged.
+    ///
+    /// Constructed only from `#[cfg(test)]` paths under **Scope A**.
+    // Scope A: same dead_code rationale as `Mode` above.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Gamma(GammaDirection),
 }
 
 /// An inline-storage chain of [`LayerFilter`]s folded in `flush_opacity_layer`.
@@ -600,9 +670,11 @@ mod task0_ir_witnesses {
     use flui_types::{Rect, geometry::px};
     use smallvec::smallvec;
 
+    use flui_types::painting::BlendMode;
+
     use super::{
-        DrawItem, DrawSegment, FilterOp, ImageFilterPass, ImageFilterSpec, LayerFilterChain,
-        MorphOp,
+        DrawItem, DrawSegment, FilterOp, GammaDirection, ImageFilterPass, ImageFilterSpec,
+        LayerFilter, LayerFilterChain, MorphOp,
     };
 
     /// Compile-time proof that `FilterOp` is `Clone`.
@@ -682,6 +754,39 @@ mod task0_ir_witnesses {
             op: MorphOp::Dilate,
         };
         assert!(matches!(pass, ImageFilterPass::Morph { .. }));
+    }
+
+    /// `LayerFilter::Mode` is constructable + pattern-matchable without GPU context.
+    ///
+    /// Exercises the `Mode` variant under `cfg(test)` — the
+    /// `#[cfg_attr(not(test), allow(dead_code))]` on the variant is satisfied by
+    /// this construction, keeping the lint live in test builds.
+    #[test]
+    fn layer_filter_mode_variant_is_constructable() {
+        let filter = LayerFilter::Mode {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: BlendMode::Multiply,
+        };
+        assert!(matches!(filter, LayerFilter::Mode { .. }));
+    }
+
+    /// `LayerFilter::Gamma` is constructable + pattern-matchable without GPU context.
+    ///
+    /// Same dead_code rationale as `Mode` above.
+    #[test]
+    fn layer_filter_gamma_variant_is_constructable() {
+        let srgb_to_lin = LayerFilter::Gamma(GammaDirection::SrgbToLinear);
+        let lin_to_srgb = LayerFilter::Gamma(GammaDirection::LinearToSrgb);
+        assert!(matches!(
+            srgb_to_lin,
+            LayerFilter::Gamma(GammaDirection::SrgbToLinear)
+        ));
+        assert!(matches!(
+            lin_to_srgb,
+            LayerFilter::Gamma(GammaDirection::LinearToSrgb)
+        ));
+        // GammaDirection is Copy + PartialEq.
+        assert_ne!(GammaDirection::SrgbToLinear, GammaDirection::LinearToSrgb);
     }
 
     /// `FilterOp` carrying a `Morph` pass is still `Clone` (T11 purity witness).

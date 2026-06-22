@@ -78,6 +78,19 @@ pub(crate) mod color_matrix;
 /// (`ScissorRect`, `ScissorRegion`, `TessellatedBatch`). Moved here from
 /// `painter.rs` so the future batcher/compositor modules share one type home.
 pub(crate) mod command_ir;
+/// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
+/// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
+/// premultiplied layer offscreen (unpremul → transfer per RGB → clamp →
+/// repremul), writing the result into a 2nd pooled texture (ping-pong).
+/// Alpha is unchanged.  [`gamma::GammaPipeline`] owns the pipeline and
+/// bind-group layout.
+pub(crate) mod gamma;
+/// Per-pixel ColorFilter::Mode blend pass: [`mode::apply_mode`] applies a
+/// [`command_ir::LayerFilter::Mode`] by compositing a solid filter color (SRC)
+/// over each layer pixel (DST) using one of the 28 Porter-Duff / W3C blend
+/// modes (unpremul DST → blend in straight sRGB → clamp → emit premul).
+/// [`mode::ModePipeline`] owns the pipeline and bind-group layout.
+pub(crate) mod mode;
 // Cycle 4 wave 5 E-10: `buffers.rs` deleted. Module hosted
 // `DynamicBuffer` (auto-growing vertex/instance buffer) and
 // `BufferManager` (5-buffer GPU resource bag). Workspace grep
@@ -222,6 +235,19 @@ mod color_matrix_filter_tests;
 // premul-direct discriminator, decal boundary, grown_bounds wiring).
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod morphology_filter_tests;
+
+// mode_filter_tests contains MO1-MO6 GPU readback tests for the
+// ColorFilter::Mode blend pass (Modulate identity, Multiply opaque, SrcOver
+// translucent premul-bracket, Screen separable, Hue non-separable,
+// Luminosity translucent).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod mode_filter_tests;
+
+// gamma_filter_tests contains GA1-GA6 GPU readback tests for the gamma
+// transfer filter pass (SrgbToLinear known value, LinearToSrgb inverse,
+// translucent alpha unchanged, round-trip ≈ identity, black/white boundary).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod gamma_filter_tests;
 
 // ============================================================================
 // PUBLIC API
