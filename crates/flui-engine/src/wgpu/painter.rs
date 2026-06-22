@@ -14,8 +14,8 @@ use smallvec::smallvec;
 
 use super::{
     command_ir::{
-        DrawItem, DrawSegment, LayerFilter, LayerFilterChain, PendingOffscreenTexture,
-        PendingOpacityLayer, ScissorRect,
+        DrawItem, DrawSegment, FilterOp, ImageFilterPass, ImageFilterSpec, LayerFilter,
+        LayerFilterChain, PendingOffscreenTexture, PendingOpacityLayer, ScissorRect,
     },
     layer_compositor::{LayerCompositor, RestoreOutcome},
     pipelines::PipelineSet,
@@ -1308,8 +1308,44 @@ impl WgpuPainter {
         );
     }
 
+    /// Open a bounds-GROWING image filter layer.
+    ///
+    /// Unlike `save_layer` (which closes over an offscreen with group opacity) and
+    /// `save_layer_with_filter` (which applies a `LayerFilter::ColorMatrix` that
+    /// does NOT grow bounds), this method routes the layer's offscreen content
+    /// through a `DrawItem::Filter` at `restore_layer` time instead of
+    /// `DrawItem::OpacityLayer`.  The `FilterOp` carries the pass chain derived
+    /// from `spec` and a `grown_bounds` rect that expands beyond the content AABB,
+    /// allowing morphology/blur to composite at a larger area than the input.
+    ///
+    /// The layer is pushed with opacity=inherited (so any outer group opacity still
+    /// applies), white tint, SrcOver, and empty color-filter chain — identical to
+    /// `save_layer_with_filter`.  The `image_filter` field on the top `SavedLayer`
+    /// is then set so `restore_layer` can detect the bounds-growing path.
+    ///
+    /// Used by `push_image_filter` in `backend.rs` for `Dilate` and `Erode`.
+    pub(crate) fn save_layer_with_image_filter(&mut self, spec: ImageFilterSpec) {
+        // Inherit the current ancestor opacity (same as `save_layer_with_filter`).
+        let layer_opacity = self.compositor.effective_layer_opacity(1.0);
+        self.save_layer_impl(
+            None, // bounds determined at restore time from content AABB + radius
+            layer_opacity,
+            [1.0, 1.0, 1.0],
+            flui_types::painting::BlendMode::SrcOver,
+            LayerFilterChain::new(), // no color-filter chain (image filter is separate)
+        );
+        // Mark the freshly-pushed SavedLayer with the image filter spec so that
+        // `restore_layer` knows to emit DrawItem::Filter instead of OpacityLayer.
+        self.compositor.set_top_image_filter(spec);
+        tracing::trace!(
+            ?spec,
+            "WgpuPainter::save_layer_with_image_filter: image filter layer opened"
+        );
+    }
+
     /// Shared implementation for [`Self::save_layer`] /
-    /// [`Self::save_layer_with_tint`] / [`Self::save_layer_with_filter`]:
+    /// [`Self::save_layer_with_tint`] / [`Self::save_layer_with_filter`] /
+    /// [`Self::save_layer_with_image_filter`]:
     /// snapshot the draw state and push a layer with the given composite
     /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, and color-filter chain.
     fn save_layer_impl(
@@ -1377,6 +1413,7 @@ impl WgpuPainter {
                 composite_bounds,
                 layer_blend,
                 layer_filter,
+                image_filter,
                 saved_segment,
                 saved_draw_order,
             } => {
@@ -1384,16 +1421,7 @@ impl WgpuPainter {
                 self.current_segment = saved_segment;
                 self.draw_order = saved_draw_order;
 
-                // Offscreen render-to-texture compositing: package the offscreen
-                // content as an OpacityLayer draw item.  During render(), this is
-                // flushed to a pooled offscreen texture (premultiplied) and
-                // composited onto the main surface with the tint
-                // `(C.r*O, C.g*O, C.b*O, O)` — correct group opacity AND chroma.
-                // Advanced blend modes are carried via `blend` and dispatched by
-                // `flush_opacity_layer` through the dst-read compositor path.
-                // `filter` carries the color-matrix GPU pass when set.
-
-                // Finalize the current parent segment so the opacity layer is
+                // Finalize the current parent segment so the new draw item is
                 // inserted at the correct Z-position in the draw order.
                 let parent_segment =
                     std::mem::replace(&mut self.current_segment, DrawSegment::new());
@@ -1401,25 +1429,87 @@ impl WgpuPainter {
                     self.draw_order.push(DrawItem::Segment(parent_segment));
                 }
 
-                tracing::trace!(
-                    "WgpuPainter::restore_layer: queued OpacityLayer \
-                     (opacity={:.3}, tint_rgb={:?}, blend={:?}, filters={:?}, bounds={:?})",
-                    layer_opacity,
-                    tint_rgb,
-                    layer_blend,
-                    layer_filter,
-                    composite_bounds
-                );
-                self.draw_order
-                    .push(DrawItem::OpacityLayer(PendingOpacityLayer {
-                        items: offscreen_items,
-                        final_segment: offscreen_final_segment,
-                        opacity: layer_opacity,
-                        tint_rgb,
-                        bounds: composite_bounds,
-                        blend: layer_blend,
-                        filters: layer_filter,
-                    }));
+                // Route to DrawItem::Filter for bounds-growing image filters
+                // (Morph/Blur); fall through to DrawItem::OpacityLayer for
+                // plain opacity/tint/blend-mode layers.
+                match image_filter {
+                    Some(ImageFilterSpec::Morph { radius, op }) => {
+                        // Package the offscreen content as a FilterOp.
+                        //
+                        // `FilterOp::input` is a flat `DrawSegment` consumed by
+                        // `render_segment_to_offscreen` at replay time.  For a
+                        // morphology layer opened with `save_layer_with_image_filter`,
+                        // callers do not nest opacity layers inside, so
+                        // `offscreen_items` is empty and `offscreen_final_segment`
+                        // holds all the content.  If `offscreen_items` is non-empty
+                        // (e.g., a nested texture from a draw_image call), log a
+                        // debug trace — the items are silently ignored because the
+                        // current FilterOp::input is a single DrawSegment; a future
+                        // task can extend FilterOp::input to Vec<DrawItem> if needed.
+                        if !offscreen_items.is_empty() {
+                            tracing::debug!(
+                                item_count = offscreen_items.len(),
+                                "restore_layer(Morph): offscreen_items discarded; \
+                                 FilterOp::input only captures the final DrawSegment. \
+                                 Nested opacity layers inside a morphology layer are \
+                                 not yet supported."
+                            );
+                        }
+                        // `_ = layer_opacity` — morphology is applied as a DrawItem::Filter
+                        // that composites directly; the opacity field is inherited via
+                        // `effective_layer_opacity(1.0)` in `save_layer_with_image_filter`
+                        // and is already baked into the save-layer setup.  The composite
+                        // step (flush_texture_batch_premultiplied) uses REPLACE blend, so
+                        // the group opacity is effectively 1.0 at this stage.
+                        let _ = (layer_opacity, tint_rgb, layer_blend, layer_filter);
+
+                        // `content_bounds` = the resolved composite rect (viewport fallback
+                        // applied by the painter before pop_layer).
+                        // `grown_bounds` = content expanded by ceil(radius), clipped to the
+                        // viewport so the composite instance rect stays in-bounds.
+                        let ceil_radius = px(radius.ceil());
+                        let grown = composite_bounds.expand(ceil_radius);
+                        let viewport_rect = self.viewport_bounds();
+                        let grown_bounds =
+                            grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
+
+                        tracing::trace!(
+                            radius,
+                            op = ?op,
+                            content_bounds = ?composite_bounds,
+                            grown_bounds = ?grown_bounds,
+                            "WgpuPainter::restore_layer: queued DrawItem::Filter (Morph)"
+                        );
+                        self.draw_order.push(DrawItem::Filter(FilterOp {
+                            input: offscreen_final_segment,
+                            passes: smallvec![ImageFilterPass::Morph { radius, op }],
+                            content_bounds: composite_bounds,
+                            grown_bounds,
+                        }));
+                    }
+                    None => {
+                        // Plain opacity/tint/blend-mode composite — existing path.
+                        tracing::trace!(
+                            "WgpuPainter::restore_layer: queued OpacityLayer \
+                             (opacity={:.3}, tint_rgb={:?}, blend={:?}, filters={:?}, bounds={:?})",
+                            layer_opacity,
+                            tint_rgb,
+                            layer_blend,
+                            layer_filter,
+                            composite_bounds
+                        );
+                        self.draw_order
+                            .push(DrawItem::OpacityLayer(PendingOpacityLayer {
+                                items: offscreen_items,
+                                final_segment: offscreen_final_segment,
+                                opacity: layer_opacity,
+                                tint_rgb,
+                                bounds: composite_bounds,
+                                blend: layer_blend,
+                                filters: layer_filter,
+                            }));
+                    }
+                }
             }
             RestoreOutcome::Reintegrate {
                 offscreen_items,

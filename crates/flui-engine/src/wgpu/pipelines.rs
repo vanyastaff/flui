@@ -60,6 +60,7 @@ use flui_types::painting::BlendMode;
 use super::{
     advanced_blend::AdvancedBlendPipeline,
     color_matrix::ColorMatrixPipeline,
+    morphology::MorphologyPipeline,
     pipeline::{PipelineCache, blend_state_for},
     ssaa::SsaaDownsamplePipeline,
 };
@@ -168,6 +169,15 @@ pub(crate) struct PipelineSet {
     /// Format-matched to `surface_format` at construction time; shared across
     /// every `apply_color_matrix` call for this painter.
     pub(crate) color_matrix: ColorMatrixPipeline,
+
+    // ── Morphology filter pipeline ────────────────────────────────────────────
+    /// Separable morphological filter (dilate / erode) pipeline used by
+    /// `apply_image_filter_passes` when a `DrawItem::Filter` carry a
+    /// `ImageFilterPass::Morph` variant.
+    ///
+    /// Format-matched to `surface_format` at construction time; shared across
+    /// every `apply_morphology` call for this painter.
+    pub(crate) morphology: MorphologyPipeline,
 
     // ── SSAA box-downsample pipeline ─────────────────────────────────────────
     /// 2×→1× box-filter downsample pipeline for SSAA path anti-aliasing.
@@ -291,6 +301,7 @@ impl PipelineSet {
 
         let advanced_blend = AdvancedBlendPipeline::new(device, surface_format);
         let color_matrix = ColorMatrixPipeline::new(device, surface_format);
+        let morphology = MorphologyPipeline::new(device, surface_format);
         let ssaa_downsample = SsaaDownsamplePipeline::new(device, surface_format);
 
         // ── SSAA tile composite: shared layout + lazy pipeline cache ──────────
@@ -325,6 +336,7 @@ impl PipelineSet {
             gradient_bind_group: None,
             advanced_blend,
             color_matrix,
+            morphology,
             ssaa_downsample,
             ssaa_tile_composite_layout,
             ssaa_tile_surface_format: surface_format,

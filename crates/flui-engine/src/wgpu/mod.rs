@@ -111,6 +111,12 @@ pub mod font_loader;
 mod instancing;
 // NOTE: integration_tests.rs removed - needs rewrite for new
 // Pixels/DevicePixels API
+/// Separable morphological filter (dilate / erode) pass: [`morphology::apply_morphology`]
+/// applies an [`command_ir::ImageFilterPass::Morph`] to a premultiplied layer
+/// offscreen via two H/V sub-passes into pooled ping-pong textures, then returns
+/// the filtered texture for compositing via `DrawItem::Filter`.
+/// [`morphology::MorphologyPipeline`] owns the pipeline and bind-group layout.
+pub(crate) mod morphology;
 mod multi_draw;
 pub mod occlusion;
 mod offscreen;
@@ -205,10 +211,17 @@ mod shape_blend_tests;
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gradient_image_blend_tests;
 
-// color_matrix_filter_tests contains F1-F3 GPU readback tests for the
-// color-matrix filter pass (identity, swap-R↔B, translucent premul roundtrip).
+// color_matrix_filter_tests contains F1-F6 GPU readback tests for the
+// color-matrix filter pass (identity, swap-R↔B, translucent premul roundtrip,
+// transpose-bug discriminator, brightness on translucent, nested opacity).
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod color_matrix_filter_tests;
+
+// morphology_filter_tests contains M1-M6 GPU readback tests for the
+// morphology filter pass (identity, dilate border expand, erode border contract,
+// premul-direct discriminator, decal boundary, grown_bounds wiring).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod morphology_filter_tests;
 
 // ============================================================================
 // PUBLIC API
