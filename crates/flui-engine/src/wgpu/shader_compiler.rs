@@ -26,10 +26,11 @@ pub enum ShaderType {
     RadialGradientMask,
     /// Sweep (angular/conic) gradient mask shader
     SweepGradientMask,
-    /// Gaussian blur horizontal pass shader (compute)
-    GaussianBlurHorizontal,
-    /// Gaussian blur vertical pass shader (compute)
-    GaussianBlurVertical,
+    // GaussianBlurHorizontal / GaussianBlurVertical removed (gpu-image-filters
+    // Task 4): the orphaned compute `blur_horizontal/vertical.wgsl` were dead
+    // registrations (no `from_shader`/`get_or_compile_module` consumer); the
+    // ImageFilter::Blur path now uses the fragment `blur.wgsl` + `BlurPipeline`
+    // (embedded via `include_str!` directly, like morphology/mode/gamma).
     /// Dual Kawase blur downsample pass shader
     DualKawaseDownsample,
     /// Dual Kawase blur upsample pass shader
@@ -47,12 +48,6 @@ impl ShaderType {
             ShaderType::LinearGradientMask => include_str!("shaders/masks/linear_gradient.wgsl"),
             ShaderType::RadialGradientMask => include_str!("shaders/masks/radial_gradient.wgsl"),
             ShaderType::SweepGradientMask => include_str!("shaders/masks/sweep_gradient.wgsl"),
-            ShaderType::GaussianBlurHorizontal => {
-                include_str!("shaders/effects/blur_horizontal.wgsl")
-            }
-            ShaderType::GaussianBlurVertical => {
-                include_str!("shaders/effects/blur_vertical.wgsl")
-            }
             ShaderType::DualKawaseDownsample => {
                 include_str!("shaders/effects/blur_downsample.wgsl")
             }
@@ -69,8 +64,6 @@ impl ShaderType {
             ShaderType::LinearGradientMask => "Linear Gradient Mask Shader",
             ShaderType::RadialGradientMask => "Radial Gradient Mask Shader",
             ShaderType::SweepGradientMask => "Sweep Gradient Mask Shader",
-            ShaderType::GaussianBlurHorizontal => "Gaussian Blur Horizontal Shader",
-            ShaderType::GaussianBlurVertical => "Gaussian Blur Vertical Shader",
             ShaderType::DualKawaseDownsample => "Dual Kawase Downsample",
             ShaderType::DualKawaseUpsample => "Dual Kawase Upsample",
         }

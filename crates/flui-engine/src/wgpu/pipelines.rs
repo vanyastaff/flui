@@ -59,6 +59,7 @@ use flui_types::painting::BlendMode;
 
 use super::{
     advanced_blend::AdvancedBlendPipeline,
+    blur::BlurPipeline,
     color_matrix::ColorMatrixPipeline,
     gamma::GammaPipeline,
     mode::ModePipeline,
@@ -206,6 +207,20 @@ pub(crate) struct PipelineSet {
     /// offscreen tile into a premultiplied 1× tile before compositing.
     pub(crate) ssaa_downsample: SsaaDownsamplePipeline,
 
+    // ── Gaussian blur filter pipeline ─────────────────────────────────────────
+    /// Separable Gaussian blur pipeline used by `apply_image_filter_passes`
+    /// when a `DrawItem::Filter` carries an `ImageFilterPass::Blur` variant.
+    ///
+    /// Format-matched to `surface_format` at construction time; shared across
+    /// every `apply_blur` call for this painter.
+    ///
+    /// ## PINNED #2 — premultiplied-direct, sRGB-encoded
+    ///
+    /// The Gaussian kernel operates on premultiplied RGBA in sRGB-encoded space.
+    /// Uses `FilterMode::Linear` + `SamplerBindingType::Filtering` (bilinear),
+    /// distinct from the morphology pipeline (`NonFiltering` nearest).
+    pub(crate) blur: BlurPipeline,
+
     // ── SSAA tile composite pipeline cache ───────────────────────────────────
     //
     // Holds per-blend-mode premultiplied texture composite pipelines used by
@@ -322,6 +337,7 @@ impl PipelineSet {
         let advanced_blend = AdvancedBlendPipeline::new(device, surface_format);
         let color_matrix = ColorMatrixPipeline::new(device, surface_format);
         let morphology = MorphologyPipeline::new(device, surface_format);
+        let blur = BlurPipeline::new(device, surface_format);
         let mode = ModePipeline::new(device, surface_format);
         let gamma = GammaPipeline::new(device, surface_format);
         let ssaa_downsample = SsaaDownsamplePipeline::new(device, surface_format);
@@ -359,6 +375,7 @@ impl PipelineSet {
             advanced_blend,
             color_matrix,
             morphology,
+            blur,
             mode,
             gamma,
             ssaa_downsample,
