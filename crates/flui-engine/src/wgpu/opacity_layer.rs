@@ -719,7 +719,8 @@ fn fold_layer_filter_chain(
 
 // ─── Image-filter pass chain fold (DrawItem::Filter) ─────────────────────────
 
-/// Apply a chain of [`ImageFilterPass`]es to `input_tex`, returning the result.
+/// Apply a chain of [`ImageFilterPass`](crate::wgpu::command_ir::ImageFilterPass)es
+/// to `input_tex`, returning the result.
 /// Folds the chain for [`DrawItem::Filter`] replay.
 ///
 /// ## Task 0 — Identity passthrough
