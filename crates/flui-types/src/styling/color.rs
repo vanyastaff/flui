@@ -724,14 +724,6 @@ impl Color {
     /// part of Oklab and is carried separately by the caller.
     #[must_use]
     pub fn to_oklab(self) -> Oklab {
-        #[inline]
-        fn srgb_to_linear(c: f32) -> f32 {
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        }
         let r = srgb_to_linear(f32::from(self.r) / 255.0);
         let g = srgb_to_linear(f32::from(self.g) / 255.0);
         let b = srgb_to_linear(f32::from(self.b) / 255.0);
@@ -758,14 +750,6 @@ impl Color {
     /// between two sRGB colors leaves the gamut only marginally).
     #[must_use]
     pub fn from_oklab(lab: Oklab, alpha: u8) -> Color {
-        #[inline]
-        fn linear_to_srgb(c: f32) -> f32 {
-            if c <= 0.003_130_8 {
-                12.92 * c
-            } else {
-                1.055 * c.powf(1.0 / 2.4) - 0.055
-            }
-        }
         // `.round() as u8` saturates: clamping out-of-gamut channels.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
         #[inline]
@@ -993,6 +977,57 @@ impl Color {
     pub const DARK_GRAY: Color = Color::rgb(64, 64, 64);
 
     // Material Design colors will be added in future commits
+}
+
+// ===== Transfer functions (IEC 61966-2-1 sRGB ↔ linear) =====
+
+/// sRGB electro-optical transfer function: gamma-encoded → linear light.
+///
+/// Applies the IEC 61966-2-1 piecewise formula to a single channel `c` in
+/// `[0, 1]` (straight sRGB). Returns the linearized value in `[0, 1]`.
+///
+/// Used by [`Color::to_oklab`] and the GPU gamma `ColorFilter` CPU oracle
+/// (Slice 3). One home for both callers — do not inline copies elsewhere.
+///
+/// # Examples
+/// ```
+/// use flui_types::styling::color::srgb_to_linear;
+/// assert!((srgb_to_linear(0.0) - 0.0).abs() < 1e-6);
+/// assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
+/// ```
+#[inline]
+#[must_use]
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear-light → sRGB opto-electronic transfer function (inverse of
+/// [`srgb_to_linear`]).
+///
+/// Applies the IEC 61966-2-1 piecewise formula to a single linearized channel
+/// `c` in `[0, 1]`. Returns the gamma-encoded sRGB value in `[0, 1]`.
+///
+/// Used by [`Color::from_oklab`] and the GPU gamma `ColorFilter` CPU oracle.
+/// One home for both callers — do not inline copies elsewhere.
+///
+/// # Examples
+/// ```
+/// use flui_types::styling::color::linear_to_srgb;
+/// assert!((linear_to_srgb(0.0) - 0.0).abs() < 1e-6);
+/// assert!((linear_to_srgb(1.0) - 1.0).abs() < 1e-6);
+/// ```
+#[inline]
+#[must_use]
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 // ===== Blend-mode evaluation helpers (used by `Color::blend`) =====
@@ -1689,5 +1724,60 @@ mod tests {
             );
             assert_eq!(got.a, 255, "{mode:?} achromatic: alpha must be 1");
         }
+    }
+
+    // ===== Transfer-function unit tests =====
+
+    /// Round-trip: sRGB → linear → sRGB must be the identity within f32 precision.
+    ///
+    /// Tests a span of values from 0 to 255 (normalized to [0, 1]) to cover both
+    /// the linear segment (c ≤ 0.04045) and the power-law segment (c > 0.04045).
+    #[test]
+    fn transfer_fn_round_trip_srgb_to_linear_and_back() {
+        for raw in 0u8..=255 {
+            let srgb = f32::from(raw) / 255.0;
+            let linear = srgb_to_linear(srgb);
+            let recovered = linear_to_srgb(linear);
+            assert!(
+                (srgb - recovered).abs() < 1e-5,
+                "round-trip failed at sRGB={srgb:.6}: linear={linear:.6}, recovered={recovered:.6}"
+            );
+        }
+    }
+
+    /// Known anchor points for `srgb_to_linear` per the IEC 61966-2-1 spec.
+    ///
+    /// 0.0 → 0.0 (identity at black), 1.0 → 1.0 (identity at white).
+    /// 0.5 tests the power-law segment; the expected value is (0.5+0.055/1.055)^2.4.
+    #[test]
+    fn transfer_fn_known_srgb_anchor_points() {
+        assert!(
+            srgb_to_linear(0.0).abs() < 1e-7,
+            "srgb_to_linear(0.0) must be 0"
+        );
+        assert!(
+            (srgb_to_linear(1.0) - 1.0).abs() < 1e-7,
+            "srgb_to_linear(1.0) must be 1"
+        );
+        // 0.5 is in the power-law region (> 0.04045)
+        let expected = ((0.5_f32 + 0.055) / 1.055).powf(2.4);
+        assert!(
+            (srgb_to_linear(0.5) - expected).abs() < 1e-6,
+            "srgb_to_linear(0.5) = {} expected {expected}",
+            srgb_to_linear(0.5)
+        );
+    }
+
+    /// Known anchor points for `linear_to_srgb` per the IEC 61966-2-1 spec.
+    #[test]
+    fn transfer_fn_known_linear_anchor_points() {
+        assert!(
+            linear_to_srgb(0.0).abs() < 1e-7,
+            "linear_to_srgb(0.0) must be 0"
+        );
+        assert!(
+            (linear_to_srgb(1.0) - 1.0).abs() < 1e-7,
+            "linear_to_srgb(1.0) must be 1"
+        );
     }
 }

@@ -25,7 +25,7 @@ use flui_types::Rect;
 use flui_types::geometry::Pixels;
 use flui_types::painting::BlendMode;
 
-use super::command_ir::{DrawItem, DrawSegment, LayerFilter, SavedLayer};
+use super::command_ir::{DrawItem, DrawSegment, LayerFilterChain, SavedLayer};
 
 /// Outcome returned by [`LayerCompositor::pop_layer`].
 ///
@@ -54,11 +54,11 @@ pub(super) enum RestoreOutcome {
         /// `SrcOver` for plain opacity layers; an advanced mode (e.g. Multiply)
         /// for layers opened with an explicit blend mode via `save_layer`.
         layer_blend: BlendMode,
-        /// Optional per-pixel GPU filter applied before compositing.
+        /// Color-filter chain to apply before compositing.
         ///
-        /// Forwarded from [`SavedLayer::filter`] so the painter can pass it into
+        /// Forwarded from [`SavedLayer::filters`] so the painter can pass it into
         /// [`super::command_ir::PendingOpacityLayer`] without coupling the flush path.
-        layer_filter: Option<LayerFilter>,
+        layer_filter: LayerFilterChain,
         /// Parent segment saved before `save_layer` — splice back into `current_segment`.
         saved_segment: DrawSegment,
         /// Parent draw order saved before `save_layer` — splice back into `draw_order`.
@@ -209,7 +209,7 @@ impl LayerCompositor {
         layer_tint_rgb: [f32; 3],
         layer_blend: BlendMode,
         bounds: Option<[f32; 4]>,
-        filter: Option<LayerFilter>,
+        filters: LayerFilterChain,
     ) {
         let saved = SavedLayer {
             saved_draw_order,
@@ -220,7 +220,7 @@ impl LayerCompositor {
             layer_tint_rgb,
             layer_blend,
             bounds,
-            filter,
+            filters,
         };
         self.layer_stack.push(saved);
 
@@ -309,7 +309,7 @@ impl LayerCompositor {
         let needs_composite = (1.0 - saved.layer_opacity).abs() > f32::EPSILON
             || has_chroma
             || saved.layer_blend.is_advanced()
-            || saved.filter.is_some();
+            || !saved.filters.is_empty();
 
         if needs_composite {
             RestoreOutcome::Composite {
@@ -319,7 +319,7 @@ impl LayerCompositor {
                 tint_rgb: saved.layer_tint_rgb,
                 composite_bounds,
                 layer_blend: saved.layer_blend,
-                layer_filter: saved.filter,
+                layer_filter: saved.filters,
                 saved_segment: saved.saved_segment,
                 saved_draw_order: saved.saved_draw_order,
             }
@@ -375,7 +375,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         compositor.debug_assert_balanced();
     }
@@ -397,7 +397,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         // Inside the layer, children draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
@@ -417,7 +417,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         // Children inside the layer draw at full opacity.
         assert!((compositor.current_opacity() - 1.0).abs() < f32::EPSILON);
@@ -434,7 +434,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         let _ = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!((compositor.current_opacity() - 0.8).abs() < f32::EPSILON);
@@ -450,7 +450,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Empty { .. }));
@@ -466,7 +466,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(matches!(outcome, RestoreOutcome::Composite { .. }));
@@ -482,7 +482,7 @@ mod tests {
             [0.0, 0.0, 1.0], // blue tint → has_chroma
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(
@@ -501,7 +501,7 @@ mod tests {
             [1.0, 1.0, 1.0], // white tint → no chroma
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         let outcome = compositor.pop_layer(segment_with_one_rect(), Vec::new(), rect_bounds_100());
         assert!(

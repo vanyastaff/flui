@@ -10,10 +10,12 @@
 
 use std::sync::Arc;
 
+use smallvec::smallvec;
+
 use super::{
     command_ir::{
-        DrawItem, DrawSegment, LayerFilter, PendingOffscreenTexture, PendingOpacityLayer,
-        ScissorRect,
+        DrawItem, DrawSegment, LayerFilter, LayerFilterChain, PendingOffscreenTexture,
+        PendingOpacityLayer, ScissorRect,
     },
     layer_compositor::{LayerCompositor, RestoreOutcome},
     pipelines::PipelineSet,
@@ -350,6 +352,10 @@ impl WgpuPainter {
                 DrawItem::OffscreenTexture(_)
                 | DrawItem::OpacityLayer(_)
                 | DrawItem::AdvancedShape(_) => None,
+                // Surface the filter's input segment so drain covers Filter
+                // geometry; the grown_bounds / passes are test-infrastructure
+                // concerns and are not needed by the deterministic-replay drain.
+                DrawItem::Filter(op) => Some(op.input),
             })
             .collect()
     }
@@ -1235,7 +1241,7 @@ impl WgpuPainter {
             layer_opacity,
             [1.0, 1.0, 1.0],
             paint.blend_mode,
-            None,
+            LayerFilterChain::new(),
         );
     }
 
@@ -1269,7 +1275,7 @@ impl WgpuPainter {
             layer_opacity,
             tint,
             flui_types::painting::BlendMode::SrcOver,
-            None, // no LayerFilter — tint carries the color
+            LayerFilterChain::new(), // no filter — tint carries the color
         );
     }
 
@@ -1298,21 +1304,21 @@ impl WgpuPainter {
             layer_opacity,
             [1.0, 1.0, 1.0],
             flui_types::painting::BlendMode::SrcOver,
-            Some(filter),
+            smallvec![filter],
         );
     }
 
     /// Shared implementation for [`Self::save_layer`] /
     /// [`Self::save_layer_with_tint`] / [`Self::save_layer_with_filter`]:
     /// snapshot the draw state and push a layer with the given composite
-    /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, and optional GPU filter.
+    /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, and color-filter chain.
     fn save_layer_impl(
         &mut self,
         bounds: Option<Rect<Pixels>>,
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
         layer_blend: flui_types::painting::BlendMode,
-        filter: Option<LayerFilter>,
+        filters: LayerFilterChain,
     ) {
         // Convert bounds to [x, y, w, h] if provided.
         let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
@@ -1321,6 +1327,15 @@ impl WgpuPainter {
         // them in a SavedLayer and resets current_opacity to 1.0 for the subtree.
         let saved_draw_order = std::mem::take(&mut self.draw_order);
         let saved_segment = std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        tracing::trace!(
+            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, blend={:?}, \
+             filters={:?}, bounds={:?}",
+            layer_opacity,
+            layer_tint_rgb,
+            layer_blend,
+            filters,
+            bounds_array
+        );
         self.compositor.push_layer(
             saved_draw_order,
             saved_segment,
@@ -1328,17 +1343,7 @@ impl WgpuPainter {
             layer_tint_rgb,
             layer_blend,
             bounds_array,
-            filter,
-        );
-
-        tracing::trace!(
-            "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, blend={:?}, \
-             filter={:?}, bounds={:?}",
-            layer_opacity,
-            layer_tint_rgb,
-            layer_blend,
-            filter,
-            bounds_array
+            filters, // moved here after the trace
         );
     }
 
@@ -1396,6 +1401,15 @@ impl WgpuPainter {
                     self.draw_order.push(DrawItem::Segment(parent_segment));
                 }
 
+                tracing::trace!(
+                    "WgpuPainter::restore_layer: queued OpacityLayer \
+                     (opacity={:.3}, tint_rgb={:?}, blend={:?}, filters={:?}, bounds={:?})",
+                    layer_opacity,
+                    tint_rgb,
+                    layer_blend,
+                    layer_filter,
+                    composite_bounds
+                );
                 self.draw_order
                     .push(DrawItem::OpacityLayer(PendingOpacityLayer {
                         items: offscreen_items,
@@ -1404,18 +1418,8 @@ impl WgpuPainter {
                         tint_rgb,
                         bounds: composite_bounds,
                         blend: layer_blend,
-                        filter: layer_filter,
+                        filters: layer_filter,
                     }));
-
-                tracing::trace!(
-                    "WgpuPainter::restore_layer: queued OpacityLayer \
-                     (opacity={:.3}, tint_rgb={:?}, blend={:?}, filter={:?}, bounds={:?})",
-                    layer_opacity,
-                    tint_rgb,
-                    layer_blend,
-                    layer_filter,
-                    composite_bounds
-                );
             }
             RestoreOutcome::Reintegrate {
                 offscreen_items,

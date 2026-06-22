@@ -58,6 +58,7 @@ use super::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
     command_ir::{DrawItem, DrawSegment, ScissorRect},
     instancing::{InstanceBatch, TextureInstance},
+    opacity_layer::apply_image_filter_passes,
     pipeline::PipelineKey,
     pipelines::PipelineSet,
     render_target::RenderTarget,
@@ -457,6 +458,67 @@ impl GpuReplay {
                         mode = ?op.blend,
                         bounds = ?op.device_bounds,
                         "GpuReplay: SSAA path tile composited"
+                    );
+                }
+                // ── Image-filter (bounds-growing) — Task 0 / Slice 0 ────────
+                //
+                // Z-correctness: z-order is set by each item's position in
+                // `draw_order` and the `for item in items` replay loop — NOT by
+                // match-arm textual position (the match is pure dispatch). When this
+                // arm runs, every earlier draw-order item is already flushed to
+                // `target.view`, so the filter result composites on top
+                // (R1 z-order invariant, replay.rs:274).
+                //
+                // Pool discipline: content_tex and filtered_tex are acquired at
+                // replay time, never held in the IR. Both drop at arm end, returning
+                // to the pool. The `apply_image_filter_passes` fold maintains ≤2
+                // live textures regardless of chain length.
+                DrawItem::Filter(mut op) => {
+                    // 1. Render the isolated input segment to a full-viewport
+                    //    premultiplied offscreen — same primitive the AdvancedShape
+                    //    arm uses (replay.rs:354).
+                    let content_tex = self.render_segment_to_offscreen(
+                        &mut op.input,
+                        viewport_size,
+                        surface_format,
+                        device,
+                        queue,
+                        pipelines,
+                        resources,
+                        encoder,
+                    );
+
+                    // 2. Fold the pass chain. Task 0: Identity → returns content_tex
+                    //    unchanged (zero extra acquire — same discipline as the
+                    //    empty-chain fast-path in fold_layer_filter_chain).
+                    let filtered_tex =
+                        apply_image_filter_passes(&op.passes, content_tex, op.grown_bounds);
+
+                    // 3. Composite at grown_bounds via the EXISTING premultiplied
+                    //    texture-batch composite seam (same call the OffscreenTexture
+                    //    arm uses, replay.rs:306). Zero new composite code.
+                    let instance = super::instancing::TextureInstance::new(
+                        op.grown_bounds,
+                        flui_types::styling::Color::WHITE,
+                    );
+                    let _ = self.texture_batch.add(instance);
+                    self.flush_texture_batch_premultiplied(
+                        device,
+                        queue,
+                        pipelines,
+                        resources,
+                        viewport_size,
+                        encoder,
+                        target.view,
+                        filtered_tex.view(),
+                        None,
+                    );
+                    // filtered_tex (and content_tex if distinct) dropped here → pool.
+                    tracing::trace!(
+                        content_bounds = ?op.content_bounds,
+                        grown_bounds = ?op.grown_bounds,
+                        pass_count = op.passes.len(),
+                        "GpuReplay: image filter composited"
                     );
                 }
             }

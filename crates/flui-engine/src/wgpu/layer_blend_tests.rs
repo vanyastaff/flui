@@ -22,7 +22,7 @@ mod unit_tests {
     use flui_types::{Rect, painting::BlendMode};
 
     use crate::wgpu::{
-        command_ir::{DrawItem, DrawSegment, PendingOpacityLayer},
+        command_ir::{DrawItem, DrawSegment, LayerFilterChain, PendingOpacityLayer},
         layer_compositor::{LayerCompositor, RestoreOutcome},
     };
 
@@ -57,7 +57,7 @@ mod unit_tests {
             [1.0, 1.0, 1.0],     // white tint — old code only checked opacity + chroma
             BlendMode::Multiply, // advanced — the new gate condition
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
         assert!(
@@ -82,7 +82,7 @@ mod unit_tests {
             [1.0, 1.0, 1.0],
             BlendMode::SrcOver,
             None,
-            None, // no LayerFilter
+            LayerFilterChain::new(), // no filter
         );
         let outcome = compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
         assert!(
@@ -144,7 +144,7 @@ mod unit_tests {
                 [1.0, 1.0, 1.0],
                 mode,
                 None,
-                None, // no LayerFilter
+                LayerFilterChain::new(), // no filter
             );
             let outcome =
                 compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
@@ -163,7 +163,7 @@ mod unit_tests {
                 [1.0, 1.0, 1.0],
                 mode,
                 None,
-                None, // no LayerFilter
+                LayerFilterChain::new(), // no filter
             );
             let outcome =
                 compositor.pop_layer(DrawSegment::new(), one_draw_item(), Rect::default());
@@ -208,7 +208,7 @@ mod unit_tests {
             tint_rgb: [1.0, 1.0, 1.0],
             blend: BlendMode::Multiply,
             bounds: Rect::default(),
-            filter: None,
+            filters: LayerFilterChain::new(),
         };
         assert!(
             layer.blend.is_advanced(),
@@ -227,7 +227,7 @@ mod unit_tests {
             tint_rgb: [1.0, 1.0, 1.0],
             blend: BlendMode::SrcOver,
             bounds: Rect::default(),
-            filter: None,
+            filters: LayerFilterChain::new(),
         };
         assert!(
             !layer.blend.is_advanced(),
