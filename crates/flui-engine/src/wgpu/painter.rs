@@ -325,6 +325,23 @@ impl WgpuPainter {
             .collect()
     }
 
+    /// Returns the number of resolved [`DrawItem::Filter`] entries in the current
+    /// draw order.
+    ///
+    /// A filter entry is placed by [`Self::restore_layer`] after a corresponding
+    /// [`Self::save_layer_with_image_filter`] when the image-filter layer had at
+    /// least one draw item inside it (non-empty content). Callers that check for
+    /// zero verify that the filter layer was either culled or was empty.
+    ///
+    /// Gated to test builds; must never be called from production code.
+    #[cfg(all(test, feature = "enable-wgpu-tests"))]
+    pub(crate) fn filter_op_count_for_test(&self) -> usize {
+        self.draw_order
+            .iter()
+            .filter(|item| matches!(item, DrawItem::Filter(_)))
+            .count()
+    }
+
     /// Finalise the current segment and drain all recorded draw items, returning them
     /// as cloned [`DrawSegment`] values.
     ///

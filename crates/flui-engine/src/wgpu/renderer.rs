@@ -36,7 +36,6 @@ use std::sync::Arc;
 
 use wgpu;
 
-use super::occlusion::OcclusionTracker;
 use crate::error::{EngineError, EngineResult};
 
 /// GPU backend capabilities
@@ -198,8 +197,6 @@ pub struct Renderer {
     device_lost: Arc<std::sync::atomic::AtomicBool>,
     /// Tracks dirty regions for incremental rendering (skip frames with no damage)
     damage_tracker: flui_layer::damage::DamageTracker,
-    /// Tracks opaque regions to skip fully-occluded layers during traversal
-    occlusion: OcclusionTracker,
     /// Raw window handle stored for self-contained device recovery.
     ///
     /// SAFETY: The stored handles are reused by `recover()` to rebuild the wgpu
@@ -302,7 +299,6 @@ impl Renderer {
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
-            occlusion: OcclusionTracker::new(),
             raw_window_handle: Some(raw_window_handle),
             raw_display_handle,
             #[cfg(feature = "gpu-profiler")]
@@ -557,7 +553,6 @@ impl Renderer {
             supports_copy_src: false,
             device_lost,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
-            occlusion: OcclusionTracker::new(),
             raw_window_handle: None,
             raw_display_handle: None,
             // Offscreen renderers have no surface present, so profiling results
@@ -1248,10 +1243,7 @@ impl Renderer {
             intermediate_active: effective_intermediate_active,
         };
 
-        // 3. Reset occlusion tracker for this frame
-        self.occlusion.reset();
-
-        // 4. Render scene content via LayerTree traversal
+        // 3. Render scene content via LayerTree traversal
         if scene.has_content()
             && let Some(painter) = self.painter.take()
         {
@@ -1305,14 +1297,8 @@ impl Renderer {
                     &ctx,
                     render_texture,
                     render_view,
-                    &mut self.occlusion,
                 );
             }
-
-            tracing::trace!(
-                opaque_regions = self.occlusion.opaque_count(),
-                "Occlusion tracking complete for frame"
-            );
 
             // 5. Final flush — submit remaining painter batches
             let mut painter = backend.into_painter();
@@ -1408,16 +1394,21 @@ impl Renderer {
         Ok(())
     }
 
-    /// Recursively render a layer and its children (depth-first).
+    /// Recursively render a layer and its children (depth-first, back-to-front /
+    /// painter's algorithm).
     ///
     /// Each layer's `render()` pushes state (transforms, clips, opacity),
-    /// children are rendered, then `cleanup()` pops the state.
-    ///
-    /// Layers that are fully occluded by previously-rendered opaque content
-    /// are skipped entirely (including their children), reducing overdraw.
+    /// children are rendered in order, then `cleanup()` pops the state.
     ///
     /// `BackdropFilterLayer` is handled specially at the Renderer level when
     /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
+    ///
+    /// # Occlusion culling
+    ///
+    /// No per-layer opaque culling is performed here. A back-to-front walk
+    /// registers bottom layers first and would see later (on-top, visible)
+    /// layers as "occluded" — exactly backwards. A sound front-to-back cull
+    /// requires a separate pre-pass that is a future optimization opportunity.
     fn render_layer_recursive(
         tree: &flui_layer::LayerTree,
         layer_id: flui_foundation::LayerId,
@@ -1425,7 +1416,6 @@ impl Renderer {
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
-        occlusion: &mut OcclusionTracker,
     ) {
         use super::layer_render::LayerRender;
 
@@ -1434,22 +1424,6 @@ impl Renderer {
         };
 
         let layer = node.layer();
-
-        // Occlusion culling: skip layers fully hidden behind opaque content.
-        // Only check layers that report bounds — layers without bounds (Offset,
-        // Transform, Opacity, etc.) are containers that affect their children
-        // and cannot be culled independently.
-        if let Some(bounds) = layer.bounds() {
-            let x = bounds.left().0;
-            let y = bounds.top().0;
-            let w = bounds.width().0;
-            let h = bounds.height().0;
-
-            if w > 0.0 && h > 0.0 && occlusion.is_occluded(x, y, w, h) {
-                tracing::trace!(?layer_id, x, y, w, h, "Skipping occluded layer");
-                return; // Skip this layer and all its children
-            }
-        }
 
         // Special handling for BackdropFilter — requires mid-frame flush + copy.
         //
@@ -1468,7 +1442,6 @@ impl Renderer {
                 ctx,
                 surface_texture,
                 surface_view,
-                occlusion,
             );
             return;
         }
@@ -1487,27 +1460,10 @@ impl Renderer {
                 ctx,
                 surface_texture,
                 surface_view,
-                occlusion,
             );
         }
 
         layer.cleanup(backend);
-
-        // Register opaque regions after rendering so that subsequent layers
-        // (siblings rendered later in traversal order) can be culled.
-        // Only leaf layers known to draw solid content are registered.
-        if layer.is_opaque()
-            && let Some(bounds) = layer.bounds()
-        {
-            let x = bounds.left().0;
-            let y = bounds.top().0;
-            let w = bounds.width().0;
-            let h = bounds.height().0;
-
-            if w > 0.0 && h > 0.0 {
-                occlusion.add_opaque(x, y, w, h);
-            }
-        }
     }
 
     /// Handle a `BackdropFilterLayer` via mid-frame flush and Dual Kawase blur.
@@ -1522,7 +1478,7 @@ impl Renderer {
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::too_many_arguments,
-        reason = "backdrop-filter pipeline needs the surface texture/view, occlusion tracker, and layer-tree context to do its job — splitting these into a helper struct adds indirection without clarity"
+        reason = "backdrop-filter pipeline needs the surface texture/view and layer-tree context to do its job — splitting these into a helper struct adds indirection without clarity"
     )]
     fn handle_backdrop_filter(
         bf_layer: &flui_layer::BackdropFilterLayer,
@@ -1532,7 +1488,6 @@ impl Renderer {
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
-        occlusion: &mut OcclusionTracker,
     ) {
         use flui_types::geometry::{Pixels, Rect};
         use flui_types::painting::ImageFilter;
@@ -1555,7 +1510,6 @@ impl Renderer {
                     ctx,
                     surface_texture,
                     surface_view,
-                    occlusion,
                 );
             }
             return;
@@ -1622,7 +1576,6 @@ impl Renderer {
                     ctx,
                     surface_texture,
                     surface_view,
-                    occlusion,
                 );
             }
             return;
@@ -1718,7 +1671,6 @@ impl Renderer {
                 ctx,
                 surface_texture,
                 surface_view,
-                occlusion,
             );
         }
         // No cleanup needed — backdrop filter has no push/pop state in this path
@@ -1951,8 +1903,6 @@ mod tests {
             supports_copy_src: true,
             intermediate_active: false,
         };
-        let mut occlusion = OcclusionTracker::new();
-
         Renderer::handle_backdrop_filter(
             bf_layer,
             node,
@@ -1961,7 +1911,6 @@ mod tests {
             &ctx,
             &surface_texture,
             &surface_view,
-            &mut occlusion,
         );
 
         // The blurred backdrop must be queued for compositing at the DEVICE
@@ -2079,8 +2028,6 @@ mod tests {
             supports_copy_src: true,
             intermediate_active: false,
         };
-        let mut occlusion = OcclusionTracker::new();
-
         Renderer::handle_backdrop_filter(
             bf_layer,
             node,
@@ -2089,7 +2036,6 @@ mod tests {
             &ctx,
             &surface_texture,
             &surface_view,
-            &mut occlusion,
         );
 
         let results = backend.painter().offscreen_results_for_test();
@@ -2220,8 +2166,6 @@ mod tests {
             supports_copy_src: true,
             intermediate_active: false,
         };
-        let mut occlusion = OcclusionTracker::new();
-
         Renderer::handle_backdrop_filter(
             bf_layer,
             node,
@@ -2230,7 +2174,6 @@ mod tests {
             &ctx,
             &surface_texture,
             &surface_view,
-            &mut occlusion,
         );
 
         let results = backend.painter().offscreen_results_for_test();
@@ -2841,6 +2784,169 @@ mod tests {
             "C2-full: center pixel must NOT match SrcOver; Multiply must produce a \
              distinctly darker result. center_pixel={center_pixel:?}, \
              srcover_oracle={srcover_oracle:?}, multiply_oracle={multiply_oracle:?}."
+        );
+    }
+
+    // =========================================================================
+    // OCR-1 — occlusion-cull regression
+    //
+    // Reproduces the bug where `render_layer_recursive` culled visible on-top
+    // layers because the occlusion tracker was fed in back-to-front (painter's
+    // algorithm) order, which is exactly backwards from the front-to-back order
+    // that `OcclusionTracker::add_opaque` requires for sound culling.
+    //
+    // Concretely: a full-screen opaque `CanvasLayer` background (child[0]) was
+    // registered as opaque AFTER rendering, then a sibling `ImageFilterLayer`
+    // (child[1]) wrapping a sub-region `CanvasLayer` had that inner canvas
+    // culled by `is_occluded` — even though it was drawn on top and fully visible.
+    //
+    // The fix removes the unsound occlusion pass from `render_layer_recursive`
+    // entirely.  There is no sound way to do per-layer opaque culling in a
+    // single back-to-front walk without knowing future (on-top) content first.
+    //
+    // This test is RED before the fix (filter_op_count == 0, child was culled)
+    // and GREEN after (filter_op_count == 1, child rendered into the filter).
+    // =========================================================================
+
+    /// OCR-1: an `ImageFilterLayer` wrapping a sub-region `CanvasLayer` that sits
+    /// on top of a full-screen opaque background must not be culled.
+    ///
+    /// Tree:
+    /// ```text
+    /// root (OpacityLayer α=1.0, SrcOver — transparent container, bounds()=None)
+    ///   child[0]: CanvasLayer (800×600 full screen, draws a red rect) — is_opaque=true
+    ///   child[1]: ImageFilterLayer(Blur σ=2.0) — bounds()=None, not cullable itself
+    ///               child: CanvasLayer (400×600 right half, draws a blue rect)
+    /// ```
+    ///
+    /// After walking, `filter_op_count_for_test()` must be 1.
+    ///
+    /// Before the fix: the inner CanvasLayer at (400,0,400,600) was contained
+    /// within the full-screen opaque rect (0,0,800,600) → `is_occluded` fired
+    /// → layer skipped → no offscreen content → `DrawItem::Filter` not emitted
+    /// → count == 0 → RED.
+    ///
+    /// After the fix: occlusion cull removed → inner CanvasLayer renders its
+    /// rect → offscreen segment non-empty → `DrawItem::Filter` emitted → count
+    /// == 1 → GREEN.
+    #[test]
+    fn on_top_layer_not_culled_by_opaque_background() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_layer::{CanvasLayer, ImageFilterLayer, Layer, LayerTree, OpacityLayer};
+        use flui_painting::{Canvas, Paint};
+        use flui_types::{
+            Color,
+            geometry::{Rect, px},
+        };
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return;
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let surface_w = 800u32;
+        let surface_h = 600u32;
+
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("OCR-1 Surface"),
+            size: wgpu::Extent3d {
+                width: surface_w,
+                height: surface_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+        )));
+        let painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (surface_w, surface_h),
+        );
+        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+
+        let ctx = RenderContext {
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+            surface_format: format,
+            supports_copy_src: true,
+            intermediate_active: false,
+        };
+
+        // Build the layer tree.
+        let mut tree = LayerTree::new();
+
+        // Root: OpacityLayer(α=1.0, SrcOver) — transparent container, bounds()=None.
+        // render() is a no-op for SrcOver+opaque; children are still walked.
+        let root_id = tree.insert(Layer::Opacity(OpacityLayer::new(1.0)));
+        tree.set_root(Some(root_id));
+
+        // child[0]: full-screen CanvasLayer — is_opaque()=true, bounds()=800×600.
+        // Draws a red rect so its segment is non-empty; after render+cleanup it would
+        // be registered as opaque by the (now-removed) bug.
+        let mut bg_canvas = Canvas::new();
+        bg_canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0)),
+            &Paint::fill(Color::rgba(255, 0, 0, 255)),
+        );
+        let bg_layer_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(bg_canvas))));
+        tree.add_child(root_id, bg_layer_id);
+
+        // child[1]: ImageFilterLayer(Blur σ=2.0) — bounds()=None (no occlusion check).
+        let filter_id = tree.insert(Layer::ImageFilter(ImageFilterLayer::blur(2.0)));
+        tree.add_child(root_id, filter_id);
+
+        // child[1]'s child: CanvasLayer covering the right half (400×600).
+        // bounds() = (400,0,400,600) ⊆ background (0,0,800,600).
+        // BUG: this layer was culled by the back-to-front occlusion cull.
+        let mut fg_canvas = Canvas::new();
+        fg_canvas.draw_rect(
+            Rect::from_xywh(px(400.0), px(0.0), px(400.0), px(600.0)),
+            &Paint::fill(Color::rgba(0, 0, 255, 255)),
+        );
+        let fg_layer_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(fg_canvas))));
+        tree.add_child(filter_id, fg_layer_id);
+
+        // Walk the layer tree.
+        Renderer::render_layer_recursive(
+            &tree,
+            root_id,
+            &mut backend,
+            &ctx,
+            &surface_texture,
+            &surface_view,
+        );
+
+        // After the fix the foreground CanvasLayer renders inside the filter's
+        // offscreen accumulator.  When the ImageFilterLayer closes, restore_layer
+        // finds non-empty offscreen content and emits exactly one DrawItem::Filter.
+        //
+        // Before the fix, the foreground CanvasLayer was culled by `is_occluded`
+        // (its bounds (400,0,400,600) ⊆ full-screen opaque rect (0,0,800,600)),
+        // leaving the filter layer empty → DrawItem::Filter was not emitted → 0.
+        let filter_op_count = backend.painter().filter_op_count_for_test();
+        assert_eq!(
+            filter_op_count, 1,
+            "OCR-1: the on-top ImageFilterLayer must produce exactly one DrawItem::Filter \
+             after rendering; got {filter_op_count}. Zero means the foreground CanvasLayer \
+             was culled by the unsound back-to-front occlusion check (or a regression \
+             reintroduced equivalent culling)."
         );
     }
 }

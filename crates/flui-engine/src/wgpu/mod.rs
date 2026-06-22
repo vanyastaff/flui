@@ -138,7 +138,6 @@ mod instancing;
 /// [`morphology::MorphologyPipeline`] owns the pipeline and bind-group layout.
 pub(crate) mod morphology;
 mod multi_draw;
-pub mod occlusion;
 mod offscreen;
 mod painter;
 pub mod path_cache;

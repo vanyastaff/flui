@@ -25,7 +25,6 @@ The relevant external APIs the crate consumes:
 | [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) `TexturePool` | `wgpu::TextureDescriptor`, `wgpu::TextureUsages` | Per-frame texture reuse for offscreen renders. Currently `Arc<Mutex<TexturePoolInner>>` -- Mythos friction; see [Outstanding refactors](#outstanding-refactors). |
 | [`src/wgpu/tessellator.rs`](src/wgpu/tessellator.rs) `Tessellator` | -- | Adapter over `lyon::tessellation::FillTessellator` + `StrokeTessellator`. |
 | [`src/wgpu/text.rs`](src/wgpu/text.rs) `TextRenderer` | -- | Adapter over `glyphon` (cosmic-text + glyph atlas + GPU sampling). |
-| [`src/wgpu/occlusion.rs`](src/wgpu/occlusion.rs) `OcclusionTracker` | -- | Per-frame opaque-region tracker. Pure CPU; no GPU API surface. |
 
 **Spec references:**
 - wgpu API: [wgpu.rs documentation](https://docs.rs/wgpu) (workspace 29.x; see [`Cargo.toml`](../../Cargo.toml) `[workspace.dependencies]`).
