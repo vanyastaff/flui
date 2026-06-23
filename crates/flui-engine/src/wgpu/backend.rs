@@ -81,7 +81,7 @@ fn build_gradient_stops(
 #[allow(missing_debug_implementations)]
 pub struct Backend<'frame> {
     painter: WgpuPainter,
-    offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
+    offscreen: Option<&'frame mut super::offscreen::OffscreenRenderer>,
     /// Cached offscreen painter reused across shader mask invocations.
     /// Lazily created on first use, resized when dimensions change.
     offscreen_painter: Option<WgpuPainter>,
@@ -153,7 +153,7 @@ impl<'frame> Backend<'frame> {
     /// Create a new Backend with the given painter and offscreen renderer.
     pub fn with_offscreen(
         painter: WgpuPainter,
-        offscreen: Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>,
+        offscreen: &'frame mut super::offscreen::OffscreenRenderer,
     ) -> Self {
         Self {
             painter,
@@ -185,11 +185,9 @@ impl<'frame> Backend<'frame> {
         self.surface_texture = Some(texture);
     }
 
-    /// Access the offscreen renderer (for shader mask, backdrop filter).
-    pub fn offscreen(
-        &self,
-    ) -> Option<&Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>> {
-        self.offscreen.as_ref()
+    /// Access the offscreen renderer mutably (for shader mask, backdrop filter).
+    pub fn offscreen_mut(&mut self) -> Option<&mut super::offscreen::OffscreenRenderer> {
+        self.offscreen.as_deref_mut()
     }
 
     /// Get a reference to the underlying painter.
@@ -204,7 +202,8 @@ impl<'frame> Backend<'frame> {
 
     /// Consume the renderer and return the underlying painter.
     ///
-    /// The offscreen `Arc` is dropped here; ref-counting keeps it alive in Renderer.
+    /// The borrowed offscreen reference is released here; `Renderer` retains
+    /// direct ownership of its `OffscreenRenderer`.
     ///
     /// Cycle 4 wave 5 E-13: flushes any active lazy-pop transform
     /// first so the returned painter is balanced -- callers reuse
@@ -650,7 +649,10 @@ impl CommandRenderer for Backend<'_> {
         self.flush_active_transform();
 
         // Try GPU shader mask pipeline
-        if let Some(offscreen_arc) = self.offscreen.clone() {
+        if self.offscreen.is_some() {
+            // SAFETY of subsequent `expect` calls: `is_some()` was true above; each
+            // `as_deref_mut()` is a separate sequential borrow that does not overlap
+            // with the painter borrows interleaved between them.
             // The live device-pixel ratio rides in the painter's current
             // transform: the `RenderView` root pushes `scale(dpr)` and the paint
             // walk accumulates it into the CTM. The `_transform` argument is
@@ -679,7 +681,10 @@ impl CommandRenderer for Backend<'_> {
 
             // Step 1: Get GPU resources from offscreen renderer
             let (device, queue, format, child_tex) = {
-                let offscreen = offscreen_arc.lock();
+                let offscreen = self
+                    .offscreen
+                    .as_deref_mut()
+                    .expect("checked is_some above");
                 let device = Arc::clone(offscreen.device());
                 let queue = Arc::clone(offscreen.queue());
                 let format = offscreen.surface_format();
@@ -688,7 +693,6 @@ impl CommandRenderer for Backend<'_> {
                     .acquire(dev_width, dev_height, format);
                 (device, queue, format, child_tex)
             };
-            // Lock released here
 
             // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
             // Ensure the cache is populated (creates or resizes as needed), then take
@@ -773,7 +777,10 @@ impl CommandRenderer for Backend<'_> {
             // gradient-endpoint normalization (scale-invariant) lands correctly.
             let result_size = Size::new(Pixels(dev_width as f32), Pixels(dev_height as f32));
             let masked_texture = {
-                let mut offscreen = offscreen_arc.lock();
+                let offscreen = self
+                    .offscreen
+                    .as_deref_mut()
+                    .expect("checked is_some above");
                 let result = offscreen.render_masked(
                     bounds,
                     result_size,
@@ -1071,13 +1078,13 @@ impl CommandRenderer for Backend<'_> {
             }
         };
 
-        let Some(offscreen_arc) = self.offscreen.clone() else {
+        if self.offscreen.is_none() {
             tracing::warn!(
                 "Backdrop filter: no OffscreenRenderer in DisplayList path; passthrough"
             );
             passthrough(self);
             return;
-        };
+        }
 
         let (Some(surface_view), Some(surface_texture)) = (self.surface_view, self.surface_texture)
         else {
@@ -1090,10 +1097,13 @@ impl CommandRenderer for Backend<'_> {
             return;
         };
 
-        // Snapshot device/queue/format under a short lock; offscreen
-        // mutation happens later through `render_blur`.
+        // Snapshot device/queue/format from offscreen; mutation happens later
+        // via separate sequential borrows for `texture_pool` and `render_blur`.
         let (device, queue, format) = {
-            let off = offscreen_arc.lock();
+            let off = self
+                .offscreen
+                .as_deref_mut()
+                .expect("checked is_some above");
             (
                 Arc::clone(off.device()),
                 Arc::clone(off.queue()),
@@ -1167,10 +1177,12 @@ impl CommandRenderer for Backend<'_> {
         // blur-input. Acquired from offscreen's texture pool so the
         // allocation amortises across frames (Path A acquires the
         // same way).
-        let blur_input = {
-            let offscreen = offscreen_arc.lock();
-            offscreen.texture_pool().acquire(w, h, format)
-        };
+        let blur_input = self
+            .offscreen
+            .as_deref_mut()
+            .expect("checked is_some above")
+            .texture_pool()
+            .acquire(w, h, format);
 
         flush_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
@@ -1194,10 +1206,11 @@ impl CommandRenderer for Backend<'_> {
         queue.submit(std::iter::once(flush_encoder.finish()));
 
         // Stage 4: Dual Kawase blur on the offscreen renderer.
-        let blurred = {
-            let mut offscreen = offscreen_arc.lock();
-            offscreen.render_blur(&blur_input, sigma)
-        };
+        let blurred = self
+            .offscreen
+            .as_deref_mut()
+            .expect("checked is_some above")
+            .render_blur(&blur_input, sigma);
 
         // Stage 5: queue blurred result for compositing on next painter
         // flush. The blurred texture is laid down at the same
@@ -1825,18 +1838,14 @@ mod tests {
 
         let format = wgpu::TextureFormat::Bgra8Unorm;
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // Simulate the `RenderView` DPR root transform on the live CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -1915,18 +1924,14 @@ mod tests {
 
         let format = wgpu::TextureFormat::Bgra8Unorm;
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // Simulate DPR=2 on the live CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -2025,18 +2030,14 @@ mod tests {
 
         let format = wgpu::TextureFormat::Bgra8Unorm;
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // Step 1: push the DPR root scale(2) into the main painter CTM — this
         // happens before any command dispatch in a real frame.
@@ -2136,18 +2137,14 @@ mod tests {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let bounds = Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(W as f32), Pixels(H as f32));
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (W, H),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // Build child display list:
         //   Step 1 — opaque blue rect (SrcOver): establishes child backdrop.
