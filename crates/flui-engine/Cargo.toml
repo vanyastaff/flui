@@ -112,6 +112,11 @@ criterion = { workspace = true }
 name = "render_throughput"
 harness = false
 
+[[bench]]
+name = "offscreen_resource_cache"
+harness = false
+required-features = ["enable-wgpu-tests"]
+
 [lints]
 workspace = true
 

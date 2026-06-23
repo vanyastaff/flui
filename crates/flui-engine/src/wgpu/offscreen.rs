@@ -18,6 +18,13 @@ use super::{
     texture_pool::{PooledTexture, TexturePool},
 };
 
+/// Maximum number of Dual Kawase blur iterations.
+///
+/// Matches the `.clamp(1, 5)` in `render_blur`; used to pre-allocate the
+/// reusable uniform buffer pool so `render_blur` never calls `create_buffer_init`
+/// inside its hot loop.
+const MAX_BLUR_ITERATIONS: usize = 5;
+
 /// Offscreen renderer for shader mask effects
 ///
 /// Manages the complete rendering pipeline for shader masks:
@@ -72,6 +79,36 @@ pub struct OffscreenRenderer {
     /// Fullscreen blit pipeline — lazily created when the intermediate-active
     /// present path is first used (COPY_SRC-less adapters, or forced in tests).
     blit_pipeline: Option<BlitPipeline>,
+
+    /// Shared linear sampler reused by `render_masked` and `render_blur`.
+    ///
+    /// Parameters: `ClampToEdge` × `Linear` — invariant across all calls.
+    /// Created once in the constructor; eliminates one `create_sampler` call
+    /// per `render_masked` invocation and one per `render_blur` invocation.
+    linear_sampler: wgpu::Sampler,
+
+    /// Fullscreen-quad vertex buffer shared by `render_masked` and `render_blur`.
+    ///
+    /// Contains 6 vertices (2 triangles) covering clip-space `[-1, 1]²`.
+    /// Created once in the constructor; eliminates one `create_buffer_init` per
+    /// `render_masked` invocation and one per `render_blur` invocation.
+    fullscreen_quad_vb: wgpu::Buffer,
+
+    /// Pre-allocated `BlurParams` uniform buffers — one slot per possible
+    /// Dual Kawase iteration (`MAX_BLUR_ITERATIONS = 5`).
+    ///
+    /// Both the downsample pass (iterations 0..N) and the upsample pass
+    /// (iterations N-1..0) index into this pool, so the pool needs
+    /// `MAX_BLUR_ITERATIONS` slots.  Each slot is updated with
+    /// `queue.write_buffer` before the pass that uses it, replacing the
+    /// previous `create_buffer_init` call that allocated a fresh GPU buffer
+    /// every iteration.
+    ///
+    /// Soundness: each buffer is written before it is used in the same
+    /// submission, and `queue.submit` is called once at the end of
+    /// `render_blur` — so a write at iteration `i` is always visible to the
+    /// draw call that references slot `i`.
+    blur_uniform_buffers: Vec<wgpu::Buffer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +151,9 @@ impl OffscreenRenderer {
     ) -> Self {
         let bind_group_layout = Self::create_bind_group_layout(&device);
         let blur_bind_group_layout = Self::create_blur_bind_group_layout(&device);
+        let linear_sampler = Self::create_linear_sampler(&device);
+        let fullscreen_quad_vb = Self::create_fullscreen_quad_vb(&device);
+        let blur_uniform_buffers = Self::create_blur_uniform_buffers(&device);
 
         Self {
             texture_pool: Arc::new(TexturePool::new(Arc::clone(&device))),
@@ -126,6 +166,9 @@ impl OffscreenRenderer {
             blur_bind_group_layout,
             blur_pipelines: None,
             blit_pipeline: None,
+            linear_sampler,
+            fullscreen_quad_vb,
+            blur_uniform_buffers,
         }
     }
 
@@ -139,6 +182,9 @@ impl OffscreenRenderer {
     ) -> Self {
         let bind_group_layout = Self::create_bind_group_layout(&device);
         let blur_bind_group_layout = Self::create_blur_bind_group_layout(&device);
+        let linear_sampler = Self::create_linear_sampler(&device);
+        let fullscreen_quad_vb = Self::create_fullscreen_quad_vb(&device);
+        let blur_uniform_buffers = Self::create_blur_uniform_buffers(&device);
 
         Self {
             texture_pool,
@@ -151,6 +197,9 @@ impl OffscreenRenderer {
             blur_bind_group_layout,
             blur_pipelines: None,
             blit_pipeline: None,
+            linear_sampler,
+            fullscreen_quad_vb,
+            blur_uniform_buffers,
         }
     }
 
@@ -195,6 +244,55 @@ impl OffscreenRenderer {
                 },
             ],
         })
+    }
+
+    /// Create the shared linear sampler used by `render_masked` and `render_blur`.
+    ///
+    /// Parameters are `ClampToEdge × Linear` — invariant across all calls.
+    fn create_linear_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Offscreen Linear Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        })
+    }
+
+    /// Create the shared fullscreen-quad vertex buffer.
+    ///
+    /// 6 vertices (2 triangles) covering clip-space `[-1, 1]²` — content
+    /// never changes, so it is allocated once and reused across all passes.
+    fn create_fullscreen_quad_vb(device: &wgpu::Device) -> wgpu::Buffer {
+        let vertices = FullscreenVertex::fullscreen_quad();
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Offscreen Fullscreen Quad VB"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    }
+
+    /// Pre-allocate `MAX_BLUR_ITERATIONS` reusable `BlurParams` uniform buffers.
+    ///
+    /// Each buffer is sized for one `BlurParams` struct and flagged
+    /// `UNIFORM | COPY_DST` so `queue.write_buffer` can update it in-place
+    /// before each pass.  This eliminates the per-iteration `create_buffer_init`
+    /// call inside `render_blur`.
+    fn create_blur_uniform_buffers(device: &wgpu::Device) -> Vec<wgpu::Buffer> {
+        let buf_size = std::mem::size_of::<BlurParams>() as u64;
+        (0..MAX_BLUR_ITERATIONS)
+            .map(|i| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("Blur Uniform Buffer {i}")),
+                    size: buf_size,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect()
     }
 
     /// Pre-compile all shaders (reduces first-use latency)
@@ -365,17 +463,8 @@ impl OffscreenRenderer {
         // Ensure pipeline exists (Arc allows using after mutable borrow ends)
         let _ = self.get_or_create_pipeline(shader_type);
 
-        // Create fullscreen quad vertex buffer
-        let vertices = FullscreenVertex::fullscreen_quad();
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Shader Mask Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        // Create uniform buffer with shader-specific data
+        // Reuse the cached fullscreen-quad vertex buffer (content is invariant).
+        // The uniform buffer is per-call (depends on child_bounds + shader type).
         let uniform_data = shader.to_mask_uniform_data(child_bounds);
         let uniform_buffer = self
             .device
@@ -388,19 +477,8 @@ impl OffscreenRenderer {
         // Create texture view for child content
         let child_view = child_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Create sampler
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Shader Mask Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-
-        // Create bind group
+        // Reuse the cached linear sampler (ClampToEdge × Linear — invariant).
+        // Create bind group (references per-call child_view + uniform_buffer).
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shader Mask Bind Group"),
             layout: &self.bind_group_layout,
@@ -411,7 +489,7 @@ impl OffscreenRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -458,7 +536,7 @@ impl OffscreenRenderer {
             // Set pipeline and bind group
             render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(0, &bind_group, &[]);
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(0, self.fullscreen_quad_vb.slice(..));
 
             // Draw fullscreen quad (6 vertices = 2 triangles)
             render_pass.draw(0..6, 0..1);
@@ -771,26 +849,8 @@ impl OffscreenRenderer {
             mip_chain.push(mip);
         }
 
-        // Create shared resources
-        let vertices = FullscreenVertex::fullscreen_quad();
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Blur Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Blur Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
+        // Reuse the cached fullscreen-quad VB and linear sampler — both are
+        // invariant across all blur iterations (same geometry, same filter params).
 
         let mut encoder = self
             .device
@@ -820,6 +880,10 @@ impl OffscreenRenderer {
         );
 
         // === Downsample passes ===
+        // Uniform buffer index `i` is written before it is consumed by the draw
+        // call at iteration `i`.  All writes and draws land in the same command
+        // buffer that is submitted once at the end of this method, so there is
+        // no hazard: the GPU processes the commands in order within a submission.
         for i in 0..iterations {
             let src_idx = i as usize;
             let dst_idx = (i + 1) as usize;
@@ -833,13 +897,12 @@ impl OffscreenRenderer {
                 _padding: 0.0,
             };
 
-            let uniform_buffer =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Blur Downsample Params"),
-                        contents: bytemuck::bytes_of(&params),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
+            // Update the pre-allocated uniform slot instead of allocating a new buffer.
+            self.queue.write_buffer(
+                &self.blur_uniform_buffers[src_idx],
+                0,
+                bytemuck::bytes_of(&params),
+            );
 
             let src_view = mip_chain[src_idx].view();
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -848,7 +911,7 @@ impl OffscreenRenderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: uniform_buffer.as_entire_binding(),
+                        resource: self.blur_uniform_buffers[src_idx].as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -856,7 +919,7 @@ impl OffscreenRenderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
+                        resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
                     },
                 ],
             });
@@ -882,33 +945,27 @@ impl OffscreenRenderer {
 
                 render_pass.set_pipeline(&downsample_pipeline);
                 render_pass.set_bind_group(0, &bind_group, &[]);
-                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(0, self.fullscreen_quad_vb.slice(..));
                 render_pass.draw(0..6, 0..1);
             }
         }
 
         // === Upsample passes ===
+        // Reuse the same pre-allocated uniform buffer slots (one per mip level).
+        // The downsample loop already updated slots 0..iterations-1; the upsample
+        // loop processes the same `src_idx` range in reverse with the same `params`
+        // values (same `texture_size` and `offset`), so we can re-read the buffers
+        // that were written during the downsample phase without overwriting them.
+        // This is safe because both phases use the same `src_w/src_h` calculation
+        // for a given `src_idx`, and `offset` is constant for the whole `render_blur`
+        // call.
         for i in (0..iterations).rev() {
             let src_idx = (i + 1) as usize;
             let dst_idx = i as usize;
 
-            let src_w = mip_chain[src_idx].width() as f32;
-            let src_h = mip_chain[src_idx].height() as f32;
-
-            let params = BlurParams {
-                texture_size: [src_w, src_h],
-                offset,
-                _padding: 0.0,
-            };
-
-            let uniform_buffer =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Blur Upsample Params"),
-                        contents: bytemuck::bytes_of(&params),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-
+            // The uniform slot for `src_idx` was already written during the
+            // downsample phase (same params: texture_size of mip[src_idx] +
+            // the same `offset`).  Re-use it directly — no write needed.
             let src_view = mip_chain[src_idx].view();
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Blur Upsample Bind Group"),
@@ -916,7 +973,7 @@ impl OffscreenRenderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: uniform_buffer.as_entire_binding(),
+                        resource: self.blur_uniform_buffers[src_idx].as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -924,7 +981,7 @@ impl OffscreenRenderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
+                        resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
                     },
                 ],
             });
@@ -950,7 +1007,7 @@ impl OffscreenRenderer {
 
                 render_pass.set_pipeline(&upsample_pipeline);
                 render_pass.set_bind_group(0, &bind_group, &[]);
-                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(0, self.fullscreen_quad_vb.slice(..));
                 render_pass.draw(0..6, 0..1);
             }
         }
