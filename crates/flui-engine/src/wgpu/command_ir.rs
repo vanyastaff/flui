@@ -584,6 +584,39 @@ impl DrawSegment {
     }
 }
 
+impl Default for DrawSegment {
+    /// Constructs a zero-capacity `DrawSegment`.
+    ///
+    /// Used by `std::mem::take` in `DrawBatcher::finish_current_segment` so
+    /// that sealing a segment does NOT trigger the `InstanceBatch::new(1024)`
+    /// allocation burst that `DrawSegment::new()` would cause — the slot is
+    /// left empty and its constituent `Vec`s grow lazily on first push.
+    fn default() -> Self {
+        Self {
+            rect_batch: InstanceBatch::new(0),
+            circle_batch: InstanceBatch::new(0),
+            arc_batch: InstanceBatch::new(0),
+            shadow_batch: InstanceBatch::new(0),
+            linear_gradient_batch: InstanceBatch::new(0),
+            radial_gradient_batch: InstanceBatch::new(0),
+            sweep_gradient_batch: InstanceBatch::new(0),
+            current_gradient_stops: Vec::new(),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            tess_batches: Vec::new(),
+            current_pipeline_key: None,
+            rect_scissors: Vec::new(),
+            circle_scissors: Vec::new(),
+            arc_scissors: Vec::new(),
+            linear_grad_scissors: Vec::new(),
+            radial_grad_scissors: Vec::new(),
+            sweep_grad_scissors: Vec::new(),
+            cached_images: Vec::new(),
+            external_images: Vec::new(),
+        }
+    }
+}
+
 // ─── Advanced-shape op ────────────────────────────────────────────────────────
 
 /// A single tessellated shape that requires a dst-read (advanced) blend.

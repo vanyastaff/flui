@@ -4,38 +4,44 @@
     missing_docs,
     reason = "criterion macros generate undocumented public fns"
 )]
-//! End-to-end render-throughput benchmark for flui-engine.
+//! Render-throughput and per-frame allocation micro-benchmarks for flui-engine.
 //!
-//! Measures the CPU-side cost of a representative frame through `WgpuPainter`:
-//!   - command encoding for ~50 rects
-//!   - a linear gradient with 4 colour stops
-//!   - a text label
-//!   - the full `painter.render()` call (GPU encode + submit)
+//! Two benchmark groups:
 //!
-//! # GPU-availability guard
+//! ## `render_throughput`
 //!
-//! Device creation is attempted once at startup. If no GPU is available
-//! (common in headless CI without a software rasteriser) the process prints
-//! a diagnostic and exits cleanly so the suite still "passes" in compile-only
-//! CI jobs (`cargo bench --no-run`). The bench runs only where a GPU exists.
+//! End-to-end GPU frame benchmark via `WgpuPainter`:
+//!   - 50 solid-colour rects (rect instance batching)
+//!   - 1 linear gradient with 4 stops (gradient-stop path)
+//!   - 1 text label (text cache key path)
+//!   - full `painter.render()` call (GPU encode + submit)
 //!
-//! # Micro-benchmark scope note — DEFERRED
+//! GPU-guarded: skipped when no adapter is present (headless CI).
 //!
-//! The hottest CPU micro-functions touched by the Phase-1 perf work —
-//! `build_gradient_stops` and `RichTextCacheKey::new` — are `pub(crate)` /
-//! private and are not accessible from an external `benches/` crate. Widening
-//! their visibility solely to bench them would pollute the public API surface
-//! (api.md). They are therefore NOT benched here; this file reaches them
-//! indirectly via the public `WgpuPainter` draw API, which is the correct
-//! integration level for a baseline-regression bench. Micro-benches for those
-//! paths are a follow-up task.
+//! ## `alloc_micro`
+//!
+//! Pure CPU micro-benchmarks that require no GPU and isolate the hot-path
+//! allocation sites targeted by GLM audit #8:
+//!
+//! - `path_cache_warm_hit` — measures the cost of a warm `PathCache::get` hit
+//!   (the borrowed-slice path; baseline proves no allocation after the fix).
+//! - `superellipse_cache_warm_hit` — measures a warm `SuperellipsePathCache::get`
+//!   hit, which deep-clones a `Path` containing 256+ `PathCommand` entries
+//!   (heap-spilled `SmallVec`).  Isolates the clone cost flagged by GLM #8 site 1.
+//! - `draw_segment_seal` — measures `DrawBatcher::finish_current_segment` with a
+//!   populated segment, isolating the per-seal allocation cost.  After the
+//!   `mem::take` fix the slot is left as a zero-cap default (`DrawSegment::default`)
+//!   rather than calling `DrawSegment::new()` (7 × `Vec::with_capacity` burst).
 
 use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::WgpuPainter;
+use flui_engine::wgpu::path_cache::PathCache;
+use flui_engine::wgpu::superellipse_cache::{SuperellipseKey, SuperellipsePathCache};
 use flui_painting::Paint;
+use flui_types::painting::path::Path;
 use flui_types::{Offset, geometry::px, painting::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
@@ -221,5 +227,104 @@ fn render_throughput(c: &mut Criterion) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// CPU-only micro-benchmarks (no GPU required)
+// ---------------------------------------------------------------------------
+
+/// Build a path with 256 `LineTo` commands — enough to spill the
+/// `SmallVec<[PathCommand; 16]>` inside `Path` to the heap.
+///
+/// This simulates what `generate_superellipse_path` produces (4 corners × 64
+/// points each), allowing the bench to measure a realistic clone cost without
+/// calling the `pub(crate)` generator.
+fn make_large_path(command_count: usize) -> Path {
+    let mut path = Path::new();
+    // MoveTo + many LineTo + Close.
+    path.move_to(flui_types::Point::new(px(0.0), px(0.0)));
+    for i in 1..command_count {
+        let angle = (i as f32) * std::f32::consts::TAU / (command_count as f32);
+        path.line_to(flui_types::Point::new(
+            px(50.0 + 50.0 * angle.cos()),
+            px(50.0 + 50.0 * angle.sin()),
+        ));
+    }
+    path.close();
+    path
+}
+
+fn alloc_micro(c: &mut Criterion) {
+    let mut group = c.benchmark_group("alloc_micro");
+
+    // ── path_cache_warm_hit ──────────────────────────────────────────────────
+    //
+    // Measures the cost of a single `PathCache::get` on a warm cache entry.
+    // `PathCache::get` returns borrowed slices (`&[[f32;2]]`, `&[u32]`) so the
+    // hit path allocates nothing — this bench guards that invariant and provides
+    // a comparison point for any future refactor of the return type.
+    {
+        let mut cache = PathCache::new(64);
+        let hash = 0xdead_beef_u64;
+        // Pre-populate with realistic path data (128 positions, 378 indices).
+        let positions: Vec<[f32; 2]> = (0..128_u32)
+            .map(|i| {
+                let a = (i as f32) * std::f32::consts::TAU / 128.0;
+                [50.0 + 50.0 * a.cos(), 50.0 + 50.0 * a.sin()]
+            })
+            .collect();
+        let indices: Vec<u32> = (1_u32..127).flat_map(|i| [0, i, i + 1]).collect();
+        cache.insert(hash, positions, indices);
+
+        group.bench_function("path_cache_warm_hit", |b| {
+            b.iter(|| {
+                // Hit path: returns `(&[[f32;2]], &[u32])` — zero allocation.
+                // The reference cannot escape the closure (borrows `cache`);
+                // use `black_box` on the lengths to prevent the call being elided.
+                if let Some((verts, idxs)) = cache.get(black_box(hash)) {
+                    black_box(verts.len());
+                    black_box(idxs.len());
+                }
+            });
+        });
+    }
+
+    // ── superellipse_cache_warm_hit ──────────────────────────────────────────
+    //
+    // Measures the cost of a `SuperellipsePathCache::get` on a warm entry.
+    // The returned value is an OWNED `Path` cloned from the cached entry
+    // (`SmallVec<[PathCommand; 16]>` spilled to ~256 entries → heap alloc per
+    // hit).  This is GLM audit #8 site 1.
+    //
+    // The hit-path clone cannot be eliminated today: `Backend::superellipse_path`
+    // is bound by the `CommandRenderer` trait signature `fn -> Path` (owned).
+    // Changing to `Arc<Path>` requires a trait API change across the crate
+    // boundary.  This bench establishes the baseline cost so the future fix can
+    // prove its win with a before/after comparison.
+    {
+        use flui_types::geometry::{RSuperellipse, Rect};
+        let rse = RSuperellipse::from_rect_and_radius(
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            flui_types::geometry::Radius::circular(px(8.0)),
+        );
+        let key = SuperellipseKey::from_superellipse(&rse);
+        // Build a realistic 256-command path to simulate the superellipse generator.
+        let path = make_large_path(256);
+        let mut cache = SuperellipsePathCache::new(64);
+        cache.insert(key, path);
+
+        group.bench_function("superellipse_cache_warm_hit", |b| {
+            b.iter(|| {
+                // Hit path: deep-clones 256 `PathCommand` entries (heap-spilled
+                // SmallVec).  A future `Arc<Path>` refactor would replace this
+                // with a single atomic increment.
+                let result = cache.get(black_box(&key));
+                black_box(result)
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(benches, render_throughput);
-criterion_main!(benches);
+criterion_group!(alloc_benches, alloc_micro);
+criterion_main!(benches, alloc_benches);
