@@ -331,4 +331,13 @@ pub use font_loader::FontLoader;
 // can store/display profiling results without gating on `gpu-profiler`.
 pub use profiler::{GpuFrameProfile, PassTiming};
 
+// Offscreen renderer + texture pool — re-exported ONLY under the
+// `enable-wgpu-tests` feature for the `offscreen_resource_cache` criterion bench.
+// These are internal GPU types and are NOT part of the public API; consumers use
+// `Renderer` / `WgpuPainter`. Gated so benching does not widen the public surface.
+#[cfg(feature = "enable-wgpu-tests")]
+pub use offscreen::OffscreenRenderer;
+#[cfg(feature = "enable-wgpu-tests")]
+pub use texture_pool::{PooledTexture, TexturePool};
+
 // Painter (WgpuPainter is the concrete implementation; Painter trait deleted in Mythos U5)
