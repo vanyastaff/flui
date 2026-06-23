@@ -129,13 +129,19 @@ arboard = "3.4"
 # TODO: Re-enable "webp" feature when image-rs/image-webp#102 is fixed upstream
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
+# === Engine/geometry shared math dependencies ===
+# glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
+# flui-geometry (bytemuck+mint features). The workspace entry carries the common
+# base features; each crate adds its own extras via per-crate `features = [...]`.
+glam = { version = "0.33", features = ["bytemuck"] }
+# bytemuck: zero-copy Pod/Zeroable derives shared by flui-engine and flui-geometry.
+bytemuck = { version = "1.24", features = ["derive"] }
+
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
-# - glam (GPU math)
 # - glyphon, cosmic-text (text rendering)
 # - lyon (tessellation)
 # - guillotiere (texture atlas)
-# - bytemuck
 
 # CACHING - Used by flui_core and flui-assets
 moka = { version = "0.12", features = ["future"] }

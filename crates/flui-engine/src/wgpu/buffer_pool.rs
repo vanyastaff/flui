@@ -219,7 +219,10 @@ impl BufferPool {
     /// - The two Vec fields are disjoint memory regions
     /// - The statistics counters are simple increment-only values
     /// - No reallocation of `vertex_buffers` occurs during the index buffer call
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "disjoint-field &mut borrow of vertex+index buffers via raw pointers; see SAFETY note"
+    )]
     pub fn get_vertex_and_index_buffers(
         &mut self,
         device: &Device,

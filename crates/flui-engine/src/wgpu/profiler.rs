@@ -41,6 +41,7 @@ use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 ///
 /// Mapped from `wgpu_profiler::GpuTimerQueryResult`; stored in [`GpuFrameProfile`]
 /// after each completed frame. All times are in milliseconds.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassTiming {
     /// Human-readable label matching the scope label passed to the profiler.
@@ -61,6 +62,7 @@ pub struct PassTiming {
 /// `gpu-profiler` feature) when a frame's queries have resolved. `None` means
 /// no frame has completed yet (the profiler needs `max_num_pending_frames`
 /// frames to warm up).
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct GpuFrameProfile {
     /// Per-pass timing records, in submission order.

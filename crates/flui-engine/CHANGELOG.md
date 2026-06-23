@@ -79,6 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`raw-window-handle` `std` feature enabled** in `crates/flui-engine/Cargo.toml` so
   `HandleError` impls `std::error::Error` (the impl is `#[cfg(feature = "std")]` in
   raw-window-handle 0.6.2), allowing direct boxing into `SurfaceCreation`.
+- **Hygiene:** `glam`/`bytemuck` pinned once in `[workspace.dependencies]`;
+  `GpuFrameProfile`/`PassTiming` are `#[non_exhaustive]` (future telemetry fields stay
+  additive); `wgpu-profiler` `compile_error!`-guarded on wasm32; `docs.rs` all-features
+  metadata + `readme`; `#[allow(unsafe_code)]` → `#[expect(…)]` in `buffer_pool`.
 
 ### Removed
 
