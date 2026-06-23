@@ -1204,14 +1204,14 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 19 (engine overhaul T9f; extended to replay.rs in T10e) —
+# Trigger 19 (engine overhaul T9f; extended to the replay/ submodules in T10e) —
 # `Matrix4` in the DrawBatcher record side, `PipelineCache`/`PipelineBuilder`
 # (record/pipeline modules), or `GpuReplay` (replay/submit module).
 #
 # C4 rule: `Matrix4`↔glam conversions must happen at the `Backend` trait
 # boundary (crates/flui-engine/src/wgpu/backend.rs). The hot record path
 # (`batches/`), the pipeline-cache module (`pipelines.rs`), and the
-# replay/submit module (`replay.rs`) must be glam-only; importing or
+# replay/submit module (`replay/`) must be glam-only; importing or
 # accepting `Matrix4` in any of these leaks the flui-types coordinate type
 # into the GPU plumbing layer and breaks the seam contract established in
 # the engine overhaul spec (T9/T10 split). The replay side must stay
@@ -1225,19 +1225,19 @@ fi
 trigger19_hits=$(rg --line-number --column '\bMatrix4\b' \
     crates/flui-engine/src/wgpu/batches \
     crates/flui-engine/src/wgpu/pipelines.rs \
-    crates/flui-engine/src/wgpu/replay.rs 2>/dev/null \
+    crates/flui-engine/src/wgpu/replay 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   || true)
 
 if [[ -n "${trigger19_hits}" ]]; then
-  echo 'VIOLATION 19: Matrix4 in batches/, pipelines.rs, or replay.rs (record/pipeline/replay side must be glam-only; convert at the trait boundary)'
+  echo 'VIOLATION 19: Matrix4 in batches/, pipelines.rs, or replay/ (record/pipeline/replay side must be glam-only; convert at the trait boundary)'
   echo "see ${trigger_doc} (trigger 19)"
   echo "${trigger19_hits}"
   echo ""
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    19: no Matrix4 in batches/, pipelines.rs, or replay.rs"
+    echo "ok    19: no Matrix4 in batches/, pipelines.rs, or replay/"
   fi
 fi
 

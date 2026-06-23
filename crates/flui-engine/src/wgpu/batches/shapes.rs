@@ -25,7 +25,7 @@ impl DrawBatcher {
     /// Record a filled rectangle or a stroked rectangle.
     //
     // Visibility note: `pub(in super::super)` makes these methods visible to the
-    // `wgpu` module (the grandparent), which is where `painter.rs` lives.  The
+    // `wgpu` module (the grandparent), which is where `painter` lives.  The
     // original `batches.rs` used `pub(super)` because its `super` was `wgpu`
     // directly; after the file→directory split the child files are one level
     // deeper, so `pub(in super::super)` preserves the identical access scope.

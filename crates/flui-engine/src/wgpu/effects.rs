@@ -294,7 +294,7 @@ impl ShadowParams {
 
     // `elevation_1` ... `elevation_5` constructor shortcuts were deleted in
     // cycle 4 E-4 — they had zero non-test consumers across the workspace
-    // (the only docstring reference at `painter.rs:3938` was migrated to
+    // (the only docstring reference was migrated to
     // `ShadowParams::new(...)` literal-construction in the same commit).
     // The Material Design elevation curves they encoded were a higher-level
     // theming concern that does not belong inside the GPU instancing crate;
@@ -431,7 +431,7 @@ mod tests {
     // `LinearGradientBuilder`, `ShadowParams::elevation_*`, and
     // `BlurIntensity` items they exercised. The remaining `GradientStop`
     // smoke test covers the only public API in this module that has live
-    // consumers (`painter.rs`'s instanced-gradient pipeline).
+    // consumers (`painter`'s instanced-gradient pipeline).
 }
 
 /// CPU-only tests for `kernel_radius`. These run in CI without a GPU.

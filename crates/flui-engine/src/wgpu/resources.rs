@@ -26,7 +26,7 @@
 //! takes `&mut` references to two sub-fields simultaneously; callers reach each
 //! pool via its independent accessor. The one call site that accesses both
 //! `texture_cache` and `buffer_pool` in sequence (`flush_segment_cached_images`
-//! in `painter.rs`) borrows them sequentially — `texture_cache.get()` returns a
+//! in `painter`) borrows them sequentially — `texture_cache.get()` returns a
 //! cloned view before `flush_texture_batch` (which uses `buffer_pool`) is
 //! called — so no `&mut` aliasing issue arises at the call site.
 

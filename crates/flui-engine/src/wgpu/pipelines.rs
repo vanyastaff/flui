@@ -158,7 +158,7 @@ pub(crate) struct PipelineSet {
 
     // ── Advanced-blend composite pipeline ────────────────────────────────────
     /// Backdrop-read advanced-blend pipeline used by `flush_opacity_layer`
-    /// (via `flush_advanced_layer` in replay.rs) when a `PendingOpacityLayer`
+    /// (via `flush_advanced_layer` in replay) when a `PendingOpacityLayer`
     /// carries an advanced (non-Porter-Duff) blend mode.
     ///
     /// Format-matched to `surface_format` at construction time; shared across

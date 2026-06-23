@@ -1,6 +1,6 @@
 //! WGSL shader source bindings for the wgpu backend.
 //!
-//! Only shaders consumed by `painter.rs` via `wgpu::ShaderSource::Wgsl(super::
+//! Only shaders consumed by `painter` via `wgpu::ShaderSource::Wgsl(super::
 //! shaders::*.into())` are exposed as `pub const` aliases here. Other shader
 //! files (`masks/*.wgsl`, `effects/*.wgsl`, `gradients/*.wgsl`, `common/*.wgsl`)
 //! are loaded directly via `include_str!("shaders/...")` from their consumers
