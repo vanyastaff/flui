@@ -1047,8 +1047,6 @@ impl Renderer {
     /// mid-frame flush: painter batches are submitted early so the surface
     /// texture can be copied, blurred, and composited before continuing.
     pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), EngineError> {
-        use super::backend::Backend;
-
         // Fine-grained damage tracking is the caller's responsibility: the
         // application layer calls `mark_dirty()` / `mark_full_repaint()` after
         // input events or state changes. When flui-view is wired up, widgets
@@ -1075,79 +1073,19 @@ impl Renderer {
             return Ok(());
         }
 
-        let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
-
-        // wgpu 28+: get_current_texture() returns CurrentSurfaceTexture enum
-        // instead of Result<SurfaceTexture, SurfaceError>.
-
-        // Check for device-lost flag (set by the device-lost callback) before
-        // attempting to acquire a surface texture. If the device is gone, we
-        // cannot proceed with the current device — return an error that the
-        // caller can handle by recreating the renderer.
-        if self.device_lost.load(std::sync::atomic::Ordering::Acquire) {
-            tracing::warn!("Device lost detected; returning DeviceLost error");
-            return Err(EngineError::DeviceLost);
-        }
-
-        let output = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                // Suboptimal is still renderable; schedule a reconfigure next frame.
-                tracing::debug!("Surface suboptimal; will reconfigure on next resize");
-                frame
-            }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                // Auto-reconfigure and retry once.
-                self.reconfigure_surface()?;
-                let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
-                match surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(frame)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-                    _ => return Err(EngineError::SurfaceLost),
-                }
-            }
-            wgpu::CurrentSurfaceTexture::Timeout => return Err(EngineError::Timeout),
-            wgpu::CurrentSurfaceTexture::Occluded => {
-                // Window is minimized or fully occluded — skip this frame
-                // entirely rather than producing garbage frames.
-                tracing::trace!("Surface occluded; skipping frame");
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                // Validation error — the surface texture could not be produced
-                // due to a validation failure (surface misconfig: incompatible
-                // format/usage/present mode). This is NOT a recoverable
-                // SurfaceLost: retrying `get_current_texture` without
-                // reconfiguring loops forever. Log and surface a distinct
-                // non-recoverable error so the caller drops the frame and
-                // reconfigures on the next pass.
-                tracing::error!("Surface texture validation error");
-                return Err(EngineError::SurfaceValidation);
-            }
+        // Acquire the swapchain texture; returns None when the frame should be
+        // skipped (Occluded), or Err for unrecoverable surface states.
+        let Some(output) = self.acquire_surface_texture()? else {
+            return Ok(());
         };
 
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Observability: the acquired swapchain texture must match the configured
-        // surface size, which is the size the geometry was laid out / the viewport
-        // uniform was written against. A divergence means a resize landed between
-        // `surface.configure` and `get_current_texture` (or the OS handed back a
-        // stale backbuffer) — the frame would then be presented stretched, which
-        // reads as resize "jitter". Warn (don't spam): only when they actually differ.
-        if let Some(config) = self.config.as_ref() {
-            let attachment = (output.texture.width(), output.texture.height());
-            let configured = (config.width, config.height);
-            if attachment != configured {
-                tracing::warn!(
-                    ?attachment,
-                    ?configured,
-                    "render_scene: swapchain texture size != configured surface size \
-                     (resize transient — frame will present stretched)"
-                );
-            }
-        }
+        // Observability: warn when the swapchain texture diverges from the
+        // configured surface size (resize transient → stretched frame).
+        self.warn_on_size_mismatch(&output.texture);
 
         // Determine whether this frame should go through the intermediate-texture
         // path (COPY_SRC-less adapters, or forced in tests).
@@ -1213,62 +1151,7 @@ impl Renderer {
 
         // 1. Clear pass — submit immediately so the render target is ready for
         //    mid-frame copy operations (backdrop blur needs pixels on the target).
-        {
-            let mut clear_encoder =
-                self.device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("FLUI Clear Encoder"),
-                    });
-            // Hoist the color attachments array before the #[cfg] split so both
-            // the profiled and non-profiled paths share one definition. The descriptor
-            // borrows `render_view`, so the array binding must live at the same scope level.
-            let clear_color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: render_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                    store: wgpu::StoreOp::Store,
-                },
-            })];
-            let clear_pass_desc = wgpu::RenderPassDescriptor {
-                label: Some("FLUI Clear Pass"),
-                color_attachments: &clear_color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            };
-            // Profiler scope wraps the clear render pass. The scope borrows
-            // `clear_encoder` exclusively; we access the encoder through
-            // `scope.recorder` so the pass sees the same underlying encoder.
-            // Scope drops at end of block → end_query fires → resolve_queries
-            // copies the result → encoder finishes and is submitted.
-            #[cfg(feature = "gpu-profiler")]
-            if let Some(profiler) = self.gpu_profiler.as_ref() {
-                let mut scope = profiler.scope("clear", &mut clear_encoder);
-                {
-                    let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
-                }
-                // scope drops here → end_query fires
-            } else {
-                // Feature compiled but no capable adapter (gpu_profiler is None):
-                // fall back to the unprofiled clear pass so the surface is still
-                // cleared. Branching on the Option, not just the Cargo feature, is
-                // what makes the documented "graceful no-op" actually graceful.
-                let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
-            }
-            #[cfg(not(feature = "gpu-profiler"))]
-            {
-                let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
-            }
-            // Resolve query results into the GPU buffer before finishing the encoder.
-            #[cfg(feature = "gpu-profiler")]
-            if let Some(profiler) = self.gpu_profiler.as_mut() {
-                profiler.resolve_queries(&mut clear_encoder);
-            }
-            self.queue.submit(std::iter::once(clear_encoder.finish()));
-        }
+        self.run_clear_pass(render_view);
 
         // 2. Build render context for backdrop filter support.
         //    `surface_format` was already computed above when selecting the
@@ -1282,155 +1165,7 @@ impl Renderer {
         };
 
         // 3. Render scene content via LayerTree traversal
-        if scene.has_content()
-            && let Some(mut painter) = self.painter.take()
-        {
-            let mut backend = if let Some(ref mut offscreen) = self.offscreen {
-                Backend::with_offscreen(&mut painter, offscreen)
-            } else {
-                Backend::new(&mut painter)
-            };
-            // Cycle 4 U-8: bind the frame render target so the
-            // DisplayList-level `render_backdrop_filter` path (U-9)
-            // can flush + blur the same target the layer-level path uses.
-            // When intermediate-active, `render_view`/`render_texture` point
-            // at the intermediate; otherwise they point at the swapchain.
-            // Without this bind, that command path falls back to passthrough
-            // — a visible regression vs Flutter.
-            backend.bind_surface(render_view, render_texture);
-
-            // Reset per-frame clip/transform/opacity/layer state so that
-            // partial-damage scissors from frame N cannot leak into frame N+1.
-            // This must happen BEFORE the damage clip_rect below.
-            backend.painter_mut().reset_frame_state();
-
-            // Apply damage rect as scissor optimization: when only part of the
-            // screen changed, limit GPU work to the damaged region.
-            // `damage_rect()` returns `None` for full repaint (no scissor needed),
-            // `Some(rect)` for partial damage.
-            //
-            // We capture `partial_damage` separately: after `render_layer_recursive`
-            // populates `draw_order`, we check whether any advanced shape (or SSAA
-            // path with an advanced blend) straddles the damage edge.  If so, we
-            // schedule a full repaint next frame to self-heal stale pixels outside
-            // the damage rect that `flush_advanced_layer` may have written.
-            let partial_damage = self
-                .damage_tracker
-                .damage_rect()
-                .filter(|r| r.width().0 > 0.0 && r.height().0 > 0.0);
-            if let Some(damage) = partial_damage {
-                backend.painter_mut().clip_rect(damage);
-                tracing::trace!(
-                    left = damage.left().0,
-                    top = damage.top().0,
-                    width = damage.width().0,
-                    height = damage.height().0,
-                    "Damage scissor applied"
-                );
-            }
-
-            // Depth-first traversal of layer tree.
-            // `render_texture`/`render_view` point at the intermediate when
-            // intermediate-active, or directly at the swapchain otherwise.
-            // Backdrop-filter and advanced-blend passes read from
-            // `render_texture`, which always has COPY_SRC in this context.
-            if let Some(root_id) = scene.root() {
-                Self::render_layer_recursive(
-                    scene.layer_tree(),
-                    root_id,
-                    &mut backend,
-                    &ctx,
-                    render_texture,
-                    render_view,
-                );
-            }
-
-            // Damage-straddle self-healing: if a partial scissor was applied AND
-            // `draw_order` now contains an advanced shape whose `device_bounds`
-            // straddle the damage edge, schedule a full repaint for the next frame.
-            //
-            // Why next-frame and not this-frame: `render_layer_recursive` has
-            // already populated the draw commands with the scissored geometry; a
-            // this-frame re-record would require replaying the entire scene graph.
-            // Partial damage is currently unused (callers use `mark_full_repaint`),
-            // so the transient stale pixel is unobservable.  A precomputed Scene
-            // bit or a re-record is the future upgrade path if partial damage
-            // becomes a hot path.
-            if let Some(damage) = partial_damage
-                && backend.painter().has_advanced_shape_straddling(damage)
-            {
-                self.force_full_repaint_next_frame = true;
-                tracing::debug!(
-                    left = damage.left().0,
-                    top = damage.top().0,
-                    width = damage.width().0,
-                    height = damage.height().0,
-                    "Advanced shape straddles partial damage; \
-                     scheduling full repaint next frame"
-                );
-            }
-
-            // 5. Final flush — submit remaining painter batches.
-            // Drop the Backend first: Drop calls flush_active_transform(), which
-            // balances any deferred lazy-coalescing save left by `with_transform`.
-            // Once `backend` is dropped the exclusive borrow on `painter` ends, so
-            // `painter` is directly accessible for the render and maintenance calls.
-            drop(backend);
-            let mut final_encoder =
-                self.device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("FLUI Final Render Encoder"),
-                    });
-            // Profiler scope wraps painter.render. The scope borrows
-            // `final_encoder` exclusively; we pass `scope.recorder` so
-            // painter.render writes into the same underlying encoder.
-            // Scope drops at end of block → end_query fires → resolve_queries
-            // copies the result → encoder finishes and is submitted.
-            // Branch on the Option (runtime), not just the Cargo feature
-            // (compile-time): when the feature is compiled but `gpu_profiler` is
-            // None (incapable adapter), the render must STILL run — otherwise the
-            // frame presents only the clear pass (blank content). This is the
-            // documented graceful no-op.
-            // The render target is always sampleable in this frame:
-            //   - Common path (supports_copy_src=true, intermediate_active=false):
-            //     `render_texture` = `output.texture` which has COPY_SRC.
-            //   - Intermediate path (intermediate_active=true):
-            //     `render_texture` = intermediate which has COPY_SRC|COPY_DST.
-            // Both cases satisfy the dst-read contract required by advanced blend
-            // and backdrop-filter.  The `view_only` fallback in `flush_opacity_layer`
-            // is only reached from benches/tests that construct a bare TextureView
-            // without a backing texture — see the reshaped fallback comments there.
-            let frame_target =
-                super::render_target::RenderTarget::sampleable(render_view, render_texture);
-            #[cfg(feature = "gpu-profiler")]
-            let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
-                let mut scope = profiler.scope("final_render", &mut final_encoder);
-                painter.render(frame_target, scope.recorder())
-                // scope drops here → end_query fires
-            } else {
-                painter.render(frame_target, &mut final_encoder)
-            };
-            #[cfg(not(feature = "gpu-profiler"))]
-            let render_result = painter.render(frame_target, &mut final_encoder);
-            if let Err(e) = render_result {
-                tracing::error!("Painter render failed: {}", e);
-            }
-            // Resolve before finishing the encoder.
-            #[cfg(feature = "gpu-profiler")]
-            if let Some(profiler) = self.gpu_profiler.as_mut() {
-                profiler.resolve_queries(&mut final_encoder);
-            }
-            self.queue.submit(std::iter::once(final_encoder.finish()));
-
-            // Frame boundary: run texture-cache maintenance ONCE, after the
-            // final flush. `painter.render` runs per-pass (backdrop-filter
-            // flushes call it mid-frame), so maintenance lives here — not inside
-            // `render` — to avoid resetting use-counters between passes.
-            painter.end_frame_maintenance();
-
-            // Return painter to Renderer for reuse
-            self.painter = Some(painter);
-        }
+        self.render_scene_content(scene, render_view, render_texture, &ctx);
 
         // If the intermediate path was active, blit the fully-rendered
         // intermediate onto the real swapchain surface now.  This is the only
@@ -1464,6 +1199,308 @@ impl Renderer {
         self.damage_tracker.reset();
 
         Ok(())
+    }
+
+    /// Acquire the current swapchain texture, handling device-lost and all
+    /// `CurrentSurfaceTexture` variants with a single retry on Outdated/Lost.
+    ///
+    /// Returns `Ok(None)` when the frame should be silently skipped (Occluded).
+    fn acquire_surface_texture(&mut self) -> Result<Option<wgpu::SurfaceTexture>, EngineError> {
+        // Check for device-lost flag (set by the device-lost callback) before
+        // attempting to acquire a surface texture. If the device is gone, we
+        // cannot proceed with the current device — return an error that the
+        // caller can handle by recreating the renderer.
+        if self.device_lost.load(std::sync::atomic::Ordering::Acquire) {
+            tracing::warn!("Device lost detected; returning DeviceLost error");
+            return Err(EngineError::DeviceLost);
+        }
+
+        // wgpu 28+: get_current_texture() returns CurrentSurfaceTexture enum
+        // instead of Result<SurfaceTexture, SurfaceError>.
+        let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
+        match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) => Ok(Some(frame)),
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                // Suboptimal is still renderable; schedule a reconfigure next frame.
+                tracing::debug!("Surface suboptimal; will reconfigure on next resize");
+                Ok(Some(frame))
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                // Auto-reconfigure and retry once.
+                self.reconfigure_surface()?;
+                let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
+                match surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(Some(frame)),
+                    _ => Err(EngineError::SurfaceLost),
+                }
+            }
+            wgpu::CurrentSurfaceTexture::Timeout => Err(EngineError::Timeout),
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                // Window is minimized or fully occluded — skip this frame
+                // entirely rather than producing garbage frames.
+                tracing::trace!("Surface occluded; skipping frame");
+                Ok(None)
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                // Validation error — the surface texture could not be produced
+                // due to a validation failure (surface misconfig: incompatible
+                // format/usage/present mode). This is NOT a recoverable
+                // SurfaceLost: retrying `get_current_texture` without
+                // reconfiguring loops forever. Log and surface a distinct
+                // non-recoverable error so the caller drops the frame and
+                // reconfigures on the next pass.
+                tracing::error!("Surface texture validation error");
+                Err(EngineError::SurfaceValidation)
+            }
+        }
+    }
+
+    /// Warn when the acquired swapchain texture dimensions differ from the
+    /// configured surface size, indicating a resize transient.
+    fn warn_on_size_mismatch(&self, output_texture: &wgpu::Texture) {
+        // Observability: the acquired swapchain texture must match the configured
+        // surface size, which is the size the geometry was laid out / the viewport
+        // uniform was written against. A divergence means a resize landed between
+        // `surface.configure` and `get_current_texture` (or the OS handed back a
+        // stale backbuffer) — the frame would then be presented stretched, which
+        // reads as resize "jitter". Warn (don't spam): only when they actually differ.
+        if let Some(config) = self.config.as_ref() {
+            let attachment = (output_texture.width(), output_texture.height());
+            let configured = (config.width, config.height);
+            if attachment != configured {
+                tracing::warn!(
+                    ?attachment,
+                    ?configured,
+                    "render_scene: swapchain texture size != configured surface size \
+                     (resize transient — frame will present stretched)"
+                );
+            }
+        }
+    }
+
+    /// Submit the clear render pass, cleaning the render target before scene
+    /// traversal so backdrop-blur mid-frame copies see a cleared surface.
+    fn run_clear_pass(&mut self, render_view: &wgpu::TextureView) {
+        let mut clear_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("FLUI Clear Encoder"),
+                });
+        // Hoist the color attachments array before the #[cfg] split so both
+        // the profiled and non-profiled paths share one definition. The descriptor
+        // borrows `render_view`, so the array binding must live at the same scope level.
+        let clear_color_attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: render_view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let clear_pass_desc = wgpu::RenderPassDescriptor {
+            label: Some("FLUI Clear Pass"),
+            color_attachments: &clear_color_attachments,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        };
+        // Profiler scope wraps the clear render pass. The scope borrows
+        // `clear_encoder` exclusively; we access the encoder through
+        // `scope.recorder` so the pass sees the same underlying encoder.
+        // Scope drops at end of block → end_query fires → resolve_queries
+        // copies the result → encoder finishes and is submitted.
+        #[cfg(feature = "gpu-profiler")]
+        if let Some(profiler) = self.gpu_profiler.as_ref() {
+            let mut scope = profiler.scope("clear", &mut clear_encoder);
+            {
+                let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
+            }
+            // scope drops here → end_query fires
+        } else {
+            // Feature compiled but no capable adapter (gpu_profiler is None):
+            // fall back to the unprofiled clear pass so the surface is still
+            // cleared. Branching on the Option, not just the Cargo feature, is
+            // what makes the documented "graceful no-op" actually graceful.
+            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+        }
+        #[cfg(not(feature = "gpu-profiler"))]
+        {
+            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+        }
+        // Resolve query results into the GPU buffer before finishing the encoder.
+        #[cfg(feature = "gpu-profiler")]
+        if let Some(profiler) = self.gpu_profiler.as_mut() {
+            profiler.resolve_queries(&mut clear_encoder);
+        }
+        self.queue.submit(std::iter::once(clear_encoder.finish()));
+    }
+
+    /// Traverse the scene's layer tree and flush all painter batches to the GPU,
+    /// including the damage-straddle self-heal check and final encoder submission.
+    fn render_scene_content(
+        &mut self,
+        scene: &flui_layer::Scene,
+        render_view: &wgpu::TextureView,
+        render_texture: &wgpu::Texture,
+        ctx: &RenderContext,
+    ) {
+        use super::backend::Backend;
+
+        if !scene.has_content() {
+            return;
+        }
+        let Some(mut painter) = self.painter.take() else {
+            return;
+        };
+
+        let mut backend = if let Some(ref mut offscreen) = self.offscreen {
+            Backend::with_offscreen(&mut painter, offscreen)
+        } else {
+            Backend::new(&mut painter)
+        };
+        // Cycle 4 U-8: bind the frame render target so the
+        // DisplayList-level `render_backdrop_filter` path (U-9)
+        // can flush + blur the same target the layer-level path uses.
+        // When intermediate-active, `render_view`/`render_texture` point
+        // at the intermediate; otherwise they point at the swapchain.
+        // Without this bind, that command path falls back to passthrough
+        // — a visible regression vs Flutter.
+        backend.bind_surface(render_view, render_texture);
+
+        // Reset per-frame clip/transform/opacity/layer state so that
+        // partial-damage scissors from frame N cannot leak into frame N+1.
+        // This must happen BEFORE the damage clip_rect below.
+        backend.painter_mut().reset_frame_state();
+
+        // Apply damage rect as scissor optimization: when only part of the
+        // screen changed, limit GPU work to the damaged region.
+        // `damage_rect()` returns `None` for full repaint (no scissor needed),
+        // `Some(rect)` for partial damage.
+        //
+        // We capture `partial_damage` separately: after `render_layer_recursive`
+        // populates `draw_order`, we check whether any advanced shape (or SSAA
+        // path with an advanced blend) straddles the damage edge.  If so, we
+        // schedule a full repaint next frame to self-heal stale pixels outside
+        // the damage rect that `flush_advanced_layer` may have written.
+        let partial_damage = self
+            .damage_tracker
+            .damage_rect()
+            .filter(|r| r.width().0 > 0.0 && r.height().0 > 0.0);
+        if let Some(damage) = partial_damage {
+            backend.painter_mut().clip_rect(damage);
+            tracing::trace!(
+                left = damage.left().0,
+                top = damage.top().0,
+                width = damage.width().0,
+                height = damage.height().0,
+                "Damage scissor applied"
+            );
+        }
+
+        // Depth-first traversal of layer tree.
+        // `render_texture`/`render_view` point at the intermediate when
+        // intermediate-active, or directly at the swapchain otherwise.
+        // Backdrop-filter and advanced-blend passes read from
+        // `render_texture`, which always has COPY_SRC in this context.
+        if let Some(root_id) = scene.root() {
+            Self::render_layer_recursive(
+                scene.layer_tree(),
+                root_id,
+                &mut backend,
+                ctx,
+                render_texture,
+                render_view,
+            );
+        }
+
+        // Damage-straddle self-healing: if a partial scissor was applied AND
+        // `draw_order` now contains an advanced shape whose `device_bounds`
+        // straddle the damage edge, schedule a full repaint for the next frame.
+        //
+        // Why next-frame and not this-frame: `render_layer_recursive` has
+        // already populated the draw commands with the scissored geometry; a
+        // this-frame re-record would require replaying the entire scene graph.
+        // Partial damage is currently unused (callers use `mark_full_repaint`),
+        // so the transient stale pixel is unobservable.  A precomputed Scene
+        // bit or a re-record is the future upgrade path if partial damage
+        // becomes a hot path.
+        if let Some(damage) = partial_damage
+            && backend.painter().has_advanced_shape_straddling(damage)
+        {
+            self.force_full_repaint_next_frame = true;
+            tracing::debug!(
+                left = damage.left().0,
+                top = damage.top().0,
+                width = damage.width().0,
+                height = damage.height().0,
+                "Advanced shape straddles partial damage; \
+                 scheduling full repaint next frame"
+            );
+        }
+
+        // 5. Final flush — submit remaining painter batches.
+        // Drop the Backend first: Drop calls flush_active_transform(), which
+        // balances any deferred lazy-coalescing save left by `with_transform`.
+        // Once `backend` is dropped the exclusive borrow on `painter` ends, so
+        // `painter` is directly accessible for the render and maintenance calls.
+        drop(backend);
+        let mut final_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("FLUI Final Render Encoder"),
+                });
+        // Profiler scope wraps painter.render. The scope borrows
+        // `final_encoder` exclusively; we pass `scope.recorder` so
+        // painter.render writes into the same underlying encoder.
+        // Scope drops at end of block → end_query fires → resolve_queries
+        // copies the result → encoder finishes and is submitted.
+        // Branch on the Option (runtime), not just the Cargo feature
+        // (compile-time): when the feature is compiled but `gpu_profiler` is
+        // None (incapable adapter), the render must STILL run — otherwise the
+        // frame presents only the clear pass (blank content). This is the
+        // documented graceful no-op.
+        // The render target is always sampleable in this frame:
+        //   - Common path (supports_copy_src=true, intermediate_active=false):
+        //     `render_texture` = `output.texture` which has COPY_SRC.
+        //   - Intermediate path (intermediate_active=true):
+        //     `render_texture` = intermediate which has COPY_SRC|COPY_DST.
+        // Both cases satisfy the dst-read contract required by advanced blend
+        // and backdrop-filter.  The `view_only` fallback in `flush_opacity_layer`
+        // is only reached from benches/tests that construct a bare TextureView
+        // without a backing texture — see the reshaped fallback comments there.
+        let frame_target =
+            super::render_target::RenderTarget::sampleable(render_view, render_texture);
+        #[cfg(feature = "gpu-profiler")]
+        let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
+            let mut scope = profiler.scope("final_render", &mut final_encoder);
+            painter.render(frame_target, scope.recorder())
+            // scope drops here → end_query fires
+        } else {
+            painter.render(frame_target, &mut final_encoder)
+        };
+        #[cfg(not(feature = "gpu-profiler"))]
+        let render_result = painter.render(frame_target, &mut final_encoder);
+        if let Err(e) = render_result {
+            tracing::error!("Painter render failed: {}", e);
+        }
+        // Resolve before finishing the encoder.
+        #[cfg(feature = "gpu-profiler")]
+        if let Some(profiler) = self.gpu_profiler.as_mut() {
+            profiler.resolve_queries(&mut final_encoder);
+        }
+        self.queue.submit(std::iter::once(final_encoder.finish()));
+
+        // Frame boundary: run texture-cache maintenance ONCE, after the
+        // final flush. `painter.render` runs per-pass (backdrop-filter
+        // flushes call it mid-frame), so maintenance lives here — not inside
+        // `render` — to avoid resetting use-counters between passes.
+        painter.end_frame_maintenance();
+
+        // Return painter to Renderer for reuse
+        self.painter = Some(painter);
     }
 
     /// Recursively render a layer and its children (depth-first, back-to-front /
