@@ -219,6 +219,25 @@ pub struct Renderer {
     /// Controlled by [`Renderer::force_intermediate_for_testing`].
     #[cfg(test)]
     force_intermediate: bool,
+
+    /// When `true`, the NEXT call to `render_scene` will promote the
+    /// damage to a full repaint before any scissor logic runs.
+    ///
+    /// Set when the current frame detected a partial-damage scissor AND a
+    /// `DrawItem::AdvancedShape` (or SSAA-path with an advanced blend) whose
+    /// `device_bounds` straddle the damage edge.  Such items call
+    /// `flush_advanced_layer` with `LoadOp::Load` on the full `device_bounds`
+    /// with no scissor — if the foreground is restricted by the scissor,
+    /// the out-of-damage slice blends `transparent_fg` over the stale
+    /// prior-frame backdrop, writing stale pixels.
+    ///
+    /// Self-healing: the next frame is forced full, repainting the shape
+    /// over its true `device_bounds` without a scissor restriction.  The
+    /// transient is unobservable today because callers use full repaint
+    /// exclusively (see the `damage_rect()` call-site comment); a this-frame
+    /// re-record or a precomputed `Scene` bit would be the upgrade path once
+    /// partial damage becomes hot.
+    force_full_repaint_next_frame: bool,
 }
 
 // SAFETY: `Renderer` stores `Option<RawWindowHandle>` and
@@ -305,6 +324,7 @@ impl Renderer {
             gpu_profiler: stack.gpu_profiler,
             #[cfg(test)]
             force_intermediate: false,
+            force_full_repaint_next_frame: false,
         })
     }
 
@@ -561,6 +581,7 @@ impl Renderer {
             gpu_profiler: None,
             #[cfg(test)]
             force_intermediate: false,
+            force_full_repaint_next_frame: false,
         })
     }
 
@@ -1035,6 +1056,19 @@ impl Renderer {
         // will call `mark_dirty(bounds)` on state change; until then, callers
         // use `mark_full_repaint()` to force a frame.
 
+        // If the previous frame detected a straddling advanced shape under partial
+        // damage, promote this frame to a full repaint so the shape is redrawn
+        // without scissor restriction, self-healing any stale out-of-damage pixels.
+        // Consumed here (set to false) so it does not propagate beyond one frame.
+        if self.force_full_repaint_next_frame {
+            self.force_full_repaint_next_frame = false;
+            self.damage_tracker.mark_full_repaint();
+            tracing::trace!(
+                "force_full_repaint_next_frame: promoting to full repaint \
+                 (advanced shape straddled partial damage last frame)"
+            );
+        }
+
         // Check if we need to render at all
         if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
             // Nothing changed — skip this frame entirely
@@ -1270,10 +1304,17 @@ impl Renderer {
             // screen changed, limit GPU work to the damaged region.
             // `damage_rect()` returns `None` for full repaint (no scissor needed),
             // `Some(rect)` for partial damage.
-            if let Some(damage) = self.damage_tracker.damage_rect()
-                && damage.width().0 > 0.0
-                && damage.height().0 > 0.0
-            {
+            //
+            // We capture `partial_damage` separately: after `render_layer_recursive`
+            // populates `draw_order`, we check whether any advanced shape (or SSAA
+            // path with an advanced blend) straddles the damage edge.  If so, we
+            // schedule a full repaint next frame to self-heal stale pixels outside
+            // the damage rect that `flush_advanced_layer` may have written.
+            let partial_damage = self
+                .damage_tracker
+                .damage_rect()
+                .filter(|r| r.width().0 > 0.0 && r.height().0 > 0.0);
+            if let Some(damage) = partial_damage {
                 backend.painter_mut().clip_rect(damage);
                 tracing::trace!(
                     left = damage.left().0,
@@ -1297,6 +1338,31 @@ impl Renderer {
                     &ctx,
                     render_texture,
                     render_view,
+                );
+            }
+
+            // Damage-straddle self-healing: if a partial scissor was applied AND
+            // `draw_order` now contains an advanced shape whose `device_bounds`
+            // straddle the damage edge, schedule a full repaint for the next frame.
+            //
+            // Why next-frame and not this-frame: `render_layer_recursive` has
+            // already populated the draw commands with the scissored geometry; a
+            // this-frame re-record would require replaying the entire scene graph.
+            // Partial damage is currently unused (callers use `mark_full_repaint`),
+            // so the transient stale pixel is unobservable.  A precomputed Scene
+            // bit or a re-record is the future upgrade path if partial damage
+            // becomes a hot path.
+            if let Some(damage) = partial_damage
+                && backend.painter().has_advanced_shape_straddling(damage)
+            {
+                self.force_full_repaint_next_frame = true;
+                tracing::debug!(
+                    left = damage.left().0,
+                    top = damage.top().0,
+                    width = damage.width().0,
+                    height = damage.height().0,
+                    "Advanced shape straddles partial damage; \
+                     scheduling full repaint next frame"
                 );
             }
 
