@@ -776,17 +776,24 @@ impl WgpuPainter {
 // coordinates, color channels, and buffer indices. These truncations are
 // intentional.
 //
-// `missing_docs` is allowed on this impl block: the methods were originally
-// trait methods carrying their docs on the trait declaration; redocumenting
-// every one here is deferred to a follow-up doc-sweep (recorded in
-// crates/flui-engine/ARCHITECTURE.md `## Outstanding refactors`).
+// These methods were originally `impl Painter for WgpuPainter` trait methods;
+// the `Painter` trait was deleted in Mythos U5 (1b376beb). This doc-sweep
+// (engine-painter-doc-sweep) adds per-method docs directly on the inherent impl.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    missing_docs
+    clippy::cast_possible_wrap
 )]
 impl WgpuPainter {
+    /// Draw a filled or stroked rectangle.
+    ///
+    /// The rectangle is batched into the current draw segment as a
+    /// `RectInstance` and submitted at the next `render` call.  The
+    /// current transform and scissor are baked into the instance; no GPU state
+    /// switch is needed between adjacent same-mode rect calls.
+    ///
+    /// `paint.style` determines fill vs stroke; `paint.color` and
+    /// `paint.blend_mode` are applied at composite time.
     pub fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
@@ -802,6 +809,13 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a filled or stroked rounded rectangle.
+    ///
+    /// `rrect` carries the axis-aligned bounds and per-corner radii.  The
+    /// shape is batched as a `RectInstance` with the corner radii encoded;
+    /// the SDF evaluator in `rect_instanced.wgsl` clips to the rounded
+    /// boundary in the fragment shader, so no tessellation is needed for
+    /// simple rounded rects.
     pub fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         let opacity = self.compositor.current_opacity();
         self.batcher.rrect(
@@ -814,6 +828,13 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a filled or stroked circle.
+    ///
+    /// The circle is batched as a `CircleInstance` via the SDF pipeline —
+    /// no tessellation, sub-pixel accurate at any scale.  `radius` is in
+    /// device pixels; the current transform's scale is baked into the instance
+    /// by `DrawBatcher::circle` so the analytical SDF always operates in
+    /// the correct device-pixel space.
     pub fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -835,6 +856,12 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a filled or stroked oval (axis-aligned ellipse).
+    ///
+    /// The bounding rectangle `rect` defines the ellipse axes.  The shape is
+    /// rendered via the circle-SDF pipeline with a non-uniform transform that
+    /// stretches the unit circle to the ellipse aspect ratio — no tessellation
+    /// required.
     pub fn oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
@@ -850,6 +877,14 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw an arc segment.
+    ///
+    /// `rect` is the bounding box of the full ellipse; `start_angle` and
+    /// `sweep_angle` are in radians (measured clockwise from the positive X
+    /// axis in screen space).  When `use_center` is `true` the arc is closed
+    /// with two radii back to the center (pie-slice); otherwise only the arc
+    /// itself is drawn.  The shape is batched as an `ArcInstance` via the
+    /// analytical arc-SDF pipeline.
     pub fn draw_arc(
         &mut self,
         rect: Rect<Pixels>,
@@ -882,6 +917,12 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a double rounded rectangle (annular ring / bordered shape).
+    ///
+    /// Renders the area between `outer` and `inner` rounded rectangles.
+    /// Typical use: a border or ring where `inner` carves out the fill.
+    /// Both shapes must be coaxial (same center); the behaviour is undefined
+    /// if `inner` extends beyond `outer`.
     pub fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -901,6 +942,12 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a line segment from `p1` to `p2`.
+    ///
+    /// The line is tessellated into a quad with half-width `paint.stroke_width / 2.0`
+    /// (minimum 0.5 px) and submitted via the tessellated-path pipeline.
+    /// `paint.color` sets the stroke color; `paint.style` is ignored (lines are
+    /// always stroked).
     pub fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -920,6 +967,16 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a plain-text string at `position` in device pixels.
+    ///
+    /// `font_size` is in device pixels.  The text is submitted to
+    /// `TextRenderer` (glyphon) as a single-style run; shaping and atlas
+    /// upload happen during the next `render` call.  For styled spans
+    /// with per-run fonts, weights, or colors use [`Self::rich_text`] instead.
+    ///
+    /// The current transform is applied to `position` before submission so that
+    /// glyphs land at the correct device-pixel coordinate even inside a
+    /// `save`/`restore` transform block.
     pub fn text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint) {
         tracing::trace!(
             text,
@@ -966,6 +1023,15 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a registered external texture into `dst_rect`.
+    ///
+    /// `texture_id` must have been registered via
+    /// [`Self::external_texture_registry_mut`] before this call.  The full
+    /// texture is composited at `dst_rect` (UV `[0,1]×[0,1]`); for a sub-rect
+    /// source use [`Self::draw_texture`], which accepts an optional `src` rect.
+    ///
+    /// The current transform is baked into the instance; no sub-rect UV
+    /// remapping is performed by this variant.
     pub fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {
         super::batches::DrawBatcher::texture(
             &mut self.current_segment,
@@ -975,6 +1041,16 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw an arbitrary path.
+    ///
+    /// The path is tessellated by lyon into a triangle mesh for filled paths or
+    /// a stroke quad-mesh for stroked paths.  For `SrcOver` blend mode the mesh
+    /// is accumulated in the current `DrawSegment`; for advanced (dst-read)
+    /// blend modes the tessellated segment is isolated into a
+    /// `DrawItem::SsaaPath` so `flush_advanced_layer` can dst-read the backdrop.
+    ///
+    /// Tessellation quality is governed by the current CTM scale (see
+    /// `current_max_scale`).
     pub fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
         self.batcher.draw_path(
             &mut self.current_segment,
@@ -1080,6 +1156,14 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a path shadow.
+    ///
+    /// Renders an analytical box shadow using Evan Wallace's O(1) technique —
+    /// quality indistinguishable from a real Gaussian at a single-pass cost.
+    /// `elevation` is in logical pixels and controls the blur radius; `color`
+    /// sets the shadow tint (typically `Color::rgba(0,0,0,N)` for a Material
+    /// elevation shadow).  Only convex path outlines are supported; complex
+    /// paths fall back gracefully without crashing.
     pub fn draw_shadow(
         &mut self,
         path: &flui_types::painting::path::Path,
@@ -1173,6 +1257,18 @@ impl WgpuPainter {
         );
     }
 
+    /// Draw a registered external texture, optionally cropped to a source sub-rect.
+    ///
+    /// `texture_id` must have been registered via
+    /// [`Self::external_texture_registry_mut`] before this call.
+    ///
+    /// `dst` is the destination rect in device pixels.  `src`, when `Some`,
+    /// selects a sub-rectangle of the texture in texel coordinates; the batcher
+    /// normalises these to UV space `[0,1]` using the registered dimensions.
+    /// When `src` is `None` the full texture is used (`UV [0,1]×[0,1]`).
+    ///
+    /// `filter_quality` controls the GPU sampler (Linear vs Nearest).
+    /// `opacity` is pre-multiplied into the instance alpha before submission.
     pub fn draw_texture(
         &mut self,
         texture_id: flui_types::painting::TextureId,
@@ -1204,32 +1300,72 @@ impl WgpuPainter {
 
     // ===== Transform Stack =====
 
+    /// Save the current transform, scissor, and SDF-clip state onto the stack.
+    ///
+    /// Must be balanced by a matching [`Self::restore`] call.  Nesting is
+    /// unbounded; `GpuStateStack` grows the stack dynamically.  At the end of
+    /// each frame `GpuStateStack::debug_assert_balanced` fires in debug builds
+    /// if the counts do not match.
     pub fn save(&mut self) {
         self.state.save();
     }
 
+    /// Restore the transform, scissor, and SDF-clip state saved by the
+    /// matching [`Self::save`] call.
+    ///
+    /// Popping from an empty stack is a logic error; in debug builds
+    /// `GpuStateStack` panics; in release builds it logs a `tracing::warn!`
+    /// and leaves the current state unchanged.
     pub fn restore(&mut self) {
         self.state.restore();
     }
 
+    /// Concatenate a translation onto the current transform.
+    ///
+    /// `offset` is in device pixels.  Equivalent to premultiplying the CTM by
+    /// `T(offset.dx, offset.dy)`.
     pub fn translate(&mut self, offset: Offset<Pixels>) {
         self.state.translate(offset);
     }
 
+    /// Concatenate a clockwise rotation onto the current transform.
+    ///
+    /// `angle` is in radians.  Equivalent to premultiplying the CTM by
+    /// `R(angle)` (rotation about the origin in the current coordinate space).
     pub fn rotate(&mut self, angle: f32) {
         self.state.rotate(angle);
     }
 
+    /// Concatenate a non-uniform scale onto the current transform.
+    ///
+    /// `sx` and `sy` are scale factors along the X and Y axes respectively.
+    /// Equivalent to premultiplying the CTM by `S(sx, sy)`.  Negative values
+    /// produce a reflection; zero produces a degenerate transform that collapses
+    /// all geometry to a line or point.
     pub fn scale(&mut self, sx: f32, sy: f32) {
         self.state.scale(sx, sy);
     }
 
     // ===== Clipping =====
 
+    /// Intersect the current scissor rect with `rect`.
+    ///
+    /// The scissor is maintained as a hardware GPU scissor rect (integer pixel
+    /// coordinates clamped to `[0, viewport]`).  Subsequent draw calls are
+    /// rasterised only within the resulting intersection.  Call [`Self::restore`]
+    /// to pop the clip state pushed by the matching [`Self::save`].
     pub fn clip_rect(&mut self, rect: Rect<Pixels>) {
         self.state.clip_rect(rect, self.size);
     }
 
+    /// Intersect the clip region with a rounded rectangle.
+    ///
+    /// Applies a coarse bounding-rect scissor for early rasteriser rejection,
+    /// then encodes the per-corner radii into `current_rrect_clip` so that the
+    /// SDF evaluator in `rect_instanced.wgsl` discards fragments outside the
+    /// rounded boundary.  The SDF clip is applied per-draw rather than as a
+    /// hardware stencil, so it only affects shapes that read the clip uniforms
+    /// (rect/circle/arc SDF batches).
     #[allow(
         clippy::similar_names,
         reason = "r_tl/r_tr/r_br/r_bl mirror the rrect-corner field names; renaming would obscure intent"
@@ -1275,6 +1411,13 @@ impl WgpuPainter {
         self.state.clip_rsuperellipse(rse, self.size);
     }
 
+    /// Clip to an arbitrary path (currently unimplemented; emits a `tracing::warn!`).
+    ///
+    /// Path clipping requires a stencil-buffer pass (even-odd or non-zero fill
+    /// rule) that is not yet wired in this engine.  All calls are no-ops at
+    /// the GPU level and will emit a release-build warning via `tracing::warn!`.
+    /// Use [`Self::clip_rect`] or [`Self::clip_rrect`] for hardware-accelerated
+    /// clipping; [`Self::clip_rsuperellipse`] for iOS-squircle clips.
     pub fn clip_path(&mut self, _path: &Path) {
         // Path clipping requires stencil buffer or path tessellation
         // This is a complex feature that needs:
@@ -1306,6 +1449,12 @@ impl WgpuPainter {
 
     // ===== Viewport Information =====
 
+    /// Return the full viewport bounds as a device-pixel rect.
+    ///
+    /// Equivalent to `Rect::from_ltrb(0, 0, width, height)` where
+    /// `(width, height)` is the size last set by [`Self::new`] or
+    /// [`Self::resize`].  Used as the fallback composite rect when a
+    /// `save_layer` carries no explicit bounds.
     pub fn viewport_bounds(&self) -> Rect<Pixels> {
         Rect::from_ltrb(
             px(0.0),
@@ -1587,6 +1736,20 @@ impl WgpuPainter {
 
     // ===== Layer Operations (Opacity) =====
 
+    /// Open a compositing layer for group opacity or blend mode.
+    ///
+    /// All drawing between `save_layer` and the matching [`Self::restore_layer`]
+    /// is captured into an offscreen texture.  On restore the offscreen is
+    /// composited onto the parent surface with the layer's effective group
+    /// opacity (derived from `paint.color.a`) and `paint.blend_mode`.
+    ///
+    /// The `paint.color` RGB is intentionally ignored (not used as a tint) —
+    /// per Flutter semantics, chroma is set via an explicit `ColorFilter`, not
+    /// the layer paint's RGB.  For a tinted layer use
+    /// [`Self::save_layer_with_tint`].
+    ///
+    /// `bounds` hints the maximum bounds of the offscreen; `None` defaults to
+    /// the full viewport.  This is a hint only — the compositor may expand it.
     pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
         let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
@@ -1756,6 +1919,25 @@ impl WgpuPainter {
         );
     }
 
+    /// Close the current compositing layer and composite it onto the parent.
+    ///
+    /// Must be called after each [`Self::save_layer`] / [`Self::save_layer_with_tint`] /
+    /// `save_layer_with_filter` / `save_layer_with_image_filter` call.
+    /// The layer's offscreen content is routed to the appropriate
+    /// `DrawItem` variant:
+    ///
+    /// - **Empty layer** → nothing emitted (`RestoreOutcome::Empty`).
+    /// - **Opacity ≈ 1.0 + white tint** → content re-integrated directly into the
+    ///   parent draw order without an offscreen blit
+    ///   (`RestoreOutcome::Reintegrate`).
+    /// - **Opacity-/tint-/blend-mode layer** → `DrawItem::OpacityLayer`
+    ///   (`RestoreOutcome::Composite`).
+    /// - **Image filter layer** (opened via `save_layer_with_image_filter`) →
+    ///   `DrawItem::Filter` with the computed `grown_bounds` and pass chain.
+    ///
+    /// Calling `restore_layer` without a matching open is a logic error; the
+    /// compositor logs a warning and reinstates the pre-restore draw state
+    /// (`RestoreOutcome::Underflow`).
     pub fn restore_layer(&mut self) {
         // Capture the offscreen content drawn since save_layer.
         let offscreen_final_segment =
