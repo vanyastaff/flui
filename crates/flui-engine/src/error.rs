@@ -192,10 +192,10 @@ pub enum EngineError {
 /// `EngineError` without a classification arm is a compile error — closing
 /// the silent-third-bucket hole.
 ///
-/// - [`Recoverable`] — retry the same operation on the next frame; no rebuild.
-/// - [`Fatal`] — the renderer must be recreated; surface reconfiguration
+/// - [`Recoverability::Recoverable`] — retry the same operation on the next frame; no rebuild.
+/// - [`Recoverability::Fatal`] — the renderer must be recreated; surface reconfiguration
 ///   cannot recover.
-/// - [`Unrecoverable`] — the frame is dropped and logged; reconfiguration or
+/// - [`Recoverability::Unrecoverable`] — the frame is dropped and logged; reconfiguration or
 ///   operator intervention may be required (e.g. a surface misconfig), but
 ///   blindly retrying the same call loops forever.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
