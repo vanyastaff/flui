@@ -1,9 +1,9 @@
-//! Filter Demo - GPU Gaussian blur via ImageFilterLayer
+//! Filter Demo - GPU Gaussian blur via SceneBuilder + ImageFilterLayer
 //!
-//! Demonstrates the full image-filter rendering pipeline:
-//! CanvasLayer (content) → ImageFilterLayer → LayerRender::render →
-//! Backend::push_image_filter → save_layer_with_image_filter →
-//! DrawItem::Filter → GPU blur pass → Renderer::render_scene → pixels
+//! Demonstrates the full image-filter rendering pipeline via the programmatic
+//! SceneBuilder API:
+//! SceneBuilder::push_image_filter → add_canvas (content) → pop →
+//! Scene → Renderer::render_scene → GPU blur pass → pixels
 //!
 //! The window shows two copies of the same shapes side-by-side:
 //! - LEFT half: sharp / un-blurred (direct CanvasLayer child of root)
@@ -14,12 +14,12 @@
 use std::sync::{Arc, Mutex};
 
 use flui_engine::wgpu::Renderer;
-use flui_layer::{CanvasLayer, ImageFilterLayer, Layer, LayerTree, OffsetLayer, Scene};
+use flui_layer::{CanvasLayer, LayerTree, Scene, SceneBuilder};
 use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
 use flui_types::{
+    Color, Offset,
     geometry::{Rect, Size, px},
-    painting::Paint,
-    styling::Color,
+    painting::{ImageFilter, Paint},
 };
 
 // ── Window-handle bridge (mirrors scene_render.rs) ───────────────────────────
@@ -47,71 +47,94 @@ impl raw_window_handle::HasDisplayHandle for PlatformWindowHandle {
 // ── Scene construction ────────────────────────────────────────────────────────
 
 /// Builds a scene demonstrating `ImageFilterLayer` Gaussian blur side-by-side
-/// with an un-blurred copy of the same shapes.
+/// with an un-blurred copy of the same shapes, using the `SceneBuilder` API.
 ///
-/// Layer tree structure:
+/// Layer tree structure (constructed via SceneBuilder push/pop):
 /// ```text
-/// OffsetLayer (zero, root container)
-///   ├── CanvasLayer  (background + LEFT un-blurred shapes)
-///   └── ImageFilterLayer (Blur σ_x=8, σ_y=8)
-///         └── CanvasLayer (RIGHT blurred shapes)
+/// OffsetLayer (zero, root — pushed first)
+///   ├── CanvasLayer  (background + LEFT un-blurred shapes — add_canvas leaf)
+///   └── ImageFilterLayer (Blur σ_x=8, σ_y=8 — push_image_filter)
+///         └── CanvasLayer (RIGHT blurred shapes — add_canvas leaf inside filter)
 /// ```
+///
+/// SceneBuilder API used:
+/// - `push_offset(Offset::ZERO)` — root container
+/// - `add_canvas(sharp_canvas)` — leaf inside the offset layer
+/// - `push_image_filter(ImageFilter::blur_xy(8.0, 8.0))` — filter container
+/// - `add_canvas(blurred_canvas)` — leaf inside the filter layer
+/// - `pop()` — close the filter layer
+/// - `pop()` — close the offset layer (root)
+/// - `build()` — consume the builder, returns root `LayerId`
 fn build_filter_scene(width: f32, height: f32) -> Scene {
     let half_width = width / 2.0;
 
     let mut tree = LayerTree::new();
 
-    // Root: zero-offset container so both children share one root id.
-    let root_id = tree.insert(Layer::from(OffsetLayer::zero()));
+    // ── SceneBuilder: construct the layer hierarchy via push/pop ─────────────
+    //
+    // The builder is scoped so `tree` is available after the borrow ends.
+    let root_id = {
+        let mut builder = SceneBuilder::new(&mut tree);
 
-    // ── LEFT: background + un-blurred shapes ─────────────────────────────────
-    let mut sharp_canvas = CanvasLayer::new();
-    {
-        let canvas = sharp_canvas.canvas_mut();
+        // Root: zero-offset container so both children share one root id.
+        builder.push_offset(Offset::ZERO);
 
-        // Full background (dark navy).
-        canvas.draw_rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
-            &Paint::fill(Color::rgb(18, 26, 42)),
-        );
+        // ── LEFT: background + un-blurred shapes ─────────────────────────────
+        let mut sharp_canvas = CanvasLayer::new();
+        {
+            let canvas = sharp_canvas.canvas_mut();
 
-        // Divider between left (sharp) and right (blurred) halves.
-        canvas.draw_rect(
-            Rect::from_ltrb(
-                px(half_width - 1.0),
-                px(0.0),
-                px(half_width + 1.0),
-                px(height),
-            ),
-            &Paint::fill(Color::rgb(80, 80, 80)),
-        );
+            // Full background (dark navy).
+            canvas.draw_rect(
+                Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
+                &Paint::fill(Color::rgb(18, 26, 42)),
+            );
 
-        // Un-blurred shapes on the left half.
-        draw_demo_shapes(canvas, 0.0, half_width, height);
-    }
-    let sharp_id = tree.insert(Layer::from(sharp_canvas));
-    tree.add_child(root_id, sharp_id);
+            // Divider between left (sharp) and right (blurred) halves.
+            canvas.draw_rect(
+                Rect::from_ltrb(
+                    px(half_width - 1.0),
+                    px(0.0),
+                    px(half_width + 1.0),
+                    px(height),
+                ),
+                &Paint::fill(Color::rgb(80, 80, 80)),
+            );
 
-    // ── RIGHT: blurred shapes wrapped in ImageFilterLayer ────────────────────
-    let mut blurred_canvas = CanvasLayer::new();
-    draw_demo_shapes(blurred_canvas.canvas_mut(), half_width, half_width, height);
-    let blurred_content_id = tree.insert(Layer::from(blurred_canvas));
+            // Un-blurred shapes on the left half.
+            draw_demo_shapes(canvas, 0.0, half_width, height);
+        }
+        // Leaf: added as a child of the current parent (the offset layer).
+        builder.add_canvas(sharp_canvas);
 
-    // ImageFilterLayer::blur_xy(sigma_x, sigma_y) — public convenience ctor.
-    let filter_layer = ImageFilterLayer::blur_xy(8.0, 8.0);
-    let filter_layer_id = tree.insert(Layer::from(filter_layer));
+        // ── RIGHT: blurred shapes wrapped in ImageFilterLayer ─────────────────
+        //
+        // SceneBuilder::push_image_filter pushes an ImageFilterLayer and makes
+        // it the current parent; add_canvas then attaches the content as its child.
+        builder.push_image_filter(ImageFilter::blur_directional(8.0, 8.0));
+        let mut blurred_canvas = CanvasLayer::new();
+        draw_demo_shapes(blurred_canvas.canvas_mut(), half_width, half_width, height);
+        builder.add_canvas(blurred_canvas);
+        // Close the ImageFilterLayer.
+        builder
+            .pop()
+            .expect("SceneBuilder stack must not underflow: blur filter was pushed");
 
-    // Wire: filter layer is a child of root, blurred canvas is its child.
-    tree.add_child(root_id, filter_layer_id);
-    tree.add_child(filter_layer_id, blurred_content_id);
+        // Close the root offset layer.
+        builder
+            .pop()
+            .expect("SceneBuilder stack must not underflow: root offset was pushed");
+
+        builder.build()
+    };
 
     tracing::info!(
-        sigma_x = 8.0,
-        sigma_y = 8.0,
-        "blurred shape via ImageFilterLayer(Blur σ=8)"
+        sigma_x = 8.0_f32,
+        sigma_y = 8.0_f32,
+        "blurred shape via SceneBuilder::push_image_filter(Blur σ=8)"
     );
 
-    Scene::new(Size::new(px(width), px(height)), tree, Some(root_id), 1)
+    Scene::new(Size::new(px(width), px(height)), tree, root_id, 1)
 }
 
 /// Draws the demo shape set into `canvas`, offset by `x_offset` px within a
@@ -157,12 +180,7 @@ fn draw_demo_shapes(
 
     // Yellow strip at the bottom.
     canvas.draw_rect(
-        Rect::from_ltrb(
-            px(left),
-            px(height - 55.0),
-            px(right),
-            px(height - 30.0),
-        ),
+        Rect::from_ltrb(px(left), px(height - 55.0), px(right), px(height - 30.0)),
         &Paint::fill(Color::rgb(255, 210, 0)),
     );
 }
@@ -174,13 +192,13 @@ fn main() {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    tracing::info!("Filter demo — GPU Gaussian blur via ImageFilterLayer");
+    tracing::info!("Filter demo — GPU Gaussian blur via SceneBuilder::push_image_filter");
 
     let platform = current_platform().expect("failed to initialize platform");
     tracing::info!("platform: {}", platform.name());
 
     let options = WindowOptions {
-        title: "FLUI Filter Demo — Gaussian Blur (ImageFilterLayer)".to_string(),
+        title: "FLUI Filter Demo — Gaussian Blur (SceneBuilder API)".to_string(),
         size: Size::new(px(900.0), px(600.0)),
         resizable: true,
         visible: true,
@@ -189,8 +207,11 @@ fn main() {
         max_size: None,
     };
 
-    let window: Arc<dyn PlatformWindow> =
-        Arc::from(platform.open_window(options).expect("failed to open window"));
+    let window: Arc<dyn PlatformWindow> = Arc::from(
+        platform
+            .open_window(options)
+            .expect("failed to open window"),
+    );
 
     tracing::info!(
         physical_size = ?window.physical_size(),

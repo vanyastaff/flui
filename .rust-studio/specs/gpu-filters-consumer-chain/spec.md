@@ -2,7 +2,9 @@
 
 # Spec: GPU filters consumer chain (make engine filters reachable end-to-end)
 
-- **Status:** Draft   ·   **Slug:** `gpu-filters-consumer-chain`   ·   **Date:** `2026-06-22`   ·   **Owner:** `chief-architect`
+- **Status:** In progress (scoped to flui-painting + flui-layer **ceiling** — render/widget tasks deferred)   ·   **Slug:** `gpu-filters-consumer-chain`   ·   **Date:** `2026-06-22`   ·   **Owner:** `chief-architect`
+
+> **SCOPE CEILING (user, 2026-06-22):** consumer wiring reaches only up to **flui-painting + flui-layer** for now; flui-rendering (render-objects) + flui-view/widgets are DEFERRED. Architecture finding (chief-architect re-scope, vault `adr-filter-consumer-chain-painting-layer-ceiling`): **DisplayList and LayerTree are orthogonal/non-convertible** (no lowering; `SaveLayer`/`BackdropFilter` replay direct to GPU; Canvas can't reference `Layer` — dependency direction). So the painting-level filter entry that produces filter LAYERS is **`SceneBuilder`** (flui-layer), NOT `Canvas` — and `SceneBuilder`'s filter producers were already complete after T1. The in-scope deliverable is therefore verification (T2′), not new producer code.
 - **Predecessor:** `gpu-image-filters` (DONE — the engine producer; PRs #267-276). Governing decision: vault `adr-filter-consumer-chain`.
 
 ## Problem
@@ -19,8 +21,8 @@ The consumer chain is broken at every level above flui-layer:
 | flui-view / widgets | No `ImageFiltered` / `ColorFiltered` / `BackdropFilter` widget exists. |
 | flui-rendering | No `RenderImageFiltered` / `RenderColorFiltered` / `RenderBackdropFilter`; `PaintEffectsCapability` has no filter hook; `paint_subtree` wraps only Opacity/Transform. |
 | flui-painting | `Paint` has no `image_filter`/`color_filter`; `DrawCommand::SaveLayer{bounds,paint,transform}` carries no filter. |
-| flui-layer | `ImageFilterLayer`/`ColorFilterLayer` exist + render, but have **zero producers**; `ColorFilterLayer` wraps a bare `ColorMatrix`, not the full `ColorFilter`. |
-| flui-engine | `push_color_filter(&ColorMatrix)` can't express `ColorFilter::Mode`/`Gamma` (which the engine implements); `LayerFilter::Mode`/`Gamma` are `cfg(test)`-only. |
+| flui-layer | ~~`ColorFilterLayer` wraps a bare `ColorMatrix`~~ — **RESOLVED (T1):** carries full `ColorFilter`; `SceneBuilder::push_{color,image}_filter`/`push_blur`/`push_backdrop_filter` are the complete programmatic producers. |
+| flui-engine | ~~`push_color_filter(&ColorMatrix)` can't express Mode/Gamma; `LayerFilter::Mode`/`Gamma` `cfg(test)`-only~~ — **RESOLVED (T1):** `push_color_filter(&ColorFilter)` dispatches all variants; Mode/Gamma promoted to production. |
 
 **Goal:** make the engine's filters reachable from the public widget API, improving the cross-crate
 architecture. **Breaking changes are allowed** (active dev, no external consumers) — used where the break is
@@ -95,14 +97,15 @@ in acceptance below.
 - **Backdrop ordering gate** — `RenderBackdropFilter` correct only under `supports_copy_src || intermediate_active` (already true for the existing path).
 - **Catalog CI guard** — every new `RenderBox` must appear in `RENDER_OBJECT_TYPES` with a `harness_*` test.
 
-## Slicing (dependency-ordered; each an independent `/dev-task` → review → local GPU-readback)
-- **T1 — Producer-completeness: full `ColorFilter` through the engine.** `[BREAK B1/B2]` `[SIGN-OFF: api-design-lead]` Widen `push_color_filter`→`&ColorFilter`; promote `LayerFilter::Mode/Gamma`; widen `ColorFilterLayer`→`ColorFilter`; update dispatch + `LayerRender for ColorFilterLayer`. GPU-readback Mode+Gamma via the layer path. *Engine+layer only — critical-path root, self-contained, immediate value.*
-- **T2 — Render seam: `PaintEffectsCapability` filter hooks + `paint_subtree` arm.** `[SIGN-OFF: chief-architect]` (hook shape + alpha-asymmetry footgun). Depends on T1.
-- **T3a — `RenderColorFiltered` + `ColorFiltered` widget** (Mode/Matrix/Gamma). Depends on T2.
-- **T3b — `RenderImageFiltered` + `ImageFiltered` widget** (Blur/Dilate/Erode/Compose). Depends on T2.
-- **T3c — `RenderBackdropFilter` + `BackdropFilter` widget** (under the backdrop gate). Depends on T2.
-  *(T3a/b/c parallel — disjoint render-objects/widgets sharing the T2 seam.)*
-- **T4 — End-to-end demos + `.flutter/` parity verification** (widget-tree-built `filter_demo`/`color_filter_demo`). Depends on T3a/b/c.
+## Slicing
+**In scope (flui-painting + flui-layer ceiling):**
+- **T1 — Producer-completeness: full `ColorFilter` through the engine.** `[BREAK]` **DONE — PR #277** (`77d08231`). `push_color_filter(&ColorFilter)` + dispatch; `LayerFilter::Mode/Gamma` promoted; `ColorFilterLayer`→`ColorFilter` (+ `ColorMatrix: Copy`, `ColorFilter` `#[non_exhaustive]`, `Matrix(ColorMatrix)` wart fixed). Readback P1-P4 (Mode/Gamma/Matrix producer path). api-design-lead ACCEPTABLE; ce-kieran COMPLETE.
+- **T2′ — SceneBuilder filter verification + demos.** **DONE — this PR.** Port `examples/filter_demo` to `SceneBuilder::push_image_filter`; add `examples/color_filter_demo` (Mode/Gamma/Matrix via `push_color_filter`); GPU-readback SC1-SC5 proving the `SceneBuilder → LayerRender → Backend → WgpuPainter → GPU` filter path closes to pixels (honest scope: `render_scene` needs a swapchain → SC tests exercise the identical constituent path minus swapchain-acquire/present). Confirms the programmatic painting+layer producer API. *This is the whole in-scope painting+layer deliverable — the `SceneBuilder` producers were already complete after T1; no new Canvas/DrawCommand filter API (a Canvas filter would be the rejected Approach A — DisplayList⊥LayerTree).*
+
+**DEFERRED (above the ceiling — flui-rendering + flui-view; resume when the user lifts the ceiling):**
+- **T2 — Render seam:** `PaintEffectsCapability` filter hooks + `paint_subtree` arm (chief-architect sign-off: alpha-asymmetry footgun). [DEFERRED]
+- **T3a/b/c — `Render{Color,Image,Backdrop}Filtered` + `{ColorFiltered, ImageFiltered, BackdropFilter}` widgets** (the real app-facing consumer — lets widget code write `ImageFiltered(child: …)`). [DEFERRED]
+- **T4 — widget-tree-built demos + `.flutter/` parity.** [DEFERRED]
 
 ## Links
 - Predecessor: `gpu-image-filters` spec + `verify-report.md`. Engine seam: `DrawItem::Filter`/`LayerFilter`, `layer_render.rs:447-477`, `traits.rs:441`, `command_ir.rs`.
