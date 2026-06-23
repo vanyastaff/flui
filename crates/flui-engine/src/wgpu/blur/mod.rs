@@ -71,7 +71,7 @@ mod pipeline;
 /// - `content_bounds` — AABB of the content in **full-frame** physical pixels; rebased
 ///   to fb-local UV by subtracting `fb_origin` before dividing by `fb_dim`.
 /// - `fb_origin` — integer-aligned top-left of the offscreen frame in device pixels
-///   (computed in `painter.rs`). Used to rebase `content_bounds` to fb-local UV
+///   (computed in `painter::layer`). Used to rebase `content_bounds` to fb-local UV
 ///   (non-negotiable #3: `content_rect_uv = (content_bounds - fb_origin) / fb_dim`).
 /// - `fb_dim` — integer dimensions `(width, height)` of the source texture and all
 ///   intermediate textures acquired here. The blur shader's `texture_size` uniform

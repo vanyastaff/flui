@@ -28,7 +28,7 @@ pub fn create_gradient_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGro
 /// Maximum number of gradient stop slots in the GPU buffer.
 ///
 /// Each gradient consumes up to 8 slots; this cap allows 100 gradients per
-/// frame. The three `*_gradient_rect` methods in `painter.rs` enforce this
+/// frame. The three `*_gradient_rect` methods in `painter::gradient` enforce this
 /// limit by dropping instances that would overflow it rather than writing
 /// past the end of the buffer.
 pub const MAX_GRADIENT_STOPS: usize = 8 * 100;
