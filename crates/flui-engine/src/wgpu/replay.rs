@@ -341,14 +341,21 @@ impl GpuReplay {
                 // anti-aliasing — edges are aliased.  This is consistent with the
                 // Phase-A quality note in `batches/shapes.rs`.
                 //
-                // Damage-straddle correctness: `flush_advanced_layer` issues its
-                // render pass with `LoadOp::Load` and writes to `op.device_bounds`
-                // on the surface.  The damage scissor (if any) was applied to the
-                // shape's geometry at record time via the GpuStateStack, which
-                // affects the offscreen foreground tessellation.  Outside the
-                // damage region the foreground is transparent, so the blend pass
-                // effectively passes through backdrop pixels — no stale content
-                // is written.  This is correct for all straddling configurations.
+                // Damage-straddle hazard: `flush_advanced_layer` issues its render
+                // pass with `LoadOp::Load` and NO scissor, writing the blend result
+                // to the full `op.device_bounds` on the surface.  If a partial
+                // damage scissor was applied at record time, the foreground texture
+                // is transparent OUTSIDE the scissor; the blend pass then computes
+                // `blend(transparent_fg, stale_backdrop)` there, potentially
+                // preserving prior-frame stale pixels in the out-of-damage slice.
+                //
+                // Self-healing: `renderer.rs` detects straddling advanced shapes
+                // after `render_layer_recursive` and sets
+                // `force_full_repaint_next_frame`, so the NEXT frame repaints the
+                // full `device_bounds` without scissor restriction.  Acceptable
+                // because partial damage is currently unused (callers use
+                // `mark_full_repaint`); a this-frame re-record or a precomputed
+                // Scene bit is the future upgrade when partial damage becomes hot.
                 DrawItem::AdvancedShape(mut op) => {
                     if let Some(surface_texture) = target.texture {
                         // Render the shape into a full-viewport offscreen foreground.
