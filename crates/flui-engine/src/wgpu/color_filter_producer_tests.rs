@@ -271,18 +271,19 @@ mod gpu_tests {
         layer_color: Color,
     ) -> Vec<[u8; 4]> {
         let bounds = full_surface_bounds();
-        let painter = build_painter(Arc::clone(device), Arc::clone(queue));
-        let mut backend = Backend::new(painter);
+        let mut painter = build_painter(Arc::clone(device), Arc::clone(queue));
+        {
+            let mut backend = Backend::new(&mut painter);
 
-        // The same call that `ColorFilterLayer::render` issues (via LayerStateStack).
-        backend.push_color_filter(&filter);
-        // Draw a full-surface rect via CommandRenderer (the display-list dispatch path).
-        backend.render_rect(bounds, &Paint::fill(layer_color), &Matrix4::IDENTITY);
-        // The same call that `ColorFilterLayer::cleanup` issues.
-        backend.pop_color_filter();
-
-        // Extract the painter and submit.
-        let mut painter = backend.into_painter();
+            // The same call that `ColorFilterLayer::render` issues (via LayerStateStack).
+            backend.push_color_filter(&filter);
+            // Draw a full-surface rect via CommandRenderer (the display-list dispatch path).
+            backend.render_rect(bounds, &Paint::fill(layer_color), &Matrix4::IDENTITY);
+            // The same call that `ColorFilterLayer::cleanup` issues.
+            backend.pop_color_filter();
+            // backend drops here → Drop impl calls flush_active_transform().
+        }
+        // Painter borrow released; submit directly.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("ColorFilterProducer Render Encoder"),
         });
@@ -561,12 +562,14 @@ mod gpu_tests {
 
         // Producer path: Backend::push_color_filter(&ColorFilter::Matrix(grayscale)).
         {
-            let painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            let mut backend = Backend::new(painter);
-            backend.push_color_filter(&ColorFilter::Matrix(grayscale));
-            backend.render_rect(bounds, &Paint::fill(layer_color), &Matrix4::IDENTITY);
-            backend.pop_color_filter();
-            let mut painter = backend.into_painter();
+            let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+            {
+                let mut backend = Backend::new(&mut painter);
+                backend.push_color_filter(&ColorFilter::Matrix(grayscale));
+                backend.render_rect(bounds, &Paint::fill(layer_color), &Matrix4::IDENTITY);
+                backend.pop_color_filter();
+                // backend drops here → Drop impl calls flush_active_transform().
+            }
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("P4 Producer Encoder"),
             });

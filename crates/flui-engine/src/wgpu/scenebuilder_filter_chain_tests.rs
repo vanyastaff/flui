@@ -296,14 +296,15 @@ mod gpu_tests {
         tree: &LayerTree,
         root_id: Option<LayerId>,
     ) -> Vec<[u8; 4]> {
-        let painter = build_painter(Arc::clone(device), Arc::clone(queue));
-        let mut backend = Backend::new(painter);
+        let mut painter = build_painter(Arc::clone(device), Arc::clone(queue));
+        {
+            let mut backend = Backend::new(&mut painter);
 
-        if let Some(root_id) = root_id {
-            walk_layer_tree(tree, root_id, &mut backend);
+            if let Some(root_id) = root_id {
+                walk_layer_tree(tree, root_id, &mut backend);
+            }
+            // backend drops here → Drop impl calls flush_active_transform().
         }
-
-        let mut painter = backend.into_painter();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("SceneBuilderFilterChain Render Encoder"),
         });
