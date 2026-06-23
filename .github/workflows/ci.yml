@@ -188,6 +188,79 @@ jobs:
           --test-threads 1
 
   # ─────────────────────────────────────────────────────────────────────────
+  # gpu-test (PILOT) — actually RUN the `enable-wgpu-tests` readback/oracle
+  # suite, which the `clippy` job above only TYPE-CHECKS. Without this, a
+  # WGSL/blend-state/color-pipeline regression merges silently green — the #1
+  # risk in two independent engine audits (the oracle infra exists and is
+  # non-vacuous, but is operationally inert in CI today).
+  #
+  # windows-latest → WARP (Microsoft's software DX12 rasterizer). The readback
+  # harness is authored and executed locally on DX12, so WARP is the SAME
+  # backend (no Vulkan/lavapipe feature-gap or precision divergence). GitHub
+  # windows runners expose no hardware GPU, so `request_adapter`
+  # (force_fallback_adapter:false) returns WARP with no harness change.
+  #
+  # The pilot (a 5-test representative subset) PROVED the approach on CI: WARP is
+  # selected on the hardware-GPU-less windows runner with no harness change, the
+  # ±LSB oracle tolerances HOLD under software rasterization (blur_oracle ±3 LSB
+  # passed), and the run is fast (nextest ~16 s; the ~8 min is the wgpu-stack
+  # build). So this now runs the FULL `enable-wgpu-tests` suite (~440 tests).
+  #
+  # Still `continue-on-error` (ADVISORY) for now: this first full-suite run
+  # measures real wall-time + surfaces any WARP-slow/flaky test before the gate
+  # becomes merge-blocking. Once the full suite shows ~3 consecutive green runs
+  # within budget, drop `continue-on-error` and add `gpu-test` to required
+  # checks. Verified only by THIS workflow's run — the dev machine is hardware
+  # DX12, so the WARP software path cannot be exercised locally.
+  # ─────────────────────────────────────────────────────────────────────────
+  gpu-test:
+    name: gpu-test (wgpu readback, WARP)
+    needs: checks
+    runs-on: windows-latest
+    # Generous headroom: ~440 readback tests on a software rasterizer, each
+    # creating its own wgpu::Device, plus the cold wgpu-stack build. The first
+    # full run measures the real figure; tighten or shard (nextest partition)
+    # afterward if needed.
+    timeout-minutes: 60
+    # Advisory until the full suite is proven green + in-budget across a few
+    # runs: a flaky/slow required GPU gate is worse than none. Drop this line to
+    # make it merge-blocking.
+    continue-on-error: true
+    env:
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      # Surface the wgpu adapter selection in the log so the run confirms WARP
+      # was enumerated (not a silently-missing-adapter skip).
+      RUST_LOG: wgpu_hal=info,wgpu_core=info
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+
+      # Full enable-wgpu-tests suite. `--test-threads 1`: each test builds its own
+      # wgpu::Device; WARP serializes command submission through one software
+      # driver, so parallel submission can saturate it. The job-level
+      # `timeout-minutes` is the hung-test backstop.
+      - name: cargo nextest run (flui-engine GPU readback suite, WARP)
+        run: >
+          cargo nextest run
+          -p flui-engine
+          --features enable-wgpu-tests
+          --lib
+          --no-fail-fast
+          --test-threads 1
+
+  # ─────────────────────────────────────────────────────────────────────────
   # bench-compile — ensures benchmarks compile and link on both platforms.
   # `--no-run` compiles + links the bench binaries without executing them so
   # CI stays fast. Gated on `checks`. Same OS matrix as `test` so Windows
