@@ -747,7 +747,7 @@ impl TextRenderer {
                 text_areas,
                 &mut self.swash_cache,
             )
-            .map_err(|e| crate::error::EngineError::text_render(format!("prepare: {e:?}")))?;
+            .map_err(crate::error::EngineError::text_prepare)?;
 
         let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Text Render Pass"),
@@ -768,7 +768,7 @@ impl TextRenderer {
 
         self.renderer
             .render(&self.text_atlas, &self.viewport, &mut text_pass)
-            .map_err(|e| crate::error::EngineError::text_render(format!("render: {e:?}")))?;
+            .map_err(crate::error::EngineError::text_render)?;
 
         self.batch.clear();
 

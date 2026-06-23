@@ -51,10 +51,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ColorFilter`; `ColorFilter::Matrix` wraps the `ColorMatrix` newtype and `ColorFilter`
   is `#[non_exhaustive]`; `ColorMatrix` is now `Copy`. *(breaking — internal signatures
   only, no serialized-format change)* (#277)
+- **Error model reshaped to typed `#[source]` variants.** `EngineError::TextRender` is
+  now `TextRender(#[source] Box<dyn Error + Send + Sync + 'static>)` (was
+  `TextRender(String)`); a new `TextPrepare(#[source] Box<dyn Error + Send + Sync +
+  'static>)` variant boxes `glyphon::PrepareError`. The `text_render` constructor now
+  takes `E: Error + Send + Sync + 'static` (was `Into<String>`); a new `text_prepare`
+  constructor mirrors it. `Renderer::new`'s `window_handle()`/`display_handle()` errors
+  are now boxed directly as `raw_window_handle::HandleError` (was stringified through
+  `std::io::Error::other`), preserving the original error type in the source chain.
+  *(breaking — pre-1.0; no shims/aliases per active-dev policy)*
+- **`Recoverability` enum replaces `is_recoverable` / `is_fatal`.** The new
+  `EngineError::recoverability() -> Recoverability` classifier is an exhaustive
+  internal `match`, so a future variant cannot compile without a classification arm —
+  closing the silent-third-bucket hole the two `bool` methods had (six variants fell
+  into an undocumented bucket). `Recoverability` is `#[non_exhaustive]` and re-exported
+  from the crate root. The single classifier consumer (`flui-app` direct mode) was
+  updated to `e.recoverability() == Recoverability::Recoverable`.
+- **New `SurfaceValidation` variant** for `wgpu::CurrentSurfaceTexture::Validation`.
+  Previously mapped to `SurfaceLost` (Recoverable), which caused an **infinite retry
+  loop** on a surface misconfig — `get_current_texture` kept returning `Validation`.
+  Now classified `Unrecoverable`: `flui-app`'s `render_frame` drops the frame and logs
+  at `error` level ("surface misconfig; external reconfigure required") instead of
+  retrying. Reconfiguration is **not automatic** — `render_scene` only reconfigures in
+  the `Outdated`/`Lost` arm, so a `SurfaceValidation` without an external trigger
+  (window resize / surface recreate) drops + error-logs every frame until that trigger
+  arrives. This stops the infinite retry; it is not a self-heal. *(breaking — pre-1.0)*
+- **`raw-window-handle` `std` feature enabled** in `crates/flui-engine/Cargo.toml` so
+  `HandleError` impls `std::error::Error` (the impl is `#[cfg(feature = "std")]` in
+  raw-window-handle 0.6.2), allowing direct boxing into `SurfaceCreation`.
 - **Hygiene:** `glam`/`bytemuck` pinned once in `[workspace.dependencies]`;
   `GpuFrameProfile`/`PassTiming` are `#[non_exhaustive]` (future telemetry fields stay
   additive); `wgpu-profiler` `compile_error!`-guarded on wasm32; `docs.rs` all-features
   metadata + `readme`; `#[allow(unsafe_code)]` → `#[expect(…)]` in `buffer_pool`.
+
+### Removed
+
+- **Four dead `String`-carrying `EngineError` variants** with zero production call
+  sites: `ResourceCreation(String)`, `ShaderError(String)`, `PipelineError(String)`,
+  `InvalidState(String)` — and their constructors `resource`, `shader`, `pipeline`,
+  `invalid_state`. wgpu shader/pipeline creation is infallible at runtime (validation
+  surfaces via `on_uncaptured_error`, not a `Result`); there was no typed error to wrap.
+  *(breaking — pre-1.0)*
+- **`EngineError::is_recoverable` and `EngineError::is_fatal`** — replaced by the
+  exhaustive `Recoverability` classifier (see Changed). No deprecated aliases.
 
 ### Fixed
 

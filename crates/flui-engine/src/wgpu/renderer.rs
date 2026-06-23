@@ -294,10 +294,10 @@ impl Renderer {
         // around DisplayHandle lifetime issues on multi-display systems.
         let window_handle = window
             .window_handle()
-            .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
+            .map_err(EngineError::surface_creation)?;
         let display_handle = window
             .display_handle()
-            .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
+            .map_err(EngineError::surface_creation)?;
         let (raw_window_handle, raw_display_handle) =
             (window_handle.as_raw(), Some(display_handle.as_raw()));
 
@@ -1116,9 +1116,14 @@ impl Renderer {
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 // Validation error — the surface texture could not be produced
-                // due to a validation failure. Log and return error.
+                // due to a validation failure (surface misconfig: incompatible
+                // format/usage/present mode). This is NOT a recoverable
+                // SurfaceLost: retrying `get_current_texture` without
+                // reconfiguring loops forever. Log and surface a distinct
+                // non-recoverable error so the caller drops the frame and
+                // reconfigures on the next pass.
                 tracing::error!("Surface texture validation error");
-                return Err(EngineError::SurfaceLost);
+                return Err(EngineError::SurfaceValidation);
             }
         };
 
