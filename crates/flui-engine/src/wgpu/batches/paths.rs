@@ -273,11 +273,16 @@ impl DrawBatcher {
                 .iter()
                 .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
                 .collect();
-            let indices: Vec<u32> = cached_indices.to_vec();
+            // `cached_indices` is already `&[u32]` — pass it directly; no allocation needed.
 
             if let Some(blend) = ssaa_blend {
                 Self::submit_transformed_and_divert_to_ssaa(
-                    segment, draw_order, state, vertices, &indices, blend,
+                    segment,
+                    draw_order,
+                    state,
+                    vertices,
+                    cached_indices,
+                    blend,
                 );
             } else {
                 // Bake current_transform into vertices: shape.wgsl has no model matrix.
@@ -286,7 +291,7 @@ impl DrawBatcher {
                     draw_order,
                     state,
                     vertices,
-                    &indices,
+                    cached_indices,
                     pipeline::pipeline_key_from_paint(paint),
                 );
             }

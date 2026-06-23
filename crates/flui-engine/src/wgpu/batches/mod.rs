@@ -112,14 +112,28 @@ impl DrawBatcher {
     /// (`WgpuPainter::queue_offscreen_result`), by the non-`SrcOver` draw-order
     /// contract in [`DrawBatcher::add_tessellated_with_key`], or by the final
     /// flush before GPU submission — routes through here.
+    ///
+    /// # Allocation strategy — `mem::take` over `mem::replace(…, DrawSegment::new())`
+    ///
+    /// The previous implementation called `mem::replace(segment, DrawSegment::new())`
+    /// on every seal, which triggered 7 `InstanceBatch::new(1024)` allocation calls
+    /// (7 × `Vec::with_capacity(1024 × sizeof(T))`) plus 11 more `Vec::new()` calls.
+    /// `mem::take` leaves the slot as `DrawSegment::default()` (zero-capacity Vecs)
+    /// so no heap allocation occurs at seal time — constituent `Vec`s grow lazily
+    /// on first push in the next batch.
     pub(super) fn finish_current_segment(
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
     ) {
-        let completed = std::mem::replace(segment, DrawSegment::new());
+        // `mem::take` moves completed data out in O(1); `segment` becomes a
+        // zero-capacity `DrawSegment::default()` — no allocation at seal time.
+        let completed = std::mem::take(segment);
         if !completed.is_empty() {
             draw_order.push(DrawItem::Segment(completed));
         }
+        // If the segment was empty `completed` is dropped immediately (no data,
+        // no capacity worth recycling). `segment` already holds the zero-cap
+        // default from `take`.
     }
 
     /// Append tessellated vertices/indices to `segment` under the given pipeline
