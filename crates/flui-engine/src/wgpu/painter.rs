@@ -287,18 +287,33 @@ impl WgpuPainter {
         self.batcher.tessellator.set_max_scale(scale);
     }
 
-    /// Returns `true` if any `DrawItem::AdvancedShape` (or `DrawItem::SsaaPath`
-    /// with an advanced blend mode) in the current `draw_order` has a
-    /// `device_bounds` that STRADDLES the given `damage` rect.
+    /// Returns `true` if any surface-reading draw item in the current `draw_order`
+    /// has bounds that STRADDLE the given `damage` rect.
+    ///
+    /// The items covered are:
+    ///
+    /// - `DrawItem::AdvancedShape` — a single tessellated shape with an advanced
+    ///   (dst-read) blend mode.
+    /// - `DrawItem::SsaaPath` with `blend.is_advanced()` — an SSAA path routed
+    ///   through `flush_advanced_layer` at replay time.
+    /// - `DrawItem::OpacityLayer` with `blend.is_advanced()` — a `saveLayer` with
+    ///   an explicit advanced blend mode; composited via `flush_advanced_layer` with
+    ///   `LoadOp::Load` and no scissor, so its `bounds` rect is the full composite
+    ///   footprint written to the surface.
+    ///
+    /// `DrawItem::Filter` and `DrawItem::OffscreenTexture` are intentionally
+    /// excluded: they composite their offscreen via premultiplied SrcOver and never
+    /// read the surface backdrop, so they carry no stale-pixel hazard outside the
+    /// scissor.
     ///
     /// "Straddle" means the bounds intersect the damage rect AND are NOT fully
-    /// contained by it — i.e., part of the shape falls outside the scissored
-    /// region.  Shapes fully inside or fully outside do not straddle.
+    /// contained by it — i.e., part of the item falls outside the scissored
+    /// region.  Items fully inside or fully outside do not straddle.
     ///
     /// Called by `renderer.rs` after `render_layer_recursive` to decide whether
     /// to schedule a full repaint on the next frame (self-healing).  Not test-gated
     /// because it is a production helper; it is also covered by the dedicated
-    /// detector test in `shape_blend_tests.rs`.
+    /// detector tests in `shape_blend_tests.rs`.
     pub(crate) fn has_advanced_shape_straddling(
         &self,
         damage: flui_types::Rect<flui_types::geometry::Pixels>,
@@ -316,6 +331,20 @@ impl WgpuPainter {
                 op.blend.is_advanced()
                     && op.device_bounds.intersects(&damage)
                     && !damage.contains_rect(&op.device_bounds)
+            }
+            DrawItem::OpacityLayer(op) => {
+                // An advanced-blend saveLayer composites onto the surface via
+                // `flush_advanced_layer` with `LoadOp::Load` and no scissor, reading
+                // the full `op.bounds` region of the backdrop.  Any straddle of the
+                // damage rect means unscissored pixels outside the damage may be
+                // written with a stale-backdrop blend result.
+                //
+                // `DrawItem::Filter` and `DrawItem::OffscreenTexture` are excluded:
+                // they composite via premultiplied SrcOver from an offscreen texture
+                // and do not read the surface backdrop.
+                op.blend.is_advanced()
+                    && op.bounds.intersects(&damage)
+                    && !damage.contains_rect(&op.bounds)
             }
             _ => false,
         })

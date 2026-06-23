@@ -18,6 +18,9 @@
 //! | S11a | `has_advanced_shape_straddling`: straddling AdvancedShape → `true` |
 //! | S11b | `has_advanced_shape_straddling`: fully-contained AdvancedShape → `false` |
 //! | S11c | `has_advanced_shape_straddling`: SrcOver (Segment) straddling → `false` |
+//! | S11d | `has_advanced_shape_straddling`: advanced-blend OpacityLayer straddling → `true` |
+//! | S11e | `has_advanced_shape_straddling`: advanced-blend OpacityLayer fully contained → `false` |
+//! | S11f | `has_advanced_shape_straddling`: SrcOver OpacityLayer straddling → `false` |
 
 // ─── GPU readback tests ───────────────────────────────────────────────────────
 
@@ -863,6 +866,138 @@ mod gpu_tests {
         assert!(
             !painter.has_advanced_shape_straddling(damage),
             "S11c: a SrcOver shape must NOT be flagged as straddling (not an advanced blend)"
+        );
+    }
+
+    /// S11d: A `saveLayer` with an advanced blend mode (`DrawItem::OpacityLayer`
+    /// whose `blend.is_advanced()` is `true`) whose `bounds` STRADDLE the damage
+    /// rect must cause `has_advanced_shape_straddling` to return `true`.
+    ///
+    /// The layer composites via `flush_advanced_layer` with `LoadOp::Load` and NO
+    /// scissor, so any backdrop pixel within `op.bounds` but outside the damage
+    /// rect is written with a stale-backdrop blend result.  The detector must flag
+    /// this so `renderer.rs` can schedule the self-healing full repaint.
+    ///
+    /// This test is the **red→green discriminator** for the P2 completeness fix:
+    /// it FAILS before the `DrawItem::OpacityLayer` arm is added (the detector
+    /// returns `false` — the gap), and passes after.
+    #[test]
+    fn has_advanced_shape_straddling_detector_advanced_layer_straddle_returns_true() {
+        let (device, queue) = acquire_test_device_and_queue();
+
+        // Layer spans the full surface (0..64, 0..64); bounds=None defaults to viewport.
+        let full_bounds = full_surface_bounds();
+        let half_width = SURFACE_WIDTH as f32 / 2.0;
+        // Damage is the left half (0..32, 0..64) — the layer straddles the right edge.
+        let damage = Rect::from_ltrb(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(half_width),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // Open a saveLayer with an advanced (Multiply) blend mode.  bounds=None
+        // resolves to the full viewport rect inside restore_layer, so op.bounds
+        // covers the entire 64×64 surface and straddles the left-half damage rect.
+        // A rect is drawn inside the layer so the compositor produces
+        // RestoreOutcome::Composite (not Empty) and emits DrawItem::OpacityLayer.
+        painter.save_layer(
+            None,
+            &Paint {
+                blend_mode: BlendMode::Multiply,
+                ..Default::default()
+            },
+        );
+        painter.rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
+        painter.restore_layer();
+
+        assert!(
+            painter.has_advanced_shape_straddling(damage),
+            "S11d: a full-surface advanced-blend saveLayer must straddle a left-half damage rect"
+        );
+    }
+
+    /// S11e: A `saveLayer` with an advanced blend mode whose `bounds` are FULLY
+    /// CONTAINED within the damage rect must cause
+    /// `has_advanced_shape_straddling` to return `false`.
+    ///
+    /// The scissor already covers the layer's entire composite footprint, so no
+    /// stale-backdrop pixel can be written outside the damage region.
+    #[test]
+    fn has_advanced_shape_straddling_detector_advanced_layer_contained_returns_false() {
+        let (device, queue) = acquire_test_device_and_queue();
+
+        // Layer is the LEFT QUARTER (0..16, 0..64) — fully inside the left-half damage.
+        let quarter_width = SURFACE_WIDTH as f32 / 4.0;
+        let layer_bounds = Rect::from_ltrb(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(quarter_width),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+        // Damage is the left half (0..32, 0..64) — fully contains the layer.
+        let half_width = SURFACE_WIDTH as f32 / 2.0;
+        let damage = Rect::from_ltrb(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(half_width),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // Explicit bounds = left-quarter rect; explicit bounds are respected as-is
+        // (no viewport fallback) so op.bounds will be the quarter rect.
+        // A rect inside ensures RestoreOutcome::Composite (not Empty).
+        painter.save_layer(
+            Some(layer_bounds),
+            &Paint {
+                blend_mode: BlendMode::Multiply,
+                ..Default::default()
+            },
+        );
+        painter.rect(layer_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
+        painter.restore_layer();
+
+        assert!(
+            !painter.has_advanced_shape_straddling(damage),
+            "S11e: an advanced-blend saveLayer fully within the damage rect must NOT straddle"
+        );
+    }
+
+    /// S11f: A `saveLayer` with a plain SrcOver blend mode whose `bounds` straddle
+    /// the damage rect must cause `has_advanced_shape_straddling` to return `false`.
+    ///
+    /// SrcOver layers do not call `flush_advanced_layer` and therefore do not read
+    /// the surface backdrop — they cannot write stale-backdrop pixels outside the
+    /// scissor.  Only the `is_advanced()` gate on the `OpacityLayer` arm admits
+    /// the hazardous case.
+    #[test]
+    fn has_advanced_shape_straddling_detector_srcover_layer_straddle_returns_false() {
+        let (device, queue) = acquire_test_device_and_queue();
+
+        // Layer spans the full surface (0..64, 0..64).
+        let full_bounds = full_surface_bounds();
+        let half_width = SURFACE_WIDTH as f32 / 2.0;
+        let damage = Rect::from_ltrb(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(half_width),
+            Pixels(SURFACE_HEIGHT as f32),
+        );
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        // SrcOver saveLayer at half opacity — the compositor emits DrawItem::OpacityLayer
+        // with blend=SrcOver (not advanced).  A rect inside ensures RestoreOutcome::Composite.
+        // The OpacityLayer arm in the detector gates on `op.blend.is_advanced()`, which is
+        // `false` for SrcOver, so the straddling check returns `false`.
+        painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 128)));
+        painter.rect(full_bounds, &Paint::fill(Color::rgba(100, 200, 50, 200)));
+        painter.restore_layer();
+
+        assert!(
+            !painter.has_advanced_shape_straddling(damage),
+            "S11f: a SrcOver saveLayer must NOT be flagged as straddling (no backdrop read)"
         );
     }
 }

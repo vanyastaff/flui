@@ -63,6 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top of opaque content (e.g. a filtered layer over an opaque background). (#276)
 - `ColorFilter::Mode` is now composited **over** the image as a per-pixel blend, fixing
   a flush-bucket-order bug where the tint drew under the opaque image. (#241)
+- **Advanced (dst-read) shapes/layers no longer leave stale pixels under partial damage.**
+  An advanced-blend shape, SSAA path, or `saveLayer` whose `device_bounds` straddle a
+  partial-damage scissor edge was clipped to the damage rect on its foreground but
+  blended over its full bounds with `LoadOp::Load` + no scissor — writing the prior
+  frame's backdrop in the out-of-damage slice (a damage-completeness gap: a dst-read
+  shape's true dirty region is its full bounds). The renderer now detects such a
+  straddle (`has_advanced_shape_straddling`) and schedules a full repaint on the next
+  frame (1-frame self-heal; partial damage is currently unused so the transient is
+  unobservable today).
 
 ### Performance
 
