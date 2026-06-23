@@ -39,11 +39,8 @@ use super::{
 /// the CPU oracle in the GPU readback tests, ensuring one authoritative home for
 /// the IEC 61966-2-1 piecewise formula.
 ///
-/// Under **Scope A** this type is constructed only from `cfg(test)` GPU readback
-/// tests (no production `push_color_filter` → `LayerFilter::Gamma` wiring yet).
-/// The `#[cfg_attr]` gates dead_code away in non-test builds only; under `cfg(test)`
-/// the lint stays live so regressions surface immediately.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Constructed from the production `push_color_filter` path via
+/// `ColorFilter::LinearToSrgbGamma` / `ColorFilter::SrgbToLinearGamma`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GammaDirection {
     /// sRGB → linear light: apply the electro-optical transfer function
@@ -93,13 +90,8 @@ pub(crate) enum LayerFilter {
     /// Mirrors [`flui_types::Color::blend`] (`self` = filter color = src,
     /// `dst` = layer pixel): the CPU oracle for the GPU readback tests.
     ///
-    /// Constructed only from `#[cfg(test)]` paths under **Scope A** (no
-    /// production `push_color_filter` → `LayerFilter::Mode` wiring yet).
-    // Scope A: no production producer of this variant yet — it is constructed
-    // only in `cfg(test)` GPU readback tests. The `apply_mode` function and
-    // `ModePipeline` that consume it are live (referenced in the fold arm),
-    // so only the *variant construction sites* need the dead_code gate.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Constructed from the production `push_color_filter` path via
+    /// `ColorFilter::Mode { color, blend_mode }`.
     Mode {
         /// Filter color in straight sRGB `[r, g, b, a]` (values in `[0, 1]`).
         color: [f32; 4],
@@ -118,9 +110,8 @@ pub(crate) enum LayerFilter {
     /// The GPU shader unpremultiplies, applies the transfer per R/G/B, clamps to
     /// `[0, 1]`, and repremultiplies; alpha is left unchanged.
     ///
-    /// Constructed only from `#[cfg(test)]` paths under **Scope A**.
-    // Scope A: same dead_code rationale as `Mode` above.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Constructed from the production `push_color_filter` path via
+    /// `ColorFilter::LinearToSrgbGamma` / `ColorFilter::SrgbToLinearGamma`.
     Gamma(GammaDirection),
 }
 

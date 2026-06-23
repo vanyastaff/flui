@@ -437,8 +437,12 @@ pub trait LayerStateStack {
     /// Pop the most recent opacity from the effect stack
     fn pop_opacity(&mut self);
 
-    /// Push a color filter onto the effect stack
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix);
+    /// Push a color filter onto the effect stack.
+    ///
+    /// Accepts the full [`flui_types::painting::ColorFilter`] enum — `Matrix`,
+    /// `Mode`, `LinearToSrgbGamma`, and `SrgbToLinearGamma` — so all engine
+    /// GPU passes are reachable from a single trait method.
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter);
 
     /// Pop the most recent color filter from the effect stack
     fn pop_color_filter(&mut self);

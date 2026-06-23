@@ -943,8 +943,11 @@ impl DrawBatcher {
             }
             ColorFilter::Matrix(matrix) => {
                 // Apply color matrix to image pixel data on CPU.
+                // `matrix` is `ColorMatrix` (a `[f32;20]` newtype); access
+                // the raw values through `matrix.values`.
                 // Matrix / gamma branches carry no per-pixel blend mode and
                 // always delegate with the paint's blend mode unchanged.
+                let m = &matrix.values;
                 let data = image.data();
                 let w = image.width();
                 let h = image.height();
@@ -956,24 +959,12 @@ impl DrawBatcher {
                     let b = f32::from(pixel[2]) / 255.0;
                     let a = f32::from(pixel[3]) / 255.0;
 
-                    let nr =
-                        (matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4])
-                            .clamp(0.0, 1.0);
-                    let ng =
-                        (matrix[5] * r + matrix[6] * g + matrix[7] * b + matrix[8] * a + matrix[9])
-                            .clamp(0.0, 1.0);
-                    let nb = (matrix[10] * r
-                        + matrix[11] * g
-                        + matrix[12] * b
-                        + matrix[13] * a
-                        + matrix[14])
-                        .clamp(0.0, 1.0);
-                    let na = (matrix[15] * r
-                        + matrix[16] * g
-                        + matrix[17] * b
-                        + matrix[18] * a
-                        + matrix[19])
-                        .clamp(0.0, 1.0);
+                    let nr = (m[0] * r + m[1] * g + m[2] * b + m[3] * a + m[4]).clamp(0.0, 1.0);
+                    let ng = (m[5] * r + m[6] * g + m[7] * b + m[8] * a + m[9]).clamp(0.0, 1.0);
+                    let nb =
+                        (m[10] * r + m[11] * g + m[12] * b + m[13] * a + m[14]).clamp(0.0, 1.0);
+                    let na =
+                        (m[15] * r + m[16] * g + m[17] * b + m[18] * a + m[19]).clamp(0.0, 1.0);
 
                     new_data.push((nr * 255.0) as u8);
                     new_data.push((ng * 255.0) as u8);
@@ -1062,6 +1053,24 @@ impl DrawBatcher {
                 );
 
                 tracing::debug!("draw_image_filtered: SrgbToLinearGamma applied via CPU");
+            }
+            // `ColorFilter` is `#[non_exhaustive]`; this arm handles any future
+            // variants added after this site was compiled.  The image is drawn
+            // unfiltered with `paint_blend_mode` so nothing is silently dropped.
+            _ => {
+                tracing::warn!(
+                    "draw_image_filtered: unknown ColorFilter variant \
+                     — drawing image unfiltered"
+                );
+                Self::draw_image(
+                    segment,
+                    draw_order,
+                    state,
+                    texture_cache,
+                    image,
+                    dst,
+                    paint_blend_mode,
+                );
             }
         }
     }

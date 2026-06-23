@@ -447,7 +447,7 @@ impl LayerStateStack for DebugBackend {
         self.log_command("pop_opacity", "");
     }
 
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter) {
         self.log_command("push_color_filter", &format!("filter={filter:?}"));
     }
 

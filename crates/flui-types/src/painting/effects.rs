@@ -107,7 +107,7 @@ pub enum ColorAdjustment {
 ///     0.0, 0.0, 0.0, 1.0, 0.0,  // A
 /// ]);
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ColorMatrix {
     /// Matrix values in row-major order: [r0-r4, g0-g4, b0-b4, a0-a4]
@@ -417,7 +417,7 @@ impl ColorAdjustment {
                 ColorMatrix::lerp_from_identity(&ColorMatrix::invert(), *t)
             }
             ColorAdjustment::Opacity(opacity) => ColorMatrix::opacity(*opacity),
-            ColorAdjustment::Matrix(matrix) => matrix.clone(),
+            ColorAdjustment::Matrix(matrix) => *matrix,
         }
     }
 }
@@ -954,7 +954,7 @@ mod tests {
     #[test]
     fn matrix_adjustment_roundtrips_values() {
         let original = ColorMatrix::grayscale();
-        let via_adjustment = ColorAdjustment::Matrix(original.clone()).to_color_matrix();
+        let via_adjustment = ColorAdjustment::Matrix(original).to_color_matrix();
         assert_eq!(original.values, via_adjustment.values);
     }
 

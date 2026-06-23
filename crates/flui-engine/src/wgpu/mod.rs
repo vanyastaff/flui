@@ -267,6 +267,13 @@ mod blur_filter_tests;
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod compose_filter_tests;
 
+// color_filter_producer_tests contains P1-P4 GPU readback acceptance tests for
+// the T1 producer-path change: Backend::push_color_filter(&ColorFilter) dispatch
+// for Mode (P1), LinearToSrgbGamma (P2), SrgbToLinearGamma (P3), and Matrix (P4).
+// These tests would fail to compile on main (old &ColorMatrix signature).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod color_filter_producer_tests;
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================

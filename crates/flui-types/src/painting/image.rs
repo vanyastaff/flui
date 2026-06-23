@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     geometry::{Pixels, Size, px},
-    painting::BlendMode,
+    painting::{BlendMode, effects::ColorMatrix},
     styling::Color,
 };
 
@@ -374,18 +374,31 @@ impl Default for ImageConfiguration {
 ///
 /// let filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
 /// ```
+/// A color filter to apply to an image or layer.
+///
+/// ## Copy semantics
+///
+/// `ColorFilter` is `Copy`: all variants are plain-old-data.  `Matrix`
+/// wraps `ColorMatrix` (a `[f32;20]` newtype) which also derives `Copy`.
+///
+/// ## Stability
+///
+/// `#[non_exhaustive]` is set because future variants (`Shader`, `Compose`)
+/// may be added without a semver-major bump.  Match with a wildcard arm:
+/// `_ => { /* handle unknown */ }`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorFilter {
-    /// Apply a color blend mode.
+    /// Apply a Porter-Duff / W3C blend of a solid color over each pixel.
     Mode {
-        /// The color to blend with the image.
+        /// The solid filter color (SRC).
         color: Color,
-        /// The blend mode to use.
+        /// The blend equation to apply.
         blend_mode: BlendMode,
     },
 
-    /// Apply a 5x4 matrix transformation in the RGBA color space.
+    /// Apply a 5×4 row-major matrix transformation in un-premultiplied RGBA.
     ///
     /// The matrix is applied as follows:
     /// ```text
@@ -395,12 +408,20 @@ pub enum ColorFilter {
     /// | A' |   | a30 a31 a32 a33 a34 |   | A |
     /// | 1  |   |  0   0   0   0   1  |   | 1 |
     /// ```
-    Matrix([f32; 20]),
+    ///
+    /// All channels are clamped to `[0, 1]` after multiplication.
+    Matrix(ColorMatrix),
 
-    /// Apply a gamma curve when converting from linear to sRGB.
+    /// Apply the IEC 61966-2-1 transfer: linear light → sRGB-encoded.
+    ///
+    /// RGB channels are gamma-encoded per channel; alpha is passed through
+    /// unchanged.
     LinearToSrgbGamma,
 
-    /// Apply a gamma curve when converting from sRGB to linear.
+    /// Apply the IEC 61966-2-1 inverse transfer: sRGB-encoded → linear light.
+    ///
+    /// RGB channels are gamma-decoded per channel; alpha is passed through
+    /// unchanged.
     SrgbToLinearGamma,
 }
 
@@ -412,11 +433,15 @@ impl ColorFilter {
         ColorFilter::Mode { color, blend_mode }
     }
 
-    /// Creates a color filter that applies a matrix transformation.
+    /// Creates a color filter that applies a 5×4 matrix transformation.
+    ///
+    /// The `matrix` argument is the row-major `[f32; 20]` array (rows R/G/B/A,
+    /// each row has 4 multipliers then an additive offset).  Internally the
+    /// array is wrapped in [`ColorMatrix`] to keep the IR uniform.
     #[inline]
     #[must_use]
     pub const fn matrix(matrix: [f32; 20]) -> Self {
-        ColorFilter::Matrix(matrix)
+        ColorFilter::Matrix(ColorMatrix::new(matrix))
     }
 
     /// Creates a color filter that converts from linear to sRGB gamma.
@@ -438,32 +463,32 @@ impl ColorFilter {
     #[must_use]
     pub const fn grayscale() -> Self {
         #[allow(clippy::excessive_precision)]
-        ColorFilter::Matrix([
+        ColorFilter::Matrix(ColorMatrix::new([
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // R = luminance
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // G = luminance
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // B = luminance
             0.0, 0.0, 0.0, 1.0, 0.0, // A = unchanged
-        ])
+        ]))
     }
 
     /// Creates a sepia tone color filter.
     #[inline]
     #[must_use]
     pub const fn sepia() -> Self {
-        ColorFilter::Matrix([
+        ColorFilter::Matrix(ColorMatrix::new([
             0.393, 0.769, 0.189, 0.0, 0.0, 0.349, 0.686, 0.168, 0.0, 0.0, 0.272, 0.534, 0.131, 0.0,
             0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-        ])
+        ]))
     }
 
     /// Creates an inverted color filter.
     #[inline]
     #[must_use]
     pub const fn invert() -> Self {
-        ColorFilter::Matrix([
+        ColorFilter::Matrix(ColorMatrix::new([
             -1.0, 0.0, 0.0, 0.0, 255.0, 0.0, -1.0, 0.0, 0.0, 255.0, 0.0, 0.0, -1.0, 0.0, 255.0,
             0.0, 0.0, 0.0, 1.0, 0.0,
-        ])
+        ]))
     }
 }
 
@@ -614,11 +639,13 @@ mod tests {
 
     #[test]
     fn test_color_filter_matrix() {
-        let matrix = [0.0; 20];
-        let filter = ColorFilter::matrix(matrix);
+        use crate::painting::effects::ColorMatrix;
+
+        let raw = [0.0f32; 20];
+        let filter = ColorFilter::matrix(raw);
 
         match filter {
-            ColorFilter::Matrix(m) => assert_eq!(m, matrix),
+            ColorFilter::Matrix(m) => assert_eq!(m.values, raw),
             _ => panic!("Wrong variant"),
         }
     }

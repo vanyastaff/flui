@@ -7,9 +7,7 @@
 use flui_foundation::LayerId;
 use flui_types::{
     geometry::{Pixels, RRect, Rect},
-    painting::{
-        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader, TextureId,
-    },
+    painting::{BlendMode, Clip, ColorFilter, FilterQuality, ImageFilter, Path, Shader, TextureId},
     Matrix4,
 };
 
@@ -273,9 +271,9 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// # Arguments
     ///
-    /// * `color_matrix` - The color matrix to apply
-    pub fn push_color_filter(&mut self, color_matrix: ColorMatrix) -> LayerId {
-        self.push_layer(Layer::ColorFilter(ColorFilterLayer::new(color_matrix)))
+    /// * `filter` - The [`ColorFilter`] to apply (`Matrix`, `Mode`, or `Gamma` variants)
+    pub fn push_color_filter(&mut self, filter: ColorFilter) -> LayerId {
+        self.push_layer(Layer::ColorFilter(ColorFilterLayer::new(filter)))
     }
 
     /// Pushes an image filter layer (blur, etc.).

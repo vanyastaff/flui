@@ -274,7 +274,9 @@ mod tests {
 
         // Effect layers
         let _ = tree.insert(Layer::Opacity(OpacityLayer::new(0.5)));
-        let _ = tree.insert(Layer::ColorFilter(ColorFilterLayer::grayscale()));
+        let _ = tree.insert(Layer::ColorFilter(ColorFilterLayer::new(
+            flui_types::painting::ColorFilter::grayscale(),
+        )));
         let _ = tree.insert(Layer::ImageFilter(ImageFilterLayer::blur(5.0)));
 
         assert_eq!(tree.len(), 7);
