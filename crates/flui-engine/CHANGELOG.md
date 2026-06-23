@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Single source of truth for the W3C blend helpers + epsilon drift.** The
+  non-separable blend leaf helpers (`hard_light`/`lum`/`clip_color`/`set_lum`/
+  `sat`/`set_sat`) were duplicated across `mode.wgsl` and `advanced_blend.wgsl`,
+  and had drifted: `mode.wgsl`'s `clip_color` used `1e-7` where the CPU oracle
+  `Color::blend` + `advanced_blend.wgsl` use `f32::EPSILON`. Extracted them to one
+  `blend_helpers.wgsl`, prepended via `concat!(include_str!(…))` at both pipeline
+  sites, aligned the epsilon to the oracle. Adds a non-separable-on-translucent
+  GPU-vs-oracle test (MO8); the 433-test readback baseline is unchanged.
 - **~28 render-correctness bugs** surfaced by the wgpu-29 deep-audit rounds: sRGB
   encoding, group-opacity premultiplication, `ColorFilter` chroma, HiDPI offscreen
   (backdrop-filter + shader-mask resolved in device space), tessellation fill-rule /

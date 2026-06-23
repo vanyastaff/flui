@@ -719,6 +719,113 @@ mod gpu_tests {
         );
     }
 
+    // ── MO8: Non-separable modes on translucent inputs ────────────────────────
+    //
+    // Regression lock for the single-source `blend_helpers.wgsl` epsilon fix.
+    //
+    // ## What this test covers
+    //
+    // All 4 non-separable modes (Hue, Saturation, Color, Luminosity) on a
+    // **translucent** filter-color input (alpha < 255) — a combination MO5
+    // (opaque Hue) and MO6 (translucent Luminosity only) did not cover. It
+    // locks the shared `blend_helpers.wgsl` non-separable math (`lum`, `sat`,
+    // `set_sat`, `set_lum`, `clip_color`) against the CPU oracle `Color::blend`
+    // per-pixel: any future drift in a shared helper shifts the GPU output
+    // relative to the oracle and fails this assertion.
+    //
+    // ## Epsilon note (what this test does NOT lock)
+    //
+    // The pre-fix `mode.wgsl` used `1e-7` in `clip_color` while the oracle and
+    // `advanced_blend.wgsl` use `f32::EPSILON` (1.1920929e-7). That drift is
+    // NOT regression-locked by a pixel test, and deliberately so: the epsilon
+    // guards (`abs(l-n) > eps` / `abs(x-l) > eps`) only matter when the OUTER
+    // `n < 0.0` / `x > 1.0` clamp branches fire, and even then the two epsilon
+    // values differ only across a ~2e-8-wide band — a sub-LSB effect no u8
+    // readback can distinguish. The epsilon is instead protected structurally
+    // by **single-sourcing**: `clip_color` now exists in exactly one place
+    // (`blend_helpers.wgsl`), verbatim-matched to the oracle, so the two copies
+    // can no longer diverge. (The clamp branches do not fire on the vector
+    // below — its channels stay in [0,1] — confirming the sub-LSB analysis.)
+    //
+    // ## Test vector design
+    //
+    // Filter (SRC): 70%-alpha warm grey-brown (r=180, g=170, b=165, a=178)
+    //   — translucent + low-saturation, exercising the `set_sat`/`set_lum`
+    //   path through `lum` and `clip_color` against a saturated backdrop.
+    //
+    // Backdrop (DST): opaque blue-green (r=30, g=120, b=100, a=255)
+    //   — high saturation, meaningful HSL interactions with the near-grey SRC.
+
+    /// MO8: All 4 non-separable modes (Hue/Saturation/Color/Luminosity) on a
+    /// translucent SRC, oracle-locked per-pixel.
+    ///
+    /// Regression lock for the shared `blend_helpers.wgsl` non-separable helper
+    /// math (`lum`/`sat`/`set_sat`/`set_lum`/`clip_color`) vs the CPU oracle —
+    /// NOT for the epsilon constant (sub-LSB; single-sourced — see the
+    /// module-level comment above).
+    #[test]
+    fn nonseparable_modes_translucent_match_oracle() {
+        let (device, queue) = acquire_test_device_and_queue();
+
+        // Translucent low-saturation SRC over a saturated opaque DST — drives the
+        // shared set_sat/set_lum/lum path for all four non-separable modes.
+        let filter_color = Color::rgba(180, 170, 165, 178);
+        // High-saturation opaque DST — provides non-trivial HSL interaction.
+        let layer_color = Color::rgba(30, 120, 100, 255);
+
+        let modes = [
+            (BlendMode::Hue, "MO8a Hue(near-grey-translucent, teal)"),
+            (
+                BlendMode::Saturation,
+                "MO8b Saturation(near-grey-translucent, teal)",
+            ),
+            (BlendMode::Color, "MO8c Color(near-grey-translucent, teal)"),
+            (
+                BlendMode::Luminosity,
+                "MO8d Luminosity(near-grey-translucent, teal)",
+            ),
+        ];
+
+        for (mode, label) in modes {
+            let (surface_tex, surface_view) = create_surface(&device);
+            clear_surface(
+                &device,
+                &queue,
+                &surface_view,
+                wgpu::Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            );
+
+            let readback = render_with_mode_filter(
+                &device,
+                &queue,
+                &surface_tex,
+                &surface_view,
+                filter_color,
+                layer_color,
+                mode,
+            );
+
+            // Oracle (G1): same function as production blending.
+            let oracle = blend_mode_oracle(filter_color, layer_color, mode);
+
+            // Sanity: translucent SRC over opaque DST → output nearly opaque.
+            // α_out = SRC_a + DST_a·(1-SRC_a) = 178/255 + 1·(1-178/255) ≈ 1.0.
+            assert!(
+                oracle[3] > 240,
+                "{label}: oracle alpha should be ~255 for 70%-alpha SrcOver opaque, got {}",
+                oracle[3],
+            );
+
+            // GPU must match oracle within ±4 LSB (non-sep + translucent + HSL).
+            assert_interior_pixels_near(label, &readback, oracle, 4);
+        }
+    }
+
     // ── MO7: Pipeline construction test ───────────────────────────────────────
 
     /// MO7: `ModePipeline::new` must complete without a wgpu validation error.

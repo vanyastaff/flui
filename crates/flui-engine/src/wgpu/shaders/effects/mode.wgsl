@@ -101,18 +101,15 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 // ─── Blend helpers ─────────────────────────────────────────────────────────────
 //
+// The 6 shared leaf helpers (hard_light, lum, clip_color, set_lum, sat,
+// set_sat) are defined in `blend_helpers.wgsl` and prepended to this module
+// by `mode/pipeline.rs` via `concat!(include_str!(...))`.  naga sees one
+// unified module — any duplicate definition would cause a "redefined" error
+// at `create_shader_module`.
+//
 // All helpers mirror the corresponding private functions in
 // `flui_types::styling::color`.  SRC = filter color, DST = layer pixel.
 // Both operate on straight sRGB [0,1] values.
-
-/// W3C `HardLight(cb, cs)`: cs is source (SRC), cb is backdrop (DST).
-fn hard_light(cb: f32, cs: f32) -> f32 {
-    if cs <= 0.5 {
-        return 2.0 * cb * cs;
-    } else {
-        return 1.0 - 2.0 * (1.0 - cb) * (1.0 - cs);
-    }
-}
 
 /// W3C separable blend function B(cb, cs), one channel.
 /// cb = backdrop (DST straight), cs = source (SRC straight).
@@ -162,82 +159,6 @@ fn separable_blend(mode: u32, cb: f32, cs: f32) -> f32 {
     if mode == 25u { return cb * cs; }
     // Fallback (should not be reached for advanced modes)
     return cs;
-}
-
-// ─── Non-separable HSL blend helpers ──────────────────────────────────────────
-//
-// Mirrors `lum`, `sat`, `set_sat`, `set_lum`, `clip_color`, `nonseparable_blend`
-// from `flui_types::styling::color`.
-
-fn lum(c: vec3<f32>) -> f32 {
-    return 0.3 * c.x + 0.59 * c.y + 0.11 * c.z;
-}
-
-fn clip_color(c: vec3<f32>) -> vec3<f32> {
-    let l = lum(c);
-    let n = min(min(c.x, c.y), c.z);
-    let x = max(max(c.x, c.y), c.z);
-    var out = c;
-    if n < 0.0 && abs(l - n) > 1e-7 {
-        out = l + (out - l) * l / (l - n);
-    }
-    if x > 1.0 && abs(x - l) > 1e-7 {
-        out = l + (out - l) * (1.0 - l) / (x - l);
-    }
-    return out;
-}
-
-fn set_lum(c: vec3<f32>, l: f32) -> vec3<f32> {
-    let d = l - lum(c);
-    return clip_color(c + d);
-}
-
-fn sat(c: vec3<f32>) -> f32 {
-    return max(max(c.x, c.y), c.z) - min(min(c.x, c.y), c.z);
-}
-
-/// Rescale an RGB triple to target saturation `s`, preserving relative channel order.
-/// Mirrors `set_sat` in `flui_types::styling::color`.
-fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
-    // Find min/mid/max channel indices and values.
-    // We handle all 6 orderings explicitly to avoid indexing with a dynamic integer.
-    var c_min: f32;
-    var c_mid: f32;
-    var c_max: f32;
-    var idx_min: u32;
-    var idx_mid: u32;
-    var idx_max: u32;
-
-    let cx = c.x;
-    let cy = c.y;
-    let cz = c.z;
-
-    // Sort 3 values to find min/mid/max with their indices.
-    if cx <= cy && cx <= cz {
-        idx_min = 0u;
-        c_min   = cx;
-        if cy <= cz { idx_mid = 1u; c_mid = cy; idx_max = 2u; c_max = cz; }
-        else        { idx_mid = 2u; c_mid = cz; idx_max = 1u; c_max = cy; }
-    } else if cy <= cx && cy <= cz {
-        idx_min = 1u;
-        c_min   = cy;
-        if cx <= cz { idx_mid = 0u; c_mid = cx; idx_max = 2u; c_max = cz; }
-        else        { idx_mid = 2u; c_mid = cz; idx_max = 0u; c_max = cx; }
-    } else {
-        idx_min = 2u;
-        c_min   = cz;
-        if cx <= cy { idx_mid = 0u; c_mid = cx; idx_max = 1u; c_max = cy; }
-        else        { idx_mid = 1u; c_mid = cy; idx_max = 0u; c_max = cx; }
-    }
-
-    var out = vec3<f32>(0.0);
-    if c_max > c_min {
-        let mid_val = (c_mid - c_min) * s / (c_max - c_min);
-        // Write mid and max channels; min stays 0.
-        out = select(out, vec3<f32>(mid_val), vec3<bool>(idx_mid == 0u, idx_mid == 1u, idx_mid == 2u));
-        out = select(out, vec3<f32>(s),       vec3<bool>(idx_max == 0u, idx_max == 1u, idx_max == 2u));
-    }
-    return out;
 }
 
 /// W3C non-separable blend (Hue/Saturation/Color/Luminosity).
