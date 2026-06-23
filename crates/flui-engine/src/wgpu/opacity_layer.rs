@@ -131,7 +131,7 @@ impl GpuReplay {
     ///
     /// Unlike [`Self::render_segment_to_offscreen`] (which acquires a full-viewport
     /// texture), this method acquires a texture sized to `fb_dim` (the integer-
-    /// aligned grown bounds computed in `painter.rs` `restore_layer`). The segment
+    /// aligned grown bounds computed in `painter::layer`'s `restore_layer`). The segment
     /// vertices are pre-transformed so that dividing by the UNCHANGED shared viewport
     /// uniform yields the correct NDC inside the `fb_dim` render target.
     ///

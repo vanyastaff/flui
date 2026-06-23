@@ -29,7 +29,7 @@
 //! CommandRenderer trait (crate::traits)
 //!     │
 //!     ▼
-//! Backend (backend.rs) → WgpuPainter (painter.rs)
+//! Backend (backend.rs) → WgpuPainter (painter/)
 //!     │                      │
 //!     │                      ├── Tessellator
 //!     │                      ├── TextRenderer

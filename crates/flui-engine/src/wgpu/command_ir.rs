@@ -196,7 +196,7 @@ pub(crate) enum ImageFilterSpec {
     ///
     /// The passes are already in execution order (index 0 = innermost = applied
     /// first), and `restore_layer` emits a single `DrawItem::Filter` carrying
-    /// the full chain.  The `cumulative_growth` helper in `painter.rs` sums the
+    /// the full chain.  The `cumulative_growth` helper in the `painter` module sums the
     /// per-pass radius contributions to produce the expanded `grown_bounds`.
     ///
     /// Inline capacity 4 covers realistic `Compose` depth; heap-spills beyond 4
@@ -207,7 +207,7 @@ pub(crate) enum ImageFilterSpec {
 /// A lowered, flattened image-filter pass.
 ///
 /// Passes are either bounds-GROWING (Morph, Blur) or bounds-PRESERVING
-/// (ColorMatrix, Identity).  The `cumulative_growth` helper in `painter.rs`
+/// (ColorMatrix, Identity).  The `cumulative_growth` helper in the `painter` module
 /// returns the correct growth for each variant; `ColorMatrix` and `Identity`
 /// contribute 0.
 ///
@@ -309,7 +309,7 @@ pub(crate) enum ImageFilterPass {
 /// integer-origin `fb`-sized intermediate at a fractional dst_rect offsets the
 /// two grids by `frac(grown_left)`, shifting every pixel by a sub-texel.
 ///
-/// `fb_origin` and `fb_dim` are computed at **record time** in `painter.rs`
+/// `fb_origin` and `fb_dim` are computed at **record time** in `painter::layer`'s
 /// `restore_layer` and stored here so BOTH composite arms (top-level in
 /// `replay.rs` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
 /// arm-drift (risk #4 in the Task 6 spec).
