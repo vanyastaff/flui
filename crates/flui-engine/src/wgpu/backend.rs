@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 
 use super::{
-    command_ir::{ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
+    command_ir::{GammaDirection, ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
     painter::WgpuPainter,
 };
 use crate::{
@@ -1511,33 +1511,78 @@ impl LayerStateStack for Backend<'_> {
         self.painter.restore_layer();
     }
 
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter) {
+        use flui_types::painting::ColorFilter;
+
         self.flush_active_transform();
 
-        // Identity fast-path: no-op layer keeps push/pop balanced.
-        // Exact f32 comparison is correct: `ColorMatrix::identity()` is
-        // built from bit-exact 0.0/1.0 literals, so a transitive equality
-        // check correctly skips the GPU pass without ULP slop.
-        let identity = flui_types::painting::ColorMatrix::identity();
-        #[expect(
-            clippy::float_cmp,
-            reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
-        )]
-        if filter.values == identity.values {
-            self.painter.save_layer(None, &Paint::fill(Color::WHITE));
-            tracing::trace!("push_color_filter: identity matrix — no-op layer");
-            return;
+        match filter {
+            ColorFilter::Matrix(m) => {
+                // Identity fast-path: no-op layer keeps push/pop balanced.
+                // Exact f32 comparison is correct: `ColorMatrix::identity()` is
+                // built from bit-exact 0.0/1.0 literals, so a transitive equality
+                // check correctly skips the GPU pass without ULP slop.
+                let identity = flui_types::painting::effects::ColorMatrix::identity();
+                #[expect(
+                    clippy::float_cmp,
+                    reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
+                )]
+                if m.values == identity.values {
+                    self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+                    tracing::trace!("push_color_filter: identity matrix — no-op layer");
+                    return;
+                }
+                // Real color-matrix: open a filter layer.  The GPU shader applies the
+                // full 5×4 matrix per-pixel (unpremul → matrix → clamp → repremul).
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(m.values));
+                tracing::trace!(
+                    matrix = ?m.values,
+                    "push_color_filter: GPU color-matrix filter layer"
+                );
+            }
+            ColorFilter::Mode { color, blend_mode } => {
+                // Blend a solid filter color over each layer pixel via the
+                // Porter-Duff / W3C blend equation.  Unpremul → blend → clamp →
+                // repremul is applied by the GPU shader.
+                self.painter.save_layer_with_filter(
+                    None,
+                    LayerFilter::Mode {
+                        color: color.to_f32_array(),
+                        blend_mode: *blend_mode,
+                    },
+                );
+                tracing::trace!(
+                    ?color,
+                    ?blend_mode,
+                    "push_color_filter: GPU mode filter layer"
+                );
+            }
+            ColorFilter::LinearToSrgbGamma => {
+                // Linear-light → sRGB-encoded transfer per RGB channel; alpha
+                // passes through unchanged.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::LinearToSrgb));
+                tracing::trace!("push_color_filter: GPU LinearToSrgb gamma filter layer");
+            }
+            ColorFilter::SrgbToLinearGamma => {
+                // sRGB-encoded → linear-light transfer per RGB channel; alpha
+                // passes through unchanged.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::SrgbToLinear));
+                tracing::trace!("push_color_filter: GPU SrgbToLinear gamma filter layer");
+            }
+            // `ColorFilter` is `#[non_exhaustive]`; a wildcard arm is required by
+            // the compiler.  Open a balanced no-op layer so `pop_color_filter` has a
+            // matching restore, and warn once so unknown variants surface in logs.
+            _ => {
+                tracing::warn!(
+                    "push_color_filter: unknown ColorFilter variant (future extension?) \
+                     — falling back to no-op layer to keep push/pop balanced"
+                );
+                self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+            }
         }
-
-        // Real color-matrix: open a filter layer.  The GPU shader applies the
-        // full 5×4 matrix per-pixel (unpremul → matrix → clamp → repremul),
-        // so no approximation is needed here.
-        self.painter
-            .save_layer_with_filter(None, LayerFilter::ColorMatrix(filter.values));
-        tracing::trace!(
-            matrix = ?filter.values,
-            "push_color_filter: GPU color-matrix filter layer"
-        );
     }
 
     fn pop_color_filter(&mut self) {

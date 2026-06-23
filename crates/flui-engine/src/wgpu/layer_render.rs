@@ -449,7 +449,10 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ColorFilt
         if self.is_identity() {
             return;
         }
-        renderer.push_color_filter(self.color_filter());
+        // `color_filter()` returns `ColorFilter` by value (Copy); take a reference
+        // to match the `&ColorFilter` trait parameter.
+        let filter = self.color_filter();
+        renderer.push_color_filter(&filter);
     }
 
     fn cleanup(&self, renderer: &mut R) {
@@ -905,7 +908,7 @@ mod tests {
         fn pop_opacity(&mut self) {
             self.calls.push("pop_opacity".to_string());
         }
-        fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorMatrix) {
+        fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorFilter) {
             self.calls.push("push_color_filter".to_string());
         }
         fn pop_color_filter(&mut self) {
