@@ -57,10 +57,11 @@ serde = { workspace = true, optional = true }
 # Linear-algebra backend (Option D, N-geom PR 2): glam provides SIMD-by-default
 # matrix/vector math + `bytemuck` Pod derives + the `mint` interop cascade.
 # Non-optional — Matrix4 (and, in later PR-2 steps, Vec2/Transform) delegate to it.
-glam = { version = "0.33", features = ["bytemuck", "mint"] }
+# Workspace base has bytemuck; add mint here for the interop cascade.
+glam = { workspace = true, features = ["mint"] }
 
 # Pod/Zeroable derives for zero-copy GPU upload (Matrix4 + future vertex structs).
-bytemuck = { version = "1", features = ["derive"] }
+bytemuck = { workspace = true }
 
 # kurbo: f64 Bézier/curve math for the painting layer. The bridge
 # (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"` (PR 3, U8).

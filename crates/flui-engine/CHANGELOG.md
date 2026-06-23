@@ -51,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ColorFilter`; `ColorFilter::Matrix` wraps the `ColorMatrix` newtype and `ColorFilter`
   is `#[non_exhaustive]`; `ColorMatrix` is now `Copy`. *(breaking — internal signatures
   only, no serialized-format change)* (#277)
+- **Hygiene:** `glam`/`bytemuck` pinned once in `[workspace.dependencies]`;
+  `GpuFrameProfile`/`PassTiming` are `#[non_exhaustive]` (future telemetry fields stay
+  additive); `wgpu-profiler` `compile_error!`-guarded on wasm32; `docs.rs` all-features
+  metadata + `readme`; `#[allow(unsafe_code)]` → `#[expect(…)]` in `buffer_pool`.
 
 ### Fixed
 

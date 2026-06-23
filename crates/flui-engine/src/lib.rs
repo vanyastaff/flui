@@ -74,6 +74,14 @@ compile_error!(
      — see flui-engine Cargo.toml [target.wasm32] note"
 );
 
+// wgpu-profiler 0.27 has no wasm32 support; reject the combination at compile
+// time so a downstream consumer cannot accidentally enable both.
+#[cfg(all(target_arch = "wasm32", feature = "gpu-profiler"))]
+compile_error!(
+    "the `gpu-profiler` feature (wgpu-profiler 0.27) is not supported on wasm32; \
+     build without it"
+);
+
 // ============================================================================
 // ABSTRACT LAYER (backend-agnostic)
 // ============================================================================

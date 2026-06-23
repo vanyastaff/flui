@@ -9,6 +9,7 @@ repository.workspace = true
 description = "GPU-accelerated rendering engine for FLUI using wgpu"
 keywords = ["rendering", "gpu", "wgpu", "ui", "graphics"]
 categories = ["rendering::engine", "graphics", "gui"]
+readme = "README.md"
 
 [features]
 default = ["wgpu-backend", "images"]
@@ -50,13 +51,13 @@ flui-assets = { path = "../flui-assets", optional = true }
 wgpu = { workspace = true, default-features = false, optional = true }
 raw-window-handle = "0.6"
 glyphon = { version = "0.11", optional = true }
-bytemuck = { version = "1.24", features = ["derive"] }
+bytemuck = { workspace = true }
 
 # Vector graphics tessellation
 lyon = "1.0.16"
 
-# Math for GPU rendering
-glam = { version = "0.33", features = ["serde", "bytemuck"] }
+# Math for GPU rendering — workspace base has bytemuck; add serde here for GPU struct serialization
+glam = { workspace = true, features = ["serde"] }
 
 # === Utilities ===
 pollster = { workspace = true }
@@ -109,3 +110,7 @@ harness = false
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
