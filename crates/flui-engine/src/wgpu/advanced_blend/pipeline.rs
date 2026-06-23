@@ -192,7 +192,18 @@ impl AdvancedBlendPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Advanced Blend Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/advanced_blend.wgsl").into()),
+            // Prepend the shared leaf helpers (hard_light, lum, clip_color,
+            // set_lum, sat, set_sat) from blend_helpers.wgsl so naga sees one
+            // unified module.  A duplicate fn definition would cause a "redefined"
+            // error here, enforcing the single-source contract.
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../shaders/blend_helpers.wgsl"),
+                    "\n\n",
+                    include_str!("../shaders/advanced_blend.wgsl"),
+                )
+                .into(),
+            ),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

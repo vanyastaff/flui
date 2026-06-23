@@ -136,14 +136,13 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOutput {
     return out;
 }
 
-// ── Blend helpers (verbatim port of color.rs separable/nonseparable) ──────────
-
-fn hard_light(cb: f32, cs: f32) -> f32 {
-    if cs <= 0.5 {
-        return 2.0 * cb * cs;
-    }
-    return 1.0 - 2.0 * (1.0 - cb) * (1.0 - cs);
-}
+// ── Blend helpers ─────────────────────────────────────────────────────────────
+//
+// The 6 shared leaf helpers (hard_light, lum, clip_color, set_lum, sat,
+// set_sat) are defined in `blend_helpers.wgsl` and prepended to this module
+// by `advanced_blend/pipeline.rs` via `concat!(include_str!(...))`.  naga
+// sees one unified module — any duplicate definition would cause a "redefined"
+// error at `create_shader_module`.
 
 fn separable_blend(mode: u32, cb: f32, cs: f32) -> f32 {
     switch mode {
@@ -190,80 +189,6 @@ fn separable_blend(mode: u32, cb: f32, cs: f32) -> f32 {
         case 10u: { return cb + cs - 2.0 * cb * cs; }
         default: { return cs; }
     }
-}
-
-// Luminosity of an RGB triple (W3C Lum).
-fn lum(c: vec3<f32>) -> f32 {
-    return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
-}
-
-// Clip an RGB triple back into [0,1] preserving luminosity (W3C ClipColor).
-// The epsilon guards avoid 0/0 when all channels are equal.
-fn clip_color(c: vec3<f32>) -> vec3<f32> {
-    let l = lum(c);
-    let n = min(min(c.r, c.g), c.b);
-    let x = max(max(c.r, c.g), c.b);
-    var out = c;
-    if n < 0.0 && abs(l - n) > 1.1920929e-7 {
-        out = l + (out - l) * l / (l - n);
-    }
-    if x > 1.0 && abs(x - l) > 1.1920929e-7 {
-        out = l + (out - l) * (1.0 - l) / (x - l);
-    }
-    return out;
-}
-
-// Shift an RGB triple to target luminosity (W3C SetLum).
-fn set_lum(c: vec3<f32>, target_lum: f32) -> vec3<f32> {
-    let d = target_lum - lum(c);
-    return clip_color(c + d);
-}
-
-// Saturation: max channel minus min channel (W3C Sat).
-fn sat(c: vec3<f32>) -> f32 {
-    return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b);
-}
-
-// Rescale RGB triple to target saturation keeping relative channel order
-// (W3C SetSat).  A flat triple (max == min) collapses to black.
-//
-// WGSL has no sort; we implement the sort-by-magnitude manually.
-// The triple has 6 orderings; we enumerate them as the index triple
-// (i_min, i_mid, i_max) by comparing all three pairs exactly once.
-fn set_sat(c: vec3<f32>, target_sat: f32) -> vec3<f32> {
-    // Extract channels into indexed array for permutation.
-    var ch = array<f32, 3>(c.r, c.g, c.b);
-
-    // Bubble-sort 3 elements ascending: O(3 comparisons), stable.
-    var tmp: f32;
-    if ch[0] > ch[1] { tmp = ch[0]; ch[0] = ch[1]; ch[1] = tmp; }
-    if ch[1] > ch[2] { tmp = ch[1]; ch[1] = ch[2]; ch[2] = tmp; }
-    if ch[0] > ch[1] { tmp = ch[0]; ch[0] = ch[1]; ch[1] = tmp; }
-    // ch[0]=min, ch[1]=mid, ch[2]=max — but these are VALUES not original indices.
-    // We need to map back to (r,g,b); find which original index maps where.
-    let c_min = ch[0];
-    let c_mid = ch[1];
-    let c_max = ch[2];
-
-    var out_ch = array<f32, 3>(0.0, 0.0, 0.0);
-    if c_max > c_min {
-        // Determine original index for each sorted slot.
-        // Priority: if two channels are equal we still assign each to a distinct slot.
-        // We use the same lexicographic tie-break as Rust's total_cmp on f32.
-        for (var slot = 0u; slot < 3u; slot++) {
-            let cv = array<f32, 3>(c.r, c.g, c.b)[slot];
-            // Assign to min/mid/max slot based on sorted value.
-            if cv == c_min {
-                out_ch[slot] = 0.0;
-            } else if cv == c_max {
-                out_ch[slot] = target_sat;
-            } else {
-                out_ch[slot] = (cv - c_min) * target_sat / (c_max - c_min);
-            }
-        }
-    }
-    // If c_max == c_min: all channels equal → out_ch stays 0 (flat/achromatic → black).
-    return vec3<f32>(out_ch[0], out_ch[1], out_ch[2]);
 }
 
 // Non-separable blend for Hue/Saturation/Color/Luminosity modes.
