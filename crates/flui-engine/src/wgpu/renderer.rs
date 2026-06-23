@@ -166,7 +166,7 @@ struct WindowedGpuStack {
     config: wgpu::SurfaceConfiguration,
     capabilities: GpuCapabilities,
     painter: super::painter::WgpuPainter,
-    offscreen: Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>,
+    offscreen: super::offscreen::OffscreenRenderer,
     supports_copy_src: bool,
     device_lost: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "gpu-profiler")]
@@ -189,7 +189,7 @@ pub struct Renderer {
     config: Option<wgpu::SurfaceConfiguration>,
     capabilities: GpuCapabilities,
     painter: Option<super::painter::WgpuPainter>,
-    offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
+    offscreen: Option<super::offscreen::OffscreenRenderer>,
     /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
     supports_copy_src: bool,
     /// Set by the device-lost callback; checked at frame start to trigger
@@ -478,7 +478,6 @@ impl Renderer {
             Arc::clone(&queue),
             surface_format,
         );
-        let offscreen = Arc::new(parking_lot::Mutex::new(offscreen));
 
         // Create the GPU profiler if the feature is enabled AND the adapter
         // exposes TIMESTAMP_QUERY. A creation failure is non-fatal — profiling
@@ -1177,16 +1176,16 @@ impl Renderer {
         // it satisfies every downstream usage without extra flags.
         let intermediate_texture_slot: Option<super::texture_pool::PooledTexture> =
             if intermediate_active {
-                if let Some(offscreen_arc) = self.offscreen.as_ref() {
+                if let Some(offscreen) = self.offscreen.as_mut() {
                     let (surface_w, surface_h) = self
                         .config
                         .as_ref()
                         .map_or((800u32, 600u32), |c| (c.width, c.height));
-                    Some(offscreen_arc.lock().texture_pool().acquire(
-                        surface_w,
-                        surface_h,
-                        surface_format,
-                    ))
+                    Some(
+                        offscreen
+                            .texture_pool()
+                            .acquire(surface_w, surface_h, surface_format),
+                    )
                 } else {
                     // No offscreen renderer — cannot allocate intermediate.
                     // Fall back gracefully (direct path, no advanced blend).
@@ -1286,8 +1285,8 @@ impl Renderer {
         if scene.has_content()
             && let Some(painter) = self.painter.take()
         {
-            let mut backend = if let Some(ref offscreen) = self.offscreen {
-                Backend::with_offscreen(painter, Arc::clone(offscreen))
+            let mut backend = if let Some(ref mut offscreen) = self.offscreen {
+                Backend::with_offscreen(painter, offscreen)
             } else {
                 Backend::new(painter)
             };
@@ -1439,12 +1438,10 @@ impl Renderer {
         // back to the pool when `intermediate_texture_slot` drops at the end of
         // this function.
         if effective_intermediate_active
-            && let (Some(offscreen_arc), Some(slot)) =
-                (self.offscreen.as_ref(), intermediate_texture_slot.as_ref())
+            && let (Some(offscreen), Some(slot)) =
+                (self.offscreen.as_mut(), intermediate_texture_slot.as_ref())
         {
-            offscreen_arc
-                .lock()
-                .blit_to_surface(slot.texture(), &view, surface_format);
+            offscreen.blit_to_surface(slot.texture(), &view, surface_format);
         }
 
         output.present();
@@ -1677,11 +1674,12 @@ impl Renderer {
             tracing::error!("Backdrop flush failed: {}", e);
         }
 
-        if let Some(offscreen_arc) = backend.offscreen().cloned() {
-            let blur_input = {
-                let offscreen = offscreen_arc.lock();
-                offscreen.texture_pool().acquire(w, h, ctx.surface_format)
-            };
+        if backend.offscreen_mut().is_some() {
+            let blur_input = backend
+                .offscreen_mut()
+                .expect("checked is_some above")
+                .texture_pool()
+                .acquire(w, h, ctx.surface_format);
 
             // 3. Copy the device-space region from the surface to the blur input.
             flush_encoder.copy_texture_to_texture(
@@ -1706,10 +1704,10 @@ impl Renderer {
             ctx.queue.submit(std::iter::once(flush_encoder.finish()));
 
             // 4. Apply Dual Kawase blur
-            let blurred = {
-                let mut offscreen = offscreen_arc.lock();
-                offscreen.render_blur(&blur_input, sigma)
-            };
+            let blurred = backend
+                .offscreen_mut()
+                .expect("checked is_some above")
+                .render_blur(&blur_input, sigma);
 
             // 5. Queue the blurred result for compositing at the CLAMPED device
             //    rect — the copy source origin is (x,y) and extent (w,h), so the
@@ -1935,11 +1933,7 @@ mod tests {
         });
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
 
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
@@ -1947,7 +1941,7 @@ mod tests {
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // Simulate the `RenderView` DPR root transform: scale(2) on the CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -2058,18 +2052,14 @@ mod tests {
         });
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // CTM: scale(2) then translate(+10,+10).
         // Maps (x,y) → (2x+20, 2y+20).
@@ -2199,18 +2189,14 @@ mod tests {
         });
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // CTM is identity (scale=1, DPR=1): device coords == logical coords.
         // Backdrop at (350,350,200,200) — corners (350,350)→(550,550).
@@ -2939,18 +2925,14 @@ mod tests {
         });
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let offscreen = Arc::new(parking_lot::Mutex::new(OffscreenRenderer::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            format,
-        )));
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
         let painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, Arc::clone(&offscreen));
+        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         let ctx = RenderContext {
             device: Arc::clone(&device),
