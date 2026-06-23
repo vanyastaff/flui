@@ -200,22 +200,31 @@ jobs:
   # windows runners expose no hardware GPU, so `request_adapter`
   # (force_fallback_adapter:false) returns WARP with no harness change.
   #
-  # PILOT phase: `continue-on-error` + a narrow, representative subset (pure-CPU
-  # IR witness + blur identity/oracle + mode + gamma — all tolerant/absolute
-  # oracles that would expose a WARP precision divergence). Goal: prove WARP
-  # runs the suite, the ±LSB tolerances hold under software rasterization, and
-  # measure wall-time, BEFORE expanding to the full suite and flipping to a
-  # required gate. Verified by THIS workflow's run (the dev machine is DX12 with
-  # a hardware GPU — the WARP path cannot be exercised locally).
+  # The pilot (a 5-test representative subset) PROVED the approach on CI: WARP is
+  # selected on the hardware-GPU-less windows runner with no harness change, the
+  # ±LSB oracle tolerances HOLD under software rasterization (blur_oracle ±3 LSB
+  # passed), and the run is fast (nextest ~16 s; the ~8 min is the wgpu-stack
+  # build). So this now runs the FULL `enable-wgpu-tests` suite (~440 tests).
+  #
+  # Still `continue-on-error` (ADVISORY) for now: this first full-suite run
+  # measures real wall-time + surfaces any WARP-slow/flaky test before the gate
+  # becomes merge-blocking. Once the full suite shows ~3 consecutive green runs
+  # within budget, drop `continue-on-error` and add `gpu-test` to required
+  # checks. Verified only by THIS workflow's run — the dev machine is hardware
+  # DX12, so the WARP software path cannot be exercised locally.
   # ─────────────────────────────────────────────────────────────────────────
   gpu-test:
-    name: gpu-test (wgpu readback, WARP — pilot)
+    name: gpu-test (wgpu readback, WARP)
     needs: checks
     runs-on: windows-latest
-    timeout-minutes: 45
-    # Advisory during the pilot: a confirmed-flaky required GPU gate is worse
-    # than none. Flip to required (drop this line) once the full suite shows
-    # three consecutive green runs.
+    # Generous headroom: ~440 readback tests on a software rasterizer, each
+    # creating its own wgpu::Device, plus the cold wgpu-stack build. The first
+    # full run measures the real figure; tighten or shard (nextest partition)
+    # afterward if needed.
+    timeout-minutes: 60
+    # Advisory until the full suite is proven green + in-budget across a few
+    # runs: a flaky/slow required GPU gate is worse than none. Drop this line to
+    # make it merge-blocking.
     continue-on-error: true
     env:
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -238,11 +247,11 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # Narrow pilot subset across filter families. `--test-threads 1`: each test
-      # builds its own wgpu::Device; WARP serializes command submission through one
-      # software driver, so parallel submission can saturate it. The job-level
+      # Full enable-wgpu-tests suite. `--test-threads 1`: each test builds its own
+      # wgpu::Device; WARP serializes command submission through one software
+      # driver, so parallel submission can saturate it. The job-level
       # `timeout-minutes` is the hung-test backstop.
-      - name: cargo nextest run (flui-engine GPU readback — pilot subset, WARP)
+      - name: cargo nextest run (flui-engine GPU readback suite, WARP)
         run: >
           cargo nextest run
           -p flui-engine
@@ -250,7 +259,6 @@ jobs:
           --lib
           --no-fail-fast
           --test-threads 1
-          -E 'test(/draw_segment_is_pure_cpu_data|blur_zero_sigma_is_identity|blur_oracle_match_within_3_lsb|modulate_with_white_preserves_dst_pixel|srgb_to_linear_known_mid_gray_absolute/)'
 
   # ─────────────────────────────────────────────────────────────────────────
   # bench-compile — ensures benchmarks compile and link on both platforms.
