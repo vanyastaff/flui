@@ -503,7 +503,7 @@ mod tests {
         let _ = seg.rect_batch.add(instance);
         // Each rect instance must have a corresponding scissor region entry
         // (start+count for the draw call). Without this the flush loop at
-        // replay.rs `for region in &segment.rect_scissors` issues zero draws.
+        // replay/flush.rs `for region in &segment.rect_scissors` issues zero draws.
         DrawSegment::push_scissor_region(&mut seg.rect_scissors, None);
 
         let content_bounds = Rect::from_ltrb(px(10.0), px(10.0), px(30.0), px(30.0));
