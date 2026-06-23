@@ -274,6 +274,13 @@ mod compose_filter_tests;
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod color_filter_producer_tests;
 
+// scenebuilder_filter_chain_tests contains SC1-SC5 GPU readback acceptance tests
+// for T2′ of `gpu-filters-consumer-chain`: SceneBuilder→LayerTree→LayerRender→
+// Backend→GPU pixel closure for image-filter blur (SC1), Mode/Multiply (SC2),
+// LinearToSrgbGamma (SC3), SrgbToLinearGamma (SC4), and Matrix/grayscale (SC5).
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod scenebuilder_filter_chain_tests;
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================
