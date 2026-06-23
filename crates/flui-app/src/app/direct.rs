@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use flui_engine::wgpu::Renderer;
+use flui_engine::{Recoverability, wgpu::Renderer};
 use flui_layer::{LayerTree, Scene, SceneBuilder};
 use flui_platform::{
     WindowOptions,
@@ -145,10 +145,13 @@ pub fn run_direct(
         let scene = Scene::new(Size::new(px(w as f32), px(h as f32)), tree, root, frame);
 
         if let Err(e) = r.render_scene(&scene) {
-            if e.is_recoverable() {
+            if e.recoverability() == Recoverability::Recoverable {
                 tracing::warn!("Recoverable render error (will retry): {}", e);
             } else {
-                tracing::error!(error = ?e, "Fatal render error");
+                // Covers both Fatal (renderer must be recreated) and
+                // Unrecoverable (surface misconfig / resource I/O / text error:
+                // drop this frame, no blind retry). Neither auto-retries.
+                tracing::error!(error = ?e, "Non-recoverable render error");
             }
         }
 

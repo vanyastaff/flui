@@ -13,6 +13,18 @@
 //!    `source()`
 //! 4. **Informative**: Each variant provides clear context about what went
 //!    wrong
+//!
+//! # Host-crash invariant
+//!
+//! wgpu shader and pipeline creation is **infallible at runtime** in this
+//! engine: a shader/pipeline that compiled once will keep compiling for the
+//! lifetime of the process, and validation failures surface through wgpu's
+//! `on_uncaptured_error` host-level handler (which logs and aborts) rather
+//! than a `Result` the engine propagates. There is therefore no typed
+//! shader/pipeline error variant to wrap. Resource I/O failures (font/shader
+//! file loads) use [`EngineError::ResourceIo`]; GPU-side init failures use
+//! [`EngineError::SurfaceCreation`] / [`EngineError::DeviceCreation`] /
+//! [`EngineError::AdapterRequest`].
 
 use std::error::Error;
 
@@ -70,15 +82,21 @@ pub enum EngineError {
     #[error("Surface acquisition timed out")]
     Timeout,
 
+    /// Surface texture acquisition failed wgpu validation.
+    ///
+    /// wgpu's `CurrentSurfaceTexture::Validation` carries no diagnostic
+    /// payload — it signals a surface misconfiguration (format/usage/present
+    /// mode incompatibility) that **cannot** be resolved by retrying
+    /// `get_current_texture`; the surface must be reconfigured before the
+    /// next acquire. Retrying without reconfiguring loops forever, so this
+    /// is classified [`Recoverability::Unrecoverable`]: the caller logs and
+    /// drops the frame, then reconfigures on the next pass.
+    #[error("Surface texture validation error")]
+    SurfaceValidation,
+
     // ========================================================================
     // Resource errors
     // ========================================================================
-    /// Failed to create a required resource
-    ///
-    /// Generic resource creation failure with description.
-    #[error("Failed to create resource: {0}")]
-    ResourceCreation(String),
-
     /// Filesystem-backed resource (font, shader file, asset) failed to load.
     ///
     /// Preserves the underlying `std::io::Error` via `#[source]` so callers can
@@ -133,44 +151,86 @@ pub enum EngineError {
     DeviceCreation(#[source] Box<dyn Error + Send + Sync>),
 
     // ========================================================================
-    // Rendering errors
+    // Text rendering errors (glyphon)
     // ========================================================================
-    /// Shader compilation or linking failed
+    /// glyphon text atlas preparation failed.
     ///
-    /// The shader source couldn't be compiled or linked.
-    #[error("Shader error: {0}")]
-    ShaderError(String),
+    /// Boxes the underlying `glyphon::PrepareError` via `#[source]` so the
+    /// diagnostic chain survives. Use [`EngineError::text_prepare`] to
+    /// construct it from any `Error + Send + Sync + 'static`.
+    #[error("Text prepare error: {0}")]
+    TextPrepare(#[source] Box<dyn Error + Send + Sync>),
 
-    /// Pipeline creation failed
+    /// glyphon text render pass failed.
     ///
-    /// Failed to create a rendering pipeline (combination of shaders, state,
-    /// etc.)
-    #[error("Pipeline error: {0}")]
-    PipelineError(String),
-
-    /// Text rendering (glyphon prepare/render) failed.
-    ///
-    /// Carries the underlying glyphon error message via String because
-    /// `glyphon::PrepareError` and `glyphon::RenderError` are private
-    /// implementation types in older glyphon releases; we preserve the
-    /// formatted error context.
+    /// Boxes the underlying `glyphon::RenderError` via `#[source]` so the
+    /// diagnostic chain survives. Use [`EngineError::text_render`] to
+    /// construct it from any `Error + Send + Sync + 'static`.
     #[error("Text render error: {0}")]
-    TextRender(String),
+    TextRender(#[source] Box<dyn Error + Send + Sync>),
 
     // ========================================================================
     // State errors
     // ========================================================================
-    /// Invalid state for the requested operation
-    ///
-    /// The renderer is in a state that doesn't allow the requested operation.
-    #[error("Invalid state: {0}")]
-    InvalidState(String),
-
     /// Renderer was not properly initialized
     ///
     /// An operation was attempted before the renderer was fully initialized.
     #[error("Renderer not initialized")]
     NotInitialized,
+}
+
+// ============================================================================
+// Recoverability classification
+// ============================================================================
+
+/// Coarse recovery classification for an [`EngineError`].
+///
+/// Replaces the previous pair of `bool` classifiers (`is_recoverable` /
+/// `is_fatal`) which silently dropped variants into an undocumented third
+/// bucket. This enum makes the third bucket explicit and the internal match
+/// in [`EngineError::recoverability`] exhaustive, so adding a variant to
+/// `EngineError` without a classification arm is a compile error — closing
+/// the silent-third-bucket hole.
+///
+/// - [`Recoverable`] — retry the same operation on the next frame; no rebuild.
+/// - [`Fatal`] — the renderer must be recreated; surface reconfiguration
+///   cannot recover.
+/// - [`Unrecoverable`] — the frame is dropped and logged; reconfiguration or
+///   operator intervention may be required (e.g. a surface misconfig), but
+///   blindly retrying the same call loops forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Recoverability {
+    /// Retry the same operation next frame; no rebuild needed.
+    Recoverable,
+    /// The renderer must be recreated; surface reconfiguration cannot recover.
+    Fatal,
+    /// Drop the frame and log; do not blindly retry (would loop forever).
+    Unrecoverable,
+}
+
+impl EngineError {
+    /// Classify this error's recovery posture.
+    ///
+    /// The internal `match` is exhaustive — a future variant added to
+    /// [`EngineError`] cannot compile without a classification arm here, so
+    /// no variant can silently fall into an undocumented bucket.
+    #[must_use]
+    pub fn recoverability(&self) -> Recoverability {
+        match self {
+            Self::SurfaceLost | Self::Timeout => Recoverability::Recoverable,
+            Self::DeviceLost
+            | Self::SurfaceCreation(_)
+            | Self::NoAdapter
+            | Self::AdapterRequest(_)
+            | Self::DeviceCreation(_)
+            | Self::NotInitialized => Recoverability::Fatal,
+            Self::SurfaceValidation
+            | Self::ResourceIo { .. }
+            | Self::TextPrepare(_)
+            | Self::TextRender(_) => Recoverability::Unrecoverable,
+        }
+    }
 }
 
 // ============================================================================
@@ -222,54 +282,32 @@ impl EngineError {
         }
     }
 
-    /// Create a shader error from a string
+    /// Create a text-prepare error from any error type.
+    ///
+    /// Boxes the underlying `glyphon::PrepareError` (or equivalent) via
+    /// `#[source]` so the diagnostic chain survives. Follows the same
+    /// `Error + Send + Sync + 'static` ctor pattern as
+    /// [`EngineError::surface_creation`].
     #[must_use]
-    pub fn shader<S: Into<String>>(msg: S) -> Self {
-        EngineError::ShaderError(msg.into())
+    pub fn text_prepare<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        EngineError::TextPrepare(Box::new(error))
     }
 
-    /// Create a pipeline error from a string
+    /// Create a text-render error from any error type.
+    ///
+    /// Boxes the underlying `glyphon::RenderError` (or equivalent) via
+    /// `#[source]` so the diagnostic chain survives. Follows the same
+    /// `Error + Send + Sync + 'static` ctor pattern as
+    /// [`EngineError::surface_creation`].
     #[must_use]
-    pub fn pipeline<S: Into<String>>(msg: S) -> Self {
-        EngineError::PipelineError(msg.into())
-    }
-
-    /// Create a text-render error from a string.
-    #[must_use]
-    pub fn text_render<S: Into<String>>(msg: S) -> Self {
-        EngineError::TextRender(msg.into())
-    }
-
-    /// Create a resource creation error from a string
-    #[must_use]
-    pub fn resource<S: Into<String>>(msg: S) -> Self {
-        EngineError::ResourceCreation(msg.into())
-    }
-
-    /// Create an invalid state error from a string
-    #[must_use]
-    pub fn invalid_state<S: Into<String>>(msg: S) -> Self {
-        EngineError::InvalidState(msg.into())
-    }
-
-    /// Check if this error is recoverable (will likely succeed on retry)
-    #[must_use]
-    pub fn is_recoverable(&self) -> bool {
-        matches!(self, EngineError::SurfaceLost | EngineError::Timeout)
-    }
-
-    /// Check if this error is fatal (requires restart or resource cleanup)
-    #[must_use]
-    pub fn is_fatal(&self) -> bool {
-        matches!(
-            self,
-            EngineError::NoAdapter
-                | EngineError::AdapterRequest(_)
-                | EngineError::DeviceCreation(_)
-                | EngineError::SurfaceCreation(_)
-                | EngineError::NotInitialized
-                | EngineError::DeviceLost
-        )
+    pub fn text_render<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        EngineError::TextRender(Box::new(error))
     }
 }
 
@@ -291,22 +329,130 @@ mod tests {
             EngineError::NoAdapter.to_string(),
             "No suitable GPU adapter found"
         );
+        assert_eq!(
+            EngineError::SurfaceValidation.to_string(),
+            "Surface texture validation error"
+        );
     }
 
     #[test]
-    fn test_is_recoverable() {
-        assert!(EngineError::SurfaceLost.is_recoverable());
-        assert!(EngineError::Timeout.is_recoverable());
-        assert!(!EngineError::NoAdapter.is_recoverable());
-        assert!(!EngineError::surface_creation(std::io::Error::other("test")).is_recoverable());
+    fn test_recoverability_surface_validation() {
+        // The bug fix this refactor rides on: a wgpu surface-validation
+        // error must NOT be classified as Recoverable (the pre-refactor code
+        // mapped `wgpu::CurrentSurfaceTexture::Validation` to `SurfaceLost`,
+        // causing an infinite retry loop on a misconfigured surface).
+        assert_eq!(
+            EngineError::SurfaceValidation.recoverability(),
+            Recoverability::Unrecoverable
+        );
     }
 
     #[test]
-    fn test_is_fatal() {
-        assert!(EngineError::NoAdapter.is_fatal());
-        assert!(EngineError::NotInitialized.is_fatal());
-        assert!(EngineError::surface_creation(std::io::Error::other("test")).is_fatal());
-        assert!(!EngineError::SurfaceLost.is_fatal());
-        assert!(!EngineError::Timeout.is_fatal());
+    fn test_recoverability_table() {
+        // Full classification table across the three buckets. Asserts the
+        //exact value so a misclassification fails the test rather than
+        // silently passing via a bool.
+        assert_eq!(
+            EngineError::SurfaceLost.recoverability(),
+            Recoverability::Recoverable
+        );
+        assert_eq!(
+            EngineError::Timeout.recoverability(),
+            Recoverability::Recoverable
+        );
+        assert_eq!(
+            EngineError::DeviceLost.recoverability(),
+            Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::NoAdapter.recoverability(),
+            Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::surface_creation(std::io::Error::other("test")).recoverability(),
+            Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::adapter_request(std::io::Error::other("test")).recoverability(),
+            Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::device_creation(std::io::Error::other("test")).recoverability(),
+            Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::NotInitialized.recoverability(),
+            Recoverability::Fatal
+        );
+        assert_eq!(
+            EngineError::SurfaceValidation.recoverability(),
+            Recoverability::Unrecoverable
+        );
+        assert_eq!(
+            EngineError::resource_io("font load", std::io::Error::other("boom")).recoverability(),
+            Recoverability::Unrecoverable
+        );
+        assert_eq!(
+            EngineError::text_prepare(std::io::Error::other("prepare boom")).recoverability(),
+            Recoverability::Unrecoverable
+        );
+        assert_eq!(
+            EngineError::text_render(std::io::Error::other("render boom")).recoverability(),
+            Recoverability::Unrecoverable
+        );
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    #[test]
+    fn test_text_prepare_source_chain() {
+        // Red pre-refactor: `text_prepare` / `TextPrepare` / typed `#[source]`
+        // did not exist; the old code stringified via
+        // `text_render(format!("prepare: {e:?}"))` into `TextRender(String)`,
+        // whose `source()` is `None` -> `unwrap()` would panic. Post-refactor
+        // the typed ctor boxes the glyphon error and `source()` downcasts back
+        // to the original `PrepareError`.
+        let e = EngineError::text_prepare(glyphon::PrepareError::AtlasFull);
+        assert_eq!(
+            e.source()
+                .unwrap()
+                .downcast_ref::<glyphon::PrepareError>()
+                .unwrap(),
+            &glyphon::PrepareError::AtlasFull
+        );
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    #[test]
+    fn test_text_render_source_chain() {
+        // Red pre-refactor: `text_render` took `Into<String>` and the
+        // `TextRender(String)` variant's `source()` is `None`. Post-refactor
+        // the typed ctor boxes the glyphon error and `source()` downcasts back
+        // to the original `RenderError`.
+        let e = EngineError::text_render(glyphon::RenderError::RemovedFromAtlas);
+        assert_eq!(
+            e.source()
+                .unwrap()
+                .downcast_ref::<glyphon::RenderError>()
+                .unwrap(),
+            &glyphon::RenderError::RemovedFromAtlas
+        );
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    #[test]
+    fn test_handle_error_preserved() {
+        // Red pre-refactor: the call site stringified the `HandleError` via
+        // `std::io::Error::other(e.to_string())` and boxed the `io::Error`,
+        // so `source().downcast_ref::<HandleError>()` returned `None`.
+        // Post-refactor (with the raw-window-handle `std` feature enabled)
+        // `HandleError` impls `std::error::Error` and is boxed directly,
+        // preserving the original error type in the source chain.
+        let e = EngineError::surface_creation(raw_window_handle::HandleError::Unavailable);
+        assert!(
+            e.source()
+                .unwrap()
+                .downcast_ref::<raw_window_handle::HandleError>()
+                .is_some()
+        );
     }
 }

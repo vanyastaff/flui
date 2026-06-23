@@ -545,6 +545,19 @@ impl AppBinding {
                         "GPU device lost — recovery will be attempted by the platform runner"
                     );
                 }
+                Err(EngineError::SurfaceValidation) => {
+                    // Surface misconfig (wgpu Validation). Drop this frame and
+                    // log; reconfiguration is NOT automatic — it requires an
+                    // external trigger (window resize / surface recreate).
+                    // `render_scene` only reconfigures in the Outdated/Lost arm,
+                    // so without such a trigger this would drop + error-log
+                    // every frame. We do not retry blindly: re-reconfiguring the
+                    // same bad config would re-validate and loop forever.
+                    self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                    tracing::error!(
+                        "Surface validation error — surface misconfig; external reconfigure required"
+                    );
+                }
                 Err(e) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
                     tracing::error!(error = ?e, "Render error (non-recoverable this frame)");

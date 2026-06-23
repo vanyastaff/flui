@@ -101,7 +101,7 @@ pub mod wgpu;
 
 // Abstract traits and errors
 pub use commands::{dispatch_command, dispatch_commands};
-pub use error::{EngineError, EngineResult};
+pub use error::{EngineError, EngineResult, Recoverability};
 // Re-export layer types from flui-layer
 pub use flui_layer::{
     CanvasLayer, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor,

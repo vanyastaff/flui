@@ -48,7 +48,11 @@ flui-assets = { path = "../flui-assets", optional = true }
 
 # === GPU Rendering (wgpu backend) ===
 wgpu = { workspace = true, default-features = false, optional = true }
-raw-window-handle = "0.6"
+# `std` is required so `raw_window_handle::HandleError` impls `std::error::Error`
+# (the impl is `#[cfg(feature = "std")]` in raw-window-handle 0.6.2); that lets us
+# box a `HandleError` directly into `EngineError::SurfaceCreation` via the typed
+# `#[source] Box<dyn Error + Send + Sync + 'static>` ctor instead of stringifying.
+raw-window-handle = { version = "0.6", features = ["std"] }
 glyphon = { version = "0.11", optional = true }
 bytemuck = { version = "1.24", features = ["derive"] }
 
