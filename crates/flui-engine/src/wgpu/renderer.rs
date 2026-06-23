@@ -1283,12 +1283,12 @@ impl Renderer {
 
         // 3. Render scene content via LayerTree traversal
         if scene.has_content()
-            && let Some(painter) = self.painter.take()
+            && let Some(mut painter) = self.painter.take()
         {
             let mut backend = if let Some(ref mut offscreen) = self.offscreen {
-                Backend::with_offscreen(painter, offscreen)
+                Backend::with_offscreen(&mut painter, offscreen)
             } else {
-                Backend::new(painter)
+                Backend::new(&mut painter)
             };
             // Cycle 4 U-8: bind the frame render target so the
             // DisplayList-level `render_backdrop_filter` path (U-9)
@@ -1370,8 +1370,12 @@ impl Renderer {
                 );
             }
 
-            // 5. Final flush — submit remaining painter batches
-            let mut painter = backend.into_painter();
+            // 5. Final flush — submit remaining painter batches.
+            // Drop the Backend first: Drop calls flush_active_transform(), which
+            // balances any deferred lazy-coalescing save left by `with_transform`.
+            // Once `backend` is dropped the exclusive borrow on `painter` ends, so
+            // `painter` is directly accessible for the render and maintenance calls.
+            drop(backend);
             let mut final_encoder =
                 self.device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1935,13 +1939,13 @@ mod tests {
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
 
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
 
         // Simulate the `RenderView` DPR root transform: scale(2) on the CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -2053,13 +2057,13 @@ mod tests {
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
 
         // CTM: scale(2) then translate(+10,+10).
         // Maps (x,y) → (2x+20, 2y+20).
@@ -2190,13 +2194,13 @@ mod tests {
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
 
         // CTM is identity (scale=1, DPR=1): device coords == logical coords.
         // Backdrop at (350,350,200,200) — corners (350,350)→(550,550).
@@ -2926,13 +2930,13 @@ mod tests {
         let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (surface_w, surface_h),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
 
         let ctx = RenderContext {
             device: Arc::clone(&device),

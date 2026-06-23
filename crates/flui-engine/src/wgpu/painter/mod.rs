@@ -204,9 +204,9 @@ impl WgpuPainter {
         // Assert save/restore balance at the frame boundary BEFORE clearing.
         //
         // Not placed in `GpuStateStack::Drop` because the Backend
-        // implicit-single-save (a lazy `active_transform` save left when a
-        // Backend is dropped without calling `into_painter`) must not
-        // false-positive-panic, and a Drop panic during unwind aborts the process.
+        // implicit-single-save (a lazy `active_transform` save, balanced by
+        // `Backend`'s own `Drop`) must not false-positive-panic here, and a
+        // Drop panic during unwind aborts the process.
         //
         // The assertion logic lives in `GpuStateStack::debug_assert_balanced`
         // so it can be exercised by unit tests without a GPU.

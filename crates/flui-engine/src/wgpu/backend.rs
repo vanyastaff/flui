@@ -60,27 +60,27 @@ fn build_gradient_stops(
 ///
 /// # Lifetime parameter
 ///
-/// `Backend<'frame>` borrows the current frame's `wgpu::TextureView` +
-/// `wgpu::Texture` when [`bind_surface`](Self::bind_surface) is
-/// called. The lifetime is internal to one render pass: `Renderer::render`
-/// creates the Backend, binds the frame surface, dispatches the
-/// `LayerTree`, then drops the Backend before the surface is
-/// presented. Sites that don't need to flush mid-frame (shader-mask
-/// offscreen rendering, tests) call [`Backend::new`] which leaves
-/// the surface handles unbound; the
+/// `Backend<'frame>` borrows the current frame's painter (`&'frame mut
+/// WgpuPainter`) and, when present, the `wgpu::TextureView` /
+/// `wgpu::Texture` bound by [`bind_surface`](Self::bind_surface). The
+/// lifetime is internal to one render pass: `Renderer::render` creates
+/// the Backend in a scoped block, dispatches the `LayerTree`, then lets
+/// it drop before calling `painter.render()`. Sites that don't need to
+/// flush mid-frame (shader-mask offscreen rendering, tests) call
+/// [`Backend::new`] which leaves the surface handles unbound; the
 /// [`render_backdrop_filter`](CommandRenderer::render_backdrop_filter)
 /// command-path falls back to passthrough when the handles are
 /// `None` (cycle 4 U-8, U-9).
 ///
 /// Per *Rust for Rustaceans* ch.2 "Variance and Lifetimes": the
 /// `'frame` parameter encodes the borrow's scope so the compiler
-/// enforces that no Backend outlives its bound surface.
+/// enforces that no Backend outlives its bound resources.
 ///
 /// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
 /// don't implement Debug.
 #[allow(missing_debug_implementations)]
 pub struct Backend<'frame> {
-    painter: WgpuPainter,
+    painter: &'frame mut WgpuPainter,
     offscreen: Option<&'frame mut super::offscreen::OffscreenRenderer>,
     /// Cached offscreen painter reused across shader mask invocations.
     /// Lazily created on first use, resized when dimensions change.
@@ -104,7 +104,7 @@ pub struct Backend<'frame> {
     /// already-applied state rather than paying another stack push.
     ///
     /// [`flush_active_transform`](Self::flush_active_transform)
-    /// balances the deferred `restore()`. It is called at every
+    /// balances the deferred `restore()`. It is called eagerly at every
     /// point where the painter save stack could be mutated outside
     /// `with_transform`'s coalescing path -- the identity /
     /// transform-mismatch arms inside `with_transform` itself, every
@@ -112,34 +112,34 @@ pub struct Backend<'frame> {
     /// `pop_clip`, `push_offset`, `push_transform`, `pop_transform`,
     /// `push_opacity`, `pop_opacity`, `push_color_filter`,
     /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`),
-    /// the explicit [`Backend::restore`](Self::restore) escape
-    /// hatch, and [`into_painter`](Self::into_painter) (so the
-    /// returned painter is balanced for re-use). PR #117 review
-    /// (Codex P1) added the LayerStateStack flush points after the
-    /// initial wave-5 ship; without them, a `push_clip → with_transform
-    /// → pop_clip` sequence would pop the lazy save instead of the
-    /// clip, corrupting state across sibling layers.
+    /// and the explicit [`Backend::restore`](Self::restore) escape
+    /// hatch. PR #117 review (Codex P1) added the LayerStateStack
+    /// flush points after the initial wave-5 ship; without them, a
+    /// `push_clip → with_transform → pop_clip` sequence would pop the
+    /// lazy save instead of the clip, corrupting state across sibling
+    /// layers.
     ///
     /// `None` means the painter is at the default state and no
     /// balance is owed.
     ///
-    /// Why no `Drop` impl: `into_painter(self) -> WgpuPainter`
-    /// requires moving a field out of `Backend`, which Rust forbids
-    /// on a `Drop` type. The full set of flush points above covers
-    /// every balanced exit; an implicit drop without
-    /// `into_painter` leaves one unbalanced `save()` in a painter
-    /// that's immediately dropped (unobservable).
+    /// The `Drop` impl provides a final safety-net flush: if a future
+    /// code path forgets to call `flush_active_transform()` before
+    /// the Backend goes out of scope, Drop balances the deferred save
+    /// so the borrowed painter is left in a clean state. The 21 eager
+    /// call sites above are NOT replaced by Drop — they flush at
+    /// precisely the right point for correctness; Drop is the backstop
+    /// for any site that is missed.
     active_transform: Option<Matrix4>,
 }
 
 impl<'frame> Backend<'frame> {
-    /// Create a new Backend with the given painter.
+    /// Create a new Backend that borrows the given painter for the frame.
     ///
     /// `surface_view` / `surface_texture` start unbound. Call
     /// [`bind_surface`](Self::bind_surface) when the frame surface
     /// is available to enable the DisplayList-backdrop-filter
     /// command path.
-    pub fn new(painter: WgpuPainter) -> Self {
+    pub fn new(painter: &'frame mut WgpuPainter) -> Self {
         Self {
             painter,
             offscreen: None,
@@ -150,9 +150,9 @@ impl<'frame> Backend<'frame> {
         }
     }
 
-    /// Create a new Backend with the given painter and offscreen renderer.
+    /// Create a new Backend that borrows the given painter and offscreen renderer.
     pub fn with_offscreen(
-        painter: WgpuPainter,
+        painter: &'frame mut WgpuPainter,
         offscreen: &'frame mut super::offscreen::OffscreenRenderer,
     ) -> Self {
         Self {
@@ -192,27 +192,12 @@ impl<'frame> Backend<'frame> {
 
     /// Get a reference to the underlying painter.
     pub fn painter(&self) -> &WgpuPainter {
-        &self.painter
+        self.painter
     }
 
     /// Get a mutable reference to the underlying painter.
     pub fn painter_mut(&mut self) -> &mut WgpuPainter {
-        &mut self.painter
-    }
-
-    /// Consume the renderer and return the underlying painter.
-    ///
-    /// The borrowed offscreen reference is released here; `Renderer` retains
-    /// direct ownership of its `OffscreenRenderer`.
-    ///
-    /// Cycle 4 wave 5 E-13: flushes any active lazy-pop transform
-    /// first so the returned painter is balanced -- callers reuse
-    /// the painter (Renderer feeds it into the next frame, the
-    /// shader-mask offscreen path stashes it into a cache) and must
-    /// not inherit a leftover `save()`.
-    pub fn into_painter(mut self) -> WgpuPainter {
-        self.flush_active_transform();
-        self.painter
+        &mut *self.painter
     }
 
     /// Returns the current save stack depth.
@@ -296,8 +281,8 @@ impl<'frame> Backend<'frame> {
     /// push_transform / pop_transform / push_opacity / pop_opacity
     /// / push_color_filter / pop_color_filter / push_image_filter
     /// / pop_image_filter), the public `Backend::restore` escape
-    /// hatch, and `into_painter` (so the moved-out painter is
-    /// balanced for re-use). See [`Self::active_transform`] for
+    /// hatch, and the `Drop` impl (so the borrowed painter is
+    /// balanced when the Backend leaves scope). See [`Self::active_transform`] for
     /// the full list and the PR #117 review (Codex P1) context.
     ///
     /// Audit context: a render pass batching 1000 same-transform
@@ -311,7 +296,7 @@ impl<'frame> Backend<'frame> {
     {
         if transform.is_identity() {
             self.flush_active_transform();
-            draw_fn(&mut self.painter);
+            draw_fn(self.painter);
             return;
         }
 
@@ -319,7 +304,7 @@ impl<'frame> Backend<'frame> {
             // Path 2: same matrix as the currently-applied one --
             // skip the push entirely; the painter is already in the
             // right state.
-            draw_fn(&mut self.painter);
+            draw_fn(self.painter);
             return;
         }
 
@@ -344,7 +329,7 @@ impl<'frame> Backend<'frame> {
         }
 
         self.active_transform = Some(*transform);
-        draw_fn(&mut self.painter);
+        draw_fn(self.painter);
     }
 
     /// Cycle 4 wave 5 E-13: balance the deferred `save()` left by a
@@ -354,7 +339,7 @@ impl<'frame> Backend<'frame> {
     /// Called from every site that mutates the painter save stack
     /// outside the coalescing path: `with_transform`'s identity /
     /// mismatch arms, every `LayerStateStack` method on `Backend`,
-    /// the public `Backend::restore`, and `into_painter`. See the
+    /// the public `Backend::restore`, and the `Drop` impl. See the
     /// [`active_transform`](Self::active_transform) field doc for
     /// the full list and the PR #117 review (Codex P1) context.
     fn flush_active_transform(&mut self) {
@@ -365,18 +350,19 @@ impl<'frame> Backend<'frame> {
     }
 }
 
-// Cycle 4 wave 5 E-13: a `Drop` impl that calls `flush_active_transform()`
-// would be the natural place to balance the lazy-pop save, but it
-// conflicts with `into_painter(self) -> WgpuPainter` -- Rust forbids
-// moving a field out of a `Drop` type. The chosen shape instead:
-// `into_painter` explicitly calls `flush_active_transform()` before
-// the move, and `with_transform`'s identity / mismatch paths also
-// flush. The only remaining failure mode is a `Backend` dropped via
-// implicit drop without going through `into_painter` -- which would
-// leak one `save()` worth of transform-stack depth in the painter
-// being dropped. That painter is itself going out of scope (no
-// other reference can leak the state), so the unbalanced save is
-// dropped with the painter and never observed.
+impl Drop for Backend<'_> {
+    /// Safety-net: balance any deferred lazy-coalescing save that was left on
+    /// the painter stack by `with_transform`. The 21 eager `flush_active_transform`
+    /// call sites throughout the impl (every `LayerStateStack` method, the identity
+    /// / mismatch arms of `with_transform`, and the `restore` escape hatch) flush at
+    /// the correct semantic point. This `Drop` impl is a backstop for any future call
+    /// path that forgets to flush: when the Backend goes out of scope the painter is
+    /// left balanced and ready for its next use (`painter.render`,
+    /// `end_frame_maintenance`, or the next frame's Backend).
+    fn drop(&mut self) {
+        self.flush_active_transform();
+    }
+}
 
 impl CommandRenderer for Backend<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
@@ -695,8 +681,12 @@ impl CommandRenderer for Backend<'_> {
             };
 
             // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
-            // Ensure the cache is populated (creates or resizes as needed), then take
-            // it out temporarily so we can wrap it in a Backend for command dispatch.
+            // Ensure the cache is populated (creates or resizes as needed), then borrow
+            // it for command dispatch. No take/put-back needed: the Backend borrows
+            // `&mut WgpuPainter` directly from `self.offscreen_painter`, and the Drop
+            // impl on the temp Backend guarantees `flush_active_transform()` runs when
+            // the dispatch scope ends — leaving the cached painter balanced for its next
+            // use (render call below, or the next ShaderMask in this frame).
             // The cached painter's render target is the device-sized child texture,
             // so it must be sized at device resolution too.
             let _ = self.get_or_create_offscreen_painter(
@@ -705,30 +695,31 @@ impl CommandRenderer for Backend<'_> {
                 format,
                 (dev_width, dev_height),
             );
-            let mut temp_painter = self
-                .offscreen_painter
-                .take()
-                .expect("offscreen_painter was just populated by get_or_create");
             {
+                let offscreen_painter = self
+                    .offscreen_painter
+                    .as_mut()
+                    .expect("offscreen_painter was just populated by get_or_create");
                 // Reset per-frame clip/transform/opacity state before rendering
                 // into this painter.  Without this, a clip_rect command from a
                 // previous ShaderMask call in the same frame leaks
                 // `current_scissor` / `current_rrect_clip` into the next one,
                 // causing the second ShaderMask's child content to be silently
                 // clipped to the prior mask's scissor region.
-                temp_painter.reset_frame_state();
+                offscreen_painter.reset_frame_state();
                 // After reset the CTM is identity. The child DisplayList carries
                 // logical coordinates, so scale by the DPR to bake it into the
                 // device-sized offscreen — without this the child renders into
                 // the top-left logical quadrant of the device texture.
                 if (dpr_scale - 1.0).abs() > f32::EPSILON {
-                    temp_painter.scale(dpr_scale, dpr_scale);
+                    offscreen_painter.scale(dpr_scale, dpr_scale);
                 }
-                let mut temp_backend = Backend::new(temp_painter);
+                let mut temp_backend = Backend::new(offscreen_painter);
                 for command in child.commands() {
                     dispatch_command(command, &mut temp_backend);
                 }
-                temp_painter = temp_backend.into_painter();
+                // temp_backend drops here → Drop impl calls flush_active_transform(),
+                // balancing any deferred lazy-coalescing save on the offscreen painter.
             }
 
             // Step 4: Flush child content to offscreen texture
@@ -764,13 +755,14 @@ impl CommandRenderer for Backend<'_> {
                 child_tex.view(),
                 child_tex.texture(),
             );
-            if let Err(e) = temp_painter.render(child_target, &mut encoder) {
+            let offscreen_painter = self
+                .offscreen_painter
+                .as_mut()
+                .expect("offscreen_painter was populated in step 2 and not moved");
+            if let Err(e) = offscreen_painter.render(child_target, &mut encoder) {
                 tracing::error!("Failed to render shader mask child content: {}", e);
             }
             queue.submit(std::iter::once(encoder.finish()));
-
-            // Put the cached painter back for reuse
-            self.offscreen_painter = Some(temp_painter);
 
             // Step 5: Apply shader mask via GPU pipeline. The result texture is
             // sized at device resolution; `bounds` stays logical so the shader's
@@ -1839,13 +1831,13 @@ mod tests {
         let format = wgpu::TextureFormat::Bgra8Unorm;
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
 
         // Simulate the `RenderView` DPR root transform on the live CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -1925,13 +1917,13 @@ mod tests {
         let format = wgpu::TextureFormat::Bgra8Unorm;
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
 
         // Simulate DPR=2 on the live CTM.
         backend.painter_mut().scale(2.0, 2.0);
@@ -2031,13 +2023,13 @@ mod tests {
         let format = wgpu::TextureFormat::Bgra8Unorm;
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (800, 800),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
 
         // Step 1: push the DPR root scale(2) into the main painter CTM — this
         // happens before any command dispatch in a real frame.
@@ -2138,13 +2130,12 @@ mod tests {
         let bounds = Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(W as f32), Pixels(H as f32));
 
         let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
-        let painter = WgpuPainter::with_shared_device(
+        let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             format,
             (W, H),
         );
-        let mut backend = Backend::with_offscreen(painter, &mut offscreen);
 
         // Build child display list:
         //   Step 1 — opaque blue rect (SrcOver): establishes child backdrop.
@@ -2163,13 +2154,18 @@ mod tests {
         let shader = flui_painting::Shader::solid(Color::WHITE);
 
         // Call the method under test — must not panic.
-        backend.render_shader_mask(
-            &child,
-            &shader,
-            bounds,
-            BlendMode::SrcOver,
-            &Matrix4::IDENTITY,
-        );
+        {
+            let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+            backend.render_shader_mask(
+                &child,
+                &shader,
+                bounds,
+                BlendMode::SrcOver,
+                &Matrix4::IDENTITY,
+            );
+            // backend drops here → Drop impl calls flush_active_transform() so
+            // the painter borrow is released cleanly before painter.render below.
+        }
 
         // Render the painter onto a sampleable main surface to composite the
         // queued ShaderMask offscreen result.
@@ -2215,9 +2211,10 @@ mod tests {
             });
         }
         // Composite the ShaderMask result onto the main surface.
+        // The backend was dropped above (releasing the borrow); painter is
+        // now exclusively accessible for the final render call.
         let render_target = RenderTarget::sampleable(&main_view, &main_surface);
-        backend
-            .into_painter()
+        painter
             .render(render_target, &mut encoder)
             .expect("painter.render must succeed on a GPU-enabled host");
         queue.submit(std::iter::once(encoder.finish()));
