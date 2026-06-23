@@ -275,7 +275,7 @@ impl Tessellator {
     // `tessellate_rounded_rect` deleted. Both were forward-looking
     // convenience wrappers that built a tiny `lyon::Path` then
     // forwarded to `tessellate_fill`; zero production callsites in
-    // the workspace (painter.rs drives rects through the instancing
+    // the workspace (painter drives rects through the instancing
     // path, not lyon tessellation). The two unit tests that
     // exercised them were deleted alongside the methods.
 
@@ -944,7 +944,7 @@ impl Tessellator {
     // Cycle 4 wave 5 E-10: `tessellate_flui_path_dashed_stroke`
     // deleted. Workspace grep returned zero callers; the live
     // dashed-stroke entry point is `tessellate_dashed_stroke` on
-    // a lyon `Path` (used by painter.rs's outline pipeline). The
+    // a lyon `Path` (used by painter's outline pipeline). The
     // FLUI-to-lyon conversion lives in the `IntoLyonPath` trait
     // below -- a caller can do
     // `tessellate_dashed_stroke(&flui_path.to_lyon_path(), paint, dp)`

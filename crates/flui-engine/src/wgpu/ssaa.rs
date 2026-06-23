@@ -598,7 +598,7 @@ impl GpuReplay {
                 // flush_advanced_layer.
             } else {
                 // View-only target has no sampleable backdrop; fall back to SrcOver.
-                // Same fallback as AdvancedShape in replay.rs.
+                // Same fallback as AdvancedShape in replay.
                 tracing::warn!(
                     mode = ?op.blend,
                     "SSAA path advanced blend reached a view_only target; \

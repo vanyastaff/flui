@@ -20,8 +20,8 @@
 //! Scene (flui-layer)
 //!     │
 //!     ▼
-//! SceneRenderer (scene.rs)
-//!     │ renders LayerTree
+//! Renderer (renderer.rs)
+//!     │ renders the LayerTree (Scene)
 //!     ▼
 //! Layer + LayerRender trait
 //!     │ dispatch commands
@@ -41,15 +41,14 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use flui_engine::wgpu::{SceneRenderer, WgpuPainter};
-//! use flui_engine::Painter;  // Abstract trait from crate root
+//! use flui_engine::wgpu::Renderer;
 //! use flui_layer::Scene;
 //!
-//! // Create renderer
-//! let mut renderer = SceneRenderer::new(surface, 800, 600);
+//! // Create a renderer for a window (owns per-window GPU state)
+//! let mut renderer = Renderer::new(&window).await?;
 //!
 //! // Render a scene
-//! renderer.render(&scene)?;
+//! renderer.render_scene(&scene)?;
 //! ```
 
 // ============================================================================
@@ -83,7 +82,7 @@ pub(crate) mod color_matrix;
 /// Command IR data types: `DrawSegment`, `DrawItem`, `SavedLayer`,
 /// `PendingOpacityLayer`, `PendingOffscreenTexture`, and their helpers
 /// (`ScissorRect`, `ScissorRegion`, `TessellatedBatch`). Moved here from
-/// `painter.rs` so the future batcher/compositor modules share one type home.
+/// `painter` so the future batcher/compositor modules share one type home.
 pub(crate) mod command_ir;
 /// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
 /// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
@@ -109,7 +108,7 @@ pub(crate) mod mode;
 // audit revealed both layers were dead).
 #[cfg(debug_assertions)]
 mod debug;
-/// Gradient + shadow + blur instance descriptors consumed by `painter.rs`'s
+/// Gradient + shadow + blur instance descriptors consumed by `painter`'s
 /// instanced-batch pipelines. The previous module-level `#[allow(dead_code)]`
 /// reflex was removed in cycle 4 E-4 alongside the forward-looking helpers
 /// (`ShadowParams::elevation_*`, `BlurIntensity`, `LinearGradientBuilder`,
@@ -121,7 +120,7 @@ mod external_texture_registry;
 pub mod font_loader;
 /// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
 /// `ArcInstance`, `TextureInstance`, gradient instances. All
-/// surviving items are consumed by `painter.rs`. Cycle 4 E-5
+/// surviving items are consumed by `painter`. Cycle 4 E-5
 /// deleted the 6 forward-looking shortcuts the previous
 /// module-level `#[allow(dead_code)]` was masking (`RectInstance::rounded_rect`,
 /// `RectInstance::with_clip_rsuperellipse`, `RectInstance::with_transform`,
@@ -141,7 +140,7 @@ mod multi_draw;
 mod offscreen;
 mod painter;
 pub mod path_cache;
-/// Pipeline key types and cache consumed by `painter.rs`. Live items:
+/// Pipeline key types and cache consumed by `painter`. Live items:
 /// `PipelineKey` (opaque/alpha-blend factory methods + bitfield queries),
 /// `PipelineCache` (get_or_create, viewport_bind_group_layout), and
 /// `pipeline_key_from_paint`. Unused constants/methods/cache helpers deleted.

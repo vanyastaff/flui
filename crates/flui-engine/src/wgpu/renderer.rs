@@ -2682,7 +2682,7 @@ mod tests {
     ///
     /// Failure modes:
     /// - Pixel matches SrcOver → Multiply is still falling back (routing broken).
-    /// - Panic during render → `debug_assert!(false)` in replay.rs not removed.
+    /// - Panic during render → `debug_assert!(false)` in replay not removed.
     /// - Pixel matches neither → advanced blend formula or blit pipeline broken.
     #[test]
     fn intermediate_path_advanced_blend_matches_oracle() {

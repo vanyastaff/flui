@@ -252,7 +252,7 @@ impl RectInstance {
     // setter; zero callsites -- transform comes from the painter's
     // matrix stack, not from per-instance helpers).
     // `with_clip_rsuperellipse` was retained against the audit's
-    // recommendation: 1 live callsite at `painter.rs:3519`
+    // recommendation: 1 live callsite in the `painter` module
     // (`instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)`)
     // -- audit text claimed zero callsites but missed the method-style
     // dispatch on `instance` (vs type-path `RectInstance::`).
@@ -649,7 +649,7 @@ impl TextureInstance {
     // Cycle 4 E-5: deleted `TextureInstance::with_rotation(dst_rect,
     // angle, tint)`. Zero callsites -- production paths use
     // `TextureInstance::with_uv` (canonical, 5 callsites in
-    // painter.rs) and the painter's matrix stack handles rotation
+    // painter) and the painter's matrix stack handles rotation
     // composition. `TextureInstance::with_uv` was retained against
     // the audit's recommendation because it IS live (audit text
     // claimed otherwise; grep proved 5 painter callsites).

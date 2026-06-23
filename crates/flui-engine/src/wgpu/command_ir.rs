@@ -6,7 +6,7 @@
 //!
 //! **Scope:** pure type definitions + their inherent impls.  The painter's
 //! record methods (rect/rrect/circle/…) and flush/replay methods remain in
-//! `painter.rs`.  These types are re-exported `pub(crate)` so `painter.rs`
+//! `painter`.  These types are re-exported `pub(crate)` so `painter`
 //! and future batcher/compositor modules can import from one place.
 
 use flui_types::{
@@ -303,7 +303,7 @@ pub(crate) enum ImageFilterPass {
 /// × nesting depth.
 ///
 /// The integer alignment is REQUIRED because the texture-batch composite sampler
-/// is bilinear (`default_sampler` Linear in `replay.rs`): compositing a
+/// is bilinear (`default_sampler` Linear in `replay`): compositing a
 /// full-viewport intermediate at a fractional `grown_bounds` is self-consistent
 /// (texel grid == device-pixel grid → aligned blit), but compositing an
 /// integer-origin `fb`-sized intermediate at a fractional dst_rect offsets the
@@ -311,7 +311,7 @@ pub(crate) enum ImageFilterPass {
 ///
 /// `fb_origin` and `fb_dim` are computed at **record time** in `painter::layer`'s
 /// `restore_layer` and stored here so BOTH composite arms (top-level in
-/// `replay.rs` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
+/// `replay` + nested in `opacity_layer.rs`) re-read ONE source — eliminating
 /// arm-drift (risk #4 in the Task 6 spec).
 #[derive(Debug, Clone)]
 pub(crate) struct FilterOp {

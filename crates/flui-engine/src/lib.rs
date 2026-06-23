@@ -25,8 +25,8 @@
 //! Scene (flui-layer)
 //!     │
 //!     ▼
-//! SceneRenderer
-//!     │ renders LayerTree
+//! Renderer
+//!     │ renders the LayerTree (Scene)
 //!     ▼
 //! Layer + LayerRender trait
 //!     │ dispatch commands
@@ -34,7 +34,7 @@
 //! CommandRenderer trait (abstract)
 //!     │
 //!     ▼
-//! Backend → Painter
+//! Backend → WgpuPainter
 //!     │
 //!     ▼
 //! GPU (wgpu)
@@ -43,8 +43,8 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use flui_engine::wgpu::SceneRenderer;
-//! use flui_layer::{Scene, SceneBuilder, CanvasLayer, Layer};
+//! use flui_engine::wgpu::Renderer;
+//! use flui_layer::{Scene, CanvasLayer, Layer};
 //! use flui_types::Size;
 //!
 //! // 1. Build a Scene (in framework layer)
@@ -54,8 +54,8 @@
 //!     0,
 //! );
 //!
-//! // 2. Render Scene (in engine layer)
-//! let mut renderer = SceneRenderer::new(surface, 800, 600);
+//! // 2. Render the Scene (in the engine layer) — `Renderer` owns per-window GPU state
+//! let mut renderer = Renderer::new(&window).await?;
 //! renderer.render_scene(&scene)?;
 //! ```
 //!
