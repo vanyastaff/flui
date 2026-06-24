@@ -290,16 +290,14 @@ fn alloc_micro(c: &mut Criterion) {
     // ── superellipse_cache_warm_hit ──────────────────────────────────────────
     //
     // Measures the cost of a `SuperellipsePathCache::get` on a warm entry.
-    // The returned value is an OWNED `Path` cloned from the cached entry
-    // (`SmallVec<[PathCommand; 16]>` spilled to ~256 entries → heap alloc per
-    // hit).  This is GLM audit #8 site 1.
-    //
-    // The hit-path clone cannot be eliminated today: `Backend::superellipse_path`
-    // is bound by the `CommandRenderer` trait signature `fn -> Path` (owned).
-    // Changing to `Arc<Path>` requires a trait API change across the crate
-    // boundary.  This bench establishes the baseline cost so the future fix can
-    // prove its win with a before/after comparison.
+    // After the Arc<Path> refactor the returned value is an `Arc<Path>` alias
+    // (reference-count bump only, no heap allocation, no copy of the ~256
+    // `PathCommand` entries).  This bench tracks the post-refactor baseline —
+    // expected: single/low-double-digit nanoseconds vs. the pre-refactor
+    // ~1257 ns deep clone.  This is GLM audit #8 site 1.
     {
+        use std::sync::Arc;
+
         use flui_types::geometry::{RSuperellipse, Rect};
         let rse = RSuperellipse::from_rect_and_radius(
             Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
@@ -307,15 +305,14 @@ fn alloc_micro(c: &mut Criterion) {
         );
         let key = SuperellipseKey::from_superellipse(&rse);
         // Build a realistic 256-command path to simulate the superellipse generator.
-        let path = make_large_path(256);
+        let path = Arc::new(make_large_path(256));
         let mut cache = SuperellipsePathCache::new(64);
         cache.insert(key, path);
 
         group.bench_function("superellipse_cache_warm_hit", |b| {
             b.iter(|| {
-                // Hit path: deep-clones 256 `PathCommand` entries (heap-spilled
-                // SmallVec).  A future `Arc<Path>` refactor would replace this
-                // with a single atomic increment.
+                // Hit path: Arc::clone (atomic reference-count increment).
+                // No deep copy of the ~256-command path.
                 let result = cache.get(black_box(&key));
                 black_box(result)
             });
