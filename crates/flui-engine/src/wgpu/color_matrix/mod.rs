@@ -29,11 +29,14 @@ use bytemuck::cast_slice;
 use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::ColorMatrixPipeline;
-use pipeline::ColorMatrixUniform;
+use pipeline::color_matrix_uniform_from_values;
 
 use super::{resources::GpuResources, texture_pool::PooledTexture};
 
+mod generated;
 mod pipeline;
+
+use generated::color_matrix;
 
 /// Apply a 5×4 color matrix to `source_tex`, writing filtered premultiplied
 /// RGBA into a freshly-acquired pooled texture returned to the caller.
@@ -76,7 +79,7 @@ pub(crate) fn apply_color_matrix(
     // (80 bytes) and bind-group-layout identity requires the uniform to be freshly
     // bound per draw.  Hoisting into the pipeline would couple the pipeline to a
     // single matrix value and break multi-layer filtering.
-    let uniform = ColorMatrixUniform::from_values(matrix_values);
+    let uniform = color_matrix_uniform_from_values(matrix_values);
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Color Matrix Uniform Buffer"),
         contents: cast_slice(&[uniform]),
@@ -97,26 +100,21 @@ pub(crate) fn apply_color_matrix(
         ..Default::default()
     });
 
-    // Per-draw bind group: uniform (0) + source texture (1) + sampler (2).
-    // Must be created against the same `pipeline.bind_group_layout` object.
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Color Matrix Bind Group"),
-        layout: &pipeline.bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+    // Per-draw bind group via the generated typed helper.  `WgpuBindGroup0::from_bindings`
+    // recreates the layout from the WGSL-derived descriptor, so no shared layout object
+    // needs to be threaded through from the pipeline.
+    let bind_group = color_matrix::WgpuBindGroup0::from_bindings(
+        device,
+        color_matrix::WgpuBindGroup0Entries::new(color_matrix::WgpuBindGroup0EntriesParams {
+            u: wgpu::BufferBinding {
+                buffer: &uniform_buffer,
+                offset: 0,
+                size: None,
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(source_tex.view()),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
+            src_texture: source_tex.view(),
+            src_sampler: &sampler,
+        }),
+    );
 
     // Render pass: clear to TRANSPARENT then draw the full-viewport quad.
     // LoadOp::Clear ensures pixels outside the source content are transparent,
@@ -140,7 +138,7 @@ pub(crate) fn apply_color_matrix(
         });
 
         render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        bind_group.set(&mut render_pass);
         // 6 vertices synthesised in the VS — no vertex buffer.
         render_pass.draw(0..6, 0..1);
     }

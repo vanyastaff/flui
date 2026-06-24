@@ -31,12 +31,14 @@ use bytemuck::cast_slice;
 use flui_types::{Rect, geometry::Pixels};
 use wgpu::util::DeviceExt as _;
 
-use pipeline::MorphUniform;
 pub(crate) use pipeline::MorphologyPipeline;
 
 use super::{command_ir::MorphOp, resources::GpuResources, texture_pool::PooledTexture};
 
+mod generated;
 mod pipeline;
+
+use generated::morphology;
 
 /// Apply a morphological filter (dilate or erode) to `source_tex` via two
 /// separable sub-passes (H then V), returning the filtered texture.
@@ -59,7 +61,7 @@ mod pipeline;
 ///   intermediate textures. The shader's `texture_size` uniform is set to `fb_dim`
 ///   (non-negotiable #2: denominator is integer fb_dim, not viewport_size).
 /// - `surface_format` — texture format of the render target.
-/// - `pipeline` — the morphology pipeline (bind-group layout + render pipeline).
+/// - `pipeline` — the morphology pipeline (render pipeline + generated bind-group helpers).
 /// - `resources` — mutable GPU resource manager (texture pool).
 /// - `device` — wgpu device for buffer and bind-group creation.
 /// - `encoder` — command encoder that both sub-passes are recorded into.
@@ -131,14 +133,13 @@ pub(crate) fn apply_morphology(
         .layer_texture_pool_mut()
         .acquire(fb_w, fb_h, surface_format);
     run_morph_sub_pass(
-        &MorphUniform {
-            texture_size: [fb_w as f32, fb_h as f32],
+        morphology::MorphUniforms::new(
+            [fb_w as f32, fb_h as f32],
             radius,
-            direction: 0.0, // horizontal
-            content_rect_uv: content_rect_uv_h,
-            op: op_selector,
-            _pad: [0.0; 3],
-        },
+            0.0, // horizontal
+            content_rect_uv_h,
+            op_selector,
+        ),
         source_tex.view(),
         h_tex.view(),
         pipeline,
@@ -152,14 +153,13 @@ pub(crate) fn apply_morphology(
         .layer_texture_pool_mut()
         .acquire(fb_w, fb_h, surface_format);
     run_morph_sub_pass(
-        &MorphUniform {
-            texture_size: [fb_w as f32, fb_h as f32],
+        morphology::MorphUniforms::new(
+            [fb_w as f32, fb_h as f32],
             radius,
-            direction: 1.0, // vertical
-            content_rect_uv: content_rect_uv_v,
-            op: op_selector,
-            _pad: [0.0; 3],
-        },
+            1.0, // vertical
+            content_rect_uv_v,
+            op_selector,
+        ),
         h_tex.view(),
         v_tex.view(),
         pipeline,
@@ -181,7 +181,7 @@ pub(crate) fn apply_morphology(
 /// the viewport are transparent (R3 invariant). `REPLACE` blend prevents the
 /// GPU from re-blending the premultiplied output.
 fn run_morph_sub_pass(
-    uniform: &MorphUniform,
+    uniform: morphology::MorphUniforms,
     src_view: &wgpu::TextureView,
     dst_view: &wgpu::TextureView,
     pipeline: &MorphologyPipeline,
@@ -193,7 +193,7 @@ fn run_morph_sub_pass(
     // bind-group can reference its own buffer without a dynamic-offset scheme).
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(pass_label),
-        contents: cast_slice(&[*uniform]),
+        contents: cast_slice(&[uniform]),
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
@@ -210,24 +210,21 @@ fn run_morph_sub_pass(
         ..Default::default()
     });
 
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(pass_label),
-        layout: &pipeline.bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+    // Per-draw bind group via the generated typed helper.  `WgpuBindGroup0::from_bindings`
+    // recreates the layout from the WGSL-derived descriptor, so no shared layout object
+    // needs to be threaded through from the pipeline.
+    let bind_group = morphology::WgpuBindGroup0::from_bindings(
+        device,
+        morphology::WgpuBindGroup0Entries::new(morphology::WgpuBindGroup0EntriesParams {
+            u: wgpu::BufferBinding {
+                buffer: &uniform_buffer,
+                offset: 0,
+                size: None,
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(src_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
+            src_texture: src_view,
+            src_sampler: &sampler,
+        }),
+    );
 
     {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -250,7 +247,7 @@ fn run_morph_sub_pass(
         });
 
         render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        bind_group.set(&mut render_pass);
         // 6 vertices synthesised in the VS — no vertex buffer.
         render_pass.draw(0..6, 0..1);
     }
