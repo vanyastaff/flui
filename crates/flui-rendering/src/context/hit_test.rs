@@ -285,23 +285,6 @@ where
         let local_position = self.position_minus(offset);
         self.inner.hit_test_child(index, local_position)
     }
-
-    /// Tests all children in reverse order (topmost first).
-    ///
-    /// Returns the index of the first child hit, or None.
-    pub fn hit_test_children_reverse<F>(&mut self, get_offset: F) -> Option<usize>
-    where
-        F: Fn(usize) -> Offset,
-    {
-        let count = 0; // Would need child count from parent
-        for i in (0..count).rev() {
-            let offset = get_offset(i);
-            if self.hit_test_child_at_offset(i, offset) {
-                return Some(i);
-            }
-        }
-        None
-    }
 }
 
 // ============================================================================

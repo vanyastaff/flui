@@ -14,11 +14,11 @@
 //! RenderTree
 //!   └─ nodes: Slab<RenderNode>
 //!        └─ RenderNode::Box(RenderEntry<BoxProtocol>)
-//!             ├─ render_object: RwLock<Box<dyn RenderObject<P>>>
+//!             ├─ render_object: Box<dyn RenderObject<P>>  (owned by value, no lock)
 //!             ├─ state: RenderState<BoxProtocol>
 //!             │    ├─ flags: AtomicRenderFlags
-//!             │    ├─ geometry: OnceCell<Size>
-//!             │    ├─ constraints: OnceCell<BoxConstraints>
+//!             │    ├─ geometry: Option<ProtocolGeometry<P>>
+//!             │    ├─ constraints: Option<ProtocolConstraints<P>>
 //!             │    └─ offset: AtomicOffset
 //!             └─ links: NodeLinks
 //!                  ├─ parent: Option<RenderId>

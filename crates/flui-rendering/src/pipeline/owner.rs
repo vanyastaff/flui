@@ -183,12 +183,6 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// subtree with an updated offset.
     retained_subtrees: rustc_hash::FxHashMap<RenderId, LayerTree>,
 
-    /// Mapping from RenderId (repaint boundary) to the LayerId of its
-    /// root layer in the PREVIOUS frame's LayerTree. Used for structural
-    /// sharing: clean boundaries clone their subtree from the previous
-    /// tree using this mapping.
-    retained_layer_ids: rustc_hash::FxHashMap<RenderId, flui_foundation::LayerId>,
-
     /// Device pixel ratio threaded into every paint pass (text shaping
     /// and hairline snapping are DPR-dependent). Set by the platform
     /// binding on surface creation / DPI change; defaults to 1.0 for
@@ -285,7 +279,6 @@ impl PipelineOwner<Idle> {
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
             retained_subtrees: rustc_hash::FxHashMap::default(),
-            retained_layer_ids: rustc_hash::FxHashMap::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: super::deferred::DeferredMutations::new(),
             handle,
@@ -345,7 +338,6 @@ impl PipelineOwner<Idle> {
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
             retained_subtrees: rustc_hash::FxHashMap::default(),
-            retained_layer_ids: rustc_hash::FxHashMap::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: super::deferred::DeferredMutations::new(),
             handle,
@@ -4394,7 +4386,6 @@ where
         semantics_enabled: from.semantics_enabled,
         last_layer_tree: from.last_layer_tree,
         retained_subtrees: from.retained_subtrees,
-        retained_layer_ids: from.retained_layer_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         deferred_mutations: from.deferred_mutations,
         handle: from.handle,

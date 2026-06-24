@@ -2,13 +2,13 @@
 
 ## Current Status
 
-The protocol system is in the design phase. Core architecture has been defined with composition-based capabilities.
+Foundation protocol traits and Box protocol are shipped. Higher-level backends and optimization passes are in progress.
 
-## Phase 1: Foundation (Current)
+## Phase 1: Foundation
 
 ### 1.1 Core Traits
-- [ ] `LayoutCapability` trait with GAT Context
-- [ ] `HitTestCapability` trait with GAT Context
+- [x] `LayoutCapability` trait with GAT Context (`src/protocol/capabilities.rs:31`)
+- [x] `HitTestCapability` trait with GAT Context (`src/protocol/capabilities.rs:177`)
 - [ ] `PaintCapability` trait with decomposed components
 - [ ] `Protocol` trait composing capabilities
 
@@ -21,8 +21,8 @@ The protocol system is in the design phase. Core architecture has been defined w
 ### 1.3 Box Protocol
 - [ ] `BoxLayout` capability (BoxConstraints -> Size)
 - [ ] `BoxHitTest` capability (Offset -> BoxHitTestResult)
-- [ ] `BoxProtocol` composition
-- [ ] `BoxLayoutCtx` context
+- [x] `BoxProtocol` composition (`src/protocol/box_protocol.rs:85`)
+- [x] `BoxLayoutCtx` context (`src/protocol/box_protocol.rs:363`)
 - [ ] `BoxHitTestCtx` context
 
 ### 1.4 Shared Paint

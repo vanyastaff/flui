@@ -131,7 +131,7 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 /// This struct provides efficient storage for render object state with:
 /// - Lock-free dirty flags using atomic operations
 /// - Boundary accessors (relayout/repaint) for pipeline-owner registration
-/// - Write-once geometry and constraints using `OnceCell`
+/// - Mutable geometry and constraints using `Option` (set/cleared via `&mut self`)
 /// - Atomic offset updates for paint positioning
 ///
 /// Boundary-aware dirty propagation is **not** performed here. Production
@@ -141,20 +141,18 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 /// # Memory Layout
 ///
 /// ```text
-/// [AtomicRenderFlags: 4 bytes] - Hot path, always accessible
-/// [OnceCell<Geometry>: 16-24 bytes] - Write-once, read-many
-/// [OnceCell<Constraints>: 16-24 bytes] - Write-once, read-many
-/// [AtomicOffset: 8 bytes] - Lock-free f32 pair
+/// [AtomicRenderFlags: 4 bytes]        - Hot path, always accessible
+/// [Option<Geometry>: 0-N bytes]        - Set/cleared each layout pass
+/// [Option<Constraints>: 0-N bytes]     - Set/cleared each layout pass
+/// [AtomicOffset: 8 bytes]             - Lock-free f32 pair
 /// ```
 ///
 /// Total: ≈44-60 bytes depending on protocol geometry size
 ///
 /// # Thread Safety
 ///
-/// All methods are thread-safe:
-/// - Atomic operations use appropriate memory ordering
-/// - OnceCell provides interior mutability safely
-/// - No data races possible
+/// Atomic flag operations are thread-safe. Geometry and constraints are
+/// accessed only through `&mut RenderState` during layout — no lock needed.
 ///
 /// # Performance Characteristics
 ///

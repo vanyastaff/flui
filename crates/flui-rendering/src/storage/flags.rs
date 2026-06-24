@@ -56,7 +56,6 @@
 //!
 //! // Layout complete
 //! flags.remove(RenderFlags::NEEDS_LAYOUT);
-//! flags.set(RenderFlags::HAS_GEOMETRY);
 //! ```
 //!
 //! ## Flutter-Style API
@@ -116,7 +115,6 @@ bitflags! {
     /// - `IS_REPAINT_BOUNDARY` - Paint change isolation boundary
     ///
     /// ## State Flags (computed properties)
-    /// - `HAS_GEOMETRY` - Node has computed geometry at least once
     /// - `HAS_OVERFLOW` - Overflow detected (debug only)
     ///
     /// # Flutter Equivalents
@@ -140,7 +138,7 @@ bitflags! {
     /// Bit 3: IS_RELAYOUT_BOUNDARY
     /// Bit 4: IS_REPAINT_BOUNDARY
     /// Bit 5: NEEDS_SEMANTICS
-    /// Bit 6: HAS_GEOMETRY
+    /// Bit 6: (reserved — hole left intentionally)
     /// Bit 7: HAS_OVERFLOW (debug only)
     /// Bit 8: NEEDS_LAYOUT_PROPAGATION
     /// Bit 9: NEEDS_PAINT_PROPAGATION
@@ -214,11 +212,7 @@ bitflags! {
 
         // ===== State Flags (Computed Properties) =====
 
-        /// Node has computed geometry at least once.
-        ///
-        /// Cleared on attach, set after first successful layout.
-        /// Used to determine if cached geometry is available.
-        const HAS_GEOMETRY = 1 << 6;
+        // Bit 6: reserved hole — do not reuse this bit position.
 
         /// Overflow detected during layout or paint (debug only).
         ///
@@ -368,9 +362,6 @@ impl fmt::Display for RenderFlags {
         }
         if self.contains(Self::IS_REPAINT_BOUNDARY) {
             flags.push("IS_REPAINT_BOUNDARY");
-        }
-        if self.contains(Self::HAS_GEOMETRY) {
-            flags.push("HAS_GEOMETRY");
         }
         if self.contains(Self::WAS_REPAINT_BOUNDARY) {
             flags.push("WAS_REPAINT_BOUNDARY");
@@ -898,22 +889,6 @@ impl AtomicRenderFlags {
         self.contains(RenderFlags::WAS_REPAINT_BOUNDARY)
     }
 
-    /// Marks that the render object has geometry.
-    ///
-    /// Set after first successful layout.
-    #[inline]
-    pub fn mark_has_geometry(&self) {
-        self.set(RenderFlags::HAS_GEOMETRY);
-    }
-
-    /// Checks if the render object has geometry.
-    ///
-    /// Returns true if layout has been computed at least once.
-    #[inline]
-    pub fn has_geometry(&self) -> bool {
-        self.contains(RenderFlags::HAS_GEOMETRY)
-    }
-
     /// Marks overflow detected (debug only).
     #[cfg(debug_assertions)]
     #[inline]
@@ -1004,7 +979,6 @@ mod tests {
         assert!(!RenderFlags::empty().is_dirty());
         assert!(RenderFlags::NEEDS_LAYOUT.is_dirty());
         assert!(RenderFlags::NEEDS_PAINT.is_dirty());
-        assert!(!RenderFlags::HAS_GEOMETRY.is_dirty());
         assert!(!RenderFlags::IS_REPAINT_BOUNDARY.is_dirty());
     }
 
@@ -1073,15 +1047,6 @@ mod tests {
         assert!(flags.is_repaint_boundary());
         flags.set_repaint_boundary(false);
         assert!(!flags.is_repaint_boundary());
-    }
-
-    #[test]
-    fn test_has_geometry() {
-        let flags = AtomicRenderFlags::empty();
-        assert!(!flags.has_geometry());
-
-        flags.mark_has_geometry();
-        assert!(flags.has_geometry());
     }
 
     #[test]

@@ -64,7 +64,7 @@ This section records places where the Rust shape diverges from the Dart shape an
 
 **Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-platform`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 
-**Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). The transitive Send+Sync chain still holds via auto-derivation: `Slab<RenderNode>` is auto-`Send + Sync` because `RenderNode` is; `RenderEntry<P>` holds `Box<dyn RenderObject<P>>` and the trait requires `Send + Sync + 'static`; `RenderState<P>` is built on atomics and `OnceCell`; `NodeLinks` is POD.
+**Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). The transitive Send+Sync chain still holds via auto-derivation: `Slab<RenderNode>` is auto-`Send + Sync` because `RenderNode` is; `RenderEntry<P>` holds `Box<dyn RenderObject<P>>` and the trait requires `Send + Sync + 'static`; `RenderState<P>` is built on atomics and `Option<T>` fields for geometry/constraints; `NodeLinks` is POD.
 
 **Alternatives:** keep the unsafe impl as defensive cruft — rejected, the safety justification was load-bearing only because of `RwLock`'s interior mutability; with that gone, no unsafe carve-out is needed.
 
@@ -99,7 +99,7 @@ Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **
 
 - `slab::Slab` storage pattern with `+1/-1` ID offset — internal precedent in [`src/storage/tree.rs`](src/storage/tree.rs); the offset rationale lives in [`docs/architecture.md`](../../docs/architecture.md).
 - `Weak<RwLock<PipelineOwner>>` parent back-reference replacing a raw pointer — [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
-- Lock-free atomic dirty tracking (`AtomicRenderFlags` + `OnceCell` + `AtomicOffset`) — documented in [`src/storage/state.rs`](src/storage/state.rs) module docstring ("10x faster than RwLock").
+- Lock-free atomic dirty tracking (`AtomicRenderFlags` + `AtomicOffset`; geometry/constraints as `Option<T>` mutated via `&mut RenderState`) — documented in [`src/storage/state.rs`](src/storage/state.rs) module docstring.
 - Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](../../docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases beyond Flutter when the structural pattern fits Rust idioms better.
 
 ---
@@ -112,7 +112,7 @@ Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **
 |---|---|---|---|
 | `RenderEntry<P>::render_object` (`src/storage/entry.rs`) | plain `Box<dyn RenderObject<P>>` | Owned by value | Mutable access via `&mut self` from `&mut RenderTree`. The previous `RwLock<Box<dyn>>` was the canonical refusal-trigger violation; removed by the U2 exemplar refactor. |
 | `RenderState<P>::flags` (`src/storage/state.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
-| `RenderState<P>::geometry`, `constraints` (`src/storage/state.rs`) | `OnceCell<...>` | Write-once read-many | Set during layout, read during paint. |
+| `RenderState<P>::geometry`, `constraints` (`src/storage/state.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
 | `RenderState<P>::offset` (`src/storage/state.rs`) | `AtomicOffset` | Lock-free atomics | Paint position. |
 | `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed per [`docs/PORT.md`](../../docs/PORT.md) lock-decision table. Off the per-node hot path. |
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner.rs`](src/pipeline/owner.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](../../docs/plans/2026-03-31-core-crates-hardening.md)). |
@@ -121,7 +121,7 @@ Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **
 | Mouse tracker maps (`src/input/mouse_tracker.rs:294-303`) | `RwLock<HashMap<…>>` | Tracker state | Off layout/paint hot path. |
 | Render view error builder (`src/view/error.rs`, via `flui-view` integration) | `static RwLock<Option<...>>` | Process-wide singleton | Off any hot path. |
 
-No `unsafe impl Send/Sync` in this crate. Re-entrancy primitives (`RenderTree::get_two_mut`, `get_many_mut`) will use a small `unsafe` block when added — local invariant (disjoint slab keys), unit-testable. This is queued in [Outstanding refactors](#outstanding-refactors) and not yet implemented.
+`NodePtr` in `src/pipeline/owner.rs` carries `unsafe impl Send` and `unsafe impl Sync` — the raw pointer is an address for the disjoint-subtree-borrow substrate ([`SubtreeBorrows`]); cross-thread deref is rejected by `SubtreeBorrows::check_thread` before any access. Re-entrancy primitives `RenderTree::get_two_mut` (`src/storage/tree.rs:337`) and `get_parent_and_children_mut` (`src/storage/tree.rs:365`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
 
 ---
 
@@ -135,29 +135,27 @@ Known sites that do not yet match the methodology but are not violations of the 
 
 ---
 
-## Outstanding refactors
+## Shipped infrastructure (formerly "Outstanding refactors")
 
-Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-implement` dispatch. Each entry names a file and what would need to change.
+These items were listed as pending in earlier drafts; all are now shipped.
 
-### `RenderTree::get_two_mut` / `get_many_mut` disjoint-borrow primitives
+### `RenderTree::get_two_mut` / `get_parent_and_children_mut` — SHIPPED
 
-**File:** [`src/storage/tree.rs`](src/storage/tree.rs).
+**Files:** [`src/storage/tree.rs:337`](src/storage/tree.rs), [`src/storage/tree.rs:365`](src/storage/tree.rs).
 
-**Goal:** add tree-aware re-entrancy primitives so a parent's layout phase can hold `&mut RenderNode` for itself and `&mut RenderNode` for each child simultaneously through one disjoint-key call. Today, the multi-child layout path at [`src/pipeline/owner.rs`](src/pipeline/owner.rs) (`layout_node_with_children` and helpers) has empty stubs at `propagate_constraints_to_child` and `sync_child_size_to_parent`; the disjoint-borrow primitive is the prerequisite for filling them in.
+Tree-aware disjoint-borrow primitives. `get_two_mut(a, b)` returns `(&mut RenderNode, &mut RenderNode)` for two distinct keys; `get_parent_and_children_mut` generalises to a parent + N children. The unsafe is local to each function with a disjoint-keys assertion and is unit-tested.
 
-**Shape:** `RenderTree::get_two_mut(parent: RenderId, child: RenderId) -> Option<(&mut RenderNode, &mut RenderNode)>` panics if `parent == child`. Implementation uses `split_at_mut` on the slab's underlying entries vec, or `unsafe` with two raw pointers + a disjoint-keys assertion. The unsafe (if used) is local to a single function with a unit-testable safety invariant.
+### `layout_dirty_root` + `layout_subtree_borrowed` — SHIPPED
 
-**Dependencies:** none beyond the U2 baseline.
+**Files:** [`src/pipeline/owner.rs:2406`](src/pipeline/owner.rs) (`layout_dirty_root`), [`src/pipeline/owner.rs:2831`](src/pipeline/owner.rs) (`layout_subtree_borrowed`).
 
-### Migrate `RenderEntry::layout` from synchronous direct invocation to pipeline-driven
+`layout_dirty_root` is the dispatcher: it obtains disjoint `&mut`s via `SubtreeBorrows`, constructs a typed `BoxLayoutCtx` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
 
-**File:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs).
+### `layout_leaf_only` — SHIPPED
 
-**Goal:** today `RenderEntry::layout_leaf_only` has no production callers; `layout_node_with_children` recurses through children but `propagate_constraints_to_child` (line 680) and `sync_child_size_to_parent` (line 687) are empty stubs. **Note:** `RenderEntry::layout_leaf_only` is exactly that — leaf-only (PR #141 Codex review comment 3293746309). For non-leaf parent + children layout, U20's `PipelineOwner::layout_dirty_root` constructs typed `BoxLayoutCtx::with_layout_callback` directly and invokes `render_object.perform_layout_raw` against an erased view, bypassing this method entirely. Until U20 lands, the leaf-only path is exercised only through the test fixture in `flui-rendering/tests/`.
+**File:** [`src/storage/entry.rs:296`](src/storage/entry.rs).
 
-**Shape (U20):** `layout_dirty_root` becomes the dispatcher: it computes the child constraint, calls `tree.get_two_mut(parent, child)` to obtain disjoint `&mut`s, constructs a typed `BoxLayoutCtx` with children + callback, and calls `parent_entry.render_object_mut().perform_layout_raw(&mut typed_ctx_as_erased)` — the blanket impl in `traits/render_box.rs` reconstructs the typed Proxy view internally. Multi-child layout uses `get_many_mut`. The legacy `child_entry.layout_leaf_only(child_constraints)` shape is NOT used in this path because it would strip children.
-
-**Dependencies:** disjoint-borrow primitive (above).
+The leaf-only layout method is implemented and exercised through the test harness and the pipeline path for pure-leaf objects.
 
 ### Move `RenderEntry<P>::clear_needs_paint` / `clear_needs_layout` to `RenderState<P>`
 
@@ -184,17 +182,16 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 
 **Dependencies:** none beyond existing dev-deps.
 
-### Property, loom, and miri test coverage (deferred from Mythos Step 13)
+### Loom and miri test coverage (deferred — proptest already shipped)
 
-**Files:** new `crates/flui-rendering/tests/proptest_tree.rs`, new `crates/flui-rendering/tests/loom_handle.rs`, miri CI invocation.
+**Files:** new `crates/flui-rendering/tests/loom_handle.rs`, miri CI invocation.
 
-**Goal:** Mythos Step 13 prescribed four test classes; this work landed only the compile_fail typestate doctests (the cheapest of the four) plus the targeted unit tests added alongside each refactor (disjoint-borrow tree, VisualUpdateNotifier, PipelineOwnerHandle). The three deferred classes are:
+**Note:** `proptest` is already a dev-dependency (`Cargo.toml:68`) and is used in `src/virtualization/tests.rs`. The two remaining deferred test classes are:
 
-- **Property tests** for tree consistency: invariants that hold over any sequence of insert/mark_dirty/run_frame operations -- every reachable RenderId has a state, every dirty RenderId is in the dirty set, no orphans. Needs the `proptest` crate as a dev-dependency.
 - **Loom tests** for `AtomicRenderFlags` set/clear/read interleaving + `PipelineOwnerHandle` send/recv sequencing. Needs the `loom` crate gated on `#[cfg(loom)]`.
 - **Miri CI gate** for the disjoint-borrow `unsafe` block in `RenderTree::get_two_mut` / `get_parent_and_children_mut`. Today the unsafe is unit-tested for behavior; miri-checking the aliasing model is a CI extension (e.g. `cargo +nightly miri test -p flui-rendering`).
 
-**Shape:** each class is a new file under `crates/flui-rendering/tests/` plus a dev-dependency. Adding all three at once would expand the Mythos chain into infrastructure work; they are properly scoped as a follow-up commit.
+**Shape:** each class is a new file under `crates/flui-rendering/tests/` plus a dev-dependency.
 
 **Dependencies:** none beyond crate dev-deps.
 
@@ -219,4 +216,4 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 ## Notes
 
 - **R12 lint promotion path is symbolic for Trigger 1.** [`docs/PORT.md`](../../docs/PORT.md) reactive-lint-promotion rule names `[workspace.lints.clippy]` as the first-promotion mechanism. The clippy lint vocabulary cannot today express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`". The grep regression in [`scripts/port-check.sh`](../../scripts/port-check.sh) is the durable enforcement layer; the clippy-promotion column waits for ecosystem expressivity (`dylint` plugin or a future clippy feature).
-- **CLAUDE.md drift.** `CLAUDE.md` still lists `flui-rendering`, `flui-view`, `flui-app`, `flui-hot-reload` as disabled. They are active. `AGENTS.md` and [`docs/crates.md`](../../docs/crates.md) are the authoritative state. Drift fix deferred to a separate housekeeping PR per the plan's `Deferred to Follow-Up Work`.
+

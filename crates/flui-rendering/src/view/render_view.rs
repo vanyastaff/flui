@@ -5,23 +5,11 @@ use std::sync::{Arc, Weak};
 
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_layer::TransformLayer;
-use flui_types::{Matrix4, Offset, Pixels, Rect, Size};
+use flui_types::{Matrix4, Pixels, Rect, Size};
 use parking_lot::RwLock;
 
 use super::ViewConfiguration;
-use crate::{
-    constraints::BoxConstraints,
-    // Cycle 4 U-4: `HitTestResult` is re-exported from
-    // `flui_interaction::routing` via `hit_testing::mod`; the import
-    // path stays the same but the underlying type is now the
-    // interaction-side canonical one. The previous `HitTestTarget` +
-    // `PointerEvent` imports were dropped here alongside the deletion
-    // of `impl HitTestTarget for RenderView`. PR #110 review feedback
-    // dropped `HitTestEntry` here too once the root-sentinel add went
-    // away.
-    hit_testing::HitTestResult,
-    pipeline::PipelineOwner,
-};
+use crate::{constraints::BoxConstraints, pipeline::PipelineOwner};
 
 /// The root of the render tree.
 ///
@@ -340,34 +328,6 @@ impl RenderView {
     // ========================================================================
     // Hit Testing
     // ========================================================================
-
-    /// Determines the set of render objects located at the given position.
-    ///
-    /// Mirrors Flutter's `RenderView.hitTest`: returns `true` because
-    /// the view covers the entire surface, then delegates to child
-    /// traversal to populate the result with real hit entries.
-    ///
-    /// # Why no root-sentinel entry
-    ///
-    /// PR #110 review feedback: the pre-fix body added
-    /// `result.add(HitTestEntry::new(RenderId::new(1)))` as a "root
-    /// sentinel" mirroring the pre-U-4 `HitTestEntry::new_render_view()`
-    /// shape. The `RenderId::new(1)` value collides with whichever
-    /// real render node gets slab index 0 (FLUI's
-    /// Slab-0-based + IDs-1-based convention), so the sentinel
-    /// masquerades as a real node ID and makes the dispatch path
-    /// ambiguous. Post-fix the function adds NO sentinel; the
-    /// post-U-4 interaction-side `HitTestResult` carries handler
-    /// closures on entries, so an entry-less result correctly
-    /// dispatches zero handlers (the previous trait-dispatch shape
-    /// the sentinel was load-bearing for is gone).
-    ///
-    /// Child-traversal that populates the result with real hit
-    /// entries lands when the RenderView → child-render-object
-    /// dispatch plumbing materializes (separate audit item).
-    pub fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
-        true
-    }
 
     // ========================================================================
     // Painting

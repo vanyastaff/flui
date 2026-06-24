@@ -11,7 +11,7 @@ Render tree: `RenderObject` / `RenderBox` / `RenderSliver` with Protocol-based l
 - **PipelineOwner** — manages layout/paint/semantics phases with typestate-enforced ordering (`pipeline/owner.rs`)
 - **Concrete render objects** — `objects/`: Padding, Center, ColoredBox, Flex, Opacity, SizedBox, Transform, etc.
 - **Parent data** — `parent_data/`: BoxParentData, SliverParentData, container mixin
-- **Constraints** — `constraints/`: BoxConstraints, SliverConstraints, scroll metrics (gated behind `scrolling` feature)
+- **Constraints** — `constraints/`: BoxConstraints, SliverConstraints, SliverGeometry, GrowthDirection
 
 ## Key constraints
 
@@ -19,7 +19,6 @@ Render tree: `RenderObject` / `RenderBox` / `RenderSliver` with Protocol-based l
 - **No `RwLock<Box<dyn RenderObject>>`** — enforced by port-check trigger #1. Boxed trait objects are owned by value in `RenderEntry<P>`.
 - **Stack safety via `stacker::maybe_grow`** — recursive layout/paint/hit-test walks use `ensure_stack` (128KiB red zone / 4MiB segment). Not on wasm32.
 - **`testing` feature** — opt-in test harness (`RenderTester`/`Probe` API). Forwards to `flui-layer/testing`. See `crates/flui-rendering/docs/TESTING.md` for the catalog rules.
-- **`scrolling` feature** — gates `ScrollMetrics` trait + `FixedScrollMetrics` + `FixedExtentMetrics` (~452 LOC). Zero workspace consumers currently.
 - **`experimental-delegates` feature** — gates delegate trait modules (~1800 LOC): custom_painter, flow, multi_child_layout, single_child_layout, sliver_grid, custom_clipper. Zero production impls.
 - **Benchmarks** — `layout` and `paint` benches. `autobenches = false` (shared `benches/helpers.rs` module).
 - **Integration tests** — 31 test files under `tests/`: render_object_harness.rs (catalog CI guard), pipeline_scenarios.rs, deep_tree_stack.rs, etc.
