@@ -135,6 +135,12 @@ pub(crate) fn mode_to_u32(mode: BlendMode) -> u32 {
 /// | 2       | FS       | 2D float texture        | Backdrop copy (premultiplied)|
 /// | 3       | FS       | Non-filtering sampler   | Nearest + ClampToEdge        |
 ///
+/// The `Stage` column is the actual shader usage.  The generated
+/// `WgpuBindGroup0` layout marks every binding `VERTEX_FRAGMENT` (wgsl_bindgen
+/// does not derive per-stage visibility); this is wider than the former
+/// hand-written descriptor (bindings 1–3 were FRAGMENT-only) but permissive —
+/// wgpu accepts it and the GPU readback suite confirms bit-identical output.
+///
 /// ## Blend state
 ///
 /// `REPLACE` (no fixed-function blending): the fragment shader emits the full
