@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use super::{
     buffer_pool::BufferPool, external_texture_registry::ExternalTextureRegistry,
-    texture_cache::TextureCache, texture_pool::TexturePool,
+    texture_cache::TextureCache, texture_pool::TexturePool, uniform_pool::UniformPool,
 };
 
 /// Single owner of the four GPU resource managers used by [`super::painter::WgpuPainter`].
@@ -68,6 +68,14 @@ pub(crate) struct GpuResources {
     /// Exposed via `WgpuPainter::external_texture_registry[_mut]` which
     /// delegate here.
     external_texture_registry: ExternalTextureRegistry,
+
+    /// Reusable uniform-buffer pool for the filter/composite passes.
+    ///
+    /// `reset_frame` must run **exactly once per frame** (after the final
+    /// submit) via `WgpuPainter::end_frame_maintenance` — NOT at the per-`render`
+    /// `buffer_pool` reset, which would alias a backdrop-flush uniform with a
+    /// final-render uniform in the same frame. See [`UniformPool`].
+    uniform_pool: UniformPool,
 }
 
 impl GpuResources {
@@ -79,6 +87,9 @@ impl GpuResources {
     /// `WgpuPainter::with_shared_device`.
     pub(crate) fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
         let buffer_pool = BufferPool::new();
+        // Built before `texture_cache` consumes `queue` (and `layer_texture_pool`
+        // consumes `device`): the uniform pool keeps its own `Arc` clones.
+        let uniform_pool = UniformPool::new(device.clone(), queue.clone());
         let texture_cache = TextureCache::new(device.clone(), queue);
         let external_texture_registry = ExternalTextureRegistry::new(device.clone());
         let layer_texture_pool = TexturePool::with_capacity(device, 4);
@@ -88,6 +99,7 @@ impl GpuResources {
             texture_cache,
             layer_texture_pool,
             external_texture_registry,
+            uniform_pool,
         }
     }
 
@@ -124,6 +136,15 @@ impl GpuResources {
     /// acquire and return offscreen compositing textures.
     pub(crate) fn layer_texture_pool_mut(&mut self) -> &mut TexturePool {
         &mut self.layer_texture_pool
+    }
+
+    // -------------------------------------------------------------------------
+    // UniformPool accessor
+    // -------------------------------------------------------------------------
+
+    /// Exclusive reference to the reusable filter/composite uniform-buffer pool.
+    pub(crate) fn uniform_pool_mut(&mut self) -> &mut UniformPool {
+        &mut self.uniform_pool
     }
 
     // -------------------------------------------------------------------------

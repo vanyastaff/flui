@@ -46,11 +46,10 @@ use std::sync::Arc;
 
 use bytemuck::cast_slice;
 use flui_types::{Rect, geometry::Pixels};
-use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::BlurPipeline;
 
-use super::{resources::GpuResources, texture_pool::PooledTexture};
+use super::{resources::GpuResources, texture_pool::PooledTexture, uniform_pool::UniformPool};
 
 mod generated;
 mod pipeline;
@@ -160,6 +159,7 @@ pub(crate) fn apply_blur(
         source_tex.view(),
         h_tex.view(),
         pipeline,
+        resources.uniform_pool_mut(),
         device,
         encoder,
         "Blur H Pass",
@@ -179,6 +179,7 @@ pub(crate) fn apply_blur(
         h_tex.view(),
         v_tex.view(),
         pipeline,
+        resources.uniform_pool_mut(),
         device,
         encoder,
         "Blur V Pass",
@@ -196,22 +197,23 @@ pub(crate) fn apply_blur(
 /// Writes into `dst_view` using `LoadOp::Clear(TRANSPARENT)` so pixels outside
 /// the viewport are transparent (R3 invariant). `REPLACE` blend prevents the
 /// GPU from re-blending the premultiplied output.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "GPU sub-pass needs the uniform, src/dst views, pipeline, pool, device, encoder, and label"
+)]
 fn run_blur_sub_pass(
     uniform: blur::BlurUniforms,
     src_view: &wgpu::TextureView,
     dst_view: &wgpu::TextureView,
     pipeline: &BlurPipeline,
+    uniform_pool: &mut UniformPool,
     device: &Arc<wgpu::Device>,
     encoder: &mut wgpu::CommandEncoder,
     pass_label: &str,
 ) {
-    // Per-pass uniform buffer (32 bytes — tiny allocation, new each pass so the
-    // bind-group can reference its own buffer without a dynamic-offset scheme).
-    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(pass_label),
-        contents: cast_slice(&[uniform]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    // Uniform (32 bytes) written into a frame-distinct buffer from the reusable
+    // pool — no per-pass allocation; each pass still binds its own buffer.
+    let uniform_buffer = uniform_pool.alloc(cast_slice(&[uniform]));
 
     // Linear-filter sampler: bilinear interpolation + ClampToEdge.
     // Bilinear is valid for Gaussian; the continuous kernel naturally composes
@@ -235,7 +237,7 @@ fn run_blur_sub_pass(
         device,
         blur::WgpuBindGroup0Entries::new(blur::WgpuBindGroup0EntriesParams {
             u: wgpu::BufferBinding {
-                buffer: &uniform_buffer,
+                buffer: uniform_buffer,
                 offset: 0,
                 size: None,
             },

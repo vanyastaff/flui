@@ -26,7 +26,6 @@
 use std::sync::Arc;
 
 use bytemuck::cast_slice;
-use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::ColorMatrixPipeline;
 use pipeline::color_matrix_uniform_from_values;
@@ -80,11 +79,7 @@ pub(crate) fn apply_color_matrix(
     // bound per draw.  Hoisting into the pipeline would couple the pipeline to a
     // single matrix value and break multi-layer filtering.
     let uniform = color_matrix_uniform_from_values(matrix_values);
-    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Color Matrix Uniform Buffer"),
-        contents: cast_slice(&[uniform]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let uniform_buffer = resources.uniform_pool_mut().alloc(cast_slice(&[uniform]));
 
     // Nearest + ClampToEdge sampler — per-draw allocation (same rationale as above).
     // No filtering: source texels are pixel-aligned with the output; bilinear
@@ -107,7 +102,7 @@ pub(crate) fn apply_color_matrix(
         device,
         color_matrix::WgpuBindGroup0Entries::new(color_matrix::WgpuBindGroup0EntriesParams {
             u: wgpu::BufferBinding {
-                buffer: &uniform_buffer,
+                buffer: uniform_buffer,
                 offset: 0,
                 size: None,
             },

@@ -27,7 +27,6 @@
 use std::sync::Arc;
 
 use bytemuck::cast_slice;
-use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::GammaPipeline;
 use pipeline::gamma_direction_to_u32;
@@ -75,12 +74,9 @@ pub(crate) fn apply_gamma(
     let filtered_view = filtered_tex.view();
 
     // Build the uniform: direction flag; padding is zero-filled by the generated ctor.
+    // The reusable pool writes it into a frame-distinct buffer (no per-call alloc).
     let uniform = gamma::GammaUniforms::new(gamma_direction_to_u32(direction));
-    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Gamma Uniform Buffer"),
-        contents: cast_slice(&[uniform]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let uniform_buffer = resources.uniform_pool_mut().alloc(cast_slice(&[uniform]));
 
     // Nearest + ClampToEdge sampler — no filtering: source texels are pixel-aligned.
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -102,7 +98,7 @@ pub(crate) fn apply_gamma(
         device,
         gamma::WgpuBindGroup0Entries::new(gamma::WgpuBindGroup0EntriesParams {
             u: wgpu::BufferBinding {
-                buffer: &uniform_buffer,
+                buffer: uniform_buffer,
                 offset: 0,
                 size: None,
             },

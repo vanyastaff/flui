@@ -611,6 +611,12 @@ impl WgpuPainter {
         // `TextRenderer::atlas_trim`.
         self.text_renderer.atlas_trim();
 
+        // Rewind the filter/composite uniform pool for next-frame reuse. Same
+        // once-per-frame seam: rewinding per `render` would alias a backdrop-
+        // flush uniform with a final-render uniform in the same frame. See
+        // `UniformPool::reset_frame`.
+        self.resources.uniform_pool_mut().reset_frame();
+
         let maint = self.resources.texture_cache_mut().end_frame_maintenance();
         if maint.evicted > 0 || maint.atlas_reset {
             tracing::debug!(
