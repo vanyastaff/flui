@@ -617,6 +617,15 @@ impl WgpuPainter {
         // `UniformPool::reset_frame`.
         self.resources.uniform_pool_mut().reset_frame();
 
+        // Reclaim over-budget vertex/index buffers (LRU-first). Must run here,
+        // after the final submit, where every pooled buffer is free — dropping a
+        // `wgpu::Buffer` only schedules the GPU free once submissions finish, so
+        // this never reclaims memory the in-flight frame still reads. See
+        // `BufferPool::evict_over_budget`.
+        self.resources
+            .buffer_pool_mut()
+            .evict_over_budget(crate::wgpu::buffer_pool::DEFAULT_BUDGET_BYTES);
+
         let maint = self.resources.texture_cache_mut().end_frame_maintenance();
         if maint.evicted > 0 || maint.atlas_reset {
             tracing::debug!(
