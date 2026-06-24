@@ -779,6 +779,27 @@ impl TextRenderer {
         Ok(())
     }
 
+    /// Reclaim glyph-atlas slots whose glyphs were not used this frame.
+    ///
+    /// glyphon tracks an in-use set per atlas that `prepare` adds to and only
+    /// `TextAtlas::trim` clears.  Without a trim the set grows monotonically:
+    /// every glyph ever rasterized (each distinct char × size × subpixel
+    /// position) is treated as permanently live, so the atlas can only grow and
+    /// never reuses a slot — unbounded GPU memory growth for UIs whose text
+    /// changes over time.
+    ///
+    /// trim only clears the CPU-side in-use set; it does not touch the atlas
+    /// texture the in-flight frame samples, so it is safe (and required) to call
+    /// **once per frame, after the frame's text has been prepared, rendered, and
+    /// submitted** — never between [`render`](Self::render) calls within a frame
+    /// (the engine renders text once per `painter.render`, and `painter.render`
+    /// runs multiple times per frame for backdrop-filter flushes).  The single
+    /// correct caller is `WgpuPainter::end_frame_maintenance`, the same
+    /// once-per-frame seam that drives texture-cache maintenance.
+    pub(crate) fn atlas_trim(&mut self) {
+        self.text_atlas.trim();
+    }
+
     // ------------------------------------------------------------------
     // Diagnostics
     // ------------------------------------------------------------------
@@ -1108,9 +1129,192 @@ mod tests {
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gpu_tests {
+    use std::sync::Arc;
+
+    use flui_types::{geometry::Pixels, geometry::Point, styling::Color};
+
+    use super::TextRenderer;
+
+    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+    const W: u32 = 128;
+    const H: u32 = 32;
+
+    fn device_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("a GPU adapter must be available on a GPU-enabled test host");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("TextRenderer Test Device"),
+            ..Default::default()
+        }))
+        .expect("GPU device creation succeeded when adapter was found");
+        (Arc::new(device), Arc::new(queue))
+    }
+
+    fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Text Test Target"),
+            size: wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Clear `view` to transparent — `TextRenderer::render` uses `LoadOp::Load`,
+    /// so the target must be initialised before the text pass composites onto it.
+    fn clear(view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Text Test Clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+
+    fn readback(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Vec<[u8; 4]> {
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let bytes_per_row = (W * 4).div_ceil(align) * align;
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Text Readback"),
+            size: u64::from(bytes_per_row * H),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Text Readback Encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("device poll must complete the readback copy");
+        let mapped = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((W * H) as usize);
+        for row in 0..H {
+            let row_start = (row * bytes_per_row) as usize;
+            for col in 0..W {
+                let off = row_start + (col as usize) * 4;
+                pixels.push([
+                    mapped[off],
+                    mapped[off + 1],
+                    mapped[off + 2],
+                    mapped[off + 3],
+                ]);
+            }
+        }
+        pixels
+    }
+
+    fn render_one(
+        tr: &mut TextRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+    ) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Text Test Frame"),
+        });
+        clear(view, &mut encoder);
+        tr.render(device, queue, view, &mut encoder, (W, H))
+            .expect("text render must succeed");
+        queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Per-frame `atlas_trim` across frames whose glyph set keeps changing must
+    /// not corrupt the atlas: text still rasterises and composites correctly on
+    /// a later frame.
+    ///
+    /// This is a no-regression guard for the trim wiring, not a red→green
+    /// behaviour test: `trim` changes no pixel output (it only clears the
+    /// CPU-side in-use set so future frames may reuse slots), and glyphon
+    /// exposes no public atlas-size accessor to assert the reclaim directly — so
+    /// the leak fix is correct by glyphon's documented `trim` contract, while
+    /// this test proves the per-frame trim does not break subsequent rendering.
     #[test]
-    fn test_text_batching() {
-        // GPU-backed batching tests require a wgpu device.
-        // Run with: cargo test -p flui-engine --features enable-wgpu-tests,dx12
+    fn atlas_trim_each_frame_keeps_text_rendering() {
+        let (device, queue) = device_queue();
+        let (target, view) = make_target(&device);
+        let mut tr = TextRenderer::new(&device, &queue, FORMAT);
+        let white = Color::rgba(255, 255, 255, 255);
+
+        // Churn: every frame draws DISTINCT glyphs (varying text + size) and
+        // trims, mimicking the once-per-frame seam. Without trim this set would
+        // accumulate in the atlas; with trim slots become reusable.
+        for frame in 0..24u32 {
+            tr.add_text(
+                &format!("churn {frame} #@%"),
+                Point::new(Pixels(2.0), Pixels(2.0)),
+                10.0 + (frame % 8) as f32,
+                white,
+            );
+            render_one(&mut tr, &device, &queue, &view);
+            tr.atlas_trim();
+        }
+
+        // Final known frame: opaque white text on a transparent target.
+        tr.add_text("FLUI", Point::new(Pixels(4.0), Pixels(8.0)), 16.0, white);
+        render_one(&mut tr, &device, &queue, &view);
+        tr.atlas_trim();
+
+        let pixels = readback(&device, &queue, &target);
+        let lit = pixels.iter().filter(|p| p[3] > 0).count();
+        assert!(
+            lit > 0,
+            "after 24 trimmed churning frames, text must still rasterise and \
+             composite (found {lit} non-transparent pixels)"
+        );
     }
 }

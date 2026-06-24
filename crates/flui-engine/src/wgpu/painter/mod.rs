@@ -595,14 +595,22 @@ impl WgpuPainter {
         self.render(super::render_target::RenderTarget::view_only(view), encoder)
     }
 
-    /// Run end-of-frame texture-cache maintenance: evict over-budget textures,
-    /// reclaim a full atlas that holds stale entries, then reset use-counters.
+    /// Run end-of-frame maintenance: trim the glyph atlas, evict over-budget
+    /// textures, reclaim a full atlas that holds stale entries, then reset
+    /// use-counters.
     ///
     /// Call EXACTLY ONCE per frame, after the final `WgpuPainter::render` flush.
     /// `render` must not do this itself — it runs once per pass (backdrop-filter
     /// flushes invoke it mid-frame), so per-call maintenance would reset
     /// use-counters between passes and drop textures still in use this frame.
     pub fn end_frame_maintenance(&mut self) {
+        // Reclaim glyph-atlas slots not used this frame. Must run here (the
+        // once-per-frame seam), not inside `TextRenderer::render`, which fires
+        // once per `render` pass — trimming mid-frame would discard the in-use
+        // set built by an earlier backdrop-filter pass's text. See
+        // `TextRenderer::atlas_trim`.
+        self.text_renderer.atlas_trim();
+
         let maint = self.resources.texture_cache_mut().end_frame_maintenance();
         if maint.evicted > 0 || maint.atlas_reset {
             tracing::debug!(
