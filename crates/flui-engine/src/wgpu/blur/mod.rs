@@ -49,11 +49,13 @@ use flui_types::{Rect, geometry::Pixels};
 use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::BlurPipeline;
-use pipeline::BlurUniform;
 
 use super::{resources::GpuResources, texture_pool::PooledTexture};
 
+mod generated;
 mod pipeline;
+
+use generated::blur;
 
 /// Apply a Gaussian blur to `source_tex` via two separable sub-passes
 /// (H then V), returning the filtered texture.
@@ -78,7 +80,7 @@ mod pipeline;
 ///   MUST be `fb_dim`, not `viewport_size` (non-negotiable #2: denominator is integer
 ///   fb_dim to avoid the SSAA-tile-denominator bug class).
 /// - `surface_format` — texture format of the render target.
-/// - `pipeline` — the blur pipeline (bind-group layout + render pipeline).
+/// - `pipeline` — the blur pipeline (render pipeline + generated bind-group helpers).
 /// - `resources` — mutable GPU resource manager (texture pool).
 /// - `device` — wgpu device for buffer and bind-group creation.
 /// - `encoder` — command encoder that both sub-passes are recorded into.
@@ -149,12 +151,12 @@ pub(crate) fn apply_blur(
         .layer_texture_pool_mut()
         .acquire(fb_w, fb_h, surface_format);
     run_blur_sub_pass(
-        &BlurUniform {
-            texture_size: [fb_w as f32, fb_h as f32],
-            sigma: sigma_x,
-            direction: 0.0, // horizontal
-            content_rect_uv: content_rect_uv_h,
-        },
+        blur::BlurUniforms::new(
+            [fb_w as f32, fb_h as f32],
+            sigma_x,
+            0.0, // horizontal
+            content_rect_uv_h,
+        ),
         source_tex.view(),
         h_tex.view(),
         pipeline,
@@ -168,12 +170,12 @@ pub(crate) fn apply_blur(
         .layer_texture_pool_mut()
         .acquire(fb_w, fb_h, surface_format);
     run_blur_sub_pass(
-        &BlurUniform {
-            texture_size: [fb_w as f32, fb_h as f32],
-            sigma: sigma_y,
-            direction: 1.0, // vertical
-            content_rect_uv: content_rect_uv_v,
-        },
+        blur::BlurUniforms::new(
+            [fb_w as f32, fb_h as f32],
+            sigma_y,
+            1.0, // vertical
+            content_rect_uv_v,
+        ),
         h_tex.view(),
         v_tex.view(),
         pipeline,
@@ -195,7 +197,7 @@ pub(crate) fn apply_blur(
 /// the viewport are transparent (R3 invariant). `REPLACE` blend prevents the
 /// GPU from re-blending the premultiplied output.
 fn run_blur_sub_pass(
-    uniform: &BlurUniform,
+    uniform: blur::BlurUniforms,
     src_view: &wgpu::TextureView,
     dst_view: &wgpu::TextureView,
     pipeline: &BlurPipeline,
@@ -207,7 +209,7 @@ fn run_blur_sub_pass(
     // bind-group can reference its own buffer without a dynamic-offset scheme).
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(pass_label),
-        contents: cast_slice(&[*uniform]),
+        contents: cast_slice(&[uniform]),
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
@@ -226,24 +228,21 @@ fn run_blur_sub_pass(
         ..Default::default()
     });
 
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(pass_label),
-        layout: &pipeline.bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+    // Per-draw bind group via the generated typed helper.  `WgpuBindGroup0::from_bindings`
+    // recreates the layout from the WGSL-derived descriptor, so no shared layout object
+    // needs to be threaded through from the pipeline.
+    let bind_group = blur::WgpuBindGroup0::from_bindings(
+        device,
+        blur::WgpuBindGroup0Entries::new(blur::WgpuBindGroup0EntriesParams {
+            u: wgpu::BufferBinding {
+                buffer: &uniform_buffer,
+                offset: 0,
+                size: None,
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(src_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
+            src_texture: src_view,
+            src_sampler: &sampler,
+        }),
+    );
 
     {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -266,7 +265,7 @@ fn run_blur_sub_pass(
         });
 
         render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        bind_group.set(&mut render_pass);
         // 6 vertices synthesised in the VS — no vertex buffer.
         render_pass.draw(0..6, 0..1);
     }
