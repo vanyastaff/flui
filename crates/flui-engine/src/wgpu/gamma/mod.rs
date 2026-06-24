@@ -30,11 +30,14 @@ use bytemuck::cast_slice;
 use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::GammaPipeline;
-use pipeline::{GammaUniform, gamma_direction_to_u32};
+use pipeline::gamma_direction_to_u32;
 
 use super::{command_ir::GammaDirection, resources::GpuResources, texture_pool::PooledTexture};
 
+mod generated;
 mod pipeline;
+
+use generated::gamma;
 
 /// Apply the sRGB ↔ linear-light gamma transfer to `source_tex`, writing the
 /// filtered premultiplied RGBA into a freshly-acquired pooled texture.
@@ -71,11 +74,8 @@ pub(crate) fn apply_gamma(
         .acquire(vp_w, vp_h, surface_format);
     let filtered_view = filtered_tex.view();
 
-    // Build the uniform: direction flag + padding.
-    let uniform = GammaUniform {
-        direction: gamma_direction_to_u32(direction),
-        _pad: [0; 3],
-    };
+    // Build the uniform: direction flag; padding is zero-filled by the generated ctor.
+    let uniform = gamma::GammaUniforms::new(gamma_direction_to_u32(direction));
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Gamma Uniform Buffer"),
         contents: cast_slice(&[uniform]),
@@ -95,24 +95,21 @@ pub(crate) fn apply_gamma(
     });
 
     // Per-draw bind group: uniform (0) + source texture (1) + sampler (2).
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Gamma Bind Group"),
-        layout: &pipeline.bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+    // The generated `WgpuBindGroup0::from_bindings` creates a compatible layout
+    // internally — wgpu validates bind-group / pipeline-layout compatibility by
+    // descriptor equality, so no layout object needs to be shared.
+    let bind_group = gamma::WgpuBindGroup0::from_bindings(
+        device,
+        gamma::WgpuBindGroup0Entries::new(gamma::WgpuBindGroup0EntriesParams {
+            u: wgpu::BufferBinding {
+                buffer: &uniform_buffer,
+                offset: 0,
+                size: None,
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(source_tex.view()),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
+            src_texture: source_tex.view(),
+            src_sampler: &sampler,
+        }),
+    );
 
     // Render pass: clear to TRANSPARENT then draw the full-viewport quad.
     {
@@ -134,7 +131,7 @@ pub(crate) fn apply_gamma(
         });
 
         render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        bind_group.set(&mut render_pass);
         // 6 vertices synthesised in the VS — no vertex buffer.
         render_pass.draw(0..6, 0..1);
     }

@@ -107,6 +107,12 @@ wgpu = { workspace = true, default-features = false, features = [
     "fragile-send-sync-non-atomic-wasm",
 ], optional = true }
 
+[build-dependencies]
+# Generates Rust bindings from gamma.wgsl in build.rs (P1 pilot).
+# Not compiled into the crate binary.
+wgsl_bindgen = { workspace = true }
+regex = { workspace = true }
+
 [dev-dependencies]
 pollster = { workspace = true }
 criterion = { workspace = true }

@@ -26,8 +26,23 @@ yanked = "warn"
 unmaintained = "all"
 # Flag crates with known unsound APIs
 unsound = "all"
-# Ignore specific advisories (add RUSTSEC IDs here if needed)
-ignore = []
+# Ignore specific advisories
+ignore = [
+    # RUSTSEC-2025-0057: fxhash is unmaintained (repo stale, owner inactive).
+    # Source: fxhash v0.2.1 ← wgsl_bindgen v0.22.2 (BUILD-DEP ONLY — never
+    # compiled into the binary or public API).  Introduced in PR wgsl-bindgen
+    # pilot (P1); no upgrade is available upstream.  The only risk is build-time
+    # hash non-determinism, which does not affect the compiled artefact.
+    { id = "RUSTSEC-2025-0057" },
+
+    # RUSTSEC-2026-0186: memmap2 ≤0.9.10 passes an unchecked pointer offset to
+    # madvise/msync syscalls.  PRE-EXISTING on main (pinned by cosmic-text 0.18.2
+    # → fontdb → memmap2 0.9.10; cosmic-text caps the version).
+    # Fixed in memmap2 0.9.11 — unblock by updating cosmic-text when 0.18.3+.
+    # The pointer is NOT dereferenced; exploitability requires our code to pass
+    # an out-of-bounds range to advise_range/flush_range, which we do not do.
+    { id = "RUSTSEC-2026-0186" },
+]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Licenses - Allowed open source licenses
