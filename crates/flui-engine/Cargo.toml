@@ -49,6 +49,9 @@ flui-assets = { path = "../flui-assets", optional = true }
 
 # === GPU Rendering (wgpu backend) ===
 wgpu = { workspace = true, default-features = false, optional = true }
+# Shader composition: resolves #import directives at pipeline-init time.
+# Only used in the wgpu backend; compile-time feature-gated via the wgpu-backend feature.
+naga_oil = { workspace = true }
 # `std` is required so `raw_window_handle::HandleError` impls `std::error::Error`
 # (the impl is `#[cfg(feature = "std")]` in raw-window-handle 0.6.2); that lets us
 # box a `HandleError` directly into `EngineError::SurfaceCreation` via the typed

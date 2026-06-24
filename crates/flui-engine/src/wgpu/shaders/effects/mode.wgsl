@@ -102,14 +102,14 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 // ─── Blend helpers ─────────────────────────────────────────────────────────────
 //
 // The 6 shared leaf helpers (hard_light, lum, clip_color, set_lum, sat,
-// set_sat) are defined in `blend_helpers.wgsl` and prepended to this module
-// by `mode/pipeline.rs` via `concat!(include_str!(...))`.  naga sees one
-// unified module — any duplicate definition would cause a "redefined" error
-// at `create_shader_module`.
+// set_sat) are defined in `blend_helpers.wgsl` and resolved by naga_oil at
+// pipeline-init time via `compose_wgsl_shader` in `src/wgpu/mod.rs`.
 //
 // All helpers mirror the corresponding private functions in
 // `flui_types::styling::color`.  SRC = filter color, DST = layer pixel.
 // Both operate on straight sRGB [0,1] values.
+
+#import blend_helpers::{hard_light, lum, clip_color, set_lum, sat, set_sat}
 
 /// W3C separable blend function B(cb, cs), one channel.
 /// cb = backdrop (DST straight), cs = source (SRC straight).
