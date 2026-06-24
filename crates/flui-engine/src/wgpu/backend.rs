@@ -1205,11 +1205,22 @@ impl CommandRenderer for Backend<'_> {
             .render_blur(&blur_input, sigma);
 
         // Stage 5: queue blurred result for compositing on next painter
-        // flush. The blurred texture is laid down at the same
-        // device-space rect we just sampled from -- using `bounds`
-        // (local-space) here would composite the blur at the wrong
-        // location whenever `transform` is non-identity.
-        self.painter.queue_offscreen_result(blurred, device_rect);
+        // flush. The composite rect must be the CLAMPED region derived from
+        // `x,y,w,h` — the same region that was copied into the blur-input
+        // texture — not the unclamped `device_rect`. When the backdrop
+        // crosses a surface edge `device_rect` is larger than the copied
+        // texture; passing it would stretch/misalign the smaller blurred
+        // result. For an on-screen backdrop where clamp == device_rect this
+        // is a no-op (Path A, `Renderer::handle_backdrop_filter`, applies
+        // the same fix at renderer.rs ~1759-1768 for the same reason).
+        let clamped_composite_rect = Rect::from_xywh(
+            Pixels(x as f32),
+            Pixels(y as f32),
+            Pixels(w as f32),
+            Pixels(h as f32),
+        );
+        self.painter
+            .queue_offscreen_result(blurred, clamped_composite_rect);
 
         // Stage 6: dispatch the child display list on top of the blurred
         // backdrop. Each child `DrawCommand` carries its own
@@ -2317,6 +2328,128 @@ mod tests {
             matches_multiply,
             "ShaderMask child advanced Multiply must match the CPU Multiply oracle; \
              pixel={pixel:?}, multiply_oracle={multiply_oracle:?}, srcover_oracle={srcover_oracle:?}."
+        );
+    }
+
+    // ── Backdrop filter: composite rect is clamped when crossing edge ─────────
+
+    /// Path B (`render_backdrop_filter`) must composite the blurred texture at the
+    /// CLAMPED rect that matches the copy source, not at the unclamped `device_rect`.
+    ///
+    /// Setup: 64×64 surface, backdrop `bounds` covering (32,32)→(100,100) in local
+    /// space with identity `transform`.  After transform: `device_rect` spans
+    /// x=32..100, y=32..100 (w=68, h=68), but the surface is only 64 wide/tall, so
+    /// the clamped copy region is x=32, y=32, w=32, h=32.
+    ///
+    /// Pre-fix: `queue_offscreen_result` receives the unclamped `device_rect`
+    /// (left=32, width=68) → composite_rect.width() ≈ 68 → test FAILS.
+    /// Post-fix: `queue_offscreen_result` receives the clamped rect
+    /// (left=32, width=32) → composite_rect.width() ≈ 32 → test PASSES.
+    #[test]
+    fn backdrop_filter_composites_at_clamped_rect_when_crossing_edge() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_painting::display_list::ImageFilter;
+
+        const SURFACE_W: u32 = 64;
+        const SURFACE_H: u32 = 64;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (SURFACE_W, SURFACE_H),
+        );
+
+        // Create a minimal surface texture that `bind_surface` can reference.
+        // Needs RENDER_ATTACHMENT (for the flush render pass), TEXTURE_BINDING,
+        // COPY_SRC (copy_texture_to_texture source), and COPY_DST.
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backdrop Edge Test Surface"),
+            size: wgpu::Extent3d {
+                width: SURFACE_W,
+                height: SURFACE_H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Bounds in local space: (32,32) → (100,100).  With identity transform,
+        // device_rect == bounds == left=32, top=32, right=100, bottom=100.
+        // Clamped to 64×64 surface: right→64, bottom→64, so w=32, h=32.
+        // The discriminating assertion: composite_rect.width() must be 32, not 68.
+        let filter_bounds = Rect::from_xywh(px(32.0), px(32.0), px(68.0), px(68.0));
+        let filter = ImageFilter::Blur {
+            sigma_x: 4.0,
+            sigma_y: 4.0,
+        };
+
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        backend.bind_surface(&surface_view, &surface_texture);
+
+        // `child = None` — we only care about the composite rect queued, not child dispatch.
+        backend.render_backdrop_filter(
+            None,
+            &filter,
+            filter_bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "render_backdrop_filter must queue exactly one offscreen composite; got {}",
+            results.len()
+        );
+        let (composite_rect, _tex_w, _tex_h) = results[0];
+
+        // The clamped rect: left=32, top=32, width=32 (64-32), height=32 (64-32).
+        // Pre-fix: width ≈ 68 (unclamped device_rect width). Post-fix: width ≈ 32.
+        let expected_width = (SURFACE_W - 32) as f32; // 32.0
+        let expected_height = (SURFACE_H - 32) as f32; // 32.0
+        let expected_left = 32.0_f32;
+        let expected_top = 32.0_f32;
+
+        assert!(
+            (composite_rect.left().0 - expected_left).abs() < 0.5,
+            "composite_rect.left must be {expected_left} (clamped x); got {}",
+            composite_rect.left().0
+        );
+        assert!(
+            (composite_rect.top().0 - expected_top).abs() < 0.5,
+            "composite_rect.top must be {expected_top} (clamped y); got {}",
+            composite_rect.top().0
+        );
+        assert!(
+            (composite_rect.width().0 - expected_width).abs() < 0.5,
+            "composite_rect.width must be {expected_width} (clamped w=64-32=32), not 68 \
+             (unclamped device_rect width); got {}. \
+             Pre-fix failure: Path B passes device_rect to queue_offscreen_result instead \
+             of the clamped rect derived from x,y,w,h.",
+            composite_rect.width().0
+        );
+        assert!(
+            (composite_rect.height().0 - expected_height).abs() < 0.5,
+            "composite_rect.height must be {expected_height} (clamped h=64-32=32), not 68; got {}",
+            composite_rect.height().0
         );
     }
 }
