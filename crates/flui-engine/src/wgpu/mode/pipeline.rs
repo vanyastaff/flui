@@ -32,6 +32,8 @@ use std::mem;
 use bytemuck::{Pod, Zeroable};
 use flui_types::painting::BlendMode;
 
+use crate::wgpu::shader_composer::{ComposableSource, compose_wgsl_shader};
+
 // ── Uniform layout ────────────────────────────────────────────────────────────
 
 /// GPU uniform buffer layout for the ColorFilter::Mode blend pass.
@@ -145,20 +147,26 @@ impl ModePipeline {
             immediate_size: 0,
         });
 
+        // Compose mode.wgsl by resolving its `#import blend_helpers` via naga_oil.
+        // The Composer registers blend_helpers.wgsl as a composable module, then
+        // produces a fully resolved naga::Module that wgpu accepts via ShaderSource::Naga.
+        // Panics are intentional here: a composition failure at pipeline-init is a
+        // programming error (bad WGSL or missing import), not a recoverable runtime
+        // condition — it matches the behaviour of the previous concat!/create_shader_module
+        // path which also panicked (wgpu panics on shader validation failure).
+        let composed_source = compose_wgsl_shader(
+            &[ComposableSource {
+                source: include_str!("../shaders/blend_helpers.wgsl"),
+                file_path: "shaders/blend_helpers.wgsl",
+            }],
+            include_str!("../shaders/effects/mode.wgsl"),
+            "shaders/effects/mode.wgsl",
+        )
+        .expect("blend_helpers.wgsl #import in mode.wgsl must resolve: check for WGSL syntax errors or a missing #define_import_path");
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mode Shader"),
-            // Prepend the shared leaf helpers (hard_light, lum, clip_color,
-            // set_lum, sat, set_sat) from blend_helpers.wgsl so naga sees one
-            // unified module.  A duplicate fn definition would cause a "redefined"
-            // error here, enforcing the single-source contract.
-            source: wgpu::ShaderSource::Wgsl(
-                concat!(
-                    include_str!("../shaders/blend_helpers.wgsl"),
-                    "\n\n",
-                    include_str!("../shaders/effects/mode.wgsl"),
-                )
-                .into(),
-            ),
+            source: composed_source,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

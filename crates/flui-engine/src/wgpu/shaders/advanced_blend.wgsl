@@ -139,10 +139,10 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOutput {
 // ── Blend helpers ─────────────────────────────────────────────────────────────
 //
 // The 6 shared leaf helpers (hard_light, lum, clip_color, set_lum, sat,
-// set_sat) are defined in `blend_helpers.wgsl` and prepended to this module
-// by `advanced_blend/pipeline.rs` via `concat!(include_str!(...))`.  naga
-// sees one unified module — any duplicate definition would cause a "redefined"
-// error at `create_shader_module`.
+// set_sat) are defined in `blend_helpers.wgsl` and resolved by naga_oil at
+// pipeline-init time via `compose_wgsl_shader` in `src/wgpu/mod.rs`.
+
+#import blend_helpers::{hard_light, lum, clip_color, set_lum, sat, set_sat}
 
 fn separable_blend(mode: u32, cb: f32, cs: f32) -> f32 {
     switch mode {

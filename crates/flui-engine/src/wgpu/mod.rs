@@ -177,6 +177,12 @@ pub(crate) mod resources;
 /// suppression. The audit also mentioned `cached_count` but no such
 /// method existed -- only `clear`.
 mod shader_compiler;
+/// naga_oil shader composition helper: resolves `#import` directives
+/// in WGSL at pipeline-init time via [`shader_composer::compose_wgsl_shader`].
+/// Used by `mode/pipeline.rs` and `advanced_blend/pipeline.rs` to
+/// compose `blend_helpers.wgsl` into each entry shader, replacing the
+/// previous `concat!(include_str!(...))` approach.
+pub(crate) mod shader_composer;
 mod shaders;
 /// SSAA (2× supersampled) path anti-aliasing: downsample pipeline and replay
 /// helper `GpuReplay::render_ssaa_path` / `GpuReplay::downsample_ssaa_tile`.
