@@ -276,7 +276,7 @@ impl LayoutCapability for BoxLayout {
     }
 
     fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
-        constraints.normalize()
+        constraints.round_for_cache()
     }
 }
 
@@ -1325,10 +1325,11 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
             .fold(Matrix4::IDENTITY, |acc, t| acc * *t);
     }
 
-    /// Adds self as a hit target with the given ID.
-    pub fn add_self(&mut self, target_id: u64) {
+    /// Adds self as a hit target with the given render ID.
+    pub fn add_self(&mut self, target_id: RenderId) {
         let transform = self.current_transform();
-        self.result.add(BoxHitTestEntry::new(target_id, transform));
+        self.result
+            .add(BoxHitTestEntry::new(target_id.as_u64(), transform));
     }
 }
 

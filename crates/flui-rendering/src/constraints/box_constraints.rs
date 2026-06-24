@@ -20,17 +20,17 @@ use super::Constraints;
 ///
 /// # Cache Support
 ///
-/// Implements `Hash` and `Eq` for use as cache keys. Use `normalize()` before
+/// Implements `Hash` and `Eq` for use as cache keys. Use `round_for_cache()` before
 /// caching to ensure consistent floating-point comparisons:
 ///
 /// ```ignore
-/// let key = constraints.normalize();
+/// let key = constraints.round_for_cache();
 /// layout_cache.insert(key, computed_size);
 /// ```
 ///
-/// # Normalization
+/// # Cache Rounding
 ///
-/// The `normalize()` method rounds floating-point values to 0.01 precision
+/// The `round_for_cache()` method rounds floating-point values to 0.01 precision
 /// (2 decimal places) to avoid cache thrashing from rounding errors while
 /// maintaining sufficient accuracy for layout calculations.
 ///
@@ -204,13 +204,15 @@ impl BoxConstraints {
     // NORMALIZATION FOR CACHING
     // ============================================================================
 
-    /// Normalizes constraints for use as cache keys.
+    /// Rounds constraints for use as cache keys.
     ///
     /// Rounds finite values to 0.01 precision (2 decimal places).
     /// Infinite values are preserved unchanged.
+    ///
+    // TODO: a real Flutter-semantic normalize() (min≥0, max≥min) can live here if a caller needs it
     #[inline]
     #[must_use]
-    pub fn normalize(&self) -> Self {
+    pub fn round_for_cache(&self) -> Self {
         Self {
             min_width: round_pixels_to_hundredths(self.min_width),
             max_width: round_pixels_to_hundredths(self.max_width),
@@ -219,13 +221,13 @@ impl BoxConstraints {
         }
     }
 
-    /// Checks if constraints are already normalized.
+    /// Checks if constraints are already rounded for caching.
     ///
-    /// More efficient than comparing with `normalize()` as it checks
+    /// More efficient than comparing with `round_for_cache()` as it checks
     /// each field individually.
     #[inline]
     #[must_use]
-    pub fn is_normalized_for_cache(&self) -> bool {
+    pub fn is_rounded_for_cache(&self) -> bool {
         is_pixels_normalized(self.min_width)
             && is_pixels_normalized(self.max_width)
             && is_pixels_normalized(self.min_height)
@@ -896,32 +898,32 @@ mod tests {
     }
 
     #[test]
-    fn test_normalization() {
+    fn test_round_for_cache() {
         let c = BoxConstraints::new(
             px(10.123_456),
             px(100.987_654),
             px(20.555_555),
             px(200.444_44),
         );
-        let normalized = c.normalize();
+        let rounded = c.round_for_cache();
 
-        assert_eq!(normalized.min_width, px(10.12));
-        assert_eq!(normalized.max_width, px(100.99));
-        assert_eq!(normalized.min_height, px(20.56));
-        assert_eq!(normalized.max_height, px(200.44));
+        assert_eq!(rounded.min_width, px(10.12));
+        assert_eq!(rounded.max_width, px(100.99));
+        assert_eq!(rounded.min_height, px(20.56));
+        assert_eq!(rounded.max_height, px(200.44));
 
         // Infinity preserved
-        let inf = BoxConstraints::UNCONSTRAINED.normalize();
+        let inf = BoxConstraints::UNCONSTRAINED.round_for_cache();
         assert!(inf.max_width.is_infinite());
     }
 
     #[test]
-    fn test_is_normalized() {
-        let normalized = BoxConstraints::new(px(10.12), px(100.99), px(20.56), px(200.44));
-        assert!(normalized.is_normalized_for_cache());
+    fn test_is_rounded_for_cache() {
+        let rounded = BoxConstraints::new(px(10.12), px(100.99), px(20.56), px(200.44));
+        assert!(rounded.is_rounded_for_cache());
 
-        let unnormalized = BoxConstraints::new(px(10.123_456), px(100.0), px(20.0), px(200.0));
-        assert!(!unnormalized.is_normalized_for_cache());
+        let unrounded = BoxConstraints::new(px(10.123_456), px(100.0), px(20.0), px(200.0));
+        assert!(!unrounded.is_rounded_for_cache());
     }
 
     #[test]

@@ -33,6 +33,7 @@
 //! }
 //! ```
 
+use flui_foundation::RenderId;
 use flui_tree::Arity;
 use flui_types::{
     Pixels, Size,
@@ -266,16 +267,16 @@ where
         self.is_within_size(self.own_size.width, self.own_size.height)
     }
 
-    /// Adds self as a hit target with the given ID.
-    pub fn add_self(&mut self, target_id: u64) {
+    /// Adds self as a hit target with the given render ID.
+    pub fn add_self(&mut self, target_id: RenderId) {
         self.inner
-            .add_hit(BoxHitTestEntry::new(target_id, Matrix4::IDENTITY));
+            .add_hit(BoxHitTestEntry::new(target_id.as_u64(), Matrix4::IDENTITY));
     }
 
     /// Adds self as a hit target with transform.
-    pub fn add_self_with_transform(&mut self, target_id: u64, transform: Matrix4) {
+    pub fn add_self_with_transform(&mut self, target_id: RenderId, transform: Matrix4) {
         self.inner
-            .add_hit(BoxHitTestEntry::new(target_id, transform));
+            .add_hit(BoxHitTestEntry::new(target_id.as_u64(), transform));
     }
 
     /// Tests a child at the given offset.
@@ -345,9 +346,43 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::RenderId;
+    use flui_tree::Leaf;
+    use flui_types::geometry::Offset;
+
+    use crate::{
+        parent_data::BoxParentData,
+        protocol::{BoxHitTestCtx, BoxProtocol, HitTestContextApi},
+    };
+
+    use super::HitTestContext;
+
     #[test]
     fn test_hit_test_context_compiles() {
         // This test just verifies the module compiles — empty body is enough
         // because failure surfaces at `cargo build`, not at assert time.
+    }
+
+    /// Exercises `HitTestContext<BoxProtocol>::add_self` end-to-end.
+    ///
+    /// Constructs a real `HitTestContext`, calls `add_self(id)`, then asserts
+    /// the entry written into the inner result carries `target_id == id.as_u64()`.
+    /// A regression in the body (wrong accessor or cast) would fail this test.
+    #[test]
+    fn add_self_writes_render_id_as_u64_into_hit_result() {
+        let id = RenderId::new(7);
+        let inner: BoxHitTestCtx<'_, Leaf, BoxParentData> = BoxHitTestCtx::new(Offset::ZERO);
+        let mut ctx: HitTestContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            HitTestContext::new(inner, flui_types::Size::ZERO);
+
+        ctx.add_self(id);
+
+        let entries = &ctx.inner().result().path;
+        assert_eq!(entries.len(), 1, "exactly one entry after add_self");
+        assert_eq!(
+            entries[0].target_id,
+            id.as_u64(),
+            "stored target_id must equal id.as_u64()"
+        );
     }
 }

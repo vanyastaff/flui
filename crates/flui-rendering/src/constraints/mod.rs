@@ -38,8 +38,8 @@
 //!
 //! let mut cache = HashMap::new();
 //!
-//! // Normalize constraints for stable cache keys
-//! let key = constraints.normalize();
+//! // Round constraints for stable cache keys
+//! let key = constraints.round_for_cache();
 //! cache.insert(key, computed_size);
 //! ```
 //!
@@ -144,7 +144,7 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
 /// use flui_rendering::constraints::prelude::*;
 ///
 /// let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-/// let normalized = constraints.normalize();
+/// let rounded = constraints.round_for_cache();
 /// ```
 pub mod prelude {
     pub use super::{
