@@ -100,14 +100,20 @@ impl WgpuPainter {
     pub(crate) fn superellipse_path(
         &mut self,
         rse: &flui_types::geometry::RSuperellipse,
-    ) -> flui_types::painting::Path {
+    ) -> std::sync::Arc<flui_types::painting::Path> {
         let key = super::super::superellipse_cache::SuperellipseKey::from_superellipse(rse);
-        if let Some(path) = self.batcher.superellipse_cache.get(&key) {
-            return path;
+        if let Some(arc_path) = self.batcher.superellipse_cache.get(&key) {
+            return arc_path;
         }
-        let path = super::super::layer_render::generate_superellipse_path(rse);
-        self.batcher.superellipse_cache.insert(key, path.clone());
-        path
+        // Cache miss: generate the path, wrap it in Arc, and store a clone
+        // of the Arc (reference-count bump, no deep copy). Return the Arc
+        // so the caller holds shared ownership.
+        let arc_path =
+            std::sync::Arc::new(super::super::layer_render::generate_superellipse_path(rse));
+        self.batcher
+            .superellipse_cache
+            .insert(key, std::sync::Arc::clone(&arc_path));
+        arc_path
     }
 
     /// Set an SDF rounded-superellipse clip (iOS-squircle).

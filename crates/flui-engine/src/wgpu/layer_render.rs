@@ -225,8 +225,8 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
         if !self.clips() {
             return;
         }
-        let path = renderer.superellipse_path(*self.clip_superellipse());
-        renderer.push_clip_path(&path, self.clip_behavior());
+        let arc_path = renderer.superellipse_path(*self.clip_superellipse());
+        renderer.push_clip_path(&arc_path, self.clip_behavior());
     }
 
     fn cleanup(&self, renderer: &mut R) {
