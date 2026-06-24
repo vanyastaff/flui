@@ -141,6 +141,16 @@ glam = { version = "0.33", features = ["bytemuck"] }
 # bytemuck: zero-copy Pod/Zeroable derives shared by flui-engine and flui-geometry.
 bytemuck = { version = "1.24", features = ["derive"] }
 
+# === Engine build-script dependencies ===
+# wgsl_bindgen: WGSL → Rust binding codegen, used in flui-engine's build.rs only.
+# Pins naga ^29 (same as wgpu 29) and naga_oil ^0.22 (same as workspace); the
+# build-script context is separate from the compiled output, so the duplicate naga
+# dep does not affect the binary.
+wgsl_bindgen = { version = "0.22", default-features = false }
+# regex: required by wgsl_bindgen's OverrideTextureFilterability / OverrideSamplerType
+# constructors in build.rs; not compiled into the crate binary.
+regex = "1"
+
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
 # - glyphon, cosmic-text (text rendering)
