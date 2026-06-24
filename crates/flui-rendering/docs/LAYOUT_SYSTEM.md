@@ -65,10 +65,10 @@ Defines min/max width and height bounds:
 ```rust
 #[derive(Clone, Debug, Default)]
 pub struct BoxConstraints {
-    pub min_width: f32,
-    pub max_width: f32,
-    pub min_height: f32,
-    pub max_height: f32,
+    pub min_width: Pixels,
+    pub max_width: Pixels,
+    pub min_height: Pixels,
+    pub max_height: Pixels,
 }
 
 impl BoxConstraints {
@@ -81,13 +81,13 @@ impl BoxConstraints {
             max_height: size.height,
         }
     }
-    
+
     /// Loose constraints - size up to max
     pub fn loose(size: Size) -> Self {
         Self {
-            min_width: 0.0,
+            min_width: Pixels::ZERO,
             max_width: size.width,
-            min_height: 0.0,
+            min_height: Pixels::ZERO,
             max_height: size.height,
         }
     }

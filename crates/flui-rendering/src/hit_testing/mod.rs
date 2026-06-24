@@ -62,7 +62,7 @@
 //! use flui_types::Offset;
 //!
 //! let mut result = HitTestResult::new();
-//! render_view.hit_test(&mut result, Offset::new(100.0, 200.0));
+//! pipeline_owner.hit_test(&mut result, Offset::new(100.0, 200.0));
 //!
 //! // Dispatch handlers attached to entries during traversal.
 //! result.dispatch(&pointer_event);

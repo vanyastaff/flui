@@ -29,13 +29,11 @@
 //! cycle-2 PR #100/U21 parallel-type prohibition.
 //!
 //! The previous `HitTestEntry` struct, its `Debug` impl, and the
-//! file-private `DummyTarget` were deleted. The single remaining
-//! consumer (`view::render_view::RenderView::hit_test`) was
-//! migrated to construct entries via
-//! `flui_interaction::routing::HitTestEntry::new(RenderId::new(1))`
-//! at the same time -- the `1`-valued `RenderId` is the root
-//! sentinel placeholder Flutter's `RenderView::hitTest` would use
-//! when adding itself to the result.
+//! file-private `DummyTarget` were deleted. The inherent `hit_test`
+//! method on `RenderView` (the sole remaining consumer at the time)
+//! was also subsequently deleted as dead code — 0 callers. The
+//! canonical hit-test entry point is
+//! [`PipelineOwner::hit_test`](crate::pipeline::PipelineOwner::hit_test).
 //!
 //! `BoxHitTestEntry` / `SliverHitTestEntry` (parallel sibling
 //! structs in this module pre-cycle) were deleted in cycle 4 U-3

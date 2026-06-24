@@ -27,10 +27,11 @@ use crate::protocol::{BoxProtocol, SliverProtocol};
 
 #[test]
 fn render_state_box_fits_budget() {
-    // RenderState<BoxProtocol> = AtomicRenderFlags(4) + OnceCell<Size>
-    // + OnceCell<BoxConstraints> + AtomicOffset(8) + PhantomData(0).
-    // Documented estimate: 44-60 bytes. Cap at 128 to leave room for
-    // future fields without forcing a re-budget on every commit.
+    // RenderState<BoxProtocol> = AtomicRenderFlags(4) + Option<Size>
+    // + Option<BoxConstraints> + AtomicOffset(8) + layout_cache
+    // + parent_data + PhantomData(0).
+    // Documented estimate: 44-60 bytes for the core fields. Cap at 128
+    // to leave room for future fields without forcing a re-budget on every commit.
     let actual = size_of::<RenderState<BoxProtocol>>();
     assert!(
         actual <= 128,
