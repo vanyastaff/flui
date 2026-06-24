@@ -58,7 +58,8 @@
 //   u32        _pad[3]    → 12 bytes padding
 // Total: 32 bytes (multiple of 16 ✓).
 //
-// Rust side: `ModeUniform { color: [f32;4], blend_mode: u32, _pad: [u32;3] }` = 32 bytes.
+// Rust side: the generated `ModeUniforms { color: [f32;4], blend_mode: u32,
+// _pad0/_pad1/_pad2: u32 }` (wgsl_bindgen, see mode/generated.rs) = 32 bytes.
 struct ModeUniforms {
     /// Filter color in straight sRGB [r, g, b, a] (SRC for the blend).
     color: vec4<f32>,

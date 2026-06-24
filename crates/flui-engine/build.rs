@@ -199,7 +199,9 @@ const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
         },
         // BlendUniforms.tint_rgb is a `vec3<f32>` packed tight before `mode: u32`
         // — force [f32; 3] so the generated layout matches the WGSL (see the
-        // field doc above).
+        // field doc above).  The `BlendUniforms` regex is intentionally a
+        // substring match: it must also retype the generated `BlendUniformsInit`
+        // constructor-mirror struct's `tint_rgb` field to the same `[f32; 3]`.
         field_type_overrides: &[("BlendUniforms", "tint_rgb", "[f32; 3]")],
     },
 ];
