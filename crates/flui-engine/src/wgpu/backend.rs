@@ -348,6 +348,160 @@ impl<'frame> Backend<'frame> {
             self.active_transform = None;
         }
     }
+
+    /// Shared backdrop-filter blur pipeline used by both backdrop entry points:
+    /// the layer-tree path (`Renderer::handle_backdrop_filter`, "Path A") and the
+    /// display-list path ([`render_backdrop_filter`](CommandRenderer::render_backdrop_filter),
+    /// "Path B"). Consolidating it here is the single-source-of-truth fix for a
+    /// duplication that had the off-screen clamp bug fixed twice and silently
+    /// drift afterward (Path B truncated where Path A rounded).
+    ///
+    /// Steps: clamp `device_rect` to the surface extent → copy that region from
+    /// the surface into a pooled blur-input → Dual-Kawase blur → queue the result
+    /// for compositing at the **clamped** rect. The painter is flushed first so
+    /// the pixels to be sampled are present (the flush + copy stay in one
+    /// submission — "Fix #11 ordering").
+    ///
+    /// Returns `true` if the blur was queued, `false` if it was skipped (no
+    /// offscreen renderer, or the region is entirely off-screen). The caller
+    /// renders the backdrop's children either way — child dispatch differs per
+    /// path (layer-tree recursion vs display-list command dispatch) and stays at
+    /// the call site.
+    ///
+    /// `device_rect` is the filter bounds already mapped to device space by the
+    /// caller (the transform source differs: the layer-walk CTM vs the
+    /// display-list command transform).
+    pub(crate) fn apply_backdrop_blur(
+        &mut self,
+        device_rect: Rect<Pixels>,
+        sigma: f32,
+        surface_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
+    ) -> bool {
+        if self.offscreen.is_none() {
+            // No offscreen renderer → no blur, and no mid-frame flush either: any
+            // painter batches queued before this backdrop still draw in the
+            // frame-end flush (the painter's `draw_order` is an explicit ordered
+            // list, so pre-backdrop content precedes the caller's children
+            // regardless of submit boundaries). Don't "restore" a mid-frame flush
+            // here — it would only split one submit into two with no blur to feed.
+            tracing::warn!("Backdrop blur skipped: no offscreen renderer available");
+            return false;
+        }
+
+        // device/queue/format come from the offscreen renderer (the same device
+        // the surface was created on); later mutation borrows `offscreen` again
+        // sequentially for the texture pool and the blur.
+        let (device, queue, format) = {
+            let off = self
+                .offscreen
+                .as_deref_mut()
+                .expect("offscreen is_some checked above");
+            (
+                Arc::clone(off.device()),
+                Arc::clone(off.queue()),
+                off.surface_format(),
+            )
+        };
+
+        // Clamp the device rect to the surface extent. `.round()` before
+        // truncation avoids a 1-device-pixel undersize on sub-pixel boundaries
+        // (DPR ≠ 1 or fractional-offset CTMs) — the canonical clamp both paths
+        // now share (Path B previously truncated here, undersizing fractional
+        // backdrops). Edges are kept ≥ 0 by the prior `clamp`.
+        let surface_extent = surface_texture.size();
+        let surface_w = surface_extent.width;
+        let surface_h = surface_extent.height;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x = device_rect.left().0.clamp(0.0, surface_w as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let y = device_rect.top().0.clamp(0.0, surface_h as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let right = device_rect.right().0.clamp(0.0, surface_w as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32).round() as u32;
+        let w = right.saturating_sub(x).max(1);
+        let h = bottom.saturating_sub(y).max(1);
+
+        // Entirely off-screen after clamping → no copyable region.
+        if right <= x || bottom <= y {
+            tracing::warn!(
+                rect_l = device_rect.left().0,
+                rect_t = device_rect.top().0,
+                rect_r = device_rect.right().0,
+                rect_b = device_rect.bottom().0,
+                surface_w,
+                surface_h,
+                "Backdrop blur skipped: clamped device region is empty (entirely off-screen)"
+            );
+            return false;
+        }
+
+        // Flush painter batches so the backdrop pixels are present on the surface
+        // before the copy. The copy is recorded into the same encoder, keeping
+        // flush → copy in one submission.
+        //
+        // PROFILER-SKIP: this backdrop-flush encoder is intentionally absent from
+        // the GpuFrameProfiler. Backdrop GPU time is not threaded through here
+        // (neither backdrop entry point has a profiler handle); the clear-pass and
+        // final-render scopes in `render_scene` cover the primary frame timing.
+        // This is an explicit trade-off, not an oversight.
+        let mut flush_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Backdrop Flush Encoder"),
+        });
+        let flush_target =
+            super::render_target::RenderTarget::sampleable(surface_view, surface_texture);
+        if let Err(e) = self.painter.render(flush_target, &mut flush_encoder) {
+            tracing::error!("Backdrop flush failed: {}", e);
+        }
+
+        // Copy the clamped device region from the surface into a pooled blur input.
+        let blur_input = self
+            .offscreen
+            .as_deref_mut()
+            .expect("offscreen is_some checked above")
+            .texture_pool()
+            .acquire(w, h, format);
+        flush_encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: surface_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: blur_input.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(flush_encoder.finish()));
+
+        // Dual-Kawase blur, then queue for compositing at the CLAMPED rect — the
+        // copy used origin (x,y) extent (w,h), so the composite rect must match
+        // exactly or the smaller blurred texture would stretch across an
+        // unclamped (edge-crossing) `device_rect`.
+        let blurred = self
+            .offscreen
+            .as_deref_mut()
+            .expect("offscreen is_some checked above")
+            .render_blur(&blur_input, sigma);
+        let clamped_composite_rect = Rect::from_xywh(
+            Pixels(x as f32),
+            Pixels(y as f32),
+            Pixels(w as f32),
+            Pixels(h as f32),
+        );
+        self.painter
+            .queue_offscreen_result(blurred, clamped_composite_rect);
+        true
+    }
 }
 
 impl Drop for Backend<'_> {
@@ -1013,25 +1167,19 @@ impl CommandRenderer for Backend<'_> {
         // out of PR-5 scope. PR-5 covers shape/gradient/image producers only.
         use flui_painting::display_list::ImageFilter;
 
-        // Helper: dispatch the child display list (or no-op when None)
-        // without applying any backdrop filter. Used by every fall-back
-        // branch below.
+        // Dispatch the child display list (or no-op when None). Used both as the
+        // fall-back when no blur is applied (non-blur filter / no surface) AND as
+        // the success-path child dispatch after `apply_backdrop_blur` — children
+        // always render, with or without a backdrop behind them.
         //
-        // PR #110 review feedback (F-W2-4): pre-fix this helper called
-        // `this.with_transform(transform, |_painter| {})` before the
-        // dispatch loop. `with_transform` save+applies the transform
-        // then runs the closure body; the empty closure means save
-        // is immediately balanced by restore, so the transform never
-        // reached the subsequent `dispatch_command` loop. Effectively
-        // a misleading no-op. Each `DrawCommand` in a `DisplayList`
-        // carries its own pre-composited transform field (set during
-        // display-list capture), so re-applying the outer
-        // `render_backdrop_filter` transform here is redundant; Path A
-        // (`Renderer::handle_backdrop_filter`) does the same -- it
-        // just dispatches children without re-wrapping. The
-        // `transform` arg is consumed by Stage 2 below (it transforms
-        // `bounds` to device space).
-        let passthrough = |this: &mut Self| {
+        // Each `DrawCommand` carries its own pre-composited transform from
+        // display-list capture, so the outer `transform` is NOT re-applied here
+        // (it is consumed only to map `bounds` to device space below). Re-applying
+        // it would double-transform; Path A (`Renderer::handle_backdrop_filter`)
+        // dispatches children the same way. (PR #110 F-W2-4: an earlier version
+        // wrapped this in `with_transform(transform, |_| {})`, whose empty closure
+        // balanced save with restore immediately — a misleading no-op.)
+        let dispatch_children = |this: &mut Self| {
             if let Some(child) = child {
                 for command in child.commands() {
                     dispatch_command(command, this);
@@ -1039,25 +1187,13 @@ impl CommandRenderer for Backend<'_> {
             }
         };
 
-        // Cycle 4 E-2 U-9: Path B (DisplayList-command-level) backdrop
-        // filter. Mirrors Path A (`Renderer::handle_backdrop_filter`
-        // at renderer.rs:845-960) which already works for the
-        // layer-tree-level `BackdropFilterLayer`. The two paths converge
-        // on the same offscreen pipeline:
-        //
-        //   1. Flush current painter batches to surface
-        //   2. Apply `transform` to `bounds` -> device-space rect,
-        //      clamp against surface extent
-        //   3. COPY_TEXTURE_TO_TEXTURE the clamped region into a
-        //      pooled blur-input texture
-        //   4. Dual Kawase blur on the offscreen renderer
-        //   5. Queue the blurred result for compositing on next flush
-        //   6. Dispatch child display list on top of the blurred backdrop
-        //
-        // Non-blur filters + missing surface/offscreen handles fall
-        // back to passthrough with a `tracing::warn!` so the gap is
-        // observable (the pre-U-9 stub was silent for non-debug builds).
-
+        // Path B (DisplayList-command level) backdrop filter. Shares the
+        // offscreen blur pipeline with Path A (`Renderer::handle_backdrop_filter`,
+        // layer-tree level) via `Backend::apply_backdrop_blur` — the clamp +
+        // copy + blur + composite live there once, so the off-screen-clamp
+        // handling can no longer drift between the two paths. Non-blur filters
+        // and a missing surface fall back to passthrough with a `warn!` so the
+        // gap stays observable.
         let sigma = match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => f32::midpoint(*sigma_x, *sigma_y),
             other => {
@@ -1065,18 +1201,10 @@ impl CommandRenderer for Backend<'_> {
                     "Backdrop filter type {:?} not supported in DisplayList path; passthrough",
                     other
                 );
-                passthrough(self);
+                dispatch_children(self);
                 return;
             }
         };
-
-        if self.offscreen.is_none() {
-            tracing::warn!(
-                "Backdrop filter: no OffscreenRenderer in DisplayList path; passthrough"
-            );
-            passthrough(self);
-            return;
-        }
 
         let (Some(surface_view), Some(surface_texture)) = (self.surface_view, self.surface_texture)
         else {
@@ -1085,153 +1213,20 @@ impl CommandRenderer for Backend<'_> {
                  (the surface handles are bound in `Renderer::render` only -- \
                  the shader-mask offscreen path does not bind them, which is expected)"
             );
-            passthrough(self);
+            dispatch_children(self);
             return;
         };
 
-        // Snapshot device/queue/format from offscreen; mutation happens later
-        // via separate sequential borrows for `texture_pool` and `render_blur`.
-        let (device, queue, format) = {
-            let off = self
-                .offscreen
-                .as_deref_mut()
-                .expect("checked is_some above");
-            (
-                Arc::clone(off.device()),
-                Arc::clone(off.queue()),
-                off.surface_format(),
-            )
-        };
-
-        // Stage 2: apply `transform` to `bounds` -> device-space rect,
-        // then clamp against the surface texture extent.
-        //
-        // PR #110 review feedback (F-W2-2): pre-fix `bounds` was used
-        // directly as the copy source rect, ignoring `transform`.
-        // `DrawCommand::BackdropFilter` stores `bounds` in local space
-        // and `transform` as the outer transform stack; `paint_bounds()`
-        // composes them via `transform.transform_rect(bounds)`. Using
-        // untransformed `bounds` blurred the wrong region whenever the
-        // canvas transform was non-identity.
-        //
-        // PR #110 review feedback (F-W2-1, P1): pre-fix `x/y/w/h` were
-        // only lower-clamped (`max(0.0)`/`max(1.0)`). If a backdrop
-        // filter is partially off-screen (negative origin or extent
-        // beyond the frame), `copy_texture_to_texture` gets an
-        // out-of-range region and wgpu validation panics at submit
-        // time, dropping the frame. Clamp against the surface texture
-        // extent before computing extents.
+        // Map local `bounds` to device space (the command carries the outer
+        // transform), then run the shared blur (no-op return if off-screen or no
+        // offscreen renderer — children still render below either way).
         let device_rect = transform.transform_rect(&bounds);
-        let surface_extent = surface_texture.size();
-        let surface_w = surface_extent.width;
-        let surface_h = surface_extent.height;
+        self.apply_backdrop_blur(device_rect, sigma, surface_texture, surface_view);
 
-        let x = device_rect.left().0.clamp(0.0, surface_w as f32) as u32;
-        let y = device_rect.top().0.clamp(0.0, surface_h as f32) as u32;
-        // Right/bottom likewise clamp, then derive width/height as the
-        // difference. `saturating_sub` guards the corner case where
-        // device_rect is entirely outside the surface (right <= x).
-        let right = device_rect.right().0.clamp(0.0, surface_w as f32) as u32;
-        let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32) as u32;
-        let w = right.saturating_sub(x).max(1);
-        let h = bottom.saturating_sub(y).max(1);
-
-        // Refuse if the clamped region is empty (the backdrop region is
-        // entirely off-screen). `copy_texture_to_texture` requires
-        // non-zero extents; falling through to passthrough preserves
-        // the child rendering without GPU validation panics.
-        if right <= x || bottom <= y {
-            tracing::warn!(
-                bounds_l = bounds.left().0,
-                bounds_t = bounds.top().0,
-                bounds_r = bounds.right().0,
-                bounds_b = bounds.bottom().0,
-                surface_w,
-                surface_h,
-                "Backdrop filter: clamped region is empty (entirely off-screen); passthrough"
-            );
-            passthrough(self);
-            return;
-        }
-
-        // Stage 1: flush painter batches to surface so the backdrop
-        // pixels we are about to blur are present.
-        let mut flush_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("DisplayList Backdrop Flush Encoder"),
-        });
-        let flush_target =
-            super::render_target::RenderTarget::sampleable(surface_view, surface_texture);
-        if let Err(e) = self.painter.render(flush_target, &mut flush_encoder) {
-            tracing::error!("DisplayList backdrop flush failed: {}", e);
-        }
-
-        // Stage 3: COPY_TEXTURE_TO_TEXTURE surface region -> pooled
-        // blur-input. Acquired from offscreen's texture pool so the
-        // allocation amortises across frames (Path A acquires the
-        // same way).
-        let blur_input = self
-            .offscreen
-            .as_deref_mut()
-            .expect("checked is_some above")
-            .texture_pool()
-            .acquire(w, h, format);
-
-        flush_encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: surface_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: blur_input.texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(flush_encoder.finish()));
-
-        // Stage 4: Dual Kawase blur on the offscreen renderer.
-        let blurred = self
-            .offscreen
-            .as_deref_mut()
-            .expect("checked is_some above")
-            .render_blur(&blur_input, sigma);
-
-        // Stage 5: queue blurred result for compositing on next painter
-        // flush. The composite rect must be the CLAMPED region derived from
-        // `x,y,w,h` — the same region that was copied into the blur-input
-        // texture — not the unclamped `device_rect`. When the backdrop
-        // crosses a surface edge `device_rect` is larger than the copied
-        // texture; passing it would stretch/misalign the smaller blurred
-        // result. For an on-screen backdrop where clamp == device_rect this
-        // is a no-op (Path A, `Renderer::handle_backdrop_filter`, applies
-        // the same fix at renderer.rs ~1759-1768 for the same reason).
-        let clamped_composite_rect = Rect::from_xywh(
-            Pixels(x as f32),
-            Pixels(y as f32),
-            Pixels(w as f32),
-            Pixels(h as f32),
-        );
-        self.painter
-            .queue_offscreen_result(blurred, clamped_composite_rect);
-
-        // Stage 6: dispatch the child display list on top of the blurred
-        // backdrop. Each child `DrawCommand` carries its own
-        // pre-composited transform from display-list capture, so no
-        // outer transform wrap is needed here (Path A treats child
-        // dispatch the same way).
-        if let Some(child) = child {
-            for command in child.commands() {
-                dispatch_command(command, self);
-            }
-        }
+        // Dispatch the child display list on top of the (maybe-)blurred backdrop.
+        // Each child `DrawCommand` carries its own pre-composited transform, so
+        // no outer transform wrap is needed (Path A dispatches children the same).
+        dispatch_children(self);
     }
 
     fn render_vertices(
