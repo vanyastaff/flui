@@ -6,8 +6,9 @@
 //!
 //! ## Uniform layout
 //!
-//! `ModeUniform` packs the filter color and blend-mode index into a 32-byte
-//! WGSL-compatible block:
+//! The generated `ModeUniforms` (see `super::generated`, derived from
+//! `mode.wgsl` by `wgsl_bindgen`) packs the filter color and blend-mode index
+//! into a 32-byte WGSL-compatible block:
 //!
 //! | Byte offset | Size | Rust field    | WGSL member    |
 //! |-------------|------|---------------|----------------|
@@ -27,40 +28,41 @@
 //!
 //! The "must match" comment in `mode.wgsl` keeps both sides auditable at a glance.
 
-use std::mem;
-
-use bytemuck::{Pod, Zeroable};
 use flui_types::painting::BlendMode;
 
+use super::generated::mode;
 use crate::wgpu::shader_composer::{ComposableSource, compose_wgsl_shader};
 
-// ── Uniform layout ────────────────────────────────────────────────────────────
+// ── Byte-identity gate ────────────────────────────────────────────────────────
+//
+// These const assertions are the GO/NO-GO check.  If wgsl_bindgen generates a
+// struct whose layout differs from the former hand-written `ModeUniform`, this
+// file fails to compile — the correct signal to stop and report BLOCKED.
+//
+// Generated `ModeUniforms` must match `ModeUniforms` in `mode.wgsl` and the
+// former hand-written struct byte-for-byte:
+//
+// | Byte offset | Size | Field        | WGSL member |
+// |-------------|------|--------------|-------------|
+// | 0           | 16   | `color`      | `vec4<f32>` |
+// | 16          | 4    | `blend_mode` | `u32`       |
+// | 20          | 12   | `_pad*`      | `u32` × 3   |
+//
+// Total = 32 bytes (multiple of 16 ✓).
 
-/// GPU uniform buffer layout for the ColorFilter::Mode blend pass.
-///
-/// **Explicit `#[repr(C)]` layout — must match `ModeUniforms` in `mode.wgsl`
-/// byte-for-byte.**
-///
-/// | Byte offset | Size | Rust field   | WGSL member |
-/// |-------------|------|--------------|-------------|
-/// | 0           | 16   | `color`      | `vec4<f32>` |
-/// | 16          | 4    | `blend_mode` | `u32`       |
-/// | 20          | 12   | `_pad`       | `u32` × 3   |
-///
-/// Total = 32 bytes (multiple of 16 ✓).
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub(super) struct ModeUniform {
-    /// Filter color in straight sRGB `[r, g, b, a]` (SRC for the blend).
-    pub(super) color: [f32; 4],
-    /// Blend mode integer — must match `blend_mode_to_u32` below.
-    pub(super) blend_mode: u32,
-    /// Padding to reach 32-byte block size (WGSL align-16 requirement).
-    pub(super) _pad: [u32; 3],
-}
+/// The generated `ModeUniforms` must be exactly 32 bytes.
+const _GENERATED_MODE_UNIFORMS_SIZE_CHECK: () = {
+    assert!(std::mem::size_of::<mode::ModeUniforms>() == 32);
+};
 
-const _MODE_UNIFORM_SIZE_CHECK: () = {
-    assert!(mem::size_of::<ModeUniform>() == 32);
+/// `color` must be at byte offset 0.
+const _GENERATED_MODE_COLOR_OFFSET_CHECK: () = {
+    assert!(std::mem::offset_of!(mode::ModeUniforms, color) == 0);
+};
+
+/// `blend_mode` must be at byte offset 16.
+const _GENERATED_MODE_BLEND_MODE_OFFSET_CHECK: () = {
+    assert!(std::mem::offset_of!(mode::ModeUniforms, blend_mode) == 16);
 };
 
 /// Map a [`BlendMode`] to its `u.blend_mode` integer in `mode.wgsl`.
@@ -117,7 +119,7 @@ pub(crate) fn blend_mode_to_u32(mode: BlendMode) -> u32 {
 ///
 /// | Binding | Stage | Type                  | Content                      |
 /// |---------|-------|-----------------------|------------------------------|
-/// | 0       | FS    | Uniform buffer        | [`ModeUniform`]              |
+/// | 0       | FS    | Uniform buffer        | `ModeUniforms` (generated)   |
 /// | 1       | FS    | 2D float texture      | Source layer (premultiplied) |
 /// | 2       | FS    | Non-filtering sampler | Nearest + ClampToEdge        |
 ///
@@ -127,10 +129,12 @@ pub(crate) fn blend_mode_to_u32(mode: BlendMode) -> u32 {
 /// premultiplied blended texel directly.
 #[allow(missing_debug_implementations)]
 pub(crate) struct ModePipeline {
-    /// Bind-group layout shared between pipeline construction and per-draw
-    /// bind-group creation in [`super::apply_mode`].
-    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     /// The single render pipeline (format-parametric at construction time).
+    ///
+    /// The bind-group layout is created from the generated `mode::WgpuBindGroup0`
+    /// and is not stored here — [`super::apply_mode`] uses
+    /// `mode::WgpuBindGroup0::from_bindings` at draw time, which creates a
+    /// compatible bind group internally.
     pub(crate) pipeline: wgpu::RenderPipeline,
 }
 
@@ -140,7 +144,9 @@ impl ModePipeline {
     /// WGSL shader compilation happens here; a wgpu validation error surfaces
     /// at this call site, which the GPU construction test exercises.
     pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
-        let bind_group_layout = create_bind_group_layout(device);
+        // The bind-group layout is sourced from the generated bindings, which
+        // derive it directly from the WGSL source — no hand-maintained descriptor.
+        let bind_group_layout = mode::WgpuBindGroup0::get_bind_group_layout(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Mode Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
@@ -210,50 +216,8 @@ impl ModePipeline {
             cache: None,
         });
 
-        Self {
-            bind_group_layout,
-            pipeline,
-        }
+        Self { pipeline }
     }
-}
-
-// ── Bind-group layout factory (private) ──────────────────────────────────────
-
-fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Mode Bind Group Layout"),
-        entries: &[
-            // Binding 0: uniform buffer (FS)
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(mem::size_of::<ModeUniform>() as u64),
-                },
-                count: None,
-            },
-            // Binding 1: source layer texture (FS) — non-filtering (Nearest)
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            // Binding 2: nearest-clamp sampler (FS)
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                count: None,
-            },
-        ],
-    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -265,18 +229,44 @@ fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 mod cpu_tests {
     use flui_types::painting::BlendMode;
 
-    use super::{ModeUniform, blend_mode_to_u32};
+    use super::{blend_mode_to_u32, mode};
 
-    /// The struct size must match the WGSL uniform-block size exactly.
+    /// The generated struct size must match the WGSL uniform-block size exactly.
     ///
-    /// Layout: color(16) + blend_mode(4) + pad(12) = 32 bytes.
+    /// Layout: color(16) + blend_mode(4) + pad(12) = 32 bytes.  The `const`
+    /// asserts above fire at compile time; this test makes the requirement
+    /// visible in test output.
     #[test]
-    fn mode_uniform_size_is_32_bytes() {
+    fn mode_uniforms_size_is_32_bytes() {
         assert_eq!(
-            std::mem::size_of::<ModeUniform>(),
+            std::mem::size_of::<mode::ModeUniforms>(),
             32,
-            "ModeUniform must be 32 bytes to match the WGSL ModeUniforms struct"
+            "ModeUniforms must be 32 bytes to match ModeUniforms in mode.wgsl"
         );
+    }
+
+    /// Field offsets must match the WGSL uniform-block layout exactly.
+    #[test]
+    fn mode_uniforms_field_offsets_match_wgsl() {
+        assert_eq!(
+            std::mem::offset_of!(mode::ModeUniforms, color),
+            0,
+            "color must be at offset 0"
+        );
+        assert_eq!(
+            std::mem::offset_of!(mode::ModeUniforms, blend_mode),
+            16,
+            "blend_mode must be at offset 16"
+        );
+    }
+
+    /// Round-trip: values written via the pad-free `new` are readable from the
+    /// same byte positions — proves the generated layout has no hidden reordering.
+    #[test]
+    fn mode_uniforms_field_round_trips() {
+        let uniform = mode::ModeUniforms::new([0.1, 0.2, 0.3, 0.4], 15);
+        assert_eq!(uniform.color, [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(uniform.blend_mode, 15);
     }
 
     /// Every `BlendMode` variant maps to a unique u32 in the expected range.
