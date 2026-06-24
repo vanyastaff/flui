@@ -251,6 +251,24 @@ impl Path {
         self.fill_type
     }
 
+    /// Returns `true` if `point` lies inside this path, respecting the
+    /// path's [`PathFillType`] (non-zero winding or even-odd).
+    ///
+    /// Uses a ray-casting algorithm for even-odd fill and a winding-number
+    /// algorithm for non-zero fill.
+    ///
+    /// Note: `AddArc` commands are currently ignored (conservative miss);
+    /// only line/quadratic/cubic segments, rects, circles, and ovals are
+    /// evaluated.
+    #[must_use]
+    #[inline]
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
+        match self.fill_type {
+            PathFillType::EvenOdd => self.contains_even_odd(point),
+            PathFillType::NonZero => self.contains_non_zero(point),
+        }
+    }
+
     #[inline]
     pub fn move_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::MoveTo(point));
