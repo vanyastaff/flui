@@ -104,10 +104,13 @@ impl RenderSliverOpacity {
 
     /// Returns whether compositing is needed.
     ///
-    /// Returns `true` if `alpha != 255` or `always_needs_compositing` is set.
+    /// Returns `true` only when `always_needs_compositing` is set OR the alpha
+    /// is non-trivially blended (`0 < alpha < 255`). Fully-transparent
+    /// (`alpha == 0`) does not need compositing because the subtree is skipped
+    /// entirely — Flutter parity: `alwaysNeedsCompositing => alpha > 0`.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
-        self.always_needs_compositing || self.alpha != 255
+        self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
     }
 
     /// Returns the `always_needs_compositing` flag.
@@ -199,11 +202,21 @@ impl RenderSliver for RenderSliverOpacity {
 // here.
 impl PaintEffectsCapability for RenderSliverOpacity {
     fn paint_alpha(&self) -> Option<u8> {
-        if self.alpha == 255 && !self.always_needs_compositing {
+        // None when fully opaque (255) OR fully transparent (0) without the
+        // always-needs-compositing flag: neither requires an OpacityLayer.
+        // Flutter proxy_sliver.dart: alpha=0 → layer=null (no layer, just skip).
+        if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
             None
         } else {
             Some(self.alpha)
         }
+    }
+
+    fn skip_paint(&self) -> bool {
+        // Flutter proxy_sliver.dart: `if (_alpha == 0) { return; }`
+        // Fully transparent without the always-compositing flag: suppress child
+        // paint entirely (no invisible GPU draws).
+        self.alpha == 0 && !self.always_needs_compositing
     }
 }
 
@@ -240,7 +253,9 @@ mod tests {
 
         let transparent = RenderSliverOpacity::transparent();
         assert_eq!(transparent.alpha(), 0);
-        assert!(transparent.needs_compositing());
+        // Flutter: alwaysNeedsCompositing => alpha > 0, so alpha=0 must NOT
+        // need compositing (the subtree is skipped entirely).
+        assert!(!transparent.needs_compositing());
     }
 
     #[test]
@@ -272,6 +287,37 @@ mod tests {
     fn paint_alpha_returns_none_when_opaque_without_force() {
         let o = RenderSliverOpacity::opaque();
         assert_eq!(o.paint_alpha(), None);
+    }
+
+    // 1.3 RED→GREEN: alpha=0 must return None (no layer), not Some(0).
+    // Flutter proxy_sliver.dart: alpha=0 → layer=null (no OpacityLayer emitted).
+    // Before fix: returned Some(0). After fix: returns None.
+    #[test]
+    fn paint_alpha_returns_none_when_transparent() {
+        let o = RenderSliverOpacity::transparent(); // alpha = 0
+        assert_eq!(
+            o.paint_alpha(),
+            None,
+            "alpha=0 without always-flag must return None (no OpacityLayer); \
+             Flutter proxy_sliver.dart: alpha=0 → layer=null"
+        );
+    }
+
+    #[test]
+    fn skip_paint_true_when_transparent() {
+        assert!(RenderSliverOpacity::transparent().skip_paint());
+        assert!(!RenderSliverOpacity::opaque().skip_paint());
+        assert!(!RenderSliverOpacity::new(0.5).skip_paint());
+    }
+
+    // alpha=0 WITH always-flag: still needs compositing (forced), so
+    // paint_alpha returns Some(0) and skip_paint returns false.
+    #[test]
+    fn paint_alpha_returns_some_when_transparent_but_forced() {
+        let mut o = RenderSliverOpacity::transparent();
+        o.set_always_needs_compositing(true);
+        assert_eq!(o.paint_alpha(), Some(0));
+        assert!(!o.skip_paint());
     }
 
     #[test]

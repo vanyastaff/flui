@@ -251,6 +251,24 @@ impl Path {
         self.fill_type
     }
 
+    /// Returns `true` if `point` lies inside this path, respecting the
+    /// path's [`PathFillType`] (non-zero winding or even-odd).
+    ///
+    /// Uses a ray-casting algorithm for even-odd fill and a winding-number
+    /// algorithm for non-zero fill.
+    ///
+    /// Note: `AddArc` commands are currently ignored (conservative miss);
+    /// only line/quadratic/cubic segments, rects, circles, and ovals are
+    /// evaluated.
+    #[must_use]
+    #[inline]
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
+        match self.fill_type {
+            PathFillType::EvenOdd => self.contains_even_odd(point),
+            PathFillType::NonZero => self.contains_non_zero(point),
+        }
+    }
+
     #[inline]
     pub fn move_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::MoveTo(point));
@@ -433,6 +451,15 @@ impl Path {
         for cmd in &self.commands {
             match cmd {
                 PathCommand::MoveTo(p) => {
+                    // Fill semantics: each subpath is implicitly closed for
+                    // containment even without an explicit `Close` (Skia/Flutter
+                    // fill an open contour as if closed). Count the closing edge
+                    // of the subpath being left. Degenerate (contributes 0) when
+                    // the subpath already ended with an explicit `Close`
+                    // (`current_pos == subpath_start`), so there is no double-count.
+                    if Self::ray_intersects_segment(point, current_pos, subpath_start) {
+                        crossings += 1;
+                    }
                     current_pos = *p;
                     subpath_start = *p;
                 }
@@ -492,6 +519,11 @@ impl Path {
             }
         }
 
+        // Implicitly close the final subpath (fill semantics — see MoveTo arm).
+        if Self::ray_intersects_segment(point, current_pos, subpath_start) {
+            crossings += 1;
+        }
+
         crossings % 2 == 1
     }
 
@@ -505,6 +537,10 @@ impl Path {
         for cmd in &self.commands {
             match cmd {
                 PathCommand::MoveTo(p) => {
+                    // Fill semantics: implicitly close the subpath being left
+                    // (see the even-odd variant). Degenerate after an explicit
+                    // `Close`, so no double-count.
+                    winding += Self::segment_winding(point, current_pos, subpath_start);
                     current_pos = *p;
                     subpath_start = *p;
                 }
@@ -552,6 +588,9 @@ impl Path {
                 }
             }
         }
+
+        // Implicitly close the final subpath (fill semantics — see MoveTo arm).
+        winding += Self::segment_winding(point, current_pos, subpath_start);
 
         winding != 0
     }
@@ -754,7 +793,56 @@ impl Default for Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
+    use crate::geometry::{Point, px};
 
-    // Path containment tests
+    /// Builds the triangle (0,0)→(100,0)→(50,100) without an explicit `close()`.
+    fn open_triangle(fill_type: PathFillType) -> Path {
+        let mut path = Path::with_fill_type(fill_type);
+        path.move_to(Point::new(px(0.0), px(0.0)));
+        path.line_to(Point::new(px(100.0), px(0.0)));
+        path.line_to(Point::new(px(50.0), px(100.0)));
+        path
+    }
+
+    /// Regression (Codex review of PR #307): a filled path implicitly closes
+    /// each subpath, so containment must honor the closing edge even without an
+    /// explicit `Close`. Point (10,50) is left of the implicit closing edge —
+    /// OUTSIDE the triangle — yet was wrongly reported inside before the fix
+    /// (the missing left edge dropped one crossing). Holds for both fill rules.
+    #[test]
+    fn open_filled_contour_is_implicitly_closed_for_containment() {
+        for fill_type in [PathFillType::EvenOdd, PathFillType::NonZero] {
+            let path = open_triangle(fill_type);
+            assert!(
+                !path.contains(Point::new(px(10.0), px(50.0))),
+                "{fill_type:?}: point outside an open-but-filled triangle must not be contained",
+            );
+            assert!(
+                path.contains(Point::new(px(50.0), px(30.0))),
+                "{fill_type:?}: point inside the triangle must be contained",
+            );
+        }
+    }
+
+    /// The implicit closure must not double-count when the contour already ends
+    /// with an explicit `Close`: a closed triangle agrees with the open one.
+    #[test]
+    fn explicit_close_does_not_double_count() {
+        for fill_type in [PathFillType::EvenOdd, PathFillType::NonZero] {
+            let mut closed = open_triangle(fill_type);
+            closed.close();
+            let open = open_triangle(fill_type);
+            for p in [
+                Point::new(px(10.0), px(50.0)), // outside
+                Point::new(px(50.0), px(30.0)), // inside
+                Point::new(px(50.0), px(5.0)),  // inside, near base
+            ] {
+                assert_eq!(
+                    closed.contains(p),
+                    open.contains(p),
+                    "{fill_type:?}: explicit close must match implicit close at {p:?}",
+                );
+            }
+        }
+    }
 }

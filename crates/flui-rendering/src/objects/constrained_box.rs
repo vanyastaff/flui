@@ -67,12 +67,12 @@ pub struct RenderConstrainedBox {
 impl RenderConstrainedBox {
     /// Creates a render object with the given additional constraints.
     ///
-    /// The constraints are normalized via
-    /// [`BoxConstraints::normalize`] to prevent layout drift caused by
+    /// The constraints are rounded for caching via
+    /// [`BoxConstraints::round_for_cache`] to prevent layout drift caused by
     /// floating-point noise in user-supplied bounds.
     pub fn new(additional_constraints: BoxConstraints) -> Self {
         Self {
-            additional_constraints: additional_constraints.normalize(),
+            additional_constraints: additional_constraints.round_for_cache(),
             has_child: false,
         }
     }
@@ -85,15 +85,15 @@ impl RenderConstrainedBox {
 
     /// Replaces the additional constraints applied to the child.
     ///
-    /// Re-normalizes the constraints before storing them. The pipeline should
+    /// Re-rounds the constraints before storing them. The pipeline should
     /// invalidate layout when this returns `true`, signalling the value
     /// actually changed.
     pub fn set_additional_constraints(&mut self, additional_constraints: BoxConstraints) -> bool {
-        let normalized = additional_constraints.normalize();
-        if self.additional_constraints == normalized {
+        let rounded = additional_constraints.round_for_cache();
+        if self.additional_constraints == rounded {
             return false;
         }
-        self.additional_constraints = normalized;
+        self.additional_constraints = rounded;
         true
     }
 }
@@ -302,7 +302,7 @@ mod tests {
     fn additional_constraints_round_trip() {
         let extra = bounded(50.0, 200.0, 25.0, 100.0);
         let node = RenderConstrainedBox::new(extra);
-        assert_eq!(node.additional_constraints(), extra.normalize());
+        assert_eq!(node.additional_constraints(), extra.round_for_cache());
     }
 
     #[test]

@@ -79,6 +79,22 @@ pub trait PaintEffectsCapability {
         None
     }
 
+    /// Whether this render object should suppress all child painting.
+    ///
+    /// Returns `true` when the node is fully transparent and no children
+    /// should be painted (e.g. `RenderOpacity` / `RenderSliverOpacity`
+    /// at `alpha == 0` without the `always_needs_compositing` flag).
+    /// The pipeline owner calls this BEFORE recording child fragments to
+    /// avoid generating invisible GPU draws.
+    ///
+    /// Flutter equivalent: `RenderSliverOpacity.paint` / `RenderOpacity.paint`
+    /// early-return when `_alpha == 0`.
+    ///
+    /// Default: `false` (most render objects always paint their children).
+    fn skip_paint(&self) -> bool {
+        false
+    }
+
     /// Returns the transform matrix to apply to children.
     ///
     /// If `Some(matrix)`, the painting pipeline wraps children in a

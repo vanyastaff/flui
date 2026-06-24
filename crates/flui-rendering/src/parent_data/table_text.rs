@@ -155,9 +155,11 @@ impl TextRange {
     }
 
     /// Get length of range.
+    ///
+    /// Returns 0 for inverted ranges (`end < start`) rather than overflowing.
     #[inline]
     pub const fn len(&self) -> usize {
-        self.end - self.start
+        self.end.saturating_sub(self.start)
     }
 
     /// Check if range is empty.
@@ -271,6 +273,18 @@ mod tests {
         assert!(range.contains(5));
         assert!(range.contains(9));
         assert!(!range.contains(10));
+    }
+
+    // 1.7b RED test (behavior fix): inverted range must saturate to zero, not
+    // panic with an arithmetic overflow in debug builds.
+    #[test]
+    fn text_range_len_saturates_when_end_before_start() {
+        let range = TextRange::new(10, 5);
+        assert_eq!(
+            range.len(),
+            0,
+            "inverted range must have length 0 (saturating_sub), not overflow"
+        );
     }
 
     #[test]

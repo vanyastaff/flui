@@ -1431,6 +1431,80 @@ fn harness_sliver_opacity_passes_geometry() {
     );
 }
 
+// 1.3 RED test (behavior fix): alpha=0 must NOT need compositing.
+// Flutter proxy_sliver.dart: `alwaysNeedsCompositing => alpha > 0`.
+// Currently `needs_compositing` returns true for alpha=0 (condition:
+// `always || alpha != 255`), which diverges from Flutter's rule.
+#[test]
+fn sliver_opacity_alpha_zero_does_not_need_compositing() {
+    let opacity = RenderSliverOpacity::transparent(); // alpha = 0
+    assert!(
+        !opacity.needs_compositing(),
+        "RenderSliverOpacity at alpha=0 must not need compositing \
+         (Flutter: alwaysNeedsCompositing => alpha > 0)"
+    );
+}
+
+// 1.3 mirror RED test: box RenderOpacity at alpha=0 must also not need
+// compositing (needs_compositing false at alpha=0 without always flag).
+#[test]
+fn box_opacity_alpha_zero_does_not_need_compositing() {
+    // RenderOpacity::needs_compositing() currently returns true for alpha=0
+    // (condition: alpha != 255), which diverges from Flutter's
+    // alwaysNeedsCompositing => alpha > 0. This test pins the correct behavior.
+    let opacity = RenderOpacity::transparent(); // alpha = 0
+    assert!(
+        !opacity.needs_compositing(),
+        "RenderOpacity at alpha=0 must not report needs_compositing \
+         (Flutter: alwaysNeedsCompositing => alpha > 0)"
+    );
+}
+
+// 1.3 paint_alpha RED→GREEN test: alpha=0 sliver must not emit an Opacity layer.
+// Flutter proxy_sliver.dart: alpha 0 → layer=null, return — no layer painted.
+// Before the paint_alpha fix, paint_alpha returned Some(0) for alpha=0, causing
+// the owner to wrap the child in a 0-alpha OpacityLayer (present in structure).
+// After fix: paint_alpha returns None at alpha=0, no OpacityLayer emitted.
+#[test]
+fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverOpacity::transparent()) // alpha = 0
+            .label("opacity")
+            .child(
+                sliver_node(RenderSliverFixedExtentList::new(30.0))
+                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_frame();
+
+    assert!(
+        !run.structure().contains(&"Opacity"),
+        "fully-transparent sliver (alpha=0) must NOT emit an OpacityLayer \
+         (Flutter: alpha=0 → layer=null): {:?}",
+        run.structure(),
+    );
+}
+
+// 1.3 paint_alpha RED→GREEN test: alpha=0 box must not emit an Opacity layer.
+// Mirrors the sliver test above for RenderOpacity (box variant).
+#[test]
+fn harness_opacity_alpha_zero_emits_no_opacity_layer() {
+    let run = RenderTester::mount(
+        box_node(RenderOpacity::transparent())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        !run.structure().contains(&"Opacity"),
+        "fully-transparent box (alpha=0) must NOT emit an OpacityLayer \
+         (Flutter: alpha=0 → layer=null): {:?}",
+        run.structure(),
+    );
+}
+
 #[test]
 fn harness_viewport_self_describes() {
     let run = RenderTester::mount(viewport(

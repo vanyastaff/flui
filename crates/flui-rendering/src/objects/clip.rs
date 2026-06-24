@@ -316,15 +316,12 @@ impl ClipGeometry for Path {
         p
     }
 
-    fn contains(&self, _position: Point<Pixels>) -> bool {
-        // Path containment requires a winding-number / tessellation
-        // test. The framework hasn't shipped that yet; for now we
-        // conservatively allow the hit (defers exclusion to the child).
-        // Flutter does the same when `customClipper.getClip()` returns
-        // a path: hit testing inside `RenderClipPath` defers to the
-        // child regardless of the path region. The corresponding
-        // backend-level path containment check lives in the engine.
-        true
+    fn contains(&self, position: Point<Pixels>) -> bool {
+        // Delegate to the fill-type-aware algorithm in flui_types::Path:
+        // even-odd (ray-casting) or non-zero (winding number), selected
+        // by the path's PathFillType. This matches Flutter's hit-test
+        // semantics for RenderClipPath.
+        self.contains(position)
     }
 
     fn with_clip_scope(
@@ -598,6 +595,48 @@ mod tests {
         assert!(!oval.contains(Point::new(px(0.0), px(0.0))));
     }
 
+    // 1.4 guard tests (characterization — NOT red→green; these pass today).
+    // Label: these confirm existing correct Oval behavior and lock it against
+    // future regressions.
+    #[test]
+    fn oval_clip_geometry_center_is_inside() {
+        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(px(100.0), px(60.0)));
+        assert!(
+            <Oval as ClipGeometry>::contains(&oval, Point::new(px(50.0), px(30.0))),
+            "center of oval must be inside (guard: existing correct behavior)"
+        );
+    }
+
+    #[test]
+    fn oval_clip_geometry_bbox_corner_is_outside_ellipse() {
+        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(px(100.0), px(60.0)));
+        assert!(
+            !<Oval as ClipGeometry>::contains(&oval, Point::new(px(1.0), px(1.0))),
+            "bbox corner (near 0,0) must be outside the inscribed ellipse \
+             (guard: existing correct behavior)"
+        );
+    }
+
+    #[test]
+    fn oval_clip_geometry_outside_bbox_is_outside() {
+        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(px(100.0), px(60.0)));
+        assert!(
+            !<Oval as ClipGeometry>::contains(&oval, Point::new(px(200.0), px(200.0))),
+            "point outside bounding box must not be inside oval \
+             (guard: existing correct behavior)"
+        );
+    }
+
+    #[test]
+    fn oval_clip_geometry_degenerate_contains_nothing() {
+        let oval = <Oval as ClipGeometry>::default_for_size(Size::ZERO);
+        assert!(
+            !<Oval as ClipGeometry>::contains(&oval, Point::ZERO),
+            "degenerate (zero-size) oval must contain nothing \
+             (guard: existing correct behavior)"
+        );
+    }
+
     // ---------- ClipGeometry impls (Rect) --------------------------------
 
     #[test]
@@ -664,15 +703,32 @@ mod tests {
 
     // ---------- ClipGeometry impls (Path) --------------------------------
 
+    // 1.4 RED test (behavior fix): Path::contains must delegate to the
+    // fill-type-aware algorithm in flui_types::Path::contains, not return
+    // a conservative true for all points.
     #[test]
-    fn path_contains_is_permissive() {
-        // Until tessellated containment is wired in the engine, Path
-        // clips defer hit-testing to the child.
-        let path = <Path as ClipGeometry>::default_for_size(Size::new(px(10.0), px(10.0)));
-        assert!(<Path as ClipGeometry>::contains(
-            &path,
-            Point::new(px(100.0), px(100.0))
-        ));
+    fn path_contains_delegates_to_fill_type_algorithm() {
+        // Build a triangle: (0,0) → (100,0) → (50,100) → close.
+        let mut triangle = Path::new();
+        triangle.move_to(Point::new(px(0.0), px(0.0)));
+        triangle.line_to(Point::new(px(100.0), px(0.0)));
+        triangle.line_to(Point::new(px(50.0), px(100.0)));
+        triangle.close();
+
+        // Centroid of the triangle — must be inside.
+        let inside = Point::new(px(50.0), px(33.0));
+        // Clearly outside (to the right and below).
+        let outside = Point::new(px(200.0), px(200.0));
+
+        assert!(
+            <Path as ClipGeometry>::contains(&triangle, inside),
+            "centroid of triangle must be inside the path"
+        );
+        assert!(
+            !<Path as ClipGeometry>::contains(&triangle, outside),
+            "point far outside bounding box must not be inside the path \
+             (before fix: Path::contains always returns true)"
+        );
     }
 
     // ---------- RenderClip<S> generic ------------------------------------

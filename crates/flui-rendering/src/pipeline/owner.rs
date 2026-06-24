@@ -172,17 +172,6 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
-    /// Retained layer subtrees per repaint boundary.
-    ///
-    /// When a repaint boundary is clean (not dirty), its subtree is
-    /// reused from this map instead of being repainted. When dirty,
-    /// the subtree is repainted and the new result is stored here.
-    ///
-    /// This is the core of incremental paint retention — only dirty
-    /// boundaries are repainted, clean boundaries reuse their retained
-    /// subtree with an updated offset.
-    retained_subtrees: rustc_hash::FxHashMap<RenderId, LayerTree>,
-
     /// Device pixel ratio threaded into every paint pass (text shaping
     /// and hairline snapping are DPR-dependent). Set by the platform
     /// binding on surface creation / DPI change; defaults to 1.0 for
@@ -278,7 +267,6 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
-            retained_subtrees: rustc_hash::FxHashMap::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: super::deferred::DeferredMutations::new(),
             handle,
@@ -337,7 +325,6 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
-            retained_subtrees: rustc_hash::FxHashMap::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: super::deferred::DeferredMutations::new(),
             handle,
@@ -1682,7 +1669,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         } else {
             &mut self.dirty.needs_compositing
         };
-        target.push(DirtyNode::new(node_id, depth));
+        // The bit is set BEFORE the push so the run_compositing walk's
+        // per-entry `needs_compositing_bits_update()` short-circuit cannot
+        // silently skip this entry even if `push` returns false (duplicate).
+        // The wake fires only on a genuinely-new entry: an existing entry
+        // means a frame is already scheduled (Flutter parity:
+        // markNeedsCompositingBitsUpdate → owner.requestVisualUpdate).
+        if target.push(DirtyNode::new(node_id, depth)) {
+            self.notifier.read().fire_need_visual_update();
+        }
     }
 
     /// Adds a node to the semantics dirty list.
@@ -1702,7 +1697,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         } else {
             &mut self.dirty.needs_semantics
         };
-        target.push(DirtyNode::new(node_id, depth));
+        // Fire the visual-update wake only on a genuinely-new entry —
+        // Flutter parity: markNeedsSemanticsUpdate → owner.requestVisualUpdate.
+        if target.push(DirtyNode::new(node_id, depth)) {
+            self.notifier.read().fire_need_visual_update();
+        }
     }
 
     // ========================================================================
@@ -3804,33 +3803,16 @@ impl PipelineOwner<PaintPhase> {
             && self.render_tree.get(root_id).is_some()
         {
             // Build a set of dirty node IDs for O(1) lookup during the
-            // paint walk. This enables paint retention: clean repaint
-            // boundaries skip their entire subtree.
+            // paint walk.
             let dirty_ids: rustc_hash::FxHashSet<RenderId> =
                 self.dirty.needs_paint.iter().map(|d| d.id).collect();
 
-            let painted_boundaries = std::cell::RefCell::new(rustc_hash::FxHashSet::default());
-
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
-            match self.paint_subtree(
-                &mut composer,
-                root_id,
-                Offset::ZERO,
-                &dirty_ids,
-                &painted_boundaries,
-            ) {
+            match self.paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids) {
                 Ok(()) => {
                     let layer_tree = composer.finish();
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
                     self.last_layer_tree = Some(layer_tree);
-
-                    // Paint retention: mark all painted boundaries as
-                    // retained. On the next frame, clean boundaries
-                    // with retained subtrees will be skipped entirely.
-                    for boundary_id in painted_boundaries.borrow().iter() {
-                        self.retained_subtrees
-                            .insert(*boundary_id, LayerTree::new());
-                    }
                 }
                 Err(e) => {
                     // Restore the debug invariant before propagating so
@@ -3885,11 +3867,8 @@ impl PipelineOwner<PaintPhase> {
         node_id: RenderId,
         origin: Offset,
         dirty_set: &rustc_hash::FxHashSet<RenderId>,
-        painted_boundaries: &std::cell::RefCell<rustc_hash::FxHashSet<RenderId>>,
     ) -> crate::error::RenderResult<()> {
-        ensure_stack(|| {
-            self.paint_subtree_impl(composer, node_id, origin, dirty_set, painted_boundaries)
-        })
+        ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin, dirty_set))
     }
 
     /// Body of [`Self::paint_subtree`]; split out so every recursion
@@ -3900,28 +3879,12 @@ impl PipelineOwner<PaintPhase> {
         node_id: RenderId,
         origin: Offset,
         dirty_set: &rustc_hash::FxHashSet<RenderId>,
-        painted_boundaries: &std::cell::RefCell<rustc_hash::FxHashSet<RenderId>>,
     ) -> crate::error::RenderResult<()> {
         let Some(render_node) = self.render_tree.get(node_id) else {
             return Ok(());
         };
 
         let is_repaint_boundary = render_node.is_repaint_boundary();
-
-        // Paint retention check: if this is a repaint boundary with a
-        // retained subtree from a previous frame and it's NOT dirty,
-        // skip the ENTIRE subtree (including children). The previous
-        // frame's layer tree is kept alive for the engine to reference.
-        // This is structural sharing: clean boundaries reuse their
-        // layer subtree without any recomputation.
-        let is_retained = is_repaint_boundary
-            && !dirty_set.contains(&node_id)
-            && self.retained_subtrees.contains_key(&node_id);
-
-        // Track that this boundary was painted (for retention on next frame).
-        if is_repaint_boundary && !is_retained {
-            painted_boundaries.borrow_mut().insert(node_id);
-        }
 
         let alpha = render_node.paint_alpha();
         let layer_blend = render_node.paint_layer_blend();
@@ -3941,7 +3904,11 @@ impl PipelineOwner<PaintPhase> {
         // Fully transparent subtree: skip recording entirely. Children
         // keep whatever dirty flags they carry; the residue scan in
         // run_paint clears them with a warning.
-        if alpha == Some(0) {
+        // Uses `skip_paint()` rather than `alpha == Some(0)` so that
+        // `paint_alpha()` encoding only controls layer-emission; the
+        // skip-paint decision is a separate, explicit contract
+        // (Flutter: `if (_alpha == 0) return;` in RenderOpacity.paint).
+        if render_node.skip_paint() {
             return Ok(());
         }
 
@@ -3967,16 +3934,12 @@ impl PipelineOwner<PaintPhase> {
 
         // Record the node's fragment. paint_raw sees ONLY the recorder
         // (sans-IO): no tree access, no layer access, no recursion.
-        // For retained nodes, skip the paint_raw call — the previous
-        // frame's paint is still valid.
         let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
-        if !is_retained {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render_node.paint_raw(&mut recorder, child_ids.len());
-            }))
-            .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
-        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_node.paint_raw(&mut recorder, child_ids.len());
+        }))
+        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
         let fragment = recorder.finish();
 
         debug_assert!(
@@ -4068,65 +4031,13 @@ impl PipelineOwner<PaintPhase> {
                         // own OffsetLayer so a future offset-only move
                         // is a layer-property update, not a repaint.
                         composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                        self.paint_subtree(
-                            composer,
-                            child_id,
-                            Offset::ZERO,
-                            dirty_set,
-                            painted_boundaries,
-                        )?;
+                        self.paint_subtree(composer, child_id, Offset::ZERO, dirty_set)?;
                         composer.pop_layer();
                     } else {
                         // Inline children bake into the shared picture
                         // space — runs merge, no extra layer.
-                        self.paint_subtree(
-                            composer,
-                            child_id,
-                            origin + child_offset,
-                            dirty_set,
-                            painted_boundaries,
-                        )?;
+                        self.paint_subtree(composer, child_id, origin + child_offset, dirty_set)?;
                     }
-                }
-            }
-        }
-
-        // For retained nodes, the fragment is empty (paint_raw was
-        // skipped), so no Child markers were recorded. We still need
-        // to recurse into children to build the layer tree structure.
-        if is_retained {
-            for &child_id in child_ids.iter() {
-                let Some(child_node) = self.render_tree.get(child_id) else {
-                    continue;
-                };
-                if child_node
-                    .as_sliver()
-                    .and_then(|entry| entry.state().geometry())
-                    .is_some_and(|geometry| !geometry.visible)
-                {
-                    continue;
-                }
-                let child_offset = child_node.offset();
-                let child_is_boundary = child_node.is_repaint_boundary();
-
-                if child_is_boundary {
-                    composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
-                    self.paint_subtree(
-                        composer,
-                        child_id,
-                        Offset::ZERO,
-                        dirty_set,
-                        painted_boundaries,
-                    )?;
-                    composer.pop_layer();
-                } else {
-                    self.paint_subtree(
-                        composer,
-                        child_id,
-                        origin + child_offset,
-                        dirty_set,
-                        painted_boundaries,
-                    )?;
                 }
             }
         }
@@ -4335,16 +4246,22 @@ impl PipelineOwner<Semantics> {
         // and `self.render_tree` are disjoint fields under Rust 2024
         // disjoint capture, so the loop compiles without a temporary
         // clone.
-        for dirty_node in self.dirty.needs_semantics.iter() {
-            if self.render_tree.contains(dirty_node.id) {
-                tracing::warn!(
-                    id = ?dirty_node.id,
-                    depth = dirty_node.depth,
-                    "run_semantics: full SemanticsOwner integration pending; \
-                     semantics config build for this node is a no-op until \
-                     RenderObject → SemanticsConfiguration plumbing lands"
-                );
-            }
+        //
+        // Aggregate into a count rather than emitting one warn per node
+        // (avoids O(n) log spam when semantics is enabled on a large tree).
+        let pending_count = self
+            .dirty
+            .needs_semantics
+            .iter()
+            .filter(|d| self.render_tree.contains(d.id))
+            .count();
+        if pending_count > 0 {
+            tracing::warn!(
+                count = pending_count,
+                "run_semantics: full SemanticsOwner integration pending; \
+                 semantics config build for {pending_count} node(s) is a no-op until \
+                 RenderObject → SemanticsConfiguration plumbing lands"
+            );
         }
         // `clear()` retains the Vec's allocated capacity; next frame's
         // pushes amortise into the existing buffer.
@@ -4385,7 +4302,6 @@ where
         debug_doing_semantics: from.debug_doing_semantics,
         semantics_enabled: from.semantics_enabled,
         last_layer_tree: from.last_layer_tree,
-        retained_subtrees: from.retained_subtrees,
         device_pixel_ratio: from.device_pixel_ratio,
         deferred_mutations: from.deferred_mutations,
         handle: from.handle,
@@ -4989,6 +4905,82 @@ mod tests {
         assert_eq!(counter.load(Ordering::Relaxed), 2);
     }
 
+    // 1.2 RED tests: compositing and semantics marks must fire the visual-update
+    // wake exactly once per new entry (Flutter: markNeedsCompositingBitsUpdate /
+    // markNeedsSemanticsUpdate both call owner.requestVisualUpdate on a new entry).
+    #[test]
+    fn compositing_mark_fires_visual_update_on_new_entry_and_deduplicates() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_count_clone = Arc::clone(&wake_count);
+        let mut owner = PipelineOwner::with_callbacks(
+            Some(move || {
+                wake_count_clone.fetch_add(1, Ordering::Relaxed);
+            }),
+            None::<fn()>,
+            None::<fn()>,
+        );
+
+        // An initial layout mark wakes; clear so we start from 0 for this test.
+        owner.clear_all_dirty_nodes();
+        let baseline = wake_count.load(Ordering::Relaxed);
+
+        // First compositing mark on a fresh owner — must wake.
+        owner.add_node_needing_compositing_bits_update(RenderId::new(10), 0);
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            baseline + 1,
+            "add_node_needing_compositing_bits_update: first entry must fire \
+             fire_need_visual_update (the GIF-frozen-until-you-scroll bug)"
+        );
+
+        // Duplicate mark — frame already scheduled, must NOT double-wake.
+        owner.add_node_needing_compositing_bits_update(RenderId::new(10), 0);
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            baseline + 1,
+            "add_node_needing_compositing_bits_update: duplicate entry must not \
+             fire a second wake"
+        );
+    }
+
+    #[test]
+    fn semantics_mark_fires_visual_update_on_new_entry_and_deduplicates() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let wake_count_clone = Arc::clone(&wake_count);
+        let mut owner = PipelineOwner::with_callbacks(
+            Some(move || {
+                wake_count_clone.fetch_add(1, Ordering::Relaxed);
+            }),
+            None::<fn()>,
+            None::<fn()>,
+        );
+
+        owner.clear_all_dirty_nodes();
+        let baseline = wake_count.load(Ordering::Relaxed);
+
+        // First semantics mark on a fresh owner — must wake.
+        owner.add_node_needing_semantics(RenderId::new(20), 0);
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            baseline + 1,
+            "add_node_needing_semantics: first entry must fire \
+             fire_need_visual_update"
+        );
+
+        // Duplicate mark — frame already scheduled, must NOT double-wake.
+        owner.add_node_needing_semantics(RenderId::new(20), 0);
+        assert_eq!(
+            wake_count.load(Ordering::Relaxed),
+            baseline + 1,
+            "add_node_needing_semantics: duplicate entry must not fire a \
+             second wake"
+        );
+    }
+
     /// The boundary-walking `mark_needs_layout` fires the wake when it
     /// enqueues the boundary, and stays silent when the boundary is
     /// already queued.
@@ -5590,5 +5582,41 @@ mod tests {
             }
             other => panic!("expected InvalidGeometry, got {other:?}"),
         }
+    }
+
+    // 1.1 equivalence test (dead-code removal — NOT a behavior fix).
+    // Verifies that removing the paint-retention `retained_subtrees` map
+    // does not change the painted output: a fully-dirty frame and a
+    // subsequently-clean frame must both produce a non-None layer tree
+    // (the boundary paints unconditionally on every dirty frame; a second
+    // frame with no dirty marks produces no paint output, not a stale
+    // retained result).
+    #[test]
+    fn repaint_boundary_paints_unconditionally_after_retention_removal() {
+        use flui_types::geometry::px;
+
+        let mut owner = PipelineOwner::new();
+        let root_node = owner.insert(Box::new(crate::objects::RenderColoredBox::red(40.0, 40.0))
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        owner.set_root_id(Some(root_node));
+        owner.set_root_constraints(Some(BoxConstraints::tight(flui_types::Size::new(
+            px(40.0),
+            px(40.0),
+        ))));
+
+        // Frame 1: fully dirty, must paint.
+        let (owner, frame1) = owner.run_frame();
+        assert!(
+            frame1.expect("frame 1 must not error").is_some(),
+            "frame 1 (fully dirty) must produce a layer tree"
+        );
+
+        // Frame 2: nothing was re-dirtied — idle frame.
+        let (_owner, frame2) = owner.run_frame();
+        assert!(
+            frame2.expect("frame 2 must not error").is_none(),
+            "frame 2 (no dirty nodes) must produce no layer tree (equivalence: \
+             removing retention does not conjure stale output on clean frames)"
+        );
     }
 }

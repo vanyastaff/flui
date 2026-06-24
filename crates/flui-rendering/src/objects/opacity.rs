@@ -104,10 +104,12 @@ impl RenderOpacity {
 
     /// Returns whether compositing is needed.
     ///
-    /// Returns true if opacity is not 1.0 or if always_needs_compositing is
-    /// set.
+    /// Returns `true` only when `always_needs_compositing` is set OR the alpha
+    /// is non-trivially blended (`0 < alpha < 255`). Fully-transparent
+    /// (`alpha == 0`) does not need compositing because the subtree is skipped
+    /// entirely — Flutter parity: `alwaysNeedsCompositing => alpha > 0`.
     pub fn needs_compositing(&self) -> bool {
-        self.always_needs_compositing || self.alpha != 255
+        self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
     }
 
     /// Converts opacity (0.0-1.0) to alpha (0-255).
@@ -175,12 +177,21 @@ impl RenderBox for RenderOpacity {
 // supertrait of RenderObject<P>, so the call resolves here.
 impl PaintEffectsCapability for RenderOpacity {
     fn paint_alpha(&self) -> Option<u8> {
-        // If fully opaque and not always needing compositing, no layer needed
-        if self.alpha == 255 && !self.always_needs_compositing {
+        // None when fully opaque (255) OR fully transparent (0) without the
+        // always-needs-compositing flag: neither requires an OpacityLayer.
+        // Flutter: alpha=0 → layer=null (no layer needed).
+        if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
             None
         } else {
             Some(self.alpha)
         }
+    }
+
+    fn skip_paint(&self) -> bool {
+        // Flutter RenderOpacity.paint: `if (_alpha == 0) { return; }`
+        // Fully transparent without the always-compositing flag: suppress child
+        // paint entirely.
+        self.alpha == 0 && !self.always_needs_compositing
     }
 }
 
@@ -222,7 +233,9 @@ mod tests {
         let opacity = RenderOpacity::transparent();
         assert!((opacity.opacity() - 0.0).abs() < f32::EPSILON);
         assert_eq!(opacity.alpha(), 0);
-        assert!(opacity.needs_compositing());
+        // Flutter: alwaysNeedsCompositing => alpha > 0, so alpha=0 must NOT
+        // need compositing (the subtree is skipped entirely).
+        assert!(!opacity.needs_compositing());
     }
 
     #[test]
@@ -250,5 +263,47 @@ mod tests {
     fn test_default() {
         let opacity = RenderOpacity::default();
         assert!((opacity.opacity() - 1.0).abs() < f32::EPSILON);
+    }
+
+    // 1.3 RED→GREEN: alpha=0 must return None from paint_alpha (no layer),
+    // not Some(0). Flutter RenderOpacity.paint: alpha=0 → layer=null.
+    // Before fix: returned Some(0). After fix: returns None.
+    #[test]
+    fn paint_alpha_returns_none_when_transparent() {
+        let o = RenderOpacity::transparent(); // alpha = 0
+        assert_eq!(
+            o.paint_alpha(),
+            None,
+            "alpha=0 without always-flag must return None (no OpacityLayer); \
+             Flutter: alpha=0 → layer=null"
+        );
+    }
+
+    #[test]
+    fn paint_alpha_returns_none_when_opaque() {
+        let o = RenderOpacity::opaque();
+        assert_eq!(o.paint_alpha(), None);
+    }
+
+    #[test]
+    fn paint_alpha_returns_some_for_partial() {
+        let o = RenderOpacity::new(0.5);
+        assert_eq!(o.paint_alpha(), Some(128));
+    }
+
+    #[test]
+    fn skip_paint_true_when_transparent() {
+        assert!(RenderOpacity::transparent().skip_paint());
+        assert!(!RenderOpacity::opaque().skip_paint());
+        assert!(!RenderOpacity::new(0.5).skip_paint());
+    }
+
+    // alpha=0 WITH always-flag: paint_alpha returns Some(0), skip_paint false.
+    #[test]
+    fn paint_alpha_returns_some_when_transparent_but_forced() {
+        let mut o = RenderOpacity::transparent();
+        o.set_always_needs_compositing(true);
+        assert_eq!(o.paint_alpha(), Some(0));
+        assert!(!o.skip_paint());
     }
 }

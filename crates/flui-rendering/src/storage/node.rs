@@ -605,6 +605,20 @@ impl RenderNode {
         }
     }
 
+    /// Whether this node's render object requests that child paint be skipped.
+    ///
+    /// Returns `true` when the node is fully transparent (e.g. `RenderOpacity`
+    /// at alpha=0 without the `always_needs_compositing` flag). The pipeline
+    /// owner calls this before recording child fragments to avoid invisible GPU
+    /// draws.
+    #[inline]
+    pub fn skip_paint(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.render_object().skip_paint(),
+            Self::Sliver(entry) => entry.render_object().skip_paint(),
+        }
+    }
+
     /// Optional blend mode for the opacity layer wrapping children.
     ///
     /// Returns the blend mode set by `paint_layer_blend`, or `None` when the
