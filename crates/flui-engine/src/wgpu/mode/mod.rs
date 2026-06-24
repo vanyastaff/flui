@@ -28,7 +28,6 @@ use std::sync::Arc;
 
 use bytemuck::cast_slice;
 use flui_types::painting::BlendMode;
-use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::ModePipeline;
 use pipeline::blend_mode_to_u32;
@@ -82,11 +81,7 @@ pub(crate) fn apply_mode(
     // Build the uniform: filter color + blend mode index.  The generated
     // `ModeUniforms::new` zero-fills the WGSL alignment padding.
     let uniform = mode::ModeUniforms::new(filter_color, blend_mode_to_u32(blend_mode));
-    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Mode Uniform Buffer"),
-        contents: cast_slice(&[uniform]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let uniform_buffer = resources.uniform_pool_mut().alloc(cast_slice(&[uniform]));
 
     // Nearest + ClampToEdge sampler — no filtering: source texels are pixel-aligned.
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -106,7 +101,7 @@ pub(crate) fn apply_mode(
         device,
         mode::WgpuBindGroup0Entries::new(mode::WgpuBindGroup0EntriesParams {
             u: wgpu::BufferBinding {
-                buffer: &uniform_buffer,
+                buffer: uniform_buffer,
                 offset: 0,
                 size: None,
             },

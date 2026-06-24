@@ -29,11 +29,13 @@ use std::sync::Arc;
 
 use bytemuck::cast_slice;
 use flui_types::{Rect, geometry::Pixels};
-use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::MorphologyPipeline;
 
-use super::{command_ir::MorphOp, resources::GpuResources, texture_pool::PooledTexture};
+use super::{
+    command_ir::MorphOp, resources::GpuResources, texture_pool::PooledTexture,
+    uniform_pool::UniformPool,
+};
 
 mod generated;
 mod pipeline;
@@ -143,6 +145,7 @@ pub(crate) fn apply_morphology(
         source_tex.view(),
         h_tex.view(),
         pipeline,
+        resources.uniform_pool_mut(),
         device,
         encoder,
         "Morphology H Pass",
@@ -163,6 +166,7 @@ pub(crate) fn apply_morphology(
         h_tex.view(),
         v_tex.view(),
         pipeline,
+        resources.uniform_pool_mut(),
         device,
         encoder,
         "Morphology V Pass",
@@ -180,22 +184,23 @@ pub(crate) fn apply_morphology(
 /// Writes into `dst_view` using `LoadOp::Clear(TRANSPARENT)` so pixels outside
 /// the viewport are transparent (R3 invariant). `REPLACE` blend prevents the
 /// GPU from re-blending the premultiplied output.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "GPU sub-pass needs the uniform, src/dst views, pipeline, pool, device, encoder, and label"
+)]
 fn run_morph_sub_pass(
     uniform: morphology::MorphUniforms,
     src_view: &wgpu::TextureView,
     dst_view: &wgpu::TextureView,
     pipeline: &MorphologyPipeline,
+    uniform_pool: &mut UniformPool,
     device: &Arc<wgpu::Device>,
     encoder: &mut wgpu::CommandEncoder,
     pass_label: &str,
 ) {
-    // Per-pass uniform buffer (48 bytes — tiny allocation, new each pass so the
-    // bind-group can reference its own buffer without a dynamic-offset scheme).
-    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(pass_label),
-        contents: cast_slice(&[uniform]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    // Uniform (48 bytes) written into a frame-distinct buffer from the reusable
+    // pool — no per-pass allocation; each pass still binds its own buffer.
+    let uniform_buffer = uniform_pool.alloc(cast_slice(&[uniform]));
 
     // Nearest-clamp sampler: source texels are pixel-aligned with the output;
     // bilinear filtering would introduce colour error between morphology steps.
@@ -217,7 +222,7 @@ fn run_morph_sub_pass(
         device,
         morphology::WgpuBindGroup0Entries::new(morphology::WgpuBindGroup0EntriesParams {
             u: wgpu::BufferBinding {
-                buffer: &uniform_buffer,
+                buffer: uniform_buffer,
                 offset: 0,
                 size: None,
             },

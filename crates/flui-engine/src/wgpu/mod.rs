@@ -198,6 +198,7 @@ mod tessellator;
 mod text;
 pub mod texture_cache;
 mod texture_pool;
+mod uniform_pool;
 mod vertex;
 
 // ============================================================================

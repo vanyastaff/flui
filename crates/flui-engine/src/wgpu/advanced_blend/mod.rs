@@ -24,7 +24,6 @@ use flui_types::{
     geometry::{Pixels, Rect},
     painting::BlendMode,
 };
-use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::AdvancedBlendPipeline;
 pub(crate) use pipeline::mode_to_u32;
@@ -254,11 +253,7 @@ pub(crate) fn flush_advanced_layer(
         op.src_uv_max,
     );
 
-    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Advanced Blend Uniform Buffer"),
-        contents: cast_slice(&[uniforms]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let uniform_buffer = resources.uniform_pool_mut().alloc(cast_slice(&[uniforms]));
 
     // Nearest + ClampToEdge sampler — no filtering: the backdrop copy and
     // foreground are pixel-aligned; filtering would introduce colour error.
@@ -279,7 +274,7 @@ pub(crate) fn flush_advanced_layer(
         device,
         advanced_blend::WgpuBindGroup0Entries::new(advanced_blend::WgpuBindGroup0EntriesParams {
             blend: wgpu::BufferBinding {
-                buffer: &uniform_buffer,
+                buffer: uniform_buffer,
                 offset: 0,
                 size: None,
             },
