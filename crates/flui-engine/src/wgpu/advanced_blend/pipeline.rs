@@ -9,86 +9,55 @@
 //! non-advanced mode (Porter-Duff or Modulate) to `mode_to_u32` is a caller
 //! contract violation; the function panics with an invariant message.
 
-use std::mem;
-
-use bytemuck::{Pod, Zeroable};
 use flui_types::painting::BlendMode;
 
+use super::generated::advanced_blend;
 use crate::wgpu::shader_composer::{ComposableSource, compose_wgsl_shader};
 
-// ── Uniform layout (mirrors `BlendUniforms` in advanced_blend.wgsl) ──────────
+// ── Byte-identity gate (generated `BlendUniforms` vs the WGSL block) ──────────
 
-/// GPU uniform buffer layout for the advanced-blend pass.
-///
-/// **Explicit `#[repr(C)]` layout — must match `BlendUniforms` in
-/// `advanced_blend.wgsl` byte-for-byte.**
-///
-/// WGSL uniform-block alignment rules (WGSL §13.4.1, WebGPU §3.13.3):
-/// - `vec4<f32>` → align 16
-/// - `vec2<f32>` → align 8
-/// - `f32`       → align 4
-/// - `vec3<f32>` → align **16** (not 12; the spec rounds vec3 up to vec4 alignment)
-/// - `u32`       → align 4
-/// - Struct size must be a multiple of 16 (largest member alignment).
-///
-/// | Byte offset | Size | Rust field       | WGSL member                    |
-/// |-------------|------|------------------|--------------------------------|
-/// | 0           | 16   | `op_bounds`      | `vec4<f32>` (op_bounds)        |
-/// | 16          | 8    | `viewport_size`  | `vec2<f32>`                    |
-/// | 24          | 8    | `copy_origin`    | `vec2<f32>`                    |
-/// | 32          | 8    | `copy_extent`    | `vec2<f32>`                    |
-/// | 40          | 4    | `opacity`        | `f32`                          |
-/// | 44          | 4    | `_pad0`          | `f32` (align gap)              |
-/// | 48          | 12   | `tint_rgb`       | `vec3<f32>` (align 16)         |
-/// | 60          | 4    | `mode`           | `u32`                          |
-/// | 64          | 8    | `src_uv_min`     | `vec2<f32>` foreground UV min  |
-/// | 72          | 8    | `src_uv_max`     | `vec2<f32>` foreground UV max  |
-///
-/// Total = 80 bytes (multiple of 16).
-///
-/// `src_uv_min/max` remap the VS-interpolated unit-quad UV `[0,1]` to the
-/// sub-region of the foreground texture that corresponds to the layer bounds
-/// within the full-viewport offscreen texture.  Pass `[0,0]..[1,1]` for a
-/// full-viewport foreground (the identity remap); pass `layer_bounds/viewport`
-/// for a layer that was rendered to a full-viewport offscreen but only covers
-/// a sub-region.
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub(super) struct BlendUniformData {
-    /// Device-space bounds [x, y, width, height] in pixels.
-    pub(super) op_bounds: [f32; 4],
-    /// Viewport size [width, height] in pixels.
-    pub(super) viewport_size: [f32; 2],
-    /// Backdrop copy rect origin [x, y] in pixels.
-    pub(super) copy_origin: [f32; 2],
-    /// Backdrop copy rect extent [width, height] in pixels.
-    pub(super) copy_extent: [f32; 2],
-    /// Group opacity in [0, 1].
-    pub(super) opacity: f32,
-    /// Alignment gap: `tint_rgb` (`vec3<f32>`) requires 16-byte WGSL alignment,
-    /// so the 4 bytes between `opacity` (offset 40) and `tint_rgb` (offset 48)
-    /// must be padded.  Must remain zero.
-    pub(super) _pad0: u32,
-    /// Per-channel RGB tint applied premultiplied.
-    pub(super) tint_rgb: [f32; 3],
-    /// Blend mode discriminant (see [`mode_to_u32`]).
-    pub(super) mode: u32,
-    /// Foreground UV min corner `[u_min, v_min]` for the src-UV remap.
-    ///
-    /// The VS-interpolated unit-quad UV `[0,1]` is remapped to
-    /// `mix(src_uv_min, src_uv_max, uv)` before sampling the foreground
-    /// texture.  Pass `[0, 0]` for a full-viewport foreground.
-    pub(super) src_uv_min: [f32; 2],
-    /// Foreground UV max corner `[u_max, v_max]` for the src-UV remap.
-    ///
-    /// Pass `[1, 1]` for a full-viewport foreground (identity remap).
-    /// Pass `[bounds_right/vp_w, bounds_bottom/vp_h]` when the layer was
-    /// rendered to a full-viewport offscreen but only covers a sub-region.
-    pub(super) src_uv_max: [f32; 2],
-}
+// These const assertions are the GO/NO-GO check.  If wgsl_bindgen generates a
+// struct whose layout differs from the former hand-written `BlendUniformData`,
+// this file fails to compile — the correct signal to stop and report BLOCKED.
+//
+// Generated `BlendUniforms` must match `BlendUniforms` in `advanced_blend.wgsl`
+// and the former hand-written struct byte-for-byte.  WGSL §13.4.1 alignment:
+// `vec4`→16, `vec2`→8, `f32`/`u32`→4, `vec3`→16 (rounded up); struct size is a
+// multiple of 16.
+//
+// | Byte offset | Size | Field           | WGSL member            |
+// |-------------|------|-----------------|------------------------|
+// | 0           | 16   | `op_bounds`     | `vec4<f32>`            |
+// | 16          | 8    | `viewport_size` | `vec2<f32>`            |
+// | 24          | 8    | `copy_origin`   | `vec2<f32>`            |
+// | 32          | 8    | `copy_extent`   | `vec2<f32>`            |
+// | 40          | 4    | `opacity`       | `f32`                  |
+// | 44          | 4    | `_pad0`         | `f32` (align gap)      |
+// | 48          | 12   | `tint_rgb`      | `vec3<f32>` (align 16) |
+// | 60          | 4    | `mode`          | `u32`                  |
+// | 64          | 8    | `src_uv_min`    | `vec2<f32>`            |
+// | 72          | 8    | `src_uv_max`    | `vec2<f32>`            |
+//
+// Total = 80 bytes (multiple of 16).
 
-const _BLEND_UNIFORM_SIZE_CHECK: () = {
-    assert!(mem::size_of::<BlendUniformData>() == 80);
+/// The generated `BlendUniforms` must be exactly 80 bytes.
+const _GENERATED_BLEND_UNIFORMS_SIZE_CHECK: () = {
+    assert!(std::mem::size_of::<advanced_blend::BlendUniforms>() == 80);
+};
+
+/// Field offsets must match the WGSL uniform-block layout exactly.  The
+/// `tint_rgb` (offset 48) / `mode` (offset 60) pair is the tight `vec3`+`u32`
+/// pack that a wrong type map (e.g. `Vec3A`) would break.
+const _GENERATED_BLEND_FIELD_OFFSET_CHECKS: () = {
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, op_bounds) == 0);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, viewport_size) == 16);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, copy_origin) == 24);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, copy_extent) == 32);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, opacity) == 40);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, tint_rgb) == 48);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, mode) == 60);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, src_uv_min) == 64);
+    assert!(std::mem::offset_of!(advanced_blend::BlendUniforms, src_uv_max) == 72);
 };
 
 // ── Mode discriminant mapping ─────────────────────────────────────────────────
@@ -161,7 +130,7 @@ pub(crate) fn mode_to_u32(mode: BlendMode) -> u32 {
 ///
 /// | Binding | Stage    | Type                    | Content                      |
 /// |---------|----------|-------------------------|------------------------------|
-/// | 0       | VS + FS  | Uniform buffer          | [`BlendUniformData`]         |
+/// | 0       | VS + FS  | Uniform buffer          | `BlendUniforms` (generated)  |
 /// | 1       | FS       | 2D float texture        | Foreground (premultiplied)   |
 /// | 2       | FS       | 2D float texture        | Backdrop copy (premultiplied)|
 /// | 3       | FS       | Non-filtering sampler   | Nearest + ClampToEdge        |
@@ -171,10 +140,13 @@ pub(crate) fn mode_to_u32(mode: BlendMode) -> u32 {
 /// `REPLACE` (no fixed-function blending): the fragment shader emits the full
 /// premultiplied composite directly; the GPU hardware must not re-blend it.
 pub(crate) struct AdvancedBlendPipeline {
-    /// Bind-group layout shared between pipeline construction and per-draw
-    /// bind-group creation in [`super::flush_advanced_layer`].
-    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     /// The single render pipeline (format-parametric at construction time).
+    ///
+    /// The bind-group layout is created from the generated
+    /// `advanced_blend::WgpuBindGroup0` and is not stored here —
+    /// [`super::flush_advanced_layer`] uses
+    /// `advanced_blend::WgpuBindGroup0::from_bindings` at draw time, which
+    /// creates a compatible bind group internally.
     pub(crate) pipeline: wgpu::RenderPipeline,
 }
 
@@ -185,7 +157,9 @@ impl AdvancedBlendPipeline {
     /// error surfaces at this call site, which the synthetic-op GPU test
     /// exercises before any production caller exists.
     pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
-        let bind_group_layout = create_bind_group_layout(device);
+        // The bind-group layout is sourced from the generated bindings, which
+        // derive it directly from the WGSL source — no hand-maintained descriptor.
+        let bind_group_layout = advanced_blend::WgpuBindGroup0::get_bind_group_layout(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Advanced Blend Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
@@ -256,63 +230,8 @@ impl AdvancedBlendPipeline {
             cache: None,
         });
 
-        Self {
-            bind_group_layout,
-            pipeline,
-        }
+        Self { pipeline }
     }
-}
-
-// ── Bind-group layout factory (private) ──────────────────────────────────────
-
-fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Advanced Blend Bind Group Layout"),
-        entries: &[
-            // Binding 0: uniform buffer (VS + FS)
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(
-                        mem::size_of::<BlendUniformData>() as u64
-                    ),
-                },
-                count: None,
-            },
-            // Binding 1: foreground texture (FS) — non-filtering (Nearest sampler)
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            // Binding 2: backdrop copy texture (FS) — non-filtering
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            // Binding 3: nearest-clamp sampler (FS)
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                count: None,
-            },
-        ],
-    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -323,7 +242,7 @@ mod cpu_tests {
 
     use flui_types::painting::BlendMode;
 
-    use super::mode_to_u32;
+    use super::{advanced_blend, mode_to_u32};
 
     /// All 15 advanced modes map to distinct `u32` values in `[0, 14]`.
     ///
@@ -373,22 +292,93 @@ mod cpu_tests {
         }
     }
 
-    /// The struct size must match the WGSL uniform-block size exactly.
+    /// The generated struct size must match the WGSL uniform-block size exactly.
     ///
     /// Layout: op_bounds(16) + viewport_size(8) + copy_origin(8) +
     /// copy_extent(8) + opacity(4) + _pad0(4) + tint_rgb(12) + mode(4) +
     /// src_uv_min(8) + src_uv_max(8) = 80 bytes.
     ///
-    /// This test makes the compile-time assert observable as a test failure
-    /// (rather than a build failure) for CI configurations that compile without
-    /// the const-eval size check being evaluated.
+    /// The `const` asserts in this file fire at compile time; this test makes the
+    /// requirement observable in test output.
     #[test]
-    fn blend_uniform_data_size_is_80_bytes() {
+    fn blend_uniforms_size_is_80_bytes() {
         assert_eq!(
-            std::mem::size_of::<super::BlendUniformData>(),
+            std::mem::size_of::<advanced_blend::BlendUniforms>(),
             80,
-            "BlendUniformData must be 80 bytes to match the WGSL BlendUniforms struct"
+            "BlendUniforms must be 80 bytes to match BlendUniforms in advanced_blend.wgsl"
         );
+    }
+
+    /// Field offsets must match the WGSL uniform-block layout exactly — in
+    /// particular the `tint_rgb`(48)/`mode`(60) tight `vec3`+`u32` pack.
+    #[test]
+    fn blend_uniforms_field_offsets_match_wgsl() {
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, op_bounds),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, viewport_size),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, copy_origin),
+            24
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, copy_extent),
+            32
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, opacity),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, tint_rgb),
+            48
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, mode),
+            60
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, src_uv_min),
+            64
+        );
+        assert_eq!(
+            std::mem::offset_of!(advanced_blend::BlendUniforms, src_uv_max),
+            72
+        );
+    }
+
+    /// Round-trip: values written via the pad-free `new` are readable from the
+    /// same byte positions — proves the generated layout has no hidden reordering.
+    #[allow(
+        clippy::float_cmp,
+        reason = "comparing floats just assigned from exact literals — bit identity is the invariant"
+    )]
+    #[test]
+    fn blend_uniforms_field_round_trips() {
+        let uniform = advanced_blend::BlendUniforms::new(
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0],
+            [7.0, 8.0],
+            [9.0, 10.0],
+            0.5,
+            [0.1, 0.2, 0.3],
+            7,
+            [0.0, 0.0],
+            [1.0, 1.0],
+        );
+        assert_eq!(uniform.op_bounds, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(uniform.viewport_size, [5.0, 6.0]);
+        assert_eq!(uniform.copy_origin, [7.0, 8.0]);
+        assert_eq!(uniform.copy_extent, [9.0, 10.0]);
+        assert_eq!(uniform.opacity, 0.5);
+        assert_eq!(uniform.tint_rgb, [0.1, 0.2, 0.3]);
+        assert_eq!(uniform.mode, 7);
+        assert_eq!(uniform.src_uv_min, [0.0, 0.0]);
+        assert_eq!(uniform.src_uv_max, [1.0, 1.0]);
     }
 }
 

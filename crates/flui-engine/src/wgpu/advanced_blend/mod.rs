@@ -29,9 +29,11 @@ use wgpu::util::DeviceExt as _;
 pub(crate) use pipeline::AdvancedBlendPipeline;
 pub(crate) use pipeline::mode_to_u32;
 
-use super::{resources::GpuResources, texture_pool::PooledTexture};
-use pipeline::BlendUniformData;
+use generated::advanced_blend;
 
+use super::{resources::GpuResources, texture_pool::PooledTexture};
+
+mod generated;
 mod pipeline;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -233,23 +235,24 @@ pub(crate) fn flush_advanced_layer(
     let (copy_extent_w, copy_extent_h) = backdrop.copy_extent;
     let (vp_w, vp_h) = viewport_size;
 
-    let uniforms = BlendUniformData {
-        op_bounds: [
+    // The generated `BlendUniforms::new` zero-fills the WGSL alignment padding
+    // (`_pad0`); fields are passed in WGSL declaration order minus the pad.
+    let uniforms = advanced_blend::BlendUniforms::new(
+        [
             op.device_bounds.left().0,
             op.device_bounds.top().0,
             op.device_bounds.width().0,
             op.device_bounds.height().0,
         ],
-        viewport_size: [vp_w as f32, vp_h as f32],
-        copy_origin: [copy_origin_x as f32, copy_origin_y as f32],
-        copy_extent: [copy_extent_w as f32, copy_extent_h as f32],
-        opacity: op.opacity,
-        _pad0: 0,
-        tint_rgb: op.tint,
-        mode: mode_to_u32(op.mode),
-        src_uv_min: op.src_uv_min,
-        src_uv_max: op.src_uv_max,
-    };
+        [vp_w as f32, vp_h as f32],
+        [copy_origin_x as f32, copy_origin_y as f32],
+        [copy_extent_w as f32, copy_extent_h as f32],
+        op.opacity,
+        op.tint,
+        mode_to_u32(op.mode),
+        op.src_uv_min,
+        op.src_uv_max,
+    );
 
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Advanced Blend Uniform Buffer"),
@@ -270,28 +273,21 @@ pub(crate) fn flush_advanced_layer(
         ..Default::default()
     });
 
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Advanced Blend Bind Group"),
-        layout: &pipeline.bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+    // Per-draw bind group via the generated typed helper:
+    // uniform (0) + foreground (1) + backdrop copy (2) + sampler (3).
+    let bind_group = advanced_blend::WgpuBindGroup0::from_bindings(
+        device,
+        advanced_blend::WgpuBindGroup0Entries::new(advanced_blend::WgpuBindGroup0EntriesParams {
+            blend: wgpu::BufferBinding {
+                buffer: &uniform_buffer,
+                offset: 0,
+                size: None,
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(op.foreground.view()),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(backdrop.texture.view()),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
+            foreground_tex: op.foreground.view(),
+            backdrop_tex: backdrop.texture.view(),
+            nearest_sampler: &sampler,
+        }),
+    );
 
     // Step 3: render pass over op.device_bounds.
     // LoadOp::Load preserves surface content outside the blend region.
@@ -314,7 +310,7 @@ pub(crate) fn flush_advanced_layer(
         });
 
         render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        bind_group.set(&mut render_pass);
         // 6 vertices synthesised in the VS from @builtin(vertex_index) — no vertex buffer.
         render_pass.draw(0..6, 0..1);
     }

@@ -31,10 +31,13 @@ use flui_types::painting::BlendMode;
 use wgpu::util::DeviceExt as _;
 
 pub(crate) use pipeline::ModePipeline;
-use pipeline::{ModeUniform, blend_mode_to_u32};
+use pipeline::blend_mode_to_u32;
+
+use generated::mode;
 
 use super::{resources::GpuResources, texture_pool::PooledTexture};
 
+mod generated;
 mod pipeline;
 
 /// Apply a Porter-Duff / W3C blend of `filter_color` (SRC) over each pixel of
@@ -76,12 +79,9 @@ pub(crate) fn apply_mode(
         .acquire(vp_w, vp_h, surface_format);
     let filtered_view = filtered_tex.view();
 
-    // Build the uniform: filter color + blend mode index + padding.
-    let uniform = ModeUniform {
-        color: filter_color,
-        blend_mode: blend_mode_to_u32(blend_mode),
-        _pad: [0; 3],
-    };
+    // Build the uniform: filter color + blend mode index.  The generated
+    // `ModeUniforms::new` zero-fills the WGSL alignment padding.
+    let uniform = mode::ModeUniforms::new(filter_color, blend_mode_to_u32(blend_mode));
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Mode Uniform Buffer"),
         contents: cast_slice(&[uniform]),
@@ -100,25 +100,20 @@ pub(crate) fn apply_mode(
         ..Default::default()
     });
 
-    // Per-draw bind group: uniform (0) + source texture (1) + sampler (2).
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Mode Bind Group"),
-        layout: &pipeline.bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+    // Per-draw bind group via the generated typed helper:
+    // uniform (0) + source texture (1) + sampler (2).
+    let bind_group = mode::WgpuBindGroup0::from_bindings(
+        device,
+        mode::WgpuBindGroup0Entries::new(mode::WgpuBindGroup0EntriesParams {
+            u: wgpu::BufferBinding {
+                buffer: &uniform_buffer,
+                offset: 0,
+                size: None,
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(source_tex.view()),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
+            src_texture: source_tex.view(),
+            src_sampler: &sampler,
+        }),
+    );
 
     // Render pass: clear to TRANSPARENT then draw the full-viewport quad.
     {
@@ -140,7 +135,7 @@ pub(crate) fn apply_mode(
         });
 
         render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
+        bind_group.set(&mut render_pass);
         // 6 vertices synthesised in the VS — no vertex buffer.
         render_pass.draw(0..6, 0..1);
     }
