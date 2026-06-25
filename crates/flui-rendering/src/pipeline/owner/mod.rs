@@ -2017,16 +2017,16 @@ impl PipelineOwner<Layout> {
     ///    [`RenderTree::get_two_mut`] and
     ///    [`RenderTree::get_parent_and_children_mut`].
     /// 3. **Index by id**: the N borrows are wrapped in a private
-    ///    `SubtreeBorrows` as a `HashMap<RenderId, NodePtr>` (raw
-    ///    pointer alias of the still-live `&mut RenderNode` borrows).
-    ///    Lookup is O(1) by id.
+    ///    `SubtreeArena` as a `HashMap<RenderId, (NodePtr, AtomicBool)>`
+    ///    (raw pointer alias of the still-live `&mut RenderNode` borrows,
+    ///    paired with a per-slot in-flight flag). Lookup is O(1) by id.
     /// 4. **Recursive walk**: a private `layout_subtree_borrowed`
-    ///    helper indexes into `SubtreeBorrows` to acquire one node's
+    ///    helper indexes into `SubtreeArena` to acquire one node's
     ///    reborrow at each call level. The leaf path delegates to
     ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     ///    The non-leaf path constructs a Direct-storage `BoxLayoutCtx`
     ///    via the erased driver context ([`crate::protocol::ErasedBoxLayoutCtx`]) with a closure
-    ///    that captures `&SubtreeBorrows` (Sync via `NodePtr`'s
+    ///    that captures `&SubtreeArena` (Sync via `NodePtr`'s
     ///    `unsafe impl`) and re-enters `layout_subtree_borrowed` for
     ///    each child. The bridge in `traits/render_box.rs` reconstructs
     ///    a typed `BoxLayoutCtx<T::Arity, T::ParentData>` (Proxy
@@ -2118,8 +2118,8 @@ impl PipelineOwner<Layout> {
     /// 2. `get_subtree_mut` receives the deduplicated id list →
     ///    uniqueness precondition satisfied → returns `Some(refs)`.
     ///    No double-borrow attempt at acquisition.
-    /// 3. `layout_subtree_borrowed` registers each `id` in
-    ///    `SubtreeBorrows::currently_laying_out` via the
+    /// 3. `layout_subtree_borrowed` marks each `id`'s in-flight flag in
+    ///    `SubtreeArena::by_id` via the
     ///    `LayoutCycleGuard` RAII on entry (U21). A `perform_layout`
     ///    body that calls `layout_child` for an ancestor id already
     ///    in flight hits the guard's `enter` collision check →
