@@ -1,14 +1,14 @@
 //! `ReconcileEvent` — structured trace stream for the keyed
 //! child reconciler.
 //!
-//! Plan §U13 / FR-035. Emitted at every disposition site of the keyed
-//! reconcile — the GlobalKey-reparent path in
-//! [`ElementTree`](super::ElementTree) in production, and every
-//! reuse / reorder / mount / unmount disposition in the test-only box
-//! reconciler reference (`reconciliation`, gated behind `cfg(test)` /
-//! `feature = "test-utils"`). Wiring these dispositions into the
-//! production slab reconciler (`reconcile_children_by_id`) is tracked by
-//! KTD-9. Observers (the `ReconcileEventCollector` test
+//! Plan §U13 / FR-035. Emitted at every disposition site on the
+//! PRODUCTION path: the slab reconciler `reconcile_children_by_id`
+//! emits reuse / reorder / mount / unmount per child, and the
+//! GlobalKey-reparent path in [`ElementTree`](super::ElementTree) emits
+//! [`Reparent`](ReconcileEventKind::Reparent). The test-only box
+//! reconciler (`reconciliation`, gated behind `cfg(test)` /
+//! `feature = "test-utils"`) emits the same dispositions as a
+//! keyed-match reference. Observers (the `ReconcileEventCollector` test
 //! fixture in the in-crate `tree::test_utils` module, gated behind the
 //! `test-utils` feature; the future devtools panel) reconstruct the
 //! per-frame reconciliation outcome WITHOUT a tree-diff comparison.

@@ -1,7 +1,7 @@
 //! Id-based keyed child reconciliation over the slab-resident
 //! [`ElementTree`] — the **production** child reconciler.
 //!
-//! # Relationship to the box-graph reconciler
+//! # The production reconciler
 //!
 //! This is the reconciler the production build path runs after the E3
 //! atomic box→arena swap: [`BuildOwner::build_scope`](crate::BuildOwner)
@@ -9,13 +9,24 @@
 //! [`reconcile_children_by_id`], which permutes the parent's
 //! [`ElementNode::child_ids`](super::ElementNode) list, reusing /
 //! inserting / removing real slab nodes through the [`ElementTree`]
-//! accessors. The single element graph is the slab.
+//! accessors. The single element graph is the slab. (It replaced an
+//! earlier box-vec reconciler that permuted a caller-owned
+//! `Vec<Box<dyn ElementBase>>`; that one has been removed.)
 //!
-//! The original box-vec `reconcile_children` (permuting a caller-owned
-//! `Vec<Box<dyn ElementBase>>`) is now dead in production and retained
-//! only as a `cfg(test)` / `feature = "test-utils"`-gated keyed-match +
-//! `ReconcileEvent` emission reference; this module mirrors its matching
-//! semantics over the slab.
+//! It also emits one typed [`ReconcileEvent`] per child disposition on
+//! the live path, so the `flui::reconcile` (FR-035) stability boundary
+//! is meaningful for normal reconciliation, not just a reference impl.
+//!
+//! # Emitted dispositions
+//!
+//! One event per reconciled child slot: `Reuse` (top scan, same slot),
+//! `Unmount`
+//! (keyless-middle drop and unclaimed-keyed drop, at the child's OLD
+//! slot), `Reorder`/`Reuse` (keyed claim, by old-slot vs new-slot),
+//! `Mount` (fresh insert), and `Reuse`/`Reorder` for the bottom slice
+//! (by `old_bottom == new_bottom`). The cross-parent `Reparent`
+//! disposition is emitted by `ElementTree` on the GlobalKey path, not
+//! here.
 //!
 //! # The borrow discipline this module proves out
 //!
@@ -43,7 +54,7 @@
 //! reconstructed from owned snapshots (key hashes + view type ids) taken
 //! up front, so the matching loop never holds a slab borrow either.
 //!
-//! # Matching semantics (Flutter-faithful, mirrors the box reconciler)
+//! # Matching semantics (Flutter-faithful)
 //!
 //! A new view reuses an old child when they share a concrete view type
 //! **and** the same key (both keyless, or both keyed and equal via
@@ -60,6 +71,7 @@ use std::collections::HashMap;
 use flui_foundation::ElementId;
 
 use super::element_tree::ElementTree;
+use super::reconcile_event::{ReconcileEvent, emit as emit_event};
 use crate::view::{ElementBase, View};
 
 /// Reconcile the slab-resident children of `parent_id` against
@@ -98,8 +110,12 @@ use crate::view::{ElementBase, View};
 /// HashMap-indexed pass plus the prefix/suffix scans). Worst case rises
 /// to `O(n * m)` only when every new keyed view's hash collides into one
 /// bucket whose candidates mostly fail the semantic `key_eq` check —
-/// the same collision-resistance cost the box reconciler pays. Both `n`
+/// the cost of collision-resistant keyed matching. Both `n`
 /// and `m` are bounded by the parent's fan-out, not the whole tree.
+// Five Flutter-parity phases + per-disposition ReconcileEvent emission push the
+// body past 100 lines; splitting would scramble the 1:1 mapping to the keyed
+// reconcile algorithm (Flutter's `Element.updateChildren`).
+#[allow(clippy::too_many_lines)]
 pub(crate) fn reconcile_children_by_id(
     tree: &mut ElementTree,
     parent_id: ElementId,
@@ -126,8 +142,8 @@ pub(crate) fn reconcile_children_by_id(
     let new_len = new_views.len();
 
     // `Some(id)` while the slot is still a claim candidate; `take()`n to
-    // `None` once a new view claims it. Mirrors the box reconciler's
-    // `old_slots: Vec<Option<Box<dyn ElementBase>>>`.
+    // `None` once a new view claims it — a working buffer of per-slot
+    // claim candidates.
     let mut old_slots: Vec<Option<ElementId>> = old_ids.iter().copied().map(Some).collect();
 
     // The reconciled id list, built front-to-back in new-view order.
@@ -145,6 +161,16 @@ pub(crate) fn reconcile_children_by_id(
             break;
         }
         update_child(tree, old_id, new_views[new_top].as_ref(), owner);
+        // Top scan is same-slot (old_top == new_top throughout): the
+        // child neither moved nor was recreated — a `Reuse` disposition.
+        emit_event(&ReconcileEvent::reuse(
+            parent_id,
+            new_top,
+            new_views[new_top].view_type_id(),
+            new_views[new_top]
+                .key()
+                .map(flui_foundation::ViewKey::key_hash),
+        ));
         old_slots[old_top] = None;
         result.push(old_id);
         old_top += 1;
@@ -153,8 +179,8 @@ pub(crate) fn reconcile_children_by_id(
 
     // ── Phase 2: scan the bottom of both lists while children match.
     // Matches are RECORDED (the bounds shrink); the actual `update` runs
-    // in phase 5a so every update is applied strictly front-to-back,
-    // matching the box reconciler's ordering guarantee.
+    // in phase 5a so every update is applied strictly front-to-back
+    // (the Flutter `updateChildren` ordering guarantee).
     let mut old_bottom = old_len;
     let mut new_bottom = new_len;
     while old_top < old_bottom && new_top < new_bottom {
@@ -174,11 +200,16 @@ pub(crate) fn reconcile_children_by_id(
     //
     // The bucket is a `Vec<ElementId>` (not a single id) so two old
     // children with DISTINCT keys that collide on `u64` hash both stay
-    // claim candidates — the symmetric defense the box reconciler also
-    // carries. Phase 4 disambiguates via the semantic `key_eq` inside
+    // claim candidates — the symmetric FR-024(c) collision defense.
+    // Phase 4 disambiguates via the semantic `key_eq` inside
     // `can_update_by_id`.
     let mut old_keyed: HashMap<u64, Vec<ElementId>> = HashMap::new();
-    for slot in old_slots.iter_mut().take(old_bottom).skip(old_top) {
+    for (idx, slot) in old_slots
+        .iter_mut()
+        .enumerate()
+        .take(old_bottom)
+        .skip(old_top)
+    {
         let Some(old_id) = *slot else {
             continue;
         };
@@ -188,8 +219,15 @@ pub(crate) fn reconcile_children_by_id(
             old_keyed.entry(hash).or_default().push(old_id);
         } else {
             // Keyless middle child with no positional match: remove.
+            // Capture the view type BEFORE the slab frees the slot so the
+            // `Unmount` disposition carries a stable identifier; the slot
+            // is its OLD index (`idx`), the position it is leaving.
+            let view_type = view_type_of(tree, old_id);
             *slot = None;
             remove_child(tree, old_id, owner);
+            if let Some(view_type) = view_type {
+                emit_event(&ReconcileEvent::unmount(parent_id, idx, view_type, None));
+            }
         }
     }
 
@@ -201,11 +239,32 @@ pub(crate) fn reconcile_children_by_id(
         let new_slot = new_top + new_offset;
         let new_view = new_views[new_slot].as_ref();
         if let Some(old_id) = claim_old_for_new(tree, new_view, &mut old_keyed) {
+            // The claimed child's `slot` is still its OLD index (the
+            // tail-of-pass re-stamp has not run yet): equal to the new
+            // slot means it stayed put (`Reuse`); otherwise the keyed
+            // match pulled it across slots (`Reorder`).
+            let stayed = slot_of(tree, old_id) == Some(new_slot);
             update_child(tree, old_id, new_view, owner);
             clear_slot(&mut old_slots, old_id);
+            let key_hash = new_view.key().map(flui_foundation::ViewKey::key_hash);
+            let view_type = new_view.view_type_id();
+            emit_event(&if stayed {
+                ReconcileEvent::reuse(parent_id, new_slot, view_type, key_hash)
+            } else {
+                ReconcileEvent::reorder(parent_id, new_slot, view_type, key_hash)
+            });
             result.push(old_id);
         } else {
             let new_id = tree.insert(new_view, parent_id, new_slot, owner);
+            // A new-side view with no old match minted a fresh element —
+            // emit after `insert` so observers only see `Mount` for an
+            // element that now exists in the slab.
+            emit_event(&ReconcileEvent::mount(
+                parent_id,
+                new_slot,
+                new_view.view_type_id(),
+                new_view.key().map(flui_foundation::ViewKey::key_hash),
+            ));
             result.push(new_id);
         }
     }
@@ -218,13 +277,36 @@ pub(crate) fn reconcile_children_by_id(
             .expect("phase-2 bottom-scan recorded this slot as a match; it cannot be None");
         let new_idx = new_bottom + offset;
         update_child(tree, old_id, new_views[new_idx].as_ref(), owner);
+        // The bottom slice stays at the tail of both lists; it shifts
+        // slot only when the middle changed size, i.e. when the deltas
+        // are asymmetric (`old_bottom != new_bottom`) — then `Reorder`,
+        // else `Reuse`. (`old_idx == new_idx` reduces to this equality
+        // because both indices are `bottom + offset`.)
+        let key_hash = new_views[new_idx]
+            .key()
+            .map(flui_foundation::ViewKey::key_hash);
+        let view_type = new_views[new_idx].view_type_id();
+        emit_event(&if old_bottom == new_bottom {
+            ReconcileEvent::reuse(parent_id, new_idx, view_type, key_hash)
+        } else {
+            ReconcileEvent::reorder(parent_id, new_idx, view_type, key_hash)
+        });
         result.push(old_id);
     }
 
     // ── Phase 5b: remove any old child never claimed.
-    for slot in &mut old_slots {
+    for (idx, slot) in old_slots.iter_mut().enumerate() {
         if let Some(old_id) = slot.take() {
+            // Capture identity before the slab frees the slot; the event
+            // slot is the child's OLD index (`idx`).
+            let view_type = view_type_of(tree, old_id);
+            let key_hash = key_hash_of(tree, old_id);
             remove_child(tree, old_id, owner);
+            if let Some(view_type) = view_type {
+                emit_event(&ReconcileEvent::unmount(
+                    parent_id, idx, view_type, key_hash,
+                ));
+            }
         }
     }
 
@@ -279,13 +361,13 @@ pub(crate) fn reconcile_children_by_id(
 /// Whether the slab child `old_id` can be updated in place by `new` —
 /// same concrete view type AND matching key.
 ///
-/// Mirrors the box reconciler's `can_update_element`, but reads the old
+/// Reads the old
 /// side from the slab through a **fresh, immediately-dropped**
 /// [`ElementTree::get`] borrow rather than from a `&dyn ElementBase`
 /// held by the caller. A stale / absent `old_id` is treated as
 /// not-updatable (returns `false`), never a panic.
 ///
-/// Key comparison is two-stage, exactly as in the box reconciler:
+/// Key comparison is two-stage:
 /// 1. hash equality (cheap, via [`ElementBase::current_key_hash`]);
 /// 2. on a hash hit where both sides are keyed, a semantic
 ///    [`ViewKey::key_eq`](flui_foundation::ViewKey::key_eq) check via
@@ -331,6 +413,28 @@ fn can_update_by_id(tree: &ElementTree, old_id: ElementId, new: &dyn View) -> bo
 /// borrow — no slab reference escapes this call.
 fn key_hash_of(tree: &ElementTree, old_id: ElementId) -> Option<u64> {
     tree.get(old_id)?.element().current_key_hash()
+}
+
+/// The view `TypeId` of the slab child `old_id`, or `None` if its id no
+/// longer resolves.
+///
+/// Read through a fresh, immediately-dropped [`ElementTree::get`] borrow
+/// so the captured identity survives the subsequent `remove` of the node
+/// — the `Unmount` disposition needs the type the child *had* before the
+/// slab freed its slot.
+fn view_type_of(tree: &ElementTree, old_id: ElementId) -> Option<std::any::TypeId> {
+    Some(tree.get(old_id)?.element().view_type_id())
+}
+
+/// The current slot index of the slab child `old_id`, or `None` if its
+/// id no longer resolves.
+///
+/// Used at the phase-4 keyed-claim site to tell a `Reuse` (slot
+/// unchanged) from a `Reorder` (slot moved): the value read here is the
+/// child's OLD slot, because the tail-of-pass [`set_child_slot`]
+/// re-stamping has not run yet.
+fn slot_of(tree: &ElementTree, old_id: ElementId) -> Option<usize> {
+    Some(tree.get(old_id)?.slot())
 }
 
 /// Claim the old-middle child a keyed `new_view` should reuse, removing
@@ -559,7 +663,7 @@ mod tests {
     /// compares by inner `tag` — exercises the production collision
     /// defense: two distinct `ColliderKey`s land in one hash bucket, and
     /// only the semantic `key_eq` (consulted on a hash hit) tells them
-    /// apart. Mirrors the box reconciler's `ColliderKey` reference.
+    /// apart.
     #[derive(Clone)]
     struct ColliderKey {
         tag: u64,
@@ -1125,5 +1229,350 @@ mod tests {
         );
         // No children were inserted; the slab is empty.
         assert_eq!(tree.len(), 0, "stale-parent reconcile must insert nothing");
+    }
+
+    /// Duplicate keys in the NEW list: the first occurrence claims the
+    /// matching old element, every later duplicate mints a fresh one
+    /// (first-wins), and the call never panics. Ports the unique
+    /// error-path case from the retired box-reconciler corpus onto the
+    /// slab.
+    #[test]
+    fn duplicate_keys_in_new_list_first_wins() {
+        let (mut tree, mut owner, root) = fixture();
+        reconcile_children_by_id(
+            &mut tree,
+            root,
+            &keyed_views(&[1, 2]),
+            &mut owner.element_owner_mut(),
+        );
+        let before = tree.get(root).unwrap().child_ids().to_vec();
+        let (id1, id2) = (before[0], before[1]);
+
+        // New list repeats key 1. Defined behavior: the first key=1 reuses
+        // the original element; the second key=1 is a fresh element; key=2
+        // is reused.
+        reconcile_children_by_id(
+            &mut tree,
+            root,
+            &keyed_views(&[1, 1, 2]),
+            &mut owner.element_owner_mut(),
+        );
+        let after = tree.get(root).unwrap().child_ids().to_vec();
+
+        assert_eq!(after.len(), 3);
+        assert_eq!(after[0], id1, "first key=1 reuses the original element");
+        assert_ne!(
+            after[1], id1,
+            "second key=1 must be a fresh element (first-wins)"
+        );
+        assert_ne!(after[1], id2, "second key=1 is not the key=2 element");
+        assert_eq!(after[2], id2, "key=2 is reused");
+        for id in &after {
+            assert!(tree.get(*id).is_some(), "every surviving child id resolves");
+        }
+    }
+
+    /// `flui::reconcile` emission coverage on the LIVE slab path
+    /// (catalog #3 / the work KTD-9 named). The production reconciler
+    /// emits one typed [`ReconcileEvent`](super::ReconcileEvent) per
+    /// child disposition so devtools / selection-persistence subscribers
+    /// reconstruct each frame's outcome WITHOUT a tree diff. Before this
+    /// wiring `reconcile_children_by_id` emitted ZERO events, so every
+    /// test here fails its multiset assertion (a real red→green guard,
+    /// not a tautology).
+    ///
+    /// Per the collector's process-global tracing-callsite caveat, these
+    /// install a per-thread dispatcher and are `#[serial]`-gated so a
+    /// concurrent dispatcher swap cannot make a freshly installed
+    /// collector miss events.
+    mod emission {
+        use flui_foundation::ElementId;
+        use serial_test::serial;
+        use tracing::dispatcher::Dispatch;
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        use super::super::reconcile_children_by_id;
+        use super::{KeyedView, fixture, keyed_views, plain_views};
+        use std::sync::OnceLock;
+
+        use crate::BuildOwner;
+        use crate::tree::ElementTree;
+        use crate::tree::ReconcileEventKind;
+        use crate::tree::test_utils::{CollectedEvent, ReconcileEventCollector};
+        use crate::view::View;
+
+        /// Process-global guard so the keep-alive subscriber installs once.
+        static GLOBAL_SUBSCRIBER: OnceLock<()> = OnceLock::new();
+
+        /// Install an *interested* process-global subscriber ONCE.
+        ///
+        /// The other (non-collector) `id_reconcile` unit tests emit
+        /// `flui::reconcile` events too. If one hits the emit callsite
+        /// FIRST, tracing computes its interest against the no-op global
+        /// default, caches `Interest::never`, and the callsite goes dead —
+        /// every later per-thread collector is then bypassed (the tests
+        /// pass in isolation but fail in the full lib suite). Installing an
+        /// interested global default rebuilds the interest cache so the
+        /// callsite stays live; per-event dispatch still routes to the
+        /// CURRENT thread's `with_default` collector, so each test's events
+        /// remain isolated. A bare `Registry` has no layer, so it records
+        /// nothing and is invisible to every other test.
+        fn ensure_global_subscriber() {
+            GLOBAL_SUBSCRIBER.get_or_init(|| {
+                // Ignore Err: some other code may already have set a global
+                // default — we only need *an* interested one present.
+                let _ = tracing::subscriber::set_global_default(Registry::default());
+            });
+        }
+
+        /// Capture the `flui::reconcile` events `body` emits on this thread.
+        fn capture<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
+            ensure_global_subscriber();
+            let collector = ReconcileEventCollector::new();
+            let subscriber = Registry::default().with(collector.layer());
+            tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
+            collector.events()
+        }
+
+        /// Assert the captured events carry exactly the expected
+        /// `(kind, slot)` dispositions as a MULTISET. Both sides are
+        /// sorted before comparison so a test does not depend on the
+        /// HashMap-iteration order of the keyed-middle phase (the SC-008
+        /// multiset contract) — `expected` is written in natural emission
+        /// order at the call site.
+        fn assert_dispositions(events: &[CollectedEvent], expected: &[(ReconcileEventKind, u64)]) {
+            let sort_key = |(kind, slot): &(ReconcileEventKind, u64)| (*kind as u8, *slot);
+            let mut actual: Vec<(ReconcileEventKind, u64)> =
+                events.iter().map(|e| (e.kind, e.slot)).collect();
+            actual.sort_by_key(sort_key);
+            let mut want = expected.to_vec();
+            want.sort_by_key(sort_key);
+            assert_eq!(
+                actual, want,
+                "reconcile disposition multiset mismatch\n  expected: {want:?}\n  actual:   {actual:?}\n  full events: {events:?}",
+            );
+        }
+
+        /// Seed `parent` with `views` via direct slab inserts, bypassing
+        /// the reconciler so NO `flui::reconcile` event fires during
+        /// setup. This matters: tracing's callsite-interest cache is
+        /// process-global, so if the production emit callsite is first
+        /// exercised OUTSIDE a collector scope it can latch "no interest"
+        /// and the first captured reconcile then observes zero events.
+        /// Building the prior state with raw inserts keeps every emit
+        /// inside a `capture` — the same discipline the §U18 corpus uses
+        /// (it mounts its initial tree directly, never via a warmup
+        /// reconcile).
+        fn seed(
+            tree: &mut ElementTree,
+            owner: &mut BuildOwner,
+            parent: ElementId,
+            views: &[Box<dyn View>],
+        ) {
+            let mut ids = Vec::with_capacity(views.len());
+            for (slot, view) in views.iter().enumerate() {
+                ids.push(tree.insert(view.as_ref(), parent, slot, &mut owner.element_owner_mut()));
+            }
+            tree.get_mut(parent)
+                .expect("seeded parent resolves")
+                .set_child_ids(ids);
+        }
+
+        /// An empty parent gaining N children emits one `Mount` per slot,
+        /// each carrying the reconciled parent id.
+        #[test]
+        #[serial]
+        fn emits_mount_for_each_inserted_child() {
+            let (mut tree, mut owner, root) = fixture();
+            let views = keyed_views(&[1, 2, 3]);
+            let events = capture(|| {
+                reconcile_children_by_id(&mut tree, root, &views, &mut owner.element_owner_mut());
+            });
+
+            assert_dispositions(
+                &events,
+                &[
+                    (ReconcileEventKind::Mount, 0),
+                    (ReconcileEventKind::Mount, 1),
+                    (ReconcileEventKind::Mount, 2),
+                ],
+            );
+            for event in &events {
+                assert_eq!(
+                    event.parent,
+                    root.as_u64(),
+                    "every event must carry the reconciled parent id; got {event:?}",
+                );
+            }
+        }
+
+        /// Re-reconciling the same shape reuses every child in place →
+        /// one `Reuse` per slot, no `Mount`/`Unmount`.
+        #[test]
+        #[serial]
+        fn emits_reuse_for_unchanged_children() {
+            let (mut tree, mut owner, root) = fixture();
+            seed(&mut tree, &mut owner, root, &keyed_views(&[1, 2, 3]));
+
+            let events = capture(|| {
+                reconcile_children_by_id(
+                    &mut tree,
+                    root,
+                    &keyed_views(&[1, 2, 3]),
+                    &mut owner.element_owner_mut(),
+                );
+            });
+
+            assert_dispositions(
+                &events,
+                &[
+                    (ReconcileEventKind::Reuse, 0),
+                    (ReconcileEventKind::Reuse, 1),
+                    (ReconcileEventKind::Reuse, 2),
+                ],
+            );
+        }
+
+        /// A keyed reorder keeps the prefix match in place (`Reuse`) and
+        /// moves the rest (`Reorder`) — the element follows its key, so
+        /// the disposition reflects real movement.
+        #[test]
+        #[serial]
+        fn emits_reuse_and_reorder_on_keyed_move() {
+            let (mut tree, mut owner, root) = fixture();
+            seed(&mut tree, &mut owner, root, &keyed_views(&[1, 2, 3]));
+
+            // [1,2,3] -> [1,3,2]: key 1 stays (Reuse@0); keys 3 and 2 are
+            // pulled to new slots by the keyed-middle walk (Reorder@1,@2).
+            let events = capture(|| {
+                reconcile_children_by_id(
+                    &mut tree,
+                    root,
+                    &keyed_views(&[1, 3, 2]),
+                    &mut owner.element_owner_mut(),
+                );
+            });
+
+            assert_dispositions(
+                &events,
+                &[
+                    (ReconcileEventKind::Reuse, 0),
+                    (ReconcileEventKind::Reorder, 1),
+                    (ReconcileEventKind::Reorder, 2),
+                ],
+            );
+        }
+
+        /// Dropping the last keyed child reuses the survivors and emits a
+        /// single `Unmount` at the dropped child's old slot.
+        #[test]
+        #[serial]
+        fn emits_unmount_for_dropped_child() {
+            let (mut tree, mut owner, root) = fixture();
+            seed(&mut tree, &mut owner, root, &keyed_views(&[1, 2, 3]));
+
+            let events = capture(|| {
+                reconcile_children_by_id(
+                    &mut tree,
+                    root,
+                    &keyed_views(&[1, 2]),
+                    &mut owner.element_owner_mut(),
+                );
+            });
+
+            assert_dispositions(
+                &events,
+                &[
+                    (ReconcileEventKind::Reuse, 0),
+                    (ReconcileEventKind::Reuse, 1),
+                    (ReconcileEventKind::Unmount, 2),
+                ],
+            );
+        }
+
+        /// A view-type change at a slot replaces the element: the old
+        /// (keyless) child unmounts and a fresh one mounts, both at the
+        /// same slot but distinct dispositions.
+        #[test]
+        #[serial]
+        fn emits_unmount_then_mount_on_type_change() {
+            let (mut tree, mut owner, root) = fixture();
+            seed(&mut tree, &mut owner, root, &plain_views(&[1]));
+
+            // A keyless `TestView` slot replaced by a keyed `KeyedView`:
+            // different concrete types, so no reuse.
+            let new_views: Vec<Box<dyn View>> = vec![Box::new(KeyedView::new(9))];
+            let events = capture(|| {
+                reconcile_children_by_id(
+                    &mut tree,
+                    root,
+                    &new_views,
+                    &mut owner.element_owner_mut(),
+                );
+            });
+
+            assert_dispositions(
+                &events,
+                &[
+                    (ReconcileEventKind::Unmount, 0),
+                    (ReconcileEventKind::Mount, 0),
+                ],
+            );
+        }
+
+        /// The S_3 permutation corpus (SC-002 / FR-024(b)) on the slab:
+        /// for each of the 6 permutations of keyed `[1, 2, 3]`, the
+        /// disposition multiset matches the keyed-reconcile contract AND
+        /// every key's element moves to its permuted slot (never rebuilt).
+        /// Ports the retired box-reconciler's exhaustive permutation
+        /// corpus onto the production reconciler — multiset equality
+        /// because Phase-4 HashMap iteration order is not stable.
+        #[test]
+        #[serial]
+        fn all_six_permutations_preserve_identity_and_emit_expected() {
+            use ReconcileEventKind::{Reorder, Reuse};
+
+            // Element type inferred from the first tuple's suffixes
+            // (`u32` keys, `u64` slots) — an explicit annotation would
+            // trip clippy::type_complexity for no readability gain.
+            let cases = [
+                ([1u32, 2, 3], [(Reuse, 0u64), (Reuse, 1), (Reuse, 2)]),
+                ([1, 3, 2], [(Reuse, 0), (Reorder, 1), (Reorder, 2)]),
+                ([2, 1, 3], [(Reorder, 0), (Reorder, 1), (Reuse, 2)]),
+                ([2, 3, 1], [(Reorder, 0), (Reorder, 1), (Reorder, 2)]),
+                ([3, 1, 2], [(Reorder, 0), (Reorder, 1), (Reorder, 2)]),
+                ([3, 2, 1], [(Reorder, 0), (Reuse, 1), (Reorder, 2)]),
+            ];
+
+            for (perm, expected) in cases {
+                let (mut tree, mut owner, root) = fixture();
+                seed(&mut tree, &mut owner, root, &keyed_views(&[1, 2, 3]));
+                let before = tree.get(root).unwrap().child_ids().to_vec();
+                // Seed order is key-ascending, so key `k` lives at index `k - 1`.
+                let id_of = |k: u32| before[(k - 1) as usize];
+
+                let new_views = keyed_views(&perm);
+                let events = capture(|| {
+                    reconcile_children_by_id(
+                        &mut tree,
+                        root,
+                        &new_views,
+                        &mut owner.element_owner_mut(),
+                    );
+                });
+
+                assert_dispositions(&events, &expected);
+
+                let after = tree.get(root).unwrap().child_ids().to_vec();
+                for (slot, &key) in perm.iter().enumerate() {
+                    assert_eq!(
+                        after[slot],
+                        id_of(key),
+                        "perm {perm:?}: slot {slot} must hold the original key={key} element, not a rebuild",
+                    );
+                }
+            }
+        }
     }
 }
