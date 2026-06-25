@@ -550,19 +550,19 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
 }
 
 // ============================================================================
-// SubtreeBorrows thread-affinity smoke (PR #144 Copilot review legacy)
+// SubtreeArena thread-affinity smoke (PR #144 Copilot review legacy)
 // ============================================================================
 
 /// PR #144 Copilot review (comment_id=3294225417) fix carried forward
-/// to U20.1: [`SubtreeBorrows`] (the U20.1 replacement for `TreePtr`)
+/// to U20.1: [`SubtreeArena`] (the U20.1 replacement for `TreePtr`)
 /// carries the owning thread's `ThreadId` and panics with a
 /// documented diagnostic on cross-thread access via
-/// [`SubtreeBorrows::check_thread`].
+/// [`SubtreeArena::check_thread`].
 ///
 /// This test verifies the legitimate worker-thread case: a pipeline
-/// run inside `std::thread::spawn` succeeds because `SubtreeBorrows`
+/// run inside `std::thread::spawn` succeeds because `SubtreeArena`
 /// is constructed AND queried on the SAME (worker) thread per call.
-/// The pathological cross-thread case (`SubtreeBorrows` constructed
+/// The pathological cross-thread case (`SubtreeArena` constructed
 /// on thread A, queried on thread B via a smuggled closure capture)
 /// cannot be exercised from integration tests because the type is
 /// private to `pipeline/owner.rs` — the guard is a defensive layer
@@ -581,7 +581,7 @@ fn u20_subtree_borrows_worker_thread_pipeline_succeeds() {
     let constraints = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
 
     // Move pipeline into a worker thread, run layout there.
-    // SubtreeBorrows is constructed inside `layout_dirty_root` using
+    // SubtreeArena is constructed inside `layout_dirty_root` using
     // the worker thread's id; subsequent `check_thread()` calls inside
     // `layout_subtree_borrowed` are on the same worker thread; guard
     // does NOT fire.
@@ -590,7 +590,7 @@ fn u20_subtree_borrows_worker_thread_pipeline_succeeds() {
     let result = join.join().expect("worker thread must not panic");
     assert!(
         result.is_ok(),
-        "single-threaded worker pipeline must succeed (SubtreeBorrows \
+        "single-threaded worker pipeline must succeed (SubtreeArena \
          constructed AND queried on the same worker thread)",
     );
 }

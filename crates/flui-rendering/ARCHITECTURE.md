@@ -121,7 +121,7 @@ Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **
 | Mouse tracker maps (`src/input/mouse_tracker.rs:294-303`) | `RwLock<HashMap<…>>` | Tracker state | Off layout/paint hot path. |
 | Render view error builder (`src/view/error.rs`, via `flui-view` integration) | `static RwLock<Option<...>>` | Process-wide singleton | Off any hot path. |
 
-`NodePtr` in `src/pipeline/owner.rs` carries `unsafe impl Send` and `unsafe impl Sync` — the raw pointer is an address for the disjoint-subtree-borrow substrate ([`SubtreeBorrows`]); cross-thread deref is rejected by `SubtreeBorrows::check_thread` before any access. Re-entrancy primitives `RenderTree::get_two_mut` (`src/storage/tree.rs:337`) and `get_parent_and_children_mut` (`src/storage/tree.rs:365`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
+`NodePtr` in `src/pipeline/owner/subtree_arena.rs` carries `unsafe impl Send` and `unsafe impl Sync` — the raw pointer is an address for the disjoint-subtree-borrow substrate ([`SubtreeArena`]); cross-thread deref is rejected by `SubtreeArena::check_thread` before any access. Re-entrancy primitives `RenderTree::get_two_mut` (`src/storage/tree.rs:337`) and `get_parent_and_children_mut` (`src/storage/tree.rs:365`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
 
 ---
 
@@ -149,7 +149,7 @@ Tree-aware disjoint-borrow primitives. `get_two_mut(a, b)` returns `(&mut Render
 
 **Files:** [`src/pipeline/owner.rs:2406`](src/pipeline/owner.rs) (`layout_dirty_root`), [`src/pipeline/owner.rs:2831`](src/pipeline/owner.rs) (`layout_subtree_borrowed`).
 
-`layout_dirty_root` is the dispatcher: it obtains disjoint `&mut`s via `SubtreeBorrows`, constructs a typed `BoxLayoutCtx` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
+`layout_dirty_root` is the dispatcher: it obtains disjoint `&mut`s via `SubtreeArena`, constructs a typed `BoxLayoutCtx` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
 
 ### `layout_leaf_only` — SHIPPED
 
