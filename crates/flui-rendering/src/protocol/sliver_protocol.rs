@@ -21,7 +21,7 @@ use crate::{
         capabilities::{
             ChildLayout, HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi,
         },
-        protocol::{Protocol, ProtocolCompatible, sealed},
+        protocol::{Protocol, sealed},
     },
     storage::IntrinsicDimension,
     traits::RenderObject,
@@ -148,26 +148,6 @@ impl Protocol for SliverProtocol {
         // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
         let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
         f(erased)
-    }
-}
-
-// Self-compatibility
-impl ProtocolCompatible<SliverProtocol> for SliverProtocol {
-    fn is_compatible() -> bool {
-        true
-    }
-}
-
-// Box and Sliver can be adapted together
-impl ProtocolCompatible<BoxProtocol> for SliverProtocol {
-    fn is_compatible() -> bool {
-        true
-    }
-}
-
-impl ProtocolCompatible<SliverProtocol> for BoxProtocol {
-    fn is_compatible() -> bool {
-        true
     }
 }
 
@@ -1535,19 +1515,6 @@ mod tests {
         let negative_cross: SliverHitTestCtx<'_, Leaf, SliverParentData> =
             SliverHitTestCtx::new(MainAxisPosition::new(10.0, -0.1));
         assert!(!negative_cross.is_hit(bounds));
-    }
-
-    #[test]
-    fn test_protocol_compatibility() {
-        use crate::protocol::protocol::ProtocolCompatible;
-
-        // Test self-compatibility
-        assert!(<SliverProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
-        assert!(<BoxProtocol as ProtocolCompatible<BoxProtocol>>::is_compatible());
-
-        // Box and Sliver protocols are compatible via adapters
-        assert!(<SliverProtocol as ProtocolCompatible<BoxProtocol>>::is_compatible());
-        assert!(<BoxProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
     }
 
     #[test]

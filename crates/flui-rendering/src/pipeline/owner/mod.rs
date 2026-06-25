@@ -313,6 +313,7 @@ impl PipelineOwner<Idle> {
     /// Consumes `self`; once transitioned out of `Idle`, the legacy
     /// idle-only API (constructors, `run_frame`) is no longer reachable
     /// until you return through [`finish`](PipelineOwner::<Semantics>::finish).
+    #[must_use]
     pub fn into_layout(self) -> PipelineOwner<Layout> {
         rebind_phase(self)
     }
@@ -339,6 +340,7 @@ impl PipelineOwner<Idle> {
     /// [`Idle`] (no in-flight layer tree), and the second element of the
     /// tuple is `Err(...)`. The owner is **always** usable for a
     /// subsequent frame on the success and error paths alike.
+    #[must_use = "dropping the returned PipelineOwner<Idle> discards the pipeline handle; thread it back into the next frame"]
     pub fn run_frame(
         mut self,
     ) -> (
@@ -1581,11 +1583,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
 impl PipelineOwner<Layout> {
     /// Transitions a layout-phase pipeline into the [`Compositing`] phase.
+    #[must_use]
     pub fn into_compositing(self) -> PipelineOwner<Compositing> {
         rebind_phase(self)
     }
 
     /// Returns to [`Idle`] from the layout phase (e.g. on error abort).
+    #[must_use]
     pub fn into_idle(self) -> PipelineOwner<Idle> {
         rebind_phase(self)
     }
@@ -2205,11 +2209,13 @@ impl PipelineOwner<Layout> {
 
 impl PipelineOwner<Compositing> {
     /// Transitions a compositing-phase pipeline into the [`PaintPhase`] phase.
+    #[must_use]
     pub fn into_paint(self) -> PipelineOwner<PaintPhase> {
         rebind_phase(self)
     }
 
     /// Returns to [`Idle`] from the compositing phase.
+    #[must_use]
     pub fn into_idle(self) -> PipelineOwner<Idle> {
         rebind_phase(self)
     }
@@ -2409,11 +2415,13 @@ struct CompositingWalkActions {
 
 impl PipelineOwner<PaintPhase> {
     /// Transitions a paint-phase pipeline into the [`Semantics`] phase.
+    #[must_use]
     pub fn into_semantics(self) -> PipelineOwner<Semantics> {
         rebind_phase(self)
     }
 
     /// Returns to [`Idle`] from the paint phase.
+    #[must_use]
     pub fn into_idle(self) -> PipelineOwner<Idle> {
         rebind_phase(self)
     }
@@ -2850,6 +2858,7 @@ fn clip_layer(clip: FragmentClip, origin: Offset) -> Layer {
 
 impl PipelineOwner<Semantics> {
     /// Completes the frame and returns to [`Idle`].
+    #[must_use]
     pub fn finish(self) -> PipelineOwner<Idle> {
         rebind_phase(self)
     }

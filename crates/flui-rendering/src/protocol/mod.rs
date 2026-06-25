@@ -126,11 +126,8 @@ pub use capabilities::{
 // ============================================================================
 pub use into_render_object::IntoRenderObject;
 pub use protocol::{
-    // Marker traits
-    BidirectionalProtocol,
     // Protocol trait
     Protocol,
-    ProtocolCompatible,
     // Usage by parent
     UsageByParent,
 };
@@ -176,8 +173,6 @@ pub use crate::traits::RenderObject;
 /// ```
 pub mod prelude {
     pub use super::{
-        // Marker traits
-        BidirectionalProtocol,
         // Concrete capabilities
         BoxHitTest,
         BoxLayout,
@@ -190,7 +185,6 @@ pub mod prelude {
         LayoutContextApi,
         // Protocol trait
         Protocol,
-        ProtocolCompatible,
         // Type aliases
         ProtocolConstraints,
         ProtocolGeometry,
@@ -200,28 +194,6 @@ pub mod prelude {
         SliverLayout,
         SliverProtocol,
     };
-}
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-/// Check if two protocols are compatible at runtime.
-pub fn are_protocols_compatible<P1, P2>() -> bool
-where
-    P1: Protocol + ProtocolCompatible<P2>,
-    P2: Protocol,
-{
-    P1::is_compatible()
-}
-
-/// Assert protocol compatibility at compile time.
-pub fn assert_compatible<From, To>()
-where
-    From: Protocol + ProtocolCompatible<To>,
-    To: Protocol,
-{
-    // Compile-time assertion via trait bounds
 }
 
 // ============================================================================
@@ -236,21 +208,5 @@ mod tests {
     fn test_protocol_names() {
         assert_eq!(BoxProtocol::name(), "box");
         assert_eq!(SliverProtocol::name(), "sliver");
-    }
-
-    #[test]
-    fn test_protocol_compatibility() {
-        assert!(are_protocols_compatible::<BoxProtocol, BoxProtocol>());
-        assert!(are_protocols_compatible::<SliverProtocol, SliverProtocol>());
-        assert!(are_protocols_compatible::<BoxProtocol, SliverProtocol>());
-        assert!(are_protocols_compatible::<SliverProtocol, BoxProtocol>());
-    }
-
-    #[test]
-    fn test_compile_time_compatibility() {
-        assert_compatible::<BoxProtocol, BoxProtocol>();
-        assert_compatible::<SliverProtocol, SliverProtocol>();
-        assert_compatible::<BoxProtocol, SliverProtocol>();
-        assert_compatible::<SliverProtocol, BoxProtocol>();
     }
 }

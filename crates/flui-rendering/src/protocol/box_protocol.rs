@@ -17,7 +17,7 @@ use crate::{
     parent_data::{BoxParentData, ParentData},
     protocol::{
         capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
-        protocol::{BidirectionalProtocol, Protocol, ProtocolCompatible, sealed},
+        protocol::{Protocol, sealed},
     },
 };
 
@@ -197,15 +197,6 @@ impl Protocol for BoxProtocol {
         // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
         let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
         f(erased)
-    }
-}
-
-impl BidirectionalProtocol for BoxProtocol {}
-
-// Self-compatibility
-impl ProtocolCompatible<BoxProtocol> for BoxProtocol {
-    fn is_compatible() -> bool {
-        true
     }
 }
 
