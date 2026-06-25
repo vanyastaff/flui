@@ -19,7 +19,7 @@ use crate::{element::Notification, owner::BuildOwner, tree::ElementTree};
 /// `ElementBuildContext` provides the bridge between Elements and the
 /// BuildContext trait, giving Views access to:
 /// - Element identity and tree position
-/// - InheritedView lookups (O(1) via BuildOwner registry)
+/// - InheritedView lookups (O(1) via each node's `inherited` map)
 /// - Ancestor traversal
 /// - Rebuild scheduling
 ///
@@ -146,33 +146,21 @@ impl ElementBuildContext {
         &self.owner
     }
 
-    /// Walk ancestors of `self.element_id` looking for an element whose
-    /// `view_type_id()` matches `type_id`. Returns the first matching
-    /// ancestor's `ElementId`.
+    /// Nearest in-scope `InheritedElement` of view type `type_id`, in **O(1)**.
     ///
-    /// Shared helper for U9 (`depend_on_inherited`) and U10
-    /// (`get_inherited`). Both perform the same ancestor scan; only the
-    /// dependent-recording side differs. Extracting the helper now also
-    /// gives U11/U12 an obvious reuse target.
+    /// Shared helper for U9 (`depend_on_inherited`) and U10 (`get_inherited`);
+    /// only the dependent-recording side differs.
     ///
-    /// Flutter parity: `framework.dart:5028-5060` `getElementForInheritedWidgetOfExactType` —
-    /// Flutter uses a per-element `_inheritedElements: PersistentHashMap`,
-    /// flui walks the ancestor chain directly because the per-element
-    /// hash-map isn't necessary at our scale and avoids the
-    /// reconciliation-time map-clone cost.
-    fn walk_ancestors_for_inherited(&self, type_id: std::any::TypeId) -> Option<ElementId> {
-        let tree = self.tree.read();
-
-        let mut current_id = self.element_id;
-        loop {
-            let node = tree.get(current_id)?;
-            let parent_id = node.parent()?;
-            let parent_node = tree.get(parent_id)?;
-            if parent_node.element().view_type_id() == type_id {
-                return Some(parent_id);
-            }
-            current_id = parent_id;
-        }
+    /// Reads the resolved inherited scope
+    /// ([`ElementNode::inherited`](crate::tree::ElementNode)) instead of
+    /// walking the ancestor chain — Flutter parity for `_inheritedElements[T]`
+    /// (`framework.dart:5094`, the O(1) per-element map). flui builds that map
+    /// at mount as an `Arc<HashMap>` shared by refcount down non-provider runs.
+    fn find_inherited_provider(&self, type_id: std::any::TypeId) -> Option<ElementId> {
+        self.tree
+            .read()
+            .get(self.element_id)?
+            .inherited_provider(type_id)
     }
 
     /// Walk strict-ancestors (parent and up) of `self.element_id`,
@@ -237,8 +225,8 @@ impl ElementBuildContext {
     /// structures.
     ///
     /// **Why this is sound.** The dummy tree is empty, so every
-    /// production `BuildContext` accessor that walks the tree
-    /// (`walk_ancestors_for_inherited`, `find_ancestor_element`, …)
+    /// production `BuildContext` accessor that consults the tree
+    /// (`find_inherited_provider`, `find_ancestor_element`, …)
     /// returns `None` / `false` after the first `tree.get(id)` lookup —
     /// the same return shape as the previous per-build dummy. The dummy
     /// is never written to during build because the early-`None` exit
@@ -311,7 +299,7 @@ impl BuildContext for ElementBuildContext {
         // `dependOnInheritedWidgetOfExactType` -> the matched
         // `InheritedElement` then has `updateDependencies(self, null)`
         // called on it (`framework.dart:5034`).
-        let Some(ancestor_id) = self.walk_ancestors_for_inherited(type_id) else {
+        let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
 
@@ -365,7 +353,7 @@ impl BuildContext for ElementBuildContext {
         // Same ancestor walk as depend_on_inherited, but does NOT
         // record a dependency. Reserved for U10 — for now we share the
         // walk + downcast logic and skip the `record_dependent` call.
-        let Some(ancestor_id) = self.walk_ancestors_for_inherited(type_id) else {
+        let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
 
@@ -725,25 +713,17 @@ impl<'b> BuildCtx<'b> {
         }
     }
 
-    /// Nearest strict-ancestor `ElementId` whose view type is `type_id` AND
-    /// which is an `InheritedElement`.
+    /// Nearest in-scope `InheritedElement` whose view type is `type_id`, in
+    /// **O(1)**.
     ///
-    /// Complexity: O(depth) average and worst case (bounded by tree depth;
-    /// the common `Theme`/`MediaQuery` lookup resolves within a few hops).
+    /// Reads the building element's own resolved inherited scope
+    /// ([`ElementNode::inherited`](crate::tree::ElementNode)) — a node field
+    /// that survives the `build_scope` element hole — rather than walking the
+    /// ancestor chain. For a non-provider that scope is its parent's set, so
+    /// the result is the nearest strict-ancestor provider; matches Flutter's
+    /// `_inheritedElements[T]` lookup.
     fn find_inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
-        let mut current = self.element_id;
-        loop {
-            let parent_id = self.tree.get(current)?.parent()?;
-            if self
-                .tree
-                .get(parent_id)?
-                .element_opt()
-                .is_some_and(|e| e.view_type_id() == type_id && e.as_inherited().is_some())
-            {
-                return Some(parent_id);
-            }
-            current = parent_id;
-        }
+        self.tree.get(self.element_id)?.inherited_provider(type_id)
     }
 }
 
