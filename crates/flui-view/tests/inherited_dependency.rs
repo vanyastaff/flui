@@ -1231,6 +1231,62 @@ mod live_inherited_during_build {
             "both consumers are recorded as distinct dependents of the provider",
         );
     }
+
+    /// A consumer whose `depend_on` callback panics. `build_or_recover`
+    /// catches it and substitutes an `ErrorView`, so `build_scope` does not
+    /// panic — but the dependency must already be recorded.
+    #[derive(Clone)]
+    struct PanicInDependCallback;
+
+    impl StatelessView for PanicInDependCallback {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            ctx.depend_on::<ThemeRoot, u32>(|_provider| {
+                panic!("induced panic inside the depend_on callback")
+            });
+            LeafView.boxed()
+        }
+    }
+
+    impl View for PanicInDependCallback {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(StatelessElement::new(self, StatelessBehavior))
+        }
+    }
+
+    #[test]
+    fn panic_in_depend_callback_still_records_dependent_for_recovery() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let root = ThemeRoot {
+            theme: MyTheme { color: 0x00C0_FFEE },
+            child: Middle {
+                observed: Arc::new(Mutex::new(None)),
+            },
+        };
+        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+        let consumer_id = tree.insert(
+            &PanicInDependCallback,
+            root_id,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(consumer_id, 1);
+
+        // The build panics inside the depend_on callback, but `build_or_recover`
+        // catches it and substitutes an ErrorView — build_scope must not panic.
+        owner.build_scope(&mut tree);
+
+        // Despite the panic, the consumer must be registered as a dependent so
+        // a later inherited change reschedules it (recovering it from the
+        // ErrorView). Recording the dependent only AFTER the callback would
+        // drop the registration on this panic and strand the element.
+        assert_eq!(
+            provider_dependent_count(&tree, root_id),
+            1,
+            "a depend_on before a panicking callback must still register the dependent",
+        );
+    }
 }
 
 // ============================================================================

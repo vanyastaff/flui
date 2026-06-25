@@ -780,14 +780,23 @@ impl BuildContext for BuildCtx<'_> {
         else {
             return false;
         };
-        callback(accessor.view_as_any());
-        // Defer the dependent-record write to `build_scope` (tree is
-        // read-only here); see [`DependentRecord`].
+        // Buffer the dependent BEFORE invoking the user callback. The tree is
+        // read-only here, so the write itself is deferred to the `build_scope`
+        // drain (see [`DependentRecord`]) — but it is *recorded* first, matching
+        // `ElementBuildContext::depend_on_inherited` and Flutter
+        // (`dependOnInheritedElement` calls `updateDependencies` before
+        // returning the widget). This matters on the error path: if the user
+        // `build()` panics after this `depend_on` (caught by `build_or_recover`,
+        // which substitutes an `ErrorView`), the element stays registered as a
+        // dependent, so a later inherited change reschedules it and it recovers.
+        // Recording only after the callback would drop the registration on that
+        // panic and strand the element on the `ErrorView`.
         self.dep_sink.lock().push(DependentRecord {
             provider: provider_id,
             dependent: self.element_id,
             depth: self.depth,
         });
+        callback(accessor.view_as_any());
         true
     }
 
@@ -909,6 +918,16 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn visit_child_elements(&self, visitor: &mut dyn FnMut(ElementId)) {
+        // Forbidden during build: a `BuildCtx` is ALWAYS mid-build, and the
+        // node's `child_ids` here are the PRE-reconcile list — for an update
+        // build they may be removed or reordered moments later. Mirrors the
+        // guard on `ElementBuildContext::visit_child_elements` and Flutter's
+        // build-target check (`framework.dart` `_debugCheckOwnerBuildTargetExists`).
+        debug_assert!(
+            !self.is_building(),
+            "visit_child_elements cannot be called during build (a BuildCtx is always \
+             mid-build; its child_ids are the stale pre-reconcile list)"
+        );
         if let Some(node) = self.tree.get(self.element_id) {
             for &child_id in node.child_ids() {
                 visitor(child_id);
@@ -1160,5 +1179,20 @@ mod tests {
     fn test_context_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<ElementBuildContext>();
+    }
+
+    /// `BuildCtx` is the context handed to a live `build()`, so it is always
+    /// mid-build; `visit_child_elements` is forbidden during build (its
+    /// `child_ids` are the stale pre-reconcile list). The debug guard must
+    /// fire — mirroring `ElementBuildContext::visit_child_elements`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "visit_child_elements cannot be called during build")]
+    fn build_ctx_forbids_visit_child_elements_during_build() {
+        let tree = ElementTree::new();
+        let dep_sink = parking_lot::Mutex::new(Vec::new());
+        // The guard fires before any tree access, so a sentinel id is fine.
+        let ctx = BuildCtx::new(ElementId::new(1), 0, &tree, &dep_sink);
+        ctx.visit_child_elements(&mut |_| {});
     }
 }
