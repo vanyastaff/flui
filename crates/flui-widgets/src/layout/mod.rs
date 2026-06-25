@@ -3,6 +3,7 @@
 //! render box.
 
 mod align;
+mod aspect_ratio;
 mod center;
 mod constrained_box;
 mod limited_box;
@@ -11,6 +12,7 @@ mod sized_box;
 mod transform;
 
 pub use align::Align;
+pub use aspect_ratio::AspectRatio;
 pub use center::Center;
 pub use constrained_box::ConstrainedBox;
 pub use limited_box::LimitedBox;

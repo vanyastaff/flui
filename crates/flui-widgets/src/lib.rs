@@ -79,6 +79,7 @@ mod container;
 pub mod flex;
 pub mod layout;
 pub mod paint;
+pub mod stack;
 pub mod text;
 
 // ============================================================================
@@ -88,13 +89,17 @@ pub mod text;
 
 pub use container::Container;
 pub use flex::{Column, Flex, Row};
-pub use layout::{Align, Center, ConstrainedBox, LimitedBox, Padding, SizedBox, Transform};
+pub use layout::{
+    Align, AspectRatio, Center, ConstrainedBox, LimitedBox, Padding, SizedBox, Transform,
+};
 pub use paint::{ColoredBox, DecoratedBox, Opacity};
+pub use stack::Stack;
 pub use text::Text;
 
-// Flex configuration enums consumed by `Row`/`Column`/`Flex` (re-exported from
-// the `flui-objects` catalog, whose canonical home is `flui-types::layout`).
-pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+// Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
+// (re-exported from the `flui-objects` catalog, whose canonical home is
+// `flui-types::layout`).
+pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
 
 // ============================================================================
 // Prelude
@@ -110,13 +115,13 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        Align, Center, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Flex,
-        LimitedBox, Opacity, Padding, Row, SizedBox, Text, Transform,
+        Align, AspectRatio, Center, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox,
+        Flex, LimitedBox, Opacity, Padding, Row, SizedBox, Stack, Text, Transform,
     };
 
     // Common configuration value types, so an app author needs only this import.
     pub use flui_geometry::{EdgeInsets, Matrix4};
-    pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+    pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_types::{Alignment, Color};
 }
