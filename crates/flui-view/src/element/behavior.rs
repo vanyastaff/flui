@@ -13,13 +13,80 @@ use flui_rendering::{
 
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
-    context::ElementBuildContext,
+    context::{BuildContext, BuildCtx, ElementBuildContext},
     element::RenderSlot,
     view::{
         AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
         View, ViewState,
     },
 };
+
+/// The `BuildContext` a behavior hands to user `build()` / lifecycle code.
+///
+/// During a [`BuildOwner::build_scope`](crate::BuildOwner) drain the owner
+/// carries a [`BuildHandle`](crate::ElementOwner) — a borrowed live view of
+/// the real tree — so the variant resolves to [`BuildCtx`] and ancestor
+/// walks / `depend_on` hit real nodes (PR-K). Outside a drain (mount-time
+/// first build, unit tests that call a behavior directly) no handle is
+/// present and it falls back to the read-only minimal context, which returns
+/// `None`/`false` from every tree walk exactly as before.
+///
+/// Holding the concrete value in a local lets the caller hand out a
+/// `&dyn BuildContext` whose borrow outlives the user `build()` closure.
+enum BuildCtxChoice<'a> {
+    /// Live context over the borrowed real tree (inside `build_scope`).
+    Live(BuildCtx<'a>),
+    /// Read-only minimal fallback (outside `build_scope`).
+    Minimal(ElementBuildContext),
+}
+
+impl BuildCtxChoice<'_> {
+    /// Borrow the chosen context as the object-safe trait.
+    fn as_ctx(&self) -> &dyn BuildContext {
+        match self {
+            Self::Live(ctx) => ctx,
+            Self::Minimal(ctx) => ctx,
+        }
+    }
+}
+
+/// Pick the build context for `core`'s `build()` from `owner`.
+///
+/// `BuildHandle` is `Copy`, so reading `owner.build_view` lifts the borrowed
+/// tree/sink references (lifetime `'a`, tied to the data — not to this `&`
+/// borrow of `owner`) out cleanly; the returned `BuildCtxChoice<'a>` does not
+/// keep `owner` borrowed, so the caller can still pass `owner` on mutably.
+/// Falls back to the minimal context when there is no handle (out of a drain)
+/// or the element is not slab-stamped (`self_id == None`).
+fn make_build_ctx<'a, V, A>(
+    core: &ElementCore<V, A>,
+    owner: &crate::ElementOwner<'a>,
+) -> BuildCtxChoice<'a>
+where
+    V: Clone + Send + Sync + 'static,
+    A: ElementArity,
+{
+    // A build-time handle without a stamped `self_id` is a framework
+    // invariant violation, not an out-of-drain call: every slab-resident
+    // element is `set_self_id`-stamped at insert, and only slab ids reach
+    // `build_scope`. Surface it loudly instead of silently degrading to the
+    // inert context (which would resurrect the very dead-inherited-lookup
+    // divergence this wiring removes).
+    debug_assert!(
+        owner.build_view.is_none() || core.self_id().is_some(),
+        "ElementOwner::build_view set during build_scope but the element has no \
+         self_id — a slab-resident element must be set_self_id-stamped at insert"
+    );
+    match (owner.build_view, core.self_id()) {
+        (Some(handle), Some(element_id)) => BuildCtxChoice::Live(BuildCtx::new(
+            element_id,
+            core.depth(),
+            handle.tree,
+            handle.dep_sink,
+        )),
+        _ => BuildCtxChoice::Minimal(ElementBuildContext::new_minimal(core.depth())),
+    }
+}
 
 // ============================================================================
 // ElementBehavior Trait
@@ -147,7 +214,7 @@ where
     ///
     /// Default returns `None`; only `StatefulBehavior<V>` overrides this
     /// to hand out `&self.state as &dyn Any`. Used by
-    /// [`BuildContext::find_ancestor_state`](crate::BuildContext::find_ancestor_state) (plan §U11, R7) to surface
+    /// [`BuildContext::find_ancestor_state`] (plan §U11, R7) to surface
     /// the typed `ViewState` to the dispatch boundary without naming
     /// `V` at the object-safe trait surface.
     ///
@@ -165,7 +232,7 @@ where
     /// Default returns `None`; only `RenderBehavior<V>` overrides this
     /// (`AnimatedBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
     /// so it keeps the default). Used by
-    /// [`BuildContext::find_render_object`](crate::BuildContext::find_render_object) (plan §U12, R9) to surface
+    /// [`BuildContext::find_render_object`] (plan §U12, R9) to surface
     /// the nearest ancestor's `RenderId` to the dispatch boundary.
     ///
     /// Flutter parity: `framework.dart:5160`
@@ -212,8 +279,18 @@ where
     /// suffices. [`StatefulBehavior`] overrides this to forward to
     /// `ViewState::did_change_dependencies`; [`AnimatedBehavior`]
     /// delegates to the composed `StatefulBehavior`. Plan §U14.
+    ///
+    /// The split-borrow `owner` handle is threaded through so the override
+    /// can resolve the same live build-time context (`BuildHandle`) the
+    /// rebuild uses, letting a user `did_change_dependencies` re-read the
+    /// changed inherited value against the real tree (PR-K).
     #[allow(unused_variables)]
-    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {}
+    fn did_change_dependencies(
+        &mut self,
+        core: &ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+    }
 }
 
 // ============================================================================
@@ -256,7 +333,13 @@ where
         if !super::behavior_commons::should_build_with_trace(core, "StatelessBehavior") {
             return Vec::new();
         }
-        let ctx = ElementBuildContext::new_minimal(core.depth());
+        // Live tree-backed context inside a `build_scope` drain (PR-K),
+        // read-only minimal fallback otherwise. Held in a local so the
+        // `&dyn BuildContext` outlives the `catch_unwind` closure below; it
+        // borrows the tree/sink, not `owner`, so the mutable `owner` reborrow
+        // for `build_or_recover` is still free.
+        let ctx_choice = make_build_ctx(core, owner);
+        let ctx = ctx_choice.as_ctx();
         // The user `build()` is wrapped in `catch_unwind`: a panicking
         // build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
@@ -266,14 +349,14 @@ where
         let view = core.view().clone();
         let child_view =
             super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
-                // `view.build(&ctx)` returns `impl IntoView` that may
+                // `view.build(ctx)` returns `impl IntoView` that may
                 // capture closure-local borrows of `view`/`ctx` (Rust 2024
                 // RPITIT default). We consume the opaque value through
                 // `IntoView::into_view()` inside the closure body — the
                 // resulting `<R as IntoView>::View` is `'static`, and
                 // boxing it produces an owned `Box<dyn View>` with no
                 // escaping borrows for `catch_unwind` to return.
-                let opaque = view.build(&ctx);
+                let opaque = view.build(ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
             });
         super::behavior_commons::single_child_views(core, child_view, "StatelessBehavior")
@@ -365,7 +448,7 @@ where
     }
 
     /// Expose the owned `ViewState` (`V::State`) as `&dyn Any` so
-    /// [`BuildContext::find_ancestor_state`](crate::BuildContext::find_ancestor_state) / `find_root_ancestor_state`
+    /// [`BuildContext::find_ancestor_state`] / `find_root_ancestor_state`
     /// (plan §U11, R7/R8) can downcast at the dispatch boundary.
     ///
     /// `V::State: 'static` is guaranteed by the [`ViewState`] trait
@@ -380,13 +463,19 @@ where
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> Vec<Box<dyn View>> {
-        let ctx = ElementBuildContext::new_minimal(core.depth());
+        // Live tree-backed context inside a `build_scope` drain (PR-K), else
+        // the read-only minimal fallback. One context serves both the
+        // first-build `init_state` and the `build` below; it borrows the
+        // tree/sink, not `owner`/`self`, so the later mutable reborrows stay
+        // free.
+        let ctx_choice = make_build_ctx(core, owner);
+        let ctx = ctx_choice.as_ctx();
 
         // Initialize state on first build — must run before the
         // `should_build` guard so a freshly-mounted `StatefulView` calls
         // `init_state` exactly once even if the element is clean.
         if !self.initialized {
-            self.state.init_state(&ctx);
+            self.state.init_state(ctx);
             self.initialized = true;
         }
 
@@ -407,7 +496,7 @@ where
                 // RPITIT-capture rationale — consume the opaque
                 // `impl IntoView` inside the closure body to box an owned
                 // `Box<dyn View>` for the `catch_unwind` return.
-                let opaque = state.build(&view, &ctx);
+                let opaque = state.build(&view, ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
             });
         super::behavior_commons::single_child_views(core, child_view, "StatefulBehavior")
@@ -449,20 +538,19 @@ where
     /// inactive lifecycles are skipped by the build-scope check itself,
     /// so we get the defensive-shape Flutter calls for free without a
     /// second guard here.
-    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {
-        // The dummy `ElementBuildContext::new_minimal` is read-only:
-        // its tree is empty, so `find_ancestor_*`, `depend_on_inherited`,
-        // and friends return `None`/`false`. That matches Flutter — a
-        // user `did_change_dependencies` body that calls `depend_on`
-        // would re-walk the ancestor chain via this context. Cycle 5
-        // ships the cheap separable part of V-13 only (the cached
-        // dummy); the real ancestor-context threading is the deferred
-        // element-ownership unification (Cycle 6). For now, user code
-        // that needs the new inherited value during
-        // `did_change_dependencies` should read it from the cached
-        // state field captured by the previous build.
-        let ctx = ElementBuildContext::new_minimal(core.depth());
-        self.state.did_change_dependencies(&ctx);
+    fn did_change_dependencies(
+        &mut self,
+        core: &ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        // Live tree-backed context (PR-K) when fired from a `build_scope`
+        // drain — so a user `did_change_dependencies` that re-reads the
+        // changed inherited value via `depend_on` resolves against the real
+        // ancestor chain, matching Flutter (`framework.dart:5977-5982` runs
+        // the hook with the element's live `BuildContext`). Outside a drain
+        // (no handle) this degrades to the read-only minimal context.
+        let ctx_choice = make_build_ctx(core, owner);
+        self.state.did_change_dependencies(ctx_choice.as_ctx());
     }
 }
 
@@ -545,7 +633,7 @@ where
     }
 
     /// Expose the behavior's `RenderId` (set by `on_mount` once a
-    /// `PipelineOwner` is in scope) so [`BuildContext::find_render_object`](crate::BuildContext::find_render_object)
+    /// `PipelineOwner` is in scope) so [`BuildContext::find_render_object`]
     /// (plan §U12, R9) can surface it to the dispatch boundary.
     ///
     /// Returns `None` until `on_mount` has run with a PipelineOwner —
@@ -1026,10 +1114,15 @@ where
     /// Flutter parity (animated widgets in Flutter inherit the
     /// `StatefulElement._didChangeDependencies` flag-and-fire path).
     /// Plan §U14.
-    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {
+    fn did_change_dependencies(
+        &mut self,
+        core: &ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
         <StatefulBehavior<V> as ElementBehavior<V, A>>::did_change_dependencies(
             &mut self.stateful,
             core,
+            owner,
         );
     }
 }

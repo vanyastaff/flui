@@ -18,7 +18,17 @@ use crate::view::{ElementBase, View};
 /// Contains the Element plus metadata for tree traversal.
 pub struct ElementNode {
     /// The actual Element.
-    pub(crate) element: Box<dyn ElementBase>,
+    ///
+    /// Normally `Some`. A `None` hole exists ONLY transiently inside
+    /// [`BuildOwner::build_scope`](crate::BuildOwner), between
+    /// [`ElementTree::take_element`] and [`ElementTree::put_element`], while
+    /// the element runs its own `build()` against a live read view of the
+    /// rest of the tree. By-value extraction is what lets the element be
+    /// `&mut`-borrowed AND hand the slab a `&` borrow at the same time
+    /// without aliasing. Outside that window every accessor assumes `Some`;
+    /// during it, ancestor walks read [`Self::element_opt`] (which returns
+    /// `None` for the hole rather than panicking).
+    pub(crate) element: Option<Box<dyn ElementBase>>,
     /// Parent Element ID (None for root).
     pub(crate) parent: Option<ElementId>,
     /// Depth in the tree (root = 0).
@@ -83,7 +93,7 @@ impl ElementNode {
     pub fn new(element: Box<dyn ElementBase>, parent: Option<ElementId>, slot: usize) -> Self {
         let depth = if parent.is_some() { 1 } else { 0 }; // Will be updated by tree
         Self {
-            element,
+            element: Some(element),
             parent,
             depth,
             slot,
@@ -93,14 +103,42 @@ impl ElementNode {
         }
     }
 
+    /// Message for the `expect` in the element accessors — the element is
+    /// absent only inside the `build_scope` take/put window.
+    const ELEMENT_PRESENT: &'static str =
+        "ElementNode::element accessed while extracted by build_scope (take/put window)";
+
     /// Get the Element.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element is currently extracted — the transient hole
+    /// `build_scope` opens between `take_element` and `put_element` while it
+    /// builds the node by value. Any lookup that can run *during* a build
+    /// (every `BuildCtx` ancestor walk) must go through [`Self::element_opt`]
+    /// instead, so reaching the in-flight node is a clean miss, not a panic.
     pub fn element(&self) -> &dyn ElementBase {
-        &*self.element
+        &**self.element.as_ref().expect(Self::ELEMENT_PRESENT)
     }
 
     /// Get the Element mutably.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the same extracted-element hole as [`Self::element`] — see
+    /// its `# Panics` note.
     pub fn element_mut(&mut self) -> &mut dyn ElementBase {
-        &mut *self.element
+        &mut **self.element.as_mut().expect(Self::ELEMENT_PRESENT)
+    }
+
+    /// Get the Element, or `None` if it is currently extracted (the
+    /// transient `build_scope` hole — see [`Self::element`]).
+    ///
+    /// Build-time ancestor walks use this instead of [`Self::element`] so a
+    /// lookup that reaches the in-flight node returns a clean miss in every
+    /// build profile rather than panicking.
+    pub fn element_opt(&self) -> Option<&dyn ElementBase> {
+        self.element.as_deref()
     }
 
     /// Get the parent ElementId.
@@ -182,7 +220,7 @@ impl std::fmt::Debug for ElementNode {
             .field("parent", &self.parent)
             .field("depth", &self.depth)
             .field("slot", &self.slot)
-            .field("lifecycle", &self.element.lifecycle())
+            .field("lifecycle", &self.element.as_ref().map(|e| e.lifecycle()))
             .finish()
     }
 }
@@ -407,10 +445,10 @@ impl ElementTree {
         // Plan §U15: stamp the element with its own ElementId BEFORE
         // `mount` so the Variable-arity reconciler can read it back
         // when emitting ReconcileEvent's `parent` field.
-        self.nodes[slab_index].element.set_self_id(id);
+        self.nodes[slab_index].element_mut().set_self_id(id);
 
         // Mount the element (now it has PipelineOwner set)
-        self.nodes[slab_index].element.mount(None, 0, owner);
+        self.nodes[slab_index].element_mut().mount(None, 0, owner);
 
         // R13: register GlobalKey on mount. The root element's view is
         // queried here because the dispatch boundary at `Element::mount`
@@ -500,12 +538,12 @@ impl ElementTree {
         let id = self.alloc_id(slab_index);
 
         // Plan §U15: same self-id stamping as mount_root.
-        self.nodes[slab_index].element.set_self_id(id);
+        self.nodes[slab_index].element_mut().set_self_id(id);
 
         // Mount the element (PipelineOwner + parent RenderId already set,
         // so `RenderBehavior::on_mount` can create its RenderObject).
         self.nodes[slab_index]
-            .element
+            .element_mut()
             .mount(Some(parent), slot, owner);
 
         // R13: register the GlobalKey hash → id mapping.
@@ -554,6 +592,40 @@ impl ElementTree {
         self.resolve_index(id).is_some()
     }
 
+    /// Extract the element out of node `id`'s slot, leaving a transient
+    /// `None` hole (see [`ElementNode::element`]).
+    ///
+    /// Companion to [`Self::put_element`]:
+    /// [`BuildOwner::build_scope`](crate::BuildOwner) takes the element out
+    /// so it can run that element's own `build()` against a shared `&` view
+    /// of the rest of the slab without aliasing, then puts it back in the
+    /// same iteration. Returns `None` for a stale/absent id or an
+    /// already-empty slot (a re-entrant take is a framework bug).
+    #[allow(
+        dead_code,
+        reason = "consumed by the build-context wiring (PR-K wire-real)"
+    )]
+    pub(crate) fn take_element(&mut self, id: ElementId) -> Option<Box<dyn ElementBase>> {
+        let index = self.resolve_index(id)?;
+        self.nodes.get_mut(index)?.element.take()
+    }
+
+    /// Restore an element previously removed by [`Self::take_element`] into
+    /// node `id`'s slot. No-op for a stale/absent id (cannot happen on the
+    /// build path: the node is re-addressed by the same id taken moments
+    /// earlier).
+    #[allow(
+        dead_code,
+        reason = "consumed by the build-context wiring (PR-K wire-real)"
+    )]
+    pub(crate) fn put_element(&mut self, id: ElementId, element: Box<dyn ElementBase>) {
+        if let Some(index) = self.resolve_index(id)
+            && let Some(node) = self.nodes.get_mut(index)
+        {
+            node.element = Some(element);
+        }
+    }
+
     /// Remove an element from the tree.
     ///
     /// # Soft vs eager removal
@@ -597,7 +669,7 @@ impl ElementTree {
         // remount.
         if self.nodes[index].registered_global_key_hash.is_some() {
             let depth = self.nodes[index].depth;
-            self.nodes[index].element.deactivate();
+            self.nodes[index].element_mut().deactivate();
             owner.push_inactive(id, depth);
             // Detach from active tree but keep the slot alive.
             self.nodes[index].parent = None;
@@ -621,7 +693,7 @@ impl ElementTree {
         // `did_change_dependencies` flag (plan §U14) — the dependent
         // leaves the active tree before its rebuild ever runs.
         owner.clear_pending_dependency_change(id);
-        self.nodes[index].element.unmount(owner);
+        self.nodes[index].element_mut().unmount(owner);
 
         let node = self.nodes.remove(index);
         // Slot freed → bump its generation so any straggler id that still
@@ -662,7 +734,7 @@ impl ElementTree {
         // Drop any stale `did_change_dependencies` flag (plan §U14) —
         // the dependent leaves the tree before its rebuild ever runs.
         owner.clear_pending_dependency_change(id);
-        self.nodes[index].element.unmount(owner);
+        self.nodes[index].element_mut().unmount(owner);
 
         let node = self.nodes.remove(index);
         // Slot freed → bump its generation (ABA guard, see `remove`).
@@ -688,7 +760,7 @@ impl ElementTree {
     /// than relying on the caller having already filtered by it.
     pub fn update(&mut self, id: ElementId, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         if let Some(node) = self.get_mut(id) {
-            node.element.update(view, owner);
+            node.element_mut().update(view, owner);
             node.set_key(view.key().map(ViewKey::clone_key));
         }
     }
@@ -696,21 +768,21 @@ impl ElementTree {
     /// Mark an element as needing rebuild.
     pub fn mark_needs_build(&mut self, id: ElementId) {
         if let Some(node) = self.get_mut(id) {
-            node.element.mark_needs_build();
+            node.element_mut().mark_needs_build();
         }
     }
 
     /// Deactivate an element (temporary removal).
     pub fn deactivate(&mut self, id: ElementId) {
         if let Some(node) = self.get_mut(id) {
-            node.element.deactivate();
+            node.element_mut().deactivate();
         }
     }
 
     /// Activate an element (re-insertion after deactivation).
     pub fn activate(&mut self, id: ElementId) {
         if let Some(node) = self.get_mut(id) {
-            node.element.activate();
+            node.element_mut().activate();
         }
     }
 
@@ -841,7 +913,7 @@ fn try_retake_inactive(
     node.depth = parent_depth + 1;
 
     // Re-activate the element. `Lifecycle::Inactive` → `Active`.
-    node.element.activate();
+    node.element_mut().activate();
 
     // Apply the NEW view configuration to the re-taken element. Without
     // this the element keeps the stale view config from before it was
@@ -851,7 +923,7 @@ fn try_retake_inactive(
     // skipped. Flutter's `_retakeInactiveElement` does the same in
     // `framework.dart:4581` (`element.update(newWidget)`) right after
     // activating.
-    node.element.update(view, owner);
+    node.element_mut().update(view, owner);
     // Plan §U7 / FR-022: re-clone the key from the new view value so
     // the stored key tracks the re-taken element's current
     // configuration — the deactivated element's old key may match

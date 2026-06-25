@@ -42,6 +42,25 @@ use flui_foundation::ElementId;
 
 use super::build_owner::{DirtyElement, InactiveElement};
 
+/// Borrowed live-tree access carried by [`ElementOwner`] while a
+/// `build_scope` drain runs an element's `build()` (PR-K).
+///
+/// Lets a behavior construct a live
+/// [`BuildCtx`](crate::context::BuildCtx) — reading the real tree and
+/// buffering inherited dependents — WITHOUT changing the object-safe
+/// `build_into_views` signature: the handle rides on the `ElementOwner`
+/// that is already threaded into every build. `dep_sink` collects the
+/// dependents recorded during the read-only build; `build_scope` drains it
+/// onto the provider nodes once it holds `&mut tree` again.
+///
+/// Both references are `Copy`, so reading [`ElementOwner::build_view`] lifts
+/// them out by value without keeping the owner borrowed.
+#[derive(Clone, Copy)]
+pub(crate) struct BuildHandle<'a> {
+    pub(crate) tree: &'a crate::tree::ElementTree,
+    pub(crate) dep_sink: &'a parking_lot::Mutex<Vec<crate::context::DependentRecord>>,
+}
+
 /// Split-borrow handle into `BuildOwner` for `Element` lifecycle paths.
 ///
 /// Carries `&mut` references to the subset of `BuildOwner` fields a
@@ -63,9 +82,10 @@ use super::build_owner::{DirtyElement, InactiveElement};
 /// - `ElementTree::insert`
 /// - `ElementTree::remove`
 /// - `ElementTree::update`
+/// - `BuildOwner::build_scope` (carrying the live `BuildHandle`)
 ///
-/// Downstream units (U9–U14) layer on top by calling the registration
-/// methods below from `Element` lifecycle code paths.
+/// Downstream units layer on top by calling the registration methods below
+/// from `Element` lifecycle code paths.
 ///
 /// # Flutter equivalent
 ///
@@ -114,6 +134,12 @@ pub struct ElementOwner<'a> {
     /// Stored as a raw reference because `Box<dyn Fn>` is not `Copy`
     /// and we never mutate it through this handle.
     pub(crate) on_build_scheduled: Option<&'a (dyn Fn() + Send + Sync)>,
+
+    /// Live-tree access during a `build_scope` drain (PR-K). `Some` only
+    /// while an element's `build()` runs; `None` on every other lifecycle
+    /// path (mount / unmount / update / reconcile). The behavior reads it
+    /// to build a live [`BuildCtx`](crate::context::BuildCtx).
+    pub(crate) build_view: Option<BuildHandle<'a>>,
 }
 
 impl ElementOwner<'_> {

@@ -399,7 +399,12 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// to notify; the scheduled rebuild handles their reaction.
     /// `StatefulBehavior` and `AnimatedBehavior` override the
     /// behavior-side hook to forward to the state.
-    fn notify_dependency_change(&mut self) {}
+    ///
+    /// `owner` carries the split-borrow build handle so the typed hook can
+    /// resolve the same live tree-backed `BuildContext` the rebuild uses
+    /// (PR-K).
+    #[allow(unused_variables)]
+    fn notify_dependency_change(&mut self, owner: &mut crate::ElementOwner<'_>) {}
 
     // ========================================================================
     // Slot Management
