@@ -2,14 +2,14 @@
 //!
 //! Validates the Core.0 exit criterion: "a RepaintBoundary-isolated repaint
 //! clears `needs_paint` only on painted nodes." The paint walk
-//! (`paint_node_recursive`) clears `needs_paint` per-node it visits (R-15
+//! (`paint_subtree`) clears `needs_paint` per-node it visits (R-15
 //! fold); nodes not reached by the root descent retain their flag until the
 //! residue scan at the end of `run_paint` emits a warning + force-clears.
 //!
 //! Refs:
 //!   * crates/flui-rendering/src/objects/repaint_boundary.rs
-//!   * crates/flui-rendering/src/pipeline/owner.rs — `run_paint`,
-//!     `paint_node_recursive`
+//!   * crates/flui-rendering/src/pipeline/owner/mod.rs — `run_paint`,
+//!     `paint_subtree`
 
 use flui_foundation::LayerId;
 use flui_layer::{Layer, LayerTree};

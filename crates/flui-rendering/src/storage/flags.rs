@@ -237,7 +237,7 @@ bitflags! {
 
         /// Previous frame's `IS_REPAINT_BOUNDARY` value.
         ///
-        /// Written by the paint phase (`PipelineOwner::paint_node_recursive`)
+        /// Written by the paint phase (`PipelineOwner::paint_subtree`)
         /// when a node is painted. Read by compositing-bits propagation to
         /// detect a transition into or out of repaint-boundary status.
         ///

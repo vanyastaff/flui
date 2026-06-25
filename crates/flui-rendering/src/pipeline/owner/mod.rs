@@ -1181,7 +1181,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// **Current consumer scope:** the compositing-bits walk consults
     /// `RenderNode::is_repaint_boundary_flag()`. The paint walk
-    /// (`paint_node_recursive`) still reads `render_object.is_repaint_boundary()`
+    /// (`paint_subtree`) still reads `render_object.is_repaint_boundary()`
     /// directly — this matches Flutter parity (Flutter's `paint`
     /// reads the `isRepaintBoundary` final getter, equivalent to our
     /// trait answer; the bootstrap flag is the optimization target
