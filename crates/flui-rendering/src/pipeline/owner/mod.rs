@@ -9,6 +9,8 @@
 mod subtree_arena;
 use subtree_arena::{SubtreeArena, child_flex_from_seeds, ensure_stack};
 
+use super::scheduler::{DirtyTracker, PhaseKind};
+
 use std::{
     marker::PhantomData,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
@@ -36,7 +38,7 @@ use crate::{
 };
 
 use super::{
-    dirty::{DirtyNode, DirtySets},
+    dirty::DirtyNode,
     handle::{DirtyKind, DirtyRequest, PipelineOwnerHandle},
     notifier::VisualUpdateNotifier,
     phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics},
@@ -115,30 +117,18 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Consolidated visual-update + semantics-owner-lifecycle callback
     /// notifier. Replaces three previously-separate `Box<dyn Fn() + Send +
     /// Sync>` fields. See [`VisualUpdateNotifier`].
+    ///
+    /// The owner keeps its own Arc clone for the `set_on_*` callback setters;
+    /// `scheduler` holds a second clone pointing at the same allocation for
+    /// the wake-on-mark path.
     notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>,
 
-    /// Co-located dirty sets for the four pipeline phases. See
-    /// [`DirtySets`]. Replaces what used to be four
-    /// parallel `Vec<DirtyNode>` fields scattered across the struct.
-    dirty: DirtySets,
-
-    /// Side queue for marks made DURING a phase iteration
-    /// (`debug_doing_layout` / `debug_doing_paint` / etc. true).
+    /// Dirty-work scheduling subsystem: dirty sets, mid-phase side queue,
+    /// phase-guard flags, and the wake-on-mark notifier clone.
     ///
-    /// **D-block PR-A1 U22 (companion memo D7):** Flutter's pipeline
-    /// permits a render object's `perform_layout` to mark another
-    /// node dirty via `markNeedsLayout`. Pushing into the active
-    /// `dirty` queue mid-iteration would either be silently ignored
-    /// (the outer loop already snapshot the queue via `std::mem::take`)
-    /// or processed in the wrong order. The side queue captures these
-    /// mid-phase marks; the outer `while` loop in `run_layout` /
-    /// `run_paint` drains it after the current iteration via
-    /// [`Self::drain_mid_layout_marks`] before deciding whether to
-    /// continue.
-    ///
-    /// Each phase's mid-mark vector retains capacity across frames
-    /// (same non-shrinking discipline as `dirty`).
-    mid_layout_marks: DirtySets,
+    /// Disjoint from `render_tree`, so `scheduler.mark_needs_layout(
+    /// &mut self.render_tree, id)` compiles as a split borrow.
+    scheduler: DirtyTracker,
 
     /// Constraints to pass to [`Self::layout_dirty_root`] when the
     /// dirty entry is the tree root (`root_id`) and the root has no
@@ -151,15 +141,6 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// cached constraints (post-layout) supersede this field; the
     /// fallback only fires on the very first layout pass.
     root_constraints: Option<BoxConstraints>,
-
-    /// Whether we're currently doing layout.
-    debug_doing_layout: bool,
-
-    /// Whether we're currently doing paint.
-    debug_doing_paint: bool,
-
-    /// Whether we're currently doing semantics.
-    debug_doing_semantics: bool,
 
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
@@ -214,11 +195,14 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
             .field("id", &self.id)
             .field("root_id", &self.root_id)
             .field("render_tree_len", &self.render_tree.len())
-            .field("nodes_needing_layout", &self.dirty.needs_layout.len())
-            .field("nodes_needing_paint", &self.dirty.needs_paint.len())
-            .field("debug_doing_layout", &self.debug_doing_layout)
-            .field("debug_doing_paint", &self.debug_doing_paint)
-            .field("debug_doing_semantics", &self.debug_doing_semantics)
+            .field("nodes_needing_layout", &self.scheduler.layout_queue_len())
+            .field("nodes_needing_paint", &self.scheduler.paint_queue_len())
+            .field("debug_doing_layout", &self.scheduler.debug_doing_layout())
+            .field("debug_doing_paint", &self.scheduler.debug_doing_paint())
+            .field(
+                "debug_doing_semantics",
+                &self.scheduler.debug_doing_semantics(),
+            )
             .field("has_layer_tree", &self.last_layer_tree.is_some())
             .finish()
     }
@@ -249,17 +233,14 @@ impl PipelineOwner<Idle> {
         let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
         let (handle, dirty_rx) =
             PipelineOwnerHandle::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
+        let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
             root_id: None,
             notifier,
-            dirty: DirtySets::new(),
-            mid_layout_marks: DirtySets::new(),
+            scheduler,
             root_constraints: None,
-            debug_doing_layout: false,
-            debug_doing_paint: false,
-            debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
             device_pixel_ratio: 1.0,
@@ -307,17 +288,14 @@ impl PipelineOwner<Idle> {
             DEFAULT_DIRTY_CHANNEL_CAPACITY,
             std::sync::Arc::clone(&notifier),
         );
+        let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
             root_id: None,
             notifier,
-            dirty: DirtySets::new(),
-            mid_layout_marks: DirtySets::new(),
+            scheduler,
             root_constraints: None,
-            debug_doing_layout: false,
-            debug_doing_paint: false,
-            debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
             device_pixel_ratio: 1.0,
@@ -486,8 +464,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         ))
     }
 
-    /// Drains the pending dirty-request channel into the local
-    /// [`DirtySets`].
+    /// Drains the pending dirty-request channel into the scheduler's
+    /// dirty sets.
     ///
     /// Called at phase boundaries by the typestate transitions; producers
     /// (background asset loaders, async work) write into the channel via
@@ -637,8 +615,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// the layout/paint walks hold raw borrows into the slab.
     pub fn remove_render_object(&mut self, id: RenderId) -> usize {
         debug_assert!(
-            !self.debug_doing_layout && !self.debug_doing_paint,
-            "remove_render_object during an active layout/paint phase —              the walks hold borrows into the slab; defer removal to              between-frame work",
+            !self.scheduler.debug_doing_layout() && !self.scheduler.debug_doing_paint(),
+            "remove_render_object during an active layout/paint phase — \
+             the walks hold borrows into the slab; defer removal to \
+             between-frame work",
         );
 
         let subtree = self.render_tree.collect_subtree_ids(id);
@@ -646,8 +626,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return 0;
         }
         let removed: FxHashSet<RenderId> = subtree.iter().copied().collect();
-        self.dirty.evict(&removed);
-        self.mid_layout_marks.evict(&removed);
+        self.scheduler.evict(&removed);
 
         let count = self.render_tree.remove_recursive(id);
         if self.root_id == Some(id) {
@@ -1323,7 +1302,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// layout phase.
     #[inline]
     pub fn nodes_needing_layout(&self) -> &[DirtyNode] {
-        self.dirty.needs_layout.as_slice()
+        self.scheduler.nodes_needing_layout()
     }
 
     /// Returns the nodes needing paint.
@@ -1332,162 +1311,41 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// paint phase.
     #[inline]
     pub fn nodes_needing_paint(&self) -> &[DirtyNode] {
-        self.dirty.needs_paint.as_slice()
+        self.scheduler.nodes_needing_paint()
     }
 
     /// Returns the nodes needing compositing bits update.
     #[inline]
     pub fn nodes_needing_compositing_bits_update(&self) -> &[DirtyNode] {
-        self.dirty.needs_compositing.as_slice()
+        self.scheduler.nodes_needing_compositing_bits_update()
     }
 
     /// Returns the nodes needing semantics update.
     #[inline]
     pub fn nodes_needing_semantics(&self) -> &[DirtyNode] {
-        self.dirty.needs_semantics.as_slice()
+        self.scheduler.nodes_needing_semantics()
     }
 
     /// Adds a node to the layout dirty list.
     ///
-    /// # Dedup + mid-layout routing (D-block PR-A1 U22, memo D7)
-    ///
-    /// 1. **Queue-membership dedup**: scans the target queue
-    ///    (`dirty.needs_layout` OR `mid_layout_marks.needs_layout`
-    ///    depending on the routing decision in step 2) and skips the
-    ///    push if `node_id` is already present. O(N) scan matches
-    ///    [`Self::mark_needs_layout`]'s pre-existing dedup pattern.
-    ///    Flag-based dedup is unsuitable because `RenderState::new()`
-    ///    defaults `NEEDS_LAYOUT = true` — a flag check would
-    ///    silently no-op on the FIRST add for every newly-inserted
-    ///    node (this is the regression the test
-    ///    `test_run_frame_catches_paint_panic` flagged).
-    /// 2. **Mid-layout routing**: if [`Self::debug_doing_layout`] is
-    ///    `true`, the outer `run_layout` loop is iterating the
-    ///    current `dirty.needs_layout` snapshot — pushing into the
-    ///    active queue mid-iteration would either be silently ignored
-    ///    (`std::mem::take` snapshot) or processed in the wrong
-    ///    order. Push into `mid_layout_marks.needs_layout` instead;
-    ///    the outer loop drains it after the current iteration via
-    ///    [`Self::drain_mid_layout_marks`].
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - The `RenderId` of the render object (1-based)
-    /// * `depth` - The depth of the node in the render tree
+    /// Routes into the mid-phase side queue when layout is active, otherwise
+    /// into `dirty.needs_layout`. See [`DirtyTracker::add_node_needing_layout`]
+    /// for the full routing and dedup contract.
     pub fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
-        let target = if self.debug_doing_layout {
-            &mut self.mid_layout_marks.needs_layout
-        } else {
-            &mut self.dirty.needs_layout
-        };
-        if !target.push(DirtyNode::new(node_id, depth)) {
-            return; // already in set
-        }
-        // New work was scheduled — wake the platform so an idle event
-        // loop produces the frame (Flutter parity: markNeedsLayout →
-        // owner.requestVisualUpdate()). Fired only on a NEW queue entry:
-        // an existing entry means a frame is already scheduled.
-        self.notifier.read().fire_need_visual_update();
+        self.scheduler.add_node_needing_layout(node_id, depth);
     }
 
     /// Marks a node as needing layout, propagating the `NEEDS_LAYOUT` flag
     /// up the ancestor chain and pushing the **relayout boundary** onto
     /// `dirty.needs_layout` for the next `run_layout` pass.
     ///
-    /// **D-block PR-A1 U15** (memo D3) — greenfield authoring of Flutter's
-    /// `markNeedsLayout` walk (`.flutter/.../object.dart:2658-2700`). Walks
-    /// the parent chain via [`NodeLinks::parent`] and at each step:
-    ///
-    /// 1. If the node is already marked `NEEDS_LAYOUT`, stop — earlier
-    ///    propagation already reached the boundary; no need to re-walk.
-    /// 2. Otherwise, set the flag via [`RenderNode::mark_layout_flag`].
-    /// 3. If the node is a relayout boundary
-    ///    ([`RenderNode::is_relayout_boundary`] — reads the per-instance
-    ///    `IS_RELAYOUT_BOUNDARY` storage flag set by
-    ///    [`compute_relayout_boundary`](crate::storage::RenderState::compute_relayout_boundary))
-    ///    OR has no parent (tree root), push this id onto
-    ///    `dirty.needs_layout` and return.
-    /// 4. Otherwise, recurse to the parent.
-    ///
-    /// [`NodeLinks::parent`]: crate::storage::NodeLinks::parent
-    /// [`RenderNode::mark_layout_flag`]: crate::storage::RenderNode::mark_layout_flag
-    /// [`RenderNode::is_relayout_boundary`]: crate::storage::RenderNode::is_relayout_boundary
-    ///
-    /// The walk is idempotent — a stale call on an already-marked subtree
-    /// short-circuits at step 1 without re-pushing the boundary. Missing
-    /// `RenderId`s (post-removal stale references) are silent no-ops; the
-    /// walk simply terminates at the missing-lookup step.
-    ///
-    /// This method supersedes the direct `add_node_needing_layout` call
-    /// pattern in `flui-view::element::behavior_commons::mark_render_needs_layout_and_paint`
-    /// (migrated in D-block PR-A1 U16). Direct `add_node_needing_layout`
-    /// remains as the low-level primitive for callers that have already
-    /// computed the correct boundary id (e.g. testing surfaces).
-    ///
-    /// **Bootstrap dependency (U17):** the relayout-boundary flag is set
-    /// per-instance only after [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
-    /// has run once. Pre-bootstrap (no layout has executed yet) every node
-    /// reports `is_relayout_boundary() == false` and propagation runs to
-    /// root — which is the correct fallback (root is always an implicit
-    /// boundary in Flutter).
+    /// **D-block PR-A1 U15** (memo D3) — ports Flutter's `markNeedsLayout`
+    /// walk (`.flutter/.../object.dart:2658-2700`). Thin forwarder: the walk
+    /// logic lives in [`DirtyTracker::mark_needs_layout`] so it is
+    /// unit-testable without a full owner. The `scheduler` and `render_tree`
+    /// fields are disjoint, so the split borrow compiles.
     pub fn mark_needs_layout(&mut self, id: RenderId) {
-        let mut current = id;
-        loop {
-            // Snapshot the per-node decision under a short-lived borrow so
-            // we can release before stepping to the parent in the recursion.
-            let step = {
-                let Some(node) = self.render_tree.get_mut(current) else {
-                    // Stale reference (e.g. node removed mid-frame). Stop.
-                    return;
-                };
-                // Idempotent flag set — the AtomicRenderFlags fetch-or is a
-                // no-op when the bit is already set. The walk does NOT
-                // short-circuit on "already marked": even with U23's
-                // `run_layout` → `layout_dirty_root` wiring (which
-                // clears NEEDS_LAYOUT after each successful layout via
-                // `layout_subtree_borrowed`), a stale flag can persist
-                // briefly between phases. Always-walking preserves
-                // correctness without depending on the precise clearing
-                // schedule; idempotence keeps it cheap.
-                node.mark_layout_flag();
-                // Flutter box.dart:2840 — a non-empty layout cache means an
-                // ANCESTOR's layout consumed this node's intrinsics/dry
-                // layout/baseline, so the invalidation must reach that
-                // ancestor: keep walking past a relayout boundary (the
-                // boundary only isolates constraint-driven layout, not
-                // intrinsic queries). Each ancestor visited clears its own
-                // cache the same way, so the escalation chains exactly as
-                // far as the cached dependencies go and no further.
-                let had_cached_queries = node.clear_layout_cache();
-                let parent = node.links().parent();
-                let boundary =
-                    (node.is_relayout_boundary() && !had_cached_queries) || parent.is_none();
-                let depth = node.depth() as usize;
-                (boundary, depth, parent)
-            };
-            let (is_boundary, depth, parent) = step;
-            if is_boundary {
-                // Codex P1 (PR #139 review): always enqueue the boundary
-                // for this invalidation, with a dedup check against the
-                // dirty queue so multiple marks-in-same-frame don't push
-                // duplicate entries. Pre-fix, the algorithm returned early
-                // on already-marked nodes WITHOUT pushing — which silently
-                // dropped subsequent invalidations once the broken pipeline
-                // had drained the dirty queue but not cleared the flag.
-                if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) {
-                    // Wake the platform: an idle event loop must produce
-                    // a frame for this invalidation (Flutter parity:
-                    // markNeedsLayout → owner.requestVisualUpdate()).
-                    // Fired only on a NEW boundary entry — an existing
-                    // entry means a frame is already scheduled.
-                    self.notifier.read().fire_need_visual_update();
-                }
-                return;
-            }
-            // SAFETY: `parent.is_none()` is folded into `is_boundary` above,
-            // so reaching this branch guarantees `Some(_)`.
-            current = parent.unwrap();
-        }
+        self.scheduler.mark_needs_layout(&mut self.render_tree, id);
     }
 
     // ========================================================================
@@ -1601,102 +1459,34 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Adds a node to the paint dirty list.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** same queue-membership dedup
-    /// (O(N) `iter().any()` scan; flag-based dedup is unsuitable
-    /// because `RenderState::new()` defaults `NEEDS_PAINT = true`) and
-    /// mid-phase routing discipline as
-    /// [`Self::add_node_needing_layout`]; see that method's doc for
-    /// the dispatch rules. Mid-phase route is gated by
-    /// `debug_doing_paint`.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - The `RenderId` of the render object (1-based)
-    /// * `depth` - The depth of the node in the render tree
+    /// Routes into the mid-phase side queue when paint is active, otherwise
+    /// into `dirty.needs_paint`. See [`DirtyTracker::add_node_needing_paint`]
+    /// for the full routing and dedup contract.
     pub fn add_node_needing_paint(&mut self, node_id: RenderId, depth: usize) {
-        let target = if self.debug_doing_paint {
-            &mut self.mid_layout_marks.needs_paint
-        } else {
-            &mut self.dirty.needs_paint
-        };
-        if !target.push(DirtyNode::new(node_id, depth)) {
-            return; // already in set
-        }
-        // Wake the platform for the (next) frame. Mid-paint marks are
-        // drained into next-frame work at the end of run_paint — without
-        // this wake an idle app would never paint them (the "GIF frozen
-        // until you scroll" failure mode).
-        self.notifier.read().fire_need_visual_update();
+        self.scheduler.add_node_needing_paint(node_id, depth);
     }
 
     /// Adds a node to the compositing bits dirty list.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** same queue-membership dedup
-    /// and mid-phase routing discipline as
-    /// [`Self::add_node_needing_layout`]. Mid-phase route is gated by
-    /// `debug_doing_layout` (the compositing phase shares the
-    /// layout-phase debug flag because compositing-bits update runs
-    /// as part of the layout pipeline per the typestate transitions).
+    /// Also sets `NEEDS_COMPOSITING_BITS_UPDATE` on the node (atomic) so the
+    /// `run_compositing` walk's short-circuit cannot drop this entry. Routes
+    /// via `debug_doing_layout` (compositing shares the layout flag). See
+    /// [`DirtyTracker::add_node_needing_compositing_bits_update`] for the
+    /// full contract.
     ///
-    /// **PR-A2 Codex review #3294562493:** also sets the
-    /// `NEEDS_COMPOSITING_BITS_UPDATE` flag on the node so the
-    /// `run_compositing` walk's per-entry `needs_compositing_bits_update()`
-    /// short-circuit doesn't silently drop this queue entry. The
-    /// invariant "queue entry ⇒ flag set" makes the queue-clear at
-    /// end of `run_compositing` safe — a queued entry can no longer
-    /// be a no-op walk that loses the scheduling signal. Callers
-    /// that want the bit set without queue membership should reach
-    /// for [`RenderNode::mark_needs_compositing_bits_update`] directly.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - The `RenderId` of the render object (1-based)
-    /// * `depth` - The depth of the node in the render tree
+    /// The `scheduler` and `render_tree` are disjoint fields: the shared
+    /// borrow `&self.render_tree` passed to the scheduler compiles cleanly.
     pub fn add_node_needing_compositing_bits_update(&mut self, node_id: RenderId, depth: usize) {
-        // Set the bit first so the run_compositing walk doesn't
-        // skip this entry on the early-return path. No-op if the id
-        // is not present in the tree (defensive).
-        if let Some(node) = self.render_tree.get(node_id) {
-            node.mark_needs_compositing_bits_update();
-        }
-        let target = if self.debug_doing_layout {
-            &mut self.mid_layout_marks.needs_compositing
-        } else {
-            &mut self.dirty.needs_compositing
-        };
-        // The bit is set BEFORE the push so the run_compositing walk's
-        // per-entry `needs_compositing_bits_update()` short-circuit cannot
-        // silently skip this entry even if `push` returns false (duplicate).
-        // The wake fires only on a genuinely-new entry: an existing entry
-        // means a frame is already scheduled (Flutter parity:
-        // markNeedsCompositingBitsUpdate → owner.requestVisualUpdate).
-        if target.push(DirtyNode::new(node_id, depth)) {
-            self.notifier.read().fire_need_visual_update();
-        }
+        self.scheduler
+            .add_node_needing_compositing_bits_update(&self.render_tree, node_id, depth);
     }
 
     /// Adds a node to the semantics dirty list.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** same queue-membership dedup
-    /// and mid-phase routing discipline as
-    /// [`Self::add_node_needing_layout`]. Mid-phase route is gated by
-    /// `debug_doing_semantics`.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - The `RenderId` of the render object (1-based)
-    /// * `depth` - The depth of the node in the render tree
+    /// Routes via `debug_doing_semantics`. See
+    /// [`DirtyTracker::add_node_needing_semantics`] for the full contract.
     pub fn add_node_needing_semantics(&mut self, node_id: RenderId, depth: usize) {
-        let target = if self.debug_doing_semantics {
-            &mut self.mid_layout_marks.needs_semantics
-        } else {
-            &mut self.dirty.needs_semantics
-        };
-        // Fire the visual-update wake only on a genuinely-new entry —
-        // Flutter parity: markNeedsSemanticsUpdate → owner.requestVisualUpdate.
-        if target.push(DirtyNode::new(node_id, depth)) {
-            self.notifier.read().fire_need_visual_update();
-        }
+        self.scheduler.add_node_needing_semantics(node_id, depth);
     }
 
     // ========================================================================
@@ -1726,94 +1516,62 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Returns whether layout is currently being performed.
     #[inline]
     pub fn debug_doing_layout(&self) -> bool {
-        self.debug_doing_layout
+        self.scheduler.debug_doing_layout()
     }
 
     /// Returns whether paint is currently being performed.
     #[inline]
     pub fn debug_doing_paint(&self) -> bool {
-        self.debug_doing_paint
+        self.scheduler.debug_doing_paint()
     }
 
     /// Returns whether semantics update is currently being performed.
     #[inline]
     pub fn debug_doing_semantics(&self) -> bool {
-        self.debug_doing_semantics
+        self.scheduler.debug_doing_semantics()
     }
 
     /// Returns whether any pipeline phase is currently active.
     #[inline]
     pub fn debug_doing_any_phase(&self) -> bool {
-        self.debug_doing_layout || self.debug_doing_paint || self.debug_doing_semantics
+        self.scheduler.debug_doing_any_phase()
     }
 
     /// Returns the total number of dirty nodes across all lists.
+    #[inline]
     pub fn dirty_node_count(&self) -> usize {
-        self.dirty.needs_layout.len()
-            + self.dirty.needs_compositing.len()
-            + self.dirty.needs_paint.len()
-            + self.dirty.needs_semantics.len()
+        self.scheduler.dirty_node_count()
     }
 
     /// Returns whether there are any dirty nodes.
     #[inline]
     pub fn has_dirty_nodes(&self) -> bool {
-        !self.dirty.needs_layout.is_empty()
-            || !self.dirty.needs_compositing.is_empty()
-            || !self.dirty.needs_paint.is_empty()
-            || !self.dirty.needs_semantics.is_empty()
+        self.scheduler.has_dirty_nodes()
     }
 
     /// Clears all dirty node lists without processing them.
     ///
-    /// Use with caution - this discards pending work.
+    /// Use with caution — this discards pending work.
     pub fn clear_all_dirty_nodes(&mut self) {
-        self.dirty.needs_layout.clear();
-        self.dirty.needs_compositing.clear();
-        self.dirty.needs_paint.clear();
-        self.dirty.needs_semantics.clear();
-        // PR-A1 U22 (memo D7): also clear mid-phase side queue.
-        self.mid_layout_marks.needs_layout.clear();
-        self.mid_layout_marks.needs_compositing.clear();
-        self.mid_layout_marks.needs_paint.clear();
-        self.mid_layout_marks.needs_semantics.clear();
+        self.scheduler.clear_all();
     }
 
     /// Drains the mid-phase side queue into the active `dirty` set.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** called by U23's `run_layout`
-    /// / `run_paint` outer `while` loops at the end of each iteration
-    /// — picks up the side-queued marks made during the iteration
-    /// (when `debug_doing_*` was `true`) so the next iteration of the
-    /// outer loop processes them.
-    ///
-    /// Capacity-preserving: each side-queue vector is moved via
-    /// `Vec::append` (drains source, keeps source's allocation
-    /// reservation for the next frame). Returns the total number of
-    /// entries drained, summed across all four phases — callers may
-    /// use this as the loop-continue signal.
+    /// Thin forwarder to [`DirtyTracker::drain_mid_marks`]. Available for
+    /// external callers (e.g. `flui-app`, integration tests) that need to
+    /// drain mid-marks between phase invocations without going through the
+    /// full phase-exit flow. The `run_*` phase methods drain via
+    /// `DirtyTracker::exit_phase` internally and do NOT call this method.
+    #[must_use]
     pub fn drain_mid_layout_marks(&mut self) -> usize {
-        let drained = self.mid_layout_marks.total();
-        self.dirty
-            .needs_layout
-            .append(&mut self.mid_layout_marks.needs_layout);
-        self.dirty
-            .needs_compositing
-            .append(&mut self.mid_layout_marks.needs_compositing);
-        self.dirty
-            .needs_paint
-            .append(&mut self.mid_layout_marks.needs_paint);
-        self.dirty
-            .needs_semantics
-            .append(&mut self.mid_layout_marks.needs_semantics);
-        drained
+        self.scheduler.drain_mid_marks()
     }
 
     /// Returns whether any mid-phase marks are pending drain.
-    /// **D-block PR-A1 U22.**
     #[inline]
     pub fn has_mid_layout_marks(&self) -> bool {
-        self.mid_layout_marks.any()
+        self.scheduler.has_mid_marks()
     }
 }
 
@@ -1849,19 +1607,19 @@ impl PipelineOwner<Layout> {
     /// out immediately and returns its size.
     pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
         let _span =
-            tracing::debug_span!("layout", dirty_nodes = self.dirty.needs_layout.len(),).entered();
+            tracing::debug_span!("layout", dirty_nodes = self.scheduler.layout_queue_len(),)
+                .entered();
 
         // Process own dirty nodes if any
         // Flutter pattern: while loop to handle nodes added during layout
-        while !self.dirty.needs_layout.is_empty() {
-            self.debug_doing_layout = true;
+        while self.scheduler.has_layout_work() {
+            self.scheduler.enter_phase(PhaseKind::Layout);
 
             // Take the dirty nodes and replace with empty set
             // This allows new nodes to be added during layout (routed
             // to mid_layout_marks per U22; drained back at end of
             // iteration below).
-            self.dirty.needs_layout.sort_shallow_first();
-            let dirty_nodes: Vec<_> = self.dirty.needs_layout.drain().collect();
+            let dirty_nodes = self.scheduler.take_layout_batch_shallow_first();
 
             tracing::debug!(
                 "run_layout: sorted order (shallow-first) = {:?}",
@@ -1935,11 +1693,10 @@ impl PipelineOwner<Layout> {
                     continue;
                 };
                 if let Err(e) = self.layout_dirty_root(dirty_node.id, constraints) {
-                    self.debug_doing_layout = false;
                     // PR-A1 U22 P1 review fix (Codex 3294365736): drain
                     // mid-phase marks back into `dirty` even on error
                     // path so they survive across phase invocations.
-                    self.drain_mid_layout_marks();
+                    let _ = self.scheduler.exit_phase(PhaseKind::Layout);
                     return Err(e);
                 }
 
@@ -1953,14 +1710,11 @@ impl PipelineOwner<Layout> {
                 self.add_node_needing_paint(dirty_node.id, dirty_node.depth);
             }
 
-            self.debug_doing_layout = false;
-
-            // PR-A1 U22 P1 review fix (Codex 3294365736): drain
-            // mid_layout_marks back into `dirty` so the outer while
-            // condition picks up marks routed to the side queue
-            // during this iteration's `debug_doing_layout = true`
-            // window.
-            self.drain_mid_layout_marks();
+            // PR-A1 U22 P1 review fix (Codex 3294365736): exit_phase clears
+            // debug_doing_layout AND drains mid_layout_marks back into `dirty`
+            // so the outer while condition picks up marks routed to the side
+            // queue during this iteration's `debug_doing_layout = true` window.
+            let _ = self.scheduler.exit_phase(PhaseKind::Layout);
         }
 
         // Drain deferred mutations: render objects may have enqueued
@@ -2498,26 +2252,26 @@ impl PipelineOwner<Compositing> {
     pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
         // Empty fast-path: no allocation, no logging churn for the
         // common "nothing changed" frame.
-        if self.dirty.needs_compositing.is_empty() {
+        if !self.scheduler.has_compositing_work() {
             return Ok(());
         }
         let _span = tracing::debug_span!(
             "compositing",
-            dirty_nodes = self.dirty.needs_compositing.len(),
+            dirty_nodes = self.scheduler.compositing_queue_len(),
         )
         .entered();
 
         // Sort shallow-first per Flutter
         // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
-        self.dirty.needs_compositing.sort_shallow_first();
+        self.scheduler.sort_compositing_shallow_first();
 
         // Iterate the dirty list by shared reference: the recursion takes
         // `&self`, which coexists with the slice's shared borrow of
-        // `self.dirty.needs_compositing` (both shared). Queue mutations are
-        // deferred into `actions` and applied after the walk, so nothing
-        // mutates the list mid-iteration.
+        // the compositing queue (both shared). Queue mutations are deferred
+        // into `actions` and applied after the walk, so nothing mutates the
+        // list mid-iteration.
         let mut actions = CompositingWalkActions::default();
-        let compositing_slice = self.dirty.needs_compositing.as_slice();
+        let compositing_slice = self.scheduler.compositing_queue_as_slice();
         for node in compositing_slice {
             self.update_subtree_compositing_bits(node.id, &mut actions);
         }
@@ -2527,9 +2281,8 @@ impl PipelineOwner<Compositing> {
         // id present in both buckets ends up correctly re-queued at the
         // post-walk depth.
         if !actions.remove_from_paint_queue.is_empty() {
-            self.dirty
-                .needs_paint
-                .retain(|d| !actions.remove_from_paint_queue.contains(&d.id));
+            self.scheduler
+                .retain_paint_queue(&actions.remove_from_paint_queue);
         }
         for (id, depth) in actions.mark_needs_paint {
             self.add_node_needing_paint(id, depth);
@@ -2537,7 +2290,7 @@ impl PipelineOwner<Compositing> {
 
         // PR #109 retain-capacity idiom (kept from pre-U34 stub): `clear()`
         // preserves the Vec's backing capacity across frames.
-        self.dirty.needs_compositing.clear();
+        self.scheduler.clear_compositing_queue();
         Ok(())
     }
 
@@ -2680,29 +2433,33 @@ impl PipelineOwner<PaintPhase> {
     /// of scope until the layer tree grows a structural-sharing
     /// substrate and the engine an incremental upload path.
     pub fn run_paint(&mut self) -> crate::error::RenderResult<()> {
-        if self.dirty.needs_paint.is_empty() {
+        if !self.scheduler.has_paint_work() {
             return Ok(());
         }
 
-        let _span =
-            tracing::debug_span!("paint", dirty_nodes = self.dirty.needs_paint.len(),).entered();
+        let _span = tracing::debug_span!("paint", dirty_nodes = self.scheduler.paint_queue_len(),)
+            .entered();
 
-        self.debug_doing_paint = true;
+        self.scheduler.enter_phase(PhaseKind::Paint);
 
         // Deepest-first ordering retained (Flutter `flushPaint`): the
         // full-tree descent below repaints everything, but per-boundary
         // dirty-driven repaints will rely on this order once retention
         // lands, and keeping it now means the dirty-list semantics
         // don't shift under that change.
-        self.dirty.needs_paint.sort_deep_first();
+        self.scheduler.sort_paint_deep_first();
 
         if let Some(root_id) = self.root_id
             && self.render_tree.get(root_id).is_some()
         {
             // Build a set of dirty node IDs for O(1) lookup during the
             // paint walk.
-            let dirty_ids: rustc_hash::FxHashSet<RenderId> =
-                self.dirty.needs_paint.iter().map(|d| d.id).collect();
+            let dirty_ids: rustc_hash::FxHashSet<RenderId> = self
+                .scheduler
+                .nodes_needing_paint()
+                .iter()
+                .map(|d| d.id)
+                .collect();
 
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
             match self.paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids) {
@@ -2714,7 +2471,7 @@ impl PipelineOwner<PaintPhase> {
                 Err(e) => {
                     // Restore the debug invariant before propagating so
                     // the owner stays consistent on the error path.
-                    self.debug_doing_paint = false;
+                    let _ = self.scheduler.exit_phase(PhaseKind::Paint);
                     return Err(e);
                 }
             }
@@ -2724,7 +2481,7 @@ impl PipelineOwner<PaintPhase> {
         // AFTER the root descent was not reached by it (multi-root or
         // detached subtree). Warn + clear so the bug is visible AND the
         // dirty list doesn't accumulate across frames.
-        for dirty_node in self.dirty.needs_paint.iter() {
+        for dirty_node in self.scheduler.nodes_needing_paint() {
             if let Some(render_node) = self.render_tree.get(dirty_node.id)
                 && render_node.needs_paint()
             {
@@ -2738,14 +2495,21 @@ impl PipelineOwner<PaintPhase> {
             }
         }
         // `clear()` retains capacity (preserve Vec backing across frames).
-        self.dirty.needs_paint.clear();
+        self.scheduler.clear_paint_queue();
 
-        self.debug_doing_paint = false;
-
-        // Drain mid-paint dirty marks back into the dirty sets so paint
-        // marks made during this pass become next-frame work rather
-        // than being stranded — Flutter's flushPaint semantics.
-        self.drain_mid_layout_marks();
+        // exit_phase clears debug_doing_paint AND drains mid-paint marks back
+        // into dirty so paint marks made during this pass become next-frame
+        // work rather than being stranded — Flutter's flushPaint semantics.
+        //
+        // Finding 2 (intentional improvement over pre-refactor behavior):
+        // exit_phase also drains mid-marks on the ERROR path (the early-return
+        // above calls exit_phase before returning Err). Pre-refactor, the error
+        // path only cleared debug_doing_paint and did NOT drain mid-marks, so
+        // any mark made between enter_phase and the error was silently lost.
+        // The always-drain contract of exit_phase is the correct behavior:
+        // mid-paint marks scheduled before the error survive into the next
+        // frame's retry rather than being dropped.
+        let _ = self.scheduler.exit_phase(PhaseKind::Paint);
 
         Ok(())
     }
@@ -3105,9 +2869,12 @@ impl PipelineOwner<Semantics> {
             return Ok(());
         }
 
-        tracing::debug!("run_semantics: {} nodes", self.dirty.needs_semantics.len());
+        tracing::debug!(
+            "run_semantics: {} nodes",
+            self.scheduler.semantics_queue_len()
+        );
 
-        self.debug_doing_semantics = true;
+        self.scheduler.enter_phase(PhaseKind::Semantics);
 
         // PR #109 review feedback: pre-fix this path used
         // `std::mem::take(&mut self.dirty.needs_semantics)` to drain in
@@ -3125,7 +2892,7 @@ impl PipelineOwner<Semantics> {
         // Sort shallow-first matching Flutter's flushSemantics. Roots
         // dispatch before their descendants so a parent's config is
         // assembled before children fold into it.
-        self.dirty.needs_semantics.sort_shallow_first();
+        self.scheduler.sort_semantics_shallow_first();
 
         // Cycle 4 R-1: pre-cycle the path panicked with
         // `unimplemented!()` once any node was queued — a Constitution
@@ -3139,16 +2906,13 @@ impl PipelineOwner<Semantics> {
         // when the full `SemanticsOwner` integration lands, swap the
         // warn for the real config-build + owner-register call.
         //
-        // Split-borrow as in `run_compositing`: `self.dirty.needs_semantics`
-        // and `self.render_tree` are disjoint fields under Rust 2024
-        // disjoint capture, so the loop compiles without a temporary
-        // clone.
-        //
         // Aggregate into a count rather than emitting one warn per node
         // (avoids O(n) log spam when semantics is enabled on a large tree).
+        // `nodes_needing_semantics()` is a shared slice accessor — disjoint
+        // from the mutable `self.render_tree` field under Rust 2024 capture.
         let pending_count = self
-            .dirty
-            .needs_semantics
+            .scheduler
+            .nodes_needing_semantics()
             .iter()
             .filter(|d| self.render_tree.contains(d.id))
             .count();
@@ -3162,17 +2926,13 @@ impl PipelineOwner<Semantics> {
         }
         // `clear()` retains the Vec's allocated capacity; next frame's
         // pushes amortise into the existing buffer.
-        self.dirty.needs_semantics.clear();
+        self.scheduler.clear_semantics_queue();
 
-        self.debug_doing_semantics = false;
-
-        // PR-A1 U22 P1 review fix (Codex 3294365736): drain
-        // mid_layout_marks.needs_semantics so semantics marks made
-        // during this iteration's `debug_doing_semantics = true`
-        // window aren't stranded. Drained entries land on
-        // dirty.needs_semantics for the NEXT run_semantics
-        // invocation.
-        self.drain_mid_layout_marks();
+        // exit_phase clears debug_doing_semantics AND drains mid-semantics
+        // marks so semantics marks made during this iteration's
+        // `debug_doing_semantics = true` window aren't stranded. Drained
+        // entries land on dirty.needs_semantics for the NEXT run_semantics.
+        let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
 
         Ok(())
     }
@@ -3191,12 +2951,8 @@ where
         render_tree: from.render_tree,
         root_id: from.root_id,
         notifier: from.notifier,
-        dirty: from.dirty,
-        mid_layout_marks: from.mid_layout_marks,
+        scheduler: from.scheduler,
         root_constraints: from.root_constraints,
-        debug_doing_layout: from.debug_doing_layout,
-        debug_doing_paint: from.debug_doing_paint,
-        debug_doing_semantics: from.debug_doing_semantics,
         semantics_enabled: from.semantics_enabled,
         last_layer_tree: from.last_layer_tree,
         device_pixel_ratio: from.device_pixel_ratio,
@@ -4145,88 +3901,6 @@ mod tests {
         assert!(
             name.contains("PanickingPaintBox"),
             "debug_name() should resolve to the concrete type via vtable; got `{name}`"
-        );
-    }
-
-    // ========================================================================
-    // D-block PR-A1 U22 P1 regression (Codex 3294365736 / Copilot 3294367387)
-    // ========================================================================
-    //
-    // Verifies the mid-phase routing + drain integration: when
-    // debug_doing_layout is true, add_node_needing_layout routes into
-    // mid_layout_marks; the wired drain at run_layout iteration end
-    // moves those entries back into dirty so the next iteration picks
-    // them up. Lib-scoped because debug_doing_layout is a private field.
-
-    /// Direct test of the U22 mid-phase routing → drain integration.
-    /// Flips debug_doing_layout=true, pushes via the public
-    /// add_node_needing_layout API, verifies the entry went to
-    /// mid_layout_marks (NOT dirty); then calls drain_mid_layout_marks
-    /// and verifies the entry is now in dirty.
-    #[test]
-    fn test_mid_phase_layout_marks_route_to_side_queue_then_drain_back() {
-        let mut owner = PipelineOwner::new();
-        let id = owner.insert(Box::new(PanickingPaintBox::new())
-            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
-        owner.clear_all_dirty_nodes();
-
-        // Phase 1: regular add (debug_doing_layout=false) goes to dirty.
-        owner.add_node_needing_layout(id, 0);
-        assert_eq!(owner.nodes_needing_layout().len(), 1);
-        assert!(!owner.has_mid_layout_marks());
-        owner.clear_all_dirty_nodes();
-
-        // Phase 2: simulate mid-phase by flipping the private debug
-        // flag. Subsequent add_node_needing_layout routes into
-        // mid_layout_marks instead of dirty.
-        owner.debug_doing_layout = true;
-        owner.add_node_needing_layout(id, 0);
-        owner.debug_doing_layout = false;
-
-        assert_eq!(
-            owner.nodes_needing_layout().len(),
-            0,
-            "mid-phase add must NOT land in dirty.needs_layout",
-        );
-        assert!(
-            owner.has_mid_layout_marks(),
-            "mid-phase add must land in mid_layout_marks",
-        );
-
-        // Phase 3: drain moves the side-queued entry back to dirty.
-        let drained = owner.drain_mid_layout_marks();
-        assert_eq!(drained, 1, "drain must report 1 entry moved");
-        assert_eq!(
-            owner.nodes_needing_layout().len(),
-            1,
-            "drained mid-mark must land in dirty.needs_layout",
-        );
-        assert!(
-            !owner.has_mid_layout_marks(),
-            "mid queue must be empty post-drain"
-        );
-    }
-
-    /// Same shape for the dedup invariant under mid-phase routing:
-    /// repeated mid-phase adds collapse to one entry in
-    /// mid_layout_marks.
-    #[test]
-    fn test_mid_phase_routing_dedups_repeated_marks() {
-        let mut owner = PipelineOwner::new();
-        let id = owner.insert(Box::new(PanickingPaintBox::new())
-            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
-        owner.clear_all_dirty_nodes();
-
-        owner.debug_doing_layout = true;
-        owner.add_node_needing_layout(id, 0);
-        owner.add_node_needing_layout(id, 0);
-        owner.add_node_needing_layout(id, 0);
-        owner.debug_doing_layout = false;
-
-        let drained = owner.drain_mid_layout_marks();
-        assert_eq!(
-            drained, 1,
-            "3 repeated mid-phase marks must dedup to 1 entry; got {drained}",
         );
     }
 
