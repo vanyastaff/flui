@@ -1727,6 +1727,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-widgets"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-geometry",
+ "flui-objects",
+ "flui-rendering",
+ "flui-types",
+ "flui-view",
+ "insta",
+ "parking_lot",
+]
+
+[[package]]
 name = "flume"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

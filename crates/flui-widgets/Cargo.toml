@@ -1,0 +1,40 @@
+[package]
+name = "flui-widgets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "User-facing Flutter-style widget catalog for FLUI (configuration objects over the flui-objects render catalog)"
+repository.workspace = true
+keywords = ["ui", "widget", "flutter", "flui", "gui"]
+categories = ["gui"]
+
+[dependencies]
+# Authoring spine: View/Element traits, BuildContext, ViewSeq, keys, derives
+# (also transitively re-exports flui-foundation's ElementId/RenderId).
+flui-view = { path = "../flui-view" }
+# Concrete RenderBox catalog every render-object widget wraps (also re-exports
+# the flex/stack config enums it owns from flui-types).
+flui-objects = { path = "../flui-objects" }
+# Protocol + RenderObject traits + BoxConstraints referenced by `RenderView`.
+flui-rendering = { path = "../flui-rendering" }
+# Styling + typography + layout value types (Alignment, Color, BoxDecoration,
+# TextStyle, …).
+flui-types = { path = "../flui-types" }
+# Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
+flui-geometry = { path = "../flui-geometry" }
+
+[dev-dependencies]
+# Integration tests drive the real layout pipeline through the render harness.
+flui-rendering = { path = "../flui-rendering", features = ["testing"] }
+flui-objects = { path = "../flui-objects", features = ["testing"] }
+flui-types = { path = "../flui-types" }
+flui-foundation = { path = "../flui-foundation" }
+# Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
+parking_lot = { workspace = true }
+# Deterministic paint/layout snapshot assertions.
+insta = { workspace = true }
+
+[features]
+default = []
+serde = ["flui-types/serde"]

@@ -22,6 +22,7 @@ members = [
     "crates/flui-rendering", # Render tree / engine (ACTIVE)
     "crates/flui-objects",   # Concrete RenderBox/RenderSliver catalog (ACTIVE)
     "crates/flui-view",      # View/Element tree (ACTIVE)
+    "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app", # Application framework (ACTIVE - Migration)
@@ -70,6 +71,7 @@ default-members = [
     "crates/flui-rendering",
     "crates/flui-objects",
     "crates/flui-view",
+    "crates/flui-widgets",
     "crates/flui-app",
     "crates/flui-animation",
 ]
