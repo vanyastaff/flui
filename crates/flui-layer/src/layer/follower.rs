@@ -5,8 +5,9 @@
 //! anchor on itself, and the layer's runtime offset is derived from the two
 //! anchors at composite time.
 //!
-//! Anchors use the workspace-canonical [`Alignment`] coordinate system from
-//! `flui-types::painting::alignment` — `(-1, -1)` = top-left, `(0, 0)` =
+//! Anchors use the workspace-canonical [`Alignment`] coordinate system —
+//! `flui_types::painting::Alignment` re-exports the canonical
+//! `flui_types::layout::Alignment` — `(-1, -1)` = top-left, `(0, 0)` =
 //! center, `(+1, +1)` = bottom-right. The pre-cycle representation used
 //! `Offset<Pixels>` in a 0..1 visual-fraction range; the U7 migration unifies
 //! anchor expression with the rest of the painting API and matches Flutter
