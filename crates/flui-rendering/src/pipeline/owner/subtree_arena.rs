@@ -533,7 +533,7 @@ pub(super) fn child_flex_from_seeds(
 // Unsafe walk 1: Box layout
 // ============================================================================
 
-/// Recursive helper for [`PipelineOwner::layout_dirty_root`].
+/// Recursive helper for `PipelineOwner::layout_dirty_root`.
 ///
 /// Reborrows one [`NodePtr`] from the pre-acquired [`SubtreeArena`]
 /// at each call level, drives `perform_layout_raw` against a typed

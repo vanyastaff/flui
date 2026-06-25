@@ -1329,7 +1329,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Adds a node to the layout dirty list.
     ///
     /// Routes into the mid-phase side queue when layout is active, otherwise
-    /// into `dirty.needs_layout`. See [`DirtyTracker::add_node_needing_layout`]
+    /// into `dirty.needs_layout`. See `DirtyTracker::add_node_needing_layout`
     /// for the full routing and dedup contract.
     pub fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
         self.scheduler.add_node_needing_layout(node_id, depth);
@@ -1341,7 +1341,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// **D-block PR-A1 U15** (memo D3) — ports Flutter's `markNeedsLayout`
     /// walk (`.flutter/.../object.dart:2658-2700`). Thin forwarder: the walk
-    /// logic lives in [`DirtyTracker::mark_needs_layout`] so it is
+    /// logic lives in `DirtyTracker::mark_needs_layout` so it is
     /// unit-testable without a full owner. The `scheduler` and `render_tree`
     /// fields are disjoint, so the split borrow compiles.
     pub fn mark_needs_layout(&mut self, id: RenderId) {
@@ -1460,7 +1460,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Adds a node to the paint dirty list.
     ///
     /// Routes into the mid-phase side queue when paint is active, otherwise
-    /// into `dirty.needs_paint`. See [`DirtyTracker::add_node_needing_paint`]
+    /// into `dirty.needs_paint`. See `DirtyTracker::add_node_needing_paint`
     /// for the full routing and dedup contract.
     pub fn add_node_needing_paint(&mut self, node_id: RenderId, depth: usize) {
         self.scheduler.add_node_needing_paint(node_id, depth);
@@ -1471,7 +1471,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Also sets `NEEDS_COMPOSITING_BITS_UPDATE` on the node (atomic) so the
     /// `run_compositing` walk's short-circuit cannot drop this entry. Routes
     /// via `debug_doing_layout` (compositing shares the layout flag). See
-    /// [`DirtyTracker::add_node_needing_compositing_bits_update`] for the
+    /// `DirtyTracker::add_node_needing_compositing_bits_update` for the
     /// full contract.
     ///
     /// The `scheduler` and `render_tree` are disjoint fields: the shared
@@ -1484,7 +1484,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Adds a node to the semantics dirty list.
     ///
     /// Routes via `debug_doing_semantics`. See
-    /// [`DirtyTracker::add_node_needing_semantics`] for the full contract.
+    /// `DirtyTracker::add_node_needing_semantics` for the full contract.
     pub fn add_node_needing_semantics(&mut self, node_id: RenderId, depth: usize) {
         self.scheduler.add_node_needing_semantics(node_id, depth);
     }
@@ -1558,7 +1558,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Drains the mid-phase side queue into the active `dirty` set.
     ///
-    /// Thin forwarder to [`DirtyTracker::drain_mid_marks`]. Available for
+    /// Thin forwarder to `DirtyTracker::drain_mid_marks`. Available for
     /// external callers (e.g. `flui-app`, integration tests) that need to
     /// drain mid-marks between phase invocations without going through the
     /// full phase-exit flow. The `run_*` phase methods drain via
