@@ -33,7 +33,7 @@
 //! let collector = ReconcileEventCollector::new();
 //! let subscriber = Registry::default().with(collector.layer());
 //! tracing::dispatcher::with_default(&tracing::Dispatch::new(subscriber), || {
-//!     // ... code that calls `reconcile_children` ...
+//!     // ... code that drives a reconcile (e.g. `reconcile_children_by_id`) ...
 //! });
 //! let events = collector.events();
 //! assert!(!events.is_empty(), "vacuous-pass guard — must observe events");

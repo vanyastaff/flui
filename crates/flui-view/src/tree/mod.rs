@@ -11,16 +11,6 @@
 mod element_tree;
 pub(crate) mod id_reconcile;
 pub mod reconcile_event;
-// The original box-vec `reconcile_children` is dead in production after the
-// E3 atomic box→arena swap — the slab `id_reconcile` is the live reconciler.
-// It is retained ONLY as the standalone keyed-match + `ReconcileEvent`
-// emission reference (the algorithm KTD-9 will port emission from) and is
-// exercised by its own in-crate tests plus the `test-utils`-gated §U18/§U19
-// corpora. Gating the whole module behind `cfg(test) || feature = "test-utils"`
-// keeps it off the production public API surface entirely (no prelude /
-// crate-root footgun) while preserving that reference and its tests.
-#[cfg(any(test, feature = "test-utils"))]
-mod reconciliation;
 
 // `test_utils` carries the `ReconcileEventCollector` Layer fixture
 // (plan §U14 / FR-035). Gated to `cfg(test)` for in-crate test use
@@ -32,7 +22,3 @@ pub mod test_utils;
 
 pub use element_tree::{ElementNode, ElementTree};
 pub use reconcile_event::{RECONCILE_TARGET, ReconcileEvent, ReconcileEventKind};
-// Surfaced only in test / `test-utils` builds — see the `mod reconciliation`
-// gate above. Absent from the production public API.
-#[cfg(any(test, feature = "test-utils"))]
-pub use reconciliation::reconcile_children;

@@ -514,6 +514,18 @@ impl ElementTree {
             self.nodes[slab_index].registered_global_key_hash = Some(hash);
         }
 
+        // A fresh child node appeared at (parent, slot). Emit `Mount` HERE —
+        // `insert` is the single site that mints child nodes, and the
+        // GlobalKey-retake path above already emitted `Reparent` and returned
+        // early, so the two dispositions can never double-fire for one
+        // new-side view (the reconciler must NOT also emit `Mount`).
+        super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent::mount(
+            parent,
+            slot,
+            view.view_type_id(),
+            view.key().map(ViewKey::key_hash),
+        ));
+
         id
     }
 

@@ -255,7 +255,7 @@ pub type ReconcileResult = [ReconcileAction; TUPLE_ARITY];
 /// 16-tuple case. Builds a `HashMap<u64, u8>` over old `key_hash` -> old
 /// index, then walks new positions looking up by `key_hash`. This is the
 /// **same shape** as the production keyed reconciler's keyed-map-build + walk
-/// phases (`crates/flui-view/src/tree/reconciliation.rs:91-177`), reduced to
+/// phases (`crates/flui-view/src/tree/id_reconcile.rs`), reduced to
 /// the workload kernel.
 ///
 /// O(N) average — the HashMap allocation and per-position hash dispatch are

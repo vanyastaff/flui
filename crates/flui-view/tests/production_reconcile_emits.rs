@@ -22,23 +22,18 @@
 //!   lock available without Variable-arity production widgets.
 //!
 //! - The actual `parent: ElementId` stamping on emitted events is
-//!   verified by the §U18 6-permutation corpus
-//!   (`reconcile_keyed_permutations.rs`), which asserts every
-//!   event's `parent` field matches the threaded `parent_id`. The
-//!   corpus calls `reconcile_children` directly with a synthetic
-//!   `ElementId::new(1)` because the production-path widget
-//!   construction for Variable arity (a `RenderView` with N
-//!   children) needs framework-spine-repair plumbing that lands
-//!   with KTD-9. Until then, the §U18 corpus exercises the
-//!   reconciler post-`parent_id`-stamp; this file exercises the
-//!   set_self_id stamp-itself; and the §U19 reparent test
-//!   exercises the alternate emission site in
-//!   `try_retake_inactive`.
+//!   verified by the S_3 permutation corpus
+//!   (`all_six_permutations_preserve_identity_and_emit_expected`, a
+//!   unit test in `tree::id_reconcile`), which asserts the disposition
+//!   multiset + identity preservation over the slab reconciler with the
+//!   threaded `parent_id`. This file exercises the `set_self_id` stamp
+//!   itself; the §U19 reparent test exercises the alternate emission
+//!   site in `try_retake_inactive`.
 //!
 //! - End-to-end `ElementTree → ElementCore<V, Variable> →
-//!   reconcile_children` chain with a real Variable widget +
-//!   asserted event correlation lands in Phase 2.5 / Phase 3
-//!   alongside KTD-9 + the variable-arity widget catalog.
+//!   reconcile_children_by_id` chain with a real Variable widget +
+//!   asserted event correlation lands alongside the variable-arity
+//!   widget catalog (Phase 2.5 / Phase 3).
 
 #![cfg(feature = "test-utils")]
 
@@ -123,7 +118,7 @@ fn set_self_id_fires_on_insert_no_panic() {
 /// test body itself never runs. The intent is signage: when KTD-9
 /// lands (Phase 2.5 / Phase 3 ID-based Variable storage), the
 /// real end-to-end `ElementTree → ElementCore<V, Variable> →
-/// reconcile_children` lock test will land here too, and this
+/// reconcile_children_by_id` lock test will land here too, and this
 /// `#[ignore]` placeholder converts into the real assertion.
 #[test]
 #[ignore = "Variable-arity end-to-end lock deferred to KTD-9 / Phase 2.5"]
@@ -142,7 +137,7 @@ fn variable_arity_end_to_end_self_id_stamp_deferred_to_ktd9() {
     //     → element.update via perform_build
     //     → ElementCore<V, Variable>::update_or_create_children
     //     → ElementChildStorage::update_with_views(self_id, ...)
-    //     → reconcile_children(parent: self_id, ...)
+    //     → reconcile_children_by_id(parent: self_id, ...)
     //     → emit_event(ReconcileEvent { parent: self_id, ... })
     //
     // Currently unreachable because Variable-arity widget
