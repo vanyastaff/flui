@@ -31,10 +31,7 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     testing::inspect,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
@@ -93,9 +90,6 @@ fn first_picture(tree: &LayerTree) -> &flui_painting::DisplayList {
 struct SimpleRow;
 
 impl flui_foundation::Diagnosticable for SimpleRow {}
-impl PaintEffectsCapability for SimpleRow {}
-impl SemanticsCapability for SimpleRow {}
-impl HotReloadCapability for SimpleRow {}
 
 impl RenderBox for SimpleRow {
     type Arity = Variable;
@@ -258,9 +252,6 @@ struct SliverPaintHost {
 }
 
 impl flui_foundation::Diagnosticable for SliverPaintHost {}
-impl PaintEffectsCapability for SliverPaintHost {}
-impl SemanticsCapability for SliverPaintHost {}
-impl HotReloadCapability for SliverPaintHost {}
 
 impl RenderBox for SliverPaintHost {
     type Arity = Variable;
@@ -282,9 +273,6 @@ impl RenderBox for SliverPaintHost {
 struct PaintLeafSliver;
 
 impl flui_foundation::Diagnosticable for PaintLeafSliver {}
-impl PaintEffectsCapability for PaintLeafSliver {}
-impl SemanticsCapability for PaintLeafSliver {}
-impl HotReloadCapability for PaintLeafSliver {}
 
 impl RenderSliver for PaintLeafSliver {
     type Arity = Leaf;
@@ -319,9 +307,6 @@ impl RenderSliver for PaintLeafSliver {
 struct InvisiblePaintLeafSliver;
 
 impl flui_foundation::Diagnosticable for InvisiblePaintLeafSliver {}
-impl PaintEffectsCapability for InvisiblePaintLeafSliver {}
-impl SemanticsCapability for InvisiblePaintLeafSliver {}
-impl HotReloadCapability for InvisiblePaintLeafSliver {}
 
 impl RenderSliver for InvisiblePaintLeafSliver {
     type Arity = Leaf;

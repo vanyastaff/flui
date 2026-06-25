@@ -60,10 +60,7 @@ use crate::{
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverMultiBoxAdaptorParentData,
     protocol::{BoxChildRef, BoxProtocol, ChildLayout},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderObject, RenderSliver},
     virtualization::{AnchorCorrection, ScrollWindow, Virtualizer},
 };
 
@@ -340,10 +337,6 @@ impl Diagnosticable for RenderSliverListLazy {
         props.add_double("pending_correction", self.pending_correction, Some("px"));
     }
 }
-
-impl PaintEffectsCapability for RenderSliverListLazy {}
-impl SemanticsCapability for RenderSliverListLazy {}
-impl HotReloadCapability for RenderSliverListLazy {}
 
 // ============================================================================
 // RenderSliver impl

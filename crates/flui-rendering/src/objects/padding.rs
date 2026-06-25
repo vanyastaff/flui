@@ -7,7 +7,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A render object that adds padding around its child.
@@ -209,11 +209,6 @@ impl RenderBox for RenderPadding {
         }
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderPadding {}
-impl SemanticsCapability for RenderPadding {}
-impl HotReloadCapability for RenderPadding {}
 
 #[cfg(test)]
 mod tests {

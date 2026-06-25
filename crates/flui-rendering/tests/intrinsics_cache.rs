@@ -21,7 +21,7 @@ use flui_rendering::{
     objects::RenderConstrainedBox,
     pipeline::PipelineOwner,
     storage::IntrinsicDimension,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 use flui_tree::{Leaf, Variable};
 use flui_types::{Size, geometry::px};
@@ -51,9 +51,6 @@ impl CountingLeaf {
 }
 
 impl flui_foundation::Diagnosticable for CountingLeaf {}
-impl PaintEffectsCapability for CountingLeaf {}
-impl SemanticsCapability for CountingLeaf {}
-impl HotReloadCapability for CountingLeaf {}
 
 impl RenderBox for CountingLeaf {
     type Arity = Leaf;
@@ -97,9 +94,6 @@ impl CountingRoot {
 }
 
 impl flui_foundation::Diagnosticable for CountingRoot {}
-impl PaintEffectsCapability for CountingRoot {}
-impl SemanticsCapability for CountingRoot {}
-impl HotReloadCapability for CountingRoot {}
 
 impl RenderBox for CountingRoot {
     type Arity = Variable;

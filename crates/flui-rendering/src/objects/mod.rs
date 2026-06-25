@@ -42,7 +42,7 @@
 //! - [`RenderSliverPadding`] - Pads a single sliver child on all four
 //!   sides, honouring the sliver layout protocol (Core.2 Wave 5a)
 //! - [`RenderSliverOpacity`] - Applies transparency to a single sliver
-//!   child via [`crate::traits::PaintEffectsCapability::paint_alpha`]
+//!   child via [`crate::traits::RenderSliver::paint_alpha`]
 //!   (Core.2 Wave 5a)
 //! - [`RenderSliverIgnorePointer`] - Pointers pass through the sliver
 //!   subtree to siblings beneath in the viewport (Core.2 Wave 5a)

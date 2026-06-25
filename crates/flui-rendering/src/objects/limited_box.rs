@@ -22,7 +22,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A render object that imposes maximum dimensions on its child *only* when
@@ -233,11 +233,6 @@ impl RenderBox for RenderLimitedBox {
         crate::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderLimitedBox {}
-impl SemanticsCapability for RenderLimitedBox {}
-impl HotReloadCapability for RenderLimitedBox {}
 
 // ===========================================================================
 // Tests

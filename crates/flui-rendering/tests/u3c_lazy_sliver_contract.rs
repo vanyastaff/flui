@@ -34,9 +34,7 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     testing::sliver as sliver_presets,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject},
 };
 use flui_tree::{Leaf, Variable};
 use flui_types::{Size, geometry::px};
@@ -62,9 +60,6 @@ impl FixedBox {
 }
 
 impl Diagnosticable for FixedBox {}
-impl PaintEffectsCapability for FixedBox {}
-impl SemanticsCapability for FixedBox {}
-impl HotReloadCapability for FixedBox {}
 
 impl RenderBox for FixedBox {
     type Arity = Leaf;
@@ -95,9 +90,6 @@ impl SliverHost {
 }
 
 impl Diagnosticable for SliverHost {}
-impl PaintEffectsCapability for SliverHost {}
-impl SemanticsCapability for SliverHost {}
-impl HotReloadCapability for SliverHost {}
 
 impl RenderBox for SliverHost {
     type Arity = Variable;
@@ -729,9 +721,6 @@ impl VarBox {
 }
 
 impl Diagnosticable for VarBox {}
-impl PaintEffectsCapability for VarBox {}
-impl SemanticsCapability for VarBox {}
-impl HotReloadCapability for VarBox {}
 
 impl RenderBox for VarBox {
     type Arity = Leaf;
@@ -860,9 +849,6 @@ impl SharedConstraintSliverHost {
 }
 
 impl Diagnosticable for SharedConstraintSliverHost {}
-impl PaintEffectsCapability for SharedConstraintSliverHost {}
-impl SemanticsCapability for SharedConstraintSliverHost {}
-impl HotReloadCapability for SharedConstraintSliverHost {}
 
 impl RenderBox for SharedConstraintSliverHost {
     type Arity = Variable;

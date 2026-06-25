@@ -24,9 +24,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
-    },
+    traits::{RenderBox, TextBaseline},
 };
 
 /// Render object that lays out and paints a styled text span.
@@ -238,10 +236,6 @@ impl RenderBox for RenderParagraph {
         }
     }
 }
-
-impl PaintEffectsCapability for RenderParagraph {}
-impl SemanticsCapability for RenderParagraph {}
-impl HotReloadCapability for RenderParagraph {}
 
 #[cfg(test)]
 mod tests {

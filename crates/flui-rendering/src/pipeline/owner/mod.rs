@@ -3671,9 +3671,6 @@ mod tests {
     }
 
     impl flui_foundation::Diagnosticable for PanickingPaintBox {}
-    impl crate::traits::PaintEffectsCapability for PanickingPaintBox {}
-    impl crate::traits::SemanticsCapability for PanickingPaintBox {}
-    impl crate::traits::HotReloadCapability for PanickingPaintBox {}
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingPaintBox {
         fn perform_layout_raw(
@@ -3727,9 +3724,6 @@ mod tests {
     }
 
     impl flui_foundation::Diagnosticable for PanickingLayoutBox {}
-    impl crate::traits::PaintEffectsCapability for PanickingLayoutBox {}
-    impl crate::traits::SemanticsCapability for PanickingLayoutBox {}
-    impl crate::traits::HotReloadCapability for PanickingLayoutBox {}
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingLayoutBox {
         fn perform_layout_raw(
@@ -4054,9 +4048,6 @@ mod tests {
     }
 
     impl flui_foundation::Diagnosticable for FixedSizeLeaf {}
-    impl crate::traits::PaintEffectsCapability for FixedSizeLeaf {}
-    impl crate::traits::SemanticsCapability for FixedSizeLeaf {}
-    impl crate::traits::HotReloadCapability for FixedSizeLeaf {}
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for FixedSizeLeaf {
         fn perform_layout_raw(

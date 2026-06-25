@@ -16,7 +16,7 @@
 //!   inline; the Rust port keeps the math in one place so the seven
 //!   `BoxFit` variants only have to be debugged once.
 //! * The scale + alignment transform is exposed via
-//!   [`PaintEffectsCapability::paint_transform`] as a single composed
+//!   [`RenderBox::paint_transform`] as a single composed
 //!   [`Matrix4`]. The pipeline wraps the child in a `TransformLayer`
 //!   — no manual canvas-state juggling in `paint`. Flutter does the
 //!   same via its `_transform` layer machinery; the Rust shape just
@@ -44,9 +44,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
-    },
+    traits::{RenderBox, TextBaseline},
 };
 
 /// A render object that scales its child to fit its own box.
@@ -61,7 +59,7 @@ pub struct RenderFittedBox {
     clip_behavior: Clip,
     has_child: bool,
     /// Cached scale factors derived in layout, consumed by
-    /// [`PaintEffectsCapability::paint_transform`].
+    /// [`RenderBox::paint_transform`].
     scale_x: f32,
     scale_y: f32,
     /// Cached child top-left offset inside `size`.
@@ -357,15 +355,15 @@ impl RenderBox for RenderFittedBox {
         let (tx, ty) = inverse.transform_point(pos.dx, pos.dy);
         ctx.hit_test_child(0, Offset::new(tx, ty))
     }
-}
 
-// Mythos Step 11: PaintEffectsCapability override.
-//
-// `paint_transform` returns the composed translate-then-scale matrix
-// the pipeline applies via its `TransformLayer` wrapper. Layout caches
-// the scale factors and alignment offset, so this method is a pure read
-// and does not need the driver-supplied `size`.
-impl PaintEffectsCapability for RenderFittedBox {
+    // The `paint_transform` override is the whole point of RenderFittedBox:
+    // the pipeline reads it through `&dyn RenderObject<BoxProtocol>` via the
+    // blanket impl forwarding here.
+    //
+    // Returns the composed translate-then-scale matrix the pipeline applies via
+    // its `TransformLayer` wrapper. Layout caches the scale factors and
+    // alignment offset, so this method is a pure read and does not need the
+    // driver-supplied `size`.
     fn paint_transform(&self, _size: Size) -> Option<Matrix4> {
         if !self.has_child {
             return None;
@@ -376,9 +374,6 @@ impl PaintEffectsCapability for RenderFittedBox {
         Some(self.effective_transform())
     }
 }
-
-impl SemanticsCapability for RenderFittedBox {}
-impl HotReloadCapability for RenderFittedBox {}
 
 // ===========================================================================
 // Tests

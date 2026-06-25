@@ -326,7 +326,7 @@ fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
         hit_testing::HitTestBehavior,
-        traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+        traits::RenderBox,
     };
     use flui_tree::Single;
 
@@ -337,9 +337,6 @@ fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
     struct PanickingNonLeaf;
 
     impl Diagnosticable for PanickingNonLeaf {}
-    impl PaintEffectsCapability for PanickingNonLeaf {}
-    impl SemanticsCapability for PanickingNonLeaf {}
-    impl HotReloadCapability for PanickingNonLeaf {}
 
     impl RenderBox for PanickingNonLeaf {
         type Arity = Single;
@@ -491,7 +488,7 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
         constraints::SliverGeometry,
         context::{SliverHitTestContext, SliverLayoutContext},
         protocol::SliverProtocol,
-        traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+        traits::RenderSliver,
     };
     use flui_tree::Leaf;
 
@@ -502,9 +499,6 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
     struct StubSliver;
 
     impl flui_foundation::Diagnosticable for StubSliver {}
-    impl PaintEffectsCapability for StubSliver {}
-    impl SemanticsCapability for StubSliver {}
-    impl HotReloadCapability for StubSliver {}
 
     impl RenderSliver for StubSliver {
         type Arity = Leaf;

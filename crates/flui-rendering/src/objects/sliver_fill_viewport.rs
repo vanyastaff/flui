@@ -8,7 +8,7 @@ use crate::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    traits::RenderSliver,
 };
 
 /// A sliver that sizes each direct Box child to a fraction of the viewport's
@@ -102,10 +102,6 @@ impl Diagnosticable for RenderSliverFillViewport {
         properties.add_double("viewport_fraction", self.viewport_fraction, None);
     }
 }
-impl PaintEffectsCapability for RenderSliverFillViewport {}
-impl SemanticsCapability for RenderSliverFillViewport {}
-impl HotReloadCapability for RenderSliverFillViewport {}
-
 impl RenderSliver for RenderSliverFillViewport {
     type Arity = Variable;
     type ParentData = SliverPhysicalParentData;

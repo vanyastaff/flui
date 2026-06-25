@@ -6,7 +6,7 @@ use flui_types::{Offset, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A render object that applies transparency to its child.
@@ -169,13 +169,9 @@ impl RenderBox for RenderOpacity {
             false
         }
     }
-}
 
-// Mythos Step 11: PaintEffectsCapability override -- the whole point of
-// RenderOpacity. The pipeline reads paint_alpha through a
-// `&dyn RenderObject<BoxProtocol>`; PaintEffectsCapability is a
-// supertrait of RenderObject<P>, so the call resolves here.
-impl PaintEffectsCapability for RenderOpacity {
+    // The whole point of RenderOpacity: the pipeline reads paint_alpha through
+    // `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards here.
     fn paint_alpha(&self) -> Option<u8> {
         // None when fully opaque (255) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
@@ -194,9 +190,6 @@ impl PaintEffectsCapability for RenderOpacity {
         self.alpha == 0 && !self.always_needs_compositing
     }
 }
-
-impl SemanticsCapability for RenderOpacity {}
-impl HotReloadCapability for RenderOpacity {}
 
 #[cfg(test)]
 mod tests {

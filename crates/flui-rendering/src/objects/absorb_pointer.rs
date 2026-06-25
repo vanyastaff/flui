@@ -26,7 +26,7 @@ use flui_types::{Offset, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A render object that, when `absorbing` is true, takes any pointer
@@ -118,11 +118,6 @@ impl RenderBox for RenderAbsorbPointer {
         }
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderAbsorbPointer {}
-impl SemanticsCapability for RenderAbsorbPointer {}
-impl HotReloadCapability for RenderAbsorbPointer {}
 
 // ===========================================================================
 // Tests

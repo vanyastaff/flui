@@ -26,10 +26,7 @@ use flui_rendering::{
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
@@ -74,9 +71,6 @@ fn make_sliver_constraints() -> SliverConstraints {
 struct StubLeafSliver;
 
 impl Diagnosticable for StubLeafSliver {}
-impl PaintEffectsCapability for StubLeafSliver {}
-impl SemanticsCapability for StubLeafSliver {}
-impl HotReloadCapability for StubLeafSliver {}
 
 impl RenderSliver for StubLeafSliver {
     type Arity = Leaf;
@@ -127,9 +121,6 @@ impl std::fmt::Debug for BoxWithSliverChild {
 }
 
 impl Diagnosticable for BoxWithSliverChild {}
-impl PaintEffectsCapability for BoxWithSliverChild {}
-impl SemanticsCapability for BoxWithSliverChild {}
-impl HotReloadCapability for BoxWithSliverChild {}
 
 impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;

@@ -47,7 +47,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
     parent_data::StackParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 // =============================================================================
@@ -502,11 +502,6 @@ impl RenderBox for RenderStack {
         false
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderStack {}
-impl SemanticsCapability for RenderStack {}
-impl HotReloadCapability for RenderStack {}
 
 // =============================================================================
 // Tests

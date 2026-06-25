@@ -25,7 +25,7 @@ use flui_types::{Offset, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A render object that, when `ignoring` is true, returns `false` from
@@ -113,11 +113,6 @@ impl RenderBox for RenderIgnorePointer {
         }
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderIgnorePointer {}
-impl SemanticsCapability for RenderIgnorePointer {}
-impl HotReloadCapability for RenderIgnorePointer {}
 
 // ===========================================================================
 // Tests

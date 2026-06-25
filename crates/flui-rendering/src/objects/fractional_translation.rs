@@ -28,7 +28,7 @@ use flui_types::{Offset, Size, geometry::px};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 // =============================================================================
@@ -218,11 +218,6 @@ impl RenderBox for RenderFractionalTranslation {
         }
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderFractionalTranslation {}
-impl SemanticsCapability for RenderFractionalTranslation {}
-impl HotReloadCapability for RenderFractionalTranslation {}
 
 // ===========================================================================
 // Tests

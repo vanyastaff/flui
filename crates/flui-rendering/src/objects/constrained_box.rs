@@ -23,7 +23,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A render object that applies *additional* constraints to its child.
@@ -272,11 +272,6 @@ impl RenderBox for RenderConstrainedBox {
         }
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderConstrainedBox {}
-impl SemanticsCapability for RenderConstrainedBox {}
-impl HotReloadCapability for RenderConstrainedBox {}
 
 // ===========================================================================
 // Tests

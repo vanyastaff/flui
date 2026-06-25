@@ -4,10 +4,8 @@ use flui_tree::Leaf;
 use flui_types::{Pixels, Size};
 
 use crate::{
-    constraints::BoxConstraints,
-    context::BoxLayoutContext,
-    parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
+    traits::RenderBox,
 };
 
 /// A render object that forces a specific size.
@@ -155,11 +153,6 @@ impl RenderBox for RenderSizedBox {
 
     // paint() uses default no-op - SizedBox only affects layout
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderSizedBox {}
-impl SemanticsCapability for RenderSizedBox {}
-impl HotReloadCapability for RenderSizedBox {}
 
 #[cfg(test)]
 mod tests {

@@ -8,9 +8,7 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     testing::{inspect, sliver as sliver_presets},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject},
 };
 use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
@@ -94,9 +92,6 @@ impl FixedHitBox {
 }
 
 impl flui_foundation::Diagnosticable for FixedHitBox {}
-impl PaintEffectsCapability for FixedHitBox {}
-impl SemanticsCapability for FixedHitBox {}
-impl HotReloadCapability for FixedHitBox {}
 
 impl RenderBox for FixedHitBox {
     type Arity = Leaf;
@@ -120,9 +115,6 @@ struct SliverHost {
 }
 
 impl flui_foundation::Diagnosticable for SliverHost {}
-impl PaintEffectsCapability for SliverHost {}
-impl SemanticsCapability for SliverHost {}
-impl HotReloadCapability for SliverHost {}
 
 impl RenderBox for SliverHost {
     type Arity = flui_tree::Variable;

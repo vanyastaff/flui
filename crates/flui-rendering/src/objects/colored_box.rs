@@ -5,10 +5,8 @@ use flui_tree::Leaf;
 use flui_types::{Color, Point, Rect, Size, geometry::px};
 
 use crate::{
-    constraints::BoxConstraints,
-    context::BoxLayoutContext,
-    parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
+    traits::RenderBox,
 };
 
 /// A render object that paints a colored rectangle.
@@ -138,11 +136,6 @@ impl RenderBox for RenderColoredBox {
         ctx.canvas().draw_rect(rect, &Paint::fill(color));
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderColoredBox {}
-impl SemanticsCapability for RenderColoredBox {}
-impl HotReloadCapability for RenderColoredBox {}
 
 #[cfg(test)]
 mod tests {

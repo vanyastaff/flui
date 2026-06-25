@@ -9,9 +9,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxDryBaselineCtx, BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
-    },
+    traits::{RenderBox, TextBaseline},
 };
 
 /// Positions its child so the child's [`TextBaseline`] sits at
@@ -129,7 +127,3 @@ impl RenderBox for RenderBaseline {
         }
     }
 }
-
-impl PaintEffectsCapability for RenderBaseline {}
-impl SemanticsCapability for RenderBaseline {}
-impl HotReloadCapability for RenderBaseline {}

@@ -41,121 +41,6 @@ use crate::{
     semantics::SemanticsConfiguration,
 };
 
-// ============================================================================
-// Capability Traits (Mythos Step 11 extension-trait split)
-// ============================================================================
-
-/// Optional paint-effect hooks (alpha + transform layers).
-///
-/// Only render objects that actually emit OpacityLayer / TransformLayer
-/// implement non-default behaviour here -- RenderOpacity overrides
-/// `paint_alpha`, RenderTransform overrides `paint_transform`. Other
-/// concrete types get the default `None` for both and the paint phase
-/// skips the layer-wrapping path.
-///
-/// This trait is a supertrait of `RenderObject<P>`; the pipeline reads
-/// these methods through a `&dyn RenderObject<P>` and the call resolves
-/// to whichever impl the concrete type provided.
-pub trait PaintEffectsCapability {
-    /// Returns the alpha value to apply to children.
-    ///
-    /// If `Some(alpha)`, the painting pipeline wraps children in an
-    /// OpacityLayer. Used by `RenderOpacity` to implement opacity
-    /// animations. Default: `None` (no opacity effect).
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
-
-    /// Returns the blend mode for the opacity layer wrapping children.
-    ///
-    /// If `Some(mode)`, the pipeline passes the mode to
-    /// `OpacityLayer::with_blend` so advanced blend modes (Multiply, Screen,
-    /// etc.) are preserved through the layer-tree compositor path.
-    ///
-    /// Returns `None` (= `SrcOver`) for all standard render objects.
-    /// Override in the `RenderOpacity`-family when a saveLayer blend mode
-    /// must propagate to the engine.
-    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
-        None
-    }
-
-    /// Whether this render object should suppress all child painting.
-    ///
-    /// Returns `true` when the node is fully transparent and no children
-    /// should be painted (e.g. `RenderOpacity` / `RenderSliverOpacity`
-    /// at `alpha == 0` without the `always_needs_compositing` flag).
-    /// The pipeline owner calls this BEFORE recording child fragments to
-    /// avoid generating invisible GPU draws.
-    ///
-    /// Flutter equivalent: `RenderSliverOpacity.paint` / `RenderOpacity.paint`
-    /// early-return when `_alpha == 0`.
-    ///
-    /// Default: `false` (most render objects always paint their children).
-    fn skip_paint(&self) -> bool {
-        false
-    }
-
-    /// Returns the transform matrix to apply to children.
-    ///
-    /// If `Some(matrix)`, the painting pipeline wraps children in a
-    /// TransformLayer. Used by `RenderTransform` to implement transform
-    /// animations. Default: `None` (no transform effect).
-    ///
-    /// `size` is the node's laid-out size, resolved by the driver from
-    /// [`RenderState`](crate::storage::RenderState) (2B field dedup) —
-    /// transform objects pivoting around an alignment-relative origin read
-    /// it instead of caching their own size.
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        let _ = size;
-        None
-    }
-
-    /// Returns the transform matrix for hit testing.
-    ///
-    /// If `Some(matrix)`, the hit-test pipeline pushes this transform
-    /// onto the `HitTestResult` stack before recursing into children,
-    /// so child entries capture the correct accumulated transform.
-    /// Default: `None` (no transform — uses identity).
-    ///
-    /// Typically the same as [`paint_transform`](Self::paint_transform).
-    /// Render objects that apply transforms for painting but not for
-    /// hit testing (e.g. decorative-only transforms) can override this
-    /// to return `None`. `size` is the laid-out size from `RenderState`
-    /// (same channel as `paint_transform`).
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        let _ = size;
-        None
-    }
-}
-
-/// Optional semantics-tree contribution.
-///
-/// Render objects that describe themselves to the accessibility tree
-/// override `describe_semantics_configuration`. Default no-op.
-///
-/// This trait is a supertrait of `RenderObject<P>`.
-pub trait SemanticsCapability {
-    /// Describes semantic properties for accessibility.
-    ///
-    /// Called when building the semantics tree. Override to provide
-    /// labels, actions, or other semantic information. Default: no-op.
-    fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
-}
-
-/// Optional hot-reload reassembly hook.
-///
-/// Default no-op. Used by render objects that need to invalidate
-/// cached state after a hot-reload.
-///
-/// This trait is a supertrait of `RenderObject<P>`.
-pub trait HotReloadCapability {
-    /// Marks this render object for reprocessing after hot reload.
-    ///
-    /// Called by the framework after code changes. The storage layer
-    /// will mark this node dirty and reprocess it. Default: no-op.
-    fn reassemble(&mut self) {}
-}
-
 /// Base trait for all render objects in the render tree.
 ///
 /// This trait defines the minimal interface required by the storage layer
@@ -168,19 +53,33 @@ pub trait HotReloadCapability {
 ///
 /// - `P`: The layout protocol (BoxProtocol or SliverProtocol)
 ///
-/// # Capability Traits
+/// # Effect-layer and Lifecycle Methods
 ///
-/// `RenderObject<P>` carries three capability supertraits whose methods
-/// are reachable through any `&dyn RenderObject<P>`:
+/// `RenderObject<P>` carries seven defaulted methods that are the former
+/// capability-supertrait surface, now inlined directly on this trait so
+/// concrete types need no boilerplate impl blocks:
 ///
-/// - [`PaintEffectsCapability`] -- `paint_alpha`, `paint_transform`
-/// - [`SemanticsCapability`] -- `describe_semantics_configuration`
-/// - [`HotReloadCapability`] -- `reassemble`
+/// - `paint_alpha`, `paint_layer_blend`, `skip_paint`, `paint_transform`,
+///   `hit_test_transform` — paint-effect hooks (default `None`/`false`)
+/// - `describe_semantics_configuration` — accessibility hook (default no-op)
+/// - `reassemble` — hot-reload hook (default no-op; see note below)
 ///
-/// All three default to no-op / `None`. Concrete render objects opt in
-/// by writing `impl <Capability> for MyRenderObject { ... }`; the empty
-/// `impl <Capability> for MyRenderObject {}` is the explicit opt-out
-/// (uses all defaults).
+/// All default to no-op / `None`. Override on `RenderBox` or `RenderSliver`
+/// (the blanket impls forward every call from `RenderObject<P>` to the
+/// protocol-specific trait). Direct `RenderObject<P>` impls (e.g.
+/// `RenderViewAdapter`) get the defaults for free.
+///
+/// # Hot-reload note
+///
+/// `reassemble` is a documented FLUI divergence: Flutter's
+/// `RenderObject.reassemble()` calls `markNeedsLayout` /
+/// `markNeedsPaint` / `markNeedsCompositingBitsUpdate` /
+/// `markNeedsSemanticsUpdate` / `visitChildren` — all pipeline-owner
+/// operations that require traversing the render tree via
+/// `PipelineOwner`. FLUI's object-level default is a no-op because
+/// render objects do not hold a pipeline-owner handle; the real fix
+/// (`PipelineOwner::reassemble_subtree`) is tracked as the hot-reload
+/// epic and deferred deliberately.
 ///
 /// # Storage Integration
 ///
@@ -190,16 +89,7 @@ pub trait HotReloadCapability {
 /// - Thread-safe access via `RwLock`
 ///
 /// The storage layer calls these trait methods to drive the rendering pipeline.
-pub trait RenderObject<P: Protocol>:
-    Diagnosticable
-    + DowncastSync
-    + Send
-    + Sync
-    + 'static
-    + PaintEffectsCapability
-    + SemanticsCapability
-    + HotReloadCapability
-{
+pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync + 'static {
     // ========================================================================
     // Core Operations
     // ========================================================================
@@ -464,20 +354,74 @@ pub trait RenderObject<P: Protocol>:
     // ========================================================================
     // Effect Layers
     // ========================================================================
-    //
-    // paint_alpha and paint_transform live on PaintEffectsCapability
-    // (Mythos Step 11 extension-trait split). They are still reachable
-    // through `&dyn RenderObject<P>` because PaintEffectsCapability is a
-    // supertrait, but a render object that doesn't apply any effect
-    // layers no longer has to carry the default impls on the core trait.
+
+    /// Returns the alpha value to apply to children.
+    ///
+    /// If `Some(alpha)`, the painting pipeline wraps children in an
+    /// `OpacityLayer`. Used by `RenderOpacity` to implement opacity
+    /// animations. Override on [`RenderBox`](crate::traits::RenderBox) or
+    /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
+    /// forward the call here. Default: `None` (no opacity effect).
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the blend mode for the opacity layer wrapping children.
+    ///
+    /// If `Some(mode)`, the pipeline passes the mode to
+    /// `OpacityLayer::with_blend` so advanced blend modes (Multiply, Screen,
+    /// etc.) are preserved through the layer-tree compositor path.
+    /// Default: `None` (= `SrcOver`).
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        None
+    }
+
+    /// Whether this render object should suppress all child painting.
+    ///
+    /// Returns `true` when the node is fully transparent and no children
+    /// should be painted (e.g. `RenderOpacity` / `RenderSliverOpacity`
+    /// at `alpha == 0` without the `always_needs_compositing` flag).
+    /// Default: `false`.
+    fn skip_paint(&self) -> bool {
+        false
+    }
+
+    /// Returns the transform matrix to apply to children.
+    ///
+    /// If `Some(matrix)`, the painting pipeline wraps children in a
+    /// `TransformLayer`. `size` is the node's laid-out size from
+    /// [`RenderState`](crate::storage::RenderState) (2B field dedup).
+    /// Default: `None` (no transform effect).
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// Returns the transform matrix for hit testing.
+    ///
+    /// If `Some(matrix)`, the hit-test pipeline pushes this transform
+    /// onto the `HitTestResult` stack before recursing into children.
+    /// Default: `None` (no transform — uses identity).
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
 
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
-    //
-    // describe_semantics_configuration lives on SemanticsCapability.
-    // reassemble lives on HotReloadCapability. Both are supertraits of
-    // RenderObject<P>; reachable through the dyn pointer.
+
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Called when building the semantics tree. Override to provide
+    /// labels, actions, or other semantic information. Default: no-op.
+    fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
+
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Default: no-op. See the *Hot-reload note* in the trait doc for the
+    /// reason this is a documented FLUI divergence from Flutter semantics.
+    fn reassemble(&mut self) {}
 
     // ========================================================================
     // Children Access (для pipeline/owner.rs)

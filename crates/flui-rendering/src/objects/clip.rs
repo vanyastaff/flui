@@ -62,7 +62,7 @@ use flui_types::{
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 // =============================================================================
@@ -544,11 +544,6 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         }
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl<S: ClipGeometry> PaintEffectsCapability for RenderClip<S> {}
-impl<S: ClipGeometry> SemanticsCapability for RenderClip<S> {}
-impl<S: ClipGeometry> HotReloadCapability for RenderClip<S> {}
 
 // =============================================================================
 // Type aliases — ergonomic per-shape names matching Flutter's class names.

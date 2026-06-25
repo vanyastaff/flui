@@ -25,7 +25,7 @@ use crate::{
     constraints::{BoxConstraints, Constraints},
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A validated, positive, finite width-to-height ratio.
@@ -359,11 +359,6 @@ impl RenderBox for RenderAspectRatio {
         ctx.child_dry_baseline(0, tight, baseline)
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderAspectRatio {}
-impl SemanticsCapability for RenderAspectRatio {}
-impl HotReloadCapability for RenderAspectRatio {}
 
 // ===========================================================================
 // Tests

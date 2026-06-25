@@ -32,7 +32,7 @@ use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     hit_testing::HitTestBehavior,
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// Type-erased metadata payload attached to a `RenderMetaData` node.
@@ -216,11 +216,6 @@ impl RenderBox for RenderMetaData {
         self.behavior.registers_self()
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderMetaData {}
-impl SemanticsCapability for RenderMetaData {}
-impl HotReloadCapability for RenderMetaData {}
 
 // ===========================================================================
 // Tests

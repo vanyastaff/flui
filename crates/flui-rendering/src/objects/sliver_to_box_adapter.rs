@@ -12,7 +12,7 @@ use crate::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    traits::RenderSliver,
 };
 
 /// A Sliver-protocol adapter that lays out one Box-protocol child.
@@ -43,10 +43,6 @@ impl Default for RenderSliverToBoxAdapter {
 // Geometry-only adapter: no configurable fields to surface. The committed
 // sliver geometry is layered onto the diagnostics node by the tree walk.
 impl Diagnosticable for RenderSliverToBoxAdapter {}
-impl PaintEffectsCapability for RenderSliverToBoxAdapter {}
-impl SemanticsCapability for RenderSliverToBoxAdapter {}
-impl HotReloadCapability for RenderSliverToBoxAdapter {}
-
 impl RenderSliver for RenderSliverToBoxAdapter {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;

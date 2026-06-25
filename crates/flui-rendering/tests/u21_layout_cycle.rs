@@ -164,7 +164,7 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
         context::{BoxHitTestContext, BoxLayoutContext},
         hit_testing::HitTestBehavior,
         parent_data::BoxParentData,
-        traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+        traits::RenderBox,
     };
     use flui_tree::Single;
     /// Single-arity user widget that panics on the FIRST perform_layout
@@ -175,9 +175,6 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
     }
 
     impl Diagnosticable for PanicOnceWidget {}
-    impl PaintEffectsCapability for PanicOnceWidget {}
-    impl SemanticsCapability for PanicOnceWidget {}
-    impl HotReloadCapability for PanicOnceWidget {}
 
     impl RenderBox for PanicOnceWidget {
         type Arity = Single;

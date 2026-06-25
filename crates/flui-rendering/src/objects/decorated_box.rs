@@ -15,7 +15,7 @@ use flui_types::{Offset, Pixels, Point, Rect, Size, styling::BoxDecoration};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// Where the decoration paints relative to the child.
@@ -139,12 +139,6 @@ impl RenderBox for RenderDecoratedBox {
         true
     }
 }
-
-// Capability opt-outs: the decoration is plain canvas content, no
-// layer-level effects.
-impl PaintEffectsCapability for RenderDecoratedBox {}
-impl SemanticsCapability for RenderDecoratedBox {}
-impl HotReloadCapability for RenderDecoratedBox {}
 
 #[cfg(test)]
 mod tests {

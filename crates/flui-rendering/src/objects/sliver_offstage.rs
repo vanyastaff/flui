@@ -29,7 +29,7 @@ use crate::{
     constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    traits::RenderSliver,
 };
 
 // ============================================================================
@@ -147,11 +147,6 @@ impl RenderSliver for RenderSliverOffstage {
         ctx.hit_test_child(0, position)
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderSliverOffstage {}
-impl SemanticsCapability for RenderSliverOffstage {}
-impl HotReloadCapability for RenderSliverOffstage {}
 
 // ============================================================================
 // Tests
