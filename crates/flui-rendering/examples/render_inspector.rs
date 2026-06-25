@@ -15,12 +15,10 @@
 //! shipped library code (the harness itself never writes to stdout — it only
 //! returns reports and values).
 
-use flui_rendering::{
-    objects::{
-        RenderColoredBox, RenderFlex, RenderPadding, RenderSliverFixedExtentList, RenderViewport,
-    },
-    testing::{Probe, RenderTester, box_node, sliver_node},
+use flui_objects::{
+    RenderColoredBox, RenderFlex, RenderPadding, RenderSliverFixedExtentList, RenderViewport,
 };
+use flui_rendering::testing::{Probe, RenderTester, box_node, sliver_node};
 use flui_types::{Size, geometry::px, layout::AxisDirection};
 
 fn header(title: &str) {

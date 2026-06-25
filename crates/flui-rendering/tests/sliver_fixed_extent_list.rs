@@ -1,9 +1,9 @@
 //! `RenderSliverFixedExtentList` — direct Box children with a fixed main-axis extent.
 
+use flui_objects::RenderSliverFixedExtentList;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::RenderSliverFixedExtentList,
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},

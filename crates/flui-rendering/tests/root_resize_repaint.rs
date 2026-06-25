@@ -12,10 +12,10 @@
 //! exposed area stays unpainted forever.
 
 use flui_layer::Layer;
+use flui_objects::RenderColoredBox;
 use flui_painting::DisplayListCore;
 use flui_rendering::{
     constraints::BoxConstraints,
-    objects::RenderColoredBox,
     pipeline::PipelineOwner,
     view::{RenderView, RenderViewAdapter, ViewConfiguration},
 };

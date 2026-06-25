@@ -21,10 +21,10 @@
 //!   * PR #143 (perform_layout_raw → Result)
 
 use flui_foundation::RenderId;
+use flui_objects::{RenderCenter, RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     error::RenderError,
-    objects::{RenderCenter, RenderColoredBox, RenderPadding},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, RenderObject},
 };

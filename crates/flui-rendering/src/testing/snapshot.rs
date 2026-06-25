@@ -1256,18 +1256,72 @@ mod tests {
     }
 
     // ── LayerTree serialization tests ─────────────────────────────────────────
+    //
+    // These tests drive the real pipeline to produce a layer tree and then
+    // inspect serialize_layer_tree / collect_commands output. We use a local
+    // `RedBox` leaf stub instead of `flui_objects::RenderColoredBox` to keep
+    // flui-rendering's own test suite free of a dependency on flui-objects
+    // (concrete objects moved there as part of ADR-0008; see plan §C1).
 
-    /// Mounting a `RenderColoredBox::red(40, 40)` and running a frame must
-    /// produce a serialized layer tree containing `"Picture"` and the stable
-    /// `DrawRect` line for the painted rectangle.
+    mod layer_tree_helpers {
+        use flui_tree::Leaf;
+        use flui_types::{Color, Point, Rect, Size, geometry::px};
+
+        use crate::{
+            context::BoxLayoutContext, parent_data::BoxParentData, pipeline::Paint,
+            traits::RenderBox,
+        };
+
+        /// Minimal leaf that fills its area with a solid color.
+        /// Replaces `RenderColoredBox` in serialization harness tests.
+        #[derive(Debug)]
+        pub(super) struct RedBox {
+            size: Size,
+        }
+
+        impl RedBox {
+            pub(super) fn fixed(width: f32, height: f32) -> Self {
+                Self {
+                    size: Size::new(px(width), px(height)),
+                }
+            }
+        }
+
+        impl flui_foundation::Diagnosticable for RedBox {}
+
+        impl RenderBox for RedBox {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+
+            fn perform_layout(
+                &mut self,
+                ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> Size {
+                ctx.constraints().constrain(self.size)
+            }
+
+            fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Leaf>) {
+                let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+                ctx.canvas().draw_rect(
+                    rect,
+                    &Paint::fill(Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0])),
+                );
+            }
+        }
+    }
+
+    use layer_tree_helpers::RedBox;
+
+    /// Mounting a fixed 40×40 red box and running a frame must produce a
+    /// serialized layer tree containing `"Picture"` and the stable `DrawRect`
+    /// line for the painted rectangle.
     #[test]
     fn serialize_simple_box_is_stable() {
         use flui_types::Size;
 
-        use crate::objects::RenderColoredBox;
         use crate::testing::{RenderTester, box_node, serialize_layer_tree};
 
-        let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
+        let run = RenderTester::mount(box_node(RedBox::fixed(40.0, 40.0)))
             .with_size(Size::new(px(40.0), px(40.0)))
             .run_frame();
 
@@ -1286,16 +1340,15 @@ mod tests {
         );
     }
 
-    /// `collect_commands` on a `RenderColoredBox` frame must return a non-empty
+    /// `collect_commands` on a fixed red box frame must return a non-empty
     /// `Vec` whose first element has `kind == DrawKind::Rect`.
     #[test]
     fn collect_commands_red_box_first_is_rect() {
         use flui_types::Size;
 
-        use crate::objects::RenderColoredBox;
         use crate::testing::{RenderTester, box_node, collect_commands};
 
-        let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
+        let run = RenderTester::mount(box_node(RedBox::fixed(40.0, 40.0)))
             .with_size(Size::new(px(40.0), px(40.0)))
             .run_frame();
 

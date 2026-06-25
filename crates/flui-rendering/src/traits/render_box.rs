@@ -361,6 +361,29 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// Whether this node is a repaint boundary.
+    ///
+    /// Override and return `true` to have the pipeline allocate a dedicated
+    /// compositing layer for this subtree.  When the child tree repaints, only
+    /// this subtree's layer is invalidated — siblings and ancestors keep their
+    /// cached paint output.
+    ///
+    /// Default: `false`. See [`RenderObject::is_repaint_boundary`].
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    /// Whether this node always needs its own compositing layer.
+    ///
+    /// Override and return `true` for nodes that apply an effect (clip,
+    /// backdrop filter, etc.) that requires a dedicated layer even when no
+    /// children need repainting.
+    ///
+    /// Default: `false`. See [`RenderObject::always_needs_compositing`].
+    fn always_needs_compositing(&self) -> bool {
+        false
+    }
+
     /// Whether this render object should suppress all child painting.
     ///
     /// Default: `false`. See
@@ -406,6 +429,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// Default: no-op. See
     /// [`RenderObject::reassemble`].
     fn reassemble(&mut self) {}
+
+    /// Short human-readable name for diagnostics and error messages.
+    ///
+    /// Default: [`core::any::type_name::<Self>()`] (the fully-qualified Rust
+    /// type name). Override to return a stable short name (e.g.
+    /// `"RenderPadding"`) that is independent of crate layout.
+    /// See [`RenderObject::debug_name`].
+    fn debug_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
 }
 
 /// Text baseline types for baseline alignment.
@@ -590,6 +623,14 @@ where
     // Effect-layer and lifecycle forwards — mirror the `actual_baseline_raw`
     // pattern: call into the RenderBox method so overrides on RenderBox are
     // visible through `&dyn RenderObject<BoxProtocol>`.
+    fn is_repaint_boundary(&self) -> bool {
+        <T as RenderBox>::is_repaint_boundary(self)
+    }
+
+    fn always_needs_compositing(&self) -> bool {
+        <T as RenderBox>::always_needs_compositing(self)
+    }
+
     fn paint_alpha(&self) -> Option<u8> {
         <T as RenderBox>::paint_alpha(self)
     }
@@ -619,6 +660,10 @@ where
 
     fn reassemble(&mut self) {
         <T as RenderBox>::reassemble(self)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        <T as RenderBox>::debug_name(self)
     }
 }
 

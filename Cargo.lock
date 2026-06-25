@@ -1323,6 +1323,7 @@ dependencies = [
  "flui-foundation",
  "flui-hot-reload",
  "flui-layer",
+ "flui-objects",
  "flui-painting",
  "flui-platform",
  "flui-rendering",
@@ -1364,6 +1365,7 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
+ "flui-objects",
  "flui-painting",
  "flui-platform",
  "flui-rendering",
@@ -1521,6 +1523,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-objects"
+version = "0.1.0"
+dependencies = [
+ "flui-animation",
+ "flui-foundation",
+ "flui-objects",
+ "flui-painting",
+ "flui-rendering",
+ "flui-scheduler",
+ "flui-tree",
+ "flui-types",
+ "insta",
+ "tracing",
+]
+
+[[package]]
 name = "flui-painting"
 version = "0.1.0"
 dependencies = [
@@ -1590,6 +1608,7 @@ dependencies = [
  "flui-foundation",
  "flui-interaction",
  "flui-layer",
+ "flui-objects",
  "flui-painting",
  "flui-rendering",
  "flui-scheduler",
@@ -1669,6 +1688,7 @@ dependencies = [
  "dyn-clone",
  "flui-foundation",
  "flui-macros",
+ "flui-objects",
  "flui-rendering",
  "flui-tree",
  "flui-types",

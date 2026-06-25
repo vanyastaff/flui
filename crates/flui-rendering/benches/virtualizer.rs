@@ -42,11 +42,11 @@ use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::Diagnosticable;
+use flui_objects::RenderSliverListLazy;
 use flui_rendering::{
     PipelineOwner,
     constraints::{BoxConstraints, SliverConstraints},
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::RenderSliverListLazy,
     parent_data::BoxParentData,
     pipeline::Layout,
     protocol::{BoxProtocol, SliverProtocol},

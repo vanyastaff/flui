@@ -21,9 +21,9 @@ use crate::parent_data::{
 /// write onto its child before layout.
 #[derive(Debug, Clone)]
 pub enum ParentDataSeed {
-    /// [`StackParentData`] for [`RenderStack`](crate::objects::RenderStack) children.
+    /// [`StackParentData`] for `RenderStack` (see `flui_objects::RenderStack`) children.
     Stack(StackParentData),
-    /// [`FlexParentData`] for [`RenderFlex`](crate::objects::RenderFlex) children.
+    /// [`FlexParentData`] for `RenderFlex` (see `flui_objects::RenderFlex`) children.
     Flex(FlexParentData),
     /// Default box offset slot (rarely needed — most parents use
     /// [`StackParentData`] / [`FlexParentData`] instead).

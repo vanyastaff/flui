@@ -120,7 +120,8 @@ mod tests {
     use std::sync::Arc;
 
     use flui_foundation::RenderId;
-    use flui_rendering::{objects::RenderSizedBox, pipeline::PipelineOwner};
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::pipeline::PipelineOwner;
     use flui_types::geometry::px;
     use parking_lot::RwLock;
 

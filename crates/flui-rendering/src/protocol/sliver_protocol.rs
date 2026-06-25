@@ -1380,9 +1380,28 @@ mod tests {
     #[test]
     fn erased_sliver_ctx_backend_ready_scheduled_nochild() {
         use flui_foundation::RenderId;
-        use flui_types::Pixels;
+        use flui_tree::Leaf;
+        use flui_types::{Size, geometry::px};
 
-        use crate::objects::RenderSizedBox;
+        use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+        /// Minimal leaf stub — only needed to satisfy the `build_one` closure's
+        /// `Box<dyn RenderObject<BoxProtocol>>` return type. The test checks the
+        /// scheduling contract, not the object's own layout behavior.
+        #[derive(Debug)]
+        struct BoxStub;
+        impl flui_foundation::Diagnosticable for BoxStub {}
+        impl RenderBox for BoxStub {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> Size {
+                Size::new(px(50.0), px(30.0))
+            }
+            fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+        }
 
         let constraints = SliverConstraints::new(
             flui_types::layout::AxisDirection::TopToBottom,
@@ -1448,9 +1467,8 @@ mod tests {
         );
 
         // index 1 absent, builder produces -> Scheduled + one parked request.
-        let mut build_one = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> {
-            Some(Box::new(RenderSizedBox::fixed(Pixels(50.0), Pixels(30.0))))
-        };
+        let mut build_one =
+            |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> { Some(Box::new(BoxStub)) };
         let r1 = SliverLayoutCtxErased::build_and_layout_box_child(
             &mut ctx,
             1,

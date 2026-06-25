@@ -7,7 +7,7 @@ use super::{SliverConstraints, SliverGeometry, right_way_up};
 /// Computes the paint offset for a box child laid out at `layout_offset` along
 /// the sliver main axis with `child_main_extent`.
 #[inline]
-pub(crate) fn child_paint_offset(
+pub fn child_paint_offset(
     constraints: &SliverConstraints,
     geometry: &SliverGeometry,
     layout_offset: Pixels,

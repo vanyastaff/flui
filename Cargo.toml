@@ -19,7 +19,8 @@ members = [
     "crates/flui-hot-reload",  # Hot-reload scene plugins via dlopen (ACTIVE)
 
     # === Phase 3: Framework Layer ===
-    "crates/flui-rendering", # Render tree (ACTIVE)
+    "crates/flui-rendering", # Render tree / engine (ACTIVE)
+    "crates/flui-objects",   # Concrete RenderBox/RenderSliver catalog (ACTIVE)
     "crates/flui-view",      # View/Element tree (ACTIVE)
 
     # === Phase 4: Application Layer ===
@@ -67,6 +68,7 @@ default-members = [
     "crates/flui-engine",
     "crates/flui-hot-reload",
     "crates/flui-rendering",
+    "crates/flui-objects",
     "crates/flui-view",
     "crates/flui-app",
     "crates/flui-animation",
@@ -101,6 +103,9 @@ bon = "3.8"
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros" }
+
+# OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
+flui-objects = { path = "crates/flui-objects" }
 
 # ERROR HANDLING & LOGGING - Used everywhere
 thiserror = "2.0"
@@ -230,6 +235,7 @@ flui-layer = { path = "crates/flui-layer" }
 flui-painting = { path = "crates/flui-painting" }
 # === Rendering Layer (colored_box_app / animated_box_app examples) ===
 flui-rendering = { path = "crates/flui-rendering" }
+flui-objects = { path = "crates/flui-objects" }
 
 # === View Layer ===
 flui-view = { path = "crates/flui-view" }

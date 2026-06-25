@@ -9,10 +9,10 @@
 //! 3. compose Flutter-parity sliver geometry from the child's main-axis size;
 //! 4. commit the child's paint offset so hit-test/paint use the same source.
 
+use flui_objects::RenderSliverToBoxAdapter;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::RenderSliverToBoxAdapter,
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},

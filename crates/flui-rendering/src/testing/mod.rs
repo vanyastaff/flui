@@ -35,19 +35,32 @@
 //! # Example
 //!
 //! ```
-//! use flui_rendering::objects::{RenderColoredBox, RenderPadding};
 //! use flui_rendering::testing::{RenderTester, Probe, box_node};
+//! use flui_rendering::prelude::*;
+//! use flui_tree::Leaf;
 //! use flui_types::{Offset, Size, geometry::px};
 //!
-//! let run = RenderTester::mount(
-//!     box_node(RenderPadding::all(5.0))
-//!         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-//! )
-//! .with_size(Size::new(px(200.0), px(200.0)))
-//! .run_frame();
+//! // A minimal leaf render object used only to exercise the harness API.
+//! // Concrete objects live in `flui_objects`; the harness itself is object-agnostic.
+//! #[derive(Debug, Default)]
+//! struct FixedBox;
+//! impl flui_foundation::Diagnosticable for FixedBox {}
+//! impl RenderBox for FixedBox {
+//!     type Arity = Leaf;
+//!     type ParentData = BoxParentData;
+//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+//!         Size::new(px(40.0), px(40.0))
+//!     }
+//!     fn size(&self) -> Size { Size::new(px(40.0), px(40.0)) }
+//!     fn paint(&self, _ctx: &mut PaintCx<'_>, _offset: Offset) {}
+//! }
 //!
-//! let child = run.id("child");
-//! assert_eq!(run.offset(child), Offset::new(px(5.0), px(5.0)));
+//! let run = RenderTester::mount(box_node(FixedBox).label("root"))
+//!     .with_size(Size::new(px(200.0), px(200.0)))
+//!     .run_frame();
+//!
+//! let root = run.id("root");
+//! assert_eq!(run.box_geometry(root).size, Size::new(px(40.0), px(40.0)));
 //! assert!(run.painted());
 //! ```
 
@@ -66,7 +79,13 @@ pub use assertions::{
     assert_properties,
 };
 pub use harness::{
-    CompositingRun, FrameRun, LayoutRun, PaintRun, RenderTester, SemanticsRun, has_overflow,
+    CompositingRun,
+    FrameRun,
+    LayoutRun,
+    PaintRun,
+    RenderTester,
+    SemanticsRun,
+    // `has_overflow` moved to `flui-objects/tests/helpers.rs` (downcasts concrete objects).
 };
 pub use inspect::{Probe, hit_path_with_transforms, localize_hit_point};
 pub use parent_data::ParentDataSeed;
@@ -81,5 +100,9 @@ pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,
 };
 
-#[cfg(test)]
-mod tests;
+// Harness self-tests were moved to `tests/harness_self_test.rs` (integration
+// test) after the flui-objects extraction (ADR-0008). Internal lib unit tests
+// cannot import from `flui_objects` without creating a duplicate-crate-version
+// error (flui-objects has a production dep on flui-rendering; the lib-under-test
+// and flui-objects' copy of flui-rendering are distinct compiled artifacts).
+// Integration tests link the already-built library and do not have this problem.

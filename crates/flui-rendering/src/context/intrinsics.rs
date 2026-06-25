@@ -198,14 +198,18 @@ impl<'a> BoxDryLayoutCtx<'a> {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
+/// Test helpers for exercising `compute_*` intrinsic implementations.
+///
+/// Promoted from `cfg(test) pub(crate)` so `flui-objects` tests can use
+/// these when the `testing` feature is enabled.
+#[cfg(any(test, feature = "testing"))]
+pub mod test_support {
     use super::*;
 
     /// A leaf context for unit-testing `compute_*` implementations of
     /// childless objects: any child query is a contract violation and
     /// panics with the probe's coordinates.
-    pub(crate) fn leaf_intrinsics<R>(f: impl FnOnce(&mut BoxIntrinsicsCtx<'_>) -> R) -> R {
+    pub fn leaf_intrinsics<R>(f: impl FnOnce(&mut BoxIntrinsicsCtx<'_>) -> R) -> R {
         let mut deny_query = |index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
             panic!(
                 "leaf object queried child {index} ({dim:?} @ {extent}) — \
@@ -227,7 +231,7 @@ pub(crate) mod test_support {
 
     /// Leaf context for `compute_dry_layout` tests; mirrors
     /// [`leaf_intrinsics`].
-    pub(crate) fn leaf_dry_layout<R>(f: impl FnOnce(&mut BoxDryLayoutCtx<'_>) -> R) -> R {
+    pub fn leaf_dry_layout<R>(f: impl FnOnce(&mut BoxDryLayoutCtx<'_>) -> R) -> R {
         let mut deny = |index: usize, constraints: BoxConstraints| -> Size {
             panic!(
                 "leaf object dry-laid-out child {index} ({constraints:?}) — \
@@ -238,7 +242,7 @@ pub(crate) mod test_support {
     }
 
     /// Leaf context for `compute_dry_baseline` tests.
-    pub(crate) fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineCtx<'_>) -> R) -> R {
+    pub fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineCtx<'_>) -> R) -> R {
         let mut deny = |index: usize,
                         request: DryBaselineChildRequest|
          -> DryBaselineChildResponse {

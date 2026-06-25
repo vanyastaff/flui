@@ -1,9 +1,9 @@
 //! `RenderSliverFillViewport` — direct Box children with viewport-sized extents.
 
+use flui_objects::RenderSliverFillViewport;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::RenderSliverFillViewport,
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},

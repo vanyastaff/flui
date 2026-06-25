@@ -8,9 +8,9 @@
 // uses only the subset it needs, so unused-in-this-unit helpers are expected.
 #![allow(dead_code)]
 
+use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
-    objects::{RenderColoredBox, RenderFlex, RenderPadding},
     pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
     testing::{TreeNode, box_node, tree},
 };

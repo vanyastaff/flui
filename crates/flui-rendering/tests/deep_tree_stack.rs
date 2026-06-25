@@ -15,11 +15,9 @@
 //! interpreter could not finish a 2500-level walk in reasonable time
 //! anyway. The 50-level miri coverage lives in `pipeline_scenarios`.
 
+use flui_objects::{RenderColoredBox, RenderConstrainedBox, RenderPadding};
 use flui_rendering::{
-    constraints::BoxConstraints,
-    hit_testing::HitTestResult,
-    objects::{RenderColoredBox, RenderConstrainedBox, RenderPadding},
-    pipeline::PipelineOwner,
+    constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
     storage::IntrinsicDimension,
 };
 use flui_types::{Offset, Size, geometry::px};
