@@ -5,7 +5,7 @@
 mod common;
 
 use common::{lay_out, loose, size};
-use flui_widgets::{IgnorePointer, Offstage, RepaintBoundary, SizedBox};
+use flui_widgets::{FractionalTranslation, IgnorePointer, Offstage, RepaintBoundary, SizedBox};
 
 #[test]
 fn offstage_hidden_takes_zero_space() {
@@ -45,4 +45,14 @@ fn ignore_pointer_is_a_layout_passthrough() {
         loose(1000.0),
     );
     assert_eq!(laid.size(laid.root()), size(64.0, 64.0));
+}
+
+#[test]
+fn fractional_translation_is_a_layout_passthrough() {
+    // The translation is paint-time only — the laid-out size is the child's.
+    let laid = lay_out(
+        FractionalTranslation::new(-0.5, 0.25).child(SizedBox::new(50.0, 30.0)),
+        loose(1000.0),
+    );
+    assert_eq!(laid.size(laid.root()), size(50.0, 30.0));
 }
