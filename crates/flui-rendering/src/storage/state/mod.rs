@@ -99,7 +99,7 @@ use crate::protocol::{
 use crate::storage::flags::{AtomicRenderFlags, RenderFlags};
 
 mod constraints;
-mod flags;
+mod flag_accessors;
 mod geometry;
 mod layout_cache;
 mod offset;

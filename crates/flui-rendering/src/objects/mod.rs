@@ -75,6 +75,7 @@
 //! ```
 
 mod absorb_pointer;
+mod align;
 mod aspect_ratio;
 mod baseline;
 mod center;
@@ -95,6 +96,7 @@ mod opacity;
 mod padding;
 mod paragraph;
 mod repaint_boundary;
+pub(crate) mod shifted_box;
 mod sized_box;
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
@@ -110,6 +112,7 @@ mod transform;
 mod viewport;
 
 pub use absorb_pointer::RenderAbsorbPointer;
+pub use align::RenderAlign;
 pub use aspect_ratio::{AspectRatio, RenderAspectRatio};
 pub use baseline::RenderBaseline;
 pub use center::RenderCenter;

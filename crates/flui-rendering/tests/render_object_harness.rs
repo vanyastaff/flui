@@ -10,7 +10,7 @@
 //! | `RenderColoredBox` | `harness_colored_box_*` | yes | yes | yes | yes | — |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
 //! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
-//! | `RenderPadding` | `harness_padding_*` | yes | — | — | yes | queries |
+//! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
 //! | `RenderCenter` | `harness_center_*` | yes | — | — | yes | — |
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
 //! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
@@ -55,7 +55,8 @@ use flui_rendering::{
     parent_data::{FlexParentData, StackParentData},
     testing::{
         BoxQueryRun, Probe, RenderTester, TreeNode, assert_descendant_properties,
-        assert_has_committed_geometry, assert_has_committed_size, box_node, sliver_node,
+        assert_has_committed_geometry, assert_has_committed_size, box_node, localize_hit_point,
+        sliver_node,
     },
     traits::TextBaseline,
 };
@@ -70,6 +71,7 @@ use flui_types::{
 
 /// Every concrete render-object type exported from `flui_rendering::objects`.
 const RENDER_OBJECT_TYPES: &[&str] = &[
+    "RenderAlign",
     "RenderSizedBox",
     "RenderColoredBox",
     "RenderImage",
@@ -318,6 +320,66 @@ fn harness_padding_forwards_intrinsics_with_insets() {
         run.min_intrinsic_width(padding, 100.0),
         60.0,
         "padding must add horizontal insets to the child's 40px min width"
+    );
+}
+
+// Hit-test localization for RenderPadding: the recorded transform for the
+// child entry must map a global hit point to the child's local coordinates.
+//
+// Setup: RenderPadding(all=12) with a 30×30 child in a 200×200 parent.
+// Padding places the child at (12, 12).  Hit at global (20, 20).
+// Expected child-local: (20−12, 20−12) = (8, 8).
+#[test]
+fn harness_padding_hit_localizes_to_padding_inset() {
+    const PADDING_PX: f32 = 12.0;
+    const HIT_X: f32 = 20.0;
+    const HIT_Y: f32 = 20.0;
+
+    let run = RenderTester::mount(
+        box_node(RenderPadding::all(PADDING_PX))
+            .child(box_node(RenderColoredBox::red(30.0, 30.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let child_id = run.id("child");
+
+    let child_paint_offset = run.offset(child_id);
+    assert_eq!(
+        child_paint_offset,
+        Offset::new(px(PADDING_PX), px(PADDING_PX)),
+        "RenderPadding(all=12) must position child at (12, 12)"
+    );
+
+    let hit_entries = run.hit_with_transforms(HIT_X, HIT_Y);
+
+    let child_transform = hit_entries
+        .iter()
+        .find(|(id, _)| *id == child_id)
+        .map(|(_, t)| *t)
+        .unwrap_or_else(|| panic!("child must be hit at ({HIT_X}, {HIT_Y})"));
+
+    let recorded_transform = child_transform.expect(
+        "child HitTestEntry must carry a recorded transform from hit_test_child_at_layout_offset",
+    );
+
+    let expected_local = Offset::new(
+        px(HIT_X - child_paint_offset.dx.get()),
+        px(HIT_Y - child_paint_offset.dy.get()),
+    );
+
+    let actual_local = localize_hit_point(recorded_transform, HIT_X, HIT_Y)
+        .expect("recorded transform must be invertible");
+
+    assert!(
+        (actual_local.dx.get() - expected_local.dx.get()).abs() < 0.01
+            && (actual_local.dy.get() - expected_local.dy.get()).abs() < 0.01,
+        "child-local hit must equal global − padding_inset \
+         (got ({:.2}, {:.2}), expected ({:.2}, {:.2}))",
+        actual_local.dx.get(),
+        actual_local.dy.get(),
+        expected_local.dx.get(),
+        expected_local.dy.get(),
     );
 }
 
@@ -1536,6 +1598,347 @@ fn harness_viewport_stacks_two_slivers() {
 
     assert_eq!(run.sliver_geometry(run.id("header")).scroll_extent, 20.0);
     assert_eq!(run.sliver_geometry(run.id("body")).scroll_extent, 80.0);
+}
+
+// ============================================================================
+// RenderAlign harness tests
+// ============================================================================
+
+// Verify that TOP_LEFT alignment places the child at (0,0) inside a 100×100
+// parent with a 40×40 child → free space = 60×60 → TOP_LEFT offset = (0,0).
+#[test]
+fn harness_align_top_left_places_child_at_origin() {
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::TOP_LEFT))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.offset(run.id("child")), Offset::new(px(0.0), px(0.0)));
+}
+
+// BOTTOM_RIGHT alignment: free space = 60×60 → offset = (60,60).
+#[test]
+fn harness_align_bottom_right_places_child_at_free_space() {
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::BOTTOM_RIGHT))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.offset(run.id("child")), Offset::new(px(60.0), px(60.0)));
+}
+
+// CENTER alignment: free space = 60×60 → offset = (30,30).
+#[test]
+fn harness_align_center_matches_render_center_offset() {
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::CENTER))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.offset(run.id("child")), Offset::new(px(30.0), px(30.0)));
+}
+
+// Intrinsics scale by the width factor.
+#[test]
+fn harness_align_intrinsics_scale_with_factor() {
+    let constraints = loose(200.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::CENTER).with_width_factor(2.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    // min_intrinsic_width = child 40 * factor 2.0 = 80
+    assert_eq!(run.min_intrinsic_width(run.root(), 0.0), 80.0);
+}
+
+// Dry baseline = child baseline + child_offset.dy.
+// Uses BOTTOM_RIGHT alignment (dy = free_h * 1.0) so that the +offset.dy term
+// is non-zero and the test fails if that addition is deleted.
+// Layout: parent 200×200, child dry ~line-height → free_h > 0 → dy > 0.
+// If the `+ child_offset_dy` line in RenderAlign::compute_dry_baseline were
+// replaced with `+ 0.0`, this test would fail because child_bl + 0 ≠ child_bl + free_h.
+#[test]
+fn align_dry_baseline_adds_child_offset_dy() {
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::BOTTOM_RIGHT)).child(
+            box_node(RenderParagraph::new(
+                flui_types::typography::TextSpan::new("A"),
+                flui_types::typography::TextDirection::Ltr,
+            ))
+            .label("text"),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let child_constraints = constraints.loosen();
+    // Dry layout the child to get its size and baseline.
+    let child_size = run.dry_layout(run.id("text"), child_constraints);
+    let child_bl = run
+        .dry_baseline(run.id("text"), child_constraints, TextBaseline::Alphabetic)
+        .expect("paragraph has a baseline");
+
+    // BOTTOM_RIGHT: free_h = parent_h - child_h; offset.dy = free_h * 1.0.
+    // parent_size = constrain(200×200, child_size, None, None) = 200×200.
+    let free_h = 200.0_f32 - child_size.height.get();
+    let expected_dy = free_h; // BOTTOM_RIGHT factor = 1.0
+    let expected = child_bl + expected_dy;
+
+    let dry_bl = run
+        .dry_baseline(run.root(), constraints, TextBaseline::Alphabetic)
+        .expect("align with paragraph child reports dry baseline");
+    assert!(
+        (dry_bl - expected).abs() < 0.5,
+        "BOTTOM_RIGHT dry baseline must be child_baseline + free_h (got {dry_bl}, expected {expected})"
+    );
+}
+
+// Live baseline = child live baseline + child_offset.dy (FIX 1 — parity with
+// Flutter RenderShiftedBox.computeDistanceToActualBaseline).
+//
+// Strategy: wrap RenderAlign in a RenderBaseline probe at a fixed offset.
+// RenderBaseline::perform_layout calls child_distance_to_actual_baseline on
+// RenderAlign, then positions it at `baseline_offset_px - live_baseline` from
+// the top.  Before the fix RenderAlign returns None so the child lands at dy=0.
+// After the fix RenderAlign returns child_bl + align_dy (non-zero for CENTER),
+// so the child lands at baseline_offset_px - (child_bl + align_dy) ≠ 0.
+//
+// Layout: outer 200×200, RenderAlign(CENTER), RenderParagraph child.
+// child_size ≈ text line-height (much less than 200); CENTER places child at
+// dy = free_h / 2, which is large and well above 0.
+// probe_offset is set to 100 so the expected child dy = 100 - (child_bl + align_dy).
+#[test]
+fn align_live_baseline_adds_child_offset_dy() {
+    use flui_types::geometry::px;
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    const PROBE_OFFSET_PX: f32 = 100.0;
+
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(
+            TextBaseline::Alphabetic,
+            px(PROBE_OFFSET_PX),
+        ))
+        .label("probe")
+        .child(
+            box_node(RenderAlign::new(Alignment::CENTER))
+                .label("align")
+                .child(
+                    box_node(RenderParagraph::new(
+                        flui_types::typography::TextSpan::new("A"),
+                        flui_types::typography::TextDirection::Ltr,
+                    ))
+                    .label("text"),
+                ),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    // Query the child (RenderAlign) dry baseline to know what the live baseline
+    // SHOULD be after the fix: child_bl + align_dy.
+    let align_constraints = constraints.loosen();
+    let align_bl_dry = run
+        .dry_baseline(run.id("align"), align_constraints, TextBaseline::Alphabetic)
+        .expect("RenderAlign with paragraph child must report a dry baseline");
+
+    // RenderBaseline positions its child at: child_offset.dy = probe_offset - live_bl_of_align.
+    // Before fix: live_bl_of_align = None → child_offset.dy = 0.
+    // After fix:  live_bl_of_align = align_bl_dry (live == dry for a statically laid-out tree)
+    //             → child_offset.dy = PROBE_OFFSET_PX - align_bl_dry.
+    let align_offset_dy = run.offset(run.id("align")).dy.get();
+    let expected_dy = PROBE_OFFSET_PX - align_bl_dry;
+
+    assert!(
+        (align_offset_dy - expected_dy).abs() < 0.5,
+        "RenderAlign must forward live baseline so RenderBaseline positions it at \
+         probe_offset - (child_bl + align_dy) (got dy={align_offset_dy}, expected {expected_dy})"
+    );
+}
+
+// Diagnostics includes width_factor and height_factor when set.
+#[test]
+fn harness_align_self_describes() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderAlign::new(Alignment::CENTER)
+                .with_width_factor(1.5)
+                .with_height_factor(2.0),
+        )
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert!(
+        run.descendant_property("RenderAlign", "width_factor")
+            .is_some(),
+        "RenderAlign must report width_factor in diagnostics"
+    );
+    assert!(
+        run.descendant_property("RenderAlign", "height_factor")
+            .is_some(),
+        "RenderAlign must report height_factor in diagnostics"
+    );
+}
+
+// Hit-test localization: the transform recorded in the child's HitTestEntry
+// must map the global hit point back to the child's local coordinate space.
+//
+// Setup: RenderAlign(CENTER) with a 40×40 child in a 100×100 parent.
+// Center places the child at offset (30, 30).
+// Hit at root (50, 50) — inside the child.
+//
+// Before commit 2e69d275 (when hit_test used hit_test_child_at_offset):
+//   the entry's transform was recorded as the identity (no offset pushed
+//   onto the HitTestResult stack), so localizing (50, 50) via the recorded
+//   transform returned (50, 50) — wrong.
+//
+// After the fix (hit_test_child_at_layout_offset):
+//   the child's paint offset (30, 30) is pushed before recursing, so the
+//   recorded global-to-local transform is a translation by (-30, -30).
+//   Localizing (50, 50) gives (20, 20) — the correct child-local position.
+#[test]
+fn harness_align_hit_localizes_to_child_offset() {
+    const PARENT_PX: f32 = 100.0;
+    const CHILD_PX: f32 = 40.0;
+    const HIT_X: f32 = 50.0;
+    const HIT_Y: f32 = 50.0;
+
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::CENTER))
+            .child(box_node(RenderColoredBox::red(CHILD_PX, CHILD_PX)).label("child")),
+    )
+    .with_size(Size::new(px(PARENT_PX), px(PARENT_PX)))
+    .run_layout();
+
+    let child_id = run.id("child");
+
+    // Confirm layout placed the child at (30, 30).
+    let child_paint_offset = run.offset(child_id);
+    assert_eq!(
+        child_paint_offset,
+        Offset::new(px(30.0), px(30.0)),
+        "CENTER alignment must place a 40×40 child in a 100×100 parent at (30, 30)"
+    );
+
+    // Retrieve the hit path with recorded transforms.
+    let hit_entries = run.hit_with_transforms(HIT_X, HIT_Y);
+
+    let child_transform = hit_entries
+        .iter()
+        .find(|(id, _)| *id == child_id)
+        .map(|(_, t)| *t)
+        .unwrap_or_else(|| panic!("child must be in the hit path at ({HIT_X}, {HIT_Y})"));
+
+    let recorded_transform = child_transform.unwrap_or_else(|| {
+        panic!(
+            "child HitTestEntry must carry a recorded transform \
+             (hit_test_child_at_layout_offset pushes the paint offset)"
+        )
+    });
+
+    // The expected child-local position is global − child_paint_offset.
+    let expected_local = Offset::new(
+        px(HIT_X - child_paint_offset.dx.get()),
+        px(HIT_Y - child_paint_offset.dy.get()),
+    );
+
+    let actual_local = localize_hit_point(recorded_transform, HIT_X, HIT_Y)
+        .expect("recorded transform must be invertible");
+
+    assert!(
+        (actual_local.dx.get() - expected_local.dx.get()).abs() < 0.01
+            && (actual_local.dy.get() - expected_local.dy.get()).abs() < 0.01,
+        "child-local hit point must equal global − child_paint_offset \
+         (got ({:.2}, {:.2}), expected ({:.2}, {:.2}))",
+        actual_local.dx.get(),
+        actual_local.dy.get(),
+        expected_local.dx.get(),
+        expected_local.dy.get(),
+    );
+}
+
+// ============================================================================
+// RenderCenter FIX tests (behaviors that changed in this PR)
+// ============================================================================
+
+// FIX A: unbounded axis with no factor must shrink-wrap to child size.
+// Before: returned Pixels::INFINITY; after: returns child width.
+#[test]
+fn center_unbounded_shrink_wraps_to_child() {
+    // Unconstrained width (max = ∞), bounded height.
+    let constraints = BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(200.0));
+    let run = RenderTester::mount(
+        box_node(RenderCenter::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()).width,
+        px(40.0),
+        "unbounded Center with no factor must shrink-wrap to child width"
+    );
+}
+
+// FIX B: factor > 1.0 must not be clamped.
+// Before: with_width_factor(2.0) stored 1.0 (clamped); after: stores 2.0.
+#[test]
+fn center_width_factor_above_one_not_clamped() {
+    let center = RenderCenter::new().with_width_factor(2.0);
+    assert_eq!(
+        center.width_factor(),
+        Some(2.0),
+        "width_factor of 2.0 must not be clamped to 1.0"
+    );
+}
+
+// Anchor for center dry-baseline: bounded layout, verify the offset.dy addition.
+// 100×100 parent, 40×40 child → parent_size = 100×100 → free_h = 60 → dy = 30.
+// dry_baseline = child_baseline + 30.
+#[test]
+fn center_dry_baseline_adds_half_free_height() {
+    let constraints = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderCenter::new()).child(
+            box_node(RenderParagraph::new(
+                flui_types::typography::TextSpan::new("A"),
+                flui_types::typography::TextDirection::Ltr,
+            ))
+            .label("text"),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let center_bl = run
+        .dry_baseline(run.root(), constraints, TextBaseline::Alphabetic)
+        .expect("center with paragraph reports dry baseline");
+
+    let child_constraints = constraints.loosen();
+    let child_bl = run
+        .dry_baseline(run.id("text"), child_constraints, TextBaseline::Alphabetic)
+        .expect("paragraph has dry baseline");
+
+    // parent_size = constrain(100×100); child_size = paragraph dry.
+    // free_h = parent.height - child.height.  dy = free_h * 0.5.
+    let child_size = run.dry_layout(run.id("text"), child_constraints);
+    let free_h = 100.0_f32 - child_size.height.get();
+    let expected = child_bl + free_h * 0.5;
+    assert!(
+        (center_bl - expected).abs() < 0.5,
+        "center dry baseline must be child_baseline + free_h/2 (got {center_bl}, expected {expected})"
+    );
 }
 
 // ============================================================================

@@ -198,8 +198,6 @@ pub use error::{RenderError, RenderResult};
 pub use parent_data::ParentData;
 pub use pipeline::PipelineOwner;
 pub use protocol::{
-    // Marker traits
-    BidirectionalProtocol,
     // Re-entrant build contract (ADR-0003 Decision 2): child handle + outcome
     BoxChildRef,
     // Concrete capabilities
@@ -214,7 +212,6 @@ pub use protocol::{
     LayoutCapability,
     LayoutContextApi,
     Protocol,
-    ProtocolCompatible,
     // Type aliases
     ProtocolConstraints,
     ProtocolGeometry,

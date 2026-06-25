@@ -68,7 +68,7 @@ pub use assertions::{
 pub use harness::{
     CompositingRun, FrameRun, LayoutRun, PaintRun, RenderTester, SemanticsRun, has_overflow,
 };
-pub use inspect::Probe;
+pub use inspect::{Probe, hit_path_with_transforms, localize_hit_point};
 pub use parent_data::ParentDataSeed;
 pub use queries::BoxQueryRun;
 pub use report::FrameReport;

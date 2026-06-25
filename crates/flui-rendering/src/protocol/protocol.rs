@@ -236,25 +236,6 @@ pub enum UsageByParent {
     InPlacement,
 }
 
-// ============================================================================
-// PROTOCOL MARKER TRAITS
-// ============================================================================
-
-/// Protocols supporting bidirectional layout (both main-axis directions).
-pub trait BidirectionalProtocol: Protocol {}
-
-// ============================================================================
-// PROTOCOL COMPATIBILITY
-// ============================================================================
-
-/// Trait for checking protocol compatibility (for adapters).
-pub trait ProtocolCompatible<Other: Protocol>: Protocol {
-    /// Returns true if protocols can be adapted together.
-    fn is_compatible() -> bool {
-        false
-    }
-}
-
 // 2B / honest-foundation cleanup: the `ProtocolRenderObject<P, A, PD>` trait
 // was deleted. It had ZERO implementors and zero callers (cross-crate
 // verified) — a pre-blanket-impl design that `RenderObject<P>` (with its
