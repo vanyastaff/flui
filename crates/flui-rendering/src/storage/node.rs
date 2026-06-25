@@ -728,6 +728,22 @@ impl RenderNode {
         self.as_box_unchecked_mut().render_object_mut()
     }
 
+    /// Downcasts this node's render object to a concrete type `T`, regardless
+    /// of protocol (Box or Sliver). Returns `None` if the stored object is not
+    /// a `T`.
+    ///
+    /// This is the View layer's hook for `RenderObjectElement`'s update path:
+    /// when a `RenderObjectWidget` updates, the framework downcasts the live
+    /// render object to the widget's concrete `RenderObject` type and calls
+    /// `RenderView::update_render_object` to apply the new configuration in
+    /// place (Flutter's `Widget.updateRenderObject`).
+    pub fn downcast_render_object_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().as_any_mut().downcast_mut::<T>(),
+            Self::Sliver(entry) => entry.render_object_mut().as_any_mut().downcast_mut::<T>(),
+        }
+    }
+
     /// Clears the needs_paint flag.
     #[inline]
     pub fn clear_needs_paint(&self) {

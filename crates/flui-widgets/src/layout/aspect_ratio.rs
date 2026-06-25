@@ -1,6 +1,6 @@
 //! [`AspectRatio`] — sizes its child to a given width:height ratio.
 
-use flui_objects::{AspectRatio as AspectRatioFactor, RenderAspectRatio};
+use flui_objects::{AspectRatioFactor, RenderAspectRatio};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 

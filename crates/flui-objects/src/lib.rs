@@ -40,8 +40,8 @@ mod text;
 
 // --- flat re-exports (layout) ---
 pub use layout::{
-    AspectRatio, FractionFactor, RenderAlign, RenderAspectRatio, RenderBaseline, RenderCenter,
-    RenderConstrainedBox, RenderFittedBox, RenderFlex, RenderFractionalTranslation,
+    AspectRatioFactor, FractionFactor, RenderAlign, RenderAspectRatio, RenderBaseline,
+    RenderCenter, RenderConstrainedBox, RenderFittedBox, RenderFlex, RenderFractionalTranslation,
     RenderFractionallySizedBox, RenderLimitedBox, RenderPadding, RenderSizedBox, RenderStack,
     RenderTransform,
 };

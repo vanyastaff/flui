@@ -1,10 +1,11 @@
-//! Layout parity tests for [`Stack`] and [`AspectRatio`].
+//! Layout parity tests for [`Stack`], [`AspectRatio`], and
+//! [`FractionallySizedBox`].
 
 mod common;
 
-use common::{lay_out, loose, offset, size};
+use common::{lay_out, loose, offset, size, tight};
 use flui_view::ViewExt;
-use flui_widgets::{AspectRatio, SizedBox, Stack};
+use flui_widgets::{AspectRatio, FractionallySizedBox, SizedBox, Stack};
 
 #[test]
 fn stack_sizes_to_largest_child_and_aligns_top_left() {
@@ -35,4 +36,18 @@ fn aspect_ratio_picks_largest_box_with_ratio() {
         loose(200.0),
     );
     assert_eq!(laid.size(laid.root()), size(200.0, 100.0));
+}
+
+#[test]
+fn fractionally_sized_box_sizes_child_to_a_fraction() {
+    // Fills the tight 200×200; the child is sized to 0.5 × each axis → 100×100.
+    let laid = lay_out(
+        FractionallySizedBox::new()
+            .width_factor(0.5)
+            .height_factor(0.5)
+            .child(SizedBox::expand()),
+        tight(200.0, 200.0),
+    );
+    assert_eq!(laid.size(laid.root()), size(200.0, 200.0));
+    assert_eq!(laid.size(laid.only_child(laid.root())), size(100.0, 100.0));
 }

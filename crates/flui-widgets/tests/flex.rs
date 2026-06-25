@@ -6,7 +6,7 @@ mod common;
 
 use common::{lay_out, loose, offset, size};
 use flui_view::ViewExt;
-use flui_widgets::prelude::row;
+use flui_widgets::row;
 use flui_widgets::{Column, CrossAxisAlignment, MainAxisSize, Row, SizedBox};
 
 #[test]

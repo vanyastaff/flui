@@ -90,11 +90,18 @@ pub mod text;
 pub use container::Container;
 pub use flex::{Column, Flex, Row};
 pub use layout::{
-    Align, AspectRatio, Center, ConstrainedBox, LimitedBox, Padding, SizedBox, Transform,
+    Align, AspectRatio, Center, ConstrainedBox, FittedBox, FractionallySizedBox, LimitedBox,
+    Padding, SizedBox, Transform,
 };
 pub use paint::{ColoredBox, DecoratedBox, Opacity};
 pub use stack::Stack;
 pub use text::Text;
+
+// The heterogeneous-children macros (contract C2's static tuple path). Kept out
+// of the prelude glob: their names collide with `std`'s `column!`/`row!`, so
+// they must be imported explicitly (`use flui_widgets::{column, row};`), which
+// shadows the std macros — a glob import would be ambiguous instead.
+pub use flui_view::{column, row};
 
 // Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
 // (re-exported from the `flui-objects` catalog, whose canonical home is
@@ -108,20 +115,24 @@ pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, Stac
 /// Commonly used widgets and supporting types for `use flui_widgets::prelude::*;`.
 pub mod prelude {
     // Authoring spine re-exported so a single prelude import is enough to write
-    // a widget tree (View traits, BuildContext, ViewSeq, derives).
+    // a widget tree (View traits, BuildContext, ViewSeq, derives). The
+    // `column!`/`row!` macros are intentionally NOT globbed here (they collide
+    // with `std`'s same-named macros) — import them explicitly from the crate
+    // root: `use flui_widgets::{column, row};`.
     pub use flui_view::prelude::*;
-    // The heterogeneous-children macros (contract C2's static tuple path).
-    pub use flui_view::{column, row};
 
     // The widget catalog.
     pub use crate::{
         Align, AspectRatio, Center, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox,
-        Flex, LimitedBox, Opacity, Padding, Row, SizedBox, Stack, Text, Transform,
+        FittedBox, Flex, FractionallySizedBox, LimitedBox, Opacity, Padding, Row, SizedBox, Stack,
+        Text, Transform,
     };
 
     // Common configuration value types, so an app author needs only this import.
-    pub use flui_geometry::{EdgeInsets, Matrix4};
+    pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_rendering::constraints::BoxConstraints;
+    pub use flui_types::layout::BoxFit;
+    pub use flui_types::painting::Clip;
     pub use flui_types::{Alignment, Color};
 }

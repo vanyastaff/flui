@@ -242,6 +242,9 @@ flui-objects = { path = "crates/flui-objects" }
 # === View Layer ===
 flui-view = { path = "crates/flui-view" }
 
+# === Widget Catalog (widgets_gallery example) ===
+flui-widgets = { path = "crates/flui-widgets" }
+
 # === Reactive Layer (animated_box_app example) ===
 flui-scheduler = { path = "crates/flui-scheduler" }
 flui-animation = { path = "crates/flui-animation" }

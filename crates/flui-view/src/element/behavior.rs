@@ -730,6 +730,25 @@ where
     }
 
     fn on_update(&mut self, core: &ElementCore<V, A>) {
+        // Apply the widget's new configuration to the *existing* render object
+        // before marking it dirty — Flutter's `RenderObjectElement.update` ->
+        // `widget.updateRenderObject(context, renderObject)`. Without this the
+        // render object keeps its `create_render_object()` configuration and a
+        // `setState` that changes a render-object widget (padding, size, text,
+        // colour, …) would never be reflected after the first frame.
+        if let Some(render_id) = self.render_id
+            && let Some(pipeline_owner) = core.pipeline_owner()
+        {
+            let mut owner = pipeline_owner.write();
+            if let Some(render_object) = owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
+            {
+                core.view().update_render_object(render_object);
+            }
+        }
+
         super::behavior_commons::mark_render_needs_layout_and_paint(
             core,
             self.render_id,

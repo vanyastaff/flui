@@ -1330,6 +1330,7 @@ dependencies = [
  "flui-scheduler",
  "flui-types",
  "flui-view",
+ "flui-widgets",
  "image",
  "pollster",
  "raw-window-handle",

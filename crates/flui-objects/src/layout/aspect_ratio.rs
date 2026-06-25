@@ -10,7 +10,7 @@
 //!
 //! # Rust-native improvements
 //!
-//! * The ratio is wrapped in [`AspectRatio`] — a validated newtype that
+//! * The ratio is wrapped in [`AspectRatioFactor`] — a validated newtype that
 //!   cannot represent a non-positive or non-finite value. Flutter's
 //!   `double aspectRatio` field can hold `NaN` and would silently produce
 //!   `NaN`-sized layouts; in this port that mistake is unrepresentable.
@@ -30,13 +30,13 @@ use flui_rendering::{
 
 /// A validated, positive, finite width-to-height ratio.
 ///
-/// `AspectRatio::new` returns `None` for non-positive or non-finite values.
-/// Use [`AspectRatio::new_unchecked`] in `const` contexts when the input is
+/// `AspectRatioFactor::new` returns `None` for non-positive or non-finite values.
+/// Use [`AspectRatioFactor::new_unchecked`] in `const` contexts when the input is
 /// known to be valid (`assert!`-guarded panic on debug builds).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AspectRatio(f32);
+pub struct AspectRatioFactor(f32);
 
-impl AspectRatio {
+impl AspectRatioFactor {
     /// Square (1:1).
     pub const SQUARE: Self = Self(1.0);
 
@@ -106,14 +106,14 @@ impl AspectRatio {
     }
 }
 
-impl Default for AspectRatio {
+impl Default for AspectRatioFactor {
     fn default() -> Self {
         Self::SQUARE
     }
 }
 
-impl From<AspectRatio> for f32 {
-    fn from(value: AspectRatio) -> Self {
+impl From<AspectRatioFactor> for f32 {
+    fn from(value: AspectRatioFactor) -> Self {
         value.0
     }
 }
@@ -142,20 +142,20 @@ impl From<AspectRatio> for f32 {
 /// # Example
 ///
 /// ```ignore
-/// use flui_objects::{AspectRatio, RenderAspectRatio};
+/// use flui_objects::{AspectRatioFactor, RenderAspectRatio};
 ///
 /// // 16:9 video frame.
-/// let _node = RenderAspectRatio::new(AspectRatio::WIDESCREEN_16_9);
+/// let _node = RenderAspectRatio::new(AspectRatioFactor::WIDESCREEN_16_9);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderAspectRatio {
-    aspect_ratio: AspectRatio,
+    aspect_ratio: AspectRatioFactor,
     has_child: bool,
 }
 
 impl RenderAspectRatio {
     /// Creates a render object with the given aspect ratio.
-    pub fn new(aspect_ratio: AspectRatio) -> Self {
+    pub fn new(aspect_ratio: AspectRatioFactor) -> Self {
         Self {
             aspect_ratio,
             has_child: false,
@@ -164,12 +164,12 @@ impl RenderAspectRatio {
 
     /// Returns the current aspect ratio.
     #[inline]
-    pub fn aspect_ratio(&self) -> AspectRatio {
+    pub fn aspect_ratio(&self) -> AspectRatioFactor {
         self.aspect_ratio
     }
 
     /// Replaces the aspect ratio; returns true if the value changed.
-    pub fn set_aspect_ratio(&mut self, aspect_ratio: AspectRatio) -> bool {
+    pub fn set_aspect_ratio(&mut self, aspect_ratio: AspectRatioFactor) -> bool {
         if self.aspect_ratio == aspect_ratio {
             return false;
         }
@@ -372,57 +372,57 @@ mod tests {
         BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
     }
 
-    // ---------- AspectRatio newtype ---------------------------------------
+    // ---------- AspectRatioFactor newtype ---------------------------------------
 
     #[test]
     fn new_rejects_invalid() {
-        assert!(AspectRatio::new(0.0).is_none());
-        assert!(AspectRatio::new(-1.0).is_none());
-        assert!(AspectRatio::new(f32::NAN).is_none());
-        assert!(AspectRatio::new(f32::INFINITY).is_none());
+        assert!(AspectRatioFactor::new(0.0).is_none());
+        assert!(AspectRatioFactor::new(-1.0).is_none());
+        assert!(AspectRatioFactor::new(f32::NAN).is_none());
+        assert!(AspectRatioFactor::new(f32::INFINITY).is_none());
     }
 
     #[test]
     fn new_accepts_positive_finite() {
-        assert!(AspectRatio::new(1.0).is_some());
-        assert!(AspectRatio::new(16.0 / 9.0).is_some());
-        assert!(AspectRatio::new(0.0001).is_some());
+        assert!(AspectRatioFactor::new(1.0).is_some());
+        assert!(AspectRatioFactor::new(16.0 / 9.0).is_some());
+        assert!(AspectRatioFactor::new(0.0001).is_some());
     }
 
     #[test]
     fn from_size_handles_zero_or_negative() {
-        assert!(AspectRatio::from_size(Size::new(px(0.0), px(100.0))).is_none());
-        assert!(AspectRatio::from_size(Size::new(px(100.0), px(0.0))).is_none());
-        let ar = AspectRatio::from_size(Size::new(px(100.0), px(50.0))).unwrap();
+        assert!(AspectRatioFactor::from_size(Size::new(px(0.0), px(100.0))).is_none());
+        assert!(AspectRatioFactor::from_size(Size::new(px(100.0), px(0.0))).is_none());
+        let ar = AspectRatioFactor::from_size(Size::new(px(100.0), px(50.0))).unwrap();
         assert_eq!(ar.value(), 2.0);
     }
 
     #[test]
     fn inverse_swaps_w_and_h() {
-        let ar = AspectRatio::new(2.0).unwrap();
+        let ar = AspectRatioFactor::new(2.0).unwrap();
         assert_eq!(ar.inverse().value(), 0.5);
     }
 
     #[test]
     fn predefined_ratios_are_valid() {
-        assert!(AspectRatio::SQUARE.value() > 0.0);
-        assert!(AspectRatio::WIDESCREEN_16_9.value() > 1.0);
-        assert!(AspectRatio::STANDARD_4_3.value() > 1.0);
-        assert!(AspectRatio::ULTRAWIDE_21_9.value() > 2.0);
+        assert!(AspectRatioFactor::SQUARE.value() > 0.0);
+        assert!(AspectRatioFactor::WIDESCREEN_16_9.value() > 1.0);
+        assert!(AspectRatioFactor::STANDARD_4_3.value() > 1.0);
+        assert!(AspectRatioFactor::ULTRAWIDE_21_9.value() > 2.0);
     }
 
     // ---------- _applyAspectRatio (Flutter parity) ------------------------
 
     #[test]
     fn unbounded_both_dims_falls_back_to_zero() {
-        let node = RenderAspectRatio::new(AspectRatio::SQUARE);
+        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
         let size = node.apply_aspect_ratio(bc(0.0, f32::INFINITY, 0.0, f32::INFINITY));
         assert_eq!(size, Size::ZERO);
     }
 
     #[test]
     fn tight_constraints_pass_through_unchanged() {
-        let node = RenderAspectRatio::new(AspectRatio::SQUARE);
+        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
         let size = node.apply_aspect_ratio(BoxConstraints::tight(Size::new(px(50.0), px(80.0))));
         assert_eq!(size, Size::new(px(50.0), px(80.0)));
     }
@@ -431,7 +431,7 @@ mod tests {
     fn width_first_basic_case() {
         // 16:9 ratio with max_width=160, max_height=200.
         // width-first: 160 wide → 90 tall (fits within 200) → return (160, 90).
-        let node = RenderAspectRatio::new(AspectRatio::WIDESCREEN_16_9);
+        let node = RenderAspectRatio::new(AspectRatioFactor::WIDESCREEN_16_9);
         let size = node.apply_aspect_ratio(bc(0.0, 160.0, 0.0, 200.0));
         assert_eq!(size, Size::new(px(160.0), px(90.0)));
     }
@@ -441,7 +441,7 @@ mod tests {
         // Square ratio with max_width=200, max_height=100.
         // width-first: 200 wide → 200 tall, but 200 > 100 → snap height
         // to 100, width = 100 → (100, 100).
-        let node = RenderAspectRatio::new(AspectRatio::SQUARE);
+        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
         let size = node.apply_aspect_ratio(bc(0.0, 200.0, 0.0, 100.0));
         assert_eq!(size, Size::new(px(100.0), px(100.0)));
     }
@@ -450,7 +450,7 @@ mod tests {
     fn unbounded_width_uses_height_path() {
         // 2:1 ratio, width unbounded, max_height=50.
         // height-first: 50 tall → 100 wide → (100, 50).
-        let node = RenderAspectRatio::new(AspectRatio::new(2.0).unwrap());
+        let node = RenderAspectRatio::new(AspectRatioFactor::new(2.0).unwrap());
         let size = node.apply_aspect_ratio(bc(0.0, f32::INFINITY, 0.0, 50.0));
         assert_eq!(size, Size::new(px(100.0), px(50.0)));
     }
@@ -461,7 +461,7 @@ mod tests {
         // width-first: 200 wide → 200 tall (fits) → result (200,200). No min
         // push-up needed in this case — let's force a case where width drops.
         // Try ratio=10 (very wide), min_w=50, max_w=20, max_h=100:
-        let node = RenderAspectRatio::new(AspectRatio::new(10.0).unwrap());
+        let node = RenderAspectRatio::new(AspectRatioFactor::new(10.0).unwrap());
         let size = node.apply_aspect_ratio(bc(50.0, 200.0, 0.0, 5.0));
         // width-first: 200 → 20 (200/10), but 20 > 5 → height=5, width=50.
         // width=50 satisfies min_width=50 — no further bump.
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn intrinsics_multiply_or_divide_by_ratio() {
-        let node = RenderAspectRatio::new(AspectRatio::new(2.0).unwrap());
+        let node = RenderAspectRatio::new(AspectRatioFactor::new(2.0).unwrap());
         flui_rendering::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
             // For 2:1, width is 2× height; height is 0.5× width.
             assert_eq!(node.compute_min_intrinsic_width(100.0, ctx), 200.0);
@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn intrinsics_zero_for_infinite_input_without_child() {
-        let node = RenderAspectRatio::new(AspectRatio::SQUARE);
+        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
         flui_rendering::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
             // Unbounded extent defers to the child; childless → 0.0
             // (proxy_box.dart `child?.getMinIntrinsicWidth ?? 0.0`).
@@ -497,8 +497,8 @@ mod tests {
 
     #[test]
     fn setter_returns_change_flag() {
-        let mut node = RenderAspectRatio::new(AspectRatio::SQUARE);
-        assert!(node.set_aspect_ratio(AspectRatio::WIDESCREEN_16_9));
-        assert!(!node.set_aspect_ratio(AspectRatio::WIDESCREEN_16_9));
+        let mut node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
+        assert!(node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9));
+        assert!(!node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9));
     }
 }

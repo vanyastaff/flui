@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::RenderId;
+use flui_foundation::{ElementId, RenderId};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
@@ -21,14 +21,13 @@ use flui_view::{BuildOwner, ElementTree, View};
 use parking_lot::RwLock;
 
 /// A laid-out widget tree, holding the element + render trees alive so geometry
-/// can be queried after layout.
+/// can be queried after layout — and re-driven via [`LaidOut::pump`].
 pub struct LaidOut {
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
     root_render_id: RenderId,
-    // Kept alive so the mounted element subtree is not torn down before the
-    // assertions read its render geometry.
-    _build_owner: BuildOwner,
-    _tree: ElementTree,
+    root_element_id: ElementId,
+    build_owner: BuildOwner,
+    tree: ElementTree,
 }
 
 /// Loose constraints from `0` up to `max × max` on both axes.
@@ -58,7 +57,6 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     // their parent render objects during this pass).
     build_owner.schedule_build_for(root_id, 0);
     build_owner.build_scope(&mut tree);
-    let _ = root_id;
 
     // The render-tree root is the single render object with no render parent —
     // works whether the root widget is itself a `RenderView` (e.g. `Padding`)
@@ -98,8 +96,9 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     LaidOut {
         pipeline_owner,
         root_render_id,
-        _build_owner: build_owner,
-        _tree: tree,
+        root_element_id: root_id,
+        build_owner,
+        tree,
     }
 }
 
@@ -107,6 +106,23 @@ impl LaidOut {
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
         self.root_render_id
+    }
+
+    /// Recompute the current render-tree root (the parentless render node). May
+    /// differ from [`LaidOut::root`] if a rebuild remounted the root subtree.
+    pub fn current_root(&self) -> RenderId {
+        let owner = self.pipeline_owner.read();
+        let render_tree = owner.render_tree();
+        render_tree
+            .iter()
+            .map(|(id, _)| id)
+            .find(|id| render_tree.parent(*id).is_none())
+            .expect("a render-tree root after layout")
+    }
+
+    /// Number of nodes currently in the render tree.
+    pub fn render_node_count(&self) -> usize {
+        self.pipeline_owner.read().render_tree().iter().count()
     }
 
     /// The `i`-th render-tree child of `id`.
@@ -129,6 +145,25 @@ impl LaidOut {
     pub fn offset(&self, id: RenderId) -> Offset {
         inspect::render_offset(&self.pipeline_owner.read(), id)
             .expect("render node should have an offset after layout")
+    }
+
+    /// Drive one more frame after external state has changed — the headless
+    /// equivalent of what `setState` schedules: mark the root dirty, rebuild
+    /// the subtree, and re-run layout/paint. Used by the `setState` (contract
+    /// C1) test, where the root's `ViewState` reads a value mutated between
+    /// frames.
+    pub fn pump(&mut self) {
+        if let Some(node) = self.tree.get_mut(self.root_element_id) {
+            node.element_mut().mark_needs_build();
+        }
+        self.build_owner.schedule_build_for(self.root_element_id, 0);
+        self.build_owner.build_scope(&mut self.tree);
+
+        let mut guard = self.pipeline_owner.write();
+        let owner = std::mem::take(&mut *guard);
+        let (owner, result) = owner.run_frame();
+        result.expect("rebuild frame should succeed");
+        *guard = owner;
     }
 }
 
