@@ -5,7 +5,7 @@
 
 use std::ops::{Add, Neg};
 
-use crate::geometry::{Offset, Pixels, Size};
+use crate::geometry::{Offset, Pixels, Rect, Size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -191,7 +191,6 @@ impl CrossAxisAlignment {
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Alignment {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Horizontal alignment: -1.0 = left, 0.0 = center, 1.0 = right
     pub x: f32,
 
@@ -243,10 +242,15 @@ impl Alignment {
     /// Bottom right alignment (1, 1).
     pub const BOTTOM_RIGHT: Self = Self::new(1.0, 1.0);
 
+    /// Linearly interpolates between two alignments.
+    ///
+    /// `t == 0.0` returns `a`; `t == 1.0` returns `b`. Values of `t` outside
+    /// `[0, 1]` extrapolate — they are **not** clamped. This matches Flutter's
+    /// `Alignment.lerp` contract and lets overshoot animation curves
+    /// (elastic, back) propagate through `Tween<Alignment>` without flattening.
     #[must_use]
     #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
-        let t = t.clamp(0.0, 1.0);
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
     }
 
@@ -277,6 +281,45 @@ impl Alignment {
         Offset::new(
             free_space.width * (0.5 * (1.0 + self.x)),
             free_space.height * (0.5 * (1.0 + self.y)),
+        )
+    }
+
+    /// Maps this normalized alignment to a pixel-coordinate `Offset` inside
+    /// `rect`.
+    ///
+    /// The result is an absolute position within `rect`:
+    /// - `Alignment::TOP_LEFT.align_within(rect)` returns the top-left corner.
+    /// - `Alignment::CENTER.align_within(rect)` returns the center point.
+    /// - `Alignment::BOTTOM_RIGHT.align_within(rect)` returns the bottom-right corner.
+    ///
+    /// Values outside `[-1, 1]` place the point outside `rect`, which is legal
+    /// and useful for follower-layer off-rectangle anchors.
+    ///
+    /// Unlike [`along_size`](Self::along_size), which requires the caller to
+    /// pre-compute `parent_size − child_size`, this method works directly on a
+    /// positioned `Rect` and accounts for its origin offset.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Alignment, Rect, geometry::px};
+    ///
+    /// let rect = flui_types::Rect::from_ltwh(px(10.0), px(20.0), px(100.0), px(200.0));
+    /// // Center of a 100×200 rect anchored at (10, 20) is (60, 120).
+    /// let center = Alignment::CENTER.align_within(rect);
+    /// assert_eq!(center.dx, px(60.0));
+    /// assert_eq!(center.dy, px(120.0));
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn align_within(self, rect: Rect<Pixels>) -> Offset<Pixels> {
+        let half_width = rect.width() * 0.5;
+        let half_height = rect.height() * 0.5;
+        let center_x = rect.left() + half_width;
+        let center_y = rect.top() + half_height;
+        Offset::new(
+            center_x + half_width * self.x,
+            center_y + half_height * self.y,
         )
     }
 }
@@ -313,6 +356,7 @@ impl Neg for Alignment {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AlignmentDirectional {
     /// Start alignment: -1.0 = start edge, 0.0 = center, 1.0 = end edge
@@ -370,9 +414,13 @@ impl AlignmentDirectional {
     }
 
     /// Linear interpolation between two directional alignments.
+    ///
+    /// Values of `t` outside `[0, 1]` extrapolate — they are **not** clamped,
+    /// matching [`Alignment::lerp`] and Flutter's `AlignmentDirectional.lerp`
+    /// so overshoot animation curves propagate without flattening.
+    #[must_use]
     #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
-        let t = t.clamp(0.0, 1.0);
         Self::new(a.start + (b.start - a.start) * t, a.y + (b.y - a.y) * t)
     }
 }
@@ -402,6 +450,7 @@ impl Neg for AlignmentDirectional {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AlignmentGeometry {
     /// Absolute alignment (x, y).
@@ -451,6 +500,8 @@ mod tests {
     use super::*;
     use crate::geometry::px;
 
+    // ---- along_size tests (pre-existing) ----
+
     #[test]
     fn along_size_center_returns_half_free_space() {
         let offset = Alignment::CENTER.along_size(Size::new(px(100.0), px(50.0)));
@@ -467,5 +518,139 @@ mod tests {
     fn along_size_bottom_right_returns_full_free_space() {
         let offset = Alignment::BOTTOM_RIGHT.along_size(Size::new(px(100.0), px(50.0)));
         assert_eq!(offset, Offset::new(px(100.0), px(50.0)));
+    }
+
+    // ---- lerp tests (migrated from painting::alignment) ----
+
+    #[test]
+    fn lerp_endpoints_are_exact() {
+        let a = Alignment::TOP_LEFT;
+        let b = Alignment::BOTTOM_RIGHT;
+        assert_eq!(Alignment::lerp(a, b, 0.0), a);
+        assert_eq!(Alignment::lerp(a, b, 1.0), b);
+    }
+
+    #[test]
+    fn lerp_midpoint_is_center() {
+        let mid = Alignment::lerp(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT, 0.5);
+        assert_eq!(mid, Alignment::CENTER);
+    }
+
+    /// Red→green anchor for the lerp fix: the old `lerp` clamped `t` to `[0, 1]`,
+    /// which pinned `t = 1.5` to `1.0` and produced `(1.0, 1.0)`.
+    /// Without the clamp, extrapolation yields `(2.0, 2.0)`.
+    #[test]
+    fn lerp_extrapolates_outside_unit_interval() {
+        let out = Alignment::lerp(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT, 1.5);
+        assert_eq!(out, Alignment::new(2.0, 2.0));
+    }
+
+    /// `AlignmentDirectional::lerp` mirrors the no-clamp contract: the old clamp
+    /// pinned `t = 1.5` to `1.0` and produced `(1.0, 1.0)`; without it,
+    /// `TOP_START..BOTTOM_END` at `t = 1.5` extrapolates to `(2.0, 2.0)`.
+    #[test]
+    fn directional_lerp_extrapolates_outside_unit_interval() {
+        let out = AlignmentDirectional::lerp(
+            AlignmentDirectional::TOP_START,
+            AlignmentDirectional::BOTTOM_END,
+            1.5,
+        );
+        assert_eq!(out, AlignmentDirectional::new(2.0, 2.0));
+    }
+
+    // ---- align_within tests (migrated from painting::alignment + new) ----
+
+    #[test]
+    fn align_within_corner_constants_match_rect_corners() {
+        let r = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(200.0));
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dx, px(0.0));
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dy, px(0.0));
+        assert_eq!(Alignment::BOTTOM_RIGHT.align_within(r).dx, px(100.0));
+        assert_eq!(Alignment::BOTTOM_RIGHT.align_within(r).dy, px(200.0));
+        assert_eq!(Alignment::CENTER.align_within(r).dx, px(50.0));
+        assert_eq!(Alignment::CENTER.align_within(r).dy, px(100.0));
+    }
+
+    #[test]
+    fn align_within_handles_offset_rect() {
+        // 200×100 rect anchored at (10, 20).
+        let r = Rect::from_ltwh(px(10.0), px(20.0), px(200.0), px(100.0));
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dx, px(10.0));
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dy, px(20.0));
+        assert_eq!(Alignment::CENTER.align_within(r).dx, px(110.0));
+        assert_eq!(Alignment::CENTER.align_within(r).dy, px(70.0));
+    }
+
+    #[test]
+    fn align_within_accepts_values_outside_unit_range() {
+        // Off-rectangle anchor — a follower-layer use case.
+        // x=2.0 on a 100-wide rect: cx=50, result = 50 + 50*2.0 = 150.
+        let r = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let a = Alignment::new(2.0, 0.0);
+        assert_eq!(a.align_within(r).dx, px(150.0));
+    }
+
+    #[test]
+    fn align_within_edge_midpoint_constants_lie_on_correct_edge() {
+        let r = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(200.0));
+        // CENTER_LEFT: x=-1 → left edge; y=0 → vertical center.
+        assert_eq!(Alignment::CENTER_LEFT.align_within(r).dx, px(0.0));
+        assert_eq!(Alignment::CENTER_LEFT.align_within(r).dy, px(100.0));
+        // TOP_CENTER: x=0 → horizontal center; y=-1 → top edge.
+        assert_eq!(Alignment::TOP_CENTER.align_within(r).dx, px(50.0));
+        assert_eq!(Alignment::TOP_CENTER.align_within(r).dy, px(0.0));
+    }
+
+    #[test]
+    fn alignment_is_copy_and_lightweight() {
+        const fn requires_copy<T: Copy>() {}
+        requires_copy::<Alignment>();
+        assert_eq!(std::mem::size_of::<Alignment>(), 8);
+    }
+
+    /// `align_within` on a zero-origin rect of size = `free_space` must return
+    /// the same `Offset` as `along_size(free_space)`.
+    ///
+    /// Invariant: a zero-origin rect with the given dimensions collapses
+    /// `align_within` to the same formula as `along_size`.
+    #[test]
+    fn align_within_and_along_size_agree_on_free_space() {
+        let free_space = Size::new(px(120.0), px(80.0));
+        let zero_origin_rect =
+            Rect::from_ltwh(px(0.0), px(0.0), free_space.width, free_space.height);
+        for alignment in [
+            Alignment::TOP_LEFT,
+            Alignment::TOP_CENTER,
+            Alignment::TOP_RIGHT,
+            Alignment::CENTER_LEFT,
+            Alignment::CENTER,
+            Alignment::CENTER_RIGHT,
+            Alignment::BOTTOM_LEFT,
+            Alignment::BOTTOM_CENTER,
+            Alignment::BOTTOM_RIGHT,
+        ] {
+            let via_along_size = alignment.along_size(free_space);
+            let via_align_within = alignment.align_within(zero_origin_rect);
+            assert_eq!(
+                via_along_size, via_align_within,
+                "along_size and align_within disagree for {alignment:?}"
+            );
+        }
+    }
+
+    // ---- canonical constants (migrated from painting::alignment) ----
+
+    #[test]
+    fn canonical_constants_match_quadrant() {
+        assert_eq!(Alignment::TOP_LEFT, Alignment::new(-1.0, -1.0));
+        assert_eq!(Alignment::CENTER, Alignment::new(0.0, 0.0));
+        assert_eq!(Alignment::BOTTOM_RIGHT, Alignment::new(1.0, 1.0));
+        assert_eq!(Alignment::CENTER_LEFT.x, -1.0);
+        assert_eq!(Alignment::TOP_CENTER.y, -1.0);
+    }
+
+    #[test]
+    fn default_is_center() {
+        assert_eq!(Alignment::default(), Alignment::CENTER);
     }
 }
