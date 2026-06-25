@@ -1,17 +1,16 @@
 //! `ReconcileEvent` — structured trace stream for the keyed
 //! child reconciler.
 //!
-//! Plan §U13 / FR-035. Emitted at every disposition site on the
-//! PRODUCTION path: the slab reconciler `reconcile_children_by_id`
-//! emits reuse / reorder / mount / unmount per child, and the
-//! GlobalKey-reparent path in [`ElementTree`](super::ElementTree) emits
-//! [`Reparent`](ReconcileEventKind::Reparent). The test-only box
-//! reconciler (`reconciliation`, gated behind `cfg(test)` /
-//! `feature = "test-utils"`) emits the same dispositions as a
-//! keyed-match reference. Observers (the `ReconcileEventCollector` test
-//! fixture in the in-crate `tree::test_utils` module, gated behind the
-//! `test-utils` feature; the future devtools panel) reconstruct the
-//! per-frame reconciliation outcome WITHOUT a tree-diff comparison.
+//! Plan §U13 / FR-035. Emitted on the PRODUCTION path: the slab
+//! reconciler `reconcile_children_by_id` emits `Reuse` / `Reorder` /
+//! `Unmount` per child, while the single child-minting site
+//! [`ElementTree::insert`](super::ElementTree::insert) emits `Mount` for
+//! a fresh element or [`Reparent`](ReconcileEventKind::Reparent) when it
+//! retakes an inactive GlobalKey element — never both for one new-side
+//! view. Observers (the `ReconcileEventCollector` test fixture in the
+//! in-crate `tree::test_utils` module, gated behind the `test-utils`
+//! feature; the future devtools panel) reconstruct the per-frame
+//! reconciliation outcome WITHOUT a tree-diff comparison.
 //!
 //! # Stability boundary
 //!
@@ -226,7 +225,11 @@ pub const RECONCILE_TARGET: &str = "flui::reconcile";
 /// Cost is zero when no subscriber is installed (tracing's per-target
 /// short-circuit fires before the field values are computed).
 pub fn emit(event: &ReconcileEvent) {
-    let view_type_id_str = format!("{:?}", event.view_type_id);
+    // `view_type_id = ?event.view_type_id` keeps the `TypeId` Debug-format
+    // INSIDE `event!`, so it runs only when the callsite is enabled — a
+    // rebuild with no `flui::reconcile` subscriber pays nothing (the field
+    // expression is not evaluated). The collector reconstructs the same
+    // `TypeId(0x…)` string via `Visit::record_debug`.
     tracing::event!(
         target: RECONCILE_TARGET,
         tracing::Level::TRACE,
@@ -235,7 +238,7 @@ pub fn emit(event: &ReconcileEvent) {
         child_key = event.child_key.unwrap_or(0),
         child_key_present = event.child_key.is_some(),
         slot = event.slot as u64,
-        view_type_id = %view_type_id_str,
+        view_type_id = ?event.view_type_id,
         from_parent = event.from_parent.map_or(0_u64, ElementId::as_u64),
         from_parent_present = event.from_parent.is_some(),
     );

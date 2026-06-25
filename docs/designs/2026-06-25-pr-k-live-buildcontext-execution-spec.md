@@ -1,8 +1,9 @@
 # PR-K execution spec — live BuildContext during build (by-value extraction)
 
-Companion to [ADR-0008]. PR-K is the keystone: it makes the `BuildContext`
-threaded into user `build()` read the REAL element tree, so InheritedView /
-`find_ancestor_*` / `dispatch_notification` stop being inert in production. It
+Companion to [ADR-0008]. PR-K is the keystone: it gives the `BuildContext`
+threaded into user `build()` a live view of the REAL element tree, so
+InheritedView / `find_ancestor_*` / `dispatch_notification` stop being inert
+in production. It
 is a single **atomic** cross-crate change (no shim — active-dev): there is no
 green intermediate checkpoint because the foundation pieces (`take/put`,
 `TreeRead`) are dead code until `build_scope` and every `build_into_views`

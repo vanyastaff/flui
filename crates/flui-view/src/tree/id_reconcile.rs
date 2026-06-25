@@ -19,14 +19,17 @@
 //!
 //! # Emitted dispositions
 //!
-//! One event per reconciled child slot: `Reuse` (top scan, same slot),
-//! `Unmount`
-//! (keyless-middle drop and unclaimed-keyed drop, at the child's OLD
-//! slot), `Reorder`/`Reuse` (keyed claim, by old-slot vs new-slot),
-//! `Mount` (fresh insert), and `Reuse`/`Reorder` for the bottom slice
-//! (by `old_bottom == new_bottom`). The cross-parent `Reparent`
-//! disposition is emitted by `ElementTree` on the GlobalKey path, not
-//! here.
+//! Emitted directly by this module: `Reuse` (top scan, same slot),
+//! `Unmount` (keyless-middle drop and unclaimed-keyed drop, at the
+//! child's OLD slot), `Reorder`/`Reuse` (keyed claim, by old-slot vs
+//! new-slot), and `Reuse`/`Reorder` for the bottom slice (by
+//! `old_bottom == new_bottom`).
+//!
+//! The insert path delegates its event to
+//! [`ElementTree::insert`](super::ElementTree::insert), the single
+//! child-minting site: it emits `Mount` for a fresh element or
+//! `Reparent` when it retakes an inactive GlobalKey element — never
+//! both, so the reconciler must NOT also emit `Mount` for an insert.
 //!
 //! # The borrow discipline this module proves out
 //!
@@ -255,16 +258,11 @@ pub(crate) fn reconcile_children_by_id(
             });
             result.push(old_id);
         } else {
+            // `ElementTree::insert` emits the disposition itself — `Mount`
+            // for a fresh element, or `Reparent` when it retakes an inactive
+            // GlobalKey element (`try_retake_inactive`). Emitting `Mount`
+            // here too would double-fire on the retake path.
             let new_id = tree.insert(new_view, parent_id, new_slot, owner);
-            // A new-side view with no old match minted a fresh element —
-            // emit after `insert` so observers only see `Mount` for an
-            // element that now exists in the slab.
-            emit_event(&ReconcileEvent::mount(
-                parent_id,
-                new_slot,
-                new_view.view_type_id(),
-                new_view.key().map(flui_foundation::ViewKey::key_hash),
-            ));
             result.push(new_id);
         }
     }
@@ -1305,23 +1303,28 @@ mod tests {
         /// Process-global guard so the keep-alive subscriber installs once.
         static GLOBAL_SUBSCRIBER: OnceLock<()> = OnceLock::new();
 
-        /// Install an *interested* process-global subscriber ONCE.
+        /// Install an *interested* process-global default subscriber ONCE
+        /// for this test binary.
         ///
-        /// The other (non-collector) `id_reconcile` unit tests emit
-        /// `flui::reconcile` events too. If one hits the emit callsite
-        /// FIRST, tracing computes its interest against the no-op global
-        /// default, caches `Interest::never`, and the callsite goes dead —
-        /// every later per-thread collector is then bypassed (the tests
-        /// pass in isolation but fail in the full lib suite). Installing an
-        /// interested global default rebuilds the interest cache so the
-        /// callsite stays live; per-event dispatch still routes to the
-        /// CURRENT thread's `with_default` collector, so each test's events
-        /// remain isolated. A bare `Registry` has no layer, so it records
-        /// nothing and is invisible to every other test.
+        /// The `flui::reconcile` callsite is shared by every reconcile,
+        /// including the many `ElementTree::insert` calls (an emit site) in
+        /// non-collector tests that run in PARALLEL. If one hits the callsite
+        /// while the only default is the no-op global, tracing caches
+        /// `Interest::never` and the callsite goes dead — later per-thread
+        /// collectors are then bypassed (tests pass in isolation but fail in
+        /// the full suite). `tracing::callsite::rebuild_interest_cache()` is
+        /// NOT sufficient: it re-evaluates against the GLOBAL default (still
+        /// the no-op), so under the suite's parallel emit pressure the
+        /// callsite re-poisons. Installing an interested global default (a
+        /// bare `Registry`, no layer → records nothing) keeps the callsite
+        /// permanently armed; per-event dispatch still routes to the CURRENT
+        /// thread's `with_default` collector, so each test's events stay
+        /// isolated. Confined to this test binary (a separate process from
+        /// every `tests/*.rs`), and nothing else here installs a global
+        /// default, so it cannot interfere.
         fn ensure_global_subscriber() {
             GLOBAL_SUBSCRIBER.get_or_init(|| {
-                // Ignore Err: some other code may already have set a global
-                // default — we only need *an* interested one present.
+                // Ignore Err: only need *an* interested global default present.
                 let _ = tracing::subscriber::set_global_default(Registry::default());
             });
         }
