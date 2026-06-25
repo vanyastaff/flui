@@ -75,6 +75,7 @@
 
 mod support;
 
+pub mod clip;
 mod container;
 pub mod flex;
 pub mod interaction;
@@ -88,6 +89,7 @@ pub mod text;
 // single-import surface.
 // ============================================================================
 
+pub use clip::{ClipOval, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Flex, Row};
 pub use interaction::{AbsorbPointer, IgnorePointer, Offstage};
@@ -125,9 +127,10 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        AbsorbPointer, Align, AspectRatio, Center, ColoredBox, Column, ConstrainedBox, Container,
-        DecoratedBox, FittedBox, Flex, FractionallySizedBox, IgnorePointer, LimitedBox, Offstage,
-        Opacity, Padding, RepaintBoundary, Row, SizedBox, Stack, Text, Transform,
+        AbsorbPointer, Align, AspectRatio, Center, ClipOval, ClipRect, ColoredBox, Column,
+        ConstrainedBox, Container, DecoratedBox, FittedBox, Flex, FractionallySizedBox,
+        IgnorePointer, LimitedBox, Offstage, Opacity, Padding, RepaintBoundary, Row, SizedBox,
+        Stack, Text, Transform,
     };
 
     // Common configuration value types, so an app author needs only this import.
