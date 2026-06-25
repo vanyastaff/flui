@@ -10,7 +10,7 @@
 //! | `RenderColoredBox` | `harness_colored_box_*` | yes | yes | yes | yes | — |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
 //! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
-//! | `RenderPadding` | `harness_padding_*` | yes | — | — | yes | queries |
+//! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
 //! | `RenderCenter` | `harness_center_*` | yes | — | — | yes | — |
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
 //! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
@@ -55,7 +55,8 @@ use flui_rendering::{
     parent_data::{FlexParentData, StackParentData},
     testing::{
         BoxQueryRun, Probe, RenderTester, TreeNode, assert_descendant_properties,
-        assert_has_committed_geometry, assert_has_committed_size, box_node, sliver_node,
+        assert_has_committed_geometry, assert_has_committed_size, box_node, localize_hit_point,
+        sliver_node,
     },
     traits::TextBaseline,
 };
@@ -319,6 +320,66 @@ fn harness_padding_forwards_intrinsics_with_insets() {
         run.min_intrinsic_width(padding, 100.0),
         60.0,
         "padding must add horizontal insets to the child's 40px min width"
+    );
+}
+
+// Hit-test localization for RenderPadding: the recorded transform for the
+// child entry must map a global hit point to the child's local coordinates.
+//
+// Setup: RenderPadding(all=12) with a 30×30 child in a 200×200 parent.
+// Padding places the child at (12, 12).  Hit at global (20, 20).
+// Expected child-local: (20−12, 20−12) = (8, 8).
+#[test]
+fn harness_padding_hit_localizes_to_padding_inset() {
+    const PADDING_PX: f32 = 12.0;
+    const HIT_X: f32 = 20.0;
+    const HIT_Y: f32 = 20.0;
+
+    let run = RenderTester::mount(
+        box_node(RenderPadding::all(PADDING_PX))
+            .child(box_node(RenderColoredBox::red(30.0, 30.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let child_id = run.id("child");
+
+    let child_paint_offset = run.offset(child_id);
+    assert_eq!(
+        child_paint_offset,
+        Offset::new(px(PADDING_PX), px(PADDING_PX)),
+        "RenderPadding(all=12) must position child at (12, 12)"
+    );
+
+    let hit_entries = run.hit_with_transforms(HIT_X, HIT_Y);
+
+    let child_transform = hit_entries
+        .iter()
+        .find(|(id, _)| *id == child_id)
+        .map(|(_, t)| *t)
+        .unwrap_or_else(|| panic!("child must be hit at ({HIT_X}, {HIT_Y})"));
+
+    let recorded_transform = child_transform.expect(
+        "child HitTestEntry must carry a recorded transform from hit_test_child_at_layout_offset",
+    );
+
+    let expected_local = Offset::new(
+        px(HIT_X - child_paint_offset.dx.get()),
+        px(HIT_Y - child_paint_offset.dy.get()),
+    );
+
+    let actual_local = localize_hit_point(recorded_transform, HIT_X, HIT_Y)
+        .expect("recorded transform must be invertible");
+
+    assert!(
+        (actual_local.dx.get() - expected_local.dx.get()).abs() < 0.01
+            && (actual_local.dy.get() - expected_local.dy.get()).abs() < 0.01,
+        "child-local hit must equal global − padding_inset \
+         (got ({:.2}, {:.2}), expected ({:.2}, {:.2}))",
+        actual_local.dx.get(),
+        actual_local.dy.get(),
+        expected_local.dx.get(),
+        expected_local.dy.get(),
     );
 }
 
@@ -1726,6 +1787,83 @@ fn harness_align_self_describes() {
         run.descendant_property("RenderAlign", "height_factor")
             .is_some(),
         "RenderAlign must report height_factor in diagnostics"
+    );
+}
+
+// Hit-test localization: the transform recorded in the child's HitTestEntry
+// must map the global hit point back to the child's local coordinate space.
+//
+// Setup: RenderAlign(CENTER) with a 40×40 child in a 100×100 parent.
+// Center places the child at offset (30, 30).
+// Hit at root (50, 50) — inside the child.
+//
+// Before commit 2e69d275 (when hit_test used hit_test_child_at_offset):
+//   the entry's transform was recorded as the identity (no offset pushed
+//   onto the HitTestResult stack), so localizing (50, 50) via the recorded
+//   transform returned (50, 50) — wrong.
+//
+// After the fix (hit_test_child_at_layout_offset):
+//   the child's paint offset (30, 30) is pushed before recursing, so the
+//   recorded global-to-local transform is a translation by (-30, -30).
+//   Localizing (50, 50) gives (20, 20) — the correct child-local position.
+#[test]
+fn harness_align_hit_localizes_to_child_offset() {
+    const PARENT_PX: f32 = 100.0;
+    const CHILD_PX: f32 = 40.0;
+    const HIT_X: f32 = 50.0;
+    const HIT_Y: f32 = 50.0;
+
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(Alignment::CENTER))
+            .child(box_node(RenderColoredBox::red(CHILD_PX, CHILD_PX)).label("child")),
+    )
+    .with_size(Size::new(px(PARENT_PX), px(PARENT_PX)))
+    .run_layout();
+
+    let child_id = run.id("child");
+
+    // Confirm layout placed the child at (30, 30).
+    let child_paint_offset = run.offset(child_id);
+    assert_eq!(
+        child_paint_offset,
+        Offset::new(px(30.0), px(30.0)),
+        "CENTER alignment must place a 40×40 child in a 100×100 parent at (30, 30)"
+    );
+
+    // Retrieve the hit path with recorded transforms.
+    let hit_entries = run.hit_with_transforms(HIT_X, HIT_Y);
+
+    let child_transform = hit_entries
+        .iter()
+        .find(|(id, _)| *id == child_id)
+        .map(|(_, t)| *t)
+        .unwrap_or_else(|| panic!("child must be in the hit path at ({HIT_X}, {HIT_Y})"));
+
+    let recorded_transform = child_transform.unwrap_or_else(|| {
+        panic!(
+            "child HitTestEntry must carry a recorded transform \
+             (hit_test_child_at_layout_offset pushes the paint offset)"
+        )
+    });
+
+    // The expected child-local position is global − child_paint_offset.
+    let expected_local = Offset::new(
+        px(HIT_X - child_paint_offset.dx.get()),
+        px(HIT_Y - child_paint_offset.dy.get()),
+    );
+
+    let actual_local = localize_hit_point(recorded_transform, HIT_X, HIT_Y)
+        .expect("recorded transform must be invertible");
+
+    assert!(
+        (actual_local.dx.get() - expected_local.dx.get()).abs() < 0.01
+            && (actual_local.dy.get() - expected_local.dy.get()).abs() < 0.01,
+        "child-local hit point must equal global − child_paint_offset \
+         (got ({:.2}, {:.2}), expected ({:.2}, {:.2}))",
+        actual_local.dx.get(),
+        actual_local.dy.get(),
+        expected_local.dx.get(),
+        expected_local.dy.get(),
     );
 }
 
