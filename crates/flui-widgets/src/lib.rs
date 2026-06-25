@@ -77,6 +77,7 @@ mod support;
 
 mod container;
 pub mod flex;
+pub mod interaction;
 pub mod layout;
 pub mod paint;
 pub mod stack;
@@ -89,11 +90,12 @@ pub mod text;
 
 pub use container::Container;
 pub use flex::{Column, Flex, Row};
+pub use interaction::{AbsorbPointer, IgnorePointer, Offstage};
 pub use layout::{
     Align, AspectRatio, Center, ConstrainedBox, FittedBox, FractionallySizedBox, LimitedBox,
     Padding, SizedBox, Transform,
 };
-pub use paint::{ColoredBox, DecoratedBox, Opacity};
+pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
 pub use stack::Stack;
 pub use text::Text;
 
@@ -123,9 +125,9 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        Align, AspectRatio, Center, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox,
-        FittedBox, Flex, FractionallySizedBox, LimitedBox, Opacity, Padding, Row, SizedBox, Stack,
-        Text, Transform,
+        AbsorbPointer, Align, AspectRatio, Center, ColoredBox, Column, ConstrainedBox, Container,
+        DecoratedBox, FittedBox, Flex, FractionallySizedBox, IgnorePointer, LimitedBox, Offstage,
+        Opacity, Padding, RepaintBoundary, Row, SizedBox, Stack, Text, Transform,
     };
 
     // Common configuration value types, so an app author needs only this import.

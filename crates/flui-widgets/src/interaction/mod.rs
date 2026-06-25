@@ -1,0 +1,11 @@
+//! Interaction widgets — modify how a subtree participates in hit-testing and
+//! visibility without changing its appearance. Each is a thin
+//! [`RenderView`](flui_view::prelude::RenderView) over a `flui-objects` proxy.
+
+mod absorb_pointer;
+mod ignore_pointer;
+mod offstage;
+
+pub use absorb_pointer::AbsorbPointer;
+pub use ignore_pointer::IgnorePointer;
+pub use offstage::Offstage;
