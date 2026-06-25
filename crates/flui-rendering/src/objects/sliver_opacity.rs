@@ -9,7 +9,7 @@
 //! / the proxy-sliver variant). Layout is a pure passthrough of the
 //! parent's [`crate::constraints::SliverConstraints`] to the child; the alpha is consumed
 //! by the compositor via the
-//! [`crate::traits::PaintEffectsCapability::paint_alpha`] override.
+//! [`crate::traits::RenderSliver::paint_alpha`] override.
 //!
 //! # Rust-native improvements
 //!
@@ -30,7 +30,7 @@ use crate::{
     constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    traits::RenderSliver,
 };
 
 // ============================================================================
@@ -42,7 +42,7 @@ use crate::{
 ///
 /// The `opacity` value ranges from `0.0` (fully transparent) to `1.0`
 /// (fully opaque). The compositor reads it via the
-/// [`crate::traits::PaintEffectsCapability::paint_alpha`] override;
+/// [`crate::traits::RenderSliver::paint_alpha`] override;
 /// layout is a transparent passthrough.
 ///
 /// # Performance
@@ -194,13 +194,9 @@ impl RenderSliver for RenderSliverOpacity {
         // opacity object adds no extra hit area.
         ctx.hit_test_child_at_layout_offset(0)
     }
-}
 
-// Mythos Step 11: PaintEffectsCapability override — the whole point of
-// RenderSliverOpacity. The pipeline reads paint_alpha through a
-// `&dyn RenderObject<SliverProtocol>`; the supertrait chain resolves
-// here.
-impl PaintEffectsCapability for RenderSliverOpacity {
+    // The whole point of RenderSliverOpacity: the pipeline reads paint_alpha
+    // through `&dyn RenderObject<SliverProtocol>`; the blanket impl forwards here.
     fn paint_alpha(&self) -> Option<u8> {
         // None when fully opaque (255) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
@@ -219,9 +215,6 @@ impl PaintEffectsCapability for RenderSliverOpacity {
         self.alpha == 0 && !self.always_needs_compositing
     }
 }
-
-impl SemanticsCapability for RenderSliverOpacity {}
-impl HotReloadCapability for RenderSliverOpacity {}
 
 // ============================================================================
 // Tests

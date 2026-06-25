@@ -10,10 +10,7 @@ use flui_rendering::{
     protocol::{BoxProtocol, SliverProtocol},
     storage::IntrinsicDimension,
     testing::{inspect, sliver as sliver_presets},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
 };
 use flui_tree::{Leaf, Single};
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
@@ -93,9 +90,6 @@ impl FixedHitBox {
 }
 
 impl flui_foundation::Diagnosticable for FixedHitBox {}
-impl PaintEffectsCapability for FixedHitBox {}
-impl SemanticsCapability for FixedHitBox {}
-impl HotReloadCapability for FixedHitBox {}
 
 impl RenderBox for FixedHitBox {
     type Arity = Leaf;
@@ -135,9 +129,6 @@ impl ExpandingHitBox {
 }
 
 impl flui_foundation::Diagnosticable for ExpandingHitBox {}
-impl PaintEffectsCapability for ExpandingHitBox {}
-impl SemanticsCapability for ExpandingHitBox {}
-impl HotReloadCapability for ExpandingHitBox {}
 
 impl RenderBox for ExpandingHitBox {
     type Arity = Leaf;
@@ -167,9 +158,6 @@ impl RenderBox for ExpandingHitBox {
 struct IntrinsicProbeSliver;
 
 impl flui_foundation::Diagnosticable for IntrinsicProbeSliver {}
-impl PaintEffectsCapability for IntrinsicProbeSliver {}
-impl SemanticsCapability for IntrinsicProbeSliver {}
-impl HotReloadCapability for IntrinsicProbeSliver {}
 
 impl RenderSliver for IntrinsicProbeSliver {
     type Arity = flui_tree::Single;
@@ -211,9 +199,6 @@ struct SliverHost {
 }
 
 impl flui_foundation::Diagnosticable for SliverHost {}
-impl PaintEffectsCapability for SliverHost {}
-impl SemanticsCapability for SliverHost {}
-impl HotReloadCapability for SliverHost {}
 
 impl RenderBox for SliverHost {
     type Arity = flui_tree::Variable;

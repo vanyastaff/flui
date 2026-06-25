@@ -18,7 +18,7 @@ use crate::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
     view::{CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
 
@@ -487,10 +487,6 @@ impl<O: ViewportOffset + 'static> Diagnosticable for RenderViewport<O> {
         }
     }
 }
-impl<O: ViewportOffset + 'static> PaintEffectsCapability for RenderViewport<O> {}
-impl<O: ViewportOffset + 'static> SemanticsCapability for RenderViewport<O> {}
-impl<O: ViewportOffset + 'static> HotReloadCapability for RenderViewport<O> {}
-
 impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     type Arity = Variable;
     type ParentData = BoxParentData;

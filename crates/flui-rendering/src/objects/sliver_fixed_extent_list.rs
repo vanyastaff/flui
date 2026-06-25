@@ -8,7 +8,7 @@ use crate::{
     constraints::{SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    traits::RenderSliver,
 };
 
 /// A sliver that lays out each direct Box child with the same main-axis extent.
@@ -77,9 +77,6 @@ impl Diagnosticable for RenderSliverFixedExtentList {
         properties.add_double("item_extent", self.item_extent, Some("px"));
     }
 }
-impl PaintEffectsCapability for RenderSliverFixedExtentList {}
-impl SemanticsCapability for RenderSliverFixedExtentList {}
-impl HotReloadCapability for RenderSliverFixedExtentList {}
 
 impl RenderSliver for RenderSliverFixedExtentList {
     type Arity = Variable;

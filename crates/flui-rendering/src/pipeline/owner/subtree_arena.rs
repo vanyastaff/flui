@@ -36,12 +36,12 @@
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
 use parking_lot::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
-use rustc_hash::FxHashSet;
 
 #[cfg(any(test, feature = "testing"))]
 use crate::testing::parent_data::ParentDataSeed;
@@ -128,31 +128,33 @@ unsafe impl Sync for NodePtr {}
 /// cross-thread access instead of corrupting the slab silently.
 /// Cheap: one `ThreadId::eq` per lookup.
 pub(super) struct SubtreeArena<'tree> {
-    by_id: HashMap<RenderId, NodePtr>,
+    /// Per-node raw-pointer index with a side in-flight flag.
+    ///
+    /// Each entry is `(NodePtr, AtomicBool)` where the `AtomicBool` is
+    /// the cycle-detection in-flight marker for that node.  The map is
+    /// structurally immutable after [`Self::new`] — only the atomic
+    /// *values* change, via interior mutability through `&self`.
+    ///
+    /// Having the in-flight bit here (a *side* structure that is never
+    /// reachable through a `NodePtr`) is the soundness invariant: reading
+    /// the flag never touches a node whose `&mut` may be live on the
+    /// call stack.  This is the same invariant the former separate
+    /// `Mutex<FxHashSet>` provided, now without the lock.
+    ///
+    /// `AtomicBool` is `Sync`, so `SubtreeArena` stays `Send + Sync`
+    /// with **no new `unsafe impl`**.  `Relaxed` ordering suffices
+    /// because [`Self::check_thread`] already enforces single-thread
+    /// access; no cross-thread synchronisation is needed.
+    by_id: HashMap<RenderId, (NodePtr, AtomicBool)>,
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
-    /// Set of ids whose layout is currently in flight at some recursion
-    /// level above the current call.  Insert on layout entry, remove on
-    /// drop (RAII via [`LayoutCycleGuard`]).  Re-entry on a member id
-    /// surfaces as [`crate::error::RenderError::LayoutCycle`] — closes
-    /// the U21 cycle-detection blocker (companion memo D6).
-    ///
-    /// Wrapped in `parking_lot::Mutex` because the layout-child closure
-    /// requires `&SubtreeArena: Send + Sync` (inherited from
-    /// `BoxLayoutCtxErased`).  Uncontended `parking_lot::Mutex` acquire
-    /// is ~10 ns — negligible vs `perform_layout` cost.  The cross-
-    /// thread closure-smuggle attack vector is independently rejected
-    /// by [`Self::check_thread`], so the Mutex serves only as the
-    /// shared-mutability cell, not as actual cross-thread sync.
-    currently_laying_out: Mutex<FxHashSet<RenderId>>,
     /// On-demand child builds requested during this walk that the frozen
     /// mid-pass borrows could not insert synchronously — the re-entrant
     /// build contract's v1 next-frame backend (ADR-0003 Decision 2).
     /// `layout_dirty_root` drains this into the deferred-mutation queue
-    /// after the walk releases its borrows.  `Mutex` for the same reason
-    /// as `currently_laying_out`: the layout-child closure requires
-    /// `&SubtreeArena: Send + Sync`.  Empty unless a lazy sliver requests
-    /// a not-yet-built child.
+    /// after the walk releases its borrows.  `Mutex` because the layout-
+    /// child closure requires `&SubtreeArena: Send + Sync`.  Empty unless
+    /// a lazy sliver requests a not-yet-built child.
     pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
     /// Symmetric remove sink (U3c D2): `(parent, child)` pairs of children
     /// the consumer wants evicted from the tree.  The `parent` is the
@@ -165,7 +167,8 @@ pub(super) struct SubtreeArena<'tree> {
     /// Drained before `pending_builds` in `layout_dirty_root`
     /// (Remove → Insert ordering, D3), post-drop of the subtree borrows,
     /// so no aliased `NodePtr` is live when the `defer_remove` calls touch
-    /// `&mut self`.  `Mutex` for the same reason as `pending_builds`.
+    /// `&mut self`.  `Mutex` for the same reason as `pending_builds`
+    /// (the layout-child closure requires `&SubtreeArena: Send + Sync`).
     pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: PhantomData<&'tree mut ()>,
@@ -195,7 +198,8 @@ impl<'tree> SubtreeArena<'tree> {
         let owner_thread = std::thread::current().id();
         let mut by_id = HashMap::with_capacity(ids.len());
         for (&id, r) in ids.iter().zip(refs) {
-            by_id.insert(id, NodePtr(r as *mut RenderNode));
+            // `AtomicBool::new(false)` — not in-flight at construction.
+            by_id.insert(id, (NodePtr(r as *mut RenderNode), AtomicBool::new(false)));
         }
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = ids
@@ -206,13 +210,6 @@ impl<'tree> SubtreeArena<'tree> {
             by_id,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds,
-            // Pre-sized to subtree size — at most `ids.len()` entries
-            // can be in-flight concurrently (the recursive walk
-            // descends linearly through one path at a time).
-            currently_laying_out: Mutex::new(FxHashSet::with_capacity_and_hasher(
-                ids.len(),
-                Default::default(),
-            )),
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             owner_thread,
@@ -256,23 +253,28 @@ impl<'tree> SubtreeArena<'tree> {
     #[inline]
     fn get(&self, id: RenderId) -> Option<NodePtr> {
         self.check_thread();
-        self.by_id.get(&id).copied()
+        self.by_id.get(&id).map(|(ptr, _)| *ptr)
     }
 
-    /// Returns `true` if `id` is currently registered in
-    /// [`Self::currently_laying_out`], meaning its `&mut RenderNode` is
-    /// live somewhere on the call stack above the current frame.
+    /// Returns `true` if `id`'s in-flight flag is set, meaning its
+    /// `&mut RenderNode` is live somewhere on the call stack above the
+    /// current frame.
     ///
     /// Used by the child-offset commit (Phase 4) to skip writing to a slot
     /// whose Unique borrow tag is still live: a write to such a slot would
     /// invalidate the ancestor's `&mut` provenance under Stacked / Tree
     /// Borrows, producing UB even if the write is atomic.
     ///
-    /// The check is only meaningful on the layout thread (same
-    /// `currently_laying_out` set used by [`LayoutCycleGuard`]).
+    /// The check is only meaningful on the layout thread (same atomic flag
+    /// set/cleared by [`LayoutCycleGuard`]).  Lock-free: reads the
+    /// `AtomicBool` in the arena's `by_id` map — a *side* structure that
+    /// never aliases any `NodePtr` slot.  `Relaxed` suffices because
+    /// [`Self::check_thread`] enforces single-thread access.
     #[inline]
     fn is_in_flight(&self, id: RenderId) -> bool {
-        self.currently_laying_out.lock().contains(&id)
+        self.by_id
+            .get(&id)
+            .is_some_and(|(_, flag)| flag.load(Ordering::Relaxed))
     }
 
     /// Takes the on-demand child builds recorded during this walk, leaving
@@ -390,8 +392,8 @@ impl<'tree> SubtreeArena<'tree> {
 // PR-A1 U21 — RAII layout-cycle guard
 // ============================================================================
 
-/// RAII guard that registers `id` in [`SubtreeArena::currently_laying_out`]
-/// on construction and unregisters on drop.
+/// RAII guard that sets `id`'s in-flight flag in [`SubtreeArena::by_id`]
+/// on construction and clears it on drop.
 ///
 /// **D-block PR-A1 U21 (companion memo D6):** detects re-entry into a
 /// node's `layout_subtree_borrowed` call (the situation where a user
@@ -402,12 +404,12 @@ impl<'tree> SubtreeArena<'tree> {
 /// UB under aliasing rules — the same slot's Unique tag is live up the
 /// recursion stack).
 ///
-/// The guard's `Drop` impl unconditionally removes `id` from the set,
+/// The guard's `Drop` impl unconditionally clears the in-flight flag,
 /// even on unwind (Rust's drop semantics guarantee this for any
 /// `Drop`-implementing value going out of scope).  Combined with the
 /// `catch_unwind` wrapper around `perform_layout_raw` in the non-leaf
-/// path, this means the cycle set stays consistent across frames: a
-/// panicking widget's id is cleared, the next frame's walk does not
+/// path, this means the in-flight state stays consistent across frames:
+/// a panicking widget's id is cleared, the next frame's walk does not
 /// see it as in-flight.
 struct LayoutCycleGuard<'arena, 'tree> {
     arena: &'arena SubtreeArena<'tree>,
@@ -415,15 +417,31 @@ struct LayoutCycleGuard<'arena, 'tree> {
 }
 
 impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
-    /// Registers `id` as currently-laying-out.  Returns
-    /// `Err(RenderError::LayoutCycle(id))` if `id` is already
-    /// registered — caller must propagate immediately.
+    /// Registers `id` as currently-laying-out by atomically setting its
+    /// in-flight flag.  Returns `Err(RenderError::LayoutCycle(id))` if
+    /// the flag was already set (id already in flight at a parent call
+    /// level) — caller must propagate immediately.
+    ///
+    /// Uses `swap(true, Relaxed)`: if the old value was `true` the node
+    /// was already in-flight (cycle); if `false` we atomically claim it.
+    /// Semantics are identical to the former `set.insert(id)` check —
+    /// re-entry is rejected, first entry proceeds.  No lock is taken.
     fn enter(arena: &'arena SubtreeArena<'tree>, id: RenderId) -> crate::error::RenderResult<Self> {
         // check_thread here so the diagnostic surfaces at the cycle-
         // guard layer too (covers callers that bypass `get`).
         arena.check_thread();
-        let mut set = arena.currently_laying_out.lock();
-        if !set.insert(id) {
+        // Look up the side flag for `id`.  An id that is not in `by_id`
+        // cannot be in-flight (it was never seeded into the arena), so
+        // we treat it as not-in-flight and let the subsequent `get` call
+        // produce `NodeNotFound` — matching the former HashSet behaviour
+        // where an absent id was not in the set.
+        let Some((_, flag)) = arena.by_id.get(&id) else {
+            return Ok(Self { arena, id });
+        };
+        // swap returns the *previous* value.  If it was already `true`
+        // the node is in-flight → cycle.  If it was `false` we just
+        // claimed it.
+        if flag.swap(true, Ordering::Relaxed) {
             // Debug-level: the layout-child callback in
             // `layout_subtree_borrowed` already logs the propagated
             // Err at tracing::error when it collapses descendant Err
@@ -440,17 +458,19 @@ impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
             );
             return Err(crate::error::RenderError::layout_cycle(id));
         }
-        // Lock drops here — set is held only for the insert.
         Ok(Self { arena, id })
     }
 }
 
 impl<'arena, 'tree> Drop for LayoutCycleGuard<'arena, 'tree> {
     fn drop(&mut self) {
-        // Unconditional remove — runs on every exit path including
-        // unwind.  Cycle set stays consistent for the next frame.
-        // `Mutex::lock` is panic-safe (no poisoning in parking_lot).
-        self.arena.currently_laying_out.lock().remove(&self.id);
+        // Unconditional clear — runs on every exit path including unwind.
+        // The in-flight flag stays consistent for the next frame.
+        // If the id is not in `by_id` (enter's early-return path for
+        // unknown ids), the store is a no-op.
+        if let Some((_, flag)) = self.arena.by_id.get(&self.id) {
+            flag.store(false, Ordering::Relaxed);
+        }
     }
 }
 
@@ -582,13 +602,13 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<flui_types::Size> {
-    // U21 cycle guard: register `id` in currently_laying_out FIRST —
-    // before any NodePtr reborrow (shared or exclusive).  On a cyclic
-    // edge the guard's `enter` returns Err(LayoutCycle) here, so the
-    // aliasing shared-read that would otherwise fire on a cyclic child
-    // never happens.  Drop on every exit path (RAII) — set stays
-    // consistent across panics via the catch_unwind in the non-leaf
-    // path below + Rust's drop-on-unwind discipline.
+    // U21 cycle guard: set `id`'s in-flight flag FIRST — before any
+    // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
+    // guard's `enter` returns Err(LayoutCycle) here, so the aliasing
+    // shared-read that would otherwise fire on a cyclic child never
+    // happens.  Drop on every exit path (RAII) — flag stays consistent
+    // across panics via the catch_unwind in the non-leaf path below +
+    // Rust's drop-on-unwind discipline.
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
     // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
@@ -693,7 +713,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
         // `&mut` is live on P1's frame).  Reading that child's memory while
         // P1's Unique tag is live is a foreign read that can break P1's
         // provenance under Stacked / Tree Borrows.  We detect this via
-        // `is_in_flight` (checks `currently_laying_out`) and skip the seed for
+        // `is_in_flight` (reads the `AtomicBool` in `by_id`) and skip the seed for
         // such children; their `ChildState` retains default values (zero
         // offset, None parent_data), which is safe since any positioning
         // decision for an in-flight ancestor that the callback yielded
@@ -953,7 +973,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // valid regardless of a failed grandchild.
     //
     // SOUNDNESS CONSTRAINT — in-flight skip:
-    // A child whose id is in `currently_laying_out` has its `&mut RenderNode`
+    // A child whose in-flight flag is set has its `&mut RenderNode`
     // live on the call stack of an ancestor `layout_subtree_borrowed_impl`
     // frame (held by that frame's Phase 2+3 block).  Writing to that slot's
     // memory (even via an atomic `set_offset`) while the ancestor's `&mut` is
@@ -1159,11 +1179,11 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     id: flui_foundation::RenderId,
     constraints: SliverConstraints,
 ) -> crate::error::RenderResult<SliverGeometry> {
-    // U21 cycle guard: register `id` in currently_laying_out FIRST —
-    // before any NodePtr reborrow (shared or exclusive).  On a cyclic
-    // edge the guard's `enter` returns Err(LayoutCycle) here so the
-    // aliasing shared read that would otherwise fire never happens.
-    // Drop runs on every exit including unwind so the set stays consistent.
+    // U21 cycle guard: set `id`'s in-flight flag FIRST — before any
+    // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
+    // guard's `enter` returns Err(LayoutCycle) here so the aliasing
+    // shared read that would otherwise fire never happens.
+    // Drop runs on every exit including unwind so the flag stays consistent.
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
     // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
@@ -1439,8 +1459,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     // this commit, child placement dies with the layout stack frame.
     //
     // SOUNDNESS CONSTRAINT — in-flight skip: identical contract to the
-    // Box path Phase 4 above.  A child whose id is in `currently_laying_out`
-    // has its `&mut RenderNode` live on an ancestor frame's Phase 2+3 block.
+    // Box path Phase 4 above.  A child whose in-flight flag is set has
+    // its `&mut RenderNode` live on an ancestor frame's Phase 2+3 block.
     // Writing to that slot (even atomically) while the Unique tag is live is
     // UB under SB and TB.  We skip such children; their next-frame layout
     // will re-establish correct offsets.
@@ -1527,7 +1547,6 @@ mod tests {
             by_id: HashMap::new(),
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
-            currently_laying_out: Mutex::new(FxHashSet::default()),
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
@@ -1562,11 +1581,25 @@ mod tests {
     /// This is gate (b) from the adversarial test spec in the plan.
     #[test]
     fn layout_cycle_guard_rejects_reentry_and_clears_on_drop() {
+        // The cycle guard operates on `by_id` entries; seed the map with
+        // the test id so `enter` / `drop` have a flag to read and write.
+        let id = RenderId::new(42);
+        let mut by_id: HashMap<RenderId, (NodePtr, AtomicBool)> = HashMap::new();
+        // NodePtr is never dereferenced in this test — we only exercise the
+        // AtomicBool side flag.  Use a dangling non-null pointer as the
+        // address; the `unsafe impl Send/Sync` on NodePtr and `check_thread`
+        // mean no deref occurs during LayoutCycleGuard operations.
+        by_id.insert(
+            id,
+            (
+                NodePtr(std::ptr::NonNull::dangling().as_ptr()),
+                AtomicBool::new(false),
+            ),
+        );
         let arena: SubtreeArena<'_> = SubtreeArena {
-            by_id: HashMap::new(),
+            by_id,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
-            currently_laying_out: Mutex::new(FxHashSet::default()),
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
@@ -1603,7 +1636,6 @@ mod tests {
             by_id: HashMap::new(),
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
-            currently_laying_out: Mutex::new(FxHashSet::default()),
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),

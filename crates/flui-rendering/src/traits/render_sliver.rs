@@ -343,6 +343,77 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     }
 
     // ========================================================================
+    // Effect Layers
+    // ========================================================================
+    //
+    // Override these to have the pipeline wrap children in OpacityLayer /
+    // TransformLayer. The blanket `impl RenderObject<SliverProtocol> for T`
+    // forwards every call from the `RenderObject<P>` surface to these
+    // RenderSliver methods — concrete types override here.
+
+    /// Returns the alpha value to apply to children.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_alpha`].
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the blend mode for the opacity layer wrapping children.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_layer_blend`].
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        None
+    }
+
+    /// Whether this render object should suppress all child painting.
+    ///
+    /// Default: `false`. See
+    /// [`RenderObject::skip_paint`].
+    fn skip_paint(&self) -> bool {
+        false
+    }
+
+    /// Returns the transform matrix to apply to children during painting.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_transform`].
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// Returns the transform matrix for hit testing.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::hit_test_transform`].
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    // ========================================================================
+    // Semantics / Hot Reload
+    // ========================================================================
+
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::describe_semantics_configuration`].
+    fn describe_semantics_configuration(
+        &self,
+        _config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+    }
+
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::reassemble`].
+    fn reassemble(&mut self) {}
+
+    // ========================================================================
     // Parent Data
     // ========================================================================
 
@@ -369,11 +440,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 /// explanation.
 impl<T> RenderObject<SliverProtocol> for T
 where
-    T: RenderSliver
-        + flui_foundation::Diagnosticable
-        + crate::traits::PaintEffectsCapability
-        + crate::traits::SemanticsCapability
-        + crate::traits::HotReloadCapability,
+    T: RenderSliver + flui_foundation::Diagnosticable,
 {
     fn perform_layout_raw(
         &mut self,
@@ -437,6 +504,40 @@ where
         let mut ctx = crate::context::SliverHitTestContext::new(inner, size);
         T::hit_test(self, &mut ctx)
     }
+
+    // Effect-layer and lifecycle forwards — same pattern as the BoxProtocol
+    // blanket: call into the RenderSliver method so overrides are visible
+    // through `&dyn RenderObject<SliverProtocol>`.
+    fn paint_alpha(&self) -> Option<u8> {
+        <T as RenderSliver>::paint_alpha(self)
+    }
+
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        <T as RenderSliver>::paint_layer_blend(self)
+    }
+
+    fn skip_paint(&self) -> bool {
+        <T as RenderSliver>::skip_paint(self)
+    }
+
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderSliver>::paint_transform(self, size)
+    }
+
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderSliver>::hit_test_transform(self, size)
+    }
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+        <T as RenderSliver>::describe_semantics_configuration(self, config)
+    }
+
+    fn reassemble(&mut self) {
+        <T as RenderSliver>::reassemble(self)
+    }
 }
 
 // ============================================================================
@@ -472,7 +573,6 @@ mod tests {
         constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
         context::SliverHitTestContext,
         protocol::{Protocol, SliverProtocol},
-        traits::{HotReloadCapability, PaintEffectsCapability, SemanticsCapability},
         view::ScrollDirection,
     };
 
@@ -562,10 +662,6 @@ mod tests {
     impl flui_foundation::Diagnosticable for FixedHeightSliver {
         fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
     }
-    impl PaintEffectsCapability for FixedHeightSliver {}
-    impl SemanticsCapability for FixedHeightSliver {}
-    impl HotReloadCapability for FixedHeightSliver {}
-
     impl RenderSliver for FixedHeightSliver {
         type Arity = Leaf;
         type ParentData = crate::parent_data::SliverParentData;
@@ -751,10 +847,6 @@ mod tests {
     impl flui_foundation::Diagnosticable for SingleAritySliver {
         fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
     }
-    impl PaintEffectsCapability for SingleAritySliver {}
-    impl SemanticsCapability for SingleAritySliver {}
-    impl HotReloadCapability for SingleAritySliver {}
-
     impl RenderSliver for SingleAritySliver {
         type Arity = Single;
         type ParentData = crate::parent_data::SliverParentData;

@@ -662,9 +662,6 @@ mod tests {
     struct ZeroSizeLeaf;
 
     impl flui_foundation::Diagnosticable for ZeroSizeLeaf {}
-    impl crate::traits::PaintEffectsCapability for ZeroSizeLeaf {}
-    impl crate::traits::SemanticsCapability for ZeroSizeLeaf {}
-    impl crate::traits::HotReloadCapability for ZeroSizeLeaf {}
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for ZeroSizeLeaf {
         fn perform_layout_raw(

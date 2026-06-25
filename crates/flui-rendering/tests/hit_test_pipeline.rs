@@ -24,10 +24,7 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     testing::inspect,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
@@ -112,9 +109,6 @@ fn padding_child_hits_leaf_first_at_laid_out_offset() {
 struct SimpleRow;
 
 impl flui_foundation::Diagnosticable for SimpleRow {}
-impl PaintEffectsCapability for SimpleRow {}
-impl SemanticsCapability for SimpleRow {}
-impl HotReloadCapability for SimpleRow {}
 
 impl RenderBox for SimpleRow {
     type Arity = Variable;
@@ -317,9 +311,6 @@ struct SliverHitHost {
 }
 
 impl flui_foundation::Diagnosticable for SliverHitHost {}
-impl PaintEffectsCapability for SliverHitHost {}
-impl SemanticsCapability for SliverHitHost {}
-impl HotReloadCapability for SliverHitHost {}
 
 impl RenderBox for SliverHitHost {
     type Arity = Variable;
@@ -345,9 +336,6 @@ struct PositionedSliverHitHost {
 }
 
 impl flui_foundation::Diagnosticable for PositionedSliverHitHost {}
-impl PaintEffectsCapability for PositionedSliverHitHost {}
-impl SemanticsCapability for PositionedSliverHitHost {}
-impl HotReloadCapability for PositionedSliverHitHost {}
 
 impl RenderBox for PositionedSliverHitHost {
     type Arity = Variable;
@@ -384,9 +372,6 @@ impl ConditionalOffsetSliverParent {
 }
 
 impl flui_foundation::Diagnosticable for ConditionalOffsetSliverParent {}
-impl PaintEffectsCapability for ConditionalOffsetSliverParent {}
-impl SemanticsCapability for ConditionalOffsetSliverParent {}
-impl HotReloadCapability for ConditionalOffsetSliverParent {}
 
 impl RenderSliver for ConditionalOffsetSliverParent {
     type Arity = flui_tree::Single;
@@ -427,9 +412,6 @@ struct HitLeafSliver {
 }
 
 impl flui_foundation::Diagnosticable for HitLeafSliver {}
-impl PaintEffectsCapability for HitLeafSliver {}
-impl SemanticsCapability for HitLeafSliver {}
-impl HotReloadCapability for HitLeafSliver {}
 
 impl RenderSliver for HitLeafSliver {
     type Arity = Leaf;
@@ -478,9 +460,6 @@ impl MainAxisBandSliver {
 }
 
 impl flui_foundation::Diagnosticable for MainAxisBandSliver {}
-impl PaintEffectsCapability for MainAxisBandSliver {}
-impl SemanticsCapability for MainAxisBandSliver {}
-impl HotReloadCapability for MainAxisBandSliver {}
 
 impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;
@@ -514,9 +493,6 @@ impl RenderSliver for MainAxisBandSliver {
 struct DefaultSelfHitSliver;
 
 impl flui_foundation::Diagnosticable for DefaultSelfHitSliver {}
-impl PaintEffectsCapability for DefaultSelfHitSliver {}
-impl SemanticsCapability for DefaultSelfHitSliver {}
-impl HotReloadCapability for DefaultSelfHitSliver {}
 
 impl RenderSliver for DefaultSelfHitSliver {
     type Arity = Leaf;
@@ -567,9 +543,6 @@ impl OvereagerHitLeafSliver {
 }
 
 impl flui_foundation::Diagnosticable for OvereagerHitLeafSliver {}
-impl PaintEffectsCapability for OvereagerHitLeafSliver {}
-impl SemanticsCapability for OvereagerHitLeafSliver {}
-impl HotReloadCapability for OvereagerHitLeafSliver {}
 
 impl RenderSliver for OvereagerHitLeafSliver {
     type Arity = Leaf;

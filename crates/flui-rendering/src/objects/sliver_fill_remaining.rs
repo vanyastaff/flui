@@ -15,7 +15,7 @@ use crate::{
     constraints::{SliverConstraints, SliverGeometry},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    traits::RenderSliver,
 };
 
 /// A Sliver-protocol adapter that sizes one non-scrollable Box child to fill
@@ -48,9 +48,6 @@ impl Default for RenderSliverFillRemaining {
 // Geometry-only fill: no configurable fields. Committed geometry is layered
 // onto the diagnostics node by the tree walk.
 impl Diagnosticable for RenderSliverFillRemaining {}
-impl PaintEffectsCapability for RenderSliverFillRemaining {}
-impl SemanticsCapability for RenderSliverFillRemaining {}
-impl HotReloadCapability for RenderSliverFillRemaining {}
 
 impl RenderSliver for RenderSliverFillRemaining {
     type Arity = Single;
@@ -129,9 +126,6 @@ impl Default for RenderSliverFillRemainingAndOverscroll {
 
 // Geometry-only fill: no configurable fields (see above).
 impl Diagnosticable for RenderSliverFillRemainingAndOverscroll {}
-impl PaintEffectsCapability for RenderSliverFillRemainingAndOverscroll {}
-impl SemanticsCapability for RenderSliverFillRemainingAndOverscroll {}
-impl HotReloadCapability for RenderSliverFillRemainingAndOverscroll {}
 
 impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
     type Arity = Single;
@@ -219,9 +213,6 @@ impl Default for RenderSliverFillRemainingWithScrollable {
 
 // Geometry-only fill: no configurable fields (see above).
 impl Diagnosticable for RenderSliverFillRemainingWithScrollable {}
-impl PaintEffectsCapability for RenderSliverFillRemainingWithScrollable {}
-impl SemanticsCapability for RenderSliverFillRemainingWithScrollable {}
-impl HotReloadCapability for RenderSliverFillRemainingWithScrollable {}
 
 impl RenderSliver for RenderSliverFillRemainingWithScrollable {
     type Arity = Single;

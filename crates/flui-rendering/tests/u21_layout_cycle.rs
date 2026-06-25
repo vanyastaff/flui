@@ -2,9 +2,9 @@
 //!
 //! Verifies [`PipelineOwner::layout_dirty_root`] surfaces
 //! [`RenderError::LayoutCycle`] on cyclic re-entry (via the
-//! `SubtreeBorrows::currently_laying_out` `FxHashSet<RenderId>` +
+//! `SubtreeArena::by_id` per-slot `AtomicBool` in-flight flag +
 //! RAII `LayoutCycleGuard`), and that the guard's `Drop` runs on
-//! panic so the cycle set stays consistent across frames.
+//! panic so the in-flight flag stays consistent across frames.
 //!
 //! Refs:
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U21
@@ -117,7 +117,7 @@ fn u21_callback_reentry_marks_parent_dirty_for_retry() {
     let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
     // P1.perform_layout → layout_child(0) → recurses into P2.
     // P2.perform_layout → layout_child(0) → recurses into P1 (cyclic
-    // edge). P1 is already in currently_laying_out → guard returns
+    // edge). P1's in-flight flag is already set → guard returns
     // Err(LayoutCycle(P1)) → callback collapses to Size::ZERO; P2's
     // descendant_error_flag set → P2 stays NEEDS_LAYOUT. P1's
     // callback only sees Ok(Size) from P2, so P1 is marked clean.
@@ -145,7 +145,7 @@ fn u21_callback_reentry_marks_parent_dirty_for_retry() {
 // ============================================================================
 
 /// Plan §U21 RAII safety: a non-leaf user widget whose
-/// `perform_layout` panics must leave `currently_laying_out` clean
+/// `perform_layout` panics must leave the in-flight flag clean
 /// for the next frame (the panic is caught by `catch_unwind` in the
 /// non-leaf path AND the `LayoutCycleGuard`'s Drop runs on unwind).
 ///
@@ -164,7 +164,7 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
         context::{BoxHitTestContext, BoxLayoutContext},
         hit_testing::HitTestBehavior,
         parent_data::BoxParentData,
-        traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+        traits::RenderBox,
     };
     use flui_tree::Single;
     /// Single-arity user widget that panics on the FIRST perform_layout
@@ -175,9 +175,6 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
     }
 
     impl Diagnosticable for PanicOnceWidget {}
-    impl PaintEffectsCapability for PanicOnceWidget {}
-    impl SemanticsCapability for PanicOnceWidget {}
-    impl HotReloadCapability for PanicOnceWidget {}
 
     impl RenderBox for PanicOnceWidget {
         type Arity = Single;
@@ -236,14 +233,14 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
     );
 
     // Frame 2: retry must succeed. Guard's Drop on the unwind path
-    // cleared parent_id from currently_laying_out — set is empty, no
+    // cleared parent_id's in-flight flag — no flag set, no
     // spurious LayoutCycle. Widget's `already_panicked = true` so the
     // perform_layout body completes normally.
     let frame_2 = pipeline.layout_dirty_root(parent_id, constraints);
     assert!(
         frame_2.is_ok(),
-        "frame 2 retry must succeed (drop-guard cleared parent_id from \
-         currently_laying_out on the frame-1 unwind); got {frame_2:?}",
+        "frame 2 retry must succeed (drop-guard cleared parent_id's \
+         in-flight flag on the frame-1 unwind); got {frame_2:?}",
     );
 }
 

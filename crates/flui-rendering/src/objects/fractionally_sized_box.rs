@@ -27,7 +27,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A non-negative fraction used as a sizing factor.
@@ -426,11 +426,6 @@ impl RenderBox for RenderFractionallySizedBox {
         Some(child_baseline + offset.dy.get())
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderFractionallySizedBox {}
-impl SemanticsCapability for RenderFractionallySizedBox {}
-impl HotReloadCapability for RenderFractionallySizedBox {}
 
 // ===========================================================================
 // Tests

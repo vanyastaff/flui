@@ -339,10 +339,73 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Effect Layers
     // ========================================================================
     //
-    // paint_alpha / paint_transform are NOT defined on RenderBox itself.
-    // They live on PaintEffectsCapability (a supertrait of
-    // RenderObject<BoxProtocol>); concrete render objects implement that
-    // capability trait directly. See Mythos Step 11.
+    // Override these to have the pipeline wrap children in OpacityLayer /
+    // TransformLayer. The blanket `impl RenderObject<BoxProtocol> for T`
+    // forwards every call from the `RenderObject<P>` surface to these
+    // RenderBox methods — concrete types override here, not on RenderObject.
+
+    /// Returns the alpha value to apply to children.
+    ///
+    /// Override to have the pipeline wrap children in an `OpacityLayer`.
+    /// Default: `None` (no opacity effect). See
+    /// [`RenderObject::paint_alpha`].
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the blend mode for the opacity layer wrapping children.
+    ///
+    /// Default: `None` (= `SrcOver`). See
+    /// [`RenderObject::paint_layer_blend`].
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        None
+    }
+
+    /// Whether this render object should suppress all child painting.
+    ///
+    /// Default: `false`. See
+    /// [`RenderObject::skip_paint`].
+    fn skip_paint(&self) -> bool {
+        false
+    }
+
+    /// Returns the transform matrix to apply to children during painting.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_transform`].
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// Returns the transform matrix for hit testing.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::hit_test_transform`].
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    // ========================================================================
+    // Semantics / Hot Reload
+    // ========================================================================
+
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::describe_semantics_configuration`].
+    fn describe_semantics_configuration(
+        &self,
+        _config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+    }
+
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::reassemble`].
+    fn reassemble(&mut self) {}
 }
 
 /// Text baseline types for baseline alignment.
@@ -390,11 +453,7 @@ pub enum TextBaseline {
 /// requires it.
 impl<T> RenderObject<BoxProtocol> for T
 where
-    T: RenderBox
-        + flui_foundation::Diagnosticable
-        + crate::traits::PaintEffectsCapability
-        + crate::traits::SemanticsCapability
-        + crate::traits::HotReloadCapability,
+    T: RenderBox + flui_foundation::Diagnosticable,
 {
     fn perform_layout_raw(
         &mut self,
@@ -526,6 +585,40 @@ where
 
     fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f32> {
         T::compute_distance_to_actual_baseline(self, baseline)
+    }
+
+    // Effect-layer and lifecycle forwards — mirror the `actual_baseline_raw`
+    // pattern: call into the RenderBox method so overrides on RenderBox are
+    // visible through `&dyn RenderObject<BoxProtocol>`.
+    fn paint_alpha(&self) -> Option<u8> {
+        <T as RenderBox>::paint_alpha(self)
+    }
+
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        <T as RenderBox>::paint_layer_blend(self)
+    }
+
+    fn skip_paint(&self) -> bool {
+        <T as RenderBox>::skip_paint(self)
+    }
+
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderBox>::paint_transform(self, size)
+    }
+
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderBox>::hit_test_transform(self, size)
+    }
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+        <T as RenderBox>::describe_semantics_configuration(self, config)
+    }
+
+    fn reassemble(&mut self) {
+        <T as RenderBox>::reassemble(self)
     }
 }
 

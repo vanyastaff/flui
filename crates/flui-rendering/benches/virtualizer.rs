@@ -51,9 +51,7 @@ use flui_rendering::{
     pipeline::Layout,
     protocol::{BoxProtocol, SliverProtocol},
     testing::sliver as sliver_presets,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject},
     virtualization::{ScrollWindow, Virtualizer},
 };
 use flui_tree::{Leaf, Variable};
@@ -328,9 +326,6 @@ struct BenchBox {
 }
 
 impl Diagnosticable for BenchBox {}
-impl PaintEffectsCapability for BenchBox {}
-impl SemanticsCapability for BenchBox {}
-impl HotReloadCapability for BenchBox {}
 
 impl RenderBox for BenchBox {
     type Arity = Leaf;
@@ -352,9 +347,6 @@ struct BenchSliverHost {
 }
 
 impl Diagnosticable for BenchSliverHost {}
-impl PaintEffectsCapability for BenchSliverHost {}
-impl SemanticsCapability for BenchSliverHost {}
-impl HotReloadCapability for BenchSliverHost {}
 
 impl RenderBox for BenchSliverHost {
     type Arity = Variable;

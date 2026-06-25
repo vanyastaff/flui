@@ -12,7 +12,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// How to inscribe an image into a box.
@@ -431,10 +431,6 @@ impl RenderBox for RenderImage {
         self.compute_size(&constraints)
     }
 }
-
-impl PaintEffectsCapability for RenderImage {}
-impl SemanticsCapability for RenderImage {}
-impl HotReloadCapability for RenderImage {}
 
 #[cfg(test)]
 mod tests {

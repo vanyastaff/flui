@@ -8,7 +8,6 @@ use std::sync::{
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
-    impl_sliver_test_caps,
     objects::RenderViewport,
     parent_data::SliverParentData,
     pipeline::PipelineOwner,
@@ -158,7 +157,7 @@ impl FixedSliver {
     }
 }
 
-impl_sliver_test_caps!(FixedSliver);
+impl flui_foundation::Diagnosticable for FixedSliver {}
 
 impl RenderSliver for FixedSliver {
     type Arity = Leaf;
@@ -202,7 +201,7 @@ impl RenderSliver for FixedSliver {
 #[derive(Debug, Default)]
 struct InvisibleHitSliver;
 
-impl_sliver_test_caps!(InvisibleHitSliver);
+impl flui_foundation::Diagnosticable for InvisibleHitSliver {}
 
 impl RenderSliver for InvisibleHitSliver {
     type Arity = Leaf;
@@ -250,7 +249,7 @@ impl MainAxisBandSliver {
     }
 }
 
-impl_sliver_test_caps!(MainAxisBandSliver);
+impl flui_foundation::Diagnosticable for MainAxisBandSliver {}
 
 impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;
@@ -314,7 +313,7 @@ impl GeometrySliver {
     }
 }
 
-impl_sliver_test_caps!(GeometrySliver);
+impl flui_foundation::Diagnosticable for GeometrySliver {}
 
 impl RenderSliver for GeometrySliver {
     type Arity = Leaf;
@@ -358,7 +357,7 @@ impl CorrectingSliver {
     }
 }
 
-impl_sliver_test_caps!(CorrectingSliver);
+impl flui_foundation::Diagnosticable for CorrectingSliver {}
 
 impl RenderSliver for CorrectingSliver {
     type Arity = Leaf;
@@ -405,7 +404,7 @@ impl CountingSliver {
     }
 }
 
-impl_sliver_test_caps!(CountingSliver);
+impl flui_foundation::Diagnosticable for CountingSliver {}
 
 impl RenderSliver for CountingSliver {
     type Arity = Leaf;
@@ -458,7 +457,7 @@ impl OutOfBandSliver {
     }
 }
 
-impl_sliver_test_caps!(OutOfBandSliver);
+impl flui_foundation::Diagnosticable for OutOfBandSliver {}
 
 impl RenderSliver for OutOfBandSliver {
     type Arity = Leaf;
@@ -507,7 +506,7 @@ impl DynamicOutOfBandSliver {
     }
 }
 
-impl_sliver_test_caps!(DynamicOutOfBandSliver);
+impl flui_foundation::Diagnosticable for DynamicOutOfBandSliver {}
 
 impl RenderSliver for DynamicOutOfBandSliver {
     type Arity = Leaf;

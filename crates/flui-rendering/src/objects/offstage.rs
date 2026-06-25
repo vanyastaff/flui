@@ -27,9 +27,7 @@ use crate::{
     },
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
-    },
+    traits::{RenderBox, TextBaseline},
 };
 
 /// A render object that, when `offstage` is true, collapses to zero
@@ -221,11 +219,6 @@ impl RenderBox for RenderOffstage {
         }
     }
 }
-
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl PaintEffectsCapability for RenderOffstage {}
-impl SemanticsCapability for RenderOffstage {}
-impl HotReloadCapability for RenderOffstage {}
 
 // ===========================================================================
 // Tests

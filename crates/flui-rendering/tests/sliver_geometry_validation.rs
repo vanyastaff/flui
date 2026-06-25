@@ -10,10 +10,7 @@ use flui_rendering::{
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
@@ -75,9 +72,6 @@ impl BadGeometrySliver {
 }
 
 impl Diagnosticable for BadGeometrySliver {}
-impl PaintEffectsCapability for BadGeometrySliver {}
-impl SemanticsCapability for BadGeometrySliver {}
-impl HotReloadCapability for BadGeometrySliver {}
 
 impl RenderSliver for BadGeometrySliver {
     type Arity = Leaf;
@@ -114,9 +108,6 @@ impl BoxWithSliverChild {
 }
 
 impl Diagnosticable for BoxWithSliverChild {}
-impl PaintEffectsCapability for BoxWithSliverChild {}
-impl SemanticsCapability for BoxWithSliverChild {}
-impl HotReloadCapability for BoxWithSliverChild {}
 
 impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;

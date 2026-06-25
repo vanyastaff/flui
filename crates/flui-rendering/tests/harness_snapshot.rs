@@ -69,7 +69,6 @@ use flui_rendering::{
     objects::RenderFittedBox,
     protocol::{BoxProtocol, Protocol, ProtocolGeometry, ProtocolPosition, RenderObject},
     testing::{Probe, has_overflow},
-    traits::{HotReloadCapability, PaintEffectsCapability, SemanticsCapability},
 };
 use flui_types::{Alignment, layout::BoxFit, painting::Clip};
 
@@ -90,9 +89,6 @@ impl PanicPaintBox {
 }
 
 impl flui_foundation::Diagnosticable for PanicPaintBox {}
-impl PaintEffectsCapability for PanicPaintBox {}
-impl SemanticsCapability for PanicPaintBox {}
-impl HotReloadCapability for PanicPaintBox {}
 
 impl RenderObject<BoxProtocol> for PanicPaintBox {
     fn perform_layout_raw(

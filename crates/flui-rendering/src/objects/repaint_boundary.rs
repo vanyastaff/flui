@@ -10,11 +10,7 @@
 
 use flui_tree::Single;
 
-use crate::{
-    context::BoxLayoutContext,
-    parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, SemanticsCapability},
-};
+use crate::{context::BoxLayoutContext, parent_data::BoxParentData};
 
 /// A render object that marks its subtree as a repaint boundary.
 ///
@@ -66,14 +62,7 @@ impl Default for RenderRepaintBoundary {
     }
 }
 
-// ============================================================================
-// Capability impls — all default / no-op
-// ============================================================================
-
 impl flui_foundation::Diagnosticable for RenderRepaintBoundary {}
-impl PaintEffectsCapability for RenderRepaintBoundary {}
-impl SemanticsCapability for RenderRepaintBoundary {}
-impl HotReloadCapability for RenderRepaintBoundary {}
 
 // ============================================================================
 // Direct RenderObject<BoxProtocol> impl
@@ -226,6 +215,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::RenderObject as _;
 
     #[test]
     fn test_new_defaults() {

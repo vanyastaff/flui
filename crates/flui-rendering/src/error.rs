@@ -223,11 +223,10 @@ pub enum RenderError {
     /// was still in flight on the same frame.
     ///
     /// **Variant pre-added in D-block PR-A1b U18; cycle-detection wiring
-    /// lands in U21** (companion memo D6) as a `currently_laying_out`
-    /// `FxHashSet<RenderId>` guard on `PipelineOwner<Layout>` with a
-    /// RAII drop-guard for unwind safety. Currently no production code
-    /// constructs this variant — it is reserved so the error surface is
-    /// already stable when U21 wires the guard.
+    /// landed in U21** (companion memo D6). The guard is a per-slot
+    /// `AtomicBool` in-flight flag in the `SubtreeArena` `by_id` index,
+    /// set/cleared by a RAII `LayoutCycleGuard` (unwind-safe via `Drop`);
+    /// re-entry into an in-flight slot returns this variant.
     #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
     LayoutCycle(RenderId),
 
@@ -423,10 +422,10 @@ impl RenderError {
     /// **D-block PR-A1 U21 (companion memo D6):** returned by
     /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
     /// when a render object's `perform_layout` re-enters an ancestor's
-    /// layout via `ctx.layout_child` — the `currently_laying_out`
-    /// `FxHashSet<RenderId>` guard detects the second-borrow attempt
-    /// and surfaces this variant instead of triggering an aliasing
-    /// reborrow or stack overflow.
+    /// layout via `ctx.layout_child` — the `SubtreeArena` per-slot
+    /// `AtomicBool` in-flight flag (set by `LayoutCycleGuard`) detects the
+    /// second-borrow attempt and surfaces this variant instead of
+    /// triggering an aliasing reborrow or stack overflow.
     pub fn layout_cycle(id: RenderId) -> Self {
         Self::LayoutCycle(id)
     }

@@ -442,11 +442,6 @@ impl Diagnosticable for RenderViewAdapter {
     }
 }
 
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl crate::traits::PaintEffectsCapability for RenderViewAdapter {}
-impl crate::traits::SemanticsCapability for RenderViewAdapter {}
-impl crate::traits::HotReloadCapability for RenderViewAdapter {}
-
 impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
     fn perform_layout_raw(
         &mut self,

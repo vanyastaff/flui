@@ -6,7 +6,7 @@ use flui_types::{Alignment, Matrix4, Offset, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 
 /// A render object that applies a transformation matrix to its child.
@@ -225,11 +225,9 @@ impl RenderBox for RenderTransform {
         // No push/pop needed here.
         ctx.hit_test_child(0, Offset::new(tx, ty))
     }
-}
 
-// Mythos Step 11: PaintEffectsCapability override -- the whole point of
-// RenderTransform.
-impl PaintEffectsCapability for RenderTransform {
+    // The whole point of RenderTransform: the pipeline reads these through
+    // `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards here.
     fn paint_transform(&self, size: Size) -> Option<Matrix4> {
         // Return the effective transform so the paint walk can apply it.
         // `size` is the laid-out size from RenderState (origin pivot).
@@ -240,9 +238,6 @@ impl PaintEffectsCapability for RenderTransform {
         Some(self.effective_transform(size))
     }
 }
-
-impl SemanticsCapability for RenderTransform {}
-impl HotReloadCapability for RenderTransform {}
 
 #[cfg(test)]
 mod tests {
