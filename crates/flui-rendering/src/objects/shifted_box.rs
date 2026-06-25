@@ -167,18 +167,28 @@ impl AligningShiftedBox {
         self.child_baselines = [None; 2];
     }
 
-    /// Hit-tests the child at its stored offset.
+    /// Hit-tests the child at its laid-out offset.
     ///
     /// Returns `false` immediately if the position lies outside the parent's
     /// own size (mirrors Flutter `RenderShiftedBox.hitTestChildren`
-    /// `addWithPaintOffset` guard).  If a child exists, delegates to
-    /// `ctx.hit_test_child_at_offset`.
+    /// `addWithPaintOffset` guard).  If a child exists, delegates via
+    /// [`hit_test_child_at_layout_offset`], which resolves the child's offset
+    /// from `RenderState` (committed by [`align_child`]) AND records the paint
+    /// offset into the `HitTestResult` so `HitTestResult::dispatch` can localize
+    /// pointer/scroll events to the child's coordinate space. This is the
+    /// canonical path (`hit_test_child_at_offset` only transforms the recursive
+    /// descent and would leave handlers on an aligned child receiving parent
+    /// coordinates — Flutter `RenderShiftedBox.hitTestChildren` records the
+    /// offset via `addWithPaintOffset`).
+    ///
+    /// [`hit_test_child_at_layout_offset`]: BoxHitTestContext::hit_test_child_at_layout_offset
+    /// [`align_child`]: AligningShiftedBox::align_child
     pub(crate) fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child {
-            ctx.hit_test_child_at_offset(0, self.child_offset)
+            ctx.hit_test_child_at_layout_offset(0)
         } else {
             false
         }
