@@ -644,6 +644,299 @@ impl BuildContext for ElementBuildContext {
 }
 
 // ============================================================================
+// BuildCtx — borrowed, build-time BuildContext (PR-K)
+// ============================================================================
+
+/// A dependency a building element registered on an `InheritedElement`.
+///
+/// Recorded during `build()` while the tree is borrowed read-only (a
+/// [`BuildCtx`] holds `&ElementTree`), then applied by
+/// [`BuildOwner::build_scope`](crate::BuildOwner) — which holds `&mut tree`
+/// again once the built element is put back — onto the provider node's
+/// dependent set. Deferring the *write* keeps the build itself read-only
+/// while still recording within the same `build_scope` iteration, before
+/// the next dirty element is processed.
+pub(crate) struct DependentRecord {
+    /// The `InheritedElement` the dependent read from.
+    pub(crate) provider: ElementId,
+    /// The element that read it (and must rebuild when it changes).
+    pub(crate) dependent: ElementId,
+    /// The dependent's tree depth (for dirty-heap ordering).
+    pub(crate) depth: usize,
+}
+
+/// Build-time [`BuildContext`] backed by a live, borrowed read view of the
+/// real [`ElementTree`].
+///
+/// Replaces the empty process-shared dummy that made `depend_on` /
+/// `find_ancestor_*` / notification dispatch inert in production. The
+/// building element is extracted from the slab by value for the duration
+/// of its `build()`
+/// (see [`ElementNode::element`](crate::tree::ElementNode)), so this can
+/// hold a shared `&ElementTree` without aliasing: ancestor walks read every
+/// live node, and the in-flight node reads back as a hole via
+/// [`element_opt`](crate::tree::ElementNode::element_opt).
+///
+/// Inherited dependencies cannot be written here (the tree is read-only),
+/// so they are buffered into `dep_sink` and applied by `build_scope` after
+/// the element is restored. `mark_needs_build` during build is a
+/// Flutter-forbidden no-op.
+pub(crate) struct BuildCtx<'b> {
+    element_id: ElementId,
+    depth: usize,
+    tree: &'b ElementTree,
+    dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+}
+
+impl<'b> BuildCtx<'b> {
+    /// Construct a build-time context for `element_id` (at `depth`) over a
+    /// borrowed view of `tree`, buffering inherited dependencies into
+    /// `dep_sink`.
+    pub(crate) fn new(
+        element_id: ElementId,
+        depth: usize,
+        tree: &'b ElementTree,
+        dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+    ) -> Self {
+        Self {
+            element_id,
+            depth,
+            tree,
+            dep_sink,
+        }
+    }
+
+    /// Walk strict-ancestors (parent and up), invoking `predicate` on each
+    /// live ancestor element. The in-flight node (extracted during build)
+    /// is skipped via [`element_opt`](crate::tree::ElementNode::element_opt).
+    fn walk_strict_ancestors<R>(
+        &self,
+        mut predicate: impl FnMut(&dyn crate::view::ElementBase) -> std::ops::ControlFlow<R>,
+    ) -> Option<R> {
+        let mut current = self.element_id;
+        loop {
+            let parent_id = self.tree.get(current)?.parent()?;
+            if let Some(elem) = self.tree.get(parent_id)?.element_opt()
+                && let std::ops::ControlFlow::Break(result) = predicate(elem)
+            {
+                return Some(result);
+            }
+            current = parent_id;
+        }
+    }
+
+    /// Nearest strict-ancestor `ElementId` whose view type is `type_id` AND
+    /// which is an `InheritedElement`.
+    ///
+    /// Complexity: O(depth) average and worst case (bounded by tree depth;
+    /// the common `Theme`/`MediaQuery` lookup resolves within a few hops).
+    fn find_inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
+        let mut current = self.element_id;
+        loop {
+            let parent_id = self.tree.get(current)?.parent()?;
+            if self
+                .tree
+                .get(parent_id)?
+                .element_opt()
+                .is_some_and(|e| e.view_type_id() == type_id && e.as_inherited().is_some())
+            {
+                return Some(parent_id);
+            }
+            current = parent_id;
+        }
+    }
+}
+
+impl BuildContext for BuildCtx<'_> {
+    fn element_id(&self) -> ElementId {
+        self.element_id
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn mounted(&self) -> bool {
+        true
+    }
+
+    fn is_building(&self) -> bool {
+        true
+    }
+
+    fn owner(&self) -> Option<&BuildOwner> {
+        None
+    }
+
+    fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        let Some(provider_id) = self.find_inherited_provider(type_id) else {
+            return false;
+        };
+        let Some(accessor) = self
+            .tree
+            .get(provider_id)
+            .and_then(super::super::tree::ElementNode::element_opt)
+            .and_then(crate::view::ElementBase::as_inherited)
+        else {
+            return false;
+        };
+        callback(accessor.view_as_any());
+        // Defer the dependent-record write to `build_scope` (tree is
+        // read-only here); see [`DependentRecord`].
+        self.dep_sink.lock().push(DependentRecord {
+            provider: provider_id,
+            dependent: self.element_id,
+            depth: self.depth,
+        });
+        true
+    }
+
+    fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        let Some(provider_id) = self.find_inherited_provider(type_id) else {
+            return false;
+        };
+        let Some(accessor) = self
+            .tree
+            .get(provider_id)
+            .and_then(super::super::tree::ElementNode::element_opt)
+            .and_then(crate::view::ElementBase::as_inherited)
+        else {
+            return false;
+        };
+        callback(accessor.view_as_any());
+        true
+    }
+
+    fn find_ancestor_element(&self, type_id: TypeId) -> Option<ElementId> {
+        let mut current = self.element_id;
+        loop {
+            let parent_id = self.tree.get(current)?.parent()?;
+            if self
+                .tree
+                .get(parent_id)?
+                .element_opt()
+                .is_some_and(|e| e.view_type_id() == type_id)
+            {
+                return Some(parent_id);
+            }
+            current = parent_id;
+        }
+    }
+
+    fn find_ancestor_view(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.walk_strict_ancestors::<()>(|elem| {
+            if elem.view_type_id() == type_id
+                && let Some(view_any) = elem.view_as_any()
+            {
+                callback(view_any);
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        })
+        .is_some()
+    }
+
+    fn find_ancestor_state(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.walk_strict_ancestors::<()>(|elem| {
+            if let Some(state_any) = elem.state_as_any()
+                && (*state_any).type_id() == type_id
+            {
+                callback(state_any);
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        })
+        .is_some()
+    }
+
+    fn find_root_ancestor_state(
+        &self,
+        type_id: TypeId,
+        callback: &mut dyn FnMut(&dyn Any),
+    ) -> bool {
+        let mut root_most: Option<ElementId> = None;
+        let mut current = self.element_id;
+        while let Some(node) = self.tree.get(current) {
+            let Some(parent_id) = node.parent() else {
+                break;
+            };
+            if self
+                .tree
+                .get(parent_id)
+                .and_then(super::super::tree::ElementNode::element_opt)
+                .and_then(crate::view::ElementBase::state_as_any)
+                .is_some_and(|s| (*s).type_id() == type_id)
+            {
+                root_most = Some(parent_id);
+            }
+            current = parent_id;
+        }
+        let Some(matched) = root_most else {
+            return false;
+        };
+        let Some(state_any) = self
+            .tree
+            .get(matched)
+            .and_then(super::super::tree::ElementNode::element_opt)
+            .and_then(crate::view::ElementBase::state_as_any)
+        else {
+            return false;
+        };
+        callback(state_any);
+        true
+    }
+
+    fn find_render_object(&self) -> Option<RenderId> {
+        self.walk_strict_ancestors(|elem| match elem.render_id() {
+            Some(id) => std::ops::ControlFlow::Break(id),
+            None => std::ops::ControlFlow::Continue(()),
+        })
+    }
+
+    fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
+        let mut current = self.element_id;
+        while let Some(node) = self.tree.get(current) {
+            let Some(parent_id) = node.parent() else {
+                break;
+            };
+            if !visitor(parent_id) {
+                break;
+            }
+            current = parent_id;
+        }
+    }
+
+    fn visit_child_elements(&self, visitor: &mut dyn FnMut(ElementId)) {
+        if let Some(node) = self.tree.get(self.element_id) {
+            for &child_id in node.child_ids() {
+                visitor(child_id);
+            }
+        }
+    }
+
+    fn mark_needs_build(&self) {
+        tracing::warn!(
+            "BuildCtx::mark_needs_build called during build — no-op (Flutter forbids \
+             mark-dirty during the build of the same element)"
+        );
+    }
+
+    fn dispatch_notification(&self, notification: &dyn Notification) {
+        let notification_any: &dyn Any = notification;
+        let type_id = notification_any.type_id();
+        self.walk_strict_ancestors::<()>(|ancestor| {
+            if ancestor.on_notification(type_id, notification_any) {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
+    }
+}
+
+// ============================================================================
 // Builder for ElementBuildContext
 // ============================================================================
 

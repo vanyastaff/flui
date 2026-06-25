@@ -109,11 +109,24 @@ impl ElementNode {
         "ElementNode::element accessed while extracted by build_scope (take/put window)";
 
     /// Get the Element.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element is currently extracted — the transient hole
+    /// `build_scope` opens between `take_element` and `put_element` while it
+    /// builds the node by value. Any lookup that can run *during* a build
+    /// (every `BuildCtx` ancestor walk) must go through [`Self::element_opt`]
+    /// instead, so reaching the in-flight node is a clean miss, not a panic.
     pub fn element(&self) -> &dyn ElementBase {
         &**self.element.as_ref().expect(Self::ELEMENT_PRESENT)
     }
 
     /// Get the Element mutably.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the same extracted-element hole as [`Self::element`] — see
+    /// its `# Panics` note.
     pub fn element_mut(&mut self) -> &mut dyn ElementBase {
         &mut **self.element.as_mut().expect(Self::ELEMENT_PRESENT)
     }

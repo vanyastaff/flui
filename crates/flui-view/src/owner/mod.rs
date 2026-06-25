@@ -12,3 +12,6 @@ mod element_owner;
 
 pub use build_owner::BuildOwner;
 pub use element_owner::ElementOwner;
+// Build-time live-tree handle carried on `ElementOwner` during a
+// `build_scope` drain (PR-K). Crate-internal.
+pub(crate) use element_owner::BuildHandle;

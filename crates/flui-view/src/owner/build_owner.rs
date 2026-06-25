@@ -300,6 +300,9 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
+            // Lifecycle paths (mount/unmount/update) get no live-tree view;
+            // only the `build_scope` drain sets `build_view`.
+            build_view: None,
         }
     }
 
@@ -363,37 +366,55 @@ impl BuildOwner {
             // per dependency-change-then-rebuild cycle.
             let needs_did_change = self.pending_dependency_changes.remove(&id);
 
-            // ── Phase 1: extract. Borrow the element from the slab, run
-            // its build half, capture owned child views, drop the borrow.
-            let new_views: Vec<Box<dyn View>> = {
+            // Guard (still holding only a brief `&mut node`): an
+            // inherited-dependency change marks an otherwise-clean dependent
+            // dirty so its build re-runs against the new value; then skip
+            // unless the element is both buildable (lifecycle) AND dirty. A
+            // clean element's build half returns an empty view list, and the
+            // phase-2 reconcile would then wrongly REMOVE all its children —
+            // so a clean entry must never reach reconcile.
+            {
                 let Some(node) = tree.get_mut(id) else {
                     // Stale / removed id — nothing to build.
                     continue;
                 };
-                // An inherited-dependency change marks the dependent dirty
-                // even when its own state is clean: the inherited value it
-                // reads changed, so its build MUST re-run.
-                // `InheritedBehavior::on_view_updated` cannot set the flag
-                // itself — it only has the dependent's id, not slab access —
-                // so the dirty mark is applied here, BEFORE the dirty guard,
-                // keyed off the `pending_dependency_changes` entry. Without
-                // this a clean dependent (dirty flag false after its first
-                // build) would be skipped by the guard below and never
-                // observe the change.
                 if needs_did_change {
                     node.element_mut().mark_needs_build();
                 }
-                // Skip unless the element is both buildable (lifecycle) AND
-                // actually dirty. A clean element's build half would return
-                // an empty view list, and the phase-2 reconcile would then
-                // wrongly REMOVE all its slab-resident children — so a clean
-                // entry must never reach the reconcile. A scheduled child is
-                // always dirty (`tree.update` / fresh insert set the flag),
-                // so this guard does not starve legitimate rebuilds.
                 if !node.element().lifecycle().can_build() || !node.element().is_dirty() {
                     continue;
                 }
+            }
 
+            // ── Phase 1: extract BY VALUE, build against a LIVE read view.
+            // Taking the element out of its slot frees the tree for a shared
+            // `&` borrow, so the element's `build()` can resolve InheritedView
+            // / ancestor lookups against the REAL tree (via the `BuildCtx`
+            // the behaviour builds from `ElementOwner::build_view`) — no empty
+            // dummy, and no deadlock against the `Arc<RwLock>` write lock the
+            // frame driver holds (the borrowed view sidesteps the lock).
+            // Inherited dependents are buffered (the tree is read-only here)
+            // and applied below once `&mut tree` is free again.
+            let Some(mut element) = tree.take_element(id) else {
+                continue;
+            };
+            let dep_sink: parking_lot::Mutex<Vec<crate::context::DependentRecord>> =
+                parking_lot::Mutex::new(Vec::new());
+
+            // Run the build half under `catch_unwind` so the extracted element
+            // is ALWAYS restored to its slot, even on an unwind. The user
+            // `build()` is already caught one level down (`build_or_recover`
+            // substitutes an `ErrorView`), but the other user hooks reachable
+            // in this window — `did_change_dependencies` (via
+            // `notify_dependency_change`) and `init_state` (inside
+            // `StatefulBehavior::build_into_views`) — are not. Without this
+            // guard a panic in either would drop `element` and leave a
+            // permanent `None` hole, turning every later
+            // `element()`/`element_mut()` access on this node into an
+            // `ELEMENT_PRESENT` panic. `AssertUnwindSafe` is sound because the
+            // sole cross-unwind invariant — the slot is whole again — is
+            // re-established by the unconditional `put_element` below.
+            let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
                     dirty_elements: &mut self.dirty_elements,
@@ -401,17 +422,45 @@ impl BuildOwner {
                     inactive_elements: &mut self.inactive_elements,
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     on_build_scheduled: self.on_build_scheduled.as_deref(),
+                    build_view: Some(super::BuildHandle {
+                        tree: &*tree,
+                        dep_sink: &dep_sink,
+                    }),
                 };
                 if needs_did_change {
-                    node.element_mut().notify_dependency_change();
+                    element.notify_dependency_change(&mut element_owner);
                 }
-                node.element_mut().build_into_views(&mut element_owner)
-            }; // ← element borrow ENDS here.
+                element.build_into_views(&mut element_owner)
+            })); // `element_owner` + its `&*tree` borrow drop here.
 
-            // ── Phase 2: apply. Reconcile the returned views against the
-            // node's slab-resident children with a fresh `&mut tree`.
-            // Newly inserted children are scheduled for build inside the
-            // reconciler so this same drain loop reaches them.
+            // Restore the element BEFORE anything else — the slot must be whole
+            // whether the build returned or unwound. With `&mut tree` free
+            // again we then apply the dependents buffered during the read-only
+            // build onto their provider nodes; recording in the SAME iteration
+            // (before the next dirty pop) preserves Flutter's
+            // record-before-notify ordering (`framework.dart:5086`).
+            tree.put_element(id, element);
+
+            let new_views: Vec<Box<dyn View>> = match build_outcome {
+                Ok(views) => views,
+                // Slot restored above; re-raise so the frame aborts exactly as
+                // it did before (no behavior change beyond keeping the slab
+                // consistent). Partial `dep_sink` records are intentionally
+                // dropped — the build did not complete.
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
+            for record in dep_sink.into_inner() {
+                if let Some(node) = tree.get_mut(record.provider)
+                    && let Some(accessor) = node.element_mut().as_inherited_mut()
+                {
+                    accessor.record_dependent(record.dependent, record.depth);
+                }
+            }
+
+            // ── Phase 2: reconcile the returned views against the node's
+            // slab-resident children with a fresh `&mut tree`. Newly inserted
+            // children are scheduled inside the reconciler so this same drain
+            // loop reaches them.
             let mut element_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
                 dirty_elements: &mut self.dirty_elements,
@@ -419,6 +468,7 @@ impl BuildOwner {
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 on_build_scheduled: self.on_build_scheduled.as_deref(),
+                build_view: None,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -497,7 +547,8 @@ impl BuildOwner {
 
         // Build the split-borrow handle once for the entire unmount sweep.
         // The handle survives `tree.get_mut` borrows because it points into
-        // disjoint `BuildOwner` fields.
+        // disjoint `BuildOwner` fields. No live build runs here, so the
+        // build-time tree handle is absent.
         let mut element_owner = super::ElementOwner {
             global_keys: &mut self.global_keys,
             dirty_elements: &mut self.dirty_elements,
@@ -505,6 +556,7 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
+            build_view: None,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).

@@ -284,8 +284,8 @@ where
     // the scheduled rebuild alone is the right response.
     // ========================================================================
 
-    fn notify_dependency_change(&mut self) {
-        self.behavior.did_change_dependencies(&self.core);
+    fn notify_dependency_change(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.behavior.did_change_dependencies(&self.core, owner);
     }
 
     // ========================================================================

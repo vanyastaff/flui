@@ -182,6 +182,18 @@ where
         self.self_id = Some(id);
     }
 
+    /// This element's own `ElementId`, stamped at slab insertion via
+    /// [`Self::set_self_id`]. `None` for a hand-rolled element that bypassed
+    /// `ElementTree::insert` / `mount_root_*` (not slab-addressable).
+    ///
+    /// Read by the behaviors to anchor the live build-time
+    /// [`BuildCtx`](crate::context::BuildContext) ancestor walk at the real
+    /// node (PR-K); the in-flight element is extracted by value during build,
+    /// so this id addresses the now-empty slot the walk skips.
+    pub(crate) fn self_id(&self) -> Option<ElementId> {
+        self.self_id
+    }
+
     /// Push this element onto the dirty heap so
     /// [`BuildOwner::build_scope`](crate::BuildOwner) reaches it.
     ///
@@ -206,9 +218,9 @@ where
         }
     }
 
-    // NOTE: `self_id` is read directly via `self.self_id` inside
-    // `update_or_create_children` rather than through a getter; the
-    // single in-crate consumer doesn't justify the boilerplate.
+    // NOTE: `update_or_create_children` reads `self.self_id` directly;
+    // external consumers (the build-time `BuildCtx` anchor) go through
+    // [`Self::self_id`].
 
     // ========================================================================
     // Lifecycle Methods (eliminates ~40 lines of boilerplate per element)

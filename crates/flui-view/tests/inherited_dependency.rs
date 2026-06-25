@@ -23,12 +23,13 @@
 //! non-recording read), and `framework.dart:6414`
 //! (`InheritedElement.notifyClients`).
 
-use std::sync::Arc;
+use std::{any::TypeId, sync::Arc};
 
+use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
-    InheritedElement, IntoView, Lifecycle, StatelessBehavior, StatelessElement, StatelessView,
-    View, ViewExt, element::InheritedBehavior, view::InheritedView,
+    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementOwner,
+    ElementTree, InheritedElement, IntoView, Lifecycle, StatelessBehavior, StatelessElement,
+    StatelessView, View, ViewExt, element::InheritedBehavior, view::InheritedView,
 };
 use parking_lot::RwLock;
 
@@ -82,6 +83,75 @@ impl InheritedView for ThemeProvider {
 impl View for ThemeProvider {
     fn create_element(&self) -> Box<dyn ElementBase> {
         Box::new(InheritedElement::new(self, InheritedBehavior::new(self)))
+    }
+}
+
+// ============================================================================
+// Shared terminal leaf — a build chain must bottom out, so probe/consumer
+// views return this leaf as their child instead of recursing on themselves.
+// `LeafElement::build_into_views` returns no children, so `build_scope`
+// terminates one hop below the deepest interesting node.
+// ============================================================================
+
+#[derive(Clone)]
+struct LeafView;
+
+impl View for LeafView {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(LeafElement::new())
+    }
+}
+
+struct LeafElement {
+    depth: usize,
+    lifecycle: Lifecycle,
+}
+
+impl LeafElement {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            lifecycle: Lifecycle::Initial,
+        }
+    }
+}
+
+impl ElementBase for LeafElement {
+    fn view_type_id(&self) -> TypeId {
+        TypeId::of::<LeafView>()
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn lifecycle(&self) -> Lifecycle {
+        self.lifecycle
+    }
+
+    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
+        self.depth = slot;
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
+        self.lifecycle = Lifecycle::Defunct;
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn deactivate(&mut self) {
+        self.lifecycle = Lifecycle::Inactive;
+    }
+
+    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
+
+    fn mark_needs_build(&mut self) {}
+
+    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
+        Vec::new()
     }
 }
 
@@ -418,96 +488,19 @@ fn get_inherited_returns_none_when_no_ancestor() {
 // ============================================================================
 
 mod did_change_dependencies_on_inherited_update {
-    use std::{
-        any::TypeId,
-        sync::{Arc, Mutex},
-    };
+    use std::sync::{Arc, Mutex};
 
-    use flui_foundation::ElementId;
     use flui_view::{
-        BuildContext, BuildOwner, ElementBase, ElementOwner, ElementTree, IntoView, Lifecycle,
-        StatefulBehavior, StatefulElement, StatefulView, View, ViewExt, ViewState,
+        BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatefulBehavior,
+        StatefulElement, StatefulView, View, ViewExt, ViewState,
     };
 
-    use super::{DummyChild, MyTheme};
+    use super::{DummyChild, LeafView, MyTheme};
 
     /// Shared probe recording lifecycle ordering. Each entry is one
     /// observed event tag ("dcd:N" for the Nth `did_change_dependencies`
     /// call, "build" for a `build` call).
     type Probe = Mutex<Vec<String>>;
-
-    // ========================================================================
-    // Terminal leaf — the build chain must terminate, so probe-stateful
-    // views and the stateless dependent both return this leaf as their
-    // child instead of self.
-    // ========================================================================
-
-    #[derive(Clone)]
-    struct LeafView;
-
-    impl View for LeafView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(LeafElement::new())
-        }
-    }
-
-    struct LeafElement {
-        depth: usize,
-        lifecycle: Lifecycle,
-    }
-
-    impl LeafElement {
-        fn new() -> Self {
-            Self {
-                depth: 0,
-                lifecycle: Lifecycle::Initial,
-            }
-        }
-    }
-
-    impl ElementBase for LeafElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<LeafView>()
-        }
-
-        fn depth(&self) -> usize {
-            self.depth
-        }
-
-        fn lifecycle(&self) -> Lifecycle {
-            self.lifecycle
-        }
-
-        fn mount(
-            &mut self,
-            _parent: Option<ElementId>,
-            slot: usize,
-            _owner: &mut ElementOwner<'_>,
-        ) {
-            self.depth = slot;
-            self.lifecycle = Lifecycle::Active;
-        }
-
-        fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
-            self.lifecycle = Lifecycle::Defunct;
-        }
-
-        fn activate(&mut self) {
-            self.lifecycle = Lifecycle::Active;
-        }
-
-        fn deactivate(&mut self) {
-            self.lifecycle = Lifecycle::Inactive;
-        }
-
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
-
-        fn mark_needs_build(&mut self) {}
-
-        fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-    }
 
     // ========================================================================
     // Stateful dependent that records `did_change_dependencies` + `build`
@@ -902,6 +895,419 @@ mod did_change_dependencies_on_inherited_update {
                 .has_pending_dependency_change(dep_id),
             "pending-flag must be cleared after build_scope drains it (even for stateless \
              dependents whose hook is a no-op)"
+        );
+    }
+
+    // ========================================================================
+    // Panic-safety: a panic in the typed `did_change_dependencies` hook (the
+    // `notify_dependency_change` branch of the build-scope take/put window)
+    // must restore the dependent's slab slot, not leave a `None` hole.
+    // ========================================================================
+
+    #[derive(Clone)]
+    struct PanicDcd;
+
+    struct PanicDcdState;
+
+    impl StatefulView for PanicDcd {
+        type State = PanicDcdState;
+
+        fn create_state(&self) -> Self::State {
+            PanicDcdState
+        }
+    }
+
+    impl ViewState<PanicDcd> for PanicDcdState {
+        fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {
+            panic!("induced did_change_dependencies panic (build-window panic-safety test)");
+        }
+
+        fn build(&self, _view: &PanicDcd, _ctx: &dyn BuildContext) -> impl IntoView {
+            LeafView.boxed()
+        }
+    }
+
+    impl View for PanicDcd {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        }
+    }
+
+    #[test]
+    fn did_change_dependencies_panic_leaves_the_slot_intact_not_a_hole() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let (provider_id, dep_id) =
+            mount_provider_and_record_dependency(&mut tree, &mut owner, 0x00FF_0000, &PanicDcd);
+
+        // Change the inherited value so the dependent is notified: scheduled +
+        // pending typed-hook. Its build window will fire the panicking hook.
+        let provider_v2 = super::ThemeProvider {
+            theme: MyTheme { color: 0x0000_FF00 },
+            child: DummyChild,
+        };
+        tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
+
+        let outcome = catch_unwind(AssertUnwindSafe(|| owner.build_scope(&mut tree)));
+        assert!(
+            outcome.is_err(),
+            "the did_change_dependencies panic must propagate out of build_scope",
+        );
+
+        // The guard restored the dependent's slot before re-raising; without
+        // it this read would observe a `None` hole.
+        assert!(
+            tree.get(dep_id)
+                .expect("dependent node still present")
+                .element_opt()
+                .is_some(),
+            "a panic in did_change_dependencies must restore the dependent's slot, not hole it",
+        );
+    }
+}
+
+// ============================================================================
+// PR-K keystone: a consumer's REAL build() resolves an inherited value two
+// hops up through the LIVE element tree, and the dependency it records there
+// drives its rebuild when the value later changes.
+//
+// Before PR-K, `build_into_views` handed user `build()` an empty process-
+// shared dummy context, so `depend_on` inside a real build returned `None`
+// and recorded nothing — inherited data was unreachable from the very place
+// Flutter makes it reachable (`framework.dart:5081`). This module pins the
+// wired behavior end to end: read-during-build → record → notify-on-update.
+// ============================================================================
+
+mod live_inherited_during_build {
+    use std::sync::{Arc, Mutex};
+
+    use flui_foundation::ElementId;
+    use flui_view::{
+        BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, InheritedElement,
+        IntoView, StatelessBehavior, StatelessElement, StatelessView, View, ViewExt,
+        element::InheritedBehavior, view::InheritedView,
+    };
+
+    use super::{LeafView, MyTheme};
+
+    /// The single value the deepest consumer observed via `depend_on` during
+    /// its build. `None` until its `build()` runs; the captured `Option`
+    /// distinguishes "never built" from "built but saw no provider".
+    type ObservedColor = Arc<Mutex<Option<u32>>>;
+
+    /// depth 0 — the inherited provider. Its child is the `Middle` pass-
+    /// through (NOT the consumer directly), so the consumer sits two hops
+    /// below and the ancestor walk must traverse a real intermediate node.
+    #[derive(Clone)]
+    struct ThemeRoot {
+        theme: MyTheme,
+        child: Middle,
+    }
+
+    impl InheritedView for ThemeRoot {
+        type Data = MyTheme;
+
+        fn data(&self) -> &Self::Data {
+            &self.theme
+        }
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn update_should_notify(&self, old: &Self) -> bool {
+            self.theme != old.theme
+        }
+    }
+
+    impl View for ThemeRoot {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(InheritedElement::new(self, InheritedBehavior::new(self)))
+        }
+    }
+
+    /// depth 1 — a pure pass-through. It does NOT call `depend_on`, so the
+    /// provider's dependent set isolates the consumer's registration (proving
+    /// the recorded dependent is the deeper node, not the intermediate one).
+    #[derive(Clone)]
+    struct Middle {
+        observed: ObservedColor,
+    }
+
+    impl StatelessView for Middle {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            Consumer {
+                observed: self.observed.clone(),
+            }
+            .boxed()
+        }
+    }
+
+    impl View for Middle {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(StatelessElement::new(self, StatelessBehavior))
+        }
+    }
+
+    /// depth 2 — reads the inherited value DURING its real build and stores
+    /// the captured color into the shared sink.
+    #[derive(Clone)]
+    struct Consumer {
+        observed: ObservedColor,
+    }
+
+    impl StatelessView for Consumer {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            // The crux: resolve `ThemeRoot` two hops up, against the live
+            // tree, from inside the actual build.
+            let color = ctx.depend_on::<ThemeRoot, u32>(|provider| provider.theme.color);
+            *self.observed.lock().unwrap() = color;
+            LeafView.boxed()
+        }
+    }
+
+    impl View for Consumer {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(StatelessElement::new(self, StatelessBehavior))
+        }
+    }
+
+    /// Count the provider's recorded dependents through the concrete
+    /// `InheritedElement<ThemeRoot>` (the integration crate cannot reach
+    /// `ElementNode::child_ids`, so dependent identity is asserted via this
+    /// count plus the rebuild-on-update phase).
+    fn provider_dependent_count(tree: &ElementTree, provider_id: ElementId) -> usize {
+        tree.get(provider_id)
+            .expect("provider exists")
+            .element()
+            .downcast_ref::<InheritedElement<ThemeRoot>>()
+            .expect("root is InheritedElement<ThemeRoot>")
+            .dependents()
+            .len()
+    }
+
+    #[test]
+    fn consumer_reads_live_inherited_value_and_rebuilds_on_change() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let observed: ObservedColor = Arc::new(Mutex::new(None));
+
+        let root_v1 = ThemeRoot {
+            theme: MyTheme { color: 0x00C0_FFEE },
+            child: Middle {
+                observed: observed.clone(),
+            },
+        };
+
+        // Mount the provider and drive a full build: build_scope reconciles
+        // and builds the whole subtree (ThemeRoot -> Middle -> Consumer ->
+        // Leaf), so the consumer's real `build()` runs under a live context.
+        let root_id = tree.mount_root(&root_v1, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root_id, 0);
+        owner.build_scope(&mut tree);
+
+        // CRUX — pre-PR-K this is `None` (empty dummy tree); now the consumer
+        // resolved the provider two ancestor hops up through the live tree.
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Some(0x00C0_FFEE),
+            "Consumer::build must observe ThemeRoot's value via depend_on against the live tree",
+        );
+
+        // The deferred dep-sink drain recorded exactly one dependent (the
+        // consumer; Middle never called depend_on) on the provider node.
+        assert_eq!(
+            provider_dependent_count(&tree, root_id),
+            1,
+            "the consumer's depend_on must register it on the provider (recorded after build)",
+        );
+
+        // ── Phase 2: changing the inherited value must rebuild the recorded
+        // dependent, which re-reads the NEW value live.
+        observed.lock().unwrap().take();
+        let root_v2 = ThemeRoot {
+            theme: MyTheme { color: 0x00BA_DA55 },
+            child: Middle {
+                observed: observed.clone(),
+            },
+        };
+        tree.update(root_id, &root_v2, &mut owner.element_owner_mut());
+
+        assert_eq!(
+            owner.dirty_count(),
+            1,
+            "the recorded dependent (and only it) is scheduled when the inherited value changes",
+        );
+
+        owner.build_scope(&mut tree);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Some(0x00BA_DA55),
+            "the rebuilt consumer re-reads the updated inherited value through the live context",
+        );
+
+        // The rebuild re-ran `depend_on`, but recording is idempotent — the
+        // dependent set must still hold exactly one entry, not a duplicate.
+        assert_eq!(
+            provider_dependent_count(&tree, root_id),
+            1,
+            "re-recording on rebuild must dedup, not accumulate duplicate dependents",
+        );
+    }
+
+    /// An `Outer` consumer that reads the live value, then builds an `Inner`
+    /// consumer that ALSO reads it — stacked so a single provider ends up
+    /// with two distinct recorded dependents (the keystone test has one).
+    #[derive(Clone)]
+    struct OuterConsumer {
+        own: ObservedColor,
+        inner: ObservedColor,
+    }
+
+    impl StatelessView for OuterConsumer {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            *self.own.lock().unwrap() = ctx.depend_on::<ThemeRoot, u32>(|p| p.theme.color);
+            Consumer {
+                observed: self.inner.clone(),
+            }
+            .boxed()
+        }
+    }
+
+    impl View for OuterConsumer {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(StatelessElement::new(self, StatelessBehavior))
+        }
+    }
+
+    #[test]
+    fn multiple_consumers_each_read_live_and_are_recorded() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let outer: ObservedColor = Arc::new(Mutex::new(None));
+        let inner: ObservedColor = Arc::new(Mutex::new(None));
+
+        // Mount the provider; its own typed `child` is never built — we attach
+        // the stacked consumers directly under it (mirroring the AE1 setup),
+        // so the throwaway `Middle` child is inert.
+        let root = ThemeRoot {
+            theme: MyTheme { color: 0x00FACADE },
+            child: Middle {
+                observed: Arc::new(Mutex::new(None)),
+            },
+        };
+        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+
+        // ThemeRoot -> OuterConsumer(outer) -> Consumer(inner) -> Leaf: two
+        // consumers at different depths each `depend_on` the same provider.
+        let outer_id = tree.insert(
+            &OuterConsumer {
+                own: outer.clone(),
+                inner: inner.clone(),
+            },
+            root_id,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(outer_id, 1);
+        owner.build_scope(&mut tree);
+
+        assert_eq!(
+            *outer.lock().unwrap(),
+            Some(0x00FACADE),
+            "outer consumer reads the live inherited value",
+        );
+        assert_eq!(
+            *inner.lock().unwrap(),
+            Some(0x00FACADE),
+            "inner consumer reads the live inherited value",
+        );
+        assert_eq!(
+            provider_dependent_count(&tree, root_id),
+            2,
+            "both consumers are recorded as distinct dependents of the provider",
+        );
+    }
+}
+
+// ============================================================================
+// Panic-safety of the build_scope take/put window.
+//
+// `build_scope` extracts each element BY VALUE for the duration of its build
+// and puts it back afterward. A panic in a user hook reachable inside that
+// window (`init_state` / `did_change_dependencies`) must NOT drop the element
+// and leave a permanent `None` hole — every later `element()` access on that
+// node would then panic with `ELEMENT_PRESENT`. A `catch_unwind` guard
+// restores the slot before re-raising. These tests pin that contract: without
+// the guard `element_opt()` returns `None` after the panic.
+// ============================================================================
+
+mod build_window_panic_restores_slot {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use flui_view::{
+        BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatefulBehavior,
+        StatefulElement, StatefulView, View, ViewExt, ViewState,
+    };
+
+    use super::LeafView;
+
+    /// A stateful view whose `init_state` panics on first build.
+    #[derive(Clone)]
+    struct PanicOnInit;
+
+    struct PanicOnInitState;
+
+    impl StatefulView for PanicOnInit {
+        type State = PanicOnInitState;
+
+        fn create_state(&self) -> Self::State {
+            PanicOnInitState
+        }
+    }
+
+    impl ViewState<PanicOnInit> for PanicOnInitState {
+        fn init_state(&mut self, _ctx: &dyn BuildContext) {
+            panic!("induced init_state panic (build-window panic-safety test)");
+        }
+
+        fn build(&self, _view: &PanicOnInit, _ctx: &dyn BuildContext) -> impl IntoView {
+            LeafView.boxed()
+        }
+    }
+
+    impl View for PanicOnInit {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        }
+    }
+
+    #[test]
+    fn init_state_panic_leaves_the_slot_intact_not_a_hole() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let root_id = tree.mount_root(&PanicOnInit, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root_id, 0);
+
+        // The panic propagates (the guard re-raises after restoring) ...
+        let outcome = catch_unwind(AssertUnwindSafe(|| owner.build_scope(&mut tree)));
+        assert!(
+            outcome.is_err(),
+            "an init_state panic must propagate out of build_scope",
+        );
+
+        // ... but the extracted element is back in its slab slot. Before the
+        // take/put catch_unwind guard this was a permanent `None` hole.
+        assert!(
+            tree.get(root_id)
+                .expect("node still present")
+                .element_opt()
+                .is_some(),
+            "a panic in the build window must restore the slot, not leave a hole",
         );
     }
 }
