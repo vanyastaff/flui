@@ -5,6 +5,8 @@
 
 use std::ops::{Add, Neg};
 
+use crate::geometry::{Offset, Pixels, Size};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisSize {
@@ -247,6 +249,36 @@ impl Alignment {
         let t = t.clamp(0.0, 1.0);
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
     }
+
+    /// Returns the offset into `free_space` where this alignment places its origin.
+    ///
+    /// `free_space` is the gap between the parent and child (`parent_size − child_size`).
+    /// The result is the child's top-left offset within the parent, in logical pixels.
+    ///
+    /// Mirrors Flutter `Alignment.alongSize`: `Offset(w/2 + x*w/2, h/2 + y*h/2)`.
+    ///
+    /// The companion methods `inscribe(Size, Rect)` (Flutter `Alignment.inscribe`) and
+    /// `along_offset(Offset)` (Flutter `Alignment.alongOffset`) are intentionally deferred
+    /// to a later phase — they serve `FittedBox` and direct `Offset`-input consumers
+    /// respectively.  Their absence here is deliberate, not an oversight.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Alignment, Offset, Size, geometry::px};
+    ///
+    /// // Center: free space 100×50 → offset (50, 25)
+    /// let offset = Alignment::CENTER.along_size(Size::new(px(100.0), px(50.0)));
+    /// assert_eq!(offset, Offset::new(px(50.0), px(25.0)));
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn along_size(self, free_space: Size<Pixels>) -> Offset<Pixels> {
+        Offset::new(
+            free_space.width * (0.5 * (1.0 + self.x)),
+            free_space.height * (0.5 * (1.0 + self.y)),
+        )
+    }
 }
 
 impl Default for Alignment {
@@ -411,5 +443,29 @@ impl Default for AlignmentGeometry {
     #[inline]
     fn default() -> Self {
         AlignmentGeometry::Absolute(Alignment::CENTER)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::px;
+
+    #[test]
+    fn along_size_center_returns_half_free_space() {
+        let offset = Alignment::CENTER.along_size(Size::new(px(100.0), px(50.0)));
+        assert_eq!(offset, Offset::new(px(50.0), px(25.0)));
+    }
+
+    #[test]
+    fn along_size_top_left_returns_zero_offset() {
+        let offset = Alignment::TOP_LEFT.along_size(Size::new(px(100.0), px(50.0)));
+        assert_eq!(offset, Offset::new(px(0.0), px(0.0)));
+    }
+
+    #[test]
+    fn along_size_bottom_right_returns_full_free_space() {
+        let offset = Alignment::BOTTOM_RIGHT.along_size(Size::new(px(100.0), px(50.0)));
+        assert_eq!(offset, Offset::new(px(100.0), px(50.0)));
     }
 }

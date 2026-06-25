@@ -1,29 +1,17 @@
-//! `RenderCenter` — centers a single child within available space.
+//! `RenderAlign` — positions a single child according to an [`Alignment`].
 //!
-//! Delegates to [`AligningShiftedBox`] at `Alignment::CENTER` and the shared
-//! [`positioned_box_size`] helper.  This replaces the previous inline `/2`
-//! arithmetic and fixes two latent divergences from Flutter:
+//! Mirrors Flutter's `RenderPositionedBox` (`rendering/shifted_box.dart`).
+//! Stores a **resolved** [`Alignment`] (not `AlignmentGeometry` — RTL wiring
+//! is Phase 4).
 //!
-//! - **FIX A — unbounded shrink-wrap:** no factor + `max_width = ∞` now
-//!   shrinks to child width instead of returning an infinite size.
-//! - **FIX B — factor clamp removed:** `with_width_factor` / `with_height_factor`
-//!   previously clamped to `[0, 1]`; Flutter only asserts `>= 0.0`.
-//!
-//! The public API is unchanged so all existing callers continue to compile.
-//!
-//! # Byte-identity guarantee
-//!
-//! `Alignment::CENTER.along_size(size − child) == (size − child) * 0.5`
-//! (IEEE-754: `x * 0.5 == x / 2.0`), so all bounded `harness_center_*` tests
-//! remain green without modification.
+//! Width and height factors are optional multipliers that control how much of
+//! the parent's space this object claims when an axis is unconstrained.  See
+//! [`positioned_box_size`].
 
 use flui_tree::Single;
-use flui_types::{Alignment, Size};
+use flui_types::{Alignment, Pixels, Size};
 
-use super::{
-    align::{positioned_box_size, positioned_box_size_no_child},
-    shifted_box::AligningShiftedBox,
-};
+use super::shifted_box::AligningShiftedBox;
 use crate::{
     constraints::BoxConstraints,
     context::{
@@ -33,46 +21,105 @@ use crate::{
     traits::{RenderBox, TextBaseline},
 };
 
-/// A render object that centers its child within the available space.
+// ============================================================================
+// Helper — shared by RenderAlign and RenderCenter
+// ============================================================================
+
+/// Computes the parent size for a positioned box (Align / Center).
 ///
-/// The child receives loose constraints (can be any size up to the parent's
-/// max), then is placed at the center of the available space.
+/// Mirrors Flutter `RenderPositionedBox.performLayout` sizing branches:
 ///
-/// # Example
+/// - `shrink_width = width_factor.is_some() || max_width.is_infinite()`
+///   → shrinking: `width = child_width * width_factor.unwrap_or(1.0)`;
+///   → expanding: `width = Pixels::INFINITY` (clamped by `constrain`).
+/// - Same logic for height.
 ///
-/// ```ignore
-/// let center = RenderCenter::new();
-/// // Add a child, then layout with constraints.
-/// ```
-#[derive(Debug, Clone)]
-pub struct RenderCenter {
-    inner: AligningShiftedBox,
-    /// Width factor (`>= 0.0`); if set, width = `child.width * factor`.
+/// This is the single canonical source for both live layout and dry-layout so
+/// the two never drift.
+pub(crate) fn positioned_box_size(
+    constraints: &BoxConstraints,
+    child_size: Size,
     width_factor: Option<f32>,
-    /// Height factor (`>= 0.0`); if set, height = `child.height * factor`.
+    height_factor: Option<f32>,
+) -> Size {
+    let shrink_width = width_factor.is_some() || constraints.max_width.is_infinite();
+    let shrink_height = height_factor.is_some() || constraints.max_height.is_infinite();
+
+    let width = if shrink_width {
+        child_size.width * width_factor.unwrap_or(1.0)
+    } else {
+        Pixels::INFINITY
+    };
+    let height = if shrink_height {
+        child_size.height * height_factor.unwrap_or(1.0)
+    } else {
+        Pixels::INFINITY
+    };
+    constraints.constrain(Size::new(width, height))
+}
+
+/// Computes the no-child size for a positioned box.
+///
+/// When there is no child, Flutter uses `0` for a shrinking axis and
+/// `double.infinity` for an expanding axis.
+pub(crate) fn positioned_box_size_no_child(
+    constraints: &BoxConstraints,
+    width_factor: Option<f32>,
+    height_factor: Option<f32>,
+) -> Size {
+    let shrink_width = width_factor.is_some() || constraints.max_width.is_infinite();
+    let shrink_height = height_factor.is_some() || constraints.max_height.is_infinite();
+    constraints.constrain(Size::new(
+        if shrink_width {
+            Pixels::ZERO
+        } else {
+            Pixels::INFINITY
+        },
+        if shrink_height {
+            Pixels::ZERO
+        } else {
+            Pixels::INFINITY
+        },
+    ))
+}
+
+// ============================================================================
+// RenderAlign
+// ============================================================================
+
+/// A render object that positions its child according to an [`Alignment`].
+///
+/// By default expands to fill the parent in both axes.  If a factor is set,
+/// or the axis is unconstrained, the object shrinks to `child_size * factor`
+/// (or `child_size * 1.0 = child_size` when only the unbounded flag fires).
+///
+/// Factors must be `>= 0.0` (asserted in debug builds, matching Flutter).
+///
+/// # Flutter parity
+///
+/// Mirrors `RenderPositionedBox` from `rendering/shifted_box.dart`.  RTL
+/// resolution (`AlignmentGeometry` + `text_direction`) is deferred to Phase 4.
+#[derive(Debug, Clone)]
+pub struct RenderAlign {
+    inner: AligningShiftedBox,
+    width_factor: Option<f32>,
     height_factor: Option<f32>,
 }
 
-impl Default for RenderCenter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RenderCenter {
-    /// Creates a new center render object.
-    pub fn new() -> Self {
+impl RenderAlign {
+    /// Creates a new `RenderAlign` with the given resolved alignment.
+    pub fn new(alignment: Alignment) -> Self {
         Self {
-            inner: AligningShiftedBox::new(Alignment::CENTER),
+            inner: AligningShiftedBox::new(alignment),
             width_factor: None,
             height_factor: None,
         }
     }
 
-    /// Creates a center with a width factor.
+    /// Sets a width factor (`>= 0.0`).
     ///
-    /// The factor must be `>= 0.0`; values above 1.0 are valid (Flutter
-    /// parity — previously this was incorrectly clamped to `[0, 1]`).
+    /// When set, the object's width becomes `child_width * factor` rather than
+    /// expanding to the parent's max width.
     #[must_use]
     pub fn with_width_factor(mut self, factor: f32) -> Self {
         debug_assert!(
@@ -83,10 +130,10 @@ impl RenderCenter {
         self
     }
 
-    /// Creates a center with a height factor.
+    /// Sets a height factor (`>= 0.0`).
     ///
-    /// The factor must be `>= 0.0`; values above 1.0 are valid (Flutter
-    /// parity — previously this was incorrectly clamped to `[0, 1]`).
+    /// When set, the object's height becomes `child_height * factor` rather
+    /// than expanding to the parent's max height.
     #[must_use]
     pub fn with_height_factor(mut self, factor: f32) -> Self {
         debug_assert!(
@@ -108,7 +155,7 @@ impl RenderCenter {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderCenter {
+impl flui_foundation::Diagnosticable for RenderAlign {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         builder.add_optional("width_factor", self.width_factor.map(|f| format!("{f:?}")));
         builder.add_optional(
@@ -118,24 +165,15 @@ impl flui_foundation::Diagnosticable for RenderCenter {
     }
 }
 
-impl RenderBox for RenderCenter {
+impl RenderBox for RenderAlign {
     type Arity = Single;
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
 
-        tracing::debug!(
-            "RenderCenter::perform_layout: constraints={:?}, child_count={}",
-            constraints,
-            ctx.child_count()
-        );
-
         if ctx.child_count() > 0 {
             let child_size = ctx.layout_single_child_loose();
-
-            tracing::debug!("RenderCenter: child_size={:?}", child_size);
-
             let parent_size = positioned_box_size(
                 &constraints,
                 child_size,
@@ -144,21 +182,15 @@ impl RenderBox for RenderCenter {
             );
             self.inner.align_child(ctx, parent_size, child_size);
             self.inner.record_child_baselines(ctx);
-
-            tracing::debug!(
-                "RenderCenter: my_size={:?}, child_offset={:?}",
-                parent_size,
-                self.inner.child_offset()
-            );
-
             parent_size
         } else {
             self.inner.clear_child_baselines();
-            let size =
-                positioned_box_size_no_child(&constraints, self.width_factor, self.height_factor);
-            tracing::debug!("RenderCenter: no child, size={:?}", size);
-            size
+            positioned_box_size_no_child(&constraints, self.width_factor, self.height_factor)
         }
+    }
+
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        self.inner.actual_baseline(baseline)
     }
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
@@ -230,8 +262,6 @@ impl RenderBox for RenderCenter {
         );
         // Mirror Flutter RenderPositionedBox.computeDryBaseline:
         //   resolvedAlignment.alongOffset(size − childSize).dy + childBaseline
-        // For CENTER: along_size gives (size-child).dy * 0.5 = free_h * 0.5,
-        // matching the prior inline `free_h * 0.5` implementation exactly.
         let child_offset_dy = self
             .inner
             .dry_child_offset(parent_size, child_size)
@@ -240,35 +270,7 @@ impl RenderBox for RenderCenter {
         Some(child_baseline + child_offset_dy)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
-        self.inner.actual_baseline(baseline)
-    }
-
-    // paint() uses the default no-op — Center just positions children.
-
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         self.inner.hit_test(ctx)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_center_with_factors() {
-        let center = RenderCenter::new()
-            .with_width_factor(0.5)
-            .with_height_factor(0.5);
-
-        assert_eq!(center.width_factor(), Some(0.5));
-        assert_eq!(center.height_factor(), Some(0.5));
-    }
-
-    #[test]
-    fn test_center_default_factors() {
-        let center = RenderCenter::new();
-        assert_eq!(center.width_factor(), None);
-        assert_eq!(center.height_factor(), None);
     }
 }
