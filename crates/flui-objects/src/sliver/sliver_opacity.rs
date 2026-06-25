@@ -113,9 +113,13 @@ impl RenderSliverOpacity {
         self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
     }
 
-    /// Returns the `always_needs_compositing` flag.
+    /// Returns the raw `always_needs_compositing` field (the explicit opt-in flag).
+    ///
+    /// This is the stored boolean flag only. Use
+    /// [`needs_compositing`](Self::needs_compositing) to test whether
+    /// compositing is needed for any reason (field OR alpha in `(0, 255)`).
     #[inline]
-    pub fn always_needs_compositing(&self) -> bool {
+    pub fn always_needs_compositing_flag(&self) -> bool {
         self.always_needs_compositing
     }
 
@@ -195,6 +199,24 @@ impl RenderSliver for RenderSliverOpacity {
         ctx.hit_test_child_at_layout_offset(0)
     }
 
+    // Compositing-layer requirement: the pipeline's compositing-bits walk
+    // (`PipelineOwner::update_subtree_compositing_bits`, owner/mod.rs:2355)
+    // reads `always_needs_compositing` through `dyn RenderObject<SliverProtocol>`.
+    // Without this override the blanket impl returns the default `false`,
+    // silently skipping the dedicated compositing layer that the opacity
+    // effect requires.
+    //
+    // Flutter parity: `RenderSliverOpacity.alwaysNeedsCompositing`
+    // (proxy_sliver.dart:128) = `child != null && _alpha > 0`.  FLUI
+    // absorbs the child-presence gate into the paint phase; here we mirror
+    // the alpha-driven part.  The additional `always_needs_compositing`
+    // opt-in field is a FLUI extension (stable-layer animation support) that
+    // Flutter's `RenderSliverOpacity` does not have — it is OR-ed in so the
+    // flag never weakens Flutter's contract.
+    fn always_needs_compositing(&self) -> bool {
+        self.needs_compositing()
+    }
+
     // The whole point of RenderSliverOpacity: the pipeline reads paint_alpha
     // through `&dyn RenderObject<SliverProtocol>`; the blanket impl forwards here.
     fn paint_alpha(&self) -> Option<u8> {
@@ -272,7 +294,7 @@ mod tests {
         let mut o = RenderSliverOpacity::opaque();
         assert!(!o.set_always_needs_compositing(false)); // no-op
         assert!(o.set_always_needs_compositing(true));
-        assert!(o.always_needs_compositing());
+        assert!(o.always_needs_compositing_flag());
         assert!(o.needs_compositing()); // forced on even with alpha=255.
     }
 

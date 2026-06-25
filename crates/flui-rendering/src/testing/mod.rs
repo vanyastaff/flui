@@ -38,7 +38,7 @@
 //! use flui_rendering::testing::{RenderTester, Probe, box_node};
 //! use flui_rendering::prelude::*;
 //! use flui_tree::Leaf;
-//! use flui_types::{Offset, Size, geometry::px};
+//! use flui_types::{Size, geometry::px};
 //!
 //! // A minimal leaf render object used only to exercise the harness API.
 //! // Concrete objects live in `flui_objects`; the harness itself is object-agnostic.
@@ -48,19 +48,17 @@
 //! impl RenderBox for FixedBox {
 //!     type Arity = Leaf;
 //!     type ParentData = BoxParentData;
-//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+//!     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
 //!         Size::new(px(40.0), px(40.0))
 //!     }
-//!     fn size(&self) -> Size { Size::new(px(40.0), px(40.0)) }
-//!     fn paint(&self, _ctx: &mut PaintCx<'_>, _offset: Offset) {}
+//!     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 //! }
 //!
 //! let run = RenderTester::mount(box_node(FixedBox).label("root"))
-//!     .with_size(Size::new(px(200.0), px(200.0)))
 //!     .run_frame();
 //!
 //! let root = run.id("root");
-//! assert_eq!(run.box_geometry(root).size, Size::new(px(40.0), px(40.0)));
+//! assert_eq!(run.box_geometry(root), Size::new(px(40.0), px(40.0)));
 //! assert!(run.painted());
 //! ```
 

@@ -394,6 +394,49 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     }
 
     // ========================================================================
+    // Compositing / Layer Boundaries
+    // ========================================================================
+    //
+    // Mirror the RenderBox trait methods of the same names (render_box.rs).
+    // The blanket `impl<T: RenderSliver …> RenderObject<SliverProtocol> for T`
+    // forwards each of these so overrides here are visible through the
+    // `&dyn RenderObject<SliverProtocol>` vtable — which is what the pipeline
+    // compositing-bits walk (`owner/mod.rs:2355`) and `RenderNode::debug_name`
+    // (`storage/node.rs:592`) both call.
+
+    /// Whether this node is a repaint boundary.
+    ///
+    /// Override and return `true` to have the pipeline allocate a dedicated
+    /// compositing layer for this subtree. Default: `false`. See
+    /// [`RenderObject::is_repaint_boundary`].
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    /// Whether this node always needs its own compositing layer.
+    ///
+    /// Override and return `true` for sliver nodes that apply an effect
+    /// requiring a dedicated layer (e.g. `RenderSliverOpacity` when alpha is
+    /// in `(0, 255)`). The pipeline compositing-bits walk at
+    /// `PipelineOwner::update_subtree_compositing_bits` reads this via the
+    /// `dyn RenderObject<SliverProtocol>` vtable, so the blanket impl must
+    /// forward the call here — concrete types override here to be visible to
+    /// the pipeline. Default: `false`. See
+    /// [`RenderObject::always_needs_compositing`].
+    fn always_needs_compositing(&self) -> bool {
+        false
+    }
+
+    /// Short human-readable name for diagnostics and error messages.
+    ///
+    /// Default: [`core::any::type_name::<Self>()`]. Override to return a
+    /// stable short name independent of crate layout. See
+    /// [`RenderObject::debug_name`].
+    fn debug_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
+
+    // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
 
@@ -537,6 +580,22 @@ where
 
     fn reassemble(&mut self) {
         <T as RenderSliver>::reassemble(self)
+    }
+
+    // Compositing / layer-boundary forwards — mirror the RenderBox blanket
+    // (render_box.rs:626-667).  UFCS calls prevent recursion: each method
+    // resolves to the `RenderSliver` trait method on `T`, not back to this
+    // `RenderObject<SliverProtocol>` impl.
+    fn is_repaint_boundary(&self) -> bool {
+        <T as RenderSliver>::is_repaint_boundary(self)
+    }
+
+    fn always_needs_compositing(&self) -> bool {
+        <T as RenderSliver>::always_needs_compositing(self)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        <T as RenderSliver>::debug_name(self)
     }
 }
 
@@ -864,6 +923,106 @@ mod tests {
         fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Single, Self::ParentData>) -> bool {
             false
         }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Compositing-hooks forwarding — RED→GREEN tests
+    //
+    // These tests exercise the blanket impl forwarding of
+    // `is_repaint_boundary`, `always_needs_compositing`, and `debug_name`
+    // through `dyn RenderObject<SliverProtocol>`.  A concrete `RenderSliver`
+    // that overrides these methods must be visible to callers going through
+    // the vtable, matching the RenderBox pattern (render_box.rs:626-667).
+    //
+    // Without the blanket-impl forwards the vtable dispatches to the
+    // default `false`/type_name on `RenderObject<P>` regardless of what
+    // the concrete type returns — the pipeline compositing-bits walk at
+    // `owner/mod.rs:2355` silently ignores `always_needs_compositing`.
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Test double: a leaf sliver that declares itself as always needing a
+    /// compositing layer and as a repaint boundary, with a custom debug name.
+    struct AlwaysCompositingSliver;
+
+    impl std::fmt::Debug for AlwaysCompositingSliver {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("AlwaysCompositingSliver").finish()
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for AlwaysCompositingSliver {
+        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
+    }
+
+    impl RenderSliver for AlwaysCompositingSliver {
+        type Arity = Leaf;
+        type ParentData = crate::parent_data::SliverParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+        ) -> SliverGeometry {
+            let c = *ctx.constraints();
+            SliverGeometry::new(c.remaining_paint_extent, c.remaining_paint_extent, 0.0)
+        }
+
+        fn is_repaint_boundary(&self) -> bool {
+            true
+        }
+
+        fn always_needs_compositing(&self) -> bool {
+            true
+        }
+
+        fn debug_name(&self) -> &'static str {
+            "AlwaysCompositingSliver"
+        }
+    }
+
+    /// `always_needs_compositing` override must be visible through
+    /// `dyn RenderObject<SliverProtocol>`.
+    ///
+    /// RED before the blanket-impl forward is added (returns `false` —
+    /// default on `RenderObject<P>`), GREEN after (returns `true` from the
+    /// concrete override).  This is the exact path the pipeline walks at
+    /// `owner/mod.rs:2355`.
+    #[test]
+    fn sliver_always_needs_compositing_forward_through_dyn() {
+        let sliver: Box<dyn crate::protocol::RenderObject<SliverProtocol>> =
+            Box::new(AlwaysCompositingSliver);
+        assert!(
+            sliver.always_needs_compositing(),
+            "always_needs_compositing override on RenderSliver must be \
+             visible through dyn RenderObject<SliverProtocol>; \
+             blanket impl must forward via UFCS"
+        );
+    }
+
+    /// `is_repaint_boundary` override must be visible through
+    /// `dyn RenderObject<SliverProtocol>`.
+    #[test]
+    fn sliver_is_repaint_boundary_forward_through_dyn() {
+        let sliver: Box<dyn crate::protocol::RenderObject<SliverProtocol>> =
+            Box::new(AlwaysCompositingSliver);
+        assert!(
+            sliver.is_repaint_boundary(),
+            "is_repaint_boundary override on RenderSliver must be \
+             visible through dyn RenderObject<SliverProtocol>"
+        );
+    }
+
+    /// `debug_name` override must be visible through
+    /// `dyn RenderObject<SliverProtocol>`.
+    #[test]
+    fn sliver_debug_name_forward_through_dyn() {
+        let sliver: Box<dyn crate::protocol::RenderObject<SliverProtocol>> =
+            Box::new(AlwaysCompositingSliver);
+        assert_eq!(
+            sliver.debug_name(),
+            "AlwaysCompositingSliver",
+            "debug_name override on RenderSliver must be visible \
+             through dyn RenderObject<SliverProtocol>"
+        );
     }
 
     /// A non-`Leaf` sliver that completes layout must now pass through the

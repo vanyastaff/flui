@@ -416,7 +416,7 @@ impl FrameRun {
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
     /// # use flui_tree::Leaf;
-    /// # use flui_types::{Offset, Size, geometry::px};
+    /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f32);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
@@ -426,8 +426,7 @@ impl FrameRun {
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
     /// #         Size::new(px(self.0), px(self.0))
     /// #     }
-    /// #     fn size(&self) -> Size { Size::new(px(self.0), px(self.0)) }
-    /// #     fn paint(&self, _ctx: &mut PaintCx<'_>, _offset: Offset) {}
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     /// # }
     /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
     ///     .run_frame();
@@ -437,7 +436,7 @@ impl FrameRun {
     ///     run.update::<FixedBox>(root, |b| b.0 = side);
     /// });
     /// assert_eq!(
-    ///     run.box_geometry(root).size,
+    ///     run.box_geometry(root),
     ///     Size::new(px(60.0), px(60.0)),
     /// );
     /// ```
@@ -494,7 +493,7 @@ impl FrameRun {
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
     /// # use flui_tree::Leaf;
-    /// # use flui_types::{Offset, Size, geometry::px};
+    /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f32);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
@@ -504,8 +503,7 @@ impl FrameRun {
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
     /// #         Size::new(px(self.0), px(self.0))
     /// #     }
-    /// #     fn size(&self) -> Size { Size::new(px(self.0), px(self.0)) }
-    /// #     fn paint(&self, _ctx: &mut PaintCx<'_>, _offset: Offset) {}
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     /// # }
     /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
     ///     .run_frame();
@@ -513,7 +511,7 @@ impl FrameRun {
     /// run.update::<FixedBox>(root, |b| b.0 = 60.0);
     /// run.pump();
     /// assert_eq!(
-    ///     run.box_geometry(root).size,
+    ///     run.box_geometry(root),
     ///     Size::new(px(60.0), px(60.0)),
     /// );
     /// ```
@@ -609,7 +607,7 @@ impl RenderTester {
     /// # use flui_rendering::testing::{box_node, RenderTester};
     /// # use flui_rendering::prelude::*;
     /// # use flui_tree::Leaf;
-    /// # use flui_types::{Offset, Size, geometry::px};
+    /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox;
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
@@ -617,8 +615,7 @@ impl RenderTester {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size { Size::ZERO }
-    /// #     fn size(&self) -> Size { Size::ZERO }
-    /// #     fn paint(&self, _ctx: &mut PaintCx<'_>, _offset: Offset) {}
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     /// # }
     /// let run = RenderTester::mount(box_node(FixedBox)).run_layout();
     /// let _ = run.snapshot(); // error: no method `snapshot` found for `LayoutRun`

@@ -43,7 +43,7 @@
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderSliverListLazy` | `harness_sliver_list_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
-//! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | — |
+//! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
@@ -1545,6 +1545,55 @@ fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
         "fully-transparent sliver (alpha=0) must NOT emit an OpacityLayer \
          (Flutter: alpha=0 → layer=null): {:?}",
         run.structure(),
+    );
+}
+
+// Compositing-hooks forwarding: RED→GREEN pipeline test.
+//
+// The `RenderSliver` blanket impl must forward `always_needs_compositing` from
+// `dyn RenderObject<SliverProtocol>` to the concrete override — matching what
+// the `RenderBox` blanket impl already does (render_box.rs:630).
+//
+// The pipeline compositing-bits walk (`PipelineOwner::update_subtree_compositing_bits`,
+// owner/mod.rs:2355) calls `node.always_needs_compositing()`, which dispatches
+// through `RenderNode` → `dyn RenderObject<SliverProtocol>::always_needs_compositing()`.
+// Without the forward the vtable returns the default `false`, so a
+// `RenderSliverOpacity` with partial alpha never gets its own compositing layer
+// (silent correctness gap — tests still pass but the frame tree is wrong).
+//
+// Flutter parity: `RenderSliverOpacity.alwaysNeedsCompositing`
+// (proxy_sliver.dart:128) = `child != null && _alpha > 0`.
+// FLUI's `needs_compositing()` = `always_flag || (alpha > 0 && alpha != 255)`.
+// The `alpha != 255` narrowing is intentional (opaque fast path; no layer needed).
+#[test]
+fn harness_sliver_opacity_always_needs_compositing_reaches_pipeline() {
+    // After compositing phase runs, the pipeline node for the opacity sliver
+    // must report `always_needs_compositing() == true` through `RenderNode`
+    // (the exact path `owner/mod.rs:2355` uses).  Before the blanket-impl
+    // forward was added this returned `false` regardless of alpha.
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverOpacity::new(0.5)) // alpha = 128 — partial, needs compositing
+            .label("opacity")
+            .child(
+                sliver_node(RenderSliverFixedExtentList::new(30.0))
+                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_to_compositing();
+
+    let opacity_id = run.id("opacity");
+    let node = run
+        .pipeline()
+        .render_tree()
+        .get(opacity_id)
+        .expect("opacity node must exist after compositing phase");
+    assert!(
+        node.always_needs_compositing(),
+        "RenderSliverOpacity with partial alpha (0.5) must report \
+         always_needs_compositing=true through RenderNode (the pipeline \
+         compositing-bits walk path); blanket impl must forward via UFCS \
+         (Flutter parity: alwaysNeedsCompositing = child != null && alpha > 0)"
     );
 }
 
