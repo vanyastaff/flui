@@ -18,15 +18,15 @@
 //!   * crates/flui-rendering/src/context/paint_cx.rs (recording side)
 
 use flui_layer::{Layer, LayerTree};
+use flui_objects::{
+    RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary, RenderSliverPadding,
+    RenderSliverToBoxAdapter,
+};
 use flui_painting::DisplayListCore;
 use flui_painting::Paint;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
-    objects::{
-        RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary,
-        RenderSliverPadding, RenderSliverToBoxAdapter,
-    },
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},

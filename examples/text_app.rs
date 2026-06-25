@@ -15,7 +15,7 @@
 //! Run with: cargo run -p flui --example text_app
 
 use flui_app::run_app;
-use flui_rendering::objects::RenderParagraph;
+use flui_objects::RenderParagraph;
 use flui_types::{
     Color,
     typography::{FontWeight, TextDirection, TextSpan, TextStyle},

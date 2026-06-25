@@ -80,6 +80,12 @@ flui-scheduler = { path = "../flui-scheduler" }
 # standard Cargo pattern for shipping a feature-gated test-support module
 # without making it part of normal/release builds.
 flui-rendering = { path = ".", features = ["testing"] }
+# Concrete render-object catalog. The integration tests in `tests/*.rs`
+# previously imported objects from `flui_rendering::objects`; after the
+# flui-objects extraction (ADR-0008) they import from `flui_objects` instead.
+# This is a dev-only dependency — flui-rendering does not depend on
+# flui-objects in production (that would invert the layer order).
+flui-objects = { path = "../flui-objects", features = ["testing"] }
 
 [features]
 default = []

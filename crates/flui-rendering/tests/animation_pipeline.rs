@@ -23,11 +23,9 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
 use flui_layer::{Layer, LayerTree};
+use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform};
 use flui_rendering::{
-    constraints::BoxConstraints,
-    hit_testing::HitTestResult,
-    objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform},
-    pipeline::PipelineOwner,
+    constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
     testing::inspect,
 };
 use flui_scheduler::Scheduler;

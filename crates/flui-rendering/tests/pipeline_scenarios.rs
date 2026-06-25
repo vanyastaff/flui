@@ -25,12 +25,12 @@
 //! 8. churn stress — 20 remove+reinsert cycles.
 
 use flui_layer::{Layer, LayerTree};
+use flui_objects::{
+    RenderClipRect, RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary,
+    RenderTransform,
+};
 use flui_rendering::{
     constraints::BoxConstraints,
-    objects::{
-        RenderClipRect, RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary,
-        RenderTransform,
-    },
     testing::{Probe, RenderTester, box_node},
 };
 use flui_types::{EdgeInsets, Matrix4, Offset, Point, Rect, Size, geometry::px};

@@ -14,6 +14,7 @@ flui-hot-reload = { path = "../../crates/flui-hot-reload", features = ["app-plug
 flui-layer = { path = "../../crates/flui-layer" }
 flui-view = { path = "../../crates/flui-view" }
 flui-rendering = { path = "../../crates/flui-rendering" }
+flui-objects = { path = "../../crates/flui-objects" }
 flui-types = { path = "../../crates/flui-types" }
 flui-foundation = { path = "../../crates/flui-foundation" }
 

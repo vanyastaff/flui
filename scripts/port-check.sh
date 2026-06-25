@@ -269,7 +269,8 @@ check "4" \
 # -----------------------------------------------------------------------------
 # Trigger 5 -- Arc::clone inside per-frame paint/composite loop.
 # Forward-looking. Scope:
-#   - flui-rendering/src/objects (per-render-object paint impls)
+#   - flui-objects/src (per-render-object paint impls; moved from
+#     flui-rendering/src/objects per ADR-0008)
 #   - flui-engine/src/wgpu/layer_render.rs (per-layer wgpu walk; extended in
 #     Mythos Step 13 of the flui-layer chain)
 #
@@ -301,7 +302,7 @@ check "5" \
   --type rust \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
-  crates/flui-rendering/src/objects \
+  crates/flui-objects/src \
   crates/flui-engine/src/wgpu/layer_render.rs
 
 # -----------------------------------------------------------------------------

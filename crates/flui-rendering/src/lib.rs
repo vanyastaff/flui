@@ -82,11 +82,17 @@ pub mod pipeline;
 pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
 pub use flui_semantics as semantics;
-pub mod objects;
+// `objects` module removed: concrete render objects live in the `flui-objects`
+// crate (see ADR-0008 / flui-objects extraction). flui-rendering now exports
+// only engine primitives (traits, pipeline, protocol, contexts, arena).
 pub mod slivers; // PORT-CHECK-OK-SP4: sliver protocol + objects; the cross-crate consumer is the future flui-view scrollable widgets (ADR-0003 U4 / ROADMAP Core.1). This branch removed the façade flui-view→render coupling, which is what surfaced the module as cross-crate-consumer-less.
 pub mod storage;
-#[cfg(test)]
-pub(crate) mod test_support;
+// Promoted from `cfg(test) pub(crate)` to the `testing` feature so
+// flui-objects' test crate can reach NoopSliver cross-crate when it enables
+// `features = ["testing"]`. Part of the custom-object-authoring test-support
+// contract (see docs/adr/ADR-0007 and flui-objects extraction plan §7).
+#[cfg(any(test, feature = "testing"))]
+pub mod test_support;
 // Protocol-agnostic windowing math (ADR-0003). Its public surface names no
 // render/sliver/protocol type, so it stays a general-purpose abstraction and is
 // cheaply extractable into a standalone crate once a 2nd direct consumer

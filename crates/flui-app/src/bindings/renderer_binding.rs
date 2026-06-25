@@ -548,7 +548,8 @@ mod tests {
     /// no other test's pipeline state can interfere.
     #[test]
     fn draw_frame_returns_layer_tree_and_defers_when_gated() {
-        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_objects::RenderColoredBox;
+        use flui_rendering::constraints::BoxConstraints;
         use flui_types::{Size, geometry::px};
 
         let owner = Arc::new(RwLock::new(PipelineOwner::new()));
@@ -596,7 +597,8 @@ mod tests {
     /// division mapped it back inside and produced phantom hits.
     #[test]
     fn hit_test_in_view_takes_logical_positions_without_rescaling() {
-        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_objects::RenderColoredBox;
+        use flui_rendering::constraints::BoxConstraints;
         use flui_types::{Offset, geometry::px};
 
         let owner = Arc::new(RwLock::new(PipelineOwner::new()));

@@ -16,7 +16,7 @@
 //! Run with: cargo run --example colored_box_app
 
 use flui_app::run_app;
-use flui_rendering::objects::RenderColoredBox;
+use flui_objects::RenderColoredBox;
 use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Leaf render view producing a red 200×200 [`RenderColoredBox`].

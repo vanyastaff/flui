@@ -10,7 +10,7 @@
 //! Each reload re-mounts the widget tree from scratch ("hot restart" semantics).
 
 use flui_hot_reload::app_plugin;
-use flui_rendering::objects::RenderColoredBox;
+use flui_objects::RenderColoredBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Size;
 use flui_types::geometry::px;

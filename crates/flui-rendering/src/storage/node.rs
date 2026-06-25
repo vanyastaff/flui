@@ -845,15 +845,33 @@ impl RenderNode {
 
 #[cfg(test)]
 mod tests {
+    use flui_tree::Leaf;
     use flui_types::{Size, geometry::px};
 
     use super::*;
-    use crate::objects::RenderColoredBox;
+    use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+    /// Minimal leaf box used only to exercise node-wiring logic.
+    /// Concrete objects live in `flui_objects`; the node API is object-agnostic.
+    #[derive(Debug, Default)]
+    struct TestBox;
+
+    impl flui_foundation::Diagnosticable for TestBox {}
+
+    impl RenderBox for TestBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::new(px(100.0), px(50.0))
+        }
+
+        fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+    }
 
     #[test]
     fn test_render_node_box_creation() {
-        let colored_box = RenderColoredBox::red(100.0, 50.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         assert!(node.is_box());
         assert!(!node.is_sliver());
@@ -862,8 +880,7 @@ mod tests {
 
     #[test]
     fn test_render_node_links() {
-        let colored_box = RenderColoredBox::blue(200.0, 100.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         // New nodes have no parent
         assert!(node.parent().is_none());
@@ -873,9 +890,8 @@ mod tests {
 
     #[test]
     fn test_render_node_with_parent() {
-        let colored_box = RenderColoredBox::green(50.0, 50.0);
         let parent_id = RenderId::new(1);
-        let node = RenderNode::new_box_with_parent(Box::new(colored_box), parent_id, 1);
+        let node = RenderNode::new_box_with_parent(Box::new(TestBox), parent_id, 1);
 
         assert_eq!(node.parent(), Some(parent_id));
         assert_eq!(node.depth(), 1);
@@ -883,8 +899,7 @@ mod tests {
 
     #[test]
     fn test_render_node_as_box() {
-        let colored_box = RenderColoredBox::red(100.0, 100.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         assert!(node.as_box().is_some());
         assert!(node.as_sliver().is_none());
@@ -892,9 +907,7 @@ mod tests {
 
     #[test]
     fn test_render_node_state_access() {
-        let colored_box =
-            RenderColoredBox::new([1.0, 0.0, 0.0, 1.0], Size::new(px(100.0), px(50.0)));
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         // Check state access through the node
         if let Some(entry) = node.as_box() {
@@ -905,8 +918,7 @@ mod tests {
 
     #[test]
     fn test_render_node_needs_layout() {
-        let colored_box = RenderColoredBox::red(100.0, 50.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         // New nodes need layout by default
         assert!(node.needs_layout());

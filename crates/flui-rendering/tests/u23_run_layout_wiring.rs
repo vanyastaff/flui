@@ -12,12 +12,8 @@
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U23
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D1
 
-use flui_rendering::{
-    constraints::BoxConstraints,
-    objects::{RenderColoredBox, RenderPadding},
-    pipeline::PipelineOwner,
-    traits::RenderObject,
-};
+use flui_objects::{RenderColoredBox, RenderPadding};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
 use flui_types::{Size, geometry::px};
 
 // ============================================================================

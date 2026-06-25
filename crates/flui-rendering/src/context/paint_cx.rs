@@ -53,10 +53,13 @@ use flui_types::{Offset, Pixels, Rect, Size, painting::Clip};
 
 /// One step of a recorded paint fragment.
 ///
-/// Crate-private: only the recorder writes ops and only the pipeline
-/// composer reads them.
+/// Pipeline-internal paint IR. Not part of the stable public API surface —
+/// re-exported publicly only when the `testing` feature (or `#[cfg(test)]`)
+/// is active so that `flui_objects` render objects can inspect their own paint
+/// output in tests. Under default/production features this type is intentionally
+/// absent from the external re-export paths.
 #[derive(Debug)]
-pub(crate) enum FragmentOp {
+pub enum FragmentOp {
     /// A sealed run of draw commands in the current layer space
     /// (node origin already baked into each command's transform).
     Run(DisplayList),
@@ -67,7 +70,9 @@ pub(crate) enum FragmentOp {
     /// when the parent paints the child somewhere other than its
     /// laid-out position (`paint_child_at`).
     Child {
+        /// Zero-based child index within this node's arity.
         index: usize,
+        /// If `Some`, overrides the child's laid-out offset for this paint pass.
         offset_override: Option<Offset>,
     },
 
@@ -80,23 +85,33 @@ pub(crate) enum FragmentOp {
     Pop,
 }
 
-/// Clip shape for a fragment layer scope.
+/// A clip layer operation recorded during paint.
 ///
-/// Mapped 1:1 onto `flui-layer`'s `ClipRectLayer` / `ClipRRectLayer` /
-/// `ClipPathLayer` by the composer.
+/// Pipeline-internal paint IR. Not part of the stable public API surface.
+/// Re-exported at `pub(crate)` scope only — consumers outside the crate
+/// have no reason to name or match on this type (the composer handles all
+/// `Push`/`Pop` ops; test introspection goes through `FragmentOp::Run`).
 #[derive(Debug, Clone)]
-pub(crate) enum FragmentClip {
+pub enum FragmentClip {
+    /// Axis-aligned rectangular clip.
     Rect {
+        /// The clip rectangle in node-local coordinates.
         rect: Rect<Pixels>,
+        /// How to handle content outside the clip boundary.
         behavior: Clip,
     },
+    /// Rounded-rectangle clip.
     RRect {
+        /// The rounded clip rectangle in node-local coordinates.
         rrect: flui_types::RRect,
+        /// How to handle content outside the clip boundary.
         behavior: Clip,
     },
+    /// Arbitrary path clip.
     Path {
         /// Boxed: a path's command buffer dwarfs the other clip shapes.
         path: Box<flui_types::painting::Path>,
+        /// How to handle content outside the clip boundary.
         behavior: Clip,
     },
 }
@@ -105,6 +120,11 @@ pub(crate) enum FragmentClip {
 /// object's `paint`.
 #[derive(Debug, Default)]
 pub struct PaintFragment {
+    /// The sequence of operations recorded during paint.
+    ///
+    /// Crate-internal: the ops enum is a pipeline implementation detail.
+    /// Cross-crate access is available only under the `testing` feature
+    /// via the `ops()` accessor and the re-exported `FragmentOp` type.
     pub(crate) ops: Vec<FragmentOp>,
 }
 
@@ -113,6 +133,16 @@ impl PaintFragment {
     /// child markers, no scopes. (An offstage subtree, for example.)
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
+    }
+
+    /// Returns a slice of all recorded ops.
+    ///
+    /// Available only when the `testing` feature is enabled (or in tests).
+    /// Consumers enabling `flui-rendering/testing` can pattern-match on
+    /// [`FragmentOp`] to inspect paint output in their own tests.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn ops(&self) -> &[FragmentOp] {
+        &self.ops
     }
 }
 

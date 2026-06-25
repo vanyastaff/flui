@@ -26,10 +26,10 @@ use std::sync::{
 };
 
 use flui_foundation::Diagnosticable;
+use flui_objects::{RenderColoredBox, RenderSliverListLazy};
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints},
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::{RenderColoredBox, RenderSliverListLazy},
     parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},

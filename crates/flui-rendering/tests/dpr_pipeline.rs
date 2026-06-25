@@ -7,10 +7,9 @@
 //! of the window, and pointer hits drifted by the scale factor.
 
 use flui_layer::Layer;
+use flui_objects::RenderColoredBox;
 use flui_painting::DisplayListCore;
-use flui_rendering::{
-    constraints::BoxConstraints, objects::RenderColoredBox, pipeline::PipelineOwner,
-};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 use flui_types::{Point, Rect, Size, geometry::px};
 
 type BoxedRenderObject =

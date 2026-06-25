@@ -10,12 +10,8 @@
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U21
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D6
 
-use flui_rendering::{
-    constraints::BoxConstraints,
-    error::RenderError,
-    objects::{RenderColoredBox, RenderPadding},
-    pipeline::PipelineOwner,
-};
+use flui_objects::{RenderColoredBox, RenderPadding};
+use flui_rendering::{constraints::BoxConstraints, error::RenderError, pipeline::PipelineOwner};
 use flui_types::{Size, geometry::px};
 
 fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {

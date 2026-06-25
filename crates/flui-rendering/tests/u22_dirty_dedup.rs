@@ -12,10 +12,8 @@
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U22
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D7
 
-use flui_rendering::{
-    objects::RenderColoredBox,
-    pipeline::{DirtyNode, PipelineOwner},
-};
+use flui_objects::RenderColoredBox;
+use flui_rendering::pipeline::{DirtyNode, PipelineOwner};
 
 fn fresh_owner_with_one_node() -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new();

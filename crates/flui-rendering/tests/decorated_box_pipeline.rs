@@ -4,12 +4,10 @@
 //! the rounded-corner geometry.
 
 use flui_layer::{Layer, LayerTree};
+use flui_objects::{DecorationPosition, RenderColoredBox, RenderDecoratedBox};
 use flui_painting::{DisplayListCore, DrawCommand};
 use flui_rendering::{
-    constraints::BoxConstraints,
-    hit_testing::HitTestResult,
-    objects::{DecorationPosition, RenderColoredBox, RenderDecoratedBox},
-    pipeline::PipelineOwner,
+    constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
 };
 use flui_types::{
     Offset, Size,

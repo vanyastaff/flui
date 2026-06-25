@@ -20,9 +20,9 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::RenderId;
+use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
-    objects::{RenderColoredBox, RenderFlex, RenderPadding},
     parent_data::{BoxParentData, FlexParentData},
     // `BoxLayoutCtxErased` is intentionally NOT re-exported under
     // `protocol::*` (PR #141 review comment 3293746269) — `protocol::*`

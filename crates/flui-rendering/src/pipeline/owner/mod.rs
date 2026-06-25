@@ -3352,7 +3352,51 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 mod tests {
     use std::sync::Arc;
 
+    use flui_tree::Leaf;
+    use flui_types::{Color, Point, Rect, Size, geometry::px};
+
     use super::*;
+    use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+    /// Minimal leaf that paints a colored rect.
+    ///
+    /// Concrete objects (RenderColoredBox, RenderSizedBox, …) now live in the
+    /// `flui_objects` crate. We use a local stub here because the pipeline/owner
+    /// tests are intra-crate unit tests that must not take a dependency on
+    /// flui_objects — they exercise the scheduling and wake-up contract, not any
+    /// object-specific behavior.
+    #[derive(Debug)]
+    struct PaintingLeaf {
+        color: [f32; 4],
+        size: Size,
+    }
+
+    impl PaintingLeaf {
+        fn red(width: f32, height: f32) -> Self {
+            Self {
+                color: [1.0, 0.0, 0.0, 1.0],
+                size: Size::new(px(width), px(height)),
+            }
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for PaintingLeaf {}
+
+    impl RenderBox for PaintingLeaf {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(self.size)
+        }
+
+        fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Leaf>) {
+            let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+            let color = Color::from_rgba_f32_array(self.color);
+            ctx.canvas()
+                .draw_rect(rect, &crate::pipeline::Paint::fill(color));
+        }
+    }
 
     #[test]
     fn test_pipeline_owner_new() {
@@ -3631,7 +3675,7 @@ mod tests {
             None::<fn()>,
         );
 
-        let id = owner.insert(Box::new(crate::objects::RenderColoredBox::red(10.0, 10.0))
+        let id = owner.insert(Box::new(PaintingLeaf::red(10.0, 10.0))
             as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
         owner.clear_all_dirty_nodes();
         let base = counter.load(Ordering::Relaxed);
@@ -4138,7 +4182,7 @@ mod tests {
         use flui_types::geometry::px;
 
         let mut owner = PipelineOwner::new();
-        let root_node = owner.insert(Box::new(crate::objects::RenderColoredBox::red(40.0, 40.0))
+        let root_node = owner.insert(Box::new(PaintingLeaf::red(40.0, 40.0))
             as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
         owner.set_root_id(Some(root_node));
         owner.set_root_constraints(Some(BoxConstraints::tight(flui_types::Size::new(

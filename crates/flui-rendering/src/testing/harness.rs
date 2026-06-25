@@ -413,23 +413,32 @@ impl FrameRun {
     /// then pumps exactly one frame. Returns one report per tick.
     ///
     /// ```
-    /// # use flui_rendering::objects::{RenderColoredBox, RenderPadding};
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
-    /// # use flui_types::{EdgeInsets, Offset, geometry::px};
-    /// let mut run = RenderTester::mount(
-    ///     box_node(RenderPadding::all(5.0))
-    ///         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    /// )
-    /// .run_frame();
-    /// let child = run.id("child");
-    /// let pad = run.root();
+    /// # use flui_rendering::prelude::*;
+    /// # use flui_tree::Leaf;
+    /// # use flui_types::{Size, geometry::px};
+    /// # #[derive(Debug, Default)]
+    /// # struct FixedBox(f32);
+    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl RenderBox for FixedBox {
+    /// #     type Arity = Leaf;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    /// #         Size::new(px(self.0), px(self.0))
+    /// #     }
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// # }
+    /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
+    ///     .run_frame();
+    /// let root = run.id("root");
     /// run.simulate([0.0, 0.5, 1.0], |t, run| {
-    ///     let padding = 5.0 + 50.0 * t as f32;
-    ///     run.update::<RenderPadding>(pad, |p| {
-    ///         p.set_padding(EdgeInsets::all(px(padding)));
-    ///     });
+    ///     let side = 40.0 + 20.0 * t as f32;
+    ///     run.update::<FixedBox>(root, |b| b.0 = side);
     /// });
-    /// assert_eq!(run.offset(child), Offset::new(px(55.0), px(55.0)));
+    /// assert_eq!(
+    ///     run.box_geometry(root),
+    ///     Size::new(px(60.0), px(60.0)),
+    /// );
     /// ```
     pub fn simulate<I, F>(&mut self, ticks: I, mut on_tick: F) -> Vec<FrameReport>
     where
@@ -481,18 +490,30 @@ impl FrameRun {
     /// Panics if the id is stale or is not a `T`.
     ///
     /// ```
-    /// # use flui_rendering::objects::{RenderColoredBox, RenderPadding};
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
-    /// # use flui_types::{EdgeInsets, Offset, geometry::px};
-    /// let mut run = RenderTester::mount(
-    ///     box_node(RenderPadding::all(5.0))
-    ///         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    /// )
-    /// .run_frame();
-    /// let pad = run.root();
-    /// run.update::<RenderPadding>(pad, |p| p.set_padding(EdgeInsets::all(px(20.0))));
+    /// # use flui_rendering::prelude::*;
+    /// # use flui_tree::Leaf;
+    /// # use flui_types::{Size, geometry::px};
+    /// # #[derive(Debug, Default)]
+    /// # struct FixedBox(f32);
+    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl RenderBox for FixedBox {
+    /// #     type Arity = Leaf;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    /// #         Size::new(px(self.0), px(self.0))
+    /// #     }
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// # }
+    /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
+    ///     .run_frame();
+    /// let root = run.root();
+    /// run.update::<FixedBox>(root, |b| b.0 = 60.0);
     /// run.pump();
-    /// assert_eq!(run.offset(run.id("child")), Offset::new(px(20.0), px(20.0)));
+    /// assert_eq!(
+    ///     run.box_geometry(root),
+    ///     Size::new(px(60.0), px(60.0)),
+    /// );
     /// ```
     pub fn update<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
         edit_object(&mut self.owner, id, edit);
@@ -583,9 +604,20 @@ impl RenderTester {
     /// exclusively on paint-phase handles. The compile-time proof:
     ///
     /// ```compile_fail
-    /// # use flui_rendering::objects::RenderColoredBox;
     /// # use flui_rendering::testing::{box_node, RenderTester};
-    /// let run = RenderTester::mount(box_node(RenderColoredBox::red(1.0, 1.0))).run_layout();
+    /// # use flui_rendering::prelude::*;
+    /// # use flui_tree::Leaf;
+    /// # use flui_types::{Size, geometry::px};
+    /// # #[derive(Debug, Default)]
+    /// # struct FixedBox;
+    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl RenderBox for FixedBox {
+    /// #     type Arity = Leaf;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size { Size::ZERO }
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// # }
+    /// let run = RenderTester::mount(box_node(FixedBox)).run_layout();
     /// let _ = run.snapshot(); // error: no method `snapshot` found for `LayoutRun`
     /// ```
     #[must_use]
@@ -834,39 +866,7 @@ impl Probe for SemanticsRun {
     }
 }
 
-// ============================================================================
-// Overflow inspection (Task 6)
-// ============================================================================
-
-/// Returns `true` when the render object at `node` has set its
-/// `has_visual_overflow` flag after layout.
-///
-/// Recognises [`crate::objects::RenderFittedBox`],
-/// [`crate::objects::RenderStack`], and
-/// [`crate::objects::RenderViewport`]. Any other node type, or a stale /
-/// sliver `node`, returns `false`.
-///
-/// Call this on a [`LayoutRun`] or [`FrameRun`] after the layout pass has
-/// committed geometry.
-#[must_use]
-pub fn has_overflow(probe: &impl Probe, node: RenderId) -> bool {
-    use crate::objects::{RenderFittedBox, RenderStack, RenderViewport};
-
-    let Some(render_node) = probe.pipeline().render_tree().get(node) else {
-        return false;
-    };
-    let Some(entry) = render_node.as_box() else {
-        return false;
-    };
-    let obj = entry.render_object();
-    if let Some(fitted) = obj.as_any().downcast_ref::<RenderFittedBox>() {
-        return fitted.has_visual_overflow();
-    }
-    if let Some(stack) = obj.as_any().downcast_ref::<RenderStack>() {
-        return stack.has_visual_overflow();
-    }
-    if let Some(viewport) = obj.as_any().downcast_ref::<RenderViewport>() {
-        return viewport.has_visual_overflow();
-    }
-    false
-}
+// `has_overflow` moved to `flui-objects/tests/helpers.rs` (flui-objects extraction
+// plan §2): it downcasts to concrete objects (RenderFittedBox/Stack/Viewport)
+// which now live in flui-objects, not flui-rendering. Moved verbatim so
+// `tests/harness_snapshot.rs` (also moved) keeps using it from its new home.

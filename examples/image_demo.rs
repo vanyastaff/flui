@@ -10,7 +10,7 @@
 //! Run with: cargo run --example image_demo
 
 use flui_app::run_app;
-use flui_rendering::objects::{ImageAlignment, ImageFit, RenderImage};
+use flui_objects::{ImageAlignment, ImageFit, RenderImage};
 use flui_types::painting::Image as FluiImage;
 use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
 

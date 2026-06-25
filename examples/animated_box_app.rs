@@ -29,7 +29,7 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController};
 use flui_app::{AppBinding, Scheduler, run_app};
 use flui_foundation::{HasInstance, Listenable, RenderId};
-use flui_rendering::objects::RenderColoredBox;
+use flui_objects::RenderColoredBox;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Color;
 use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};

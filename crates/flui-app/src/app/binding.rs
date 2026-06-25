@@ -651,7 +651,7 @@ mod tests {
         let binding = AppBinding::instance();
 
         let id = binding.shared_pipeline_owner.write().insert(Box::new(
-            flui_rendering::objects::RenderColoredBox::red(10.0, 10.0),
+            flui_objects::RenderColoredBox::red(10.0, 10.0),
         )
             as Box<
                 dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,

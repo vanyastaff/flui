@@ -36,22 +36,13 @@ use crate::{
 /// # Example
 ///
 /// ```ignore
-/// use flui_rendering::tree::RenderTree;
-/// use flui_rendering::objects::RenderColoredBox;
+/// // Concrete render objects (RenderColoredBox, RenderSizedBox, …) now live
+/// // in the `flui_objects` crate. See `flui_objects::RenderColoredBox` for a
+/// // ready-made leaf box to use in examples and tests.
+/// use flui_rendering::storage::RenderTree;
 ///
 /// let mut tree = RenderTree::new();
-///
-/// // Insert root
-/// let root_id = tree.insert(Box::new(RenderColoredBox::new(Color::RED)));
-/// tree.set_root(Some(root_id));
-///
-/// // Insert child`
-/// let child_id = tree.insert_child(root_id, Box::new(RenderColoredBox::new(Color::BLUE)));
-///
-/// // Access render object
-/// if let Some(node) = tree.get(root_id) {
-///     println!("Root has {} children", node.children().len());
-/// }
+/// // tree.insert_box(Box::new(flui_objects::RenderColoredBox::red(40.0, 40.0)) as Box<_>);
 /// ```
 #[derive(Debug)]
 pub struct RenderTree {
@@ -1030,13 +1021,29 @@ impl TreeNav<RenderId> for RenderTree {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Pixels;
+    use flui_tree::Leaf;
+    use flui_types::{Size, geometry::px};
 
     use super::*;
-    use crate::objects::RenderSizedBox;
+    use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+    /// Minimal leaf stub — concrete objects live in `flui_objects`.
+    /// This test only needs "something with RenderObject<BoxProtocol>" to
+    /// exercise the slab slot / generation / ABA mechanics.
+    #[derive(Debug, Default)]
+    struct LeafStub;
+    impl flui_foundation::Diagnosticable for LeafStub {}
+    impl RenderBox for LeafStub {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::new(px(10.0), px(10.0))
+        }
+        fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+    }
 
     fn make_leaf() -> Box<dyn RenderObject<BoxProtocol>> {
-        Box::new(RenderSizedBox::fixed(Pixels(10.0), Pixels(10.0)))
+        Box::new(LeafStub)
     }
 
     /// D2 — ABA regression: after a slot is freed and reused, the OLD id

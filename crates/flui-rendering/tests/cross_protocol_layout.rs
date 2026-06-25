@@ -19,10 +19,10 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::Diagnosticable;
+use flui_objects::{RenderColoredBox, RenderSliverPadding};
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
-    objects::{RenderColoredBox, RenderSliverPadding},
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},

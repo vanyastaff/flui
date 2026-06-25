@@ -1,0 +1,7 @@
+---
+source: crates/flui-objects/tests/harness_snapshot.rs
+assertion_line: 6
+expression: "\"line one\\nline two\""
+---
+line one
+line two

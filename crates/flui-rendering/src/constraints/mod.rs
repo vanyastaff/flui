@@ -88,7 +88,10 @@ pub use box_constraints::BoxConstraints;
 pub use direction::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up};
 pub use sliver_constraints::SliverConstraints;
 pub use sliver_geometry::SliverGeometry;
-pub(crate) use sliver_layout::child_paint_offset;
+/// Paint-offset math shared by sliver render objects and the pipeline.
+/// Moved from `pub(crate)` to `pub` so `flui_objects` sliver implementations
+/// can call it without adding an internal API surface.
+pub use sliver_layout::child_paint_offset;
 
 /// Abstract constraint trait following Flutter's protocol.
 ///

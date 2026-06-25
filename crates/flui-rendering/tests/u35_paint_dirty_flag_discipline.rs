@@ -13,12 +13,8 @@
 
 use flui_foundation::LayerId;
 use flui_layer::{Layer, LayerTree};
-use flui_rendering::{
-    constraints::BoxConstraints,
-    objects::{RenderColoredBox, RenderPadding, RenderRepaintBoundary},
-    pipeline::PipelineOwner,
-    traits::RenderObject,
-};
+use flui_objects::{RenderColoredBox, RenderPadding, RenderRepaintBoundary};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
 use flui_types::geometry::px;
 
 // ============================================================================

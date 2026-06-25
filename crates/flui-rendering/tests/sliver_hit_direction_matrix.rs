@@ -3,10 +3,10 @@
 //! Exercises 4 axis directions × 2 growth directions through a Box host that
 //! lays out a band sliver with explicit [`SliverConstraints`].
 
+use flui_objects::RenderViewport;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverLayoutContext},
-    objects::RenderViewport,
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::SliverProtocol,
