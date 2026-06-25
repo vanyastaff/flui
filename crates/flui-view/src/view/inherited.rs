@@ -1,7 +1,10 @@
 //! InheritedView - Views that provide data to descendants.
 //!
-//! InheritedViews propagate data down the tree efficiently using O(1) lookup
-//! via a hash table in BuildOwner, rather than O(depth) parent walks.
+//! InheritedViews propagate data down the tree with O(1) lookup: each
+//! [`ElementNode`](crate::tree::ElementNode) carries an `inherited` map
+//! (`provider view TypeId → provider ElementId`) built at mount, so
+//! `ctx.depend_on::<T>()` is one hash lookup rather than an O(depth) parent
+//! walk. Mirrors Flutter's per-element `_inheritedElements` map.
 
 use super::view::View;
 

@@ -124,10 +124,11 @@ where
 
     /// Called after mount to perform behavior-specific setup.
     ///
-    /// The split-borrow `owner` handle is threaded through so behaviors
-    /// can register themselves in `BuildOwner` registries
-    /// (`InheritedBehavior::on_mount` uses it to register its `TypeId`
-    /// for O(1) `depend_on_inherited` lookups). Plan §U9.
+    /// The split-borrow `owner` handle is threaded through so behaviors can
+    /// register themselves in `BuildOwner` registries. (The O(1) inherited
+    /// lookup is NOT wired here — it is built structurally by
+    /// [`ElementTree::insert`](crate::tree::ElementTree) into each node's
+    /// `inherited` map, so `InheritedBehavior` needs no mount-time hook.)
     #[allow(unused_variables)]
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 

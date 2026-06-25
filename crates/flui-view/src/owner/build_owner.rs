@@ -77,8 +77,10 @@ impl PartialOrd for DirtyElement {
 /// - Maintain list of dirty elements
 /// - Process rebuilds in correct order
 /// - Manage GlobalKey registry
-/// - Track InheritedElement locations for O(1) lookup
 /// - Track inactive elements for finalization
+///
+/// O(1) InheritedElement lookup is NOT here — it lives structurally in each
+/// node's [`inherited`](crate::tree::ElementNode) map, built at mount.
 pub struct BuildOwner {
     /// Elements that need rebuild, sorted by depth.
     ///

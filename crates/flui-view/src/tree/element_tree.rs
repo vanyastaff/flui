@@ -3,6 +3,8 @@
 //! Elements are stored in a Slab for O(1) access by ElementId.
 //! This follows Flutter's approach where Elements form the retained tree.
 
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -78,6 +80,60 @@ pub struct ElementNode {
     /// slot `i` after the most recent id-reconcile, matching the new
     /// view order.
     pub(crate) child_ids: Vec<ElementId>,
+    /// The set of [`InheritedView`](crate::view::InheritedView) providers in
+    /// scope at this node — `provider view TypeId → provider ElementId` — so
+    /// `BuildContext::depend_on_inherited` / `get_inherited` resolve the
+    /// nearest `P` provider in **O(1)** instead of an O(depth) ancestor walk.
+    /// (Only those two inherited lookups read this map; the `find_ancestor_*`
+    /// family still walks, as it matches arbitrary — not just inherited —
+    /// ancestor types.)
+    ///
+    /// Built top-down at [`insert`](ElementTree::insert) /
+    /// [`mount_root_with_pipeline_owner`](ElementTree::mount_root_with_pipeline_owner):
+    /// a non-provider aliases its parent's map by refcount (`Arc::clone`, the
+    /// `framework.dart:5129` pointer-copy); a provider stores
+    /// `parent_map + (view_type_id → self)` so nested same-type providers
+    /// shadow nearest-wins. Recomputed for a re-taken subtree on GlobalKey
+    /// reparent. Like `parent`/`depth`/`child_ids` it is a node field, so it
+    /// survives the `build_scope` take/put window and a building element can
+    /// read its own scope while its `element` slot is a hole.
+    ///
+    /// Flutter parity: `Element._inheritedElements` (`framework.dart:5053`,
+    /// `_updateInheritance` at `:5127`/`:6270`). flui keys on the provider
+    /// view `TypeId` (== Flutter's `widget.runtimeType`) and uses a plain
+    /// `Arc<HashMap>` with copy-on-insert-at-providers rather than a persistent
+    /// HAMT — provider counts in a UI scope are tiny, so the per-provider
+    /// O(k) clone is effectively O(1) and avoids a new dependency.
+    pub(crate) inherited: Arc<HashMap<TypeId, ElementId>>,
+}
+
+/// Compute a child node's inherited scope from its parent's.
+///
+/// A non-provider returns the parent map unchanged (`Arc::clone` — refcount
+/// bump, no allocation); a provider returns `parent_map + (view_type_id →
+/// id)`, so the nearest same-type provider shadows. Average/worst case O(k)
+/// where k = providers in scope (only at provider nodes; tiny in practice).
+///
+/// A provider's resolved scope therefore includes ITSELF — so
+/// `depend_on::<P>()` from inside a `P` provider's own build resolves that
+/// provider, where the old strict-ancestor walk skipped self and found the
+/// next `P` up (or `None`). This is an intentional, Flutter-faithful shift
+/// (`_updateInheritance` puts `this` into `_inheritedElements`,
+/// `framework.dart:6274`); it is currently unreachable because
+/// `InheritedBehavior::build_into_views` only returns the child and never
+/// self-depends.
+fn compute_inherited_scope(
+    parent_map: &Arc<HashMap<TypeId, ElementId>>,
+    element: &dyn ElementBase,
+    id: ElementId,
+) -> Arc<HashMap<TypeId, ElementId>> {
+    if element.as_inherited().is_some() {
+        let mut map = (**parent_map).clone();
+        map.insert(element.view_type_id(), id);
+        Arc::new(map)
+    } else {
+        Arc::clone(parent_map)
+    }
 }
 
 impl ElementNode {
@@ -100,7 +156,22 @@ impl ElementNode {
             key: None,
             registered_global_key_hash: None,
             child_ids: Vec::new(),
+            // Empty until the tree sets the real scope against the parent's
+            // map (insert / mount_root_*), mirroring how `key`/`depth` are
+            // finalised by the caller right after construction.
+            inherited: Arc::new(HashMap::new()),
         }
+    }
+
+    /// The nearest in-scope [`InheritedView`](crate::view::InheritedView)
+    /// provider whose view type is `type_id`, in O(1).
+    ///
+    /// This is the resolved scope at THIS node: for a non-provider it is the
+    /// parent's set; for a provider it also includes itself. Build-time
+    /// `depend_on` / `find_ancestor` read it via the node (which outlives the
+    /// `build_scope` element hole).
+    pub(crate) fn inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
+        self.inherited.get(&type_id).copied()
     }
 
     /// Message for the `expect` in the element accessors — the element is
@@ -447,6 +518,14 @@ impl ElementTree {
         // when emitting ReconcileEvent's `parent` field.
         self.nodes[slab_index].element_mut().set_self_id(id);
 
+        // Root inherited scope: empty parent map, plus self if the root is
+        // itself a provider. Set before `mount` (see `insert`).
+        self.nodes[slab_index].inherited = {
+            let empty = Arc::new(HashMap::new());
+            let node = &self.nodes[slab_index];
+            compute_inherited_scope(&empty, node.element(), id)
+        };
+
         // Mount the element (now it has PipelineOwner set)
         self.nodes[slab_index].element_mut().mount(None, 0, owner);
 
@@ -515,14 +594,16 @@ impl ElementTree {
         // slab-resident, so that propagate-before-mount ordering moves
         // here: read `pipeline_owner_any()` / `child_render_id()` off the
         // parent node, hand them to the child, then mount.
-        let (parent_depth, parent_owner, child_parent_render_id) = match self.get(parent) {
-            Some(node) => (
-                node.depth,
-                node.element().pipeline_owner_any(),
-                node.element().child_render_id(),
-            ),
-            None => (0, None, None),
-        };
+        let (parent_depth, parent_owner, child_parent_render_id, parent_inherited) =
+            match self.get(parent) {
+                Some(node) => (
+                    node.depth,
+                    node.element().pipeline_owner_any(),
+                    node.element().child_render_id(),
+                    Arc::clone(&node.inherited),
+                ),
+                None => (0, None, None, Arc::new(HashMap::new())),
+            };
 
         if let Some(owner_any) = parent_owner {
             element.set_pipeline_owner_any(owner_any);
@@ -539,6 +620,16 @@ impl ElementTree {
 
         // Plan §U15: same self-id stamping as mount_root.
         self.nodes[slab_index].element_mut().set_self_id(id);
+
+        // Resolve this child's inherited scope from the parent's now that the
+        // element knows whether it is itself a provider (`as_inherited`) and
+        // its `view_type_id`. Computed before `mount` so an
+        // `InheritedBehavior::on_mount` (or any mount-time lookup) already sees
+        // its own scope.
+        self.nodes[slab_index].inherited = {
+            let node = &self.nodes[slab_index];
+            compute_inherited_scope(&parent_inherited, node.element(), id)
+        };
 
         // Mount the element (PipelineOwner + parent RenderId already set,
         // so `RenderBehavior::on_mount` can create its RenderObject).
@@ -565,6 +656,47 @@ impl ElementTree {
         ));
 
         id
+    }
+
+    /// Recompute the inherited scope ([`ElementNode::inherited`]) for the
+    /// subtree rooted at `root_id`, top-down against each node's current
+    /// parent.
+    ///
+    /// Needed after a GlobalKey reparent ([`try_retake_inactive`]): the moved
+    /// subtree's nodes carry maps built against their OLD ancestor chain, so
+    /// `depend_on` would resolve providers from the old location. A node is
+    /// only processed after its parent (the stack guarantees parent-before-
+    /// child), so each child recomputes against its parent's already-updated
+    /// scope — mirroring Flutter re-running `_updateInheritance` down a
+    /// reactivated subtree. Average/worst case O(subtree size).
+    fn recompute_inherited_subtree(&mut self, root_id: ElementId) {
+        // A `visited` set bounds the walk to each node once. The element tree
+        // is acyclic by construction (`child_ids` come from the reconciler),
+        // so this never trips in practice — but it converts a malformed
+        // `child_ids` cycle from an unbounded hang into clean termination.
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![root_id];
+        while let Some(id) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(node) = self.get(id) else {
+                continue;
+            };
+            let parent_map = match node.parent {
+                Some(parent_id) => self
+                    .get(parent_id)
+                    .map_or_else(|| Arc::new(HashMap::new()), |p| Arc::clone(&p.inherited)),
+                None => Arc::new(HashMap::new()),
+            };
+            let scope = {
+                let node = self.get(id).expect("id resolved at loop top");
+                compute_inherited_scope(&parent_map, node.element(), id)
+            };
+            let node = self.get_mut(id).expect("id resolved at loop top");
+            node.inherited = scope;
+            stack.extend_from_slice(&node.child_ids);
+        }
     }
 
     /// Get an element node by ID.
@@ -931,6 +1063,13 @@ fn try_retake_inactive(
     // concrete `Box<dyn ViewKey>` is the new view's key now.
     node.set_key(view.key().map(ViewKey::clone_key));
 
+    // The subtree moved under a new parent, so its inherited scopes (built
+    // against the OLD ancestor chain) are stale — recompute top-down against
+    // `new_parent`. Flutter re-runs `_updateInheritance` on reactivation
+    // (`framework.dart:4775`). `node`'s `&mut` borrow ends above, freeing
+    // `tree` for this walk.
+    tree.recompute_inherited_subtree(candidate_id);
+
     tracing::debug!(
         candidate = ?candidate_id,
         new_parent = ?new_parent,
@@ -1189,5 +1328,305 @@ mod tests {
         // Eager remove resolves (generation matches) then attempts the bump,
         // which overflows and panics.
         let _ = tree.remove(saturated, &mut owner.element_owner_mut());
+    }
+
+    // ========================================================================
+    // Inherited scope (PR-2): the per-node `inherited` map gives O(1)
+    // `depend_on` resolution. These exercise the map directly (it is
+    // `pub(crate)`), independent of the build pipeline.
+    // ========================================================================
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct ThemeData {
+        color: u32,
+    }
+
+    /// An `InheritedView` provider fixture. `child` is required by the trait
+    /// but never built here — these tests insert the tree shape directly.
+    #[derive(Clone)]
+    struct Theme {
+        data: ThemeData,
+        child: TestView,
+    }
+
+    impl crate::view::InheritedView for Theme {
+        type Data = ThemeData;
+
+        fn data(&self) -> &Self::Data {
+            &self.data
+        }
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn update_should_notify(&self, old: &Self) -> bool {
+            self.data != old.data
+        }
+    }
+
+    impl View for Theme {
+        fn create_element(&self) -> Box<dyn crate::ElementBase> {
+            use crate::InheritedElement;
+            use crate::element::InheritedBehavior;
+            Box::new(InheritedElement::new(self, InheritedBehavior::new(self)))
+        }
+    }
+
+    fn theme(color: u32) -> Theme {
+        Theme {
+            data: ThemeData { color },
+            child: TestView {
+                name: "unused".to_string(),
+            },
+        }
+    }
+
+    fn leaf(name: &str) -> TestView {
+        TestView {
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn inherited_scope_resolves_provider_in_o1() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let provider = tree.mount_root(&theme(1), &mut owner.element_owner_mut());
+        let child = tree.insert(&leaf("c"), provider, 0, &mut owner.element_owner_mut());
+
+        let theme_ty = TypeId::of::<Theme>();
+        // A provider's own scope includes itself (Flutter `_inheritedElements`
+        // for an InheritedElement contains `this`).
+        assert_eq!(
+            tree.get(provider).unwrap().inherited_provider(theme_ty),
+            Some(provider),
+        );
+        // A descendant resolves the ancestor provider via the aliased map.
+        assert_eq!(
+            tree.get(child).unwrap().inherited_provider(theme_ty),
+            Some(provider),
+        );
+        // A non-provider view type is absent from the scope.
+        assert_eq!(
+            tree.get(child)
+                .unwrap()
+                .inherited_provider(TypeId::of::<TestView>()),
+            None,
+        );
+        // Non-providers alias the parent's map by refcount — no per-node clone.
+        assert!(
+            Arc::ptr_eq(
+                &tree.get(provider).unwrap().inherited,
+                &tree.get(child).unwrap().inherited,
+            ),
+            "a non-provider child must share its parent's inherited map Arc",
+        );
+    }
+
+    #[test]
+    fn nested_same_type_provider_shadows_nearest() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let outer = tree.mount_root(&theme(1), &mut owner.element_owner_mut());
+        let inner = tree.insert(&theme(2), outer, 0, &mut owner.element_owner_mut());
+        let leaf_id = tree.insert(&leaf("l"), inner, 0, &mut owner.element_owner_mut());
+
+        let theme_ty = TypeId::of::<Theme>();
+        // Nearest-wins: the leaf resolves the inner provider, not the outer.
+        assert_eq!(
+            tree.get(leaf_id).unwrap().inherited_provider(theme_ty),
+            Some(inner),
+            "the nearest same-type provider must shadow the outer one",
+        );
+        assert_eq!(
+            tree.get(inner).unwrap().inherited_provider(theme_ty),
+            Some(inner),
+        );
+        assert_eq!(
+            tree.get(outer).unwrap().inherited_provider(theme_ty),
+            Some(outer),
+        );
+    }
+
+    #[test]
+    fn recompute_inherited_subtree_after_reparent() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        // root(non-provider) -> [ provider_a(1), provider_b(2) ];
+        // k under provider_a, child c under k.
+        let root = tree.mount_root(&leaf("root"), &mut owner.element_owner_mut());
+        let provider_a = tree.insert(&theme(1), root, 0, &mut owner.element_owner_mut());
+        let provider_b = tree.insert(&theme(2), root, 1, &mut owner.element_owner_mut());
+        let k = tree.insert(&leaf("k"), provider_a, 0, &mut owner.element_owner_mut());
+        let c = tree.insert(&leaf("c"), k, 0, &mut owner.element_owner_mut());
+        // Direct `insert` does not maintain `child_ids` (the reconciler does);
+        // model the post-build subtree the reparent path actually walks.
+        tree.get_mut(k).unwrap().set_child_ids(vec![c]);
+
+        let theme_ty = TypeId::of::<Theme>();
+        assert_eq!(
+            tree.get(k).unwrap().inherited_provider(theme_ty),
+            Some(provider_a),
+        );
+        assert_eq!(
+            tree.get(c).unwrap().inherited_provider(theme_ty),
+            Some(provider_a),
+        );
+
+        // Reparent k under provider_b and recompute the moved subtree.
+        tree.get_mut(k).unwrap().parent = Some(provider_b);
+        tree.recompute_inherited_subtree(k);
+
+        assert_eq!(
+            tree.get(k).unwrap().inherited_provider(theme_ty),
+            Some(provider_b),
+            "the moved node resolves the new provider after recompute",
+        );
+        assert_eq!(
+            tree.get(c).unwrap().inherited_provider(theme_ty),
+            Some(provider_b),
+            "a descendant of the moved node is recomputed too (top-down walk)",
+        );
+    }
+
+    #[test]
+    fn recompute_reshadows_nested_provider_in_moved_subtree() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        // root -> [ provider_a(1), provider_b(2) ]; k under provider_a;
+        // a NESTED provider(3) under k; leaf d under the nested provider.
+        let root = tree.mount_root(&leaf("root"), &mut owner.element_owner_mut());
+        let provider_a = tree.insert(&theme(1), root, 0, &mut owner.element_owner_mut());
+        let provider_b = tree.insert(&theme(2), root, 1, &mut owner.element_owner_mut());
+        let k = tree.insert(&leaf("k"), provider_a, 0, &mut owner.element_owner_mut());
+        let nested = tree.insert(&theme(3), k, 0, &mut owner.element_owner_mut());
+        let d = tree.insert(&leaf("d"), nested, 0, &mut owner.element_owner_mut());
+        tree.get_mut(k).unwrap().set_child_ids(vec![nested]);
+        tree.get_mut(nested).unwrap().set_child_ids(vec![d]);
+
+        let theme_ty = TypeId::of::<Theme>();
+        assert_eq!(
+            tree.get(d).unwrap().inherited_provider(theme_ty),
+            Some(nested)
+        );
+
+        // Move k under provider_b and recompute the whole moved subtree.
+        tree.get_mut(k).unwrap().parent = Some(provider_b);
+        tree.recompute_inherited_subtree(k);
+
+        assert_eq!(
+            tree.get(k).unwrap().inherited_provider(theme_ty),
+            Some(provider_b),
+            "the moved root resolves the new outer provider",
+        );
+        assert_eq!(
+            tree.get(nested).unwrap().inherited_provider(theme_ty),
+            Some(nested),
+            "a provider inside the moved subtree re-shadows itself after recompute",
+        );
+        assert_eq!(
+            tree.get(d).unwrap().inherited_provider(theme_ty),
+            Some(nested),
+            "below the nested provider the nearest (nested) one still wins",
+        );
+    }
+
+    /// A keyed stateless view used to drive the REAL GlobalKey reparent path
+    /// (`try_retake_inactive` → `recompute_inherited_subtree`). `GlobalKey<T>`
+    /// is phantom in `T`, so a stateless `GlobalKey<()>` is enough to register
+    /// in the migration registry.
+    #[derive(Clone)]
+    struct Keyed {
+        key: crate::GlobalKey<()>,
+    }
+
+    impl StatelessView for Keyed {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            leaf("keyed-child").boxed()
+        }
+    }
+
+    impl View for Keyed {
+        fn create_element(&self) -> Box<dyn crate::ElementBase> {
+            use crate::element::StatelessBehavior;
+            Box::new(StatelessElement::new(self, StatelessBehavior))
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(global_key_registry)]
+    fn globalkey_retake_recomputes_inherited_scope() {
+        use parking_lot::RwLock;
+
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+        crate::test_only_set_global_key_registry(&tree, &owner);
+
+        let root = tree
+            .write()
+            .mount_root(&leaf("root"), &mut owner.write().element_owner_mut());
+        let provider_a =
+            tree.write()
+                .insert(&theme(1), root, 0, &mut owner.write().element_owner_mut());
+        let provider_b =
+            tree.write()
+                .insert(&theme(2), root, 1, &mut owner.write().element_owner_mut());
+
+        let keyed = Keyed {
+            key: crate::GlobalKey::new(),
+        };
+        let k = tree.write().insert(
+            &keyed,
+            provider_a,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
+        let c = tree
+            .write()
+            .insert(&leaf("c"), k, 0, &mut owner.write().element_owner_mut());
+        // Soft-remove only detaches the top, preserving `child_ids`; model the
+        // built subtree so the post-retake recompute reaches `c`.
+        tree.write().get_mut(k).unwrap().set_child_ids(vec![c]);
+
+        let theme_ty = TypeId::of::<Theme>();
+        assert_eq!(
+            tree.read().get(k).unwrap().inherited_provider(theme_ty),
+            Some(provider_a),
+        );
+
+        // Soft-remove K (→ inactive queue), then re-insert under provider_b
+        // with the SAME GlobalKey: the real `try_retake_inactive` reactivates
+        // it and calls `recompute_inherited_subtree`.
+        tree.write()
+            .remove(k, &mut owner.write().element_owner_mut());
+        let migrated = tree.write().insert(
+            &keyed,
+            provider_b,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
+        assert_eq!(migrated, k, "GlobalKey retake reuses the same ElementId");
+
+        assert_eq!(
+            tree.read().get(k).unwrap().inherited_provider(theme_ty),
+            Some(provider_b),
+            "the retaken node resolves the new provider after the real reparent path",
+        );
+        assert_eq!(
+            tree.read().get(c).unwrap().inherited_provider(theme_ty),
+            Some(provider_b),
+            "the retaken node's child is recomputed too (try_retake_inactive wiring)",
+        );
+
+        crate::test_only_clear_global_key_registry();
     }
 }
