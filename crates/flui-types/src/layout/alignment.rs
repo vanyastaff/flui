@@ -356,6 +356,7 @@ impl Neg for Alignment {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AlignmentDirectional {
     /// Start alignment: -1.0 = start edge, 0.0 = center, 1.0 = end edge
@@ -413,9 +414,13 @@ impl AlignmentDirectional {
     }
 
     /// Linear interpolation between two directional alignments.
+    ///
+    /// Values of `t` outside `[0, 1]` extrapolate — they are **not** clamped,
+    /// matching [`Alignment::lerp`] and Flutter's `AlignmentDirectional.lerp`
+    /// so overshoot animation curves propagate without flattening.
+    #[must_use]
     #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
-        let t = t.clamp(0.0, 1.0);
         Self::new(a.start + (b.start - a.start) * t, a.y + (b.y - a.y) * t)
     }
 }
@@ -445,6 +450,7 @@ impl Neg for AlignmentDirectional {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AlignmentGeometry {
     /// Absolute alignment (x, y).
@@ -537,6 +543,19 @@ mod tests {
     fn lerp_extrapolates_outside_unit_interval() {
         let out = Alignment::lerp(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT, 1.5);
         assert_eq!(out, Alignment::new(2.0, 2.0));
+    }
+
+    /// `AlignmentDirectional::lerp` mirrors the no-clamp contract: the old clamp
+    /// pinned `t = 1.5` to `1.0` and produced `(1.0, 1.0)`; without it,
+    /// `TOP_START..BOTTOM_END` at `t = 1.5` extrapolates to `(2.0, 2.0)`.
+    #[test]
+    fn directional_lerp_extrapolates_outside_unit_interval() {
+        let out = AlignmentDirectional::lerp(
+            AlignmentDirectional::TOP_START,
+            AlignmentDirectional::BOTTOM_END,
+            1.5,
+        );
+        assert_eq!(out, AlignmentDirectional::new(2.0, 2.0));
     }
 
     // ---- align_within tests (migrated from painting::alignment + new) ----
