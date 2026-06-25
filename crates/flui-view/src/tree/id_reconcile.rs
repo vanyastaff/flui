@@ -201,12 +201,14 @@ pub(crate) fn reconcile_children_by_id(
     // keyless old middle child (it can only match positionally, which
     // the top/bottom scans already exhausted).
     //
-    // The bucket is a `Vec<ElementId>` (not a single id) so two old
-    // children with DISTINCT keys that collide on `u64` hash both stay
-    // claim candidates — the symmetric FR-024(c) collision defense.
-    // Phase 4 disambiguates via the semantic `key_eq` inside
-    // `can_update_by_id`.
-    let mut old_keyed: HashMap<u64, Vec<ElementId>> = HashMap::new();
+    // The bucket holds OLD-SLOT INDICES (a `Vec<usize>`, not a single
+    // index) so two old children with DISTINCT keys that collide on `u64`
+    // hash both stay claim candidates — the symmetric FR-024(c) collision
+    // defense. Phase 4 disambiguates via the semantic `key_eq` inside
+    // `can_update_by_id`, and clears a claim by index in O(1) (indexing
+    // the bucket by slot, not id, is what keeps phase 4 linear rather than
+    // O(n*m) — no per-claim scan of `old_slots`).
+    let mut old_keyed: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, slot) in old_slots
         .iter_mut()
         .enumerate()
@@ -219,7 +221,7 @@ pub(crate) fn reconcile_children_by_id(
         if let Some(hash) = key_hash_of(tree, old_id) {
             // Keyed: defer the claim to phase 4. FIFO bucket order
             // preserves first-wins across true duplicate keys.
-            old_keyed.entry(hash).or_default().push(old_id);
+            old_keyed.entry(hash).or_default().push(idx);
         } else {
             // Keyless middle child with no positional match: remove.
             // Capture the view type BEFORE the slab frees the slot so the
@@ -241,14 +243,19 @@ pub(crate) fn reconcile_children_by_id(
     for new_offset in 0..(new_bottom - new_top) {
         let new_slot = new_top + new_offset;
         let new_view = new_views[new_slot].as_ref();
-        if let Some(old_id) = claim_old_for_new(tree, new_view, &mut old_keyed) {
+        if let Some(old_idx) = claim_old_for_new(tree, new_view, &mut old_keyed, &old_slots) {
+            // Clear the claim by index in O(1) and take its id; `take`
+            // leaves `None`, so phase 5b will not also remove this reused
+            // child.
+            let old_id = old_slots[old_idx]
+                .take()
+                .expect("claim_old_for_new only returns indices of Some, keyed slots");
             // The claimed child's `slot` is still its OLD index (the
             // tail-of-pass re-stamp has not run yet): equal to the new
             // slot means it stayed put (`Reuse`); otherwise the keyed
             // match pulled it across slots (`Reorder`).
             let stayed = slot_of(tree, old_id) == Some(new_slot);
             update_child(tree, old_id, new_view, owner);
-            clear_slot(&mut old_slots, old_id);
             let key_hash = new_view.key().map(flui_foundation::ViewKey::key_hash);
             let view_type = new_view.view_type_id();
             emit_event(&if stayed {
@@ -435,41 +442,32 @@ fn slot_of(tree: &ElementTree, old_id: ElementId) -> Option<usize> {
     Some(tree.get(old_id)?.slot())
 }
 
-/// Claim the old-middle child a keyed `new_view` should reuse, removing
-/// it from `old_keyed` so a later duplicate-key view cannot reclaim it
-/// (first-wins).
+/// Claim the old-middle child a keyed `new_view` should reuse, returning
+/// its OLD-SLOT INDEX and removing that index from `old_keyed` so a later
+/// duplicate-key view cannot reclaim it (first-wins). The caller clears
+/// the slot by index in O(1) — there is no per-claim scan of `old_slots`.
 ///
 /// Walks the whole hash bucket (distinct keys can collide on `u64`) and
-/// returns the first candidate that [`can_update_by_id`] accepts —
-/// non-matching candidates stay in the bucket for a later view. Returns
-/// `None` for a keyless new view (those only match positionally, already
-/// handled by the top/bottom scans) or when no candidate matches.
+/// returns the index of the first candidate that [`can_update_by_id`]
+/// accepts — non-matching candidates stay in the bucket for a later view.
+/// Returns `None` for a keyless new view (those only match positionally,
+/// already handled by the top/bottom scans) or when no candidate matches.
 fn claim_old_for_new(
     tree: &ElementTree,
     new_view: &dyn View,
-    old_keyed: &mut HashMap<u64, Vec<ElementId>>,
-) -> Option<ElementId> {
+    old_keyed: &mut HashMap<u64, Vec<usize>>,
+    old_slots: &[Option<ElementId>],
+) -> Option<usize> {
     let key_hash = new_view.key()?.key_hash();
     let bucket = old_keyed.get_mut(&key_hash)?;
-    let position = bucket
-        .iter()
-        .position(|&old_id| can_update_by_id(tree, old_id, new_view))?;
-    let old_id = bucket.remove(position);
+    let position = bucket.iter().position(|&old_idx| {
+        old_slots[old_idx].is_some_and(|old_id| can_update_by_id(tree, old_id, new_view))
+    })?;
+    let old_idx = bucket.remove(position);
     if bucket.is_empty() {
         old_keyed.remove(&key_hash);
     }
-    Some(old_id)
-}
-
-/// Clear `old_id` from the `old_slots` working buffer once it has been
-/// claimed, so phase 5b does not remove an element that is being reused.
-///
-/// Linear scan over the (parent-fan-out-bounded) slot list. The id is
-/// present at most once — old children are unique in a child list.
-fn clear_slot(old_slots: &mut [Option<ElementId>], old_id: ElementId) {
-    if let Some(slot) = old_slots.iter_mut().find(|slot| **slot == Some(old_id)) {
-        *slot = None;
-    }
+    Some(old_idx)
 }
 
 /// Apply `new` to the reused slab child `id` through a fresh `&mut tree`
