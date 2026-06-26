@@ -285,6 +285,44 @@ impl LaidOut {
         );
         result.dispatch(&event);
     }
+
+    /// Hit-test at root-local `(x, y)` and dispatch a synthetic secondary-button
+    /// (right-click) pointer-down event — the headless analogue of a right-mouse
+    /// button press reaching the framework. Used by `GestureDetector` tests to
+    /// assert `on_secondary_tap` fires on right-click.
+    pub fn dispatch_secondary_down(&self, x: f32, y: f32) {
+        use flui_interaction::events::pointer::PointerButton;
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let position = Offset::new(px(x), px(y));
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        let event = flui_interaction::events::make_down_event_with_button(
+            position,
+            flui_interaction::events::PointerType::Mouse,
+            PointerButton::Secondary,
+        );
+        result.dispatch(&event);
+    }
+
+    /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
+    /// secondary-button pointer-up — to complete the right-click gesture.
+    pub fn dispatch_secondary_up(&self, x: f32, y: f32) {
+        use flui_interaction::events::pointer::PointerButton;
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let position = Offset::new(px(x), px(y));
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        let event = flui_interaction::events::make_up_event_with_button(
+            position,
+            flui_interaction::events::PointerType::Mouse,
+            PointerButton::Secondary,
+        );
+        result.dispatch(&event);
+    }
 }
 
 /// Convenience: a `Size` in logical pixels.

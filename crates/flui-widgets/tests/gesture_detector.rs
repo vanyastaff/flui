@@ -223,3 +223,77 @@ fn gesture_detector_quick_tap_beats_the_pan_recognizer() {
         "no movement means the pan never starts",
     );
 }
+
+#[test]
+fn secondary_tap_fires_on_secondary_down_up() {
+    let primary_taps = Arc::new(AtomicUsize::new(0));
+    let secondary_taps = Arc::new(AtomicUsize::new(0));
+    let (primary_cb, secondary_cb) = (Arc::clone(&primary_taps), Arc::clone(&secondary_taps));
+
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_tap(move || {
+                primary_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_secondary_tap(move || {
+                secondary_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(100.0, 100.0),
+    );
+
+    assert_eq!(
+        secondary_taps.load(Ordering::SeqCst),
+        0,
+        "no tap before any pointer"
+    );
+
+    // A secondary-button (right-click) down + up fires on_secondary_tap.
+    laid.dispatch_secondary_down(50.0, 50.0);
+    laid.dispatch_secondary_up(50.0, 50.0);
+
+    assert_eq!(
+        secondary_taps.load(Ordering::SeqCst),
+        1,
+        "a secondary down+up fires on_secondary_tap exactly once",
+    );
+    assert_eq!(
+        primary_taps.load(Ordering::SeqCst),
+        0,
+        "a secondary tap must NOT fire on_tap",
+    );
+}
+
+#[test]
+fn primary_tap_does_not_fire_on_secondary_tap() {
+    let primary_taps = Arc::new(AtomicUsize::new(0));
+    let secondary_taps = Arc::new(AtomicUsize::new(0));
+    let (primary_cb, secondary_cb) = (Arc::clone(&primary_taps), Arc::clone(&secondary_taps));
+
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_tap(move || {
+                primary_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_secondary_tap(move || {
+                secondary_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(100.0, 100.0),
+    );
+
+    // A primary-button tap fires on_tap and must NOT fire on_secondary_tap.
+    laid.dispatch_pointer_down(50.0, 50.0);
+    laid.dispatch_pointer_up(50.0, 50.0);
+
+    assert_eq!(
+        primary_taps.load(Ordering::SeqCst),
+        1,
+        "a primary down+up fires on_tap exactly once",
+    );
+    assert_eq!(
+        secondary_taps.load(Ordering::SeqCst),
+        0,
+        "a primary tap must NOT fire on_secondary_tap",
+    );
+}

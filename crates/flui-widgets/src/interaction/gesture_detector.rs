@@ -29,6 +29,8 @@ type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
 /// Two gesture families are wired:
 /// - **tap** (`on_tap`) — a primary-button down + up without moving past the
 ///   touch slop.
+/// - **secondary tap** (`on_secondary_tap`) — a secondary-button (right-click)
+///   down + up without moving past the touch slop.
 /// - **pan/drag** (`on_pan_start` / `on_pan_update` / `on_pan_end`) — a contact
 ///   that moves past the drag slop, reported with running deltas and a release
 ///   velocity.
@@ -45,6 +47,7 @@ type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
 #[derive(Clone, Default, StatefulView)]
 pub struct GestureDetector {
     on_tap: Option<TapHandler>,
+    on_secondary_tap: Option<TapHandler>,
     on_pan_start: Option<PanStartHandler>,
     on_pan_update: Option<PanUpdateHandler>,
     on_pan_end: Option<PanEndHandler>,
@@ -55,6 +58,7 @@ impl std::fmt::Debug for GestureDetector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureDetector")
             .field("on_tap", &self.on_tap.is_some())
+            .field("on_secondary_tap", &self.on_secondary_tap.is_some())
             .field("on_pan_start", &self.on_pan_start.is_some())
             .field("on_pan_update", &self.on_pan_update.is_some())
             .field("on_pan_end", &self.on_pan_end.is_some())
@@ -73,6 +77,14 @@ impl GestureDetector {
     #[must_use]
     pub fn on_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_tap = Some(Arc::new(callback));
+        self
+    }
+
+    /// Called when the child receives a secondary-button tap (right-click down
+    /// + up without moving past the touch slop).
+    #[must_use]
+    pub fn on_secondary_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_secondary_tap = Some(Arc::new(callback));
         self
     }
 
@@ -139,6 +151,9 @@ pub struct GestureDetectorState {
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
     /// rather than a frozen capture, so a rebuild with a new closure is honored.
     tap_slot: Arc<Mutex<Option<TapHandler>>>,
+    /// The live `on_secondary_tap`, refreshed each `build` (same rationale as
+    /// `tap_slot`).
+    secondary_tap_slot: Arc<Mutex<Option<TapHandler>>>,
     /// The live pan callbacks, refreshed each `build` (same rationale).
     pan_slot: Arc<Mutex<PanCallbacks>>,
 }
@@ -157,16 +172,25 @@ impl StatefulView for GestureDetector {
         let arena = GestureArena::new();
 
         let tap_slot = Arc::new(Mutex::new(self.on_tap.clone()));
+        let secondary_tap_slot = Arc::new(Mutex::new(self.on_secondary_tap.clone()));
         let tap = {
-            let slot = Arc::clone(&tap_slot);
-            TapGestureRecognizer::new(arena.clone()).with_on_tap(move |_details| {
-                // Clone the live handler OUT before invoking it, so the slot lock
-                // is never held across user code (no re-entrancy / poison hazard).
-                let handler = slot.lock().ok().and_then(|guard| guard.clone());
-                if let Some(handler) = handler {
-                    handler();
-                }
-            })
+            let primary_slot = Arc::clone(&tap_slot);
+            let secondary_slot = Arc::clone(&secondary_tap_slot);
+            TapGestureRecognizer::new(arena.clone())
+                .with_on_tap(move |_details| {
+                    // Clone the live handler OUT before invoking it, so the slot lock
+                    // is never held across user code (no re-entrancy / poison hazard).
+                    let handler = primary_slot.lock().ok().and_then(|guard| guard.clone());
+                    if let Some(handler) = handler {
+                        handler();
+                    }
+                })
+                .with_on_secondary_tap(move |_details| {
+                    let handler = secondary_slot.lock().ok().and_then(|guard| guard.clone());
+                    if let Some(handler) = handler {
+                        handler();
+                    }
+                })
         };
 
         let pan_slot = Arc::new(Mutex::new(PanCallbacks {
@@ -207,6 +231,7 @@ impl StatefulView for GestureDetector {
             tap,
             drag,
             tap_slot,
+            secondary_tap_slot,
             pan_slot,
         }
     }
@@ -218,6 +243,9 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // closures is honored (the recognizers themselves persist).
         if let Ok(mut slot) = self.tap_slot.lock() {
             slot.clone_from(&view.on_tap);
+        }
+        if let Ok(mut slot) = self.secondary_tap_slot.lock() {
+            slot.clone_from(&view.on_secondary_tap);
         }
         if let Ok(mut slot) = self.pan_slot.lock() {
             slot.start.clone_from(&view.on_pan_start);
@@ -248,6 +276,12 @@ impl ViewState<GestureDetector> for GestureDetectorState {
                 // member. This is the role a global GestureBinding plays in
                 // production.
                 tap_down.add_pointer(pointer, position);
+                // Forward the real Down event so the recognizer refines the
+                // provisional TapButton::Primary set by add_pointer to the actual
+                // button (Primary / Secondary / Tertiary). Without this, a
+                // secondary-button down is recorded as Primary, and the
+                // button-mismatch guard in handle_tap_up cancels the gesture.
+                tap_down.handle_event(event);
                 drag_down.add_pointer(pointer, position);
                 arena.close(pointer);
             })

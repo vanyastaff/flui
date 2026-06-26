@@ -17,7 +17,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{tree::ElementTree, view::View};
 
-/// A clonable, owned handle that lets a listener callback — an animation tick
+/// A cloneable, owned handle that lets a listener callback — an animation tick
 /// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
 /// element for the next [`BuildOwner::build_scope`] drain and request a frame.
 ///
