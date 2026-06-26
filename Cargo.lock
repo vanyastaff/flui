@@ -1731,10 +1731,12 @@ dependencies = [
 name = "flui-widgets"
 version = "0.1.0"
 dependencies = [
+ "flui-animation",
  "flui-foundation",
  "flui-geometry",
  "flui-objects",
  "flui-rendering",
+ "flui-scheduler",
  "flui-types",
  "flui-view",
  "insta",
