@@ -1,0 +1,47 @@
+# FLUI completion backlog (autonomous 12h run, 2026-06-26)
+
+Living, dependency-ordered unit backlog for the 12-hour autonomous push. Each unit
+ships via: **design (read-only) → build (worktree-isolated) → adversarial review →
+curate-merge → commit, gates green**. Update `Status` as units land. Resume by
+picking the top `OPEN` unit. See memory `autonomous-12h-completion-goal`.
+
+Discipline: writers worktree-isolated ONLY; never blind-merge a branch (curate —
+remove footguns, fix conflicts); verify `.flutter/` for parity; no stubs/todo!;
+leapfrog where Flutter has no strong contract.
+
+## Wave A — gesture + animation completion (builds on flui-binding Phase 1)
+
+| # | Unit | Status | Notes |
+|---|------|--------|-------|
+| A1 | **GestureDetector gesture completion** — shared clock-bound arena acquisition + `on_long_press` + `on_double_tap` (drag/pan + tap + secondary already done). Cross-detector competition. | OPEN | recognizers already clock-deterministic; crux = ambient shared-arena design |
+| A2 | **Binding Phase 1b — tree integration** — `HeadlessBinding` owns/drives a tree; `pump_frame` adds `build_scope` + `run_frame` after deadline poll. | OPEN | harness already does build_scope+run_frame; connect into pump_frame |
+| A3 | **TickerProvider + implicit animations (Phase 3)** — view-layer vsync (`SingleTickerProviderStateMixin` analogue) + restart-aware controller driving; `AnimatedOpacity`, `AnimatedContainer`, `AnimatedAlign`, `AnimatedPadding`. | OPEN | flagship; needs A2; leapfrog: better default curves + deterministic test via binding |
+
+## Wave B — catalog completeness (mostly independent)
+
+| # | Unit | Status | Notes |
+|---|------|--------|-------|
+| B1 | **Image + ImageProvider** — decode/cache infra + `Image` widget over `RenderImage` (currently MVP). | OPEN | needs image-decode; check flui-assets |
+| B2 | **ClipPath + CustomClipper** — Path-based clipper trait + `ClipPath` widget over `RenderClip`. | OPEN | check Path infra in flui-geometry/painting |
+| B3 | **Wrap** — `RenderWrap` (run-based flow layout) + `Wrap` widget. | OPEN | new render object |
+| B4 | **IntrinsicWidth/IntrinsicHeight, OverflowBox, SizedOverflowBox, RotatedBox** widgets + render objects. | OPEN | several small layout render objects |
+
+## Wave C — scrolling / perf leapfrog
+
+| # | Unit | Status | Notes |
+|---|------|--------|-------|
+| C1 | **Lazy slivers** — `SliverChildBuilderDelegate` + a `SliverMultiBoxAdaptorElement` (build children on demand during layout). | OPEN | hardest scrolling element; perf leapfrog vs eager |
+| C2 | **Scroll physics + Scrollbar + RefreshIndicator**. | OPEN | |
+
+## Wave D — big competitive features
+
+| # | Unit | Status | Notes |
+|---|------|--------|-------|
+| D1 | **TextField / text input** — focus tree, IME, selection, cursor. | OPEN | large; check flui-interaction focus |
+| D2 | **Theme / MediaQuery / responsive** — inherited theming. | OPEN | |
+
+## Done this session (pre-run)
+- pan/drag + arena reject fix (`4fea0fbe`); Phase 0 clock + long-press (`4b8f3ff6`);
+  dyn-sanction (`82f4b36c`); double-tap clock (`7c141277`); port-check ~4-6x
+  (`3357caf4`); flui-binding Phase 1 (`9813e64c`); VERSION-test de-brittle (`23882bc3`).
+- (kimi) on_secondary_tap, changelogs, 0.2.0 bump.
