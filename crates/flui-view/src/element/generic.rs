@@ -56,7 +56,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
 use super::arity::ElementArity;
-use crate::{element::Lifecycle, view::View};
+use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
 
 /// Generic element core with arity-based child management.
 ///
@@ -144,6 +144,16 @@ where
     /// [`BuildOwner::build_scope`](crate::BuildOwner) drains.
     self_id: Option<ElementId>,
 
+    /// Handle for scheduling THIS element's rebuild from a listener callback
+    /// fired outside a frame (an animation tick). Captured at
+    /// [`mount`](Self::mount) from the
+    /// [`ElementOwner`](crate::ElementOwner); the mark-dirty callback
+    /// ([`create_mark_dirty_callback`](Self::create_mark_dirty_callback))
+    /// clones it so a `notify_listeners` enqueues `(self_id, depth)` onto the
+    /// inbox `BuildOwner::build_scope` drains. `None` before mount or for a
+    /// hand-rolled element that bypassed `ElementTree` insertion.
+    external_scheduler: Option<ExternalBuildScheduler>,
+
     /// Phantom data for generic parameter A.
     _phantom: PhantomData<A>,
 }
@@ -171,6 +181,7 @@ where
             pipeline_owner: None,
             parent_render_id: None,
             self_id: None,
+            external_scheduler: None,
             _phantom: PhantomData,
         }
     }
@@ -228,13 +239,18 @@ where
 
     /// Mount this element into the tree.
     ///
-    /// Sets lifecycle to Active and stores depth.
+    /// Sets lifecycle to Active and stores the sibling `slot`. NOTE: the stored
+    /// `depth` field is this slot index, NOT the element's tree depth
+    /// (`parent_depth + 1`, which lives on [`ElementNode`](crate::tree::ElementNode)).
+    /// It must therefore NOT be used as a dirty-heap ordering key — external
+    /// rebuild scheduling looks the real tree depth up from the node at drain
+    /// time instead (see `BuildOwner::build_scope`).
     /// Delegates child mounting to the storage implementation.
     ///
     /// # Arguments
     ///
     /// * `parent` - The parent ElementId (if any)
-    /// * `slot` - The slot/depth in the tree
+    /// * `slot` - The element's sibling slot index (NOT its tree depth)
     /// * `_owner` - Split-borrow handle into the BuildOwner. Currently
     ///   unused at this layer because `update_or_create_child` /
     ///   `update_or_create_children` (called during `perform_build`)
@@ -246,11 +262,18 @@ where
         &mut self,
         _parent: Option<ElementId>,
         slot: usize,
-        _owner: &mut crate::ElementOwner<'_>,
+        owner: &mut crate::ElementOwner<'_>,
     ) {
         self.lifecycle = Lifecycle::Active;
         self.depth = slot;
         self.dirty.store(true, Ordering::Relaxed);
+
+        // Capture the handle that lets an out-of-frame listener tick schedule
+        // THIS element's rebuild (see `create_mark_dirty_callback`). Stamped
+        // here — after `set_self_id` ran at slab insertion — so the callback
+        // built in a behavior's `on_mount` (e.g. `AnimatedBehavior`) already
+        // sees it.
+        self.external_scheduler = Some(owner.external_scheduler());
 
         // Children will be mounted during perform_build
         tracing::debug!(
@@ -484,14 +507,22 @@ where
         self.dirty.store(false, Ordering::Relaxed);
     }
 
-    /// Create a callback that can mark this element dirty.
+    /// Create a callback that marks this element dirty AND schedules its
+    /// rebuild.
     ///
-    /// This is useful for AnimatedBehavior and other behaviors that need to
-    /// trigger rebuilds from listener callbacks without mutable access.
+    /// Used by `AnimatedBehavior` (and any behavior driving rebuilds from a
+    /// `Listenable`): the returned callback is registered with the listenable,
+    /// so a `notify_listeners` fired between frames — an animation tick — both
+    /// flips the dirty flag and enqueues `(self_id, depth)` onto the inbox that
+    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains, then requests a
+    /// frame. Without the schedule half the flag would flip but the element
+    /// would never be on the heap `build_scope` processes, so its
+    /// `ViewState::build` would never re-run.
     ///
-    /// # Returns
-    ///
-    /// A shareable callback that marks this element dirty when called.
+    /// The [`ExternalBuildScheduler`] + `self_id` are captured by value, so the
+    /// callback is `'static` and needs no access to the owner when it fires. A
+    /// callback created before mount (no scheduler / `self_id` yet) degrades to
+    /// the flag-only behavior.
     ///
     /// # Example
     ///
@@ -501,8 +532,13 @@ where
     /// ```
     pub fn create_mark_dirty_callback(&self) -> ListenerCallback {
         let dirty = Arc::clone(&self.dirty);
+        let scheduler = self.external_scheduler.clone();
+        let self_id = self.self_id;
         Arc::new(move || {
             dirty.store(true, Ordering::Relaxed);
+            if let (Some(scheduler), Some(id)) = (&scheduler, self_id) {
+                scheduler.schedule(id);
+            }
         })
     }
 
