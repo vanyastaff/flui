@@ -4,8 +4,9 @@
 //! call site below is the thing an app author actually writes).
 //!
 //! ```text
-//! Container → Column → { Text, Row of ColoredBox swatches, a centered card }
-//!   → Element tree → render objects → layout → paint → LayerTree → wgpu
+//! Container → Column → { Text, a Row of circular avatars, a faded Row,
+//!   a centered card } → Element tree → render objects → layout → paint
+//!   → LayerTree → wgpu
 //! ```
 //!
 //! Run with: cargo run --example widgets_gallery
@@ -22,8 +23,18 @@ fn swatch(color: Color) -> ColoredBox {
     ColoredBox::new(color).child(SizedBox::square(64.0))
 }
 
-/// The gallery root: a dark padded surface with a title, a row of swatches, and
-/// a centred "card".
+/// A circular colour avatar: a coloured box clipped to an inscribed oval.
+fn avatar(color: Color) -> ClipOval {
+    ClipOval::new().child(swatch(color))
+}
+
+/// A half-faded circular avatar, showing the `Opacity` paint effect.
+fn faded_avatar(color: Color) -> Opacity {
+    Opacity::new(0.4).child(avatar(color))
+}
+
+/// The gallery root: a dark padded surface with a title, a row of circular
+/// avatars, a faded row, and a centred "card".
 #[derive(Clone, StatelessView)]
 struct Gallery;
 
@@ -37,11 +48,19 @@ impl StatelessView for Gallery {
                 Text::new("FLUI widget gallery"),
                 SizedBox::height(16.0),
                 Row::new(row![
-                    swatch(Color::rgb(229, 57, 53)),
+                    avatar(Color::rgb(229, 57, 53)),
                     SizedBox::width(12.0),
-                    swatch(Color::rgb(30, 136, 229)),
+                    avatar(Color::rgb(30, 136, 229)),
                     SizedBox::width(12.0),
-                    swatch(Color::rgb(67, 160, 71)),
+                    avatar(Color::rgb(67, 160, 71)),
+                ]),
+                SizedBox::height(12.0),
+                Row::new(row![
+                    faded_avatar(Color::rgb(229, 57, 53)),
+                    SizedBox::width(12.0),
+                    faded_avatar(Color::rgb(30, 136, 229)),
+                    SizedBox::width(12.0),
+                    faded_avatar(Color::rgb(67, 160, 71)),
                 ]),
                 SizedBox::height(24.0),
                 Container::new()
