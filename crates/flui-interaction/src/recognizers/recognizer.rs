@@ -109,6 +109,15 @@ impl RecognizerBase {
         &self.arena
     }
 
+    /// The current instant on the arena's clock — the time a deadline-driven
+    /// recognizer compares its captured down-time against. Reads the OS clock in
+    /// production; a headless frame driver's virtual clock in tests, so a
+    /// deadline elapses deterministically without a wall-clock sleep.
+    #[inline]
+    pub fn now(&self) -> std::time::Instant {
+        self.arena.now()
+    }
+
     /// Get the primary pointer ID (if tracking one)
     #[inline]
     pub fn primary_pointer(&self) -> Option<PointerId> {

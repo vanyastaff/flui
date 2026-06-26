@@ -268,7 +268,7 @@ impl LongPressGestureRecognizer {
     fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
         state.phase = LongPressPhase::Possible;
-        state.down_time = Some(Instant::now());
+        state.down_time = Some(self.state.now());
         state.current_position = Some(position);
         state.device_kind = Some(kind);
         drop(state); // Release lock before callback
@@ -420,7 +420,7 @@ impl LongPressGestureRecognizer {
             let Some(down_time) = state.down_time else {
                 return false;
             };
-            if Instant::now().duration_since(down_time) < self.long_press_duration() {
+            if self.state.now().duration_since(down_time) < self.long_press_duration() {
                 return false;
             }
             state.phase = LongPressPhase::Started;

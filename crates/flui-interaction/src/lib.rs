@@ -149,6 +149,7 @@ pub mod routing;
 // ============================================================================
 
 pub mod arena;
+pub mod clock;
 pub mod recognizers;
 pub mod timer;
 
@@ -195,6 +196,7 @@ pub use arena::{
 // Re-exports: Other
 // ============================================================================
 pub use binding::GestureBinding;
+pub use clock::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
 // Re-exports: Events (W3C-compliant types)
 // ============================================================================

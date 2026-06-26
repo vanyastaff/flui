@@ -60,6 +60,7 @@ use parking_lot::Mutex;
 use smallvec::SmallVec;
 use tracing::instrument;
 
+use crate::clock::{MonotonicClock, SystemClock};
 use crate::ids::PointerId;
 
 /// Default timeout for gesture disambiguation (100ms).
@@ -586,14 +587,30 @@ impl ArenaEntryData {
 pub struct GestureArena {
     /// Map from pointer ID to arena entry (lock-free concurrent HashMap).
     entries: Arc<DashMap<PointerId, Mutex<ArenaEntryData>>>,
+    /// The time source deadline-driven recognizers read `now()` from. Defaults
+    /// to the OS clock; a headless frame driver injects a `ManualClock` so a
+    /// deadline (e.g. long-press) elapses deterministically without sleeping.
+    clock: Arc<dyn MonotonicClock>, // PORT-CHECK-OK-DYN: arena clock abstraction; two impls (System/Manual) and headless determinism require trait object.
 }
 
 impl GestureArena {
-    /// Create a new gesture arena.
+    /// Create a new gesture arena driven by the real OS clock.
     #[inline]
     pub fn new() -> Self {
+        Self::with_clock(Arc::new(SystemClock))
+    }
+
+    /// Create a gesture arena with an explicit time source.
+    ///
+    /// Production uses [`new`](Self::new) (the OS clock); a headless frame driver
+    /// passes a [`ManualClock`](crate::clock::ManualClock) it advances per frame
+    /// so deadline-driven recognizers resolve deterministically with no sleep.
+    #[inline]
+    // PORT-CHECK-OK-DYN: arena clock abstraction; two impls (System/Manual) and headless determinism require trait object.
+    pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
+            clock,
         }
     }
 
@@ -602,7 +619,15 @@ impl GestureArena {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             entries: Arc::new(DashMap::with_capacity(capacity)),
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    /// The current instant on this arena's clock — the time a deadline-driven
+    /// recognizer compares its captured down-time against.
+    #[inline]
+    pub fn now(&self) -> Instant {
+        self.clock.now()
     }
 
     /// Add a member to the arena for a specific pointer.
