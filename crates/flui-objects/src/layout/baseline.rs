@@ -79,17 +79,18 @@ impl RenderBox for RenderBaseline {
         self.has_child = true;
         let child_size = ctx.layout_child(0, constraints);
 
-        let size = if let Some(distance) = ctx.child_distance_to_actual_baseline(0, self.baseline) {
-            self.child_offset =
-                Offset::new(Pixels::ZERO, self.baseline_offset - Pixels::new(distance));
-            Size::new(
-                child_size.width,
-                child_size.height - Pixels::new(distance) + self.baseline_offset,
-            )
-        } else {
-            self.child_offset = Offset::ZERO;
-            child_size
-        };
+        // Flutter parity (`RenderBaseline.performLayout`): the effective baseline
+        // is the child's real baseline distance, or — when the child reports none
+        // (e.g. a plain box) — the child's full height (`childBaseline ??
+        // child.size.height`). The child is shifted down so that baseline sits
+        // `baseline_offset` below the top; the box's height becomes `top +
+        // child.height` (= `baseline_offset` plus any descent below the baseline).
+        let baseline_distance = ctx
+            .child_distance_to_actual_baseline(0, self.baseline)
+            .map_or(child_size.height, Pixels::new);
+        let top = self.baseline_offset - baseline_distance;
+        self.child_offset = Offset::new(Pixels::ZERO, top);
+        let size = Size::new(child_size.width, top + child_size.height);
 
         ctx.position_child(0, self.child_offset);
         constraints.constrain(size)

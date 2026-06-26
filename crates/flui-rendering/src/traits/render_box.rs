@@ -442,14 +442,11 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 }
 
 /// Text baseline types for baseline alignment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextBaseline {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// The alphabetic baseline.
-    Alphabetic,
-    /// The ideographic baseline.
-    Ideographic,
-}
+///
+/// Re-exported from [`flui_types`] — the single canonical definition for the
+/// workspace. The former parallel enum here was consolidated into `flui-types`
+/// (its lower, owning layer) in 2026-06.
+pub use flui_types::layout::TextBaseline;
 
 // ============================================================================
 // Blanket Implementation of RenderObject<BoxProtocol> for RenderBox

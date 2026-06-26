@@ -480,8 +480,10 @@ fn harness_aspect_ratio_enforces_ratio() {
     // Loose constraints let `_apply_aspect_ratio` honour the ratio; tight
     // constraints return `constraints.smallest()` unchanged (Flutter parity).
     let run = RenderTester::mount(
-        box_node(RenderAspectRatio::new(AspectRatioFactor::new_unchecked(2.0)))
-            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+        box_node(RenderAspectRatio::new(AspectRatioFactor::new_unchecked(
+            2.0,
+        )))
+        .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
     )
     .with_constraints(loose(200.0))
     .run_layout();
@@ -497,8 +499,10 @@ fn harness_aspect_ratio_enforces_ratio() {
 #[test]
 fn harness_aspect_ratio_tight_constraints_use_smallest_size() {
     let run = RenderTester::mount(
-        box_node(RenderAspectRatio::new(AspectRatioFactor::new_unchecked(2.0)))
-            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+        box_node(RenderAspectRatio::new(AspectRatioFactor::new_unchecked(
+            2.0,
+        )))
+        .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
     )
     .with_size(Size::new(px(200.0), px(200.0)))
     .run_layout();

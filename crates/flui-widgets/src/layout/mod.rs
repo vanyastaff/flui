@@ -4,6 +4,7 @@
 
 mod align;
 mod aspect_ratio;
+mod baseline;
 mod center;
 mod constrained_box;
 mod fitted_box;
@@ -16,6 +17,7 @@ mod transform;
 
 pub use align::Align;
 pub use aspect_ratio::AspectRatio;
+pub use baseline::Baseline;
 pub use center::Center;
 pub use constrained_box::ConstrainedBox;
 pub use fitted_box::FittedBox;

@@ -94,7 +94,7 @@ pub use container::Container;
 pub use flex::{Column, Flex, Row};
 pub use interaction::{AbsorbPointer, IgnorePointer, Offstage};
 pub use layout::{
-    Align, AspectRatio, Center, ConstrainedBox, FittedBox, FractionalTranslation,
+    Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
     FractionallySizedBox, LimitedBox, Padding, SizedBox, Transform,
 };
 pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
@@ -127,8 +127,8 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        AbsorbPointer, Align, AspectRatio, Center, ClipOval, ClipRect, ColoredBox, Column,
-        ConstrainedBox, Container, DecoratedBox, FittedBox, Flex, FractionalTranslation,
+        AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRect, ColoredBox,
+        Column, ConstrainedBox, Container, DecoratedBox, FittedBox, Flex, FractionalTranslation,
         FractionallySizedBox, IgnorePointer, LimitedBox, Offstage, Opacity, Padding,
         RepaintBoundary, Row, SizedBox, Stack, Text, Transform,
     };
@@ -139,5 +139,6 @@ pub mod prelude {
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_types::layout::BoxFit;
     pub use flui_types::painting::Clip;
+    pub use flui_types::typography::TextBaseline;
     pub use flui_types::{Alignment, Color};
 }

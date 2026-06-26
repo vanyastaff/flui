@@ -1,9 +1,10 @@
 //! Baseline types for text alignment
 
-#[derive(Default, Clone, Debug, PartialEq)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextBaseline {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    /// The alphabetic baseline — the canonical, single definition for the
+    /// whole workspace (`flui-rendering` re-exports this; consolidated 2026-06).
     #[default]
     Alphabetic,
 
