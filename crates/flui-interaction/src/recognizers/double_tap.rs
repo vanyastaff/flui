@@ -197,7 +197,7 @@ impl DoubleTapGestureRecognizer {
                 let settings = self.settings.lock().clone();
 
                 if let Some(first_time) = state.first_tap_time {
-                    let elapsed = Instant::now().duration_since(first_time);
+                    let elapsed = self.state.now().duration_since(first_time);
 
                     if elapsed > settings.double_tap_timeout() {
                         // Too slow - start over as first tap
@@ -259,7 +259,7 @@ impl DoubleTapGestureRecognizer {
             DoubleTapPhase::FirstDown => {
                 // First tap completed
                 state.phase = DoubleTapPhase::WaitingForSecond;
-                state.first_tap_time = Some(Instant::now());
+                state.first_tap_time = Some(self.state.now());
                 state.first_tap_position = Some(position);
             }
             DoubleTapPhase::SecondDown => {
@@ -334,7 +334,7 @@ impl DoubleTapGestureRecognizer {
         if state.phase == DoubleTapPhase::WaitingForSecond
             && let Some(first_time) = state.first_tap_time
         {
-            let elapsed = Instant::now().duration_since(first_time);
+            let elapsed = self.state.now().duration_since(first_time);
             if elapsed > self.double_tap_timeout() {
                 // Timeout - reset to ready and cancel. Flutter parity:
                 // `DoubleTapGestureRecognizer` fires `onDoubleTapCancel` and
@@ -613,5 +613,31 @@ mod tests {
         // Should have reset to ready
         let state = recognizer.gesture_state.lock();
         assert_eq!(state.phase, DoubleTapPhase::Ready);
+    }
+
+    #[test]
+    fn double_tap_timeout_is_deterministic_via_virtual_clock() {
+        // Same as `test_double_tap_timeout` but with NO wall-clock sleep: a
+        // `ManualClock` drives the arena's `now()`, so the inter-tap window
+        // expires on virtual time the moment the driver advances past it.
+        let clock = crate::clock::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let recognizer = DoubleTapGestureRecognizer::new(arena);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(px(100.0), px(100.0));
+
+        // First tap completes → records `first_tap_time` from the virtual clock.
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+
+        // Advance virtual time past the 300ms double-tap window — no sleep.
+        clock.advance(Duration::from_millis(350));
+
+        assert!(
+            recognizer.check_timeout(),
+            "the inter-tap window expired on the virtual clock",
+        );
+        assert_eq!(recognizer.gesture_state.lock().phase, DoubleTapPhase::Ready,);
     }
 }
