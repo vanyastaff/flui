@@ -23,6 +23,8 @@ flui-rendering = { path = "../flui-rendering" }
 flui-animation = { path = "../flui-animation" }
 # `Listenable` — the subscription `AnimatedView`/`FadeTransition` returns.
 flui-foundation = { path = "../flui-foundation" }
+# Gesture recognizers + arena that `GestureDetector` drives.
+flui-interaction = { path = "../flui-interaction" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
 # TextStyle, …).
 flui-types = { path = "../flui-types" }

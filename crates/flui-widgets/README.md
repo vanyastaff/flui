@@ -38,7 +38,7 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 | **Clip** | `ClipRect` · `ClipRRect` · `ClipOval` |
 | **Scroll / Sliver** | `SingleChildScrollView` · `ListView` · `Viewport` · `SliverToBoxAdapter` · `SliverFixedExtentList` · `SliverPadding` · `SliverOpacity` |
 | **Transitions** | `FadeTransition` · `ScaleTransition` · `RotationTransition` |
-| **Interaction** | `Listener` · `IgnorePointer` · `AbsorbPointer` · `Offstage` |
+| **Interaction** | `GestureDetector` · `Listener` · `IgnorePointer` · `AbsorbPointer` · `Offstage` |
 | **Composition** | `Container` |
 | **Text** | `Text` |
 
@@ -73,11 +73,11 @@ This is the [Core.1 vertical slice](../../docs/ROADMAP.md) — it proves the who
 including parent-data layout (`Flexible`/`Expanded`/`Positioned`), scrolling
 (`ListView`/`SingleChildScrollView` over slivers), and animation
 (`FadeTransition` driven by an `Animation` through the build-scheduling spine).
-Pointer routing landed too: `Listener` advertises a handler that the hit-test
-pipeline attaches to its entry, so a `PointerEvent` reaches the matching
-callback. Its `HitTestBehavior` follows Flutter — `DeferToChild` (the default,
-fires only on a hit descendant) and `Opaque` (any pointer within bounds). Not
-yet shipped (tracked): `ClipPath`, `Image`, implicit animations
+Interaction landed too: `Listener` (raw pointer routing — its handler rides on
+the hit-test entry, with Flutter's `HitTestBehavior`: `DeferToChild` default /
+`Opaque`) and `GestureDetector` (`on_tap` over a real `TapGestureRecognizer` +
+per-detector arena, with slop-cancel and pointer-cancel handling). Not yet
+shipped (tracked): `ClipPath`, `Image`, implicit animations
 (`AnimatedContainer` & friends), and higher-level gesture recognizers
 (`GestureDetector` tap/drag). See
 [`AGENTS.md`](AGENTS.md) for the authoring pattern and

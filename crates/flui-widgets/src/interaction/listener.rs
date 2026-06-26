@@ -27,6 +27,7 @@ pub struct Listener {
     on_pointer_down: Option<PointerCallback>,
     on_pointer_up: Option<PointerCallback>,
     on_pointer_move: Option<PointerCallback>,
+    on_pointer_cancel: Option<PointerCallback>,
     behavior: HitTestBehavior,
     child: Child,
 }
@@ -37,6 +38,7 @@ impl Default for Listener {
             on_pointer_down: None,
             on_pointer_up: None,
             on_pointer_move: None,
+            on_pointer_cancel: None,
             // Flutter's `Listener` default.
             behavior: HitTestBehavior::DeferToChild,
             child: Child::empty(),
@@ -50,6 +52,7 @@ impl std::fmt::Debug for Listener {
             .field("on_pointer_down", &self.on_pointer_down.is_some())
             .field("on_pointer_up", &self.on_pointer_up.is_some())
             .field("on_pointer_move", &self.on_pointer_move.is_some())
+            .field("on_pointer_cancel", &self.on_pointer_cancel.is_some())
             .field("behavior", &self.behavior)
             .finish_non_exhaustive()
     }
@@ -100,6 +103,17 @@ impl Listener {
         self
     }
 
+    /// Called when contact is interrupted (the platform cancels the pointer, or
+    /// it leaves the surface) — a gesture must abandon any in-flight tracking.
+    #[must_use]
+    pub fn on_pointer_cancel(
+        mut self,
+        callback: impl Fn(&PointerEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_pointer_cancel = Some(Arc::new(callback));
+        self
+    }
+
     /// Set the child whose pointer events are observed.
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
@@ -114,6 +128,7 @@ impl Listener {
         let on_down = self.on_pointer_down.clone();
         let on_up = self.on_pointer_up.clone();
         let on_move = self.on_pointer_move.clone();
+        let on_cancel = self.on_pointer_cancel.clone();
         Arc::new(move |event: &PointerEvent| {
             match event {
                 PointerEvent::Down(_) => {
@@ -128,6 +143,11 @@ impl Listener {
                 }
                 PointerEvent::Move(_) => {
                     if let Some(callback) = &on_move {
+                        callback(event);
+                    }
+                }
+                PointerEvent::Cancel(_) => {
+                    if let Some(callback) = &on_cancel {
                         callback(event);
                     }
                 }

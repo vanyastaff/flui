@@ -255,6 +255,36 @@ impl LaidOut {
         );
         result.dispatch(&event);
     }
+
+    /// A pointer-move to `(x, y)` — to drive slop / drag handling.
+    pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let position = Offset::new(px(x), px(y));
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        let event = flui_interaction::events::make_move_event(
+            position,
+            flui_interaction::events::PointerType::Mouse,
+        );
+        result.dispatch(&event);
+    }
+
+    /// A pointer-cancel routed to the entries hit at `(x, y)` — the headless
+    /// analogue of the platform interrupting the contact that started there.
+    pub fn dispatch_pointer_cancel(&self, x: f32, y: f32) {
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let position = Offset::new(px(x), px(y));
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        let event = flui_interaction::events::make_cancel_event(
+            flui_interaction::events::PointerType::Mouse,
+        );
+        result.dispatch(&event);
+    }
 }
 
 /// Convenience: a `Size` in logical pixels.

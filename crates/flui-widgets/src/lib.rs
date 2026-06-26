@@ -94,7 +94,9 @@ pub mod transitions;
 pub use clip::{ClipOval, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
-pub use interaction::{AbsorbPointer, IgnorePointer, Listener, Offstage};
+pub use interaction::{
+    AbsorbPointer, GestureDetector, GestureDetectorState, IgnorePointer, Listener, Offstage,
+};
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
     FractionallySizedBox, LimitedBox, Padding, SizedBox, Transform,
