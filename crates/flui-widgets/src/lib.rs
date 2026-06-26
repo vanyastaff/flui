@@ -90,7 +90,7 @@ pub mod text;
 // single-import surface.
 // ============================================================================
 
-pub use clip::{ClipOval, ClipRect};
+pub use clip::{ClipOval, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
 pub use interaction::{AbsorbPointer, IgnorePointer, Offstage};
@@ -134,12 +134,12 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRect, ColoredBox,
-        Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox, Flex, FlexFit,
-        Flexible, FractionalTranslation, FractionallySizedBox, IgnorePointer, LimitedBox, ListView,
-        Offstage, Opacity, Padding, Positioned, RepaintBoundary, Row, SingleChildScrollView,
-        SizedBox, SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack,
-        Text, Transform, Viewport,
+        AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRRect, ClipRect,
+        ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox, Flex,
+        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, IgnorePointer, LimitedBox,
+        ListView, Offstage, Opacity, Padding, Positioned, RepaintBoundary, Row,
+        SingleChildScrollView, SizedBox, SliverFixedExtentList, SliverOpacity, SliverPadding,
+        SliverToBoxAdapter, Stack, Text, Transform, Viewport,
     };
 
     // Common configuration value types, so an app author needs only this import.
