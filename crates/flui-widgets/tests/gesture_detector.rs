@@ -125,3 +125,101 @@ fn gesture_detector_cancel_aborts_the_tap_without_wedging_the_detector() {
         "a tap after a cancel still fires (the cancel swept the arena entry)",
     );
 }
+
+#[test]
+fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let starts = Arc::new(AtomicUsize::new(0));
+    let updates = Arc::new(AtomicUsize::new(0));
+    let ends = Arc::new(AtomicUsize::new(0));
+    let (tap_cb, start_cb, update_cb, end_cb) = (
+        Arc::clone(&taps),
+        Arc::clone(&starts),
+        Arc::clone(&updates),
+        Arc::clone(&ends),
+    );
+
+    // The detector wants BOTH a tap and a pan; the arena must hand a real drag
+    // to the pan recognizer and cancel the tap.
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_tap(move || {
+                tap_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_pan_start(move |_details| {
+                start_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_pan_update(move |_details| {
+                update_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_pan_end(move |_details| {
+                end_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(100.0, 100.0),
+    );
+
+    // Down, then a move well past the pan slop (60px > 18px) that crosses into a
+    // drag, a second move, then up. Every position stays inside the 100×100
+    // child so the headless harness (which re-hit-tests each event — no pointer
+    // capture) keeps routing to the detector.
+    laid.dispatch_pointer_down(50.0, 20.0);
+    laid.dispatch_pointer_move(50.0, 80.0);
+    laid.dispatch_pointer_move(50.0, 90.0);
+    laid.dispatch_pointer_up(50.0, 90.0);
+
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        1,
+        "the drag started exactly once"
+    );
+    assert!(
+        updates.load(Ordering::SeqCst) >= 1,
+        "the drag reported at least one update as the pointer moved",
+    );
+    assert_eq!(
+        ends.load(Ordering::SeqCst),
+        1,
+        "the drag ended exactly once on up"
+    );
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "a drag past the slop cancels the competing tap — they are mutually exclusive",
+    );
+}
+
+#[test]
+fn gesture_detector_quick_tap_beats_the_pan_recognizer() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let starts = Arc::new(AtomicUsize::new(0));
+    let (tap_cb, start_cb) = (Arc::clone(&taps), Arc::clone(&starts));
+
+    // Same dual-gesture detector, but a quick down→up with no movement: the tap
+    // is the arena's front member and wins; the pan never starts.
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_tap(move || {
+                tap_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_pan_start(move |_details| {
+                start_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(100.0, 100.0),
+    );
+
+    laid.dispatch_pointer_down(50.0, 50.0);
+    laid.dispatch_pointer_up(50.0, 50.0);
+
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "a quick down+up fires the tap"
+    );
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        0,
+        "no movement means the pan never starts",
+    );
+}

@@ -128,6 +128,8 @@ pub use flui_rendering::parent_data::FlexFit;
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
 // `PointerEvent`/`EventPropagation` its callbacks receive/return.
 pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
+// Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
+pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 
 // ============================================================================
 // Prelude
@@ -146,14 +148,15 @@ pub mod prelude {
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRRect, ClipRect,
         ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox, Flex,
-        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, IgnorePointer, LimitedBox,
-        ListView, Offstage, Opacity, Padding, Positioned, RepaintBoundary, Row,
-        SingleChildScrollView, SizedBox, SliverFixedExtentList, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Stack, Text, Transform, Viewport,
+        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureDetector,
+        IgnorePointer, LimitedBox, ListView, Listener, Offstage, Opacity, Padding, Positioned,
+        RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport,
     };
 
     // Common configuration value types, so an app author needs only this import.
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
+    pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};

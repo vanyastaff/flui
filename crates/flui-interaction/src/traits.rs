@@ -177,7 +177,6 @@ pub trait GestureRecognizerExt {
 /// Drag axis constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DragAxis {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Vertical drag only (up/down).
     Vertical,
     /// Horizontal drag only (left/right).

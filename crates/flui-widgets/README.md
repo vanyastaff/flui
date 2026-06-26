@@ -75,11 +75,13 @@ including parent-data layout (`Flexible`/`Expanded`/`Positioned`), scrolling
 (`FadeTransition` driven by an `Animation` through the build-scheduling spine).
 Interaction landed too: `Listener` (raw pointer routing — its handler rides on
 the hit-test entry, with Flutter's `HitTestBehavior`: `DeferToChild` default /
-`Opaque`) and `GestureDetector` (`on_tap` over a real `TapGestureRecognizer` +
-per-detector arena, with slop-cancel and pointer-cancel handling). Not yet
+`Opaque`) and `GestureDetector` (`on_tap` plus `on_pan_start`/`on_pan_update`/
+`on_pan_end`, where a real `TapGestureRecognizer` and `DragGestureRecognizer`
+compete in a per-detector arena — a quick tap wins the front of the arena, a
+move past the slop hands the gesture to the drag and cancels the tap). Not yet
 shipped (tracked): `ClipPath`, `Image`, implicit animations
-(`AnimatedContainer` & friends), and higher-level gesture recognizers
-(`GestureDetector` tap/drag). See
+(`AnimatedContainer` & friends), and the remaining recognizers
+(double-tap / long-press). See
 [`AGENTS.md`](AGENTS.md) for the authoring pattern and
 [`docs/adr/ADR-0009`](../../docs/adr/ADR-0009-flui-widgets-authoring-catalog.md)
 for the design rationale.

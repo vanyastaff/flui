@@ -268,10 +268,27 @@ impl RecognizerBase {
         )
     )]
     pub fn reject(&self) {
-        if let Some(pointer) = self.primary_pointer() {
-            self.arena.resolve(pointer, None);
-            self.stop_tracking();
+        let Some(pointer) = self.primary_pointer() else {
+            return;
+        };
+        // Withdraw ONLY this recognizer from the arena, using the stable member
+        // identity captured in `start_tracking`. Resolving the whole entry with
+        // no winner (the previous behavior) rejected every *competing* member
+        // too, so a recognizer that bowed out of a shared arena (e.g. a tap
+        // exceeding its slop) silently killed the drag it was competing with.
+        let member = self.tracked_member.lock().as_ref().and_then(Weak::upgrade);
+        if let Some(member) = member {
+            self.arena.reject_member(pointer, &member);
         }
+        // Clear ONLY this recognizer's local tracking — do NOT `stop_tracking`
+        // (it would `sweep`, force-resolving any still-open competition in
+        // first-member-wins fashion mid-gesture). Tear the shared entry down
+        // only once it has actually settled (a winner emerged, or no members
+        // remain); a competition that still has rivals must keep running until
+        // one accepts or the pointer lifts.
+        self.set_primary_pointer(None);
+        self.set_initial_position(None);
+        self.arena.remove_if_settled(pointer);
     }
 }
 

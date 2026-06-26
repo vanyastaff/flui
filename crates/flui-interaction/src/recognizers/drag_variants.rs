@@ -34,10 +34,9 @@
 use std::sync::Arc;
 
 use crate::arena::GestureArena;
+use crate::traits::DragAxis;
 
-use super::drag::{
-    DragAxis, DragEndCallback, DragGestureRecognizer, DragStartCallback, DragUpdateCallback,
-};
+use super::drag::{DragEndCallback, DragGestureRecognizer, DragStartCallback, DragUpdateCallback};
 
 /// A drag recogniser constrained to the vertical axis.
 ///

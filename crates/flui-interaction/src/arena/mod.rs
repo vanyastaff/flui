@@ -848,6 +848,43 @@ impl GestureArena {
         Self::dispatch_pending(pending, pointer);
     }
 
+    /// Withdraw a single member from the arena, leaving the others to keep
+    /// competing.
+    ///
+    /// Unlike [`resolve`](Self::resolve) with no winner — which resolves the
+    /// whole entry and rejects *every* member — this removes only `member`.
+    /// When exactly one member remains in a closed arena, that member wins
+    /// (Flutter parity: `GestureArenaEntry.resolve(rejected)` withdraws the
+    /// caller without rejecting its competitors).
+    pub fn reject_member(&self, pointer: PointerId, member: &Arc<dyn GestureArenaMember>) {
+        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
+            entry_ref.lock().reject(member)
+        } else {
+            return;
+        };
+        Self::dispatch_pending(pending, pointer);
+    }
+
+    /// Remove the entry for `pointer` only if it has **settled** — a winner has
+    /// been resolved, or no members remain.
+    ///
+    /// Unlike [`sweep`](Self::sweep), this never force-resolves a still-open
+    /// competition (first-member-wins): an entry that still has rivals is left
+    /// untouched. It is the teardown a withdrawing member uses (after
+    /// [`reject_member`](Self::reject_member)) to clean up the shared entry
+    /// without disturbing the members still competing for the pointer.
+    pub fn remove_if_settled(&self, pointer: PointerId) {
+        let settled = if let Some(entry_ref) = self.entries.get(&pointer) {
+            let entry = entry_ref.lock();
+            entry.is_resolved || entry.members.is_empty()
+        } else {
+            return;
+        };
+        if settled {
+            self.entries.remove(&pointer);
+        }
+    }
+
     /// Resolve the arena with multiple winners.
     ///
     /// All specified winners receive `accept_gesture()`.
@@ -1532,6 +1569,80 @@ mod tests {
         assert!(member1.was_accepted());
         assert!(member2.was_rejected());
         assert!(member3.was_rejected());
+    }
+
+    #[test]
+    fn test_reject_member_leaves_a_competitor_to_win() {
+        // Two members compete in a closed arena; one withdraws via
+        // `reject_member`. Withdrawal must reject ONLY the bowing-out member —
+        // the sole survivor then wins. Regression guard: a self-reject used to
+        // resolve the whole entry with no winner, rejecting every competitor
+        // (so e.g. a tap exceeding its slop silently killed the drag it raced).
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+
+        let bowing_out = Arc::new(MockMember::new());
+        let survivor = Arc::new(MockMember::new());
+        arena.add(pointer, bowing_out.clone());
+        arena.add(pointer, survivor.clone());
+        arena.close(pointer); // 2 members, no winner — stays open to compete
+
+        let withdrawing: Arc<dyn GestureArenaMember> = bowing_out.clone();
+        arena.reject_member(pointer, &withdrawing);
+
+        assert!(
+            bowing_out.was_rejected(),
+            "the withdrawing member is rejected"
+        );
+        assert!(
+            survivor.was_accepted(),
+            "the sole remaining member wins — withdrawal must not reject competitors",
+        );
+        assert!(!survivor.was_rejected(), "the survivor is not rejected");
+    }
+
+    #[test]
+    fn test_reject_member_keeps_a_three_way_competition_open() {
+        // With THREE members competing, one withdrawing must leave the other two
+        // STILL competing — never force-resolve to the front member. Guards the
+        // withdrawing-member teardown: `remove_if_settled` must NOT tear down an
+        // unresolved entry that still has rivals (the latent bug a recogniser's
+        // `stop_tracking()`→`sweep()` would have caused for 3+ members).
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+
+        let bowing_out = Arc::new(MockMember::new());
+        let rival_a = Arc::new(MockMember::new());
+        let rival_b = Arc::new(MockMember::new());
+        arena.add(pointer, bowing_out.clone());
+        arena.add(pointer, rival_a.clone());
+        arena.add(pointer, rival_b.clone());
+        arena.close(pointer); // 3 members, unresolved
+
+        let withdrawing: Arc<dyn GestureArenaMember> = bowing_out.clone();
+        arena.reject_member(pointer, &withdrawing);
+        arena.remove_if_settled(pointer); // the teardown a withdrawing member runs
+
+        assert!(
+            bowing_out.was_rejected(),
+            "the withdrawing member is rejected"
+        );
+        assert!(
+            !rival_a.was_accepted() && !rival_a.was_rejected(),
+            "rival A keeps competing — not resolved either way",
+        );
+        assert!(
+            !rival_b.was_accepted() && !rival_b.was_rejected(),
+            "rival B keeps competing — not resolved either way",
+        );
+        assert!(
+            !arena.is_resolved(pointer),
+            "the entry is not force-resolved"
+        );
+        assert!(
+            !arena.is_empty(),
+            "the entry survives — two rivals are still in it"
+        );
     }
 
     #[test]
