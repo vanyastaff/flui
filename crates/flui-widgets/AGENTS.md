@@ -6,14 +6,15 @@
 ## What this crate is
 
 `flui-widgets` is the declarative surface over the render machine. Every widget
-is a **small immutable configuration object** in one of three shapes:
+is a **small immutable configuration object** in one of these shapes:
 
 | Shape | Trait | When | Example |
 |---|---|---|---|
 | Render-object widget | `RenderView` + `impl_render_view!` | wraps one `flui-objects` render box | `Padding`, `ColoredBox`, `Text` |
 | Multi-child render widget | `RenderView` (hand-written `impl View`, generic over `C: ViewSeq`) | lays out a child sequence | `Flex`/`Row`/`Column` |
 | Composition widget | `StatelessView` + `#[derive(StatelessView)]` | builds other widgets | `Container` |
-| Parent-data widget | `ParentDataView` | configures a child's parent-layout data | *(Flexible/Positioned — pending)* |
+| Parent-data widget | `ParentDataView` + `impl_parent_data_view!` | configures a child's parent-layout data | `Flexible`/`Expanded`/`Positioned` |
+| Transition widget | `AnimatedView` + `impl_animated_view!` | rebuilds each `Animation` tick | `FadeTransition` |
 
 The render *machine* (layout/paint/compositing) lives in `flui-rendering` +
 `flui-objects`. **Do not** put layout math here — a widget only *configures* a

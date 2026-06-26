@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use flui_foundation::{ElementId, RenderId};
+use flui_objects::RenderOpacity;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
@@ -164,6 +165,33 @@ impl LaidOut {
         let (owner, result) = owner.run_frame();
         result.expect("rebuild frame should succeed");
         *guard = owner;
+    }
+
+    /// Drive a frame WITHOUT marking the root dirty — the headless equivalent of
+    /// a vsync/animation tick. `build_scope` drains whatever the external inbox
+    /// holds (an `AnimatedView` scheduled by a listenable change between
+    /// frames), rebuilds those elements, and re-runs layout/paint. This is what
+    /// distinguishes an animation-driven rebuild from a `setState`/`pump` one.
+    pub fn tick(&mut self) {
+        self.build_owner.build_scope(&mut self.tree);
+
+        let mut guard = self.pipeline_owner.write();
+        let owner = std::mem::take(&mut *guard);
+        let (owner, result) = owner.run_frame();
+        result.expect("tick frame should succeed");
+        *guard = owner;
+    }
+
+    /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a
+    /// `FadeTransition` builds). Panics if `id` is not a `RenderOpacity`.
+    pub fn opacity(&self, id: RenderId) -> f32 {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderOpacity>())
+            .map(|render| render.opacity())
+            .expect("render node should be a RenderOpacity")
     }
 }
 

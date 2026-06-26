@@ -84,6 +84,7 @@ pub mod paint;
 pub mod scroll;
 pub mod stack;
 pub mod text;
+pub mod transitions;
 
 // ============================================================================
 // Flat re-exports — `flui_widgets::Padding`, identical depth to Flutter's
@@ -105,6 +106,7 @@ pub use scroll::{
 };
 pub use stack::{Positioned, Stack};
 pub use text::Text;
+pub use transitions::{FadeTransition, FadeTransitionState};
 
 // The heterogeneous-children macros (contract C2's static tuple path). Kept out
 // of the prelude glob: their names collide with `std`'s `column!`/`row!`, so

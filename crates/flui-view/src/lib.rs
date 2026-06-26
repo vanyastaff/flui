@@ -193,11 +193,12 @@ pub use test_only_global_key_registry::{
 pub use owner::{BuildOwner, ElementOwner};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
-    BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement, ErrorView, ErrorViewBuilder,
-    FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
-    ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderView,
-    RootRenderElement, RootRenderView, StatefulElement, StatefulView, StatelessElement,
-    StatelessView, View, ViewExt, ViewState, clear_error_view_builder, set_error_view_builder,
+    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement,
+    ErrorView, ErrorViewBuilder, FlutterError, InheritedElement, InheritedView, IntoElement,
+    IntoView, Memo, ParentDataConfig, ParentDataElement, ParentDataView, ProxyElement, ProxyView,
+    RenderElement, RenderView, RootRenderElement, RootRenderView, StatefulElement, StatefulView,
+    StatelessElement, StatelessView, View, ViewExt, ViewState, clear_error_view_builder,
+    set_error_view_builder,
 };
 
 // ============================================================================
@@ -242,8 +243,9 @@ pub mod prelude {
         owner::{BuildOwner, ElementOwner},
         tree::{ElementNode, ElementTree},
         view::{
-            BoxedView, InheritedView, IntoView, Memo, ParentDataConfig, ParentDataView, ProxyView,
-            RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
+            AnimatedView, BoxedView, InheritedView, IntoView, Memo, ParentDataConfig,
+            ParentDataView, ProxyView, RenderView, StatefulView, StatelessView, View, ViewExt,
+            ViewState,
         },
     };
 }

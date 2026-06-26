@@ -31,10 +31,13 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 
 | Family | Widgets |
 |---|---|
-| **Layout** | `Padding` · `Align` · `Center` · `SizedBox` · `ConstrainedBox` · `LimitedBox` · `AspectRatio` · `FittedBox` · `FractionallySizedBox` · `Transform` · `FractionalTranslation` |
+| **Layout** | `Padding` · `Align` · `Center` · `SizedBox` · `ConstrainedBox` · `LimitedBox` · `AspectRatio` · `FittedBox` · `FractionallySizedBox` · `Transform` · `FractionalTranslation` · `Baseline` |
 | **Flex / Stack** | `Flex` · `Row` · `Column` · `Stack` |
+| **Parent-data** | `Flexible` · `Expanded` · `Positioned` |
 | **Paint** | `ColoredBox` · `DecoratedBox` · `Opacity` · `RepaintBoundary` |
-| **Clip** | `ClipRect` · `ClipOval` |
+| **Clip** | `ClipRect` · `ClipRRect` · `ClipOval` |
+| **Scroll / Sliver** | `SingleChildScrollView` · `ListView` · `Viewport` · `SliverToBoxAdapter` · `SliverFixedExtentList` · `SliverPadding` · `SliverOpacity` |
+| **Transitions** | `FadeTransition` |
 | **Interaction** | `IgnorePointer` · `AbsorbPointer` · `Offstage` |
 | **Composition** | `Container` |
 | **Text** | `Text` |
@@ -53,17 +56,26 @@ Each is **behavior-loyal to Flutter** (same layout/paint algorithm) with a
   type* (contract C2).
 - **Composition widget** — `Container`: a `StatelessView` that builds a stack of
   other widgets in Flutter's exact order.
+- **Parent-data widget** — `Flexible`/`Expanded`/`Positioned`: a `ParentDataView`
+  that writes layout data (flex factor, edge offsets) onto its child's render
+  node, which the parent `RenderFlex`/`RenderStack` reads.
+- **Transition widget** — `FadeTransition`: an `AnimatedView` that subscribes to
+  an `Animation` and rebuilds each tick, mapping the value onto a child property.
 
 It is **reactive**: a `setState`/rebuild that changes a widget's configuration
-updates its render object in place (no remount), exactly as Flutter does.
+updates its render object in place (no remount), and an `Animation` tick
+schedules the same in-place update — exactly as Flutter does.
 
 ## Status
 
 This is the [Core.1 vertical slice](../../docs/ROADMAP.md) — it proves the whole
-`build → layout → paint → composite → reconcile` pipeline on live widget code.
-Not yet shipped (tracked): `Flexible`/`Expanded`/`Positioned` (parent-data),
-`ClipRRect`/`ClipPath`, `Image`, scrolling, implicit animations, and gesture
-widgets. See [`AGENTS.md`](AGENTS.md) for the authoring pattern and
+`build → layout → paint → composite → reconcile` pipeline on live widget code,
+including parent-data layout (`Flexible`/`Expanded`/`Positioned`), scrolling
+(`ListView`/`SingleChildScrollView` over slivers), and animation
+(`FadeTransition` driven by an `Animation` through the build-scheduling spine).
+Not yet shipped (tracked): `ClipPath`, `Image`, implicit animations
+(`AnimatedContainer` & friends), and gesture widgets. See
+[`AGENTS.md`](AGENTS.md) for the authoring pattern and
 [`docs/adr/ADR-0009`](../../docs/adr/ADR-0009-flui-widgets-authoring-catalog.md)
 for the design rationale.
 
