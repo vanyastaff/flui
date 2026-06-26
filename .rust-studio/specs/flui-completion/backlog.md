@@ -13,8 +13,8 @@ leapfrog where Flutter has no strong contract.
 
 | # | Unit | Status | Notes |
 |---|------|--------|-------|
-| A1 | **GestureDetector gesture completion** — shared clock-bound arena acquisition + `on_long_press` + `on_double_tap` (drag/pan + tap + secondary already done). Cross-detector competition. | OPEN | recognizers already clock-deterministic; crux = ambient shared-arena design |
-| A2 | **Binding Phase 1b — tree integration** — `HeadlessBinding` owns/drives a tree; `pump_frame` adds `build_scope` + `run_frame` after deadline poll. | OPEN | harness already does build_scope+run_frame; connect into pump_frame |
+| A1 | **GestureDetector gesture completion** — `GestureArenaScope` InheritedView + `on_long_press` + `on_double_tap` via shared clock-bound arena. | DONE (`53bc652e`) | long-press, double-tap-alone, standalone all verified red→green. DEFERRED to A2: on_tap+on_double_tap combo (tap self-sweeps), multi-detector competition, binding-driven close/sweep (harness does it now). Docs made honest. |
+| A2 | **Binding-driven arena lifecycle (Phase 1b/2)** — the binding drives `close`-on-down + `sweep`-on-up; recognizers STOP self-sweeping the SHARED arena (self-sweep only the PRIVATE standalone arena). Unblocks tap-vs-double-tap HOLD (arena hold/release), multi-detector competition, production shared-arena. Then `pump_frame` adds `build_scope`+`run_frame`. | OPEN | THE fix for A1's deferrals; arena has hold()/release(); Flutter: GestureBinding sweeps on PointerUp, recognizers don't self-sweep |
 | A3 | **TickerProvider + implicit animations (Phase 3)** — view-layer vsync (`SingleTickerProviderStateMixin` analogue) + restart-aware controller driving; `AnimatedOpacity`, `AnimatedContainer`, `AnimatedAlign`, `AnimatedPadding`. | OPEN | flagship; needs A2; leapfrog: better default curves + deterministic test via binding |
 
 ## Wave B — catalog completeness (mostly independent)
