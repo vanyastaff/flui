@@ -1740,6 +1740,7 @@ name = "flui-widgets"
 version = "0.2.0"
 dependencies = [
  "flui-animation",
+ "flui-binding",
  "flui-foundation",
  "flui-geometry",
  "flui-interaction",

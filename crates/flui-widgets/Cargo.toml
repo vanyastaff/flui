@@ -41,6 +41,9 @@ flui-scheduler = { path = "../flui-scheduler" }
 # Constructs `PointerEvent`s (make_down_event, behind the `testing` feature) for
 # the `Listener` dispatch test.
 flui-interaction = { path = "../flui-interaction", features = ["testing"] }
+# Headless frame driver: provides the shared clock-bound arena a `GestureArenaScope`
+# hands to detectors, and `pump_frame` to poll deadline-driven gestures in tests.
+flui-binding = { path = "../flui-binding" }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.

@@ -95,7 +95,8 @@ pub use clip::{ClipOval, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
 pub use interaction::{
-    AbsorbPointer, GestureDetector, GestureDetectorState, IgnorePointer, Listener, Offstage,
+    AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,
+    Listener, Offstage,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
@@ -148,9 +149,9 @@ pub mod prelude {
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRRect, ClipRect,
         ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox, Flex,
-        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureDetector,
-        IgnorePointer, LimitedBox, ListView, Listener, Offstage, Opacity, Padding, Positioned,
-        RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
+        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
+        GestureDetector, IgnorePointer, LimitedBox, ListView, Listener, Offstage, Opacity, Padding,
+        Positioned, RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
         SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport,
     };
 
