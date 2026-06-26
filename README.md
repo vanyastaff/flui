@@ -2,14 +2,14 @@
 
 > A modular, Flutter-inspired declarative UI framework for Rust with GPU-accelerated rendering.
 
-FLUI brings the proven three-tree architecture (View → Element → Render) to Rust, adapted to native ownership, type-safe arity, and a strict layered crate DAG. It is currently in the platform-integration phase: foundation layers are stable, and higher rendering / view crates are being landed incrementally.
+FLUI brings the proven three-tree architecture (View → Element → Render) to Rust, adapted to native ownership, type-safe arity, and a strict layered crate DAG. The Core.1 vertical slice is complete: the widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline is exercised end-to-end, and the gesture/animation integration ships.
 
 ## Status
 
-- ✅ Foundation: `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform` (MVP)
+- ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform`
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-log`, `flui-hot-reload`
-- ✅ Framework: `flui-view`, `flui-app` (migration)
-- ⏸️ Disabled until integration completes: `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`, `flui-assets`
+- ✅ Framework: `flui-view`, `flui-widgets`, `flui-app` (migration), `flui-animation`
+- ⏸️ Disabled until integration completes: `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`, `flui-assets`
 
 See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
 
@@ -88,7 +88,7 @@ For Claude Code-specific guidance (build commands, troubleshooting) see [`CLAUDE
 
 ## License
 
-Licensed under the [MIT License](LICENSE). The workspace `Cargo.toml` declares dual `MIT OR Apache-2.0`; an Apache-2.0 license file will be added once dual-licensing is finalized.
+Licensed under either the [MIT License](LICENSE) or the [Apache License, Version 2.0](LICENSE-APACHE) at your option. The workspace `Cargo.toml` declares `MIT OR Apache-2.0`.
 
 ## Acknowledgments
 
