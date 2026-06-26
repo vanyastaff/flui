@@ -606,7 +606,17 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         // hold deadline elapses even if the finger is held still (no further
         // pointer event arrives to drive it). `check_timer` is idempotent, so
         // polling every frame fires at most once.
-        self.check_timer();
+        //
+        // When the deadline fires, ALSO win the arena — mirroring
+        // `did_exceed_deadline`. Without this, a held long-press in a
+        // multi-recognizer detector fires its callback but never rejects the
+        // competing tap, so the tap would still fire on release. `check_timer`
+        // returns having already dropped the gesture_state lock, so resolving
+        // here is re-entrancy-safe (the arena defers member notifications out
+        // of its own lock).
+        if self.check_timer() {
+            self.state.accept_tracked();
+        }
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
@@ -883,6 +893,61 @@ mod tests {
         // Second tick — must not refire (phase is now `Started`).
         assert!(!recognizer.check_timer());
         assert_eq!(*started_count.lock(), 1);
+    }
+
+    #[test]
+    fn poll_deadline_wins_the_arena_when_it_fires() {
+        // The frame-driven deadline poll must not only fire the long-press
+        // callback but WIN the arena, so a competing member (e.g. a tap on the
+        // same region) is rejected. Mirrors `did_exceed_deadline`. Without the
+        // `accept_tracked` in `poll_deadline`, a frame-polled long-press leaves
+        // its competitor live, so a held press would let the tap also fire on
+        // release. Driven entirely off a `ManualClock` (no sleep).
+        struct Competitor {
+            rejected: Arc<Mutex<bool>>,
+        }
+        impl crate::sealed::arena_member::Sealed for Competitor {}
+        impl crate::arena::GestureArenaMember for Competitor {
+            fn accept_gesture(&self, _: PointerId) {}
+            fn reject_gesture(&self, _: PointerId) {
+                *self.rejected.lock() = true;
+            }
+        }
+
+        let clock = crate::clock::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena.clone(),
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
+        );
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(10.0)));
+
+        // A competing recognizer (e.g. a tap) joins the same arena entry.
+        let rejected = Arc::new(Mutex::new(false));
+        arena.add(
+            pointer,
+            Arc::new(Competitor {
+                rejected: rejected.clone(),
+            }),
+        );
+        arena.close(pointer);
+
+        // Before the deadline: the frame poll fires nothing and rejects no one.
+        arena.poll_deadlines();
+        assert!(
+            !*rejected.lock(),
+            "no resolution before the hold deadline elapses"
+        );
+
+        // Past the deadline: the frame poll fires the long-press AND wins the
+        // arena, rejecting the competitor.
+        clock.advance(Duration::from_millis(150));
+        arena.poll_deadlines();
+        assert!(
+            *rejected.lock(),
+            "poll_deadline must win the arena and reject the competing member",
+        );
     }
 
     #[test]

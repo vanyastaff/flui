@@ -102,6 +102,12 @@ impl HeadlessBinding {
     /// Add a deadline-driven recognizer to the same virtual timeline the frame
     /// driver polls by constructing it against `binding.arena().clone()` (the
     /// arena's entries are `Arc`-backed, so the clone shares them).
+    ///
+    /// To hand this arena to a whole widget subtree, wrap it in a
+    /// `GestureArenaScope` (in `flui-widgets`): every `GestureDetector` below
+    /// reads the scope's arena ambiently and competes in / is polled against it.
+    /// `flui-binding` cannot host that scope itself — it has no `flui-view`
+    /// dependency — so the wiring lives one layer up.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
         &self.arena

@@ -436,6 +436,17 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         // We won the arena - gesture is accepted
     }
 
+    fn poll_deadline(&self) {
+        // Frame-driven give-up check: after a completed first tap, the
+        // inter-tap window must eventually expire if no second tap arrives.
+        // Without this poll, `poll_deadlines()` never drives the timeout, so a
+        // detector combining `on_tap` + `on_double_tap` could leave the lone
+        // single-tap forever holding the arena. `check_timeout` is idempotent
+        // (it only fires once the window has elapsed in the `WaitingForSecond`
+        // phase) and drops the gesture_state lock before releasing the arena.
+        self.check_timeout();
+    }
+
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         if let Some(pos) = self.state.initial_position() {
@@ -613,6 +624,44 @@ mod tests {
         // Should have reset to ready
         let state = recognizer.gesture_state.lock();
         assert_eq!(state.phase, DoubleTapPhase::Ready);
+    }
+
+    #[test]
+    fn poll_deadline_drives_the_give_up_timeout() {
+        // After a completed first tap the recognizer sits in `WaitingForSecond`,
+        // holding its arena entry. The binding's `poll_deadlines()` must drive
+        // the inter-tap give-up off the frame tick — without the `poll_deadline`
+        // override on the `GestureArenaMember` impl, `poll_deadlines` never calls
+        // `check_timeout`, so a lone tap combined with a double-tap recognizer
+        // could hold the arena forever. Driven off a `ManualClock` (no sleep).
+        let clock = crate::clock::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let cancelled = Arc::new(Mutex::new(false));
+        let cancelled_clone = cancelled.clone();
+        let recognizer = DoubleTapGestureRecognizer::new(arena.clone())
+            .with_on_double_tap_cancel(move |_| *cancelled_clone.lock() = true);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(px(10.0), px(10.0));
+
+        // Complete the first tap → `WaitingForSecond`, member still in the arena.
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+
+        // Poll before the 300ms window expires: nothing fires.
+        arena.poll_deadlines();
+        assert!(
+            !*cancelled.lock(),
+            "no give-up before the inter-tap window expires"
+        );
+
+        // Advance past the window; the frame poll must drive `check_timeout`.
+        clock.advance(Duration::from_millis(350));
+        arena.poll_deadlines();
+        assert!(
+            *cancelled.lock(),
+            "poll_deadlines must drive the double-tap give-up timeout",
+        );
     }
 
     #[test]

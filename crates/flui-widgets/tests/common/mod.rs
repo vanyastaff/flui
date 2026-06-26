@@ -10,8 +10,11 @@
 #![allow(dead_code)] // each test binary uses a different subset of the harness
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
+use flui_interaction::PointerId;
 use flui_objects::{RenderOpacity, RenderTransform};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
@@ -19,6 +22,7 @@ use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree, View};
+use flui_widgets::GestureArenaScope;
 use parking_lot::RwLock;
 
 /// A laid-out widget tree, holding the element + render trees alive so geometry
@@ -322,6 +326,75 @@ impl LaidOut {
             PointerButton::Secondary,
         );
         result.dispatch(&event);
+    }
+}
+
+/// A laid-out widget tree wrapped in a [`GestureArenaScope`] over a
+/// [`HeadlessBinding`]'s shared, clock-bound arena — plus the binding that
+/// drives deadlines.
+///
+/// This is the headless analogue of a real `GestureBinding` above the tree: the
+/// detectors below read the binding's arena ambiently, the binding closes that
+/// arena after the down has been dispatched to the whole hit-test path
+/// (`binding.dart` ordering), and `pump` advances the virtual clock + polls
+/// gesture deadlines with no `thread::sleep`.
+pub struct LaidOutScoped {
+    laid: LaidOut,
+    binding: HeadlessBinding,
+}
+
+/// Build `root` wrapped in a [`GestureArenaScope`] over a fresh
+/// [`HeadlessBinding`]'s arena, then lay it out under `constraints`.
+///
+/// The detectors in `root` read the binding's arena in `init_state`, so they
+/// compete in (and have their deadlines polled against) the same arena the
+/// returned binding drives.
+pub fn lay_out_with_arena(root: impl View, constraints: BoxConstraints) -> LaidOutScoped {
+    let binding = HeadlessBinding::new();
+    let scoped = GestureArenaScope::new(binding.arena().clone(), root);
+    let laid = lay_out(scoped, constraints);
+    LaidOutScoped { laid, binding }
+}
+
+impl LaidOutScoped {
+    /// The underlying laid-out tree, for geometry queries.
+    pub fn laid(&self) -> &LaidOut {
+        &self.laid
+    }
+
+    /// Advance the virtual clock by `dt` and fire any gesture deadline that has
+    /// now elapsed — the deterministic, sleep-free frame tick.
+    pub fn pump(&mut self, dt: Duration) {
+        self.binding.pump_frame(dt);
+    }
+
+    /// Dispatch a synthetic pointer-down at `(x, y)`, THEN close the shared
+    /// arena — mirroring `binding.dart`'s order (close after the down has been
+    /// dispatched to the whole hit-test path, so every overlapping detector has
+    /// added its recognizers before the single close).
+    pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
+        self.laid.dispatch_pointer_down(x, y);
+        self.binding.arena().close(PointerId::PRIMARY);
+    }
+
+    /// Dispatch a synthetic pointer-up at `(x, y)`, THEN sweep the shared arena
+    /// (the contact ended; force-resolve + clean up its entry).
+    pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
+        self.laid.dispatch_pointer_up(x, y);
+        self.binding.arena().sweep(PointerId::PRIMARY);
+    }
+
+    /// Dispatch a synthetic pointer-move at `(x, y)` (no arena close/sweep — a
+    /// move neither opens nor ends a contact).
+    pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
+        self.laid.dispatch_pointer_move(x, y);
+    }
+
+    /// Dispatch a synthetic pointer-cancel at `(x, y)`, THEN sweep the shared
+    /// arena (the contact was interrupted).
+    pub fn dispatch_pointer_cancel(&self, x: f32, y: f32) {
+        self.laid.dispatch_pointer_cancel(x, y);
+        self.binding.arena().sweep(PointerId::PRIMARY);
     }
 }
 
