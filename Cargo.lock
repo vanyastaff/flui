@@ -1734,6 +1734,7 @@ dependencies = [
  "flui-animation",
  "flui-foundation",
  "flui-geometry",
+ "flui-interaction",
  "flui-objects",
  "flui-rendering",
  "flui-scheduler",
