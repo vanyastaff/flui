@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 description = "User-facing Flutter-style widget catalog for FLUI (configuration objects over the flui-objects render catalog)"
 repository.workspace = true
+readme = "README.md"
 keywords = ["ui", "widget", "flutter", "flui", "gui"]
 categories = ["gui"]
 
