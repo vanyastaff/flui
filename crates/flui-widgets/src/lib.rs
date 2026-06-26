@@ -106,7 +106,7 @@ pub use scroll::{
 };
 pub use stack::{Positioned, Stack};
 pub use text::Text;
-pub use transitions::{FadeTransition, FadeTransitionState};
+pub use transitions::{FadeTransition, FadeTransitionState, ScaleTransition, ScaleTransitionState};
 
 // The heterogeneous-children macros (contract C2's static tuple path). Kept out
 // of the prelude glob: their names collide with `std`'s `column!`/`row!`, so

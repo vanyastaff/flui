@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use flui_foundation::{ElementId, RenderId};
-use flui_objects::RenderOpacity;
+use flui_objects::{RenderOpacity, RenderTransform};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
@@ -192,6 +192,18 @@ impl LaidOut {
             .and_then(|node| node.downcast_render_object_mut::<RenderOpacity>())
             .map(|render| render.opacity())
             .expect("render node should be a RenderOpacity")
+    }
+
+    /// The x-scale (matrix `[0][0]`) of a [`RenderTransform`] node — the factor a
+    /// `ScaleTransition` writes. Panics if `id` is not a `RenderTransform`.
+    pub fn transform_scale(&self, id: RenderId) -> f32 {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderTransform>())
+            .map(|render| render.transform().get(0, 0))
+            .expect("render node should be a RenderTransform")
     }
 }
 
