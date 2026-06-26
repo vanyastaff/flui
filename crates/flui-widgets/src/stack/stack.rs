@@ -15,7 +15,8 @@ use crate::support::generic_render_view_element;
 ///
 /// Flutter parity: `widgets/basic.dart` `Stack` over `RenderStack`. Defaults
 /// match Flutter: `alignment = Alignment::TOP_LEFT`, `fit = StackFit::Loose`.
-/// Per-child positioning (`Positioned`) lands with the parent-data widgets.
+/// Wrap a child in [`Positioned`](crate::Positioned) to place it at explicit
+/// edges instead of being aligned.
 ///
 /// Generic over `C: ViewSeq` — `stack!`-style tuples (via the shared
 /// `column!`/`row!` macros) or a dynamic `Vec<BoxedView>`.

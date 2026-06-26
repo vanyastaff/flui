@@ -480,6 +480,12 @@ impl BuildOwner {
             );
         }
 
+        // The build drained: every render child has attached. Settle each
+        // render parent's children into element-slot order (no-op unless an
+        // insert flagged a possible drift), so a render sibling that attached
+        // before a component-deferred sibling does not invert their layout.
+        tree.reorder_render_children_after_build();
+
         #[cfg(debug_assertions)]
         {
             self.building = false;

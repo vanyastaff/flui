@@ -606,6 +606,24 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
         None
     }
 
+    /// The parent-data configuration this element contributes to its child's
+    /// render node, if any.
+    ///
+    /// Returns `Some` only for a `ParentDataElement` (a `ParentDataView` such
+    /// as `Flexible` / `Expanded` / `Positioned`); every other behavior returns
+    /// the default `None`. The [`ElementTree`](crate::tree::ElementTree)
+    /// insert/update seam walks ancestors of a freshly-attached render child,
+    /// collects each `Some` between the child and the nearest ancestor render
+    /// object, and writes them onto that child's render node (nearest wins).
+    ///
+    /// Flutter parity: `ParentDataElement.applyParentData` —
+    /// `framework.dart`'s `ParentDataElement<T>` attaches its
+    /// `ParentDataWidget.applyParentData` payload to the descendant
+    /// `RenderObject.parentData` at the same point we write it here.
+    fn parent_data_config(&self) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
+        None
+    }
+
     // ========================================================================
     // Notification handler protocol (U13 / R10)
     // ========================================================================

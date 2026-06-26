@@ -39,8 +39,8 @@ pub use flui_tree::IndexedSlot;
 // Re-export commonly used arity and generic types
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
 pub use behavior::{
-    AnimatedBehavior, ElementBehavior, InheritedBehavior, ProxyBehavior, RenderBehavior,
-    StatefulBehavior, StatelessBehavior,
+    AnimatedBehavior, ElementBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior,
+    RenderBehavior, StatefulBehavior, StatelessBehavior,
 };
 pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
@@ -122,3 +122,12 @@ pub type InheritedElement<V> = Element<V, Single, InheritedBehavior<V>>;
 /// Automatically subscribes to listenable changes and marks element dirty
 /// when the animation value changes.
 pub type AnimatedElement<V> = Element<V, Single, AnimatedBehavior<V>>;
+
+/// Parent-data element with a single child.
+///
+/// This is the element type created for views implementing `ParentDataView`
+/// (`Flexible`, `Expanded`, `Positioned`). It is a transparent proxy: it
+/// reconciles its wrapped child unchanged, and additionally surfaces the
+/// view's configured parent-data through `parent_data_config()` so the
+/// `ElementTree` insert/update seams can write it onto the child render node.
+pub type ParentDataElement<V> = Element<V, Single, ParentDataBehavior>;

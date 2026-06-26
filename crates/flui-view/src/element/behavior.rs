@@ -244,6 +244,21 @@ where
         None
     }
 
+    /// The parent-data this element contributes to its render child's nearest
+    /// render parent, if it is a `ParentDataView` (Flexible / Positioned).
+    ///
+    /// Default `None`; `ParentDataBehavior` overrides it. Read at the
+    /// `ElementTree` insert/update seams (`apply_ancestor_parent_data`) — the
+    /// port of Flutter's `RenderObjectElement.attachRenderObject` →
+    /// `_findAncestorParentDataElements` → `ParentDataWidget.applyParentData`.
+    #[allow(unused_variables)]
+    fn parent_data_config(
+        &self,
+        core: &ElementCore<V, A>,
+    ) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
+        None
+    }
+
     /// Object-safe notification handler hook routed from
     /// [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
     /// during bubble dispatch (plan §U13 / R10).
@@ -402,6 +417,48 @@ where
         _owner: &mut crate::ElementOwner<'_>,
     ) -> Vec<Box<dyn View>> {
         super::behavior_commons::proxy_style_views(core, "ProxyBehavior", V::child)
+    }
+}
+
+// ============================================================================
+// ParentDataBehavior
+// ============================================================================
+
+/// Behavior for `ParentDataView` elements (Flexible / Expanded / Positioned).
+///
+/// A transparent single-child proxy: like [`ProxyBehavior`] it owns no render
+/// object, so the unified `Element` passes the parent's render id straight
+/// through to the wrapped child (whose render object attaches to the nearest
+/// ancestor render object). The parent-data the view contributes is surfaced
+/// via [`parent_data_config`](ElementBehavior::parent_data_config) and written
+/// onto the child render node by the `ElementTree` insert/update seams — the
+/// port of Flutter's `RenderObjectElement.attachRenderObject` →
+/// `_updateParentData`.
+#[derive(Debug, Clone, Copy)]
+pub struct ParentDataBehavior;
+
+impl<V, A> ElementBehavior<V, A> for ParentDataBehavior
+where
+    V: crate::view::ParentDataView,
+    A: ElementArity,
+{
+    fn debug_kind(&self) -> &'static str {
+        "ParentDataElement"
+    }
+
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
+        super::behavior_commons::proxy_style_views(core, "ParentDataBehavior", V::child)
+    }
+
+    fn parent_data_config(
+        &self,
+        core: &ElementCore<V, A>,
+    ) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
+        Some(Box::new(core.view().create_parent_data()))
     }
 }
 

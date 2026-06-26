@@ -3,5 +3,7 @@
 //! `RenderFlex`.
 
 mod flex;
+mod flexible;
 
 pub use flex::{Column, Flex, Row};
+pub use flexible::{Expanded, Flexible};

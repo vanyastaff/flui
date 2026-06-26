@@ -92,7 +92,7 @@ pub mod text;
 
 pub use clip::{ClipOval, ClipRect};
 pub use container::Container;
-pub use flex::{Column, Flex, Row};
+pub use flex::{Column, Expanded, Flex, Flexible, Row};
 pub use interaction::{AbsorbPointer, IgnorePointer, Offstage};
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
@@ -103,7 +103,7 @@ pub use scroll::{
     ListView, SingleChildScrollView, SliverFixedExtentList, SliverOpacity, SliverPadding,
     SliverToBoxAdapter, Viewport,
 };
-pub use stack::Stack;
+pub use stack::{Positioned, Stack};
 pub use text::Text;
 
 // The heterogeneous-children macros (contract C2's static tuple path). Kept out
@@ -116,6 +116,8 @@ pub use flui_view::{column, row};
 // (re-exported from the `flui-objects` catalog, whose canonical home is
 // `flui-types::layout`).
 pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+// `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
+pub use flui_rendering::parent_data::FlexFit;
 
 // ============================================================================
 // Prelude
@@ -133,10 +135,11 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRect, ColoredBox,
-        Column, ConstrainedBox, Container, DecoratedBox, FittedBox, Flex, FractionalTranslation,
-        FractionallySizedBox, IgnorePointer, LimitedBox, ListView, Offstage, Opacity, Padding,
-        RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport,
+        Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox, Flex, FlexFit,
+        Flexible, FractionalTranslation, FractionallySizedBox, IgnorePointer, LimitedBox, ListView,
+        Offstage, Opacity, Padding, Positioned, RepaintBoundary, Row, SingleChildScrollView,
+        SizedBox, SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack,
+        Text, Transform, Viewport,
     };
 
     // Common configuration value types, so an app author needs only this import.
