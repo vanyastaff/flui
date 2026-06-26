@@ -9,6 +9,12 @@ Discipline: writers worktree-isolated ONLY; never blind-merge a branch (curate �
 remove footguns, fix conflicts); verify `.flutter/` for parity; no stubs/todo!;
 leapfrog where Flutter has no strong contract.
 
+Workflow pattern (learned): **design/architect agents → FREEFORM text (no schema)**
+— a strict multi-field schema makes the architect overflow the StructuredOutput
+retry cap (it writes prose). Reserve JSON schemas for the BUILD result + REVIEW
+verdict only. Reviewers diff `HEAD..<branch>` (NOT `main` — main is stale; my work
+is on `core1-widgets-slice`). Curate per the review verdicts before merging.
+
 ## Wave A — gesture + animation completion (builds on flui-binding Phase 1)
 
 | # | Unit | Status | Notes |
