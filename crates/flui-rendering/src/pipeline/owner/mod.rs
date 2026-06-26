@@ -763,7 +763,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // Leaf-first path: children pushed their entries during
             // the callback above; the ancestor follows. The transform
             // is still on the stack, so this entry captures it.
-            result.add(crate::hit_testing::HitTestEntry::new(id));
+            //
+            // A render object that listens for pointer events (RenderListener)
+            // advertises a handler here; it rides on the entry so
+            // `HitTestResult::dispatch` can invoke it. Additive: every other
+            // render object returns `None`, leaving today's handler-less entry.
+            let entry = crate::hit_testing::HitTestEntry::new(id);
+            let entry = match render_object.pointer_event_handler() {
+                Some(handler) => entry.handler(handler),
+                None => entry,
+            };
+            result.add(entry);
         }
 
         if has_transform {

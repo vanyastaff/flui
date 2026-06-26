@@ -59,7 +59,8 @@ pub use proxy::{
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{
-    MetaDataPayload, RenderAbsorbPointer, RenderIgnorePointer, RenderMetaData, RenderOffstage,
+    MetaDataPayload, RenderAbsorbPointer, RenderIgnorePointer, RenderListener, RenderMetaData,
+    RenderOffstage,
 };
 
 // --- flat re-exports (text) ---

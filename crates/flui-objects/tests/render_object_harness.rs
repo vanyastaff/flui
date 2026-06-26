@@ -33,6 +33,7 @@
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes | — |
 //! | `RenderSliverToBoxAdapter` | `harness_sliver_to_box_adapter_*` | yes | — | — | yes | — |
@@ -49,9 +50,12 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
+use std::sync::Arc;
+
 use flui_objects::*;
 use flui_rendering::{
     constraints::BoxConstraints,
+    hit_testing::{EventPropagation, HitTestBehavior, HitTestResult, PointerEventHandler},
     parent_data::{FlexParentData, StackParentData},
     testing::{
         BoxQueryRun, Probe, RenderTester, TreeNode, assert_descendant_properties,
@@ -99,6 +103,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderStack",
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
+    "RenderListener",
     "RenderSliverFixedExtentList",
     "RenderSliverPadding",
     "RenderSliverToBoxAdapter",
@@ -224,6 +229,41 @@ fn harness_colored_box_hit_test_within_bounds() {
 
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.root()));
     assert!(run.hit(50.0, 50.0).is_empty());
+}
+
+#[test]
+fn harness_listener_passes_layout_through_and_attaches_handler() {
+    // A no-op handler — the harness verifies it reaches the hit entry (the new
+    // pipeline wiring); that it FIRES end-to-end is covered by the Listener
+    // widget's dispatch test.
+    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
+    let run = RenderTester::mount(
+        // DeferToChild over a hittable ColoredBox: the listener registers when
+        // the child is hit.
+        box_node(RenderListener::new(handler, HitTestBehavior::DeferToChild))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    // Layout is a pure pass-through: the listener sizes to its 40×40 child.
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(40.0), px(40.0)));
+
+    // A pointer landing on the child hits the listener (it registers itself in
+    // the leaf-first path alongside its child), and its hit entry carries the
+    // handler the pipeline attached from `pointer_event_handler()`.
+    assert!(
+        run.hit(20.0, 20.0).contains(&run.root()),
+        "the listener registers itself in the hit path",
+    );
+    let mut result = HitTestResult::new();
+    run.pipeline()
+        .hit_test(Offset::new(px(20.0), px(20.0)), &mut result);
+    assert!(
+        result.path().iter().any(|entry| entry.handler.is_some()),
+        "the listener's hit entry must carry a pointer handler:\n{}",
+        run.diagnostics(),
+    );
 }
 
 #[test]

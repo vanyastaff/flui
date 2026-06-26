@@ -1,7 +1,10 @@
 # Listener widget — route raw pointer events to callbacks
 
-Status: **SCOPED, not yet implemented** (2026-06-26). De-risked by a full
-read-only architecture scan.
+Status: **SHIPPED** (2026-06-26). Implemented exactly per the plan below; the
+"not yet implemented" caveats are historical. End-to-end verified: a
+pointer-down within a `Listener`'s bounds fires its `on_pointer_down` callback
+through the real hit-test + dispatch path (`tests/listener.rs`), and the
+`RenderListener` catalog-harness test asserts its hit entry carries the handler.
 
 ## Key finding: NO design blocker
 

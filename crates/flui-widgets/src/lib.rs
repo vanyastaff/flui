@@ -94,7 +94,7 @@ pub mod transitions;
 pub use clip::{ClipOval, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
-pub use interaction::{AbsorbPointer, IgnorePointer, Offstage};
+pub use interaction::{AbsorbPointer, IgnorePointer, Listener, Offstage};
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
     FractionallySizedBox, LimitedBox, Padding, SizedBox, Transform,
@@ -123,6 +123,9 @@ pub use flui_view::{column, row};
 pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
 // `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
 pub use flui_rendering::parent_data::FlexFit;
+// Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
+// `PointerEvent`/`EventPropagation` its callbacks receive/return.
+pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
 
 // ============================================================================
 // Prelude
@@ -151,6 +154,7 @@ pub mod prelude {
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_rendering::constraints::BoxConstraints;
+    pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
     pub use flui_types::painting::Clip;
     pub use flui_types::typography::TextBaseline;

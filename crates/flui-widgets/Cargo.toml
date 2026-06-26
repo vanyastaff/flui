@@ -36,6 +36,9 @@ flui-objects = { path = "../flui-objects", features = ["testing"] }
 flui-types = { path = "../flui-types" }
 # Drives a real `AnimationController` in the `FadeTransition` integration test.
 flui-scheduler = { path = "../flui-scheduler" }
+# Constructs `PointerEvent`s (make_down_event, behind the `testing` feature) for
+# the `Listener` dispatch test.
+flui-interaction = { path = "../flui-interaction", features = ["testing"] }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.

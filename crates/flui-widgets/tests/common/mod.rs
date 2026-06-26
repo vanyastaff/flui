@@ -221,6 +221,40 @@ impl LaidOut {
             })
             .expect("render node should be a RenderTransform")
     }
+
+    /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
+    /// event there — the headless analogue of a platform pointer-down reaching
+    /// the framework (`AppBinding::handle_input` → hit_test → dispatch). Used by
+    /// the `Listener` test to assert its callback fires.
+    pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let position = Offset::new(px(x), px(y));
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        let event = flui_interaction::events::make_down_event(
+            position,
+            flui_interaction::events::PointerType::Mouse,
+        );
+        result.dispatch(&event);
+    }
+
+    /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
+    /// pointer-up — to assert `on_pointer_up` routing.
+    pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let position = Offset::new(px(x), px(y));
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        let event = flui_interaction::events::make_up_event(
+            position,
+            flui_interaction::events::PointerType::Mouse,
+        );
+        result.dispatch(&event);
+    }
 }
 
 /// Convenience: a `Size` in logical pixels.

@@ -410,6 +410,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The pointer-event handler this box contributes to its hit entry.
+    ///
+    /// Default `None`; override (e.g. `RenderListener`) to receive pointer
+    /// events that land on this box. The blanket `RenderObject<BoxProtocol>`
+    /// impl forwards to this — concrete types override here, not on
+    /// `RenderObject`. See [`RenderObject::pointer_event_handler`].
+    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+        None
+    }
+
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
@@ -646,6 +656,10 @@ where
 
     fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         <T as RenderBox>::hit_test_transform(self, size)
+    }
+
+    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+        <T as RenderBox>::pointer_event_handler(self)
     }
 
     fn describe_semantics_configuration(
