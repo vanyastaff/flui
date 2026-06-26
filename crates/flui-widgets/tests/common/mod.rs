@@ -12,9 +12,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::cell::Cell;
+
 use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
 use flui_interaction::PointerId;
+use flui_interaction::events::{
+    PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
+    make_move_event_for_id, make_up_event_for_id,
+};
 use flui_objects::{RenderOpacity, RenderTransform};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
@@ -226,6 +232,19 @@ impl LaidOut {
             .expect("render node should be a RenderTransform")
     }
 
+    /// Hit-test at root-local `(x, y)` and dispatch `event` to the entries hit
+    /// there — the route step a binding runs before the arena lifecycle. The
+    /// event already carries the pointer id; `(x, y)` is the hit-test position.
+    pub fn route_event(&self, event: &PointerEvent, x: f32, y: f32) {
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let position = Offset::new(px(x), px(y));
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        result.dispatch(event);
+    }
+
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
     /// event there — the headless analogue of a platform pointer-down reaching
     /// the framework (`AppBinding::handle_input` → hit_test → dispatch). Used by
@@ -341,6 +360,15 @@ impl LaidOut {
 pub struct LaidOutScoped {
     laid: LaidOut,
     binding: HeadlessBinding,
+    /// Next contact's pointer id (1-based; `0` is not a valid `PointerId`). Each
+    /// `dispatch_pointer_down` allocates a fresh id so two sequential taps use
+    /// distinct ids — what a real `GestureBinding` does per contact, and what
+    /// keeps a genuine double-tap sound (the second down opens its own arena
+    /// entry instead of re-adding clones into the held first entry).
+    next_pointer: Cell<u64>,
+    /// The current contact's pointer id (set on each down) so the matching
+    /// up / move / cancel route to the same id.
+    current_pointer: Cell<u64>,
 }
 
 /// Build `root` wrapped in a [`GestureArenaScope`] over a fresh
@@ -353,7 +381,12 @@ pub fn lay_out_with_arena(root: impl View, constraints: BoxConstraints) -> LaidO
     let binding = HeadlessBinding::new();
     let scoped = GestureArenaScope::new(binding.arena().clone(), root);
     let laid = lay_out(scoped, constraints);
-    LaidOutScoped { laid, binding }
+    LaidOutScoped {
+        laid,
+        binding,
+        next_pointer: Cell::new(1),
+        current_pointer: Cell::new(0),
+    }
 }
 
 impl LaidOutScoped {
@@ -368,33 +401,56 @@ impl LaidOutScoped {
         self.binding.pump_frame(dt);
     }
 
-    /// Dispatch a synthetic pointer-down at `(x, y)`, THEN close the shared
-    /// arena — mirroring `binding.dart`'s order (close after the down has been
-    /// dispatched to the whole hit-test path, so every overlapping detector has
-    /// added its recognizers before the single close).
+    /// Allocate a fresh pointer id for a new contact, remembering it as current.
+    fn begin_contact(&self) -> PointerId {
+        let id = self.next_pointer.get();
+        self.next_pointer.set(id + 1);
+        self.current_pointer.set(id);
+        PointerId::new(id).expect("contact ids start at 1")
+    }
+
+    /// The pointer id of the in-flight contact (set by the matching down).
+    fn current_contact(&self) -> PointerId {
+        PointerId::new(self.current_pointer.get()).expect("a down precedes up/move/cancel")
+    }
+
+    /// Dispatch a synthetic pointer-down at `(x, y)` through the binding: route
+    /// to the hit-test path, THEN close the shared arena — `binding.dart`'s
+    /// order (close after the down has reached the whole hit-test path, so every
+    /// overlapping detector has added its recognizers before the single close).
+    /// Each down allocates a fresh contact id.
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
-        self.laid.dispatch_pointer_down(x, y);
-        self.binding.arena().close(PointerId::PRIMARY);
+        let pointer = self.begin_contact();
+        let event = make_down_event_for_id(pointer, offset(x, y), PointerType::Mouse);
+        self.binding
+            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
-    /// Dispatch a synthetic pointer-up at `(x, y)`, THEN sweep the shared arena
-    /// (the contact ended; force-resolve + clean up its entry).
+    /// Dispatch a synthetic pointer-up at `(x, y)` for the current contact:
+    /// route, THEN sweep the shared arena (the contact ended).
     pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
-        self.laid.dispatch_pointer_up(x, y);
-        self.binding.arena().sweep(PointerId::PRIMARY);
+        let pointer = self.current_contact();
+        let event = make_up_event_for_id(pointer, offset(x, y), PointerType::Mouse);
+        self.binding
+            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
-    /// Dispatch a synthetic pointer-move at `(x, y)` (no arena close/sweep — a
-    /// move neither opens nor ends a contact).
+    /// Dispatch a synthetic pointer-move at `(x, y)` for the current contact (no
+    /// arena close/sweep — a move neither opens nor ends a contact).
     pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
-        self.laid.dispatch_pointer_move(x, y);
+        let pointer = self.current_contact();
+        let event = make_move_event_for_id(pointer, offset(x, y), PointerType::Mouse);
+        self.binding
+            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
-    /// Dispatch a synthetic pointer-cancel at `(x, y)`, THEN sweep the shared
-    /// arena (the contact was interrupted).
+    /// Dispatch a synthetic pointer-cancel at `(x, y)` for the current contact:
+    /// route, THEN sweep the shared arena (the contact was interrupted).
     pub fn dispatch_pointer_cancel(&self, x: f32, y: f32) {
-        self.laid.dispatch_pointer_cancel(x, y);
-        self.binding.arena().sweep(PointerId::PRIMARY);
+        let pointer = self.current_contact();
+        let event = make_cancel_event_for_id(pointer, PointerType::Mouse);
+        self.binding
+            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 }
 

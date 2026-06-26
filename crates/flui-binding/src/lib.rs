@@ -66,7 +66,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_interaction::arena::GestureArena;
+use flui_interaction::PointerEvent;
+use flui_interaction::arena::{GestureArena, run_pointer_lifecycle};
 use flui_interaction::{ManualClock, MonotonicClock};
 
 /// A deterministic, non-singleton headless frame driver.
@@ -84,16 +85,20 @@ pub struct HeadlessBinding {
 }
 
 impl HeadlessBinding {
-    /// Create a headless binding with a fresh virtual clock and a clock-bound
-    /// gesture arena.
+    /// Create a headless binding with a fresh virtual clock and a clock-bound,
+    /// binding-owned gesture arena.
     ///
-    /// The arena is built via `GestureArena::with_clock(Arc::new(clock.clone()))`,
-    /// so the arena and the binding observe the *same* virtual timeline (the
-    /// clock's elapsed counter is `Arc`-backed and shared across clones).
+    /// The arena is built via
+    /// `GestureArena::binding_driven(Arc::new(clock.clone()))`, so the arena and
+    /// the binding observe the *same* virtual timeline (the clock's elapsed
+    /// counter is `Arc`-backed and shared across clones) AND the recognizers
+    /// below never self-sweep — this binding runs the close/sweep lifecycle in
+    /// [`dispatch_pointer`](Self::dispatch_pointer).
     #[must_use]
     pub fn new() -> Self {
         let clock = ManualClock::new();
-        let arena = GestureArena::with_clock(Arc::new(clock.clone()) as Arc<dyn MonotonicClock>);
+        let arena =
+            GestureArena::binding_driven(Arc::new(clock.clone()) as Arc<dyn MonotonicClock>);
         Self { clock, arena }
     }
 
@@ -121,6 +126,22 @@ impl HeadlessBinding {
     #[must_use]
     pub fn clock(&self) -> &ManualClock {
         &self.clock
+    }
+
+    /// Route a pointer event to the hit-test path, then run the arena's
+    /// close/sweep lifecycle — Flutter's `GestureBinding.handleEvent` order.
+    ///
+    /// `route` delivers the event to the framework (hit-test + dispatch, which
+    /// drives every hit `Listener`'s `add_pointer` / `handle_event`); the closure
+    /// keeps this binding rendering-agnostic, since `flui-binding` cannot name
+    /// `HitTestResult`. The route runs **first**, then the arena is closed on
+    /// `Down` and swept on `Up` / `Cancel`. The route-before-sweep order is
+    /// load-bearing: it lets a double-tap's first-up `hold` run before the sweep,
+    /// so the sweep observes the hold and defers — and lets every overlapping
+    /// detector add its recognizers before the single `close`.
+    pub fn dispatch_pointer(&self, event: &PointerEvent, route: impl FnOnce(&PointerEvent)) {
+        route(event);
+        run_pointer_lifecycle(&self.arena, event);
     }
 
     /// Advance one deterministic frame by `dt`.

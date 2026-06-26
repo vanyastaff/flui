@@ -226,10 +226,22 @@ impl RecognizerBase {
         let Some(pointer) = self.primary_pointer() else {
             return;
         };
-        let Some(member) = self.tracked_member.lock().as_ref().and_then(Weak::upgrade) else {
+        let Some(member) = self.tracked_member() else {
             return;
         };
         self.arena.resolve(pointer, Some(member));
+    }
+
+    /// The exact `Arc<dyn GestureArenaMember>` this recognizer registered with
+    /// the arena in [`start_tracking`](Self::start_tracking), upgraded from the
+    /// stored `Weak`.
+    ///
+    /// Returns `None` once the recognizer is no longer tracking (the member was
+    /// dropped). Used by the double-tap lifecycle to resolve the first contact's
+    /// entry in favour of the double-tap.
+    #[inline]
+    pub fn tracked_member(&self) -> Option<Arc<dyn GestureArenaMember>> {
+        self.tracked_member.lock().as_ref().and_then(Weak::upgrade)
     }
 
     /// Stop tracking (called on success or rejection)
@@ -243,7 +255,15 @@ impl RecognizerBase {
         )
     )]
     pub fn stop_tracking(&self) {
-        if let Some(pointer) = self.primary_pointer() {
+        // Sweep only when this recognizer owns the arena lifecycle. In a
+        // binding-driven arena the binding sweeps on `PointerUp` after routing
+        // the event to the whole hit-test path; a recognizer self-sweeping here
+        // would force-resolve a shared entry to the front member before a
+        // double-tap (or a peer detector) could complete. Local tracking is
+        // cleared in both modes.
+        if let Some(pointer) = self.primary_pointer()
+            && self.arena.sweep_model() == crate::arena::SweepModel::SelfDriven
+        {
             self.arena.sweep(pointer);
         }
         self.set_primary_pointer(None);

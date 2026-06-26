@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use flui_interaction::arena::GestureArena;
+use flui_interaction::arena::{GestureArena, SweepModel};
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragEndDetails, DragGestureRecognizer, DragStartDetails,
     DragUpdateDetails, GestureRecognizer, LongPressGestureRecognizer, PointerEvent,
@@ -35,12 +35,13 @@ type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
 ///   long-press deadline. Deadline-driven: it needs a [`GestureArenaScope`] +
 ///   binding above to poll the deadline (see [arena acquisition](#arena-acquisition)).
 /// - **double tap** (`on_double_tap`) — two quick taps within the double-tap
-///   window. Works on its own. **Combining `on_double_tap` with `on_tap` on the
-///   same detector is not yet correct**: the tap recognizer resolves the arena on
-///   the first pointer-up, so a genuine double-tap fires `on_tap` twice instead.
-///   Holding the tap until the double-tap window closes needs the binding-driven
-///   arena sweep (the gesture lifecycle phase, tracked next). Use `on_double_tap`
-///   without `on_tap` until then.
+///   window. Combines correctly with `on_tap` under a [`GestureArenaScope`] +
+///   binding: the double-tap recognizer holds the arena across the inter-tap
+///   window, so the binding's first-up sweep is deferred and the front-member
+///   tap cannot win early — two quick taps fire `on_double_tap` once (not `on_tap`
+///   twice), and a lone tap is held until the window closes, then fires `on_tap`
+///   once. Standalone (no scope), the inter-tap give-up is not polled, so prefer
+///   `on_double_tap` under a scope.
 /// - **pan/drag** (`on_pan_start` / `on_pan_update` / `on_pan_end`) — a contact
 ///   that moves past the drag slop, reported with running deltas and a release
 ///   velocity.
@@ -56,11 +57,12 @@ type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
 /// In `init_state` the detector reads an ambient [`GestureArenaScope`] via
 /// `ctx.get::<GestureArenaScope, _>(..)`:
 /// - **Some(scope)** — build all recognizers against the shared, clock-bound
-///   arena and poll its deadlines each frame on the binding's virtual clock, so a
-///   long-press resolves deterministically. NOTE: the arena *close*-on-down and
-///   *sweep*-on-up are currently supplied by the test harness, not the binding —
-///   until the binding drives that lifecycle, cross-detector competition between
-///   overlapping detectors is not yet sound (the gesture lifecycle phase, next).
+///   arena (which answers [`SweepModel::BindingDriven`]) and poll its deadlines
+///   each frame on the binding's virtual clock, so a long-press resolves
+///   deterministically. The binding drives the *close*-on-down / *sweep*-on-up
+///   lifecycle after routing each event to the whole hit-test path, so
+///   overlapping detectors genuinely compete in the one arena (the recognizers
+///   below never self-sweep), and `on_tap` + `on_double_tap` combine correctly.
 /// - **None** (standalone) — build against a private [`GestureArena`] the
 ///   detector closes itself on down. Tap / secondary-tap / pan are fully
 ///   functional this way (byte-for-byte the historical behavior); the
@@ -133,14 +135,15 @@ impl GestureDetector {
     }
 
     /// Called when the child is double-tapped (two quick taps within the
-    /// double-tap window). The success path is purely event-driven (the inter-tap
-    /// timing reads the arena clock).
+    /// double-tap window). The inter-tap timing reads the arena clock.
     ///
-    /// **Do not combine with [`on_tap`](Self::on_tap) on the same detector yet:**
-    /// the tap recognizer resolves the arena on the first up, so a genuine
-    /// double-tap fires `on_tap` twice instead of `on_double_tap` once. Holding the
-    /// tap until the double-tap window closes needs the binding-driven arena sweep
-    /// (the next gesture lifecycle phase).
+    /// Combines correctly with [`on_tap`](Self::on_tap) under a
+    /// [`GestureArenaScope`] + binding: the double-tap recognizer holds the arena
+    /// across the inter-tap window, so the binding's first-up sweep is deferred
+    /// and the tap cannot win early. Two quick taps fire `on_double_tap` once
+    /// (never `on_tap` twice); a lone tap is held until the window closes, then
+    /// fires `on_tap` once. The give-up is binding-polled, so combine the two
+    /// under a scope.
     #[must_use]
     pub fn on_double_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_double_tap = Some(Arc::new(callback));
@@ -280,11 +283,15 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // never changes, and `get` (unlike `depend_on`) is legal here — Flutter
         // forbids `dependOnInheritedWidgetOfExactType` in `initState`, and the
         // no-dependency lookup sidesteps that rule.
-        let shared = ctx.get::<GestureArenaScope, _>(|scope| scope.arena().clone());
-        let (arena, self_close) = match shared {
-            Some(arena) => (arena, false),
-            None => (GestureArena::new(), true),
-        };
+        let arena = ctx
+            .get::<GestureArenaScope, _>(|scope| scope.arena().clone())
+            .unwrap_or_else(GestureArena::new);
+        // The arena's sweep model decides who owns close-on-down / sweep-on-up:
+        // a binding-owned (shared) arena answers `BindingDriven` and runs the
+        // lifecycle itself; a private `GestureArena::new()` answers `SelfDriven`,
+        // so this detector closes it. Deriving the flag from the arena keeps the
+        // two halves symmetric and subsumes a separate bool.
+        let self_close = arena.sweep_model() == SweepModel::SelfDriven;
 
         // Each recognizer reads its live slot OUT before invoking it, so a slot
         // lock is never held across user code (no re-entrancy / poison hazard).
