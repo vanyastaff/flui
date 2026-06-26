@@ -590,7 +590,7 @@ pub struct GestureArena {
     /// The time source deadline-driven recognizers read `now()` from. Defaults
     /// to the OS clock; a headless frame driver injects a `ManualClock` so a
     /// deadline (e.g. long-press) elapses deterministically without sleeping.
-    clock: Arc<dyn MonotonicClock>, // PORT-CHECK-OK-DYN: arena clock abstraction; two impls (System/Manual) and headless determinism require trait object.
+    clock: Arc<dyn MonotonicClock>,
 }
 
 impl GestureArena {
@@ -606,7 +606,6 @@ impl GestureArena {
     /// passes a [`ManualClock`](crate::clock::ManualClock) it advances per frame
     /// so deadline-driven recognizers resolve deterministically with no sleep.
     #[inline]
-    // PORT-CHECK-OK-DYN: arena clock abstraction; two impls (System/Manual) and headless determinism require trait object.
     pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
