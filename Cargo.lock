@@ -1314,7 +1314,7 @@ checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 
 [[package]]
 name = "flui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "flui-animation",
@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "flui-animation"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "flui-foundation",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "flui-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "android-activity",
  "anyhow",
@@ -1385,7 +1385,7 @@ dependencies = [
 
 [[package]]
 name = "flui-assets"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flui-types",
  "image",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "flui-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "flui-foundation"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "android_log-sys",
  "flui-types",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "flui-geometry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "flui-hot-reload"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "android_log-sys",
  "flui-layer",
@@ -1480,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "flui-interaction"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "cursor-icon",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "flui-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flui-foundation",
  "proc-macro2",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "flui-objects"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "flui-painting"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cosmic-text",
  "flui-foundation",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "flui-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "android-activity",
  "anyhow",
@@ -1598,7 +1598,7 @@ dependencies = [
 
 [[package]]
 name = "flui-rendering"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "flui-scheduler"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dashmap",
  "event-listener",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "flui-tree"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bon",
  "flui-foundation",
@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "flui-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "flui-geometry",
@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "flui-view"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bon",
  "criterion",
@@ -1716,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "flui-web-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
@@ -1729,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "flui-widgets"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
