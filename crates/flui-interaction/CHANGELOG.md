@@ -16,6 +16,8 @@ Versioning: per `docs/release.md` policy.
 - `pub mod observability` with `GestureEvent` typed enum + `SPAN_RECOGNIZER` / `SPAN_ARENA` span-name constants + `pointer_event_kind` helper. `#[tracing::instrument]` on `RecognizerBase` and `GestureArena` hot paths; observability is now Definition-of-Done for any recogniser or arena change.
 - `MultiDragGestureRecognizer` — per-pointer drag with team / multiple handles (`multi_drag.rs`).
 - `TapAndDragGestureRecognizer` — composite tap-then-drag (`tap_and_drag.rs`).
+- `GestureArena::reject_member` and `GestureArena::remove_if_settled` — granular member withdrawal so a recognizer can bow out of a shared arena without force-resolving the whole entry.
+- Re-exported `DragStartDetails`, `DragUpdateDetails`, `DragEndDetails`, `DragDownDetails`, plus `DragStartCallback`, `DragUpdateCallback`, `DragEndCallback`, `DragDownCallback`, `DragCancelCallback` from the crate root (previously only `DragGestureRecognizer` itself was exported).
 - `PointerPanZoom` variants — trackpad-fidelity precision + rotation.
 - `SamplingClock` for the resampler; `PointerEventResampler` wired into `GestureBinding`.
 - Criterion benchmarks under `crates/flui-interaction/benches/` — `velocity_tracker_bench`, `gesture_arena_bench`, `tap_detector_bench`, `pointer_resampler_bench`. Run with `cargo bench -p flui-interaction`. Hot-path regression guards; no `eprintln!` / `dbg!` in committed code.
@@ -27,6 +29,7 @@ Versioning: per `docs/release.md` policy.
 - `lsq_solver` factored into a reusable helper (regression math shared with `PointerEventResampler` and `VelocityTracker`).
 - drag recognisers split into `HorizontalDragGestureRecognizer` / `VerticalDragGestureRecognizer` / `PanGestureRecognizer` with `dragStartBehavior` and per-axis slop. `drag_variants` module added. Legacy `DragGestureRecognizer` is now an alias for the three-axis supertype.
 - `InputPredictor` maximum prediction horizon reduced 50 ms → 25 ms, aligned with Chromium's empirically validated `kMaxPredictionTime` (`ui/base/prediction/input_predictor.h`); longer horizons overshoot on direction changes.
+- Consolidated the two parallel `DragAxis` enums (one in `traits.rs`, one in `drag.rs`) into `traits::DragAxis`; `drag_variants.rs` now imports from `traits`.
 
 ### Removed
 
@@ -42,6 +45,7 @@ Versioning: per `docs/release.md` policy.
 - `PointerEventResampler` computed interpolated positions but never emitted the synthesized Move while still advancing `last_position`; it now emits per Flutter `resampler.dart`.
 
 - `LongPressGestureRecognizer::did_exceed_deadline` now calls `try_fire_timer` before resolving Accepted so `on_long_press_start` fires (was resolving without firing the start callback).
+- **Arena bug:** `RecognizerBase::reject()` used to call `arena.resolve(pointer, None)`, which rejected every competing member. A tap that moved past its slop therefore silently killed the drag it was racing. `reject()` now withdraws only itself via `reject_member`, then clears local tracking and calls `remove_if_settled` so the remaining competition keeps running.
 - pre-existing bug sweep — `events.rs::make_down_event_for_id` is now `#[cfg(any(test, feature = "testing"))]`-gated (was the only `*_for_id` family member shipping test-only code into the release binary); rustdoc hard-gate (`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`) is green; `EagerGestureRecognizer` added to the crate-root `AssertSendSync` static-assertion block; `force_press.rs::with_start_pressure` / `with_peak_pressure` now `debug_assert!(Arc::strong_count == 1)` to document the builder-call-immediately-after-`Arc::new` contract; `processing::prediction::predict` and `processing::resampler` refactored from post-guard `.unwrap()` to `let-else`; `tap_and_drag.rs` replaces a production `expect` with a `let-else` + `tracing::warn!` recovery.
 
 ### Performance
