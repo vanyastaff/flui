@@ -23,6 +23,7 @@ members = [
     "crates/flui-objects",   # Concrete RenderBox/RenderSliver catalog (ACTIVE)
     "crates/flui-view",      # View/Element tree (ACTIVE)
     "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
+    "crates/flui-binding",   # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app", # Application framework (ACTIVE - Migration)
@@ -72,6 +73,7 @@ default-members = [
     "crates/flui-objects",
     "crates/flui-view",
     "crates/flui-widgets",
+    "crates/flui-binding",
     "crates/flui-app",
     "crates/flui-animation",
 ]
@@ -108,6 +110,10 @@ flui-macros = { path = "crates/flui-macros" }
 
 # OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
 flui-objects = { path = "crates/flui-objects" }
+
+# HEADLESS FRAME DRIVER — deterministic `pump_frame(dt)` over the gesture arena +
+# virtual clock; sits above flui-widgets, below flui-app.
+flui-binding = { path = "crates/flui-binding" }
 
 # ERROR HANDLING & LOGGING - Used everywhere
 thiserror = "2.0"

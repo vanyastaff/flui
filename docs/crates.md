@@ -63,6 +63,7 @@ These crates compose the rendering substrate without knowing about each other.
 | `flui-view` | ✅ ACTIVE | View + Element tree, `BuildContext`, view trait |
 | `flui-objects` | ✅ ACTIVE | Concrete `RenderBox` / `RenderSliver` catalog that `flui-widgets` wraps |
 | `flui-widgets` | ✅ ACTIVE | User-facing Flutter-style widget catalog (configuration objects over `flui-objects`) |
+| `flui-binding` | ✅ ACTIVE | Deterministic non-singleton headless frame driver: `HeadlessBinding::pump_frame(dt)` advances a virtual `ManualClock` and polls clock-bound gesture-arena deadlines — sleep-free time-based gesture tests (long-press, double-tap). Animation-controller ticks (Phase 3) and tree-rebuild integration (Phase 1b) are deferred. |
 | `flui-assets` | ⏸️ DISABLED | Asset loading, caching, image decoding |
 | `flui-build` | ⏸️ DISABLED | Async cross-platform build pipeline (`PlatformBuilder` typestate) |
 
