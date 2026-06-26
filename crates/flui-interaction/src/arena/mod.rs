@@ -532,6 +532,59 @@ impl ArenaEntryData {
 }
 
 // ============================================================================
+// SweepModel
+// ============================================================================
+
+/// Who owns the close/sweep lifecycle of an arena.
+///
+/// This is the FLUI-native encoding of the Flutter contract that the
+/// *binding* — not a recognizer — drives `close(pointer)` on pointer-down and
+/// `sweep(pointer)` on pointer-up (`gestures/binding.dart` `handleEvent`).
+///
+/// - [`SelfDriven`](Self::SelfDriven) — the historical private-arena default. A
+///   recognizer (or a detector owning a private arena) closes/sweeps the arena
+///   itself, so [`RecognizerBase::stop_tracking`] sweeps on up. Used by every
+///   standalone recognizer path and a `GestureDetector` with no
+///   `GestureArenaScope` above it.
+/// - [`BindingDriven`](Self::BindingDriven) — a binding owns the arena and runs
+///   the close/sweep lifecycle after routing each pointer event to the hit-test
+///   path. Recognizers below it must *not* self-sweep: a tap's own
+///   `stop_tracking → sweep` on the first up would force-resolve a shared entry
+///   to the front member before a double-tap (or a peer detector) could
+///   complete.
+///
+/// The model is immutable per arena, like the clock; it rides on the
+/// `Arc`-backed handle, so every clone observes it.
+///
+/// [`RecognizerBase::stop_tracking`]: crate::recognizers::RecognizerBase::stop_tracking
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SweepModel {
+    /// The recognizer / detector owns the lifecycle (private arena).
+    SelfDriven,
+    /// A binding owns the lifecycle (shared arena).
+    BindingDriven,
+}
+
+/// Run the binding-owned close/sweep lifecycle for a single pointer event.
+///
+/// Mirrors Flutter's `GestureBinding.handleEvent` (`gestures/binding.dart`):
+/// on `PointerDown` the arena is closed; on `PointerUp` / `PointerCancel` it is
+/// swept. Every other event is a no-op for the arena lifecycle. Callers run
+/// their own route (hit-test dispatch) step *first*, then call this kernel — the
+/// route-before-sweep order is load-bearing (it lets a double-tap's first-up
+/// `hold` run before the sweep, so the sweep observes the hold and defers).
+/// Shared by the headless binding and any future production `GestureBinding`.
+pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
+    use crate::events::PointerEvent;
+    let pointer = crate::events::extract_pointer_id(event);
+    match event {
+        PointerEvent::Down(_) => arena.close(pointer),
+        PointerEvent::Up(_) | PointerEvent::Cancel(_) => arena.sweep(pointer),
+        _ => {}
+    }
+}
+
+// ============================================================================
 // GestureArena
 // ============================================================================
 
@@ -591,6 +644,9 @@ pub struct GestureArena {
     /// to the OS clock; a headless frame driver injects a `ManualClock` so a
     /// deadline (e.g. long-press) elapses deterministically without sleeping.
     clock: Arc<dyn MonotonicClock>,
+    /// Who owns the close/sweep lifecycle. Immutable per arena (like the clock);
+    /// recognizers read it to decide whether `stop_tracking` should self-sweep.
+    sweep_model: SweepModel,
 }
 
 impl GestureArena {
@@ -610,6 +666,23 @@ impl GestureArena {
         Self {
             entries: Arc::new(DashMap::new()),
             clock,
+            sweep_model: SweepModel::SelfDriven,
+        }
+    }
+
+    /// Create a binding-owned gesture arena driven by the given clock.
+    ///
+    /// The returned arena answers [`SweepModel::BindingDriven`], so recognizers
+    /// added to it never self-sweep in `stop_tracking` — the binding runs the
+    /// close/sweep lifecycle via [`run_pointer_lifecycle`] after routing each
+    /// pointer event. This is the arena a [`HeadlessBinding`](https://docs.rs/flui-binding)
+    /// (or a future production `GestureBinding`) hands down to a subtree.
+    #[inline]
+    pub fn binding_driven(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self {
+            entries: Arc::new(DashMap::new()),
+            clock,
+            sweep_model: SweepModel::BindingDriven,
         }
     }
 
@@ -619,7 +692,18 @@ impl GestureArena {
         Self {
             entries: Arc::new(DashMap::with_capacity(capacity)),
             clock: Arc::new(SystemClock),
+            sweep_model: SweepModel::SelfDriven,
         }
+    }
+
+    /// Who owns this arena's close/sweep lifecycle.
+    ///
+    /// [`SelfDriven`](SweepModel::SelfDriven) for a private arena (the
+    /// recognizer sweeps itself); [`BindingDriven`](SweepModel::BindingDriven)
+    /// for a binding-owned shared arena.
+    #[inline]
+    pub fn sweep_model(&self) -> SweepModel {
+        self.sweep_model
     }
 
     /// The current instant on this arena's clock — the time a deadline-driven
@@ -2032,5 +2116,75 @@ mod tests {
         entry.resolve(GestureDisposition::Rejected); // Should be ignored
 
         assert!(member.was_accepted());
+    }
+
+    // ========================================================================
+    // SweepModel
+    // ========================================================================
+
+    #[test]
+    fn new_arena_is_self_driven_binding_arena_is_binding_driven() {
+        assert_eq!(GestureArena::new().sweep_model(), SweepModel::SelfDriven);
+        assert_eq!(
+            GestureArena::with_capacity(4).sweep_model(),
+            SweepModel::SelfDriven
+        );
+        let binding = GestureArena::binding_driven(Arc::new(SystemClock));
+        assert_eq!(binding.sweep_model(), SweepModel::BindingDriven);
+        // The model rides on the Arc-backed handle: every clone observes it.
+        assert_eq!(binding.clone().sweep_model(), SweepModel::BindingDriven);
+    }
+
+    #[test]
+    fn run_pointer_lifecycle_closes_on_down_and_sweeps_on_up() {
+        use crate::events::{PointerType, make_down_event, make_up_event};
+        use flui_types::{Offset, geometry::px};
+
+        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
+        let pointer = PointerId::PRIMARY;
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member.clone());
+
+        // Down closes the arena (single member wins on close).
+        let down = make_down_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        run_pointer_lifecycle(&arena, &down);
+        assert!(!arena.is_open(pointer), "down must close the arena");
+        assert!(member.was_accepted(), "the single member wins on close");
+
+        // Up sweeps the (resolved) entry away.
+        let up = make_up_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        run_pointer_lifecycle(&arena, &up);
+        assert!(!arena.contains(pointer), "up must sweep the entry");
+    }
+
+    #[test]
+    fn a_held_entry_defers_the_binding_sweep_until_release() {
+        // The double-tap lifecycle leans on this: a held entry must defer the
+        // binding's first-up sweep (so a competing front-member tap cannot win
+        // early), and `release` must then drain the deferred sweep — removing
+        // the entry. The double-tap resolves the contended entries explicitly
+        // before releasing, so the deferred sweep is pure cleanup here.
+        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
+        let pointer = PointerId::PRIMARY;
+        let first = Arc::new(MockMember::new());
+        let second = Arc::new(MockMember::new());
+        arena.add(pointer, first.clone());
+        arena.add(pointer, second.clone());
+        arena.close(pointer); // 2 members, unresolved
+        arena.hold(pointer);
+
+        // Sweep while held: deferred, nobody resolved.
+        arena.sweep(pointer);
+        assert!(arena.contains(pointer), "the held sweep is deferred");
+        assert!(arena.has_pending_sweep(pointer));
+        assert!(!first.was_accepted(), "no resolution while held");
+        assert!(!second.was_accepted());
+
+        // Release drains the deferred sweep and removes the entry.
+        arena.release(pointer);
+        assert!(
+            !arena.contains(pointer),
+            "release drains the deferred sweep"
+        );
     }
 }

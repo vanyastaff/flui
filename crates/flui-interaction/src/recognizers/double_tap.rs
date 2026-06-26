@@ -72,6 +72,17 @@ pub struct DoubleTapGestureRecognizer {
 
     /// Gesture settings (device-specific tolerances)
     settings: Arc<Mutex<GestureSettings>>,
+
+    /// The first contact's pointer id, captured on the first up so its held
+    /// arena entry can be resolved + released after the second tap (or the
+    /// give-up). `None` outside the inter-tap window.
+    first_pointer: Arc<Mutex<Option<PointerId>>>,
+
+    /// The first contact's arena member, captured alongside `first_pointer`, so
+    /// completion can resolve the first entry in favour of the double-tap
+    /// (rejecting the first tap). Held as the exact `Arc` identity the arena
+    /// matches on via `Arc::ptr_eq`.
+    first_member: Arc<Mutex<Option<Arc<dyn GestureArenaMember>>>>,
 }
 
 #[derive(Default)]
@@ -130,6 +141,8 @@ impl DoubleTapGestureRecognizer {
             callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
+            first_pointer: Arc::new(Mutex::new(None)),
+            first_member: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -143,6 +156,8 @@ impl DoubleTapGestureRecognizer {
             callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
             settings: Arc::new(Mutex::new(settings)),
+            first_pointer: Arc::new(Mutex::new(None)),
+            first_member: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -257,28 +272,60 @@ impl DoubleTapGestureRecognizer {
 
         match state.phase {
             DoubleTapPhase::FirstDown => {
-                // First tap completed
+                // First tap completed — enter the inter-tap window.
                 state.phase = DoubleTapPhase::WaitingForSecond;
                 state.first_tap_time = Some(self.state.now());
                 state.first_tap_position = Some(position);
+                drop(state); // Release before touching the arena.
+
+                // Capture the first contact and HOLD its arena entry across the
+                // window (Flutter `_registerFirstTap` -> `gestureArena.hold`).
+                // The binding's first-up sweep then sees the entry held and
+                // defers, so a competing front-member tap cannot win yet. Do
+                // NOT stop tracking — the recognizer stays live for the second
+                // contact.
+                let first_pointer = self.state.primary_pointer();
+                *self.first_pointer.lock() = first_pointer;
+                *self.first_member.lock() = self.state.tracked_member();
+                if let Some(pointer) = first_pointer {
+                    self.state.arena().hold(pointer);
+                }
             }
             DoubleTapPhase::SecondDown => {
-                // Second tap completed - double tap!
+                // Second tap completed — a double tap.
                 state.phase = DoubleTapPhase::Completed;
                 drop(state);
 
-                // Call callback
+                // Resolve BOTH contended entries in favour of the double-tap so
+                // neither single tap fires (Flutter `_registerSecondTap`'s two
+                // `entry.resolve(accepted)` calls): the held first entry wins for
+                // its captured member (rejecting tap1), and the current entry
+                // wins for the second contact's tracked member (rejecting tap2).
+                // Resolving in *favour of* the double-tap — not `resolve(p,
+                // None)` — is required: a no-winner resolve would reject the
+                // double-tap's own member and spuriously fire `on_double_tap_cancel`.
+                let first_pointer = *self.first_pointer.lock();
+                let first_member = self.first_member.lock().take();
+                if let (Some(pointer), Some(member)) = (first_pointer, first_member) {
+                    self.state.arena().resolve(pointer, Some(member));
+                }
+                self.state.accept_tracked();
+
+                // Fire the double-tap callback once.
                 if let Some(callback) = self.callbacks.lock().on_double_tap.clone() {
-                    let details = DoubleTapDetails {
+                    callback(DoubleTapDetails {
                         global_position: position,
                         local_position: position,
                         kind,
-                    };
-                    callback(details);
+                    });
                 }
 
-                // Reset and stop tracking (single lock scope: three separate
-                // lock() calls would let another thread observe partial state)
+                // Release the first entry's hold (drains any deferred sweep) and
+                // reset (Flutter `_reset` -> `gestureArena.release`).
+                if let Some(pointer) = first_pointer {
+                    self.state.arena().release(pointer);
+                }
+                *self.first_pointer.lock() = None;
                 {
                     let mut state = self.gesture_state.lock();
                     state.phase = DoubleTapPhase::Ready;
@@ -336,10 +383,10 @@ impl DoubleTapGestureRecognizer {
         {
             let elapsed = self.state.now().duration_since(first_time);
             if elapsed > self.double_tap_timeout() {
-                // Timeout - reset to ready and cancel. Flutter parity:
-                // `DoubleTapGestureRecognizer` fires `onDoubleTapCancel` and
-                // releases its arena hold when the inter-tap window expires
-                // (`_reset` -> `_checkCancel`).
+                // Window expired with no second contact. Flutter parity:
+                // `DoubleTapGestureRecognizer._reset` fires `onDoubleTapCancel`,
+                // withdraws the double-tap from the held first entry, and
+                // releases the hold.
                 let position = state.first_tap_position.take().unwrap_or(Offset::ZERO);
                 let kind = state.device_kind.unwrap_or(PointerType::Touch);
                 state.phase = DoubleTapPhase::Ready;
@@ -353,7 +400,18 @@ impl DoubleTapGestureRecognizer {
                         kind,
                     });
                 }
+                // Withdraw the double-tap from the held first entry. The entry
+                // was closed as `[tap1, double_tap]`; removing the double-tap
+                // leaves the lone tap, which the closed-arena single-member rule
+                // resolves the winner — so the held tap finally fires. Then
+                // release the hold to drain any deferred sweep (idempotent — the
+                // entry is already resolved or removed).
+                let first_pointer = self.first_pointer.lock().take();
+                *self.first_member.lock() = None;
                 self.state.reject();
+                if let Some(pointer) = first_pointer {
+                    self.state.arena().release(pointer);
+                }
                 return true;
             }
         }
@@ -456,6 +514,13 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
                 .device_kind
                 .unwrap_or(PointerType::Touch);
             self.handle_cancel(pos, kind);
+        }
+        // If a competitor won while we held the first entry across the inter-tap
+        // window, drain the hold so the entry is not left held.
+        let first_pointer = self.first_pointer.lock().take();
+        *self.first_member.lock() = None;
+        if let Some(pointer) = first_pointer {
+            self.state.arena().release(pointer);
         }
     }
 }

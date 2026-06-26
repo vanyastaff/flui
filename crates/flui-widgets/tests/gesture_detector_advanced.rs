@@ -290,3 +290,175 @@ fn standalone_quick_tap_fires_tap_not_long_press() {
         "the long press is inert standalone and does not fire on a quick tap",
     );
 }
+
+// ============================================================================
+// (5) on_tap + on_double_tap on the SAME detector (the headline fix).
+// ============================================================================
+
+#[test]
+fn double_tap_combined_with_tap_fires_double_tap_once_and_tap_never() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let double_taps = Arc::new(AtomicUsize::new(0));
+    let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));
+
+    let mut scoped = lay_out_with_arena(
+        GestureDetector::new()
+            .on_tap(move || {
+                tap_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_double_tap(move || {
+                double_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    // Two quick taps within the window. The double-tap recognizer holds the
+    // arena across the inter-tap window, so the binding's first-up sweep is
+    // deferred and the tap cannot win early; the second tap completes the
+    // double-tap, which rejects BOTH taps. Without the binding-driven lifecycle
+    // this fires on_tap TWICE and on_double_tap zero times.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    scoped.pump(Duration::from_millis(50));
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+
+    assert_eq!(
+        double_taps.load(Ordering::SeqCst),
+        1,
+        "two quick taps fire on_double_tap exactly once",
+    );
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "a genuine double tap must NOT fire on_tap at all",
+    );
+}
+
+#[test]
+fn lone_tap_is_held_until_the_double_tap_window_closes_then_fires_tap() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let double_taps = Arc::new(AtomicUsize::new(0));
+    let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));
+
+    let mut scoped = lay_out_with_arena(
+        GestureDetector::new()
+            .on_tap(move || {
+                tap_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_double_tap(move || {
+                double_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    // One tap: the double-tap recognizer holds the arena, so the tap is deferred
+    // — it must NOT have fired yet.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "the lone tap is held until the double-tap window closes",
+    );
+
+    // Cross the 300ms window with no second contact: the double-tap gives up,
+    // withdraws itself, and the lone tap finally wins and fires once.
+    scoped.pump(Duration::from_millis(350));
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "after the window closes the held tap fires exactly once",
+    );
+    assert_eq!(
+        double_taps.load(Ordering::SeqCst),
+        0,
+        "a single tap is not a double tap",
+    );
+}
+
+// ============================================================================
+// (6) Two overlapping detectors compete in one GestureArenaScope.
+// ============================================================================
+//
+// Detector A (outer, on_long_press) wraps detector B (inner, on_tap), both over
+// the same hit-testable target so both Listeners sit on the hit path and add
+// their recognizers to the SAME arena entry for one contact. The hit path is
+// "most specific first", so the INNER detector's recognizer is the arena front
+// member. These guard that A's recognizers no longer self-sweep B out (the
+// binding owns the sweep): exactly one callback fires per contact.
+
+fn nested_tap_over_long_press(
+    tap_count: Arc<AtomicUsize>,
+    press_count: Arc<AtomicUsize>,
+) -> GestureDetector {
+    GestureDetector::new()
+        .on_long_press(move || {
+            press_count.fetch_add(1, Ordering::SeqCst);
+        })
+        .child(
+            GestureDetector::new()
+                .on_tap(move || {
+                    tap_count.fetch_add(1, Ordering::SeqCst);
+                })
+                .child(target()),
+        )
+}
+
+#[test]
+fn overlapping_detectors_quick_tap_resolves_to_the_inner_tap() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let presses = Arc::new(AtomicUsize::new(0));
+
+    let scoped = lay_out_with_arena(
+        nested_tap_over_long_press(Arc::clone(&taps), Arc::clone(&presses)),
+        tight(100.0, 100.0),
+    );
+
+    // Quick down+up: the inner tap is the front member and wins on the binding's
+    // sweep; the outer long press never fires.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "the inner tap wins a quick contact",
+    );
+    assert_eq!(
+        presses.load(Ordering::SeqCst),
+        0,
+        "the outer long press does not fire on a quick contact",
+    );
+}
+
+#[test]
+fn overlapping_detectors_held_press_resolves_to_the_outer_long_press() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let presses = Arc::new(AtomicUsize::new(0));
+
+    let mut scoped = lay_out_with_arena(
+        nested_tap_over_long_press(Arc::clone(&taps), Arc::clone(&presses)),
+        tight(100.0, 100.0),
+    );
+
+    // Hold past the deadline: the outer long press wins the shared arena
+    // (rejecting the inner tap), then release. The inner tap must NOT fire — the
+    // case that regresses if the inner tap's own up self-sweeps the arena.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.pump(Duration::from_millis(600));
+    scoped.dispatch_pointer_up(50.0, 50.0);
+
+    assert_eq!(
+        presses.load(Ordering::SeqCst),
+        1,
+        "the held press fires the outer long press exactly once",
+    );
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "the long press rejected the inner tap, so the tap must NOT fire",
+    );
+}
