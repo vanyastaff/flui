@@ -10,11 +10,15 @@
 mod list_view;
 mod single_child_scroll_view;
 mod sliver_fixed_extent_list;
+mod sliver_opacity;
+mod sliver_padding;
 mod sliver_to_box_adapter;
 mod viewport;
 
 pub use list_view::ListView;
 pub use single_child_scroll_view::SingleChildScrollView;
 pub use sliver_fixed_extent_list::SliverFixedExtentList;
+pub use sliver_opacity::SliverOpacity;
+pub use sliver_padding::SliverPadding;
 pub use sliver_to_box_adapter::SliverToBoxAdapter;
 pub use viewport::Viewport;

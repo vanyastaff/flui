@@ -100,7 +100,8 @@ pub use layout::{
 };
 pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
-    ListView, SingleChildScrollView, SliverFixedExtentList, SliverToBoxAdapter, Viewport,
+    ListView, SingleChildScrollView, SliverFixedExtentList, SliverOpacity, SliverPadding,
+    SliverToBoxAdapter, Viewport,
 };
 pub use stack::Stack;
 pub use text::Text;
@@ -135,7 +136,7 @@ pub mod prelude {
         Column, ConstrainedBox, Container, DecoratedBox, FittedBox, Flex, FractionalTranslation,
         FractionallySizedBox, IgnorePointer, LimitedBox, ListView, Offstage, Opacity, Padding,
         RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
-        SliverToBoxAdapter, Stack, Text, Transform, Viewport,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport,
     };
 
     // Common configuration value types, so an app author needs only this import.

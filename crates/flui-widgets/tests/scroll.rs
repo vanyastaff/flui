@@ -70,3 +70,22 @@ fn list_view_gives_each_row_the_fixed_item_extent() {
     let first_row = laid.child(list, 0);
     assert_eq!(laid.size(first_row), size(200.0, 50.0));
 }
+
+#[test]
+fn sliver_padding_insets_its_sliver_child() {
+    use flui_widgets::{SliverPadding, SliverToBoxAdapter, Viewport};
+    // Viewport → SliverPadding(10) → SliverToBoxAdapter → box: the padding's
+    // 10-per-side cross inset shrinks the box's cross axis to 200-20 = 180.
+    let laid = lay_out(
+        Viewport::new((SliverPadding::all(10.0)
+            .child(SliverToBoxAdapter::new().child(SizedBox::new(180.0, 100.0))),)),
+        tight(200.0, 300.0),
+    );
+    let viewport = laid.root();
+    assert_eq!(laid.size(viewport), size(200.0, 300.0));
+
+    let padding = laid.only_child(viewport);
+    let adapter = laid.only_child(padding);
+    let box_child = laid.only_child(adapter);
+    assert_eq!(laid.size(box_child), size(180.0, 100.0));
+}
