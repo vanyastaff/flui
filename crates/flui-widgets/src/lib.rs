@@ -81,6 +81,7 @@ pub mod flex;
 pub mod interaction;
 pub mod layout;
 pub mod paint;
+pub mod scroll;
 pub mod stack;
 pub mod text;
 
@@ -98,6 +99,9 @@ pub use layout::{
     FractionallySizedBox, LimitedBox, Padding, SizedBox, Transform,
 };
 pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
+pub use scroll::{
+    ListView, SingleChildScrollView, SliverFixedExtentList, SliverToBoxAdapter, Viewport,
+};
 pub use stack::Stack;
 pub use text::Text;
 
@@ -129,15 +133,16 @@ pub mod prelude {
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRect, ColoredBox,
         Column, ConstrainedBox, Container, DecoratedBox, FittedBox, Flex, FractionalTranslation,
-        FractionallySizedBox, IgnorePointer, LimitedBox, Offstage, Opacity, Padding,
-        RepaintBoundary, Row, SizedBox, Stack, Text, Transform,
+        FractionallySizedBox, IgnorePointer, LimitedBox, ListView, Offstage, Opacity, Padding,
+        RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
+        SliverToBoxAdapter, Stack, Text, Transform, Viewport,
     };
 
     // Common configuration value types, so an app author needs only this import.
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_rendering::constraints::BoxConstraints;
-    pub use flui_types::layout::BoxFit;
+    pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
     pub use flui_types::painting::Clip;
     pub use flui_types::typography::TextBaseline;
     pub use flui_types::{Alignment, Color};
