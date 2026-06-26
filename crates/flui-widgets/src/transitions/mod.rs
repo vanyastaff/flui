@@ -5,7 +5,9 @@
 //! value.
 
 mod fade_transition;
+mod rotation_transition;
 mod scale_transition;
 
 pub use fade_transition::{FadeTransition, FadeTransitionState};
+pub use rotation_transition::{RotationTransition, RotationTransitionState};
 pub use scale_transition::{ScaleTransition, ScaleTransitionState};
