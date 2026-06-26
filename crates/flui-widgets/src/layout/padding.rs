@@ -13,11 +13,9 @@ use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use flui_widgets::prelude::*;
-///
-/// Padding::all(8.0).child(Text::new("hello"))
-/// # ;
+/// ```rust
+/// # use flui_widgets::prelude::*;
+/// let _ = Padding::all(8.0).child(Text::new("hello"));
 /// ```
 #[derive(Clone, Debug)]
 pub struct Padding {

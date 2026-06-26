@@ -34,17 +34,17 @@
 //! [`ViewSeq`](flui_view::seq::ViewSeq)-backed `column!`/`row!` macros (the
 //! static tuple path) or `Vec<BoxedView>` (the dynamic path).
 //!
-//! ```rust,ignore
+//! ```rust
 //! use flui_widgets::prelude::*;
+//! use flui_widgets::{column, row}; // ViewSeq macros (shadow std's same-named)
 //!
-//! Container::new()
-//!     .padding(EdgeInsets::all(8.0))
-//!     .color(Color::from_rgb(0.1, 0.4, 0.9))
+//! let _tree = Container::new()
+//!     .padding(EdgeInsets::all(px(8.0)))
+//!     .color(Color::rgb(26, 102, 230))
 //!     .child(Column::new(column![
 //!         Text::new("Hello"),
 //!         Padding::all(4.0).child(Text::new("World")),
-//!     ]))
-//! # ;
+//!     ]));
 //! ```
 //!
 //! [`RenderView`]: flui_view::prelude::RenderView

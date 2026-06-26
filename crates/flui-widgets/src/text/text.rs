@@ -14,11 +14,9 @@ use flui_view::{RenderView, impl_render_view};
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use flui_widgets::prelude::*;
-///
-/// Text::new("Hello, world")
-/// # ;
+/// ```rust
+/// # use flui_widgets::prelude::*;
+/// let _ = Text::new("Hello, world");
 /// ```
 #[derive(Clone, Debug)]
 pub struct Text {
