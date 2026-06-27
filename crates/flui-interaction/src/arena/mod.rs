@@ -568,18 +568,21 @@ pub enum SweepModel {
 /// Run the binding-owned close/sweep lifecycle for a single pointer event.
 ///
 /// Mirrors Flutter's `GestureBinding.handleEvent` (`gestures/binding.dart`):
-/// on `PointerDown` the arena is closed; on `PointerUp` / `PointerCancel` it is
-/// swept. Every other event is a no-op for the arena lifecycle. Callers run
-/// their own route (hit-test dispatch) step *first*, then call this kernel — the
-/// route-before-sweep order is load-bearing (it lets a double-tap's first-up
-/// `hold` run before the sweep, so the sweep observes the hold and defers).
+/// on `PointerDown` the arena is closed; on `PointerUp` it is swept. Every
+/// other event — including `PointerCancel` — is a no-op for the arena
+/// lifecycle (recognizers self-reject on cancel; sweeping on cancel would
+/// force the first member to win an interrupted gesture). Callers run
+/// their own route (hit-test dispatch) step *first*, then call this kernel
+/// — the route-before-sweep order is load-bearing (it lets a double-tap's
+/// first-up `hold` run before the sweep, so the sweep observes the hold
+/// and defers).
 /// Shared by the headless binding and any future production `GestureBinding`.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
     use crate::events::PointerEvent;
     let pointer = crate::events::extract_pointer_id(event);
     match event {
         PointerEvent::Down(_) => arena.close(pointer),
-        PointerEvent::Up(_) | PointerEvent::Cancel(_) => arena.sweep(pointer),
+        PointerEvent::Up(_) => arena.sweep(pointer),
         _ => {}
     }
 }
@@ -894,8 +897,19 @@ impl GestureArena {
 
     /// Release the hold on an arena.
     ///
-    /// If arena was waiting to close, it will close now.
-    /// If sweep was pending, it will execute now.
+    /// If the arena was waiting to close, it will close now. If a sweep was
+    /// pending (deferred while held), the deferred sweep drains and the entry
+    /// is removed.
+    ///
+    /// # Contract
+    ///
+    /// The caller is responsible for ensuring the entry is already resolved
+    /// (or has no members) before the deferred sweep drains. Releasing an
+    /// unresolved multi-member entry causes the entry to be silently removed
+    /// without invoking `accept_gesture` or `reject_gesture` on any member.
+    /// The correct pattern: resolve (or `reject_member` until one winner
+    /// remains) *before* calling `release`, so `has_pending_sweep` drains a
+    /// settled entry.
     pub fn release(&self, pointer: PointerId) {
         let mut pending = PendingNotifications::new();
         let should_sweep = {
