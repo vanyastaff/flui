@@ -242,7 +242,7 @@ impl ViewState<CounterView> for CounterState {
         }
     }
 
-    fn did_update_view(&mut self, _old_view: &CounterView) {
+    fn did_update_view(&mut self, _old_view: &CounterView, _new_view: &CounterView) {
         self.update_count.fetch_add(1, Ordering::SeqCst);
     }
 }

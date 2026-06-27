@@ -290,6 +290,20 @@ impl AnimationController {
         inner.reverse_duration = Some(duration);
     }
 
+    /// Set the base forward duration.
+    ///
+    /// Mirrors Flutter's `controller.duration = newDuration`, which an
+    /// [`ImplicitlyAnimatedWidget`](https://api.flutter.dev/flutter/widgets/ImplicitlyAnimatedWidget-class.html)
+    /// assigns on every `didUpdateWidget` so a duration change takes effect on
+    /// the *next* run. It does not retime an in-flight run (the active run keeps
+    /// the duration it started with, since `tick_at` scales against the
+    /// already-captured `run_duration`/`duration`); the new value is read when
+    /// the next `forward`/`reverse` re-establishes the run epoch.
+    pub fn set_duration(&self, duration: Duration) {
+        let mut inner = self.inner.lock();
+        inner.duration = duration;
+    }
+
     /// Start animation forward from current value to upper bound.
     ///
     /// # Errors

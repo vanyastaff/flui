@@ -85,7 +85,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController};
+use flui_animation::{AnimationController, Vsync};
 use flui_interaction::PointerEvent;
 use flui_interaction::arena::{GestureArena, run_pointer_lifecycle};
 use flui_interaction::{ManualClock, MonotonicClock};
@@ -108,28 +108,13 @@ struct TreeBinding {
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
 }
 
-/// One registered [`AnimationController`] plus the binding's per-run anchor.
-///
-/// `run_start_secs` is the virtual-clock instant (elapsed seconds since the
-/// binding's [`ManualClock`] was created) at which the controller's *current* run
-/// is treated as `t = 0`; `last_gen` is the controller's `run_generation`
-/// observed when that anchor was set. Each frame, if the generation advanced (a
-/// fresh run re-zeroed the controller's epoch), the anchor is reset to the
-/// current instant — so `tick_at(now − run_start_secs)` always rides the active
-/// run's own timeline, never a stale one.
-#[derive(Debug)]
-struct RegisteredController {
-    controller: AnimationController,
-    run_start_secs: f64,
-    last_gen: u64,
-}
-
 /// A deterministic, non-singleton headless frame driver.
 ///
 /// Owns the single virtual time authority ([`ManualClock`]) and a clock-bound
 /// [`GestureArena`] whose deadline checks read that clock; optionally also owns a
-/// mounted tree triple (via [`with_tree`](Self::with_tree)) and a registry of
-/// animation controllers. Drive it with [`pump_frame`](Self::pump_frame).
+/// mounted tree triple (via [`with_tree`](Self::with_tree)) and drives a
+/// restart-aware animation-controller registry ([`Vsync`]). Drive it with
+/// [`pump_frame`](Self::pump_frame).
 #[derive(Debug)]
 pub struct HeadlessBinding {
     /// The single virtual time authority. Every time-based read flows from here.
@@ -137,9 +122,11 @@ pub struct HeadlessBinding {
     /// The shared, clock-bound arena. Deadline-driven recognizers added to it (via
     /// [`arena`](Self::arena)) resolve against the virtual clock.
     arena: GestureArena,
-    /// Animation controllers ticked each frame on the virtual timeline,
-    /// restart-aware (see [`register_controller`](Self::register_controller)).
-    controllers: Vec<RegisteredController>,
+    /// The controller registry ticked each frame on the virtual timeline,
+    /// restart-aware. Shared (`Arc`-backed): a `VsyncScope` hands the same
+    /// registry to a widget subtree so an implicitly-animated widget registers
+    /// its controller here. See [`vsync`](Self::vsync) / [`adopt_vsync`](Self::adopt_vsync).
+    vsync: Vsync,
     /// The mounted tree this binding rebuilds + renders each frame. `None` for a
     /// gesture-only binding ([`new`](Self::new)); `Some` once tree-bound.
     tree: Option<TreeBinding>,
@@ -163,7 +150,7 @@ impl HeadlessBinding {
         Self {
             clock,
             arena,
-            controllers: Vec::new(),
+            vsync: Vsync::new(),
             tree: None,
         }
     }
@@ -195,29 +182,40 @@ impl HeadlessBinding {
         binding
     }
 
-    /// Register `controller` so each [`pump_frame`](Self::pump_frame) advances it
-    /// on the virtual timeline.
+    /// Register `controller` with this binding's [`Vsync`] so each
+    /// [`pump_frame`](Self::pump_frame) advances it on the virtual timeline.
     ///
     /// The controller is `Clone` (`Arc`-backed); register a clone and keep your
-    /// own handle to drive it (`forward()`, `reverse()`, …). The binding records
-    /// the current virtual instant as this run's anchor and the controller's
-    /// `run_generation`; on a later frame where the generation has advanced (a
-    /// fresh run started), it re-anchors automatically — so a controller run
-    /// multiple times stays in sync without any binding-side run lifecycle.
-    ///
-    /// Register **before** starting the controller for the cleanest anchoring
-    /// (register-then-`forward()`); register-after-`forward()` anchors at the
-    /// register instant, which is exact when registration immediately follows the
-    /// start. Drop the binding (or stop driving a controller) before disposing
-    /// the controller — a registered controller is ticked only while it reports
-    /// running, so a disposed controller is simply skipped.
+    /// own handle to drive it (`forward()`, `reverse()`, …). The registry is
+    /// restart-aware: it re-anchors a controller's run on every fresh
+    /// `forward`/`reverse`, so a controller run multiple times stays in sync
+    /// without any binding-side run lifecycle. Convenience for a test that owns
+    /// the controller directly; an implicitly-animated widget instead registers
+    /// through a `VsyncScope` over [`vsync`](Self::vsync).
     pub fn register_controller(&mut self, controller: AnimationController) {
-        let run_start_secs = self.clock.elapsed().as_secs_f64();
-        self.controllers.push(RegisteredController {
-            last_gen: controller.run_generation(),
-            run_start_secs,
-            controller,
-        });
+        self.vsync.register(controller);
+    }
+
+    /// The controller registry this binding ticks each frame.
+    ///
+    /// Wrap a widget subtree in a `VsyncScope` over `binding.vsync().clone()`
+    /// (in `flui-widgets`) so every implicitly-animated widget below registers
+    /// its controller here and is driven by `pump_frame`. `flui-binding` cannot
+    /// host that scope itself — it has no `flui-widgets` dependency — so the
+    /// wiring lives one layer up, exactly as the gesture arena does.
+    #[must_use]
+    pub fn vsync(&self) -> &Vsync {
+        &self.vsync
+    }
+
+    /// Replace this binding's registry with a pre-existing shared `Vsync`.
+    ///
+    /// Use when a `VsyncScope` was placed in the tree *before* the binding was
+    /// built (the scope needs the registry handle to hand to descendants, and
+    /// the binding must drive that same registry). Call before any controller is
+    /// registered, so no registration is stranded on the discarded registry.
+    pub fn adopt_vsync(&mut self, vsync: Vsync) {
+        self.vsync = vsync;
     }
 
     /// Mutable access to the bound `BuildOwner`, for an embedder/harness that
@@ -340,25 +338,12 @@ impl HeadlessBinding {
         //    now elapsed fires here, inside the frame.
         self.arena.poll_deadlines();
 
-        // 3. Tick registered controllers on the virtual timeline, restart-aware.
-        //    Pass RAW (pre-dilation) seconds — `tick_at`'s contract — measured
-        //    from each run's own start; `time_dilation` is applied inside the
-        //    controller. A generation bump means a fresh run was just established,
-        //    so re-anchor `t = 0` to now (the controller already discarded any
-        //    intermediate run via its own `restart_ticker`).
+        // 3. Tick the registered controllers on the virtual timeline. The
+        //    registry is restart-aware: it re-anchors each controller's run on a
+        //    `run_generation` bump and ticks only running controllers with the
+        //    raw seconds elapsed since that run's anchor.
         let now_secs = self.clock.elapsed().as_secs_f64();
-        for registered in &mut self.controllers {
-            let generation = registered.controller.run_generation();
-            if generation != registered.last_gen {
-                registered.last_gen = generation;
-                registered.run_start_secs = now_secs;
-            }
-            if registered.controller.status().is_running() {
-                registered
-                    .controller
-                    .tick_at(now_secs - registered.run_start_secs);
-            }
-        }
+        self.vsync.tick_all(now_secs);
 
         // 4 + 5. Tree-bound only: drain the build inbox (filled by steps 2-3) and
         //        run the render pipeline frame. The pipeline owner is shared via

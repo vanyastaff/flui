@@ -75,6 +75,7 @@
 
 mod support;
 
+pub mod animated;
 pub mod clip;
 mod container;
 pub mod flex;
@@ -91,6 +92,10 @@ pub mod transitions;
 // single-import surface.
 // ============================================================================
 
+pub use animated::{
+    AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
+    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, VsyncScope,
+};
 pub use clip::{ClipOval, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
@@ -110,8 +115,8 @@ pub use scroll::{
 pub use stack::{Positioned, Stack};
 pub use text::Text;
 pub use transitions::{
-    FadeTransition, FadeTransitionState, RotationTransition, RotationTransitionState,
-    ScaleTransition, ScaleTransitionState,
+    AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
+    RotationTransitionState, ScaleTransition, ScaleTransitionState,
 };
 
 // The heterogeneous-children macros (contract C2's static tuple path). Kept out

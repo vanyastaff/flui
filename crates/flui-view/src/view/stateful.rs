@@ -130,9 +130,17 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
 
     /// Called when the View configuration changes.
     ///
-    /// The Element receives a new View instance (with potentially different
-    /// field values). Use this to react to configuration changes.
-    fn did_update_view(&mut self, _old_view: &V) {}
+    /// The Element has just swapped in `new_view` (the current configuration);
+    /// `old_view` is the previous one. Compare the two to react to a changed
+    /// field — this is Flutter's `didUpdateWidget(oldWidget)`, where `oldWidget`
+    /// is the argument and the new widget is `this.widget` (here passed
+    /// explicitly as `new_view`, since FLUI state does not hold the view).
+    ///
+    /// An implicitly-animated widget retargets its controller here: if the
+    /// animated property differs between `old_view` and `new_view`, it sets the
+    /// tween's `begin` to the current displayed value, its `end` to the new
+    /// target, and restarts the controller from `0`.
+    fn did_update_view(&mut self, _old_view: &V, _new_view: &V) {}
 
     /// Called when the Element is temporarily removed from the tree.
     ///

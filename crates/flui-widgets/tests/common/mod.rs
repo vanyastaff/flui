@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use std::cell::Cell;
 
-use flui_animation::AnimationController;
+use flui_animation::{AnimationController, Vsync};
 use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
 use flui_interaction::PointerId;
@@ -120,6 +120,20 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         root_render_id,
         root_element_id: root_id,
     }
+}
+
+/// Like [`lay_out`], but drives implicitly-animated widgets: the binding adopts
+/// `vsync` so it ticks every controller a descendant `VsyncScope` (built from
+/// the same `vsync`) registered during the mount build pass.
+///
+/// The caller threads `vsync` into the root widget (so its build wraps the
+/// animated subtree in `VsyncScope::new(vsync.clone(), …)`) AND passes the same
+/// handle here, so the scope a descendant reads and the registry the binding
+/// drives are one and the same.
+pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsync) -> LaidOut {
+    let mut laid = lay_out(root, constraints);
+    laid.binding.adopt_vsync(vsync);
+    laid
 }
 
 impl LaidOut {

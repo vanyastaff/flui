@@ -574,11 +574,13 @@ where
 
     fn on_view_updated(
         &mut self,
-        _core: &ElementCore<V, A>,
+        core: &ElementCore<V, A>,
         old_view: &V,
         _owner: &mut crate::ElementOwner<'_>,
     ) {
-        self.state.did_update_view(old_view);
+        // `core.view()` is already the freshly-swapped-in configuration here —
+        // Flutter's `this.widget` at `didUpdateWidget` time.
+        self.state.did_update_view(old_view, core.view());
     }
 
     /// Fire `ViewState::did_change_dependencies` on the owned state.

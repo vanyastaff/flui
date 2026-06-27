@@ -105,6 +105,7 @@ pub mod smoothing;
 pub mod spring;
 pub mod switch;
 pub mod tween;
+pub mod vsync;
 
 // Data types (moved from flui_types)
 pub mod curve;
@@ -135,6 +136,7 @@ pub use spring::{AnimatedValue, TwoWayConverter};
 pub use flui_macros::Animatable;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
+pub use vsync::{Vsync, VsyncRegistration};
 
 // Re-exports from data type modules
 pub use curve::{
