@@ -8,14 +8,18 @@
 
 mod common;
 
-use common::{lay_out, lay_out_with_arena, size, tight};
+use std::sync::Arc;
+use std::time::Duration;
+
+use common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
+use flui_animation::Vsync;
+use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;
 use flui_view::ViewExt;
 use flui_widgets::{
-    ClampingScrollPhysics, ColoredBox, ListView, ScrollController, ScrollPhysics, Scrollable,
-    SharedScrollPhysics, SingleChildScrollView, SizedBox,
+    BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, ListView, ScrollController,
+    ScrollPhysics, Scrollable, SharedScrollPhysics, SingleChildScrollView, SizedBox, VsyncScope,
 };
-use std::sync::Arc;
 
 #[test]
 fn single_child_scroll_view_lays_child_out_unbounded_on_scroll_axis() {
@@ -276,6 +280,217 @@ fn scrollable_drag_up_at_max_extent_is_clamped_by_physics() {
         controller.pixels() <= 500.0,
         "clamping physics must not allow the offset to exceed max_scroll_extent (500); \
          got {:.1}",
+        controller.pixels()
+    );
+}
+
+// ============================================================================
+// Scrollable — fling ballistic simulation integration
+// ============================================================================
+
+/// Wrap `widget` in a [`VsyncScope`] so its `ScrollableState::init_state` can
+/// register the fling controller, then lay it out under `constraints` with a
+/// gesture arena. Adopts the same vsync in the tree binding so
+/// [`LaidOutScoped::pump_for`] ticks the fling animation deterministically.
+fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOutScoped {
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out_with_arena(wrapped, constraints);
+    scoped.adopt_vsync(vsync);
+    scoped
+}
+
+/// After a pan gesture ends with sufficient velocity the scroll offset must
+/// continue to advance beyond the release position when the binding pumps
+/// animation frames — confirming that the fling animation controller is wired
+/// to the scroll controller and the vsync is driving it.
+#[test]
+fn scrollable_fling_advances_offset_past_release() {
+    let controller = ScrollController::new();
+    // Large extent prevents the fling from hitting the boundary on the first
+    // frame — we want to observe forward motion, not clamping.
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    // Upward drag well past the 18 px slop to establish a recognizable fling
+    // velocity. The first move crosses slop (on_pan_start). The second fires
+    // on_pan_update, advancing the offset. The pointer_up triggers on_pan_end
+    // which calls animate_with on the fling controller.
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
+    scoped.dispatch_pointer_move(150.0, 150.0); // 30 px more: on_pan_update
+    scoped.dispatch_pointer_up(150.0, 150.0);
+
+    let pixels_at_release = controller.pixels();
+    assert!(
+        pixels_at_release > 0.0,
+        "pan drag must advance the offset before release; got {pixels_at_release}"
+    );
+
+    // First pump: vsync detects the new run generation from `animate_with` and
+    // anchors the run start at t=0. The controller ticks at elapsed=0, which
+    // gives x(0) = start (the release position). No net advance yet.
+    scoped.pump_for(Duration::from_millis(16));
+    // Second pump: advances to t=16 ms. The ballistic simulation gives
+    // x(0.016) > start (friction deceleration carries the position forward).
+    scoped.pump_for(Duration::from_millis(16));
+
+    assert!(
+        controller.pixels() > pixels_at_release,
+        "scroll offset must continue past the release position after two fling frames; \
+         release={pixels_at_release:.1}, now={:.1}",
+        controller.pixels()
+    );
+}
+
+/// Clamping physics must never allow the fling to carry the scroll position
+/// past `max_scroll_extent` regardless of the initial fling velocity.
+///
+/// The drag leaves the position at `max_scroll_extent` (clamped during the pan
+/// update phase). The ballistic simulation starts there; even with an extreme
+/// velocity the `BoundedFrictionSimulation` respects its upper bound.
+#[test]
+fn clamping_physics_fling_stays_within_max_extent() {
+    let controller = ScrollController::new();
+    let max_extent = 500.0_f32;
+    controller.update_dimensions(300.0, 0.0, max_extent);
+
+    let physics: SharedScrollPhysics = Arc::new(ClampingScrollPhysics::new());
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .physics(physics)
+        .child(SizedBox::new(300.0, 800.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    // Large upward drag: clamping physics clamps at max_extent during
+    // on_pan_update, so we release from the boundary.
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: 70 px upward
+    scoped.dispatch_pointer_move(150.0, 10.0); // 170 px more upward: on_pan_update
+    scoped.dispatch_pointer_up(150.0, 10.0);
+
+    // Pump many frames — even with extreme fling velocity the clamping
+    // simulation bounds the final position.
+    for _ in 0..30 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    assert!(
+        controller.pixels() <= max_extent,
+        "clamping physics must hold scroll at or below max_extent ({max_extent}); \
+         got {:.1}",
+        controller.pixels()
+    );
+}
+
+/// Bouncing physics allows the drag to carry the scroll position past
+/// `max_scroll_extent` with spring damping. On release, a
+/// `ScrollSpringSimulation` springs the position back to the boundary. After
+/// enough frames the position must be within 1 px of `max_scroll_extent`.
+#[test]
+fn bouncing_physics_fling_springs_back_after_overscroll() {
+    let controller = ScrollController::new();
+    let max_extent = 500.0_f32;
+    controller.update_dimensions(300.0, 0.0, max_extent);
+
+    let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .physics(physics)
+        .child(SizedBox::new(300.0, 800.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    // Pre-position the scroll just below max_extent so a moderate in-bounds
+    // upward drag pushes it past the boundary under bouncing physics.
+    controller.set_pixels(480.0);
+
+    // Upward drag past slop, then a further in-bounds move that applies
+    // `apply_boundary_conditions` and lets pixels exceed max_extent (damped
+    // by the overscroll spring coefficient 0.52):
+    //   proposed = 480 − (−60) = 540 → clamped = 500 + 40×0.52 = 520.8
+    // on_pan_end sees pixels = 520.8 > max_extent and returns a
+    // ScrollSpringSimulation that springs the position back to max_extent.
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
+    scoped.dispatch_pointer_move(150.0, 120.0); // 60 px more upward: on_pan_update
+    scoped.dispatch_pointer_up(150.0, 120.0);
+
+    // Pump 100 frames (1.6 s) — sufficient for the critically-damped spring
+    // (SpringDescription with damping_ratio ≥ 0.75) to settle.
+    for _ in 0..100 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    let final_pixels = controller.pixels();
+    assert!(
+        final_pixels <= max_extent + 1.0,
+        "bouncing spring-back must return scroll to within 1 px of max_extent ({max_extent}); \
+         got {final_pixels:.3}"
+    );
+}
+
+/// A pan gesture that crosses drag-slop during an active fling fires
+/// `on_pan_start`, which calls `fling_controller.stop()`. Subsequent animation
+/// frames must not advance the scroll offset — the fling must be dead.
+#[test]
+fn pan_start_during_fling_halts_momentum() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    // --- First gesture: start a fling ---
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: 70 px
+    scoped.dispatch_pointer_move(150.0, 150.0); // in-progress update
+    scoped.dispatch_pointer_up(150.0, 150.0);
+
+    // Let the fling run for one frame so we know it advanced.
+    scoped.pump_for(Duration::from_millis(16));
+    let pixels_mid_fling = controller.pixels();
+    assert!(
+        pixels_mid_fling > 0.0,
+        "fling must advance the offset on the first frame; got {pixels_mid_fling:.1}"
+    );
+
+    // --- Second gesture: cross slop to fire on_pan_start → fling.stop() ---
+    // Using a downward drag (positive dy) so it doesn't overlap with the
+    // already-advanced scroll position numerically.
+    scoped.dispatch_pointer_down(150.0, 200.0);
+    // 50 px downward — well past the 18 px slop, fires on_pan_start which
+    // stops the fling. Does NOT fire on_pan_update (slop-crossing move only
+    // fires on_start in the DragGestureRecognizer FSM).
+    scoped.dispatch_pointer_move(150.0, 250.0);
+    // Cancel to avoid triggering on_pan_end (and a new fling).
+    scoped.dispatch_pointer_cancel(150.0, 250.0);
+
+    let pixels_after_grab = controller.pixels();
+
+    // --- Pump more frames: fling is stopped, no value-listener fire ---
+    for _ in 0..5 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    let drift = (controller.pixels() - pixels_after_grab).abs();
+    assert!(
+        drift <= 1.0,
+        "halting the fling via on_pan_start must freeze the scroll offset; \
+         offset drifted by {drift:.3} px after grab \
+         (from {pixels_after_grab:.1} to {:.1})",
         controller.pixels()
     );
 }

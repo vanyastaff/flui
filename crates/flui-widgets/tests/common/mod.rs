@@ -9,10 +9,9 @@
 
 #![allow(dead_code)] // each test binary uses a different subset of the harness
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use std::cell::Cell;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use flui_animation::{AnimationController, Vsync};
 use flui_binding::HeadlessBinding;
@@ -434,6 +433,31 @@ impl LaidOutScoped {
         self.binding.pump_frame(dt);
     }
 
+    /// Spin until `Instant::now()` returns a value strictly greater than the
+    /// one returned by the immediately preceding call — i.e. wait until the OS
+    /// high-resolution timer has ticked at least once.
+    ///
+    /// Purpose: `DragGestureRecognizer::handle_move` calls `Instant::now()`
+    /// internally to timestamp each velocity-tracker sample. When several
+    /// `dispatch_pointer_*` calls happen within a single OS timer tick (common
+    /// on systems with ~100 ns QPC resolution), all samples carry the same
+    /// timestamp. The resulting least-squares system is singular and produces
+    /// NaN velocity — which then propagates into scroll-physics simulations.
+    ///
+    /// Calling this before each dispatch that should count toward velocity
+    /// (down and every move) guarantees that consecutive
+    /// `velocity_tracker.add_position(Instant::now(), …)` calls in the
+    /// recognizer receive strictly increasing timestamps.
+    ///
+    /// The busy-wait exits after at most one OS timer period (~100 ns on
+    /// Windows with QPC), so the overhead per dispatch is negligible.
+    fn advance_gesture_clock() {
+        let t0 = Instant::now();
+        while Instant::now() == t0 {
+            std::hint::spin_loop();
+        }
+    }
+
     /// Allocate a fresh pointer id for a new contact, remembering it as current.
     fn begin_contact(&self) -> PointerId {
         let id = self.next_pointer.get();
@@ -453,6 +477,10 @@ impl LaidOutScoped {
     /// overlapping detector has added its recognizers before the single close).
     /// Each down allocates a fresh contact id.
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
+        // Ensure the OS timer has ticked at least once so the first
+        // velocity-tracker sample (added inside `handle_down`) gets a timestamp
+        // strictly greater than any previously recorded one.
+        Self::advance_gesture_clock();
         let pointer = self.begin_contact();
         let event = make_down_event_for_id(pointer, offset(x, y), PointerType::Mouse);
         self.binding
@@ -471,6 +499,10 @@ impl LaidOutScoped {
     /// Dispatch a synthetic pointer-move at `(x, y)` for the current contact (no
     /// arena close/sweep — a move neither opens nor ends a contact).
     pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
+        // Advance the gesture clock before each move so consecutive velocity
+        // tracker samples have strictly increasing `Instant::now()` timestamps
+        // (see `advance_gesture_clock` for rationale).
+        Self::advance_gesture_clock();
         let pointer = self.current_contact();
         let event = make_move_event_for_id(pointer, offset(x, y), PointerType::Mouse);
         self.binding
@@ -484,6 +516,25 @@ impl LaidOutScoped {
         let event = make_cancel_event_for_id(pointer, PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
+    }
+
+    /// Register `vsync` with the tree binding so [`pump_for`](Self::pump_for)
+    /// ticks controllers that state objects registered against it during
+    /// `init_state`. Call this with the same `Vsync` handle that was given to
+    /// the `VsyncScope` wrapping the scrollable widget.
+    pub fn adopt_vsync(&mut self, vsync: Vsync) {
+        self.laid.binding.adopt_vsync(vsync);
+    }
+
+    /// Advance `dt` of virtual animation time through the TREE binding: ticks
+    /// vsync-registered controllers (e.g. a fling controller registered by a
+    /// `ScrollableState`), drains the scheduled rebuild inbox, and re-runs
+    /// layout + paint. Does **not** advance the gesture-arena clock.
+    ///
+    /// Use this to drive ballistic scroll animations in tests after gesture
+    /// events have already started a fling via `dispatch_pointer_up`.
+    pub fn pump_for(&mut self, dt: Duration) {
+        self.laid.binding.pump_frame(dt);
     }
 }
 
