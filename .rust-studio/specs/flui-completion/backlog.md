@@ -57,7 +57,7 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 | Platform | flui-platform (19k) | ~80% | STATUS_HEAP_CORRUPTION investigation; CI-excluded. wgpu-blocked. |
 | Reactivity | flui-reactivity (8k, 102 tests) | lib-green, **0 consumers** | CONFIRMED standalone — no crate depends on it ("signals locked out by C1"). Intentional contract decision; integrating signals into the view layer is a strategic feature, not a fix. |
 | Semantics | flui-semantics (6.6k, 131 tests) | lib-green | a11y tree exists; verify it's emitted from the real pipeline. |
-| CLI | flui-cli (7.3k, 67 tests) | lib-green | run/build/devtools/templates; e2e needs app (wgpu). Verify command logic headlessly. |
+| CLI | flui-cli (7.3k) | **WORKS e2e** | `flui --help` runs (create/run/build/test/analyze/doctor/devices/emulators/clean/upgrade/platform/format/devtools/completions); `flui doctor` does real env detection (Rust/Java/Android SDK/wasm/wgpu, missing-target hints) with a TUI. Now a workspace member + in default-members. |
 | Build | flui-build (4k, 46 tests) | lib-green | android/cross; verify the build orchestration paths. |
 | DevTools | flui-devtools (2k, 26 tests) | lib-green | profiler/inspector/hot_reload; verify protocol + data capture. |
 | Hot reload | flui-hot-reload (1k) | 0→5 tests (`a065f3f1`) | DONE: loader edges + mtime update-detection. REMAINING: happy-path load+build_scene e2e (needs a built `scene_plugin!` cdylib fixture; exercised by examples/desktop_scene). |
