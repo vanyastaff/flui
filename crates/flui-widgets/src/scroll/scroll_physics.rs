@@ -100,7 +100,7 @@ pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 /// # Flutter parity
 ///
 /// Mirrors `ClampingScrollPhysics` from `widgets/scroll_physics.dart`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ClampingScrollPhysics {
     /// Below this absolute velocity (logical px / s) no fling is started.
     ///
@@ -122,6 +122,16 @@ impl ClampingScrollPhysics {
             min_fling_velocity_px_per_sec: 50.0,
             fling_drag_coefficient: 0.135,
         }
+    }
+}
+
+impl Default for ClampingScrollPhysics {
+    /// Returns the same values as [`ClampingScrollPhysics::new`] — notably
+    /// `fling_drag_coefficient = 0.135`, which `#[derive(Default)]` cannot
+    /// provide (it would zero-initialize every field, and a drag coefficient of
+    /// 0 is invalid for `BoundedFrictionSimulation`).
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -88,6 +88,34 @@ pub trait Simulation: Send + Sync {
     fn tolerance(&self) -> Tolerance;
 }
 
+/// Blanket implementation so `Box<dyn Simulation>` itself satisfies `Simulation`.
+///
+/// This lets callers that receive a `Box<dyn Simulation>` (e.g. from
+/// [`ScrollPhysics::create_ballistic_simulation`]) pass it directly to
+/// [`AnimationController::animate_with`], which is generic over
+/// `S: Simulation + 'static`.
+impl<S: Simulation + ?Sized> Simulation for Box<S> {
+    #[inline]
+    fn x(&self, time: f32) -> f32 {
+        (**self).x(time)
+    }
+
+    #[inline]
+    fn dx(&self, time: f32) -> f32 {
+        (**self).dx(time)
+    }
+
+    #[inline]
+    fn is_done(&self, time: f32) -> bool {
+        (**self).is_done(time)
+    }
+
+    #[inline]
+    fn tolerance(&self) -> Tolerance {
+        (**self).tolerance()
+    }
+}
+
 /// Description of a spring's physical properties.
 ///
 /// Used to configure [`SpringSimulation`].
@@ -629,8 +657,11 @@ impl FrictionSimulation {
 
 impl Simulation for FrictionSimulation {
     fn x(&self, time: f32) -> f32 {
-        self.initial_position + self.initial_velocity * self.drag.powf(time) / self.drag_log
-            - self.initial_velocity / self.drag_log
+        // Single-term form: pos + vel*(drag^t - 1)/drag_log
+        // Algebraically equivalent to the two-term form for finite inputs, but
+        // avoids INF - INF = NaN when |vel| → ∞ (e.g. before the 8 000 px/s
+        // cap is applied).
+        self.initial_position + self.initial_velocity * (self.drag.powf(time) - 1.0) / self.drag_log
     }
 
     fn dx(&self, time: f32) -> f32 {

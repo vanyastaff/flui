@@ -404,10 +404,16 @@ impl AnimationController {
 
     /// Stop the animation at its current value.
     ///
-    /// The status is updated based on the current value:
-    /// - [`AnimationStatus::Completed`] at the upper bound
-    /// - [`AnimationStatus::Dismissed`] at the lower bound
-    /// - the previous direction status if stopped in the middle
+    /// The status transitions to a **non-running** settled status:
+    /// - [`AnimationStatus::Completed`] at (or above) the upper bound, or when
+    ///   the active run direction was [`Forward`](AnimationDirection::Forward)
+    /// - [`AnimationStatus::Dismissed`] at (or below) the lower bound, or when
+    ///   the active run direction was [`Reverse`](AnimationDirection::Reverse)
+    ///
+    /// Using a non-running status is critical for frame drivers that poll
+    /// `status().is_running()` (e.g. `Vsync::tick_all`) — a running status
+    /// after `stop()` would allow the driver to continue ticking a stale or
+    /// cleared simulation and produce non-finite pixel values.
     ///
     /// # Errors
     ///
@@ -421,7 +427,7 @@ impl AnimationController {
             ticker.stop();
         }
 
-        let status = inner.settled_status_keep_direction();
+        let status = inner.settled_status_directed();
         inner.status = status;
         Self::emit_status_after_unlock(inner, status);
         Ok(())
@@ -1160,11 +1166,31 @@ impl AnimationControllerInner {
         (dilated - self.run_epoch_secs).max(0.0)
     }
 
+    /// Whether the current value is at (or indistinguishable from) the upper bound.
+    ///
+    /// Uses exact equality for infinite bounds to avoid the `INFINITY - INFINITY = NaN`
+    /// pitfall that breaks the epsilon comparison when the fling controller is created
+    /// with `(NEG_INFINITY, INFINITY)` bounds.
+    fn is_at_upper_bound(&self) -> bool {
+        self.value == self.upper_bound
+            || (!self.upper_bound.is_infinite()
+                && (self.value - self.upper_bound).abs() < BOUND_EPSILON)
+    }
+
+    /// Whether the current value is at (or indistinguishable from) the lower bound.
+    ///
+    /// Uses exact equality for infinite bounds — see [`is_at_upper_bound`](Self::is_at_upper_bound).
+    fn is_at_lower_bound(&self) -> bool {
+        self.value == self.lower_bound
+            || (!self.lower_bound.is_infinite()
+                && (self.value - self.lower_bound).abs() < BOUND_EPSILON)
+    }
+
     /// Status at a settled value, mapping non-bound stops by direction.
     fn settled_status_directed(&self) -> AnimationStatus {
-        if (self.value - self.upper_bound).abs() < BOUND_EPSILON {
+        if self.is_at_upper_bound() {
             AnimationStatus::Completed
-        } else if (self.value - self.lower_bound).abs() < BOUND_EPSILON {
+        } else if self.is_at_lower_bound() {
             AnimationStatus::Dismissed
         } else {
             match self.direction {
@@ -1176,9 +1202,9 @@ impl AnimationControllerInner {
 
     /// Status at a settled value, keeping the running status for non-bound stops.
     fn settled_status_keep_direction(&self) -> AnimationStatus {
-        if (self.value - self.upper_bound).abs() < BOUND_EPSILON {
+        if self.is_at_upper_bound() {
             AnimationStatus::Completed
-        } else if (self.value - self.lower_bound).abs() < BOUND_EPSILON {
+        } else if self.is_at_lower_bound() {
             AnimationStatus::Dismissed
         } else {
             self.direction.running_status()
