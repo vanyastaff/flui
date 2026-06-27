@@ -47,6 +47,23 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 | D1 | **TextField / text input** — focus tree, IME, selection, cursor. | DONE v1 (merge `913fec8b`) | TextEditingController (UTF-8-clamped caret + ChangeNotifier) + EditableText (StatefulView, FocusNode + key-handler via existing FocusManager registry, KeyState::Down→edit) + TextField (decoration + tap-to-focus). Reused FocusManager (no flui-interaction changes). 18 tests (controller edits, key-routing, focus-gating). DEFERRED v1 (documented, no fake): IME, drag-selection, clipboard, multi-line, obscureText, formatters, overflow-scroll, multi-field tap-disambiguation. Env note: flui-interaction LIB-TEST build hits sccache rustc-segfault on this machine (not D1 — verified via flui-widgets 18/18). |
 | D2 | **Theme / MediaQuery / responsive** — inherited theming. | DONE (merge `9d909a9f`) | `MediaQuery`/`MediaQueryData` + `Theme`/`ThemeData` InheritedView widgets (`of`/`maybe_of` via depend_on), on the GestureArenaScope/VsyncScope pattern. SP-3 collision with flui-app pre-tree Theme → renamed `AppTheme`/`AppThemeBuilder` (verified self-consistent, zero external consumers; flui-app not compiled — wgpu crashes compiler here — but rename is closed/internal). `Brightness` gained derives. 6 integration tests; 685 widgets+types green. Curated: discarded an agent leak of brightness.rs/lib.rs into main pre-merge. |
 
+## Working-state drive (user 2026-06-27: "добить всё до рабочего состояния" — get every infra/DX area actually working, not just compiling)
+
+Verified state (compile + tests green in the non-GPU `--workspace` run, 4326 tests). LOC + test-fn counts gathered; goal = each area driven to *verified working*, gaps closed. BLOCKER: wgpu/flui-engine/flui-app/flui-platform crash rustc here, so e2e flows through the running app can't be verified locally — gate non-GPU libs, verify GPU-path changes statically / via examples.
+
+| Area | Crate | State | Next to working |
+|------|-------|-------|-----------------|
+| GPU engine | flui-engine (61k) | ~90-95% (88-agent audit) | 1 real bug + lock refactors (engine memory). wgpu-blocked locally. |
+| Platform | flui-platform (19k) | ~80% | STATUS_HEAP_CORRUPTION investigation; CI-excluded. wgpu-blocked. |
+| Reactivity | flui-reactivity (8k, 102 tests) | lib-green | CHECK: "signals locked out by C1" (memory) — is it wired into the view layer or standalone? Integration is the gap. |
+| Semantics | flui-semantics (6.6k, 131 tests) | lib-green | a11y tree exists; verify it's emitted from the real pipeline. |
+| CLI | flui-cli (7.3k, 67 tests) | lib-green | run/build/devtools/templates; e2e needs app (wgpu). Verify command logic headlessly. |
+| Build | flui-build (4k, 46 tests) | lib-green | android/cross; verify the build orchestration paths. |
+| DevTools | flui-devtools (2k, 26 tests) | lib-green | profiler/inspector/hot_reload; verify protocol + data capture. |
+| Hot reload | flui-hot-reload (1k) | 0→5 tests (`a065f3f1`) | DONE: loader edges + mtime update-detection. REMAINING: happy-path load+build_scene e2e (needs a built `scene_plugin!` cdylib fixture; exercised by examples/desktop_scene). |
+| Assets | flui-assets (4.6k) | lib-green | decode/cache/loaders real (B1 reused). |
+| Macros | flui-macros (715, 7 tests) | lib-green | add trybuild expand/compile-fail coverage. |
+
 ## Core hardening (user pivot 2026-06-27: "core, tools" over more widgets/objects)
 
 | # | Item | Status | Notes |
