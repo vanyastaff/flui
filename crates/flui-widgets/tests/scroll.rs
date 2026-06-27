@@ -494,3 +494,254 @@ fn pan_start_during_fling_halts_momentum() {
         controller.pixels()
     );
 }
+
+// ============================================================================
+// Scrollbar — thumb drag
+// ============================================================================
+
+/// Dragging the scrollbar thumb by N track-pixels must scroll the content
+/// by the proportional number of content-pixels. This test FAILS if the
+/// `on_pan_update` wired to the thumb's `GestureDetector` does not call
+/// `set_pixels` — the controller would remain at 0.
+///
+/// Mapping: `dP/d(thumb_top) = (viewport + scroll_extent) / available_track`
+/// With viewport=300, scroll_extent=300, available_track=150:
+///   50 track-px × (600 / 150) = 200 content-px
+#[test]
+fn scrollbar_thumb_drag_moves_scroll_offset_proportionally() {
+    use flui_widgets::Scrollbar;
+
+    let controller = ScrollController::new();
+    // viewport=300, content=600 → scroll_extent=300, thumb occupies half the track.
+    controller.update_dimensions(300.0, 0.0, 300.0);
+
+    // Use a wider thumb (20 px) for comfortable hit-testing.
+    let widget = Scrollbar::new()
+        .controller(controller.clone())
+        .thumb_width(20.0)
+        .child(SizedBox::new(300.0, 300.0));
+
+    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+
+    assert_eq!(controller.pixels(), 0.0, "initial scroll offset must be 0");
+
+    // Thumb geometry at pixels=0:
+    //   thumb_fraction = 300 / 600 = 0.5, thumb_height = 150, available_track = 150
+    //   thumb_top = 0, thumb x = [280, 300], thumb y = [0, 150]
+    //
+    // Sequence:
+    //   Down at (290, 10)       — inside thumb
+    //   Move to (290, 60)  +50  — slop-crossing (>18 px): fires on_pan_start (no-op)
+    //   Move to (290, 110) +50  — fires on_pan_update(delta_y=50) → content_delta=200
+    //   Up   at (290, 110)      — within new thumb y=[50,200] after scroll, within widget
+    scoped.dispatch_pointer_down(290.0, 10.0);
+    scoped.dispatch_pointer_move(290.0, 60.0);
+    scoped.dispatch_pointer_move(290.0, 110.0);
+    scoped.dispatch_pointer_up(290.0, 110.0);
+
+    let final_pixels = controller.pixels();
+    assert!(
+        (final_pixels - 200.0).abs() < 1.0,
+        "dragging the thumb 50 track-px must scroll 200 content-px \
+         (viewport=300, scroll_extent=300, available_track=150); got {final_pixels:.2}"
+    );
+}
+
+/// Chaining small thumb-drag moves accumulates content-delta until `max_scroll_extent`
+/// is hit, and `clamp` prevents the position from exceeding the maximum.
+///
+/// Geometry: viewport=300, scroll_extent=300, thumb_height=150, available_track=150.
+/// Each +20 track-px move gives content_delta = (20/150)*600 = 80 px.
+/// After 4 `on_pan_update` calls: accumulated proposed = 320, clamped to 300.
+///
+/// All pointer positions stay within the thumb's original Positioned bounds
+/// (y in [0, 150]) so every re-hit-test succeeds.
+#[test]
+fn scrollbar_thumb_drag_clamps_at_max_scroll_extent() {
+    use flui_widgets::Scrollbar;
+
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 300.0);
+
+    let widget = Scrollbar::new()
+        .controller(controller.clone())
+        .thumb_width(20.0)
+        .child(SizedBox::new(300.0, 300.0));
+
+    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+
+    // Thumb at pixels=0 occupies x=[280,300], y=[0,150].
+    // Slop-crossing: DOWN -> MOVE(+20) crosses 18px threshold.
+    // Four on_pan_update calls of +20 track-px each accumulate 320 content-px -> clamped to 300.
+    scoped.dispatch_pointer_down(290.0, 10.0);
+    scoped.dispatch_pointer_move(290.0, 30.0); // +20 px: slop-crossing -> on_pan_start
+    scoped.dispatch_pointer_move(290.0, 50.0); // +20 px -> on_pan_update: pixels=80
+    scoped.dispatch_pointer_move(290.0, 70.0); // +20 px -> on_pan_update: pixels=160
+    scoped.dispatch_pointer_move(290.0, 90.0); // +20 px -> on_pan_update: pixels=240
+    scoped.dispatch_pointer_move(290.0, 110.0); // +20 px -> on_pan_update: proposed=320, clamped=300
+    scoped.dispatch_pointer_up(290.0, 110.0);
+
+    assert!(
+        controller.pixels() <= 300.0,
+        "thumb drag must not carry scroll past max_scroll_extent (300); got {:.2}",
+        controller.pixels()
+    );
+    assert!(
+        controller.pixels() > 0.0,
+        "thumb drag must have moved the scroll position; got {:.2}",
+        controller.pixels()
+    );
+}
+
+// ============================================================================
+// RefreshIndicator — pull-to-refresh
+// ============================================================================
+
+/// An over-threshold pull at the top + release must fire `on_refresh` and
+/// transition the controller to the refreshing state.
+///
+/// This test FAILS if `on_pan_end` does not detect the overscroll or does not
+/// call the callback.
+#[test]
+fn refresh_indicator_over_threshold_pull_fires_on_refresh() {
+    use flui_widgets::{RefreshController, RefreshIndicator};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let refreshed = std::sync::Arc::new(AtomicBool::new(false));
+    let refreshed_cb = refreshed.clone();
+
+    let scroll_ctrl = ScrollController::new();
+    // viewport=300, content=800 → scroll_extent=500.
+    scroll_ctrl.update_dimensions(300.0, 0.0, 500.0);
+
+    let refresh_ctrl = RefreshController::new();
+
+    let widget = RefreshIndicator::new()
+        .scroll_controller(scroll_ctrl.clone())
+        .controller(refresh_ctrl.clone())
+        // Default threshold is 80 px; use 50 px for a smaller test pull.
+        .threshold_px(50.0)
+        .on_refresh(move || {
+            refreshed_cb.store(true, Ordering::SeqCst);
+        })
+        .child(SizedBox::new(300.0, 800.0));
+
+    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+
+    assert!(!refresh_ctrl.is_refreshing(), "must start in idle state");
+
+    // Pull down from the top: finger moves DOWN (y increases), delta.dy > 0, so
+    // proposed = pixels - delta.dy = 0 - positive < min_scroll_extent -> overscroll.
+    //
+    // Sequence:
+    //   Down at (150,  50)        -- inside widget, upper area
+    //   Move to (150, 100) +50    -- slop-crossing: on_pan_start fires (stops fling)
+    //   Move to (150, 170) +70    -- on_pan_update: proposed = 0 - 70 = -70 < 0
+    //                              -> overscroll = 70 > threshold (50) tracked
+    //   Up   at (150, 170)        -- on_pan_end: pull (70) >= threshold (50) -> fires
+    scoped.dispatch_pointer_down(150.0, 50.0);
+    scoped.dispatch_pointer_move(150.0, 100.0); // slop-crossing: dy=+50, on_pan_start fires
+    scoped.dispatch_pointer_move(150.0, 170.0); // dy=+70: proposed=0-70=-70<0 -> overscroll=70
+    scoped.dispatch_pointer_up(150.0, 170.0);
+
+    assert!(
+        refreshed.load(Ordering::SeqCst),
+        "on_refresh must fire after an over-threshold pull and release"
+    );
+    assert!(
+        refresh_ctrl.is_refreshing(),
+        "controller must be in refreshing state after on_refresh fires"
+    );
+}
+
+/// A pull that stays below the threshold must NOT fire `on_refresh`.
+#[test]
+fn refresh_indicator_under_threshold_pull_does_not_fire_on_refresh() {
+    use flui_widgets::{RefreshController, RefreshIndicator};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let refreshed = std::sync::Arc::new(AtomicBool::new(false));
+    let refreshed_cb = refreshed.clone();
+
+    let scroll_ctrl = ScrollController::new();
+    scroll_ctrl.update_dimensions(300.0, 0.0, 500.0);
+
+    let refresh_ctrl = RefreshController::new();
+
+    let widget = RefreshIndicator::new()
+        .scroll_controller(scroll_ctrl.clone())
+        .controller(refresh_ctrl.clone())
+        .threshold_px(80.0)
+        .on_refresh(move || {
+            refreshed_cb.store(true, Ordering::SeqCst);
+        })
+        .child(SizedBox::new(300.0, 800.0));
+
+    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+
+    // Pull only 30 px past top — below the 80 px threshold.
+    // Finger moves DOWN (y increases): slop-crossing +50, then +30 actual overscroll.
+    scoped.dispatch_pointer_down(150.0, 50.0);
+    scoped.dispatch_pointer_move(150.0, 100.0); // slop-crossing: dy=+50
+    scoped.dispatch_pointer_move(150.0, 130.0); // dy=+30: proposed=0-30=-30 -> overscroll=30<80
+    scoped.dispatch_pointer_up(150.0, 130.0);
+
+    assert!(
+        !refreshed.load(Ordering::SeqCst),
+        "on_refresh must NOT fire for a sub-threshold pull (30 px < 80 px threshold)"
+    );
+    assert!(
+        !refresh_ctrl.is_refreshing(),
+        "controller must remain in idle state after a sub-threshold pull"
+    );
+}
+
+/// After a successful refresh, `RefreshController::finish()` must return the
+/// controller to the idle state, hiding the spinner.
+#[test]
+fn refresh_indicator_finish_dismisses_spinner() {
+    use flui_widgets::{RefreshController, RefreshIndicator};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let refreshed = std::sync::Arc::new(AtomicBool::new(false));
+    let refreshed_cb = refreshed.clone();
+
+    let scroll_ctrl = ScrollController::new();
+    scroll_ctrl.update_dimensions(300.0, 0.0, 500.0);
+
+    let refresh_ctrl = RefreshController::new();
+
+    let widget = RefreshIndicator::new()
+        .scroll_controller(scroll_ctrl.clone())
+        .controller(refresh_ctrl.clone())
+        .threshold_px(50.0)
+        .on_refresh(move || {
+            refreshed_cb.store(true, Ordering::SeqCst);
+        })
+        .child(SizedBox::new(300.0, 800.0));
+
+    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+
+    // Trigger a refresh with an over-threshold pull (finger moves DOWN: y increases).
+    scoped.dispatch_pointer_down(150.0, 50.0);
+    scoped.dispatch_pointer_move(150.0, 100.0); // slop-crossing: dy=+50
+    scoped.dispatch_pointer_move(150.0, 170.0); // dy=+70: overscroll=70>=threshold(50)
+    scoped.dispatch_pointer_up(150.0, 170.0);
+
+    assert!(
+        refreshed.load(Ordering::SeqCst),
+        "on_refresh must fire before testing finish()"
+    );
+    assert!(
+        refresh_ctrl.is_refreshing(),
+        "spinner must be present (is_refreshing=true) while refresh is in progress"
+    );
+
+    // Caller signals completion.
+    refresh_ctrl.finish();
+
+    assert!(
+        !refresh_ctrl.is_refreshing(),
+        "spinner must be gone (is_refreshing=false) after finish() is called"
+    );
+}

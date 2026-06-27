@@ -11,6 +11,7 @@
 //! visual position indicator.
 
 mod list_view;
+mod refresh_indicator;
 mod scroll_controller;
 mod scroll_physics;
 mod scrollable;
@@ -23,6 +24,7 @@ mod sliver_to_box_adapter;
 mod viewport;
 
 pub use list_view::ListView;
+pub use refresh_indicator::{RefreshController, RefreshIndicator, RefreshIndicatorState};
 pub use scroll_controller::ScrollController;
 pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollPhysics, SharedScrollPhysics,

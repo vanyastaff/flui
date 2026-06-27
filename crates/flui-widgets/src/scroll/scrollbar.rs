@@ -14,7 +14,6 @@
 //!
 //! # Deferred (v1)
 //!
-//! - Scrollbar-thumb drag (thumb acts as a hit region that jumps the position).
 //! - Fade-in / fade-out animation when scrolling starts / stops.
 //! - Horizontal scrollbar orientation.
 //! - `ScrollbarTheme` look customization beyond `thumb_color`/`thumb_width`.
@@ -26,12 +25,13 @@
 //! it. The thumb width defaults to 6 px (mobile), matching Flutter's
 //! `ScrollbarThemeData.thickness`.
 
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::Color;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, Child, IntoView, ViewExt};
 
 use crate::scroll::ScrollController;
-use crate::{AnimatedBuilder, ColoredBox, Positioned, Stack};
+use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
 /// Minimum thumb extent in logical pixels — matches Flutter's
 /// `ScrollbarPainter.minLength` default.
@@ -158,7 +158,32 @@ impl StatelessView for Scrollbar {
             }
 
             if show_thumb {
-                let positioned_thumb = Positioned::new(ColoredBox::new(thumb_color))
+                let ctrl_drag = controller.clone();
+
+                // Wrap the thumb in a GestureDetector so the user can drag it
+                // to reposition the scroll. The delta in track-space maps to
+                // content-space via:
+                //   dP/d(thumb_top) = (viewport + scroll_extent) / available_track
+                // (derived from the thumb_offset_fraction formula).
+                let thumb_gesture = GestureDetector::new()
+                    .behavior(HitTestBehavior::Opaque)
+                    .on_pan_update(move |details| {
+                        let delta_track_px = details.delta.dy.get();
+                        if available_track > 0.0 {
+                            let total_content_extent =
+                                ctrl_drag.viewport_dimension_pixels() + ctrl_drag.scroll_extent();
+                            let content_delta =
+                                (delta_track_px / available_track) * total_content_extent;
+                            let proposed = ctrl_drag.pixels() + content_delta;
+                            ctrl_drag.set_pixels(proposed.clamp(
+                                ctrl_drag.min_scroll_extent(),
+                                ctrl_drag.max_scroll_extent(),
+                            ));
+                        }
+                    })
+                    .child(ColoredBox::new(thumb_color));
+
+                let positioned_thumb = Positioned::new(thumb_gesture)
                     .top(thumb_top)
                     .right(0.0)
                     .width(thumb_width)
