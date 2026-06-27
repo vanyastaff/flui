@@ -97,7 +97,7 @@ pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, VsyncScope,
 };
-pub use clip::{ClipOval, ClipRRect, ClipRect};
+pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
 pub use interaction::{
@@ -161,9 +161,9 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRRect, ClipRect,
-        ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox, Flex,
-        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
+        AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipPath, ClipRRect,
+        ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox,
+        Flex, FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
         GestureDetector, IgnorePointer, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListView,
         Listener, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned,
         RepaintBoundary, RotatedBox, Row, SingleChildScrollView, SizedBox, SizedOverflowBox,

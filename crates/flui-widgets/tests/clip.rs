@@ -4,7 +4,9 @@
 mod common;
 
 use common::{lay_out, loose, size};
-use flui_widgets::{ClipOval, ClipRRect, ClipRect, SizedBox};
+use flui_types::Size;
+use flui_types::painting::Path;
+use flui_widgets::{ClipOval, ClipPath, ClipRRect, ClipRect, SizedBox};
 
 #[test]
 fn clip_rect_is_a_layout_passthrough() {
@@ -27,6 +29,17 @@ fn clip_rrect_is_a_layout_passthrough() {
     // child's size straight through.
     let laid = lay_out(
         ClipRRect::circular(12.0).child(SizedBox::new(120.0, 80.0)),
+        loose(1000.0),
+    );
+    assert_eq!(laid.size(laid.root()), size(120.0, 80.0));
+}
+
+#[test]
+fn clip_path_is_a_layout_passthrough() {
+    // The custom path is a paint-time effect; layout passes the child's size
+    // straight through, exactly as the rect/oval/rrect clips do.
+    let laid = lay_out(
+        ClipPath::new(|_size: Size| Path::new()).child(SizedBox::new(120.0, 80.0)),
         loose(1000.0),
     );
     assert_eq!(laid.size(laid.root()), size(120.0, 80.0));
