@@ -30,7 +30,7 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 |---|------|--------|-------|
 | B1 | **Image + ImageProvider** — decode/cache infra + `Image` widget over `RenderImage` (currently MVP). | OPEN | needs image-decode; check flui-assets |
 | B2 | **ClipPath + CustomClipper** — Path-based clipper trait + `ClipPath` widget over `RenderClip`. | OPEN | check Path infra in flui-geometry/painting |
-| B3 | **Wrap** — `RenderWrap` (run-based flow layout) + `Wrap` widget. | OPEN | new render object |
+| B3 | **Wrap** — `RenderWrap` (run-based flow layout) + `Wrap` widget. | DONE (merge of `1f5f6e11`) | RenderWrap (flui-objects) + Wrap widget; perform_layout verified 1:1 vs `.flutter/.../wrap.dart` (run-building, runAlignment/alignment/crossAxisAlignment, spaceBetween/Around/Evenly, vertical); reused existing WrapParentData/Axis/WrapAlignment. Catalog + 6 harness + 10 widget tests. 483 obj+widgets green; clippy/fmt/port-check clean. RTL deferred (TextDirection not plumbed, parity w/ flex). Built by worktree-isolated agent, curated+gate-verified by me. |
 | B4 | **IntrinsicWidth/IntrinsicHeight, OverflowBox, SizedOverflowBox, RotatedBox** widgets + render objects. | OPEN | several small layout render objects |
 
 ## Wave C — scrolling / perf leapfrog
