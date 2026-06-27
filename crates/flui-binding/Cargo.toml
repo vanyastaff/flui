@@ -16,6 +16,18 @@ workspace = true
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline polling).
 flui-interaction = { path = "../flui-interaction" }
+# The element tree + build owner this binding drives each frame (`build_scope`
+# drains the external inbox an animation/listenable tick fills).
+flui-view = { path = "../flui-view" }
+# The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
+flui-rendering = { path = "../flui-rendering" }
+# Registered `AnimationController`s the frame loop ticks on the virtual timeline,
+# restart-aware via the controller's `run_generation` counter.
+flui-animation = { path = "../flui-animation" }
+# Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
+# both hold (render-object attachment shares the owner; the binding does not own
+# it exclusively).
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 # The long-press deadline recognizer + settings exercised by the pump_frame test,

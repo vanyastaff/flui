@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use std::cell::Cell;
 
+use flui_animation::AnimationController;
 use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
 use flui_interaction::PointerId;
@@ -31,14 +32,18 @@ use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::GestureArenaScope;
 use parking_lot::RwLock;
 
-/// A laid-out widget tree, holding the element + render trees alive so geometry
-/// can be queried after layout — and re-driven via [`LaidOut::pump`].
+/// A laid-out widget tree, holding the element + render trees alive (inside a
+/// tree-bound [`HeadlessBinding`]) so geometry can be queried after layout — and
+/// re-driven via [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`].
+///
+/// `pipeline_owner` is the harness's own clone of the same shared
+/// `Arc<RwLock<PipelineOwner>>` the binding drives, so geometry reads observe the
+/// frame the binding just ran.
 pub struct LaidOut {
+    binding: HeadlessBinding,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
     root_render_id: RenderId,
     root_element_id: ElementId,
-    build_owner: BuildOwner,
-    tree: ElementTree,
 }
 
 /// Loose constraints from `0` up to `max × max` on both axes.
@@ -104,12 +109,16 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         *guard = owner;
     }
 
+    // Bootstrap done (mounted, rooted, first frame run): hand the three owners to
+    // a tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
+    // for geometry reads. `pump`/`tick`/`pump_for` route through the binding.
+    let binding = HeadlessBinding::with_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+
     LaidOut {
+        binding,
         pipeline_owner,
         root_render_id,
         root_element_id: root_id,
-        build_owner,
-        tree,
     }
 }
 
@@ -159,37 +168,47 @@ impl LaidOut {
     }
 
     /// Drive one more frame after external state has changed — the headless
-    /// equivalent of what `setState` schedules: mark the root dirty, rebuild
-    /// the subtree, and re-run layout/paint. Used by the `setState` (contract
-    /// C1) test, where the root's `ViewState` reads a value mutated between
-    /// frames.
+    /// equivalent of what `setState` schedules: mark the root dirty, then pump a
+    /// zero-time frame (rebuild the subtree + re-run layout/paint). Used by the
+    /// `setState` (contract C1) test, where the root's `ViewState` reads a value
+    /// mutated between frames.
+    ///
+    /// `Duration::ZERO` is faithful: today's `pump` advances no clock, it only
+    /// drives a frame — so step 1 is a no-op, step 2 finds no crossed deadline,
+    /// step 3 ticks the (here empty) registry, then `build_scope` + `run_frame`.
     pub fn pump(&mut self) {
-        if let Some(node) = self.tree.get_mut(self.root_element_id) {
+        if let Some(node) = self.binding.tree_mut().get_mut(self.root_element_id) {
             node.element_mut().mark_needs_build();
         }
-        self.build_owner.schedule_build_for(self.root_element_id, 0);
-        self.build_owner.build_scope(&mut self.tree);
-
-        let mut guard = self.pipeline_owner.write();
-        let owner = std::mem::take(&mut *guard);
-        let (owner, result) = owner.run_frame();
-        result.expect("rebuild frame should succeed");
-        *guard = owner;
+        self.binding
+            .build_owner_mut()
+            .schedule_build_for(self.root_element_id, 0);
+        self.binding.pump_frame(Duration::ZERO);
     }
 
     /// Drive a frame WITHOUT marking the root dirty — the headless equivalent of
-    /// a vsync/animation tick. `build_scope` drains whatever the external inbox
-    /// holds (an `AnimatedView` scheduled by a listenable change between
-    /// frames), rebuilds those elements, and re-runs layout/paint. This is what
-    /// distinguishes an animation-driven rebuild from a `setState`/`pump` one.
+    /// a vsync/animation tick. `build_scope` (inside `pump_frame`) drains whatever
+    /// the external inbox holds (an `AnimatedView` scheduled by a listenable
+    /// change between frames), rebuilds those elements, and re-runs layout/paint.
+    /// This is what distinguishes an animation-driven rebuild from a
+    /// `setState`/`pump` one.
     pub fn tick(&mut self) {
-        self.build_owner.build_scope(&mut self.tree);
+        self.binding.pump_frame(Duration::ZERO);
+    }
 
-        let mut guard = self.pipeline_owner.write();
-        let owner = std::mem::take(&mut *guard);
-        let (owner, result) = owner.run_frame();
-        result.expect("tick frame should succeed");
-        *guard = owner;
+    /// Register `controller` with the binding so each [`pump`](Self::pump) /
+    /// [`tick`](Self::tick) / [`pump_for`](Self::pump_for) advances it on the
+    /// virtual timeline (restart-aware). Register before starting the controller.
+    pub fn register_controller(&mut self, controller: AnimationController) {
+        self.binding.register_controller(controller);
+    }
+
+    /// Advance `dt` of virtual time and drive a frame — the animation-frame
+    /// analogue: ticks registered controllers (whose listenable notifications
+    /// schedule the dependent `AnimatedView`/`FadeTransition` rebuild into the
+    /// build inbox), drains it, and re-runs layout/paint. No root dirtying.
+    pub fn pump_for(&mut self, dt: Duration) {
+        self.binding.pump_frame(dt);
     }
 
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a

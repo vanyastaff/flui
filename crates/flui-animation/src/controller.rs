@@ -145,6 +145,15 @@ struct AnimationControllerInner {
     /// in-progress rate without a fresh tick.
     last_raw_elapsed_secs: f64,
 
+    /// Monotonically increasing counter, bumped once each time a fresh run is
+    /// established (every [`restart_ticker`](AnimationController::restart_ticker),
+    /// where `run_epoch_secs` is re-zeroed). An external frame driver reads
+    /// [`AnimationController::run_generation`] to detect "a new run's `t = 0`
+    /// was just set" and re-anchor its own per-run epoch — so a controller run
+    /// twice (forward → reverse) is ticked from the second run's start instead
+    /// of a stale anchor. Never reset; stable across `tick_at`.
+    run_generation: u64,
+
     /// Per-run duration override (used by `animate_to`/`animate_back`); does NOT
     /// clobber the controller's base `duration`.
     run_duration: Option<Duration>,
@@ -255,6 +264,7 @@ impl AnimationController {
             target_value: upper_bound,
             run_epoch_secs: 0.0,
             last_raw_elapsed_secs: 0.0,
+            run_generation: 0,
             run_duration: None,
             disposed: false,
             next_listener_id: 1,
@@ -766,6 +776,28 @@ impl AnimationController {
         range / duration.as_secs_f32()
     }
 
+    /// A monotonically increasing run-generation counter, bumped once each time
+    /// a fresh run begins — every `forward`/`reverse`/`animate_to`/`animate_back`/
+    /// `repeat`/`fling`/`animate_with` (i.e. every internal `restart_ticker`
+    /// that re-zeros the run epoch).
+    ///
+    /// An external, deterministic frame driver (e.g. `flui-binding`'s
+    /// `HeadlessBinding`) reads this to detect that a new run's `t = 0` was just
+    /// established and re-anchor the virtual instant it feeds to
+    /// [`tick_at`](Self::tick_at). Without it, a controller run a *second* time
+    /// (forward to completion, then reverse) would be ticked from the first
+    /// run's stale anchor and snap straight to its target on the first frame.
+    ///
+    /// The counter is **stable across [`tick_at`](Self::tick_at)** (ticking
+    /// advances a run, it does not start one), and the settle-without-restart
+    /// paths (`stop`/`reset`/`set_value`/zero-distance `forward`) leave it
+    /// untouched. It wraps on `u64` overflow — only its *change* is observed, so
+    /// the wrap is harmless.
+    #[must_use]
+    pub fn run_generation(&self) -> u64 {
+        self.inner.lock().run_generation
+    }
+
     /// Advance the animation using the ticker's most recent elapsed time.
     ///
     /// Normally driven by the ticker callback; exposed for manual stepping.
@@ -1011,6 +1043,11 @@ impl AnimationController {
     fn restart_ticker(&self, inner: &mut AnimationControllerInner) {
         inner.run_epoch_secs = 0.0;
         inner.last_raw_elapsed_secs = 0.0;
+        // A fresh run's `t = 0` is established here — bump the generation so an
+        // external frame driver re-anchors its per-run epoch (see
+        // [`run_generation`](Self::run_generation)). `restart_ticker` is the
+        // single chokepoint every run-start path funnels through.
+        inner.run_generation = inner.run_generation.wrapping_add(1);
         if let Some(ticker) = &mut inner.ticker {
             // Restart-safe: `Ticker::start` debug-asserts on the Active state, and
             // controller methods can be called repeatedly, so stop a live run first.
@@ -1448,6 +1485,50 @@ mod tests {
         let c = controller(100);
         c.dispose();
         assert!(matches!(c.forward(), Err(AnimationError::Disposed)));
+    }
+
+    // ---- run-generation: bumps per run-start, stable across ticks ----
+
+    #[test]
+    fn run_generation_bumps_per_run_not_per_tick() {
+        let _serial = serial();
+        let c = controller(100);
+        let g0 = c.run_generation();
+
+        c.forward().unwrap();
+        let g1 = c.run_generation();
+        assert_eq!(g1, g0 + 1, "forward() establishes a new run");
+
+        // Ticking advances the SAME run — the generation must not move, so the
+        // binding does not spuriously re-anchor mid-run.
+        c.tick_at(0.02);
+        c.tick_at(0.05);
+        assert_eq!(c.run_generation(), g1, "tick_at must not start a new run");
+
+        c.reverse().unwrap();
+        assert_eq!(
+            c.run_generation(),
+            g1 + 1,
+            "reverse() establishes a new run"
+        );
+
+        // A settle-only path (reset) does NOT bump — the controller is not
+        // running afterwards, so there is no run to anchor.
+        c.reset().unwrap();
+        assert_eq!(c.run_generation(), g1 + 1, "reset() does not start a run");
+
+        c.animate_to(1.0, Some(Duration::from_millis(50))).unwrap();
+        assert_eq!(c.run_generation(), g1 + 2, "animate_to starts a new run");
+
+        c.reset().unwrap();
+        c.repeat_with(None, None, false, Some(Duration::from_millis(10)), Some(2))
+            .unwrap();
+        assert_eq!(c.run_generation(), g1 + 3, "repeat starts a new run");
+
+        c.fling(1.0).unwrap();
+        assert_eq!(c.run_generation(), g1 + 4, "fling starts a new run");
+
+        c.dispose();
     }
 
     // ---- B1: animate_to actually advances + does not clobber base duration ----

@@ -1402,8 +1402,12 @@ dependencies = [
 name = "flui-binding"
 version = "0.2.0"
 dependencies = [
+ "flui-animation",
  "flui-interaction",
+ "flui-rendering",
  "flui-types",
+ "flui-view",
+ "parking_lot",
 ]
 
 [[package]]
