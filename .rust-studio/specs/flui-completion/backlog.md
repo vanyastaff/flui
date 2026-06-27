@@ -49,13 +49,13 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 
 ## Working-state drive (user 2026-06-27: "добить всё до рабочего состояния" — get every infra/DX area actually working, not just compiling)
 
-Verified state (compile + tests green in the non-GPU `--workspace` run, 4326 tests). LOC + test-fn counts gathered; goal = each area driven to *verified working*, gaps closed. BLOCKER: wgpu/flui-engine/flui-app/flui-platform crash rustc here, so e2e flows through the running app can't be verified locally — gate non-GPU libs, verify GPU-path changes statically / via examples.
+**BREAKTHROUGH 2026-06-27:** the `CARGO_INCREMENTAL=0` tools fix (`22f878b4`) ALSO unblocked the GPU build — the wgpu rustc-segfault was the same sccache+incremental issue. **flui-engine / flui-app / flui-platform now COMPILE**, and the FULL workspace (minus flui-platform) is **4578 tests GREEN** (engine + app + all infra + widgets). flui-app 31/31 (incl. the D2 `AppTheme` rename — now runtime-verified, not just static). So the project is far more *working* than the earlier ~70% estimate: nearly everything compiles + tests pass. Remaining real gaps: **flui-platform** (STATUS_HEAP_CORRUPTION, CI-excluded — the one broken area), **flui-cli** (not a workspace member — commented out in root Cargo.toml:53; compiles standalone, should be re-included + verified), runtime e2e (actual window/app run — libs test-green, manual/example verification), reactivity standalone-by-design.
 
 | Area | Crate | State | Next to working |
 |------|-------|-------|-----------------|
 | GPU engine | flui-engine (61k) | ~90-95% (88-agent audit) | 1 real bug + lock refactors (engine memory). wgpu-blocked locally. |
 | Platform | flui-platform (19k) | ~80% | STATUS_HEAP_CORRUPTION investigation; CI-excluded. wgpu-blocked. |
-| Reactivity | flui-reactivity (8k, 102 tests) | lib-green | CHECK: "signals locked out by C1" (memory) — is it wired into the view layer or standalone? Integration is the gap. |
+| Reactivity | flui-reactivity (8k, 102 tests) | lib-green, **0 consumers** | CONFIRMED standalone — no crate depends on it ("signals locked out by C1"). Intentional contract decision; integrating signals into the view layer is a strategic feature, not a fix. |
 | Semantics | flui-semantics (6.6k, 131 tests) | lib-green | a11y tree exists; verify it's emitted from the real pipeline. |
 | CLI | flui-cli (7.3k, 67 tests) | lib-green | run/build/devtools/templates; e2e needs app (wgpu). Verify command logic headlessly. |
 | Build | flui-build (4k, 46 tests) | lib-green | android/cross; verify the build orchestration paths. |
