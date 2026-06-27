@@ -38,7 +38,7 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 | # | Unit | Status | Notes |
 |---|------|--------|-------|
 | C1 | **Lazy slivers** — `SliverChildBuilderDelegate` + a `SliverMultiBoxAdaptorElement` (build children on demand during layout). | OPEN — render layer EXISTS, element backend is the gap | SCOPED 2026-06-27: `RenderSliverListLazy` (flui-objects/src/sliver/sliver_list_lazy.rs, 864L) already does virtualization — `Virtualizer` O(log n) range, re-entrant `build_and_layout_box_child` contract, `DeferredMutations` (flui-rendering/src/pipeline/deferred.rs). THE GAP: the build-backend is a v1 stub that "parks the request" (sliver_list_lazy doc step ~20) — needs the ELEMENT-layer to actually build a child view on demand DURING the layout pass (re-entrant build via the deferred queue) from a `SliverChildBuilderDelegate`, then `SliverList.builder` widget. This is the design-heavy element×layout re-entrancy crux — needs a dedicated design pass (NOT a mechanical port). |
-| C2 | **Scroll physics + Scrollbar + RefreshIndicator**. | OPEN | |
+| C2 | **Scroll physics + Scrollbar + RefreshIndicator**. | DONE v1 (merge `5192f136`) | ScrollController (Arc ChangeNotifier) + ScrollPhysics (Clamping/Bouncing) + Scrollable (pan→set_pixels) + Scrollbar. GestureDetector gained HitTestBehavior knob (default DeferToChild). 13 scroll tests; 176 widgets green. DEFERRED v1: fling-sim (needs VsyncScope), thumb-drag, nested, RefreshIndicator, snapping, keyboard. |
 
 ## Wave D — big competitive features
 
