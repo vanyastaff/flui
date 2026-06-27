@@ -356,8 +356,13 @@ impl BuildOwner {
 
     /// Schedule an element for rebuild.
     ///
-    /// Elements are processed in depth order (shallowest first) to ensure
-    /// parent rebuilds happen before child rebuilds.
+    /// Elements are processed in depth order (shallowest first) so parent
+    /// rebuilds happen before child rebuilds. The `depth` is a best-effort
+    /// ordering hint: [`build_scope`](Self::build_scope) re-derives every
+    /// queued element's authoritative tree depth from its node before draining
+    /// (see [`rekey_dirty_depths`](Self::rekey_dirty_depths)), so a caller that
+    /// only knows the sibling slot index (e.g. `setState` via
+    /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize) {
         if self.dirty_set.insert(id) {
             self.dirty_elements
@@ -367,6 +372,33 @@ impl BuildOwner {
             if let Some(callback) = self.on_build_scheduled.as_deref() {
                 callback();
             }
+        }
+    }
+
+    /// Re-key every queued dirty element to its authoritative TREE depth.
+    ///
+    /// The dirty heap orders by depth, but [`schedule_build_for`] is handed a
+    /// depth by its caller — and the `setState` path
+    /// (`ElementCore::schedule_self_build`) plus the live `BuildCtx` both pass
+    /// `ElementCore::depth`, which is the sibling SLOT index, not
+    /// `parent_depth + 1`. Left as-is, a deeply-nested `setState` would sort as
+    /// if it were shallow and a child could rebuild before its parent —
+    /// violating Flutter's shallowest-first contract. Rebuilding the heap keyed
+    /// on each node's real depth (`ElementNode::depth`, the same authority the
+    /// external-inbox drain uses) restores the contract regardless of what
+    /// `schedule_build_for` was told.
+    fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
+        if self.dirty_elements.is_empty() {
+            return;
+        }
+        let queued: Vec<ElementId> = std::mem::take(&mut self.dirty_elements)
+            .into_iter()
+            .map(|Reverse(dirty)| dirty.id())
+            .collect();
+        for id in queued {
+            let depth = tree.get(id).map_or(0, |node| node.depth);
+            self.dirty_elements
+                .push(Reverse(DirtyElement::new(id, depth)));
         }
     }
 
@@ -443,6 +475,18 @@ impl BuildOwner {
                     .push(Reverse(DirtyElement::new(id, depth)));
             }
         }
+
+        // Re-key every element already on the heap to its AUTHORITATIVE tree
+        // depth before draining. `schedule_build_for` trusts the depth its
+        // caller passes, but the `setState` path (`ElementCore::schedule_self_build`)
+        // and the live `BuildCtx` both pass `ElementCore::depth` — the sibling
+        // SLOT index, not `parent_depth + 1`. Trusting it lets a deeply-nested
+        // `setState` sort as if it were shallow, so a child could build before
+        // its parent and violate Flutter's shallowest-first build contract
+        // (`framework.dart` `_dirtyElements.sort(Element._sort)` keys on the
+        // element's real depth). Re-derive each id's depth from its node — the
+        // same authority the external-inbox drain just above already uses.
+        self.rekey_dirty_depths(tree);
 
         // Process dirty elements in depth order, extract-then-apply
         // (E3 — atomic box→arena swap).
@@ -972,6 +1016,49 @@ mod tests {
 
         let Reverse(third) = owner.dirty_elements.pop().unwrap();
         assert_eq!(third.depth(), 2);
+    }
+
+    /// A `setState` hands `schedule_build_for` the element's SLOT index, not its
+    /// tree depth. `rekey_dirty_depths` (run at the top of `build_scope`) must
+    /// override that with each node's authoritative `parent_depth + 1` so a
+    /// deeply-nested rebuild never drains before its shallower parent.
+    ///
+    /// This is RED without the re-key: the elements are scheduled with
+    /// deliberately INVERTED depths (the deepest leaf gets `0`, the root gets
+    /// `2`), so trusting the scheduled depth would drain the leaf first —
+    /// violating Flutter's shallowest-first contract.
+    #[test]
+    fn rekey_dirty_depths_restores_shallowest_first_from_inverted_slots() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let view = TestView;
+
+        // A single-child chain: root (depth 0) → mid (depth 1) → leaf (depth 2).
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let mid = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
+        let leaf = tree.insert(&view, mid, 0, &mut owner.element_owner_mut());
+        assert_eq!(tree.get(root).map(|n| n.depth), Some(0));
+        assert_eq!(tree.get(mid).map(|n| n.depth), Some(1));
+        assert_eq!(tree.get(leaf).map(|n| n.depth), Some(2));
+
+        // Schedule with INVERTED depths — what a `setState` on each would pass if
+        // it trusted the slot index (all three are slot 0 here; we exaggerate to
+        // an outright inversion to make the mis-order deterministic).
+        owner.schedule_build_for(leaf, 0);
+        owner.schedule_build_for(mid, 1);
+        owner.schedule_build_for(root, 2);
+
+        owner.rekey_dirty_depths(&tree);
+
+        // Drains shallowest-first by AUTHORITATIVE tree depth, not the scheduled
+        // (inverted) depth.
+        let Reverse(first) = owner.dirty_elements.pop().unwrap();
+        let Reverse(second) = owner.dirty_elements.pop().unwrap();
+        let Reverse(third) = owner.dirty_elements.pop().unwrap();
+        assert_eq!(first.id(), root, "root (tree depth 0) drains first");
+        assert_eq!(second.id(), mid, "mid (tree depth 1) drains second");
+        assert_eq!(third.id(), leaf, "leaf (tree depth 2) drains last");
+        assert_eq!((first.depth(), second.depth(), third.depth()), (0, 1, 2));
     }
 
     #[test]
