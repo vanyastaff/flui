@@ -9,6 +9,7 @@ use flui_interaction::{
     DragUpdateDetails, GestureRecognizer, LongPressGestureRecognizer, PointerEvent,
     PointerEventExt, TapGestureRecognizer,
 };
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
 use crate::{GestureArenaScope, Listener};
@@ -69,11 +70,13 @@ type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
 ///   deadline-driven gestures (long-press hold, double-tap give-up) are inert
 ///   without a binding to poll them — a documented limitation.
 ///
-/// Hit behavior follows the wrapped `Listener` ([`DeferToChild`]): a gesture is
-/// recognized only when the contact lands on a hit-testable descendant.
+/// # Hit behavior
 ///
-/// [`DeferToChild`]: flui_rendering::hit_testing::HitTestBehavior::DeferToChild
-#[derive(Clone, Default, StatefulView)]
+/// The default is [`DeferToChild`](HitTestBehavior::DeferToChild): a gesture is
+/// recognized only when the contact lands on a hit-testable descendant. Override
+/// with [`behavior`](Self::behavior) — for example, scroll areas use
+/// [`Opaque`](HitTestBehavior::Opaque) so they fire regardless of content.
+#[derive(Clone, StatefulView)]
 pub struct GestureDetector {
     on_tap: Option<GestureCallback>,
     on_secondary_tap: Option<GestureCallback>,
@@ -82,7 +85,25 @@ pub struct GestureDetector {
     on_pan_start: Option<PanStartHandler>,
     on_pan_update: Option<PanUpdateHandler>,
     on_pan_end: Option<PanEndHandler>,
+    /// How the underlying [`Listener`] participates in hit-testing.
+    behavior: HitTestBehavior,
     child: Child,
+}
+
+impl Default for GestureDetector {
+    fn default() -> Self {
+        Self {
+            on_tap: None,
+            on_secondary_tap: None,
+            on_long_press: None,
+            on_double_tap: None,
+            on_pan_start: None,
+            on_pan_update: None,
+            on_pan_end: None,
+            behavior: HitTestBehavior::DeferToChild,
+            child: Child::empty(),
+        }
+    }
 }
 
 impl std::fmt::Debug for GestureDetector {
@@ -95,6 +116,7 @@ impl std::fmt::Debug for GestureDetector {
             .field("on_pan_start", &self.on_pan_start.is_some())
             .field("on_pan_update", &self.on_pan_update.is_some())
             .field("on_pan_end", &self.on_pan_end.is_some())
+            .field("behavior", &self.behavior)
             .finish_non_exhaustive()
     }
 }
@@ -176,6 +198,16 @@ impl GestureDetector {
     #[must_use]
     pub fn on_pan_end(mut self, callback: impl Fn(DragEndDetails) + Send + Sync + 'static) -> Self {
         self.on_pan_end = Some(Arc::new(callback));
+        self
+    }
+
+    /// Override the hit-test behavior (default:
+    /// [`DeferToChild`](HitTestBehavior::DeferToChild)). Set
+    /// [`Opaque`](HitTestBehavior::Opaque) for a scroll area or any gesture
+    /// target that must fire even when the child has no hittable surface.
+    #[must_use]
+    pub fn behavior(mut self, behavior: HitTestBehavior) -> Self {
+        self.behavior = behavior;
         self
     }
 
@@ -398,7 +430,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             .as_ref()
             .expect("init_state builds the recognizers before the first build");
 
-        let listener = self.make_listener(recognizers);
+        let listener = self.make_listener(recognizers).behavior(view.behavior);
 
         match view.child.clone().into_inner() {
             Some(child) => listener.child(child),

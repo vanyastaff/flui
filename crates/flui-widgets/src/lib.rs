@@ -130,8 +130,9 @@ pub use layout::{
 pub use flui_objects::OverflowBoxFit;
 pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
-    ListView, SingleChildScrollView, SliverFixedExtentList, SliverOpacity, SliverPadding,
-    SliverToBoxAdapter, Viewport,
+    BouncingScrollPhysics, ClampingScrollPhysics, ListView, ScrollController, ScrollPhysics,
+    Scrollable, Scrollbar, SharedScrollPhysics, SingleChildScrollView, SliverFixedExtentList,
+    SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
 };
 pub use stack::{Positioned, Stack};
 pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
@@ -184,9 +185,9 @@ pub mod prelude {
         IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IntrinsicHeight,
         IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
         Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
-        Row, SingleChildScrollView, SizedBox, SizedOverflowBox, SliverFixedExtentList,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, TextEditingController,
-        TextField, Theme, ThemeData, Transform, Viewport, Wrap,
+        Row, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter,
+        Stack, Text, TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
