@@ -78,12 +78,27 @@ where
          self_id — a slab-resident element must be set_self_id-stamped at insert"
     );
     match (owner.build_view, core.self_id()) {
-        (Some(handle), Some(element_id)) => BuildCtxChoice::Live(BuildCtx::new(
-            element_id,
-            core.depth(),
-            handle.tree,
-            handle.dep_sink,
-        )),
+        (Some(handle), Some(element_id)) => {
+            // The live context carries the element's AUTHORITATIVE tree depth
+            // (`parent_depth + 1`, from its node), not `ElementCore::depth` — the
+            // sibling SLOT index. `BuildContext::depth` is documented as the tree
+            // depth, and `depend_on` records a dependent at this depth while
+            // `mark_needs_build` schedules a rebuild at it; using the slot would
+            // mis-order a nested dependent / rebuild in the dirty heap (the same
+            // class of bug `rekey_dirty_depths` corrects for the `setState` path).
+            // Falls back to the slot only if the node is unexpectedly absent (a
+            // framework invariant already debug-asserted above).
+            let tree_depth = match handle.tree.get(element_id) {
+                Some(node) => node.depth(),
+                None => core.depth(),
+            };
+            BuildCtxChoice::Live(BuildCtx::new(
+                element_id,
+                tree_depth,
+                handle.tree,
+                handle.dep_sink,
+            ))
+        }
         _ => BuildCtxChoice::Minimal(ElementBuildContext::new_minimal(core.depth())),
     }
 }

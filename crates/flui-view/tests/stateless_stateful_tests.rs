@@ -13,9 +13,9 @@ use std::{
 
 use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementOwner, IntoView, Lifecycle, StatefulBehavior,
-    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementOwner, ElementTree, IntoView, Lifecycle,
+    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -549,4 +549,63 @@ fn test_stateful_element_debug() {
     let debug_str = format!("{:?}", element);
     assert!(debug_str.contains("StatefulElement"));
     assert!(debug_str.contains("lifecycle"));
+}
+
+/// A stateless view that builds a chain of itself `remaining` levels deep,
+/// recording the live [`BuildContext::depth`] it sees at each level. The
+/// terminal level builds a [`LeafView`].
+#[derive(Clone)]
+struct DepthProbe {
+    remaining: usize,
+    seen: Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+impl StatelessView for DepthProbe {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.seen.lock().unwrap().push(ctx.depth());
+        if self.remaining == 0 {
+            LeafView.boxed()
+        } else {
+            DepthProbe {
+                remaining: self.remaining - 1,
+                seen: Arc::clone(&self.seen),
+            }
+            .boxed()
+        }
+    }
+}
+
+impl View for DepthProbe {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(StatelessElement::new(self, StatelessBehavior))
+    }
+}
+
+/// The LIVE `BuildContext` handed to `ViewState::build` during a `build_scope`
+/// must report each element's AUTHORITATIVE tree depth (`parent_depth + 1`),
+/// not its sibling slot index. Every `DepthProbe` here is an only child (slot
+/// 0), so before the live-context depth fix the build saw `0` at every level
+/// (`[0, 0, 0]`); the fix makes it report the real chain depth `[0, 1, 2]`.
+/// Correct depth is what keeps `depend_on`-registered dependents and
+/// `mark_needs_build` rebuilds ordering shallowest-first in the dirty heap.
+#[test]
+fn live_build_context_reports_authoritative_tree_depth() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let root = DepthProbe {
+        remaining: 2,
+        seen: Arc::clone(&seen),
+    };
+
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![0, 1, 2],
+        "the live build context must report authoritative tree depth at each \
+         chain level, not the sibling slot (which is 0 for every only-child)",
+    );
 }
