@@ -44,7 +44,7 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 
 | # | Unit | Status | Notes |
 |---|------|--------|-------|
-| D1 | **TextField / text input** — focus tree, IME, selection, cursor. | OPEN | large; check flui-interaction focus |
+| D1 | **TextField / text input** — focus tree, IME, selection, cursor. | DONE v1 (merge `913fec8b`) | TextEditingController (UTF-8-clamped caret + ChangeNotifier) + EditableText (StatefulView, FocusNode + key-handler via existing FocusManager registry, KeyState::Down→edit) + TextField (decoration + tap-to-focus). Reused FocusManager (no flui-interaction changes). 18 tests (controller edits, key-routing, focus-gating). DEFERRED v1 (documented, no fake): IME, drag-selection, clipboard, multi-line, obscureText, formatters, overflow-scroll, multi-field tap-disambiguation. Env note: flui-interaction LIB-TEST build hits sccache rustc-segfault on this machine (not D1 — verified via flui-widgets 18/18). |
 | D2 | **Theme / MediaQuery / responsive** — inherited theming. | DONE (merge `9d909a9f`) | `MediaQuery`/`MediaQueryData` + `Theme`/`ThemeData` InheritedView widgets (`of`/`maybe_of` via depend_on), on the GestureArenaScope/VsyncScope pattern. SP-3 collision with flui-app pre-tree Theme → renamed `AppTheme`/`AppThemeBuilder` (verified self-consistent, zero external consumers; flui-app not compiled — wgpu crashes compiler here — but rename is closed/internal). `Brightness` gained derives. 6 integration tests; 685 widgets+types green. Curated: discarded an agent leak of brightness.rs/lib.rs into main pre-merge. |
 
 ## Core hardening (user pivot 2026-06-27: "core, tools" over more widgets/objects)
