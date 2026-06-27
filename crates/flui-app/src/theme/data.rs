@@ -1,4 +1,4 @@
-//! Theme data and builder.
+//! Application-level theme data and builder.
 
 use super::colors::ColorScheme;
 
@@ -14,21 +14,27 @@ pub enum ThemeMode {
     System,
 }
 
-/// Complete theme configuration.
+/// Complete application-level theme configuration.
+///
+/// `AppTheme` is the app-framework's pre-tree configuration object — it lives
+/// outside the widget tree and is distinct from the [`flui_widgets::Theme`]
+/// inherited widget (which provides [`flui_widgets::ThemeData`] to descendants
+/// at runtime). Use `AppTheme` to bootstrap application appearance before the
+/// widget tree is mounted.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Use defaults
-/// let theme = Theme::light();
+/// let theme = AppTheme::light();
 ///
 /// // Or build custom
-/// let theme = Theme::builder()
+/// let theme = AppTheme::builder()
 ///     .mode(ThemeMode::Dark)
 ///     .build();
 /// ```
 #[derive(Debug, Clone)]
-pub struct Theme {
+pub struct AppTheme {
     /// Theme mode.
     pub mode: ThemeMode,
 
@@ -51,13 +57,13 @@ pub struct Theme {
     pub animation_duration_ms: u32,
 }
 
-impl Default for Theme {
+impl Default for AppTheme {
     fn default() -> Self {
         Self::light()
     }
 }
 
-impl Theme {
+impl AppTheme {
     /// Create a light theme with defaults.
     pub fn light() -> Self {
         Self {
@@ -85,14 +91,14 @@ impl Theme {
     }
 
     /// Create a theme builder.
-    pub fn builder() -> ThemeBuilder {
-        ThemeBuilder::default()
+    pub fn builder() -> AppThemeBuilder {
+        AppThemeBuilder::default()
     }
 }
 
-/// Builder for creating custom themes.
+/// Builder for creating custom [`AppTheme`] values.
 #[derive(Debug, Clone, Default)]
-pub struct ThemeBuilder {
+pub struct AppThemeBuilder {
     mode: Option<ThemeMode>,
     colors: Option<ColorScheme>,
     font_family: Option<String>,
@@ -102,7 +108,7 @@ pub struct ThemeBuilder {
     animation_duration_ms: Option<u32>,
 }
 
-impl ThemeBuilder {
+impl AppThemeBuilder {
     /// Set theme mode.
     pub fn mode(mut self, mode: ThemeMode) -> Self {
         self.mode = Some(mode);
@@ -145,15 +151,15 @@ impl ThemeBuilder {
         self
     }
 
-    /// Build the theme.
-    pub fn build(self) -> Theme {
+    /// Build the [`AppTheme`].
+    pub fn build(self) -> AppTheme {
         let mode = self.mode.unwrap_or_default();
         let base = match mode {
-            ThemeMode::Light | ThemeMode::System => Theme::light(),
-            ThemeMode::Dark => Theme::dark(),
+            ThemeMode::Light | ThemeMode::System => AppTheme::light(),
+            ThemeMode::Dark => AppTheme::dark(),
         };
 
-        Theme {
+        AppTheme {
             mode,
             colors: self.colors.unwrap_or(base.colors),
             font_family: self.font_family.unwrap_or(base.font_family),
@@ -173,17 +179,17 @@ mod tests {
 
     #[test]
     fn test_theme_defaults() {
-        let light = Theme::light();
+        let light = AppTheme::light();
         assert_eq!(light.mode, ThemeMode::Light);
         assert_eq!(light.font_size, 14.0);
 
-        let dark = Theme::dark();
+        let dark = AppTheme::dark();
         assert_eq!(dark.mode, ThemeMode::Dark);
     }
 
     #[test]
     fn test_theme_builder() {
-        let theme = Theme::builder()
+        let theme = AppTheme::builder()
             .mode(ThemeMode::Dark)
             .font_size(16.0)
             .spacing(12.0)
