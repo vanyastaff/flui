@@ -45,7 +45,7 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 | # | Unit | Status | Notes |
 |---|------|--------|-------|
 | D1 | **TextField / text input** — focus tree, IME, selection, cursor. | OPEN | large; check flui-interaction focus |
-| D2 | **Theme / MediaQuery / responsive** — inherited theming. | OPEN | |
+| D2 | **Theme / MediaQuery / responsive** — inherited theming. | DONE (merge `9d909a9f`) | `MediaQuery`/`MediaQueryData` + `Theme`/`ThemeData` InheritedView widgets (`of`/`maybe_of` via depend_on), on the GestureArenaScope/VsyncScope pattern. SP-3 collision with flui-app pre-tree Theme → renamed `AppTheme`/`AppThemeBuilder` (verified self-consistent, zero external consumers; flui-app not compiled — wgpu crashes compiler here — but rename is closed/internal). `Brightness` gained derives. 6 integration tests; 685 widgets+types green. Curated: discarded an agent leak of brightness.rs/lib.rs into main pre-merge. |
 
 ## Core hardening (user pivot 2026-06-27: "core, tools" over more widgets/objects)
 
