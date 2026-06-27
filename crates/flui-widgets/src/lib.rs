@@ -86,6 +86,7 @@ pub mod scroll;
 pub mod stack;
 pub mod text;
 pub mod transitions;
+pub mod wrap;
 
 // ============================================================================
 // Flat re-exports — `flui_widgets::Padding`, identical depth to Flutter's
@@ -118,6 +119,7 @@ pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
     RotationTransitionState, ScaleTransition, ScaleTransitionState,
 };
+pub use wrap::Wrap;
 
 // The heterogeneous-children macros (contract C2's static tuple path). Kept out
 // of the prelude glob: their names collide with `std`'s `column!`/`row!`, so
@@ -129,6 +131,9 @@ pub use flui_view::{column, row};
 // (re-exported from the `flui-objects` catalog, whose canonical home is
 // `flui-types::layout`).
 pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+// `WrapAlignment`/`WrapCrossAlignment` configure `Wrap`'s main-axis distribution
+// and per-child cross-axis positioning.
+pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
 // `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
 pub use flui_rendering::parent_data::FlexFit;
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
@@ -157,13 +162,14 @@ pub mod prelude {
         FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
         GestureDetector, IgnorePointer, LimitedBox, ListView, Listener, Offstage, Opacity, Padding,
         Positioned, RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
     pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+    pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};

@@ -13,6 +13,7 @@ pub(crate) mod shifted_box;
 mod sized_box;
 mod stack;
 mod transform;
+mod wrap;
 
 // Public items are re-exported through lib.rs; pub use here so that
 // `pub use layout::X` in lib.rs has a pub path to resolve.
@@ -32,3 +33,4 @@ pub use padding::*;
 pub use sized_box::*;
 pub use stack::*;
 pub use transform::*;
+pub use wrap::*;
