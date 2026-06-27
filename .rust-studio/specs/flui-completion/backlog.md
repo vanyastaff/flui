@@ -52,8 +52,15 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | K1 | **Build-order depth bug** — dirty heap mis-ordered nested setState/dependency rebuilds (`ElementCore::depth`=slot, not tree depth). | DONE (`d4f8951f`+`c93581fb`) | Fix1 `rekey_dirty_depths` re-keys heap to authoritative `node.depth` at build_scope start (setState path). Fix2 live BuildCtx carries `node.depth()` not slot (dependents/ctx-mark paths). BinaryHeap self-maintains → NO Flutter-style resort needed. Full ripple verified (all schedule_build_for callers authoritative-or-rekeyed). 2 red→green tests; 446 view + 105 widgets green. Resolved the latent flag from memory `animation-heap-schedule`. |
-| K2 | **subtree-arena `is_in_flight` `Cell<usize>` fast-path** — perf followup (avoid lock on hot path). | OPEN | from memory `flui-rendering-phase2-subtree-arena`; touches unsafe pipeline — needs benchmark + miri. |
-| K3 | **owner.rs god-file** (~5600 LOC) decomposition. | OPEN | architectural debt (audit `flui-rendering-audit-2026-06-24`); SRP split, regression-risky. |
+| K2 | **subtree-arena `is_in_flight` `Cell<usize>` fast-path** — perf followup (avoid lock on hot path). | OPEN (after K3) | from memory `flui-rendering-phase2-subtree-arena`; touches unsafe pipeline — needs benchmark + miri. Same crate as K3 → strictly after. |
+| K3 | **owner.rs god-file** (~4218 LOC) decomposition. | IN-FLIGHT (worktree agent) | SRP split into responsibility modules; subtree_arena.rs (unsafe) stays separate; pure refactor. |
+| K4 | **Move `MonotonicClock` to flui-foundation** — foundational time primitive (was stranded in flui-interaction, unreachable by flui-scheduler). | DONE (`03a9f462`) | Pure relocation; interaction re-exports (legit — arena API takes it). 541 tests green. Enables future Ticker-virtual-clock unification (production+headless on one path, retiring the binding's parallel Vsync `tick_at` bypass). |
+| K5 | **Ticker virtual-clock unification** — inject foundation `MonotonicClock` into `Ticker` so the scheduler-ticker drives animations deterministically; retire binding's separate Vsync registry. | OPEN | enabled by K4; design-heavy (binding currently drives via Vsync.tick_at); deliberate follow-up. |
+
+## In-flight (parallel worktree agents, 2026-06-27)
+- **K3** owner decomposition (flui-rendering) — agent `owner-decomp`.
+- **D2** Theme + MediaQuery (flui-widgets) — agent `theme-mediaquery`. Independent crate from K3.
+- Curate-merge each on completion; then K2 (after K3), D1 TextField, K5.
 | — | Audit bugs already fixed (Phase 1): `RenderView::hit_test_raw` now misses on empty region (not phantom-true), opacity alpha-0, ClipPath hit-test. Verified still correct. | — | |
 
 ## Done this session (pre-run)
