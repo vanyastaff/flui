@@ -76,6 +76,7 @@
 mod support;
 
 pub mod animated;
+pub mod app;
 pub mod clip;
 mod container;
 pub mod flex;
@@ -93,6 +94,12 @@ pub mod wrap;
 // Flat re-exports — `flui_widgets::Padding`, identical depth to Flutter's
 // single-import surface.
 // ============================================================================
+
+// Application-scoped inherited widgets: ambient screen data and theming.
+pub use app::{MediaQuery, MediaQueryData, Theme, ThemeData};
+// `Brightness` is the value type shared by `MediaQueryData` and `ThemeData`;
+// re-exported here so callers need only `use flui_widgets::Brightness`.
+pub use flui_types::platform::Brightness;
 
 pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
@@ -170,14 +177,15 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipPath, ClipRRect,
-        ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox,
-        Flex, FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
-        GestureDetector, IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider,
-        IntrinsicHeight, IntrinsicWidth, LimitedBox, ListView, Listener, Offstage, Opacity,
-        OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox, Row,
-        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverFixedExtentList, SliverOpacity,
-        SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport, Wrap,
+        AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
+        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded,
+        FittedBox, Flex, FlexFit, Flexible, FractionalTranslation, FractionallySizedBox,
+        GestureArenaScope, GestureDetector, IgnorePointer, Image, ImageAlignment, ImageFit,
+        ImageProvider, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery,
+        MediaQueryData, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned,
+        RepaintBoundary, RotatedBox, Row, SingleChildScrollView, SizedBox, SizedOverflowBox,
+        SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text,
+        Theme, ThemeData, Transform, Viewport, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

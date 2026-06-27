@@ -1,27 +1,27 @@
-//! Theme system for FLUI applications.
+//! Application-level theme system for FLUI applications.
 //!
-//! Rust-way theme system - simple, type-safe, composable.
+//! `AppTheme` is the app-framework's pre-tree configuration object. It is
+//! distinct from `flui_widgets::Theme`, which is the in-tree inherited widget
+//! that provides `ThemeData` to descendants at runtime.
 //!
 //! # Design Philosophy
 //!
-//! Unlike Flutter's deeply nested ThemeData, we use:
 //! - Flat, composable structs
 //! - Builder pattern with sensible defaults
-//! - Type-safe color tokens
+//! - Type-safe color tokens via [`ColorScheme`]
 //! - No runtime reflection
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_app::theme::{Theme, ThemeMode};
+//! use flui_app::theme::{AppTheme, ThemeMode};
 //!
 //! // Use built-in theme
-//! let theme = Theme::light();
+//! let theme = AppTheme::light();
 //!
 //! // Or customize
-//! let theme = Theme::builder()
+//! let theme = AppTheme::builder()
 //!     .mode(ThemeMode::Dark)
-//!     .primary(Color::from_hex("#6200EE"))
 //!     .build();
 //! ```
 
@@ -29,4 +29,4 @@ mod colors;
 mod data;
 
 pub use colors::ColorScheme;
-pub use data::{Theme, ThemeBuilder, ThemeMode};
+pub use data::{AppTheme, AppThemeBuilder, ThemeMode};
