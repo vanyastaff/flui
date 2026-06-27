@@ -47,6 +47,15 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 | D1 | **TextField / text input** — focus tree, IME, selection, cursor. | OPEN | large; check flui-interaction focus |
 | D2 | **Theme / MediaQuery / responsive** — inherited theming. | OPEN | |
 
+## Core hardening (user pivot 2026-06-27: "core, tools" over more widgets/objects)
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| K1 | **Build-order depth bug** — dirty heap mis-ordered nested setState/dependency rebuilds (`ElementCore::depth`=slot, not tree depth). | DONE (`d4f8951f`+`c93581fb`) | Fix1 `rekey_dirty_depths` re-keys heap to authoritative `node.depth` at build_scope start (setState path). Fix2 live BuildCtx carries `node.depth()` not slot (dependents/ctx-mark paths). BinaryHeap self-maintains → NO Flutter-style resort needed. Full ripple verified (all schedule_build_for callers authoritative-or-rekeyed). 2 red→green tests; 446 view + 105 widgets green. Resolved the latent flag from memory `animation-heap-schedule`. |
+| K2 | **subtree-arena `is_in_flight` `Cell<usize>` fast-path** — perf followup (avoid lock on hot path). | OPEN | from memory `flui-rendering-phase2-subtree-arena`; touches unsafe pipeline — needs benchmark + miri. |
+| K3 | **owner.rs god-file** (~5600 LOC) decomposition. | OPEN | architectural debt (audit `flui-rendering-audit-2026-06-24`); SRP split, regression-risky. |
+| — | Audit bugs already fixed (Phase 1): `RenderView::hit_test_raw` now misses on empty region (not phantom-true), opacity alpha-0, ClipPath hit-test. Verified still correct. | — | |
+
 ## Done this session (pre-run)
 - pan/drag + arena reject fix (`4fea0fbe`); Phase 0 clock + long-press (`4b8f3ff6`);
   dyn-sanction (`82f4b36c`); double-tap clock (`7c141277`); port-check ~4-6x
