@@ -42,6 +42,7 @@ image = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Integration tests drive the real layout pipeline through the render harness.
+flui-foundation = { path = "../flui-foundation" }
 flui-rendering = { path = "../flui-rendering", features = ["testing"] }
 flui-objects = { path = "../flui-objects", features = ["testing"] }
 flui-types = { path = "../flui-types" }

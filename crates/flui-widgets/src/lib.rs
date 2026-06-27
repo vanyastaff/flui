@@ -134,7 +134,7 @@ pub use scroll::{
     SliverToBoxAdapter, Viewport,
 };
 pub use stack::{Positioned, Stack};
-pub use text::Text;
+pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
     RotationTransitionState, ScaleTransition, ScaleTransitionState,
@@ -178,14 +178,15 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
-        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded,
-        FittedBox, Flex, FlexFit, Flexible, FractionalTranslation, FractionallySizedBox,
-        GestureArenaScope, GestureDetector, IgnorePointer, Image, ImageAlignment, ImageFit,
-        ImageProvider, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery,
-        MediaQueryData, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned,
-        RepaintBoundary, RotatedBox, Row, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text,
-        Theme, ThemeData, Transform, Viewport, Wrap,
+        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox,
+        EditableText, EditableTextState, Expanded, FittedBox, Flex, FlexFit, Flexible,
+        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector,
+        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IntrinsicHeight,
+        IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
+        Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
+        Row, SingleChildScrollView, SizedBox, SizedOverflowBox, SliverFixedExtentList,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, TextEditingController,
+        TextField, Theme, ThemeData, Transform, Viewport, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
