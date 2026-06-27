@@ -756,7 +756,7 @@ mod tests {
         // override on the `GestureArenaMember` impl, `poll_deadlines` never calls
         // `check_timeout`, so a lone tap combined with a double-tap recognizer
         // could hold the arena forever. Driven off a `ManualClock` (no sleep).
-        let clock = crate::clock::ManualClock::new();
+        let clock = flui_foundation::ManualClock::new();
         let arena = GestureArena::with_clock(Arc::new(clock.clone()));
         let cancelled = Arc::new(Mutex::new(false));
         let cancelled_clone = cancelled.clone();
@@ -791,7 +791,7 @@ mod tests {
         // Same as `test_double_tap_timeout` but with NO wall-clock sleep: a
         // `ManualClock` drives the arena's `now()`, so the inter-tap window
         // expires on virtual time the moment the driver advances past it.
-        let clock = crate::clock::ManualClock::new();
+        let clock = flui_foundation::ManualClock::new();
         let arena = GestureArena::with_clock(Arc::new(clock.clone()));
         let recognizer = DoubleTapGestureRecognizer::new(arena);
 
@@ -836,7 +836,7 @@ mod tests {
             recognizers::TapGestureRecognizer,
         };
 
-        let clock = crate::clock::ManualClock::new();
+        let clock = flui_foundation::ManualClock::new();
         let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
 
         let tap_fired = Arc::new(AtomicBool::new(false));

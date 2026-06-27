@@ -1,11 +1,18 @@
-//! Monotonic time source for deadline-driven gesture recognition.
+//! Monotonic time source — a foundational primitive for deadline- and
+//! frame-driven subsystems.
 //!
 //! Production reads the OS clock ([`SystemClock`] = `Instant::now()`); a headless
 //! frame driver swaps in a [`ManualClock`] it advances explicitly, so a deadline
-//! (e.g. a long-press timeout) elapses deterministically with no wall-clock
-//! sleep. The [`GestureArena`](crate::arena::GestureArena) owns the clock and
-//! recognizers read it via `RecognizerBase::now()`, so the production and
-//! headless paths run the *same* code — only the time source differs.
+//! (e.g. a gesture long-press timeout, or an animation tick) elapses
+//! deterministically with no wall-clock sleep. A subsystem owns the clock and its
+//! time-dependent code reads `now()`, so the production and headless paths run the
+//! *same* code — only the injected time source differs.
+//!
+//! Lives in `flui-foundation` (not a single consumer crate) because more than one
+//! layer needs it: the gesture arena (`flui-interaction`) injects it for deadline
+//! resolution, and the headless binding (`flui-binding`) advances it to drive
+//! frames — and the scheduler/animation layers can read it without reaching
+//! sideways across the crate graph.
 
 use std::fmt;
 use std::sync::Arc;
@@ -13,13 +20,13 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-/// A monotonic time source — the single authority a deadline-driven recognizer
-/// reads `now()` from.
+/// A monotonic time source — the single authority a deadline- or frame-driven
+/// subsystem reads `now()` from.
 ///
 /// The default ([`SystemClock`]) is the OS clock; a headless frame driver uses
 /// [`ManualClock`] to advance a virtual timeline deterministically. Injected once
-/// at arena construction (mirroring how an `AnimationController` holds its
-/// `Scheduler`), so per-call signatures stay unchanged.
+/// at construction (mirroring how an `AnimationController` holds its `Scheduler`),
+/// so per-call signatures stay unchanged.
 pub trait MonotonicClock: Send + Sync + fmt::Debug {
     /// The current instant on this clock's timeline. Must be non-decreasing
     /// across calls.
@@ -41,7 +48,7 @@ impl MonotonicClock for SystemClock {
 ///
 /// `now()` is `base + elapsed`; [`advance`](Self::advance) moves the timeline
 /// forward. Clones share the same timeline (the elapsed counter is `Arc`-backed),
-/// so a driver holding one handle and the arena holding another observe a single
+/// so a driver holding one handle and a subsystem holding another observe a single
 /// clock. `now()` returns a real [`Instant`] on the virtual timeline, so types
 /// that already store an `Instant` (e.g. a recognizer's captured down-time) need
 /// no change — only their source does.

@@ -60,8 +60,8 @@ use parking_lot::Mutex;
 use smallvec::SmallVec;
 use tracing::instrument;
 
-use crate::clock::{MonotonicClock, SystemClock};
 use crate::ids::PointerId;
+use flui_foundation::{MonotonicClock, SystemClock};
 
 /// Default timeout for gesture disambiguation (100ms).
 ///
@@ -662,7 +662,7 @@ impl GestureArena {
     /// Create a gesture arena with an explicit time source.
     ///
     /// Production uses [`new`](Self::new) (the OS clock); a headless frame driver
-    /// passes a [`ManualClock`](crate::clock::ManualClock) it advances per frame
+    /// passes a [`ManualClock`](flui_foundation::ManualClock) it advances per frame
     /// so deadline-driven recognizers resolve deterministically with no sleep.
     #[inline]
     pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {

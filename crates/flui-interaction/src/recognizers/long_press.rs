@@ -914,7 +914,7 @@ mod tests {
             }
         }
 
-        let clock = crate::clock::ManualClock::new();
+        let clock = flui_foundation::ManualClock::new();
         let arena = GestureArena::with_clock(Arc::new(clock.clone()));
         let recognizer = LongPressGestureRecognizer::with_settings(
             arena.clone(),

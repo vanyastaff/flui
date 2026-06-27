@@ -149,7 +149,6 @@ pub mod routing;
 // ============================================================================
 
 pub mod arena;
-pub mod clock;
 pub mod recognizers;
 pub mod timer;
 
@@ -197,7 +196,10 @@ pub use arena::{
 // Re-exports: Other
 // ============================================================================
 pub use binding::GestureBinding;
-pub use clock::{ManualClock, MonotonicClock, SystemClock};
+// The monotonic clock primitive now lives in `flui-foundation`; re-exported here
+// because the gesture arena's public API takes a `MonotonicClock` (and tests /
+// the headless binding construct `ManualClock`/`SystemClock` against the arena).
+pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
 // Re-exports: Events (W3C-compliant types)
 // ============================================================================
