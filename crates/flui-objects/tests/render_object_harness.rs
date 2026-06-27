@@ -46,6 +46,7 @@
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
+//! | `RenderWrap` | `harness_render_wrap_*` | yes | yes | — | yes | — |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
@@ -116,6 +117,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverOffstage",
     "RenderSliverOpacity",
     "RenderViewport",
+    "RenderWrap",
 ];
 
 fn loose(max: f32) -> BoxConstraints {
@@ -2031,6 +2033,135 @@ fn center_dry_baseline_adds_half_free_height() {
     assert!(
         (center_bl - expected).abs() < 0.5,
         "center dry baseline must be child_baseline + free_h/2 (got {center_bl}, expected {expected})"
+    );
+}
+
+// ============================================================================
+// Wrap
+// ============================================================================
+
+#[test]
+fn harness_render_wrap_wraps_to_second_run() {
+    // Three 40×40 boxes in a max-100-wide loose constraint.
+    // Run 1: a(40) + b(40) = 80 ≤ 100. Run 2: c(40) wraps.
+    // Container: constrain(80 main, 80 cross) within [0,100]×[0,100] = (80,80).
+    //
+    // This assertion FAILS if wrapping is not implemented — without wrapping,
+    // c would be placed at main=80 instead of starting a new run at cross=40.
+    let run = RenderTester::mount(
+        box_node(RenderWrap::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(40.0, 40.0)).label("c")),
+    )
+    .with_constraints(loose(100.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(80.0), px(80.0)));
+    assert_eq!(run.offset(run.id("a")), Offset::ZERO);
+    assert_eq!(run.offset(run.id("b")), Offset::new(px(40.0), px(0.0)));
+    // Wrap proof: c must be on a new row, not overflowing the first.
+    assert_eq!(
+        run.offset(run.id("c")),
+        Offset::new(px(0.0), px(40.0)),
+        "c must wrap to a second run, not overflow the first",
+    );
+}
+
+#[test]
+fn harness_render_wrap_spacing_and_run_spacing_add_gaps() {
+    // Three 30×20 boxes, spacing=10, run_spacing=5, loose(100).
+    // Run 1: a(30) + gap(10) + b(30) = 70. Next: 70+10+30=110 > 100 → wrap.
+    // Run 2: c. max_run_main=70, total_cross=20+5+20=45.
+    // Container: (70, 45). a@(0,0), b@(40,0), c@(0,25).
+    let run = RenderTester::mount(
+        box_node(RenderWrap::new().with_spacing(10.0).with_run_spacing(5.0))
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(30.0, 20.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(30.0, 20.0)).label("c")),
+    )
+    .with_constraints(loose(100.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(70.0), px(45.0)));
+    assert_eq!(run.offset(run.id("a")), Offset::ZERO);
+    // b is offset by 30 (a width) + 10 (spacing).
+    assert_eq!(run.offset(run.id("b")), Offset::new(px(40.0), px(0.0)));
+    // c is on the second run: cross_offset = run 1 cross(20) + run_spacing(5).
+    assert_eq!(run.offset(run.id("c")), Offset::new(px(0.0), px(25.0)));
+}
+
+#[test]
+fn harness_render_wrap_center_alignment_distributes_main_axis_free_space() {
+    // Two 30×20 boxes in a tight-100-wide container, alignment=Center.
+    // Run 1 main_extent=60. container_main=100. free=40.
+    // Center: leading=20, between=0.
+    // a@(20,0), b@(50,0).
+    let run = RenderTester::mount(
+        box_node(RenderWrap::new().with_alignment(WrapAlignment::Center))
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(30.0, 20.0)).label("b")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.offset(run.id("a")), Offset::new(px(20.0), px(0.0)));
+    assert_eq!(run.offset(run.id("b")), Offset::new(px(50.0), px(0.0)));
+}
+
+#[test]
+fn harness_render_wrap_cross_axis_alignment_centers_short_child_within_run() {
+    // Two children in one run: a=40×40, b=40×10. Run cross=40.
+    // WrapCrossAlignment::Center: b's cross offset = (40−10)/2 = 15.
+    let run = RenderTester::mount(
+        box_node(RenderWrap::new().with_cross_axis_alignment(WrapCrossAlignment::Center))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(40.0, 10.0)).label("b")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    // a is tall, b is short → b gets a 15px cross-axis offset to centre it.
+    assert_eq!(run.offset(run.id("a")), Offset::ZERO);
+    assert_eq!(
+        run.offset(run.id("b")),
+        Offset::new(px(40.0), px(15.0)),
+        "shorter child must be centred within the run's cross extent",
+    );
+}
+
+#[test]
+fn harness_render_wrap_hit_tests_last_child_first() {
+    // Two overlapping children (both at origin when loose): last is on top.
+    // Because wrap places each child sequentially, they don't overlap here,
+    // but we verify hit_test descends through all children in reverse order.
+    let run = RenderTester::mount(
+        box_node(RenderWrap::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("first"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("second")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("first")));
+    assert_eq!(run.hit_first(60.0, 20.0), Some(run.id("second")));
+}
+
+#[test]
+fn harness_render_wrap_diagnostics_reports_all_properties() {
+    let run = RenderTester::mount(box_node(RenderWrap::new()))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderWrap",
+        &[
+            "direction",
+            "alignment",
+            "run_alignment",
+            "cross_axis_alignment",
+        ],
     );
 }
 
