@@ -18,6 +18,10 @@ path = "src/main.rs"
 # Build system
 flui-build = { path = "../flui-build" }
 
+# Async runtime — `run` blocks on the async build/push pipeline via a
+# multi-thread `Runtime`.
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
 # Logging (via flui_foundation::log — merged from flui-log in
 # D-block PR-C-1 U2)
 flui-foundation = { path = "../flui-foundation" }

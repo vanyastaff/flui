@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{BuildError, BuildResult};
-use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
 use crate::util::process;
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
@@ -85,7 +85,7 @@ impl PlatformBuilder for DesktopBuilder {
             _ => {
                 return Err(BuildError::InvalidPlatform {
                     reason: "Expected Desktop platform".to_string(),
-                })
+                });
             }
         };
 

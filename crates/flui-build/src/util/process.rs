@@ -4,7 +4,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 use crate::error::{BuildError, BuildResult};
-use crate::output_parser::{get_parser, BuildEvent};
+use crate::output_parser::{BuildEvent, get_parser};
 use crate::progress::BuildProgress;
 
 /// Run a command and stream output to console
@@ -154,43 +154,43 @@ pub(crate) async fn run_command_with_progress<S: AsRef<str>>(
                 tracing::info!("{}", line);
             }
 
-            if let Some(event) = parser.parse_line(&line) {
-                if let Some(ref mut prog) = progress {
-                    match event {
-                        BuildEvent::Started { task } => {
-                            if !verbose {
-                                prog.set_message(&task);
-                            }
+            if let Some(event) = parser.parse_line(&line)
+                && let Some(ref mut prog) = progress
+            {
+                match event {
+                    BuildEvent::Started { task } => {
+                        if !verbose {
+                            prog.set_message(&task);
                         }
-                        BuildEvent::Progress { current, total } => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let percent = (current * 100 / total.max(1)) as u8;
-                            prog.set_progress(percent);
+                    }
+                    BuildEvent::Progress { current, total } => {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let percent = (current * 100 / total.max(1)) as u8;
+                        prog.set_progress(percent);
+                    }
+                    BuildEvent::Completed { task, duration_ms } => {
+                        let msg = if let Some(ms) = duration_ms {
+                            format!("{} ({:.2}s)", task, ms as f64 / 1000.0)
+                        } else {
+                            task
+                        };
+                        if !verbose {
+                            prog.finish_phase(msg);
                         }
-                        BuildEvent::Completed { task, duration_ms } => {
-                            let msg = if let Some(ms) = duration_ms {
-                                format!("{} ({:.2}s)", task, ms as f64 / 1000.0)
-                            } else {
-                                task
-                            };
-                            if !verbose {
-                                prog.finish_phase(msg);
-                            }
+                    }
+                    BuildEvent::Warning { message } => {
+                        if !verbose {
+                            tracing::warn!("{}", message);
                         }
-                        BuildEvent::Warning { message } => {
-                            if !verbose {
-                                tracing::warn!("{}", message);
-                            }
+                    }
+                    BuildEvent::Error { message } => {
+                        if !verbose {
+                            tracing::error!("{}", message);
                         }
-                        BuildEvent::Error { message } => {
-                            if !verbose {
-                                tracing::error!("{}", message);
-                            }
-                        }
-                        BuildEvent::Info { message } => {
-                            if !verbose {
-                                prog.set_message(&message);
-                            }
+                    }
+                    BuildEvent::Info { message } => {
+                        if !verbose {
+                            prog.set_message(&message);
                         }
                     }
                 }

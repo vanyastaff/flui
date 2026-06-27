@@ -70,17 +70,17 @@ impl OutputParser for CargoParser {
         }
 
         // "    Finished release [optimized] target(s) in 12.34s"
-        if line.starts_with("Finished") {
-            if let Some(time_str) = line.split(" in ").nth(1) {
-                let time_str = time_str.trim_end_matches('s');
-                if let Ok(seconds) = time_str.parse::<f64>() {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let duration = (seconds * 1000.0) as u64;
-                    return Some(BuildEvent::Completed {
-                        task: "Rust compilation".to_string(),
-                        duration_ms: Some(duration),
-                    });
-                }
+        if line.starts_with("Finished")
+            && let Some(time_str) = line.split(" in ").nth(1)
+        {
+            let time_str = time_str.trim_end_matches('s');
+            if let Ok(seconds) = time_str.parse::<f64>() {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let duration = (seconds * 1000.0) as u64;
+                return Some(BuildEvent::Completed {
+                    task: "Rust compilation".to_string(),
+                    duration_ms: Some(duration),
+                });
             }
         }
 
@@ -126,15 +126,15 @@ impl OutputParser for GradleParser {
         }
 
         // "BUILD SUCCESSFUL in 12s"
-        if line.starts_with("BUILD SUCCESSFUL") {
-            if let Some(time_str) = line.split(" in ").nth(1) {
-                let time_str = time_str.trim_end_matches('s');
-                if let Ok(seconds) = time_str.parse::<u64>() {
-                    return Some(BuildEvent::Completed {
-                        task: "Gradle build".to_string(),
-                        duration_ms: Some(seconds * 1000),
-                    });
-                }
+        if line.starts_with("BUILD SUCCESSFUL")
+            && let Some(time_str) = line.split(" in ").nth(1)
+        {
+            let time_str = time_str.trim_end_matches('s');
+            if let Ok(seconds) = time_str.parse::<u64>() {
+                return Some(BuildEvent::Completed {
+                    task: "Gradle build".to_string(),
+                    duration_ms: Some(seconds * 1000),
+                });
             }
         }
 
@@ -203,17 +203,17 @@ impl OutputParser for WasmPackParser {
         }
 
         // "✨  Done in 12.34s"
-        if line.contains("Done in") {
-            if let Some(time_str) = line.split("Done in ").nth(1) {
-                let time_str = time_str.trim_end_matches('s');
-                if let Ok(seconds) = time_str.parse::<f64>() {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let duration = (seconds * 1000.0) as u64;
-                    return Some(BuildEvent::Completed {
-                        task: "WASM build".to_string(),
-                        duration_ms: Some(duration),
-                    });
-                }
+        if line.contains("Done in")
+            && let Some(time_str) = line.split("Done in ").nth(1)
+        {
+            let time_str = time_str.trim_end_matches('s');
+            if let Ok(seconds) = time_str.parse::<f64>() {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let duration = (seconds * 1000.0) as u64;
+                return Some(BuildEvent::Completed {
+                    task: "WASM build".to_string(),
+                    duration_ms: Some(duration),
+                });
             }
         }
 
@@ -304,13 +304,13 @@ impl OutputParser for XcodeParser {
         let line = line.trim();
 
         // Xcode format: "=== BUILD TARGET xxx OF PROJECT yyy WITH CONFIGURATION Debug ==="
-        if line.starts_with("=== BUILD TARGET") {
-            if let Some(target) = line.split("TARGET ").nth(1) {
-                let target_name = target.split(" OF ").next()?.to_string();
-                return Some(BuildEvent::Started {
-                    task: format!("Building {target_name}"),
-                });
-            }
+        if line.starts_with("=== BUILD TARGET")
+            && let Some(target) = line.split("TARGET ").nth(1)
+        {
+            let target_name = target.split(" OF ").next()?.to_string();
+            return Some(BuildEvent::Started {
+                task: format!("Building {target_name}"),
+            });
         }
 
         // "▸ Compiling Foo.swift"
@@ -338,17 +338,17 @@ impl OutputParser for XcodeParser {
         }
 
         // "** BUILD SUCCEEDED ** [12.5 sec]"
-        if line.contains("BUILD SUCCEEDED") {
-            if let Some(time_str) = line.split('[').nth(1) {
-                let time_str = time_str.trim_end_matches(']').trim_end_matches(" sec");
-                if let Ok(seconds) = time_str.parse::<f64>() {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let duration = (seconds * 1000.0) as u64;
-                    return Some(BuildEvent::Completed {
-                        task: "Xcode build".to_string(),
-                        duration_ms: Some(duration),
-                    });
-                }
+        if line.contains("BUILD SUCCEEDED")
+            && let Some(time_str) = line.split('[').nth(1)
+        {
+            let time_str = time_str.trim_end_matches(']').trim_end_matches(" sec");
+            if let Ok(seconds) = time_str.parse::<f64>() {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let duration = (seconds * 1000.0) as u64;
+                return Some(BuildEvent::Completed {
+                    task: "Xcode build".to_string(),
+                    duration_ms: Some(duration),
+                });
             }
         }
 

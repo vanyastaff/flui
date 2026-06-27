@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{BuildError, BuildResult};
-use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
 use crate::util::{check_command_exists, process};
 
 /// Builder for iOS platform (.app bundles via Xcode)

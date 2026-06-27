@@ -92,10 +92,8 @@ fn check_rust(verbose: bool, all_ok: &mut bool) -> String {
         style(version.trim()).cyan()
     );
 
-    if verbose {
-        if let Ok(path) = which::which("rustc") {
-            write!(result, "\n  Path: {}", style(path.display()).dim()).ok();
-        }
+    if verbose && let Ok(path) = which::which("rustc") {
+        write!(result, "\n  Path: {}", style(path.display()).dim()).ok();
     }
 
     result
@@ -146,10 +144,8 @@ fn check_java(verbose: bool, all_ok: &mut bool) -> String {
 
     let mut result = format!("{} Java: {}", style("✓").green(), style(line.trim()).cyan());
 
-    if verbose {
-        if let Ok(java_home) = std::env::var("JAVA_HOME") {
-            write!(result, "\n  JAVA_HOME: {}", style(java_home).dim()).ok();
-        }
+    if verbose && let Ok(java_home) = std::env::var("JAVA_HOME") {
+        write!(result, "\n  JAVA_HOME: {}", style(java_home).dim()).ok();
     }
 
     if version_output.contains("version \"1.8") {

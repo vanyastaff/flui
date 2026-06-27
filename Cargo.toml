@@ -48,10 +48,17 @@ members = [
 
     # === Animation Layer ===
     "crates/flui-animation", # Animation system (ACTIVE)
+
+    # === DX tooling ===
+    "crates/flui-devtools", # Profiler / inspector / hot-reload protocol
+    "crates/flui-build",    # Build orchestration (android / cross)
+    "crates/flui-cli",      # `flui` CLI (run / build / devtools / templates)
+    # NOTE: flui-reactivity is excluded — its manifest inherits `any_spawner` from
+    # workspace.dependencies, which is not declared at the root (the reactive
+    # runtime is not wired into the workspace). The crate is standalone-by-design
+    # (0 consumers — "signals locked out by C1"); re-include it only when signals
+    # are integrated into the view layer and its deps are added to the workspace.
     # "crates/flui-reactivity",
-    # "crates/flui-devtools",
-    # "crates/flui-cli",
-    # "crates/flui-build",
 ]
 
 # Default members exclude Android-only crates (ndk-sys won't compile on host)
@@ -76,6 +83,9 @@ default-members = [
     "crates/flui-binding",
     "crates/flui-app",
     "crates/flui-animation",
+    "crates/flui-devtools",
+    "crates/flui-build",
+    "crates/flui-cli",
 ]
 
 [workspace.package]
@@ -104,6 +114,11 @@ serde_json = "1.0"
 
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
+
+# DX TOOLING - flui-cli / flui-build / flui-devtools
+indicatif = "0.17" # progress bars (build/cli)
+tempfile = "3"     # scratch dirs/files (build/cli tests)
+which = "7"        # locate toolchain executables (build/cli)
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros" }

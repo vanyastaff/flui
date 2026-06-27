@@ -88,20 +88,17 @@ fn android_devices(details: bool) -> String {
 
                     devices.push(format!("  {icon} {device_id} ({status_styled})"));
 
-                    if details && status == "device" {
-                        if let Ok(model_output) = Command::new("adb")
+                    if details
+                        && status == "device"
+                        && let Ok(model_output) = Command::new("adb")
                             .args(["-s", device_id, "shell", "getprop", "ro.product.model"])
                             .output()
-                        {
-                            let model = String::from_utf8_lossy(&model_output.stdout)
-                                .trim()
-                                .to_string();
-                            if !model.is_empty() {
-                                devices.push(format!(
-                                    "    {}",
-                                    style(format!("Model: {model}")).dim()
-                                ));
-                            }
+                    {
+                        let model = String::from_utf8_lossy(&model_output.stdout)
+                            .trim()
+                            .to_string();
+                        if !model.is_empty() {
+                            devices.push(format!("    {}", style(format!("Model: {model}")).dim()));
                         }
                     }
                 }
@@ -217,13 +214,11 @@ fn browsers(details: bool) -> String {
     for browser in &browsers {
         result.push(format!("  {} {}", style("●").green(), browser.name));
 
-        if details {
-            if let Some(version) = &browser.version {
-                result.push(format!(
-                    "    {}",
-                    style(format!("Version: {version}")).dim()
-                ));
-            }
+        if details && let Some(version) = &browser.version {
+            result.push(format!(
+                "    {}",
+                style(format!("Version: {version}")).dim()
+            ));
         }
     }
 
@@ -319,39 +314,38 @@ fn enumerate_browsers_windows() -> Vec<BrowserInfo> {
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command", ps_command])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
+        let output_str = String::from_utf8_lossy(&output.stdout);
 
-            for line in output_str.lines() {
-                if let Some(stripped) = line.strip_prefix("BROWSER:") {
-                    let parts: Vec<&str> = stripped.split('|').collect();
-                    if parts.len() == 2 {
-                        let registry_name = parts[0].trim();
-                        let path = parts[1].trim().to_string();
+        for line in output_str.lines() {
+            if let Some(stripped) = line.strip_prefix("BROWSER:") {
+                let parts: Vec<&str> = stripped.split('|').collect();
+                if parts.len() == 2 {
+                    let registry_name = parts[0].trim();
+                    let path = parts[1].trim().to_string();
 
-                        if Path::new(&path).exists() {
-                            let display_name = match registry_name {
-                                "Google Chrome" | "CHROME.EXE" => "Chrome",
-                                "Microsoft Edge" | "MSEDGE" => "Edge",
-                                "Firefox" | "FIREFOX.EXE" => "Firefox",
-                                "Brave" | "BRAVE.EXE" => "Brave",
-                                "Opera" | "OPERA.EXE" => "Opera",
-                                "IEXPLORE.EXE" => "Internet Explorer",
-                                _ => registry_name,
-                            }
-                            .to_string();
+                    if Path::new(&path).exists() {
+                        let display_name = match registry_name {
+                            "Google Chrome" | "CHROME.EXE" => "Chrome",
+                            "Microsoft Edge" | "MSEDGE" => "Edge",
+                            "Firefox" | "FIREFOX.EXE" => "Firefox",
+                            "Brave" | "BRAVE.EXE" => "Brave",
+                            "Opera" | "OPERA.EXE" => "Opera",
+                            "IEXPLORE.EXE" => "Internet Explorer",
+                            _ => registry_name,
+                        }
+                        .to_string();
 
-                            if !browsers
-                                .iter()
-                                .any(|b: &BrowserInfo| b.name == display_name)
-                            {
-                                browsers.push(BrowserInfo {
-                                    name: display_name,
-                                    version: None,
-                                    path: Some(path),
-                                });
-                            }
+                        if !browsers
+                            .iter()
+                            .any(|b: &BrowserInfo| b.name == display_name)
+                        {
+                            browsers.push(BrowserInfo {
+                                name: display_name,
+                                version: None,
+                                path: Some(path),
+                            });
                         }
                     }
                 }

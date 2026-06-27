@@ -340,7 +340,7 @@ pub fn execute_scene(
     package: &str,
     target: &str,
     release: bool,
-    verbose: bool,
+    _verbose: bool,
 ) -> CliResult<()> {
     use flui_build::android::AndroidBuilder;
     use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
@@ -403,7 +403,11 @@ pub fn execute_scene(
         if !alt.exists() {
             return Err(CliError::BuildFailed {
                 platform: "android".to_string(),
-                details: format!("Scene crate src/ not found at {:?} or {:?}", scene_src, alt),
+                details: format!(
+                    "Scene crate src/ not found at {} or {}",
+                    scene_src.display(),
+                    alt.display()
+                ),
             });
         }
     }

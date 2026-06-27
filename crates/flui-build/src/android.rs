@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{BuildError, BuildResult};
-use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
 use crate::util::{check_command_exists, environment, process};
 
 /// Builder for Android platform (APK builds via Gradle and cargo-ndk)
@@ -133,7 +133,7 @@ impl AndroidBuilder {
     ) -> BuildResult<()> {
         let so_str = so_path
             .to_str()
-            .ok_or_else(|| BuildError::Other(format!("Invalid path: {:?}", so_path)))?;
+            .ok_or_else(|| BuildError::Other(format!("Invalid path: {}", so_path.display())))?;
 
         let tmp_path = format!("/data/local/tmp/{lib_name}");
         let app_path = format!("/data/data/{package}/files/{lib_name}");

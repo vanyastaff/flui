@@ -99,7 +99,7 @@ async fn build_desktop(mut progress: BuildProgress) {
     progress.start_phase(BuildPhase::BuildRust, Some("Compiling Rust..."));
     sleep(Duration::from_millis(700)).await;
     progress.set_message("Building for x86_64-pc-windows-msvc");
-    sleep(Duration::from_millis(1000)).await;
+    sleep(Duration::from_secs(1)).await;
     progress.set_message("Linking flui_app.dll");
     sleep(Duration::from_millis(300)).await;
     progress.finish_phase("Native library built (1.8 MB)");

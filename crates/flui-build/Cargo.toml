@@ -15,12 +15,15 @@ categories = ["development-tools::build-utils"]
 thiserror.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["process"] }
+tokio = { workspace = true, features = ["process", "io-util"] }
 which.workspace = true
 indicatif.workspace = true                           # Progress bars for build status
 
 [dev-dependencies]
 tempfile.workspace = true
+# The `progress_demo` example runs an async main + spawns tasks; these features
+# are example/test-only so the library itself stays minimal (process + io-util).
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
