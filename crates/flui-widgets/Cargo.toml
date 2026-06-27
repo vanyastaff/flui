@@ -30,6 +30,15 @@ flui-interaction = { path = "../flui-interaction" }
 flui-types = { path = "../flui-types" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
 flui-geometry = { path = "../flui-geometry" }
+# Typed error variants for `ImageProviderError` via `#[derive(Error)]`.
+thiserror = { workspace = true }
+# Structured diagnostics for image-provider failures — `tracing::warn!` on
+# provider errors so silent empty-box failures are visible in traces.
+tracing = { workspace = true }
+# Image decoding (PNG, JPEG, GIF, …). Optional: gate behind the `images`
+# feature to avoid pulling in the decode library for apps that only use
+# `Image::from_image` (pre-decoded `PixelImage`).
+image = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Integration tests drive the real layout pipeline through the render harness.
@@ -51,4 +60,8 @@ insta = { workspace = true }
 
 [features]
 default = []
+# Activates the `image` crate for decoding PNG/JPEG/GIF/… from bytes or files.
+# Required by `MemoryImage` and `FileImage`; `DirectImageProvider` and
+# `NetworkImage` compile without it.
+images = ["dep:image"]
 serde = ["flui-types/serde"]

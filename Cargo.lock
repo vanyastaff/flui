@@ -1753,8 +1753,11 @@ dependencies = [
  "flui-scheduler",
  "flui-types",
  "flui-view",
+ "image",
  "insta",
  "parking_lot",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
