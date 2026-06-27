@@ -303,6 +303,28 @@ pub type ActualBaselineChildCallback<'a> = &'a (
 pub type SliverLayoutChildCallback<'a> =
     &'a (dyn Fn(flui_foundation::RenderId, SliverConstraints) -> SliverGeometry + Send + Sync);
 
+/// Callback for querying a Box child's intrinsic dimensions from within a Box
+/// parent's `perform_layout`.
+///
+/// Called by `RenderIntrinsicWidth` / `RenderIntrinsicHeight` to measure the
+/// child's intrinsic extent before committing to a layout size.  The callback
+/// routes through [`crate::pipeline::owner::subtree_arena`]'s
+/// `box_intrinsic_query_borrowed` — the same pre-acquired subtree pool used by
+/// the sliver→box intrinsic path — so no fresh `&mut RenderTree` is needed.
+///
+/// The `extent` argument carries the cross-axis extent (height for width
+/// queries, width for height queries), matching Flutter's
+/// `getMinIntrinsicWidth(double height)` / `getMaxIntrinsicWidth(double height)`
+/// parameter convention.
+///
+/// Returns `0.0` when the callback cannot route the query (out-of-bounds index,
+/// error in child layout, or no callback wired on the Direct-storage path).
+pub type BoxChildIntrinsicCallback<'a> = &'a (
+        dyn Fn(flui_foundation::RenderId, crate::storage::IntrinsicDimension, f32) -> f32
+            + Send
+            + Sync
+    );
+
 /// Per-child geometry storage owned by the typed wrapper when bridging
 /// from an erased context.
 ///
@@ -826,6 +848,27 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
         None
     }
+
+    /// Queries a child's intrinsic dimension from within `perform_layout`.
+    ///
+    /// Delegates to the pipeline's `box_intrinsic_query_borrowed` callback when
+    /// one is wired (the production path used by `RenderIntrinsicWidth` /
+    /// `RenderIntrinsicHeight`).  Returns `0.0` on Direct-storage contexts
+    /// (unit tests, leaf-only paths) where no intrinsics callback is available —
+    /// the same conservative fallback as `layout_child` returning `Size::ZERO`
+    /// on the no-callback Direct path.
+    ///
+    /// `dimension` — which of the four intrinsic axes to query
+    /// (`MinWidth`/`MaxWidth` pass a height extent; `MinHeight`/`MaxHeight`
+    /// pass a width extent — matching Flutter's `_IntrinsicDimension`).
+    fn child_intrinsic(
+        &mut self,
+        _index: usize,
+        _dimension: crate::storage::IntrinsicDimension,
+        _extent: f32,
+    ) -> f32 {
+        0.0
+    }
 }
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
@@ -947,6 +990,25 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
             | BoxLayoutCtxStorage::Proxy { .. } => None,
         }
     }
+
+    #[inline]
+    fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        match &mut self.storage {
+            // Direct-storage contexts have no intrinsics callback; return the
+            // same conservative 0.0 that the default trait body produces.
+            BoxLayoutCtxStorage::Direct { .. } => 0.0,
+            // Proxy delegates to the pipeline-wired ErasedBoxLayoutCtx, which
+            // holds the `BoxChildIntrinsicCallback` set by `layout_dirty_root`.
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.child_intrinsic(index, dimension, extent)
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -1016,6 +1078,18 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     /// `layout_sliver_child` returns [`SliverGeometry::ZERO`] in that
     /// case, matching the conservative fallback on the box path.
     sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
+    /// Optional callback for querying Box child intrinsic dimensions from
+    /// within a Box parent's `perform_layout`.
+    ///
+    /// `None` on all paths that do not involve a Box parent that reads child
+    /// intrinsics (the overwhelming majority of layout nodes).  When `None`,
+    /// `child_intrinsic` returns `0.0` — the same conservative fallback as
+    /// `layout_child` returning `Size::ZERO` on the no-callback Direct path.
+    ///
+    /// Wired by `layout_dirty_root` in `subtree_arena.rs` via
+    /// `box_intrinsic_query_borrowed` — the same pre-acquired subtree pool
+    /// already used for the Sliver→Box intrinsic path.
+    intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
 }
 
 impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
@@ -1024,6 +1098,12 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     /// `sliver_layout_child_callback` is `None` when the parent is known
     /// to have no sliver children (avoids the allocation + closure
     /// construction on the all-box common path).
+    ///
+    /// `intrinsics_child_callback` is `None` when the parent is known not
+    /// to query child intrinsics during `perform_layout` (the common path).
+    /// Wired to `box_intrinsic_query_borrowed` by `layout_dirty_root` so that
+    /// `RenderIntrinsicWidth` / `RenderIntrinsicHeight` can measure their child
+    /// from within the layout walk.
     pub fn new(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ErasedChildState>,
@@ -1031,6 +1111,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
         layout_child_callback: LayoutChildCallback<'ctx>,
         actual_baseline_callback: ActualBaselineChildCallback<'ctx>,
         sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
+        intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
     ) -> Self {
         Self {
             constraints,
@@ -1039,6 +1120,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
             layout_child_callback,
             actual_baseline_callback,
             sliver_layout_child_callback,
+            intrinsics_child_callback,
         }
     }
 }
@@ -1141,6 +1223,21 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
             .iter()
             .find_map(|slot| slot.parent_data.as_deref())
             .map(|pd| pd.as_any().type_id())
+    }
+
+    fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        let Some(callback) = self.intrinsics_child_callback else {
+            return 0.0;
+        };
+        let Some(&child_id) = self.child_ids.get(index) else {
+            return 0.0;
+        };
+        callback(child_id, dimension, extent)
     }
 }
 

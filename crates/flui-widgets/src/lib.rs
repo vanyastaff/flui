@@ -106,8 +106,12 @@ pub use interaction::{
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
-    FractionallySizedBox, LimitedBox, Padding, SizedBox, Transform,
+    FractionallySizedBox, IntrinsicHeight, IntrinsicWidth, LimitedBox, OverflowBox, Padding,
+    RotatedBox, SizedBox, SizedOverflowBox, Transform,
 };
+// `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
+// so consumers don't need to reach into `flui_objects`.
+pub use flui_objects::OverflowBoxFit;
 pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     ListView, SingleChildScrollView, SliverFixedExtentList, SliverOpacity, SliverPadding,
@@ -160,9 +164,11 @@ pub mod prelude {
         AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipRRect, ClipRect,
         ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox, Flex,
         FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
-        GestureDetector, IgnorePointer, LimitedBox, ListView, Listener, Offstage, Opacity, Padding,
-        Positioned, RepaintBoundary, Row, SingleChildScrollView, SizedBox, SliverFixedExtentList,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport, Wrap,
+        GestureDetector, IgnorePointer, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListView,
+        Listener, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned,
+        RepaintBoundary, RotatedBox, Row, SingleChildScrollView, SizedBox, SizedOverflowBox,
+        SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text,
+        Transform, Viewport, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
