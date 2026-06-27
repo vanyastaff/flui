@@ -10,7 +10,7 @@
 //!
 //! Objects are grouped into six domain families:
 //!
-//! - `layout` — sizing, alignment, flex, stack, transform, fitted-box
+//! - `layout` — sizing, alignment, flex, stack, transform, fitted-box, intrinsic, overflow, rotation
 //! - `proxy` — paint-effect proxies (opacity, clip, decoration, color, repaint boundary)
 //! - `interaction` — hit-test and visibility proxies (absorb/ignore pointer, offstage, metadata)
 //! - `text` — [`RenderParagraph`]
@@ -19,7 +19,7 @@
 //!
 //! # Flat public surface
 //!
-//! All 38 types are re-exported flat from this crate root so the consumer
+//! All 43 types are re-exported flat from this crate root so the consumer
 //! import path is simply `flui_objects::RenderPadding` — identical depth to the
 //! old `flui_rendering::objects::RenderPadding`.
 //!
@@ -41,13 +41,14 @@ mod text;
 // --- flat re-exports (layout) ---
 pub use layout::{
     AspectRatioFactor, FractionFactor, RenderAlign, RenderAspectRatio, RenderBaseline,
-    RenderCenter, RenderConstrainedBox, RenderFittedBox, RenderFlex, RenderFractionalTranslation,
-    RenderFractionallySizedBox, RenderLimitedBox, RenderPadding, RenderSizedBox, RenderStack,
-    RenderTransform, RenderWrap,
+    RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox, RenderFittedBox, RenderFlex,
+    RenderFractionalTranslation, RenderFractionallySizedBox, RenderIntrinsicHeight,
+    RenderIntrinsicWidth, RenderLimitedBox, RenderPadding, RenderRotatedBox, RenderSizedBox,
+    RenderSizedOverflowBox, RenderStack, RenderTransform, RenderWrap,
 };
 pub use layout::{
-    CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, PositionedSpec, StackFit,
-    TranslationFraction, WrapAlignment, WrapCrossAlignment,
+    CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, OverflowBoxFit,
+    PositionedSpec, StackFit, TranslationFraction, WrapAlignment, WrapCrossAlignment,
 };
 
 // --- flat re-exports (proxy) ---

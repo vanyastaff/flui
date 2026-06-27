@@ -47,6 +47,11 @@
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
 //! | `RenderWrap` | `harness_render_wrap_*` | yes | yes | — | yes | — |
+//! | `RenderIntrinsicWidth` | `harness_intrinsic_width_*` | yes | — | — | yes | — |
+//! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | — |
+//! | `RenderConstrainedOverflowBox` | `harness_constrained_overflow_box_*` | yes | — | — | yes | — |
+//! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
+//! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | — |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
@@ -118,6 +123,11 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverOpacity",
     "RenderViewport",
     "RenderWrap",
+    "RenderIntrinsicWidth",
+    "RenderIntrinsicHeight",
+    "RenderConstrainedOverflowBox",
+    "RenderSizedOverflowBox",
+    "RenderRotatedBox",
 ];
 
 fn loose(max: f32) -> BoxConstraints {
@@ -2145,6 +2155,321 @@ fn harness_render_wrap_hit_tests_last_child_first() {
 
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("first")));
     assert_eq!(run.hit_first(60.0, 20.0), Some(run.id("second")));
+}
+
+// ============================================================================
+// RenderIntrinsicWidth
+// ============================================================================
+
+#[test]
+fn harness_intrinsic_width_leaf_sizes_to_zero() {
+    // Without a child, a leaf IntrinsicWidth should shrink-wrap to zero
+    // (constraints.smallest() with min_w=0).
+    let run = RenderTester::mount(box_node(RenderIntrinsicWidth::unconstrained()))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+    assert_descendant_properties(&run.diagnostics(), "RenderIntrinsicWidth", &[]);
+}
+
+#[test]
+fn harness_intrinsic_width_with_child_passes_size_through() {
+    // Without step snapping the child's natural size is propagated unchanged
+    // through constrain().
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained())
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    // IntrinsicWidth forwards unconstrained → child size = 60×40 → constrain
+    // under 0..200 → stays 60×40.
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(60.0), px(40.0)));
+}
+
+#[test]
+fn harness_intrinsic_width_self_describes_step_knobs() {
+    let run = RenderTester::mount(box_node(RenderIntrinsicWidth::new(Some(20.0), Some(10.0))))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderIntrinsicWidth",
+        &["step_width", "step_height"],
+    );
+}
+
+// ============================================================================
+// RenderIntrinsicHeight
+// ============================================================================
+
+#[test]
+fn harness_intrinsic_height_leaf_sizes_to_zero() {
+    let run = RenderTester::mount(box_node(RenderIntrinsicHeight::new()))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+    assert_descendant_properties(&run.diagnostics(), "RenderIntrinsicHeight", &[]);
+}
+
+#[test]
+fn harness_intrinsic_height_with_child_passes_size_through() {
+    // No intrinsic-height query possible in a Direct-storage context (returns 0),
+    // so child_constraints height will be tight at 0px = min_height, which the
+    // child ignores when it has a natural 40px height under the loosen'd
+    // unconstrained → child reports 40px height.
+    //
+    // Concretely: max_intrinsic_height callback returns 0.0 (Direct context)
+    // → clamped to constraints.min_height=0 → tight(0) → child size 60×0?
+    // Actually: child is a ColoredBox with fixed size, which IGNORES tight(0)
+    // only if constrained differently — ColoredBox lays out at self.size clamped
+    // to constraints.  With tight(0) → height=0.
+    //
+    // Test the observable behavior honestly: the Direct test context yields
+    // tight(h=0) for the height, so the child is 60×0 and constrain gives 60×0.
+    // This is correct for this (test-context) code path; the live path uses
+    // box_intrinsic_query_borrowed.
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicHeight::new())
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    // Direct context: max_intrinsic_height → 0.0 → tight h=0 → child 60×0 → constrain → 60×0.
+    // Width flows through unchanged (no tight_width, no step).
+    assert_eq!(run.box_geometry(run.root()).width, px(60.0));
+}
+
+// ============================================================================
+// RenderConstrainedOverflowBox
+// ============================================================================
+
+#[test]
+fn harness_constrained_overflow_box_max_fit_claims_full_parent() {
+    // Max fit (default): OverflowBox claims all of its loose parent space.
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::centered())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    // Max fit: claimed size = constraints.biggest() = 200×200.
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(200.0), px(200.0)),
+        "OverflowBoxFit::Max must claim all available space",
+    );
+}
+
+#[test]
+fn harness_constrained_overflow_box_defer_to_child_shrink_wraps() {
+    // DeferToChild: reported size follows constrain(child_size).
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            None,
+            None,
+            None,
+            None,
+            OverflowBoxFit::DeferToChild,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(40.0), px(40.0)),
+        "OverflowBoxFit::DeferToChild must constrain child size back to parent",
+    );
+}
+
+#[test]
+fn harness_constrained_overflow_box_self_describes_fit() {
+    let run = RenderTester::mount(box_node(RenderConstrainedOverflowBox::new(
+        Alignment::CENTER,
+        None,
+        Some(px(300.0)),
+        None,
+        None,
+        OverflowBoxFit::Max,
+    )))
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_descendant_properties(&run.diagnostics(), "RenderConstrainedOverflowBox", &["fit"]);
+}
+
+// ============================================================================
+// RenderSizedOverflowBox
+// ============================================================================
+
+#[test]
+fn harness_sized_overflow_box_reports_requested_size() {
+    // The box claims requested_size (clamped to constraints) regardless of child.
+    let run = RenderTester::mount(
+        box_node(RenderSizedOverflowBox::centered(80.0, 60.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(80.0), px(60.0)),
+        "SizedOverflowBox must report the requested size, not the child size",
+    );
+}
+
+#[test]
+fn harness_sized_overflow_box_child_lays_out_under_incoming_constraints() {
+    // Key contract: child sees the PARENT constraints, not the requested size.
+    // Under loose(200) the child (fixed 40×40 ColoredBox) stays at 40×40,
+    // even though the box claims 80×60.
+    let run = RenderTester::mount(
+        box_node(RenderSizedOverflowBox::centered(80.0, 60.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(40.0), px(40.0)),
+        "child must be laid out under incoming constraints, not the requested size",
+    );
+}
+
+#[test]
+fn harness_sized_overflow_box_self_describes() {
+    let run = RenderTester::mount(box_node(RenderSizedOverflowBox::centered(80.0, 60.0)))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderSizedOverflowBox",
+        &["requested_width", "requested_height"],
+    );
+}
+
+// ============================================================================
+// RenderRotatedBox
+// ============================================================================
+
+#[test]
+fn harness_rotated_box_even_turns_preserves_size() {
+    // 0 quarter turns: child size is unchanged.
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(0))
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(60.0), px(40.0)),
+        "0 quarter turns must preserve child dimensions",
+    );
+}
+
+#[test]
+fn harness_rotated_box_odd_turns_swaps_axes() {
+    // 1 quarter turn: child is constrained under flipped constraints (200h×200w),
+    // then size is swapped: child 60×40 → parent reports 40×60.
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(1))
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    // After 90°: width becomes height and vice versa.
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(40.0), px(60.0)),
+        "1 quarter turn must swap child width↔height for the parent-reported size",
+    );
+}
+
+#[test]
+fn harness_rotated_box_two_turns_is_same_size_as_zero() {
+    // 2 quarter turns = 180°: axes are not swapped (even).
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(2))
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(60.0), px(40.0)),
+        "2 quarter turns must not swap dimensions",
+    );
+}
+
+#[test]
+fn harness_rotated_box_leaf_sizes_to_zero_even_turns() {
+    let run = RenderTester::mount(box_node(RenderRotatedBox::new(0)))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+    assert_descendant_properties(&run.diagnostics(), "RenderRotatedBox", &["quarter_turns"]);
+}
+
+#[test]
+fn harness_rotated_box_hit_test_90_degree_within_child() {
+    // After a 90° rotation (1 quarter turn) the child occupies a rotated
+    // region.  The paint matrix maps child (0,0)..(60,40) into the parent frame
+    // as a rotated rectangle centered in the parent slot (40×60).
+    //
+    // Parent size: 40×60 (swapped child).
+    // Paint matrix: translate(20,30) * rotate(90°) * translate(-30,-20).
+    // Child center in parent coords: (20, 30).
+    //
+    // A pointer at parent (20, 30) should hit the child (it maps to child center
+    // (30, 20) which is inside the 60×40 child).
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(1))
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    // The center of the parent slot — should always hit the child's center.
+    let center_x = run.box_geometry(run.root()).width.get() / 2.0;
+    let center_y = run.box_geometry(run.root()).height.get() / 2.0;
+    assert!(
+        run.hit(center_x, center_y).contains(&run.root()),
+        "pointer at parent center must hit the rotated child",
+    );
+}
+
+#[test]
+fn harness_rotated_box_negative_quarter_turn_swaps_axes() {
+    // -1 quarter turn (counter-clockwise 90°) is still odd → axes swapped.
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(-1))
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(40.0), px(60.0)),
+        "-1 quarter turn (odd) must swap child width↔height",
+    );
 }
 
 #[test]

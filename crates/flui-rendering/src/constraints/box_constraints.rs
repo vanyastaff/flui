@@ -512,6 +512,26 @@ impl BoxConstraints {
         }
     }
 
+    /// Swaps the width and height axes of these constraints.
+    ///
+    /// Returns constraints with `min_width ↔ min_height` and `max_width ↔ max_height`
+    /// exchanged.  Used by `RenderRotatedBox` to pass rotated constraints to the
+    /// child when the quarter-turns count is odd (90° or 270°): the child must
+    /// fill the space that appears as the parent's *height* but, from the child's
+    /// coordinate frame, is its *width*.
+    ///
+    /// Flutter parity: `BoxConstraints.flipped` getter in `box.dart`.
+    #[inline]
+    #[must_use]
+    pub fn flipped(self) -> Self {
+        Self {
+            min_width: self.min_height,
+            max_width: self.max_height,
+            min_height: self.min_width,
+            max_height: self.max_width,
+        }
+    }
+
     /// Enforces these constraints on another set of constraints.
     ///
     /// Constrains the other constraints to fit within these bounds.
