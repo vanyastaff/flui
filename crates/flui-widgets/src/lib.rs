@@ -79,6 +79,7 @@ pub mod animated;
 pub mod clip;
 mod container;
 pub mod flex;
+pub mod image;
 pub mod interaction;
 pub mod layout;
 pub mod paint;
@@ -98,8 +99,16 @@ pub use animated::{
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
+// `Image` widget over `RenderImage`; provider types live in the same module.
+// `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
+// need only import from `flui-widgets`, not from lower-level crates.
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
+pub use flui_objects::{ImageAlignment, ImageFit};
+pub use image::{
+    DirectImageProvider, FileImage, Image, ImageProvider, ImageProviderError, MemoryImage,
+    NetworkImage,
+};
 pub use interaction::{
     AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,
     Listener, Offstage,
@@ -164,11 +173,11 @@ pub mod prelude {
         AbsorbPointer, Align, AspectRatio, Baseline, Center, ClipOval, ClipPath, ClipRRect,
         ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox, Expanded, FittedBox,
         Flex, FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
-        GestureDetector, IgnorePointer, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListView,
-        Listener, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned,
-        RepaintBoundary, RotatedBox, Row, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text,
-        Transform, Viewport, Wrap,
+        GestureDetector, IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider,
+        IntrinsicHeight, IntrinsicWidth, LimitedBox, ListView, Listener, Offstage, Opacity,
+        OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox, Row,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverFixedExtentList, SliverOpacity,
+        SliverPadding, SliverToBoxAdapter, Stack, Text, Transform, Viewport, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
