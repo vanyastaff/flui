@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{lay_out_animated, loose, tight};
-use flui_animation::Vsync;
+use flui_animation::{ElasticOutCurve, Vsync};
 use flui_geometry::{EdgeInsets, px};
 use flui_types::{Alignment, Offset};
 use flui_view::prelude::{BuildContext, StatefulView};
@@ -432,5 +432,78 @@ fn animated_container_interpolates_size_over_frames() {
         samples[1] > 21.0 && samples[1] < 99.0,
         "an intermediate frame shows a partial width, got {}",
         samples[1],
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Non-cubic curve — compile-and-run gate
+// ----------------------------------------------------------------------------
+
+/// Probe that wires an `ElasticOutCurve` into `AnimatedOpacity`.
+///
+/// This struct would FAIL TO COMPILE if `AnimatedOpacity::curve()` still only
+/// accepted `Cubic` — `ElasticOutCurve` is a distinct type that does not
+/// implement `Into<Cubic>`.
+#[derive(Clone, StatefulView)]
+struct ElasticOpacityProbe {
+    vsync: Vsync,
+    target: Arc<Mutex<f32>>,
+}
+
+struct ElasticOpacityProbeState {
+    vsync: Vsync,
+    target: Arc<Mutex<f32>>,
+}
+
+impl StatefulView for ElasticOpacityProbe {
+    type State = ElasticOpacityProbeState;
+
+    fn create_state(&self) -> Self::State {
+        ElasticOpacityProbeState {
+            vsync: self.vsync.clone(),
+            target: Arc::clone(&self.target),
+        }
+    }
+}
+
+impl ViewState<ElasticOpacityProbe> for ElasticOpacityProbeState {
+    fn build(&self, _view: &ElasticOpacityProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        VsyncScope::new(
+            self.vsync.clone(),
+            AnimatedOpacity::new(*self.target.lock(), SizedBox::new(100.0, 50.0))
+                .duration(RUN)
+                // Key line: passes a non-Cubic curve — compile error without type erasure.
+                .curve(ElasticOutCurve::default()),
+        )
+    }
+}
+
+#[test]
+fn animated_opacity_accepts_non_cubic_elastic_out_curve() {
+    // The elastic-out curve overshoots the target before settling, so do not
+    // assert monotonicity.  Only check start and convergence to the target.
+    let vsync = Vsync::new();
+    let target = Arc::new(Mutex::new(0.0));
+    let probe = ElasticOpacityProbe {
+        vsync: vsync.clone(),
+        target: Arc::clone(&target),
+    };
+    let mut laid = lay_out_animated(probe, tight(100.0, 50.0), vsync);
+
+    assert!(
+        laid.opacity(laid.current_root()).abs() < 1e-4,
+        "starts transparent"
+    );
+
+    *target.lock() = 1.0;
+    laid.pump();
+    laid.pump_for(FRAME); // detection frame (~0.0)
+    for _ in 0..5 {
+        laid.pump_for(FRAME);
+    }
+    let final_opacity = laid.opacity(laid.current_root());
+    assert!(
+        (final_opacity - 1.0).abs() < 0.05,
+        "elastic-out run converges to the target (1.0), got {final_opacity}",
     );
 }

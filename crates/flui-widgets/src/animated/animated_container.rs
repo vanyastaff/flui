@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use flui_animation::curve::Cubic;
+use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{Animation, Curves};
 use flui_geometry::EdgeInsets;
 use flui_types::{Alignment, Color};
@@ -34,7 +34,7 @@ pub struct AnimatedContainer {
     height: Option<f32>,
     margin: Option<EdgeInsets>,
     duration: Duration,
-    curve: Cubic,
+    curve: ArcCurve,
     child: BoxedView,
 }
 
@@ -50,7 +50,7 @@ impl AnimatedContainer {
             height: None,
             margin: None,
             duration: DEFAULT_DURATION,
-            curve: Curves::EaseInOut,
+            curve: ArcCurve::new(Curves::EaseInOut),
             child: child.into_view().boxed(),
         }
     }
@@ -104,10 +104,11 @@ impl AnimatedContainer {
         self
     }
 
-    /// Override the easing curve.
+    /// Override the easing curve; accepts any type implementing
+    /// [`Curve`](flui_animation::Curve), including elastic and bounce curves.
     #[must_use]
-    pub fn curve(mut self, curve: Cubic) -> Self {
-        self.curve = curve;
+    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+        self.curve = ArcCurve::new(curve);
         self
     }
 }
@@ -139,7 +140,7 @@ impl StatefulView for AnimatedContainer {
 
     fn create_state(&self) -> Self::State {
         AnimatedContainerState {
-            controller: ImplicitController::new(self.duration, self.curve),
+            controller: ImplicitController::new(self.duration, self.curve.clone()),
             alignment: OptTween::at_rest(self.alignment),
             padding: OptTween::at_rest(self.padding),
             color: OptTween::at_rest(self.color),

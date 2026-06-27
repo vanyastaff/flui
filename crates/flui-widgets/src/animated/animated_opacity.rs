@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use flui_animation::curve::Cubic;
+use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{Animatable, Animation, Curves};
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
@@ -26,7 +26,7 @@ use crate::{AnimatedBuilder, Opacity};
 pub struct AnimatedOpacity {
     opacity: f32,
     duration: Duration,
-    curve: Cubic,
+    curve: ArcCurve,
     child: BoxedView,
 }
 
@@ -37,7 +37,7 @@ impl AnimatedOpacity {
         Self {
             opacity,
             duration: DEFAULT_DURATION,
-            curve: Curves::EaseInOut,
+            curve: ArcCurve::new(Curves::EaseInOut),
             child: child.into_view().boxed(),
         }
     }
@@ -49,11 +49,12 @@ impl AnimatedOpacity {
         self
     }
 
-    /// Override the easing curve (any cubic from [`Curves`], e.g.
-    /// [`Curves::EaseIn`](flui_animation::Curves::EaseIn)).
+    /// Override the easing curve; accepts any type implementing
+    /// [`Curve`](flui_animation::Curve), including elastic and bounce curves
+    /// from [`flui_animation::Curves`](flui_animation::Curves).
     #[must_use]
-    pub fn curve(mut self, curve: Cubic) -> Self {
-        self.curve = curve;
+    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+        self.curve = ArcCurve::new(curve);
         self
     }
 }
@@ -79,7 +80,7 @@ impl StatefulView for AnimatedOpacity {
 
     fn create_state(&self) -> Self::State {
         AnimatedOpacityState {
-            animation: ImplicitAnimation::new(self.opacity, self.duration, self.curve),
+            animation: ImplicitAnimation::new(self.opacity, self.duration, self.curve.clone()),
             child: self.child.clone(),
         }
     }

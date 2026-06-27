@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use flui_animation::curve::Cubic;
+use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{Animatable, Animation, Curves};
 use flui_types::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
@@ -23,7 +23,7 @@ use crate::{Align, AnimatedBuilder};
 pub struct AnimatedAlign {
     alignment: Alignment,
     duration: Duration,
-    curve: Cubic,
+    curve: ArcCurve,
     child: BoxedView,
 }
 
@@ -34,7 +34,7 @@ impl AnimatedAlign {
         Self {
             alignment,
             duration: DEFAULT_DURATION,
-            curve: Curves::EaseInOut,
+            curve: ArcCurve::new(Curves::EaseInOut),
             child: child.into_view().boxed(),
         }
     }
@@ -46,10 +46,11 @@ impl AnimatedAlign {
         self
     }
 
-    /// Override the easing curve.
+    /// Override the easing curve; accepts any type implementing
+    /// [`Curve`](flui_animation::Curve), including elastic and bounce curves.
     #[must_use]
-    pub fn curve(mut self, curve: Cubic) -> Self {
-        self.curve = curve;
+    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+        self.curve = ArcCurve::new(curve);
         self
     }
 }
@@ -75,7 +76,7 @@ impl StatefulView for AnimatedAlign {
 
     fn create_state(&self) -> Self::State {
         AnimatedAlignState {
-            animation: ImplicitAnimation::new(self.alignment, self.duration, self.curve),
+            animation: ImplicitAnimation::new(self.alignment, self.duration, self.curve.clone()),
             child: self.child.clone(),
         }
     }

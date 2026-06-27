@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::curve::Cubic;
+use flui_animation::curve::ArcCurve;
 use flui_animation::{
     Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Scheduler, Tween,
     Vsync, VsyncRegistration,
@@ -39,14 +39,14 @@ pub(crate) const DEFAULT_DURATION: Duration = Duration::from_millis(200);
 /// feeds to one or more tweens.
 pub(crate) struct ImplicitController {
     controller: AnimationController,
-    curved: CurvedAnimation<Cubic>,
+    curved: CurvedAnimation<ArcCurve>,
     vsync: Option<Vsync>,
     vsync_registration: Option<VsyncRegistration>,
 }
 
 impl ImplicitController {
     /// A controller at rest (value `0`, `Dismissed`) with `curve` applied.
-    pub(crate) fn new(duration: Duration, curve: Cubic) -> Self {
+    pub(crate) fn new(duration: Duration, curve: ArcCurve) -> Self {
         // A fresh scheduler: on a real display its ticker would drive the
         // controller off wall-clock time; under a `VsyncScope` the binding drives
         // it deterministically via `tick_at` instead (this scheduler is never
@@ -83,7 +83,7 @@ impl ImplicitController {
     }
 
     /// A clone of the curved animation for capture in a build closure.
-    pub(crate) fn curved(&self) -> CurvedAnimation<Cubic> {
+    pub(crate) fn curved(&self) -> CurvedAnimation<ArcCurve> {
         self.curved.clone()
     }
 
@@ -137,7 +137,7 @@ pub(crate) struct ImplicitAnimation<T: Lerp + Clone + PartialEq + Send + Sync + 
 
 impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     /// Build an animation sitting at `target` (no motion yet).
-    pub(crate) fn new(target: T, duration: Duration, curve: Cubic) -> Self {
+    pub(crate) fn new(target: T, duration: Duration, curve: ArcCurve) -> Self {
         Self {
             controller: ImplicitController::new(duration, curve),
             tween: Tween::new(target.clone(), target),
@@ -160,7 +160,7 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     }
 
     /// A clone of the curved animation for capture in a build closure.
-    pub(crate) fn curved(&self) -> CurvedAnimation<Cubic> {
+    pub(crate) fn curved(&self) -> CurvedAnimation<ArcCurve> {
         self.controller.curved()
     }
 

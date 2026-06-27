@@ -2,6 +2,8 @@
 
 use smallvec::SmallVec;
 use std::f32::consts::PI;
+use std::fmt;
+use std::sync::Arc;
 
 /// A mapping from the unit interval to the unit interval.
 ///
@@ -1100,6 +1102,66 @@ impl Curves {
         (0.365_5, 1.0),
         (0.546_5, 0.989),
     );
+}
+
+/// A reference-counted, type-erased curve handle.
+///
+/// Wraps any `impl Curve + Send + Sync + 'static` behind an `Arc` so that a
+/// single, stable concrete type can be stored in widgets and animation
+/// controllers, regardless of which specific curve is used.
+///
+/// `ArcCurve` implements `Curve + Clone + Send + Sync + Debug`, which satisfies
+/// the full bound that [`CurvedAnimation`] places on its `C` type parameter.
+/// The `Debug` output intentionally omits the inner curve's type name because
+/// `Curve` does not require `Debug`; use a concrete named type when the type
+/// name is load-bearing.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::curve::{ArcCurve, Curve, ElasticOutCurve};
+///
+/// let curve = ArcCurve::new(ElasticOutCurve::default());
+/// assert_eq!(curve.transform(0.0), 0.0);
+/// assert!((curve.transform(1.0) - 1.0).abs() < 1e-5);
+/// ```
+///
+/// [`CurvedAnimation`]: crate::CurvedAnimation
+#[derive(Clone)]
+pub struct ArcCurve(Arc<dyn Curve + Send + Sync>);
+
+impl ArcCurve {
+    /// Wrap `curve` in a reference-counted erased handle.
+    ///
+    /// The `Arc` is cloned cheaply (reference-count bump), so `ArcCurve` can
+    /// be stored in `Clone`-derived structs without duplicating the curve data.
+    pub fn new(curve: impl Curve + Send + Sync + 'static) -> Self {
+        Self(Arc::new(curve))
+    }
+}
+
+impl Curve for ArcCurve {
+    fn transform(&self, t: f32) -> f32 {
+        self.0.transform(t)
+    }
+}
+
+impl fmt::Debug for ArcCurve {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ArcCurve").finish_non_exhaustive()
+    }
+}
+
+/// Blanket impl so `Arc<dyn Curve + Send + Sync>` can itself be used as a
+/// `Curve` where object-safety is all that matters.  Note that this type alone
+/// does not satisfy [`CurvedAnimation`]'s `C: Debug` bound; prefer [`ArcCurve`]
+/// for that use-case.
+///
+/// [`CurvedAnimation`]: crate::CurvedAnimation
+impl Curve for Arc<dyn Curve + Send + Sync> {
+    fn transform(&self, t: f32) -> f32 {
+        (**self).transform(t)
+    }
 }
 
 #[cfg(test)]

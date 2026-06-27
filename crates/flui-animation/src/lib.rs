@@ -140,10 +140,10 @@ pub use vsync::{Vsync, VsyncRegistration};
 
 // Re-exports from data type modules
 pub use curve::{
-    BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline, Cubic,
-    Curve, Curve2D, Curve2DSample, Curves, DecelerateCurve, ElasticInCurve, ElasticInOutCurve,
-    ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve, ReverseCurve, SawTooth,
-    Split, ThreePointCubic, Threshold,
+    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline,
+    Cubic, Curve, Curve2D, Curve2DSample, Curves, DecelerateCurve, ElasticInCurve,
+    ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve,
+    ReverseCurve, SawTooth, Split, ThreePointCubic, Threshold,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
