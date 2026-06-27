@@ -300,3 +300,42 @@ fn decode_bytes(bytes: &[u8]) -> Result<PixelImage, ImageProviderError> {
         Err(ImageProviderError::DecoderUnavailable)
     }
 }
+
+#[cfg(all(test, feature = "images"))]
+mod decode_tests {
+    use super::*;
+
+    /// Round-trip a known-size image through PNG encoding and
+    /// [`MemoryImage`]: the decoder must recover the exact pixel dimensions.
+    /// Exercises the real `images`-feature decode path (`decode_bytes`), which
+    /// the default `from_image` tests never reach.
+    #[test]
+    fn memory_image_decodes_png_to_its_source_dimensions() {
+        let source = image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(source)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encoding a 3×2 RGBA image to PNG cannot fail");
+
+        let decoded = MemoryImage::new(png)
+            .resolve()
+            .expect("a valid PNG decodes to a PixelImage");
+        let size = decoded.size();
+        assert_eq!(
+            (size.width.get(), size.height.get()),
+            (3.0, 2.0),
+            "the decoded image keeps its 3×2 source dimensions",
+        );
+    }
+
+    /// A non-image byte blob surfaces a typed [`ImageProviderError::DecodeFailed`]
+    /// rather than panicking.
+    #[test]
+    fn memory_image_reports_decode_failure_on_garbage_bytes() {
+        let result = MemoryImage::new(vec![0u8, 1, 2, 3, 4]).resolve();
+        assert!(
+            matches!(result, Err(ImageProviderError::DecodeFailed { .. })),
+            "garbage bytes must yield a typed DecodeFailed error, got {result:?}",
+        );
+    }
+}
