@@ -207,36 +207,40 @@ impl DoubleTapGestureRecognizer {
                 state.device_kind = Some(kind);
             }
             DoubleTapPhase::WaitingForSecond => {
-                // Second tap down - check timing and distance
-                // Cache settings to avoid multiple locks
+                // Second tap down: validate timing and distance.
+                //
+                // When routed through `add_pointer`, expired-window and
+                // out-of-slop contacts are intercepted before `start_tracking`
+                // and never reach this point. These guards are a safety fallback
+                // for direct `handle_down` callers (unit tests).
                 let settings = self.settings.lock().clone();
 
                 if let Some(first_time) = state.first_tap_time {
                     let elapsed = self.state.now().duration_since(first_time);
 
                     if elapsed > settings.double_tap_timeout() {
-                        // Too slow - start over as first tap
-                        state.phase = DoubleTapPhase::FirstDown;
-                        state.first_tap_position = Some(position);
-                        state.first_tap_time = None;
-                        state.current_position = Some(position);
+                        // Window expired. `add_pointer` handles this via
+                        // `check_timeout()` before registration. Reaching here
+                        // means a direct call: stay in WaitingForSecond and let
+                        // the next `check_timeout()` poll clean up the hold.
+                        // Must not release the hold here — we don't know whether
+                        // `start_tracking` was already called for this contact.
                         return;
                     }
 
-                    // Check distance from first tap
+                    // Out-of-slop contact: Flutter ignores it, keeps the first
+                    // entry held, and stays in WaitingForSecond (Flutter parity:
+                    // `addAllowedPointer` filters out-of-slop contacts before
+                    // they compete). Do NOT reset to FirstDown — that would
+                    // orphan the held first entry on the next up.
                     if let Some(first_pos) = state.first_tap_position {
                         let distance = (position - first_pos).distance();
                         if distance.get() > settings.double_tap_slop() {
-                            // Too far - start over as first tap
-                            state.phase = DoubleTapPhase::FirstDown;
-                            state.first_tap_position = Some(position);
-                            state.first_tap_time = None;
-                            state.current_position = Some(position);
                             return;
                         }
                     }
 
-                    // Good! Second tap down
+                    // Valid second tap down.
                     state.phase = DoubleTapPhase::SecondDown;
                     state.current_position = Some(position);
                 }
@@ -441,11 +445,51 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
-        // Start tracking this pointer
+
+        // Pre-registration checks for contacts arriving while we hold the first
+        // entry. Mirror Flutter `addAllowedPointer`: expired-window and
+        // out-of-slop contacts are handled *before* the new pointer is registered
+        // in the arena so that `reject`/`release` on the first entry runs while
+        // `primary_pointer` is still the first pointer — not yet updated by
+        // `start_tracking` for the new contact.
+        {
+            let state = self.gesture_state.lock();
+            if state.phase == DoubleTapPhase::WaitingForSecond {
+                let settings = self.settings.lock().clone();
+
+                let window_expired = state.first_tap_time.is_some_and(|first_time| {
+                    self.state.now().duration_since(first_time) > settings.double_tap_timeout()
+                });
+
+                let out_of_slop = state.first_tap_position.is_some_and(|first_pos| {
+                    (position - first_pos).distance().get() > settings.double_tap_slop()
+                });
+
+                // Release the lock before any re-entrant path (check_timeout re-acquires it).
+                drop(state);
+
+                if window_expired {
+                    // The inter-tap window has expired. Release the held first
+                    // entry (so the lone tap can fire) and fire
+                    // `on_double_tap_cancel`. check_timeout() handles all of
+                    // this, identical to the periodic poll path, and resets
+                    // phase to Ready. Afterwards, start_tracking + handle_down
+                    // treat this contact as the new first tap.
+                    self.check_timeout();
+                    // Fall through: phase is now Ready.
+                } else if out_of_slop {
+                    // Flutter parity: out-of-slop contacts are ignored — keep
+                    // the first entry held and stay in WaitingForSecond.
+                    return;
+                }
+                // In-window + in-slop: fall through to register normally.
+            } else {
+                drop(state);
+            }
+        }
+
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);
-
-        // Handle pointer down
         self.handle_down(position, PointerType::Touch);
     }
 
@@ -478,8 +522,19 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         self.state.mark_disposed();
         // Reject arena entries + clear tracked pointer (Flutter parity:
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
-        // clears arena state for tracked pointers).
+        // clears arena state for tracked pointers). reject_gesture (fired by
+        // state.reject) also drains the inter-tap hold via first_pointer, but
+        // that relies on the entry still being active.
         self.state.reject();
+        // Belt-and-suspenders: clear first_pointer/first_member even when
+        // reject_gesture was a no-op (arena already settled or no active entry).
+        // Avoids retaining one Arc<dyn GestureArenaMember> after unmount
+        // mid-inter-tap-window.
+        let first_ptr = self.first_pointer.lock().take();
+        *self.first_member.lock() = None;
+        if let Some(ptr) = first_ptr {
+            self.state.arena().release(ptr);
+        }
         self.callbacks.lock().on_double_tap = None;
         self.callbacks.lock().on_double_tap_cancel = None;
     }
@@ -654,9 +709,11 @@ mod tests {
         let second_pos = Offset::new(px(250.0), px(100.0)); // 150px away
         recognizer.handle_down(second_pos, PointerType::Touch);
 
-        // Should have reset to first tap, not double tap
+        // Flutter parity: an out-of-slop contact is ignored. The recognizer
+        // stays in WaitingForSecond with the first entry still held — it does
+        // NOT reset to FirstDown, which would orphan the held entry.
         let state = recognizer.gesture_state.lock();
-        assert_eq!(state.phase, DoubleTapPhase::FirstDown);
+        assert_eq!(state.phase, DoubleTapPhase::WaitingForSecond);
         drop(state);
 
         let up_event = make_up_event(second_pos, PointerType::Touch);
@@ -753,5 +810,100 @@ mod tests {
             "the inter-tap window expired on the virtual clock",
         );
         assert_eq!(recognizer.gesture_state.lock().phase, DoubleTapPhase::Ready,);
+    }
+
+    #[test]
+    fn no_arena_leak_on_mistimed_second_tap() {
+        // RED-WITHOUT-FIX: before this fix, `add_pointer` in WaitingForSecond
+        // did not release the held first-pointer entry when the second contact
+        // arrived too late. The held entry was orphaned: `has_pending_sweep`
+        // never drained, member Arcs were retained, and the first tap was
+        // silently swallowed.
+        //
+        // This test asserts that after a too-slow second contact:
+        //   (a) the first-pointer entry's stale hold is gone — no pending-sweep
+        //       leak (the OLD held entry was drained by check_timeout + release;
+        //       a fresh entry for the second contact exists, but without a hold),
+        //   (b) the first tap has fired (the tap recognizer's callback ran), and
+        //   (c) the double-tap recognizer correctly restarted as a fresh first tap.
+        //
+        // Driven with a binding_driven arena + ManualClock (deterministic, no sleep).
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{
+            arena::run_pointer_lifecycle,
+            events::{PointerType, make_down_event, make_up_event},
+            recognizers::TapGestureRecognizer,
+        };
+
+        let clock = crate::clock::ManualClock::new();
+        let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
+
+        let tap_fired = Arc::new(AtomicBool::new(false));
+        let tap_fired_clone = Arc::clone(&tap_fired);
+
+        let position = Offset::new(px(10.0), px(10.0));
+        let first_pointer = PointerId::PRIMARY;
+
+        // Two recognizers competing on the same pointer, as under a GestureDetector.
+        let tap = TapGestureRecognizer::new(arena.clone())
+            .with_on_tap(move |_| tap_fired_clone.store(true, Ordering::SeqCst));
+        let double_tap = DoubleTapGestureRecognizer::new(arena.clone());
+
+        // --- First tap: route (add recognizers), then binding closes the arena ---
+        let first_down = make_down_event(position, PointerType::Touch);
+        tap.add_pointer(first_pointer, position);
+        double_tap.add_pointer(first_pointer, position);
+        run_pointer_lifecycle(&arena, &first_down); // close → 2 members, contested
+
+        // First up: recognizers handle it first, then binding sweeps.
+        // double_tap.handle_event holds the entry; the binding's sweep defers.
+        let first_up = make_up_event(position, PointerType::Touch);
+        tap.handle_event(&first_up);
+        double_tap.handle_event(&first_up);
+        run_pointer_lifecycle(&arena, &first_up); // sweep → held → has_pending_sweep
+
+        // The held entry is still in the arena; the tap has not fired yet.
+        assert!(
+            arena.contains(first_pointer),
+            "held entry must not be swept while double-tap waits for the second contact"
+        );
+        assert!(
+            !tap_fired.load(Ordering::SeqCst),
+            "tap must not fire while double-tap holds the arena"
+        );
+
+        // Advance past the inter-tap window so the second down arrives too late.
+        clock.advance(Duration::from_millis(350));
+
+        // --- Second contact (too-slow) ---
+        // add_pointer detects the expired window, calls check_timeout internally,
+        // releases the hold, and restarts as a fresh first tap.
+        let second_down = make_down_event(position, PointerType::Touch);
+        run_pointer_lifecycle(&arena, &second_down);
+        double_tap.add_pointer(first_pointer, position);
+        // After add_pointer:
+        //   - check_timeout fired: double-tap withdrew from the first entry,
+        //     lone tap won (single-member-wins rule), tap fired.
+        //   - release(first_pointer) drained has_pending_sweep, removed old entry.
+        //   - start_tracking added a fresh entry for the second contact (no hold).
+
+        // (a) No stale pending-sweep on the fresh entry — the OLD hold was drained.
+        assert!(
+            !arena.has_pending_sweep(first_pointer),
+            "no stale pending-sweep on the fresh entry — old hold was properly drained"
+        );
+        // (b) The first tap fired: check_timeout resolved the first-tap entry in
+        //     favour of the lone tap, which had its pending_up set by handle_event.
+        assert!(
+            tap_fired.load(Ordering::SeqCst),
+            "the first tap must fire when double-tap gives up the held entry"
+        );
+        // (c) The double-tap restarted: handle_down(Ready) → FirstDown.
+        assert_eq!(
+            double_tap.gesture_state.lock().phase,
+            DoubleTapPhase::FirstDown,
+            "double-tap must restart as a fresh first tap for the second contact"
+        );
     }
 }

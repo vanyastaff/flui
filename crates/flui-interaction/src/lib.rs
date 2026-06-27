@@ -190,7 +190,8 @@ pub mod settings;
 // ============================================================================
 pub use arena::{
     DEFAULT_DISAMBIGUATION_TIMEOUT, GestureArena, GestureArenaEntry, GestureArenaMember,
-    GestureArenaTeam, GestureDisposition, PointerSignalResolver, SignalPriority, TeamEntry,
+    GestureArenaTeam, GestureDisposition, PointerSignalResolver, SignalPriority, SweepModel,
+    TeamEntry, run_pointer_lifecycle,
 };
 // ============================================================================
 // Re-exports: Other
