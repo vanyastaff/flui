@@ -11,7 +11,7 @@
 //!
 //! # Fling ballistic simulation
 //!
-//! On `on_pan_end`, a [`ScrollPhysics`] ballistic simulation is started via
+//! On `on_pan_end`, a `ScrollPhysics` ballistic simulation is started via
 //! `AnimationController::animate_with`. The fling controller is registered
 //! with the ambient [`VsyncScope`] in `init_state` so the binding ticks it
 //! each frame deterministically; a value listener on the controller pushes the

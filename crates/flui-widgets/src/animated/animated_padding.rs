@@ -18,7 +18,7 @@ use crate::{AnimatedBuilder, Padding};
 /// Flutter parity: `widgets/implicit_animations.dart` `AnimatedPadding`. First
 /// build sits at the given padding; each later build with different insets
 /// animates from the current insets to the new ones over `duration` along
-/// `curve`. Driven by a binding under a [`VsyncScope`](crate::VsyncScope).
+/// `curve`. Driven by a binding under a [`VsyncScope`].
 #[derive(Clone, StatefulView)]
 pub struct AnimatedPadding {
     padding: EdgeInsets,
@@ -47,7 +47,7 @@ impl AnimatedPadding {
     }
 
     /// Override the easing curve; accepts any type implementing
-    /// [`Curve`](flui_animation::Curve), including elastic and bounce curves.
+    /// [`Curve`], including elastic and bounce curves.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
         self.curve = ArcCurve::new(curve);

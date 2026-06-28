@@ -18,7 +18,7 @@ use crate::{Align, AnimatedBuilder};
 /// Flutter parity: `widgets/implicit_animations.dart` `AnimatedAlign`. First
 /// build sits at the given alignment; each later build with a different
 /// alignment animates the child's position over `duration` along `curve`.
-/// Driven by a binding under a [`VsyncScope`](crate::VsyncScope).
+/// Driven by a binding under a [`VsyncScope`].
 #[derive(Clone, StatefulView)]
 pub struct AnimatedAlign {
     alignment: Alignment,
@@ -47,7 +47,7 @@ impl AnimatedAlign {
     }
 
     /// Override the easing curve; accepts any type implementing
-    /// [`Curve`](flui_animation::Curve), including elastic and bounce curves.
+    /// [`Curve`], including elastic and bounce curves.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
         self.curve = ArcCurve::new(curve);

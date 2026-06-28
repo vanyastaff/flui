@@ -127,7 +127,7 @@ fn field_border_decoration() -> BoxDecoration<Pixels> {
         ))))
 }
 
-/// Ask the [`FocusManager`] to focus the node that was registered by the
+/// Ask the `FocusManager` to focus the node that was registered by the
 /// `EditableTextState` for `_controller`.
 ///
 /// `EditableTextState::init_state` attaches the node to the root scope and

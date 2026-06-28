@@ -207,14 +207,14 @@ pub struct BuildOwner {
     /// `pub(crate)` so the [`ElementOwner`](super::ElementOwner)
     /// split-borrow can fire it from `schedule_build_for` without
     /// re-borrowing the owner. Stored as `Arc` (not `Box`) so an
-    /// [`ExternalBuildScheduler`] captured by an animation listener can clone
+    /// `ExternalBuildScheduler` captured by an animation listener can clone
     /// and fire it as a frame request from outside a frame.
     #[allow(clippy::type_complexity)]
     pub(crate) on_build_scheduled: Option<Arc<dyn Fn() + Send + Sync>>,
 
     /// Inbox of element ids scheduled from *outside* a frame — an
     /// animation/listenable tick whose mark-dirty callback holds an
-    /// [`ExternalBuildScheduler`] but no `&mut BuildOwner`. A SET, so repeated
+    /// `ExternalBuildScheduler` but no `&mut BuildOwner`. A SET, so repeated
     /// ticks dedup. Drained onto [`Self::dirty_elements`] at the start of
     /// [`Self::build_scope`], where each id's tree depth is looked up. Shared
     /// (`Arc`) so the listener callbacks and the owner reference the same queue.
@@ -343,7 +343,7 @@ impl BuildOwner {
     /// that a visual update is needed.
     ///
     /// Set this BEFORE mounting any element. Each element captures a clone of
-    /// the current callback `Arc` into its [`ExternalBuildScheduler`] at mount
+    /// the current callback `Arc` into its `ExternalBuildScheduler` at mount
     /// (for out-of-frame rebuild requests); replacing the callback afterwards
     /// does not retroactively update already-mounted elements, which keep
     /// firing the previous `Arc`. The binding wires this once at startup.
@@ -360,7 +360,7 @@ impl BuildOwner {
     /// rebuilds happen before child rebuilds. The `depth` is a best-effort
     /// ordering hint: [`build_scope`](Self::build_scope) re-derives every
     /// queued element's authoritative tree depth from its node before draining
-    /// (see [`rekey_dirty_depths`](Self::rekey_dirty_depths)), so a caller that
+    /// (see `rekey_dirty_depths`), so a caller that
     /// only knows the sibling slot index (e.g. `setState` via
     /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize) {
@@ -377,7 +377,7 @@ impl BuildOwner {
 
     /// Re-key every queued dirty element to its authoritative TREE depth.
     ///
-    /// The dirty heap orders by depth, but [`schedule_build_for`] is handed a
+    /// The dirty heap orders by depth, but `schedule_build_for` is handed a
     /// depth by its caller — and the `setState` path
     /// (`ElementCore::schedule_self_build`) plus the live `BuildCtx` both pass
     /// `ElementCore::depth`, which is the sibling SLOT index, not

@@ -91,8 +91,8 @@ pub trait Simulation: Send + Sync {
 /// Blanket implementation so `Box<dyn Simulation>` itself satisfies `Simulation`.
 ///
 /// This lets callers that receive a `Box<dyn Simulation>` (e.g. from
-/// [`ScrollPhysics::create_ballistic_simulation`]) pass it directly to
-/// [`AnimationController::animate_with`], which is generic over
+/// `ScrollPhysics::create_ballistic_simulation`) pass it directly to
+/// `AnimationController::animate_with`, which is generic over
 /// `S: Simulation + 'static`.
 impl<S: Simulation + ?Sized> Simulation for Box<S> {
     #[inline]

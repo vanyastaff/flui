@@ -10,8 +10,8 @@ use crate::scroll::{SliverToBoxAdapter, Viewport};
 /// `scroll_direction`, showing a scrollable window into it.
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `SingleChildScrollView`. Composes
-/// a [`Viewport`](crate::Viewport) over a
-/// [`SliverToBoxAdapter`](crate::SliverToBoxAdapter): the child is laid out
+/// a [`Viewport`] over a
+/// [`SliverToBoxAdapter`]: the child is laid out
 /// unbounded on the scroll axis and the viewport clips the overflow.
 ///
 /// `scroll_direction` defaults to [`Axis::Vertical`]. `offset` is a programmatic

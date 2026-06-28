@@ -5,7 +5,7 @@
 //! [`ScrollController`]'s `thumb_fraction()` and `thumb_offset_fraction()`
 //! helpers, which in turn depend on `viewport_dimension_pixels`,
 //! `min_scroll_extent`, and `max_scroll_extent` — values the enclosing
-//! [`Scrollable`] (or the app) sets via
+//! `Scrollable` (or the app) sets via
 //! [`ScrollController::update_dimensions`].
 //!
 //! Rebuilds are driven by [`AnimatedBuilder`] subscribed to the controller's
@@ -44,7 +44,7 @@ const DEFAULT_THUMB_WIDTH_PX: f32 = 6.0;
 ///
 /// The thumb height and vertical position are computed from the
 /// [`ScrollController`]: pair a `Scrollbar` with the same controller that
-/// drives the [`Scrollable`](super::Scrollable) it sits alongside.
+/// drives the `Scrollable`(super::Scrollable) it sits alongside.
 ///
 /// # Example
 ///

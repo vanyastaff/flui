@@ -72,7 +72,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// Each clone is its own `Sender` over the same bounded channel; sends
     /// from different threads do not block each other. Backpressure
-    /// surfaces as [`super::handle::SendError::ChannelFull`].
+    /// surfaces as `SendError::ChannelFull`.
     #[inline]
     pub fn handle(&self) -> PipelineOwnerHandle {
         self.handle.clone()

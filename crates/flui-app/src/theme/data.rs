@@ -17,8 +17,8 @@ pub enum ThemeMode {
 /// Complete application-level theme configuration.
 ///
 /// `AppTheme` is the app-framework's pre-tree configuration object — it lives
-/// outside the widget tree and is distinct from the [`flui_widgets::Theme`]
-/// inherited widget (which provides [`flui_widgets::ThemeData`] to descendants
+/// outside the widget tree and is distinct from the `flui_widgets::Theme`
+/// inherited widget (which provides `flui_widgets::ThemeData` to descendants
 /// at runtime). Use `AppTheme` to bootstrap application appearance before the
 /// widget tree is mounted.
 ///

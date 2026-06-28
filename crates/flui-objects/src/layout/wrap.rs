@@ -107,7 +107,7 @@ struct RunMetrics {
 
 // ── RenderWrap ────────────────────────────────────────────────────────────────
 
-/// Lays children out sequentially along [`direction`](RenderWrap::direction),
+/// Lays children out sequentially along `direction`,
 /// starting a new run in the cross axis when the next child would overflow the
 /// available main-axis extent.
 ///
@@ -358,10 +358,10 @@ impl RenderBox for RenderWrap {
     /// Three-phase layout matching Flutter's `RenderWrap.performLayout`.
     ///
     /// **Phase 1 — run building** (`_computeRuns`): lay out each child under
-    /// `child_constraints` and accumulate [`RunMetrics`]. A new run starts
+    /// `child_constraints` and accumulate `RunMetrics`. A new run starts
     /// when the current run's main extent plus `spacing` plus the next child's
     /// main extent exceeds the main-axis limit by more than
-    /// [`PRECISION_TOLERANCE`].
+    /// `PRECISION_TOLERANCE`.
     ///
     /// **Phase 2 — container sizing**: constrain the union of run extents
     /// against the incoming constraints to produce the final `Size`.

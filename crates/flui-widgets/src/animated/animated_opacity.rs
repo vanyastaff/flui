@@ -20,7 +20,7 @@ use crate::{AnimatedBuilder, Opacity};
 /// painting fades.
 ///
 /// Driven deterministically by a binding when a
-/// [`VsyncScope`](crate::VsyncScope) is above it; otherwise driven by its own
+/// [`VsyncScope`] is above it; otherwise driven by its own
 /// scheduler ticker on a real display.
 #[derive(Clone, StatefulView)]
 pub struct AnimatedOpacity {
@@ -50,8 +50,8 @@ impl AnimatedOpacity {
     }
 
     /// Override the easing curve; accepts any type implementing
-    /// [`Curve`](flui_animation::Curve), including elastic and bounce curves
-    /// from [`flui_animation::Curves`](flui_animation::Curves).
+    /// [`Curve`], including elastic and bounce curves
+    /// from [`flui_animation::Curves`].
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
         self.curve = ArcCurve::new(curve);

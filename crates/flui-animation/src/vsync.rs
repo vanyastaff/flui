@@ -12,7 +12,7 @@
 //! ## Why the binding drives controllers here, not via each controller's own
 //! scheduler-ticker
 //!
-//! [`AnimationController`] also carries an auto-scheduling [`Ticker`] that
+//! [`AnimationController`] also carries an auto-scheduling `Ticker` that
 //! advances it off wall-clock `Instant::now()` — correct for a real display, but
 //! non-deterministic. `Vsync` bypasses that ticker entirely: it calls
 //! [`AnimationController::tick_at`] with *virtual* seconds, so a headless frame

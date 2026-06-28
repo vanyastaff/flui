@@ -39,7 +39,7 @@
 //!
 //! ### Restart-aware controllers
 //!
-//! A registered [`AnimationController`](flui_animation::AnimationController) is
+//! A registered [`AnimationController`] is
 //! ticked via `tick_at(seconds_since_this_run_started)`. Because a controller
 //! re-zeros its run epoch on every fresh `forward()`/`reverse()`/…, the binding
 //! watches the controller's

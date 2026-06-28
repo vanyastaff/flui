@@ -308,7 +308,7 @@ pub type SliverLayoutChildCallback<'a> =
 ///
 /// Called by `RenderIntrinsicWidth` / `RenderIntrinsicHeight` to measure the
 /// child's intrinsic extent before committing to a layout size.  The callback
-/// routes through [`crate::pipeline::owner::subtree_arena`]'s
+/// routes through the owner's private `subtree_arena`'s
 /// `box_intrinsic_query_borrowed` — the same pre-acquired subtree pool used by
 /// the sliver→box intrinsic path — so no fresh `&mut RenderTree` is needed.
 ///

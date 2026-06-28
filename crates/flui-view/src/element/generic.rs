@@ -519,7 +519,7 @@ where
     /// would never be on the heap `build_scope` processes, so its
     /// `ViewState::build` would never re-run.
     ///
-    /// The [`ExternalBuildScheduler`] + `self_id` are captured by value, so the
+    /// The `ExternalBuildScheduler` + `self_id` are captured by value, so the
     /// callback is `'static` and needs no access to the owner when it fires. A
     /// callback created before mount (no scheduler / `self_id` yet) degrades to
     /// the flag-only behavior.

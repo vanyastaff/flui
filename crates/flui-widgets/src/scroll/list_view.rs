@@ -15,8 +15,8 @@ use crate::scroll::{SliverFixedExtentList, Viewport};
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `ListView` (the
 /// `ListView(itemExtent: …)` constructor). Composes a
-/// [`Viewport`](crate::Viewport) over a
-/// [`SliverFixedExtentList`](crate::SliverFixedExtentList). A first cut requires
+/// [`Viewport`] over a
+/// [`SliverFixedExtentList`]. A first cut requires
 /// a fixed `item_extent`; variable-height and lazily-built lists arrive with the
 /// lazy sliver list. `offset` is programmatic for now.
 #[derive(Clone, StatelessView)]

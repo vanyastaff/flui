@@ -24,7 +24,7 @@ use crate::{AnimatedBuilder, Container};
 /// animated (they pass straight through when set) — those need dedicated tweens
 /// and are tracked as follow-up.
 ///
-/// Driven by a binding under a [`VsyncScope`](crate::VsyncScope).
+/// Driven by a binding under a [`VsyncScope`].
 #[derive(Clone, StatefulView)]
 pub struct AnimatedContainer {
     alignment: Option<Alignment>,
@@ -105,7 +105,7 @@ impl AnimatedContainer {
     }
 
     /// Override the easing curve; accepts any type implementing
-    /// [`Curve`](flui_animation::Curve), including elastic and bounce curves.
+    /// [`Curve`], including elastic and bounce curves.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
         self.curve = ArcCurve::new(curve);

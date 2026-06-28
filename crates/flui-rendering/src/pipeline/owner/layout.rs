@@ -455,8 +455,8 @@ impl PipelineOwner<Layout> {
     ///    `RenderTree::get_subtree_mut(&ids)` materialises N disjoint
     ///    `&mut RenderNode` references in a single function body via
     ///    the proven `*mut Slab` reborrow pattern that already powers
-    ///    [`RenderTree::get_two_mut`] and
-    ///    [`RenderTree::get_parent_and_children_mut`].
+    ///    `RenderTree::get_two_mut` and
+    ///    `RenderTree::get_parent_and_children_mut`.
     /// 3. **Index by id**: the N borrows are wrapped in a private
     ///    `SubtreeArena` as a `HashMap<RenderId, (NodePtr, AtomicBool)>`
     ///    (raw pointer alias of the still-live `&mut RenderNode` borrows,

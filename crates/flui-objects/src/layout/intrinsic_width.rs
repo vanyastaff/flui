@@ -88,7 +88,7 @@ impl RenderIntrinsicWidth {
     ///
     /// Both `step_width` and `step_height` default to `None` (no snapping).
     /// Non-positive or non-finite step values are treated as `None` at layout
-    /// time via [`apply_step`].
+    /// time via `apply_step`.
     pub fn new(step_width: Option<f32>, step_height: Option<f32>) -> Self {
         Self {
             step_width,
