@@ -17,7 +17,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["process", "io-util"] }
 which.workspace = true
-indicatif.workspace = true                           # Progress bars for build status
+indicatif.workspace = true                                      # Progress bars for build status
 
 [dev-dependencies]
 tempfile.workspace = true
