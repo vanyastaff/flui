@@ -138,6 +138,7 @@ pub(super) fn resolve_anchor_correction(
 // requiring `&self` in the shared walk.
 #[inline]
 fn calc_paint_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
+    debug_assert!(from <= to);
     let a = c.scroll_offset;
     let b = c.scroll_offset + c.remaining_paint_extent;
     (to.min(b) - from.max(a)).max(0.0)
@@ -145,6 +146,7 @@ fn calc_paint_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 
 #[inline]
 fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
+    debug_assert!(from <= to);
     let a = c.scroll_offset + c.cache_origin;
     let b = c.scroll_offset + c.remaining_cache_extent;
     (to.min(b) - from.max(a))
@@ -287,6 +289,7 @@ where
                     // production consumer that hits this arm has a wiring bug.
                     break;
                 }
+                // ChildLayout is #[non_exhaustive]; forward-compat wildcard.
                 _ => {}
             }
         }

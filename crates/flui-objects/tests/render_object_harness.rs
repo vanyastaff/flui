@@ -63,13 +63,14 @@ use flui_objects::*;
 use flui_rendering::{
     constraints::BoxConstraints,
     hit_testing::{EventPropagation, HitTestBehavior, HitTestResult, PointerEventHandler},
-    parent_data::{FlexParentData, StackParentData},
+    parent_data::{FlexParentData, SliverMultiBoxAdaptorParentData, StackParentData},
     testing::{
-        BoxQueryRun, Probe, RenderTester, TreeNode, assert_descendant_properties,
+        BoxQueryRun, ParentDataSeed, Probe, RenderTester, TreeNode, assert_descendant_properties,
         assert_has_committed_geometry, assert_has_committed_size, box_node, localize_hit_point,
         sliver_node,
     },
     traits::TextBaseline,
+    view::ScrollableViewportOffset,
 };
 use flui_types::{
     Alignment, EdgeInsets, Offset, Point, Rect, Size,
@@ -1506,6 +1507,194 @@ fn harness_sliver_list_layout_emits_absent_requests() {
             "all requests must originate from the list sliver",
         );
     }
+}
+
+#[test]
+fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
+    // Pre-seed 2 arena-resident children at logical indices 0 and 1 (48 px
+    // each).  With no scrolling and a 3-item list, items 0 and 1 are present
+    // in the tree; the band walk lays them out from `logical_to_slot` and only
+    // emits a request for the absent index 2.
+    //
+    // Fails before SliverMultiBoxAdaptor seeding is wired: without the seed the
+    // parent-data index is never stamped, logical_to_slot stays empty, and the
+    // walk fires requests for ALL 3 indices instead of just index 2.
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverList::new(3, 48.0))
+            .label("list")
+            .child(
+                box_node(RenderColoredBox::red(300.0, 48.0))
+                    .label("item0")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(0),
+                    )),
+            )
+            .child(
+                box_node(RenderColoredBox::red(300.0, 48.0))
+                    .label("item1")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(1),
+                    )),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    // Items 0 and 1 are in the tree and laid out: offsets must reflect their
+    // virtualizer-assigned layout offsets (0 and 48 px) minus scroll_offset=0.
+    assert_eq!(
+        run.offset(run.id("item0")).dy,
+        px(0.0),
+        "resident at logical index 0 must be positioned at dy=0"
+    );
+    assert_eq!(
+        run.offset(run.id("item1")).dy,
+        px(48.0),
+        "resident at logical index 1 must be positioned at dy=48 (one estimate below index 0)"
+    );
+
+    // Only the absent item — index 2 — should be requested.
+    let pending = run.owner_mut().take_pending_child_requests();
+    let indices: Vec<usize> = {
+        let mut v: Vec<usize> = pending.iter().map(|&(_, i)| i).collect();
+        v.sort_unstable();
+        v
+    };
+    assert_eq!(
+        indices,
+        &[2],
+        "only logical index 2 should be requested; got {indices:?}"
+    );
+}
+
+#[test]
+fn harness_sliver_list_off_band_resident_enqueued_for_removal() {
+    // Pre-seed a resident at logical index 0 (48 px).  With scroll=300 the
+    // cache window starts at 300-250=50 px; item 0 ends at 48 px, so it is
+    // just outside the cache → the band walk enqueues it for deferred removal.
+    //
+    // Fails before disposal is wired: without the seeded logical index in
+    // `logical_to_slot` the walk never identifies item 0 as out-of-band and
+    // never disposes it.
+    let run = RenderTester::mount(viewport_with_scroll(
+        300.0,
+        sliver_node(RenderSliverList::new(20, 48.0))
+            .label("list")
+            .child(
+                box_node(RenderColoredBox::red(300.0, 48.0))
+                    .label("item0")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(0),
+                    )),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    // After layout the deferred removal is applied: the node must be gone.
+    assert!(
+        run.try_box_geometry(run.id("item0")).is_none(),
+        "off-band resident at index 0 must be removed from the tree after layout"
+    );
+}
+
+#[test]
+fn harness_sliver_list_scroll_extent_equals_virtualizer_estimate() {
+    // A 3-item list with no arena residents (all absent → requests emitted)
+    // reports scroll_extent = item_count × estimate = 3 × 48 = 144 px.
+    //
+    // Fails if item_count or default_extent_estimate is mis-wired: a zero
+    // estimate or zero count would give scroll_extent = 0.
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverList::new(3, 48.0)).label("list"),
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("list")).scroll_extent,
+        144.0,
+        "3 items × 48 px estimate must give scroll_extent = 144.0"
+    );
+}
+
+#[test]
+fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
+    // Two-pass test for the anchor-correction state machine.
+    //
+    // Setup: 10-item list (48 px estimate), item 0 pre-seeded at 60 px.
+    // With scroll=100 the viewport tight-visible range starts at item 2
+    // (estimated start 96 px < 100 < 144 px = its end) → anchor=(2, 0).
+    // Item 0 is in the cache-above band (cache_before = 100 px, cache
+    // starts at 0).  set_measured(0, 60, (2,0)) accumulates pending=12.
+    // Forward scroll (last=0 → current=100) → correction EMITTED.
+    //
+    // The viewport absorbs the correction in a three-pass correction loop:
+    //   Pass 1 (scroll=100): correction=12 fires → correct_by(12) → pixels=112.
+    //   Pass 2 (scroll=112): no new correction; apply_content_dimensions clamps
+    //     pixels 112→92 (max_scroll = total_extent(492) − viewport(400) = 92),
+    //     returns false → re-run.
+    //   Pass 3 (scroll=92): accepted; last_scroll_offset finalised to 92.
+    // Observable: item 0's paint dy = layout_offset(0) − scroll(92) = −92 px.
+    //
+    // Pass 2 of this test: grow item 0 to 84 px, scroll BACKWARD to 72 px.
+    // Virtualizer item 0 is now Measured at 60 px.  With scroll=72,
+    // visible range starts at item 1 (item 0 ends at 60 < 72) → anchor=(1,0).
+    // set_measured(0, 84, (1,0)) accumulates pending=24.  But backward
+    // scroll (72 < 92 = last_scroll_offset) → SUPPRESSED.  Viewport keeps
+    // scroll=72.  Item 0 paint dy = 0 − 72 = −72 px.
+    //
+    // Fails when anchor-correction is not wired, when forward/backward
+    // detection is inverted, or when the viewport's correction loop is broken.
+    let mut run = RenderTester::mount(viewport_with_scroll(
+        100.0,
+        sliver_node(RenderSliverList::new(10, 48.0))
+            .label("list")
+            .child(
+                box_node(RenderColoredBox::red(300.0, 60.0))
+                    .label("item0")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(0),
+                    )),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let item0_id = run.id("item0");
+    let vp_id = run.id("viewport");
+
+    // Pass 1 check: the 12 px forward correction was absorbed by the viewport.
+    // Correction loop: scroll 100→112 (correct_by), 112→92 (clamped by
+    // apply_content_dimensions, max_scroll=492-400=92), 92 accepted.
+    // Item 0 at layout_offset=0 with final scroll=92 gets paint dy = -92 px.
+    assert_eq!(
+        run.offset(item0_id).dy,
+        px(-92.0),
+        "forward correction loop: scroll 100→112→92 (clamped); \
+         item 0 (layout_offset=0) must have dy=0-92=-92; got {:?}",
+        run.offset(item0_id).dy,
+    );
+
+    // Pass 2: grow item 0 to 84 px, scroll backward to 72 px.
+    run.update::<RenderColoredBox>(item0_id, |b| {
+        b.set_preferred_size(Size::new(px(300.0), px(84.0)));
+    });
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(72.0);
+    });
+    run.relayout();
+
+    // Pass 2 check: backward scroll (72 < 92 = last_scroll_offset) suppresses
+    // the 24 px correction → viewport stays at scroll=72.  Item 0 at
+    // layout_offset=0 gets paint dy = 0 - 72 = -72 px.
+    assert_eq!(
+        run.offset(item0_id).dy,
+        px(-72.0),
+        "backward suppression: viewport stays at scroll=72; \
+         item 0 (layout_offset=0) must have dy=0-72=-72; got {:?}",
+        run.offset(item0_id).dy,
+    );
 }
 
 #[test]

@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use flui_foundation::RenderId;
 
 use crate::{
-    parent_data::{FlexParentData, StackParentData},
+    parent_data::{FlexParentData, SliverMultiBoxAdaptorParentData, StackParentData},
     pipeline::{Idle, PipelineOwner},
     protocol::{BoxProtocol, SliverProtocol},
     testing::parent_data::ParentDataSeed,
@@ -136,6 +136,19 @@ impl TreeNode {
     #[must_use]
     pub fn with_flex_parent_data(self, data: FlexParentData) -> Self {
         self.with_parent_data_seed(ParentDataSeed::Flex(data))
+    }
+
+    /// Convenience wrapper for [`SliverMultiBoxAdaptorParentData`] on
+    /// [`RenderSliverList`] / [`RenderSliverListLazy`] children.
+    ///
+    /// Stamps the logical `index` onto the child before layout so the
+    /// virtualizer band walk can discover it in `logical_to_slot` and treat
+    /// it as a pre-existing resident.
+    ///
+    /// [`RenderSliverList`]: crate::traits::RenderSliver
+    #[must_use]
+    pub fn with_sliver_multi_box_parent_data(self, data: SliverMultiBoxAdaptorParentData) -> Self {
+        self.with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(data))
     }
 }
 

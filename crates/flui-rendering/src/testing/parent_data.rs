@@ -14,7 +14,8 @@
 //! (or the `with_stack_parent_data` / `with_flex_parent_data` helpers).
 
 use crate::parent_data::{
-    BoxParentData, FlexParentData, ParentData, SliverPhysicalParentData, StackParentData,
+    BoxParentData, FlexParentData, ParentData, SliverMultiBoxAdaptorParentData,
+    SliverPhysicalParentData, StackParentData,
 };
 
 /// A harness-side clone of the parent metadata a widget would normally
@@ -30,6 +31,12 @@ pub enum ParentDataSeed {
     Box(BoxParentData),
     /// [`SliverPhysicalParentData`] for single-child sliver adapters.
     SliverPhysical(SliverPhysicalParentData),
+    /// [`SliverMultiBoxAdaptorParentData`] for [`RenderSliverList`] /
+    /// [`RenderSliverListLazy`] children — stamps the logical index so the
+    /// virtualizer band walk can find the child in `logical_to_slot`.
+    ///
+    /// [`RenderSliverList`]: crate::traits::RenderSliver
+    SliverMultiBoxAdaptor(SliverMultiBoxAdaptorParentData),
 }
 
 impl ParentDataSeed {
@@ -41,6 +48,7 @@ impl ParentDataSeed {
             Self::Flex(data) => Box::new(data.clone()),
             Self::Box(data) => Box::new(data.clone()),
             Self::SliverPhysical(data) => Box::new(data.clone()),
+            Self::SliverMultiBoxAdaptor(data) => Box::new(data.clone()),
         }
     }
 }
