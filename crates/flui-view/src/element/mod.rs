@@ -7,11 +7,14 @@
 //! - Child element relationships
 //! - RenderObject connections
 
+pub(crate) mod child_manager;
 mod inherited_access;
 mod lifecycle;
 mod notification;
 mod render_object_element;
 mod root;
+pub(crate) mod sliver_adaptor;
+pub(crate) mod sparse_children;
 
 // New generic infrastructure
 pub mod arity;
@@ -56,6 +59,7 @@ pub use notification::{
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
+pub use sliver_adaptor::SliverListAdaptorView;
 pub use unified::Element;
 
 /// Slot describing a child element's position in its parent's children list.

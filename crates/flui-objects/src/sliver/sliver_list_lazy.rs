@@ -62,7 +62,7 @@ use flui_rendering::{
     virtualization::Virtualizer,
 };
 
-use super::virtualized_band::walk_virtualizer_band;
+use super::virtualized_band::{OffBandDisposal, walk_virtualizer_band};
 
 // Only used by the test-only helper methods `accumulate_correction` /
 // `resolve_correction`, which exist so test code can exercise the
@@ -322,7 +322,7 @@ impl RenderSliver for RenderSliverListLazy {
         // returns.  No per-frame `Arc::clone`.
         let child_source = &self.child_source;
 
-        walk_virtualizer_band(
+        let (geometry, _cache_first, _cache_last) = walk_virtualizer_band(
             &mut self.virtualizer,
             &mut self.logical_to_slot,
             &mut self.item_count,
@@ -331,6 +331,10 @@ impl RenderSliver for RenderSliverListLazy {
             &mut self.attached_child_count,
             &constraints,
             ctx,
+            // This type owns its children directly (built via the re-entrant
+            // build contract) so the render side manages disposal via
+            // `dispose_box_child` — the element tree is not involved.
+            OffBandDisposal::RenderOwned,
             // Resident-build fallback: child is already attached; this factory
             // fires only if the backend concurrently evicted the slot.
             //
@@ -357,7 +361,8 @@ impl RenderSliver for RenderSliverListLazy {
                     hook(logical_i);
                 }
             },
-        )
+        );
+        geometry
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

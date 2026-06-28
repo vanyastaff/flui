@@ -12,10 +12,14 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, RenderId};
 use parking_lot::{Mutex, RwLock};
 
-use crate::{tree::ElementTree, view::View};
+use crate::{
+    element::child_manager::{ChildManager, ChildManagerRegistry},
+    tree::ElementTree,
+    view::View,
+};
 
 /// A cloneable, owned handle that lets a listener callback — an animation tick
 /// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
@@ -219,6 +223,19 @@ pub struct BuildOwner {
     /// [`Self::build_scope`], where each id's tree depth is looked up. Shared
     /// (`Arc`) so the listener callbacks and the owner reference the same queue.
     pub(crate) external_inbox: Arc<Mutex<HashSet<ElementId>>>,
+
+    /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
+    /// element. Keyed by the sliver's `RenderId`; populated at mount and
+    /// cleared at unmount by `SliverListAdaptorBehavior` via the
+    /// `ElementOwner::register_child_manager` / `unregister_child_manager`
+    /// split-borrow methods.
+    ///
+    /// `Arc<Mutex<…>>` (not a plain `HashMap`) so `ElementOwner` can carry a
+    /// `&'a Arc<…>` reference — the same pattern as `external_inbox`. The outer
+    /// `Arc` lets `service_child_requests` clone individual manager `Arc`s out
+    /// of the registry before calling service (releasing the registry lock
+    /// before the potentially long service call).
+    pub(crate) child_manager_registry: ChildManagerRegistry,
 }
 
 /// An element that has been deactivated and is pending unmount.
@@ -312,6 +329,7 @@ impl BuildOwner {
             scope_depth: 0,
             on_build_scheduled: None,
             external_inbox: Arc::new(Mutex::new(HashSet::new())),
+            child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -425,6 +443,7 @@ impl BuildOwner {
             // Lifecycle paths (mount/unmount/update) get no live-tree view;
             // only the `build_scope` drain sets `build_view`.
             build_view: None,
+            child_manager_registry: &self.child_manager_registry,
         }
     }
 
@@ -583,6 +602,7 @@ impl BuildOwner {
                         tree: &*tree,
                         dep_sink: &dep_sink,
                     }),
+                    child_manager_registry: &self.child_manager_registry,
                 };
                 if needs_did_change {
                     element.notify_dependency_change(&mut element_owner);
@@ -628,6 +648,7 @@ impl BuildOwner {
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
                 build_view: None,
+                child_manager_registry: &self.child_manager_registry,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -648,6 +669,168 @@ impl BuildOwner {
             self.building = false;
             self.scope_depth -= 1;
         }
+    }
+
+    // ========================================================================
+    // Lazy-sliver child manager service
+    // ========================================================================
+
+    /// Drive lazy-sliver child managers post-layout.
+    ///
+    /// Called by `HeadlessBinding::pump_frame` (and future production bindings)
+    /// immediately **after** `PipelineOwner::run_frame` and the pipeline lock
+    /// is released, so the render tree is quiescent and no `NodePtr` alias is
+    /// live.
+    ///
+    /// # Ordering
+    ///
+    /// 1. Drain `PipelineOwner`'s `pending_child_requests` and
+    ///    `pending_retain_bands` accumulated during the most recent layout pass.
+    /// 2. Group by `RenderId`.
+    /// 3. Clone each affected manager `Arc` out of the registry (releases the
+    ///    registry lock before the service calls).
+    /// 4. For each manager, call `ChildManager::service` with an inline
+    ///    `ElementOwner` split-borrow — mirrors the pattern in `build_scope`'s
+    ///    `catch_unwind` closure.
+    /// 5. A second `build_scope` expands the newly-built children's subtrees
+    ///    (the items' own views — e.g. `Padding(Text)` — need their own build
+    ///    pass since `SparseChildren::ensure` only mounts the top-level node).
+    /// 6. Mark each affected sliver as needing layout so the next frame
+    ///    re-measures with the newly-present render nodes.
+    /// 7. `finalize_tree` cleans up any evicted children pushed to inactive by
+    ///    `retain_band` or `on_unmount`.
+    ///
+    /// # Headless-binding only
+    ///
+    /// Production `flui-app` has no `BuildOwner` in scope during `run_frame`;
+    /// production wiring is deferred to when the platform binding has a
+    /// unified tree-holding pattern. Headless tests drive this path directly.
+    pub fn service_child_requests(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    ) {
+        // 1. Drain pending buffers from the pipeline (under a brief write lock).
+        let (pending_requests, retain_bands) = {
+            let mut guard = pipeline.write();
+            let requests = guard.take_pending_child_requests();
+            let bands = guard.take_pending_retain_bands();
+            (requests, bands)
+        };
+
+        // Finalize BEFORE the early-return: `build_scope` does not call
+        // `finalize_tree`, so sparse children pushed to `inactive_elements` by
+        // `SliverListAdaptorBehavior::on_unmount` (F3) — during a reconcile that
+        // removed their host — must be cleaned up here. Without this, those
+        // elements and their render nodes are leaked until the next
+        // `service_child_requests` call that has pending layout requests.
+        if !self.inactive_elements.is_empty() {
+            self.finalize_tree(tree);
+        }
+
+        if pending_requests.is_empty() && retain_bands.is_empty() {
+            return;
+        }
+
+        tracing::debug!(
+            requests = pending_requests.len(),
+            bands = retain_bands.len(),
+            "service_child_requests: draining lazy-sliver pending buffers"
+        );
+
+        // 2. Group requests and retain-bands by sliver RenderId.
+        let mut requests_by_sliver: HashMap<RenderId, Vec<usize>> = HashMap::new();
+        for (sliver_id, logical_index) in pending_requests {
+            requests_by_sliver
+                .entry(sliver_id)
+                .or_default()
+                .push(logical_index);
+        }
+        let mut bands_by_sliver: HashMap<RenderId, (usize, usize)> = HashMap::new();
+        for (sliver_id, first, last) in retain_bands {
+            bands_by_sliver.insert(sliver_id, (first, last));
+        }
+
+        // Collect all affected sliver ids (may have requests, bands, or both).
+        let affected_ids: Vec<RenderId> = {
+            let mut ids: HashSet<RenderId> = requests_by_sliver.keys().copied().collect();
+            ids.extend(bands_by_sliver.keys().copied());
+            ids.into_iter().collect()
+        };
+
+        // 3. Clone manager Arcs out of the registry before any service call.
+        //    This releases the registry lock so that service calls that call
+        //    `register_child_manager` / `unregister_child_manager` through an
+        //    `ElementOwner` can re-enter the registry without deadlocking.
+        let manager_arcs: Vec<(RenderId, Arc<Mutex<dyn ChildManager + Send>>)> = {
+            let registry = self.child_manager_registry.lock();
+            affected_ids
+                .iter()
+                .filter_map(|&id| registry.get(&id).map(|m| (id, Arc::clone(m))))
+                .collect()
+        };
+
+        if manager_arcs.is_empty() {
+            tracing::debug!("service_child_requests: no registered managers for affected slivers");
+            return;
+        }
+
+        // 4. Call service on each manager. Each iteration builds an inline
+        //    ElementOwner split-borrow, calls service (which may call
+        //    `ensure`/`evict` and mutate the tree + dirty heap), then drops
+        //    the inline owner — the borrow ends before the next iteration.
+        for (sliver_id, manager_arc) in &manager_arcs {
+            let requested = requests_by_sliver
+                .get(sliver_id)
+                .map_or(&[][..], Vec::as_slice);
+            let (retain_first, retain_last) = bands_by_sliver
+                .get(sliver_id)
+                .copied()
+                .unwrap_or((0, usize::MAX));
+
+            // Inline split-borrow (same pattern as `build_scope` catch_unwind).
+            let mut inline_owner = super::ElementOwner {
+                global_keys: &mut self.global_keys,
+                dirty_elements: &mut self.dirty_elements,
+                dirty_set: &mut self.dirty_set,
+                inactive_elements: &mut self.inactive_elements,
+                pending_dependency_changes: &mut self.pending_dependency_changes,
+                on_build_scheduled: self.on_build_scheduled.as_deref(),
+                external_inbox: &self.external_inbox,
+                external_request_frame: self.on_build_scheduled.as_ref(),
+                build_view: None,
+                child_manager_registry: &self.child_manager_registry,
+            };
+
+            manager_arc.lock().service(
+                requested,
+                retain_first,
+                retain_last,
+                tree,
+                &mut inline_owner,
+                pipeline,
+            );
+        } // `inline_owner` drops here — all `&mut` borrows released.
+
+        // 5. Second build_scope: expand newly-built children's subtrees.
+        //    `SparseChildren::ensure` mounts the top-level lazy-child node and
+        //    pushes it onto the dirty heap (F1), but the child's own sub-views
+        //    (e.g. a Padding wrapping a Text) need a dedicated build pass.
+        self.build_scope(tree);
+
+        // 6. Mark each serviced sliver as needing re-layout so the next frame
+        //    measures with the freshly-present render nodes.
+        {
+            let mut guard = pipeline.write();
+            for (sliver_id, _) in &manager_arcs {
+                guard.mark_needs_layout(*sliver_id);
+            }
+        }
+
+        // 7. Finalize: unmount evicted children (pushed to inactive by
+        //    `retain_band` → `evict` → `tree.remove_subtree`) and the lazy
+        //    children pushed by `on_unmount` (F3).
+        self.finalize_tree(tree);
     }
 
     // ========================================================================
@@ -724,6 +907,7 @@ impl BuildOwner {
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
             build_view: None,
+            child_manager_registry: &self.child_manager_registry,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).

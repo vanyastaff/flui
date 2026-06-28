@@ -37,6 +37,32 @@ use flui_rendering::{
 };
 
 // ============================================================================
+// OFF-BAND DISPOSAL STRATEGY
+// ============================================================================
+
+/// Controls whether `walk_virtualizer_band` disposes off-band children from
+/// the render tree or leaves that to the element tree.
+///
+/// - `RenderOwned`: the render object owns its children (built via
+///   `build_and_layout_box_child`); `dispose_box_child` enqueues the removal.
+///   Used by [`super::sliver_list_lazy::RenderSliverListLazy`].
+///
+/// - `ElementOwned`: the element tree owns the children; the render sliver
+///   must NOT call `dispose_box_child` (that would evict the render node from
+///   under the element's feet, causing an ABA double-remove on the next
+///   element-side eviction). Instead the caller reads back the band indices
+///   returned by [`walk_virtualizer_band`] and signals the element tree via
+///   `ctx.emit_retain_band`.  Used by
+///   [`super::sliver_list::RenderSliverList`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OffBandDisposal {
+    /// Caller is `RenderSliverListLazy`; dispose via `ctx.dispose_box_child`.
+    RenderOwned,
+    /// Caller is `RenderSliverList`; skip dispose — element tree handles it.
+    ElementOwned,
+}
+
+// ============================================================================
 // HELPER FREE FUNCTIONS  (pub(super) — used by sliver_list_lazy + sliver_list)
 // ============================================================================
 
@@ -188,14 +214,23 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 ///   deferred-insert position.  `dense_count` is the pre-loop child count
 ///   (the correct append index for the build strategy; a request-only strategy
 ///   ignores it — the element decides placement at service time).
+/// - `off_band_disposal`: whether to call `ctx.dispose_box_child` for off-band
+///   children ([`OffBandDisposal::RenderOwned`]) or to skip that call and let
+///   the element tree handle removal via the retain-band channel
+///   ([`OffBandDisposal::ElementOwned`]).
 /// - `on_dispose(logical_i)`: called for each off-band child **after**
-///   `ctx.dispose_box_child` enqueues the deferred removal.  Use this to fire
-///   caller-side cleanup hooks (e.g. `dispose_hook` in `RenderSliverListLazy`).
+///   `ctx.dispose_box_child` enqueues the deferred removal (only fires for
+///   `RenderOwned`).  Use this to fire caller-side cleanup hooks (e.g.
+///   `dispose_hook` in `RenderSliverListLazy`).
 ///
 /// ## Returns
 ///
-/// [`SliverGeometry`] computed from the virtualizer estimate plus the
-/// accumulated anchor correction.
+/// `(geometry, cache_first, cache_last)`:
+/// - `geometry` — the [`SliverGeometry`] for this pass.
+/// - `cache_first` / `cache_last` — the `[first, last)` logical-index band
+///   that was retained this pass (the `Virtualizer::query` result, clamped
+///   by any mid-pass `item_count` shrink via `NoChild`).  `ElementOwned`
+///   callers forward these to `ctx.emit_retain_band(cache_first, cache_last)`.
 pub(super) fn walk_virtualizer_band<'ctx, F, G, H>(
     virtualizer: &mut Virtualizer,
     logical_to_slot: &mut BTreeMap<usize, usize>,
@@ -205,10 +240,11 @@ pub(super) fn walk_virtualizer_band<'ctx, F, G, H>(
     attached_child_count: &mut usize,
     constraints: &SliverConstraints,
     ctx: &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
+    off_band_disposal: OffBandDisposal,
     resident_build_fallback: &mut F,
     on_absent: &mut G,
     on_dispose: &mut H,
-) -> SliverGeometry
+) -> (SliverGeometry, usize, usize)
 where
     F: FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
     G: FnMut(
@@ -217,7 +253,7 @@ where
         BoxConstraints,
         &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
     ) -> ChildLayout<BoxChildRef>,
-    H: FnMut(usize), // logical_i of each off-band disposed child
+    H: FnMut(usize), // logical_i of each off-band disposed child (RenderOwned only)
 {
     let scroll_offset = constraints.scroll_offset;
 
@@ -303,23 +339,29 @@ where
     let cache_last = cache_last.min(*item_count);
 
     // ── 5. Dispose off-band children ──────────────────────────────────────
-    // U3c D2: `dispose_box_child` pushes `(parent, child)` into
-    // `pending_removes`; the walk drains that sink (Remove → Insert ordering,
-    // D3) after releasing its borrows.
-    for (&logical_i, &slot) in logical_to_slot.iter() {
-        let in_band = logical_i >= cache_first && logical_i < cache_last;
-        if !in_band {
-            let keep_alive = ctx
-                .child_parent_data(slot)
-                .map(|pd| pd.keep_alive.keep_alive)
-                .unwrap_or(false);
-            if keep_alive {
-                continue;
+    // For `RenderOwned` slivers, `dispose_box_child` enqueues the render-node
+    // removal (U3c D2: Remove → Insert ordering D3 in `layout_dirty_root`).
+    // For `ElementOwned` slivers, we skip this entirely: the element tree drives
+    // eviction via `SparseChildren::retain_band` using the `cache_first`/
+    // `cache_last` band returned below, preventing the ABA double-remove that
+    // would occur if both the render side and the element side tried to free the
+    // same node.
+    if off_band_disposal == OffBandDisposal::RenderOwned {
+        for (&logical_i, &slot) in logical_to_slot.iter() {
+            let in_band = logical_i >= cache_first && logical_i < cache_last;
+            if !in_band {
+                let keep_alive = ctx
+                    .child_parent_data(slot)
+                    .map(|pd| pd.keep_alive.keep_alive)
+                    .unwrap_or(false);
+                if keep_alive {
+                    continue;
+                }
+                if let Some(id) = ctx.child_id(slot) {
+                    ctx.dispose_box_child(id);
+                }
+                on_dispose(logical_i);
             }
-            if let Some(id) = ctx.child_id(slot) {
-                ctx.dispose_box_child(id);
-            }
-            on_dispose(logical_i);
         }
     }
 
@@ -389,10 +431,14 @@ where
     let scroll_offset_correction =
         resolve_anchor_correction(pending_correction, last_scroll_offset, scroll_offset);
 
-    SliverGeometry {
+    let geometry = SliverGeometry {
         scroll_offset_correction,
         ..geometry
-    }
+    };
+
+    // Return the geometry and the retained band so element-owned callers can
+    // forward it to `ctx.emit_retain_band`.
+    (geometry, cache_first, cache_last)
 }
 
 // ============================================================================

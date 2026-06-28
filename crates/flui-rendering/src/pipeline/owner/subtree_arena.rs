@@ -171,14 +171,22 @@ pub(super) struct SubtreeArena<'tree> {
     /// (the layout-child closure requires `&SubtreeArena: Send + Sync`).
     pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
     /// Child-build requests from `RenderSliverList` (U4.2): `(sliver_id,
-    /// logical_index)` pairs recorded when a request-strategy sliver finds an
-    /// absent in-band child.  Semantically distinct from `pending_builds`
-    /// (which holds a fully-constructed `Box<dyn RenderObject>` and an insert
-    /// position) — here the element tree (U4.3) decides what to build and where
-    /// to insert it.  Drained after `pending_builds` in `layout_dirty_root`
-    /// and moved into `PipelineOwner::pending_child_requests` for the binding
-    /// layer to consume.  Same `Mutex` discipline.
+    /// logical_index)` pairs recorded when an absent in-band child is
+    /// encountered.  Unlike `pending_builds`, no render object is pre-built
+    /// here — the element tree (U4.3) decides what to build.  Drained after
+    /// `pending_builds` in `layout_dirty_root` and moved into
+    /// `PipelineOwner::pending_child_requests` for the binding layer.  Same
+    /// `Mutex` discipline.
     pending_child_requests: Mutex<Vec<(flui_foundation::RenderId, usize)>>,
+    /// Retain-band signals from element-owned slivers (U4.3 removal half).
+    ///
+    /// Each entry is `(sliver_id, cache_first, cache_last)` — the `[first,
+    /// last)` band the sliver retained this pass.  Drained after the walk
+    /// (after `pending_child_requests`, after `drop(arena)`) and moved into
+    /// `PipelineOwner::pending_retain_bands` for the binding layer.  Same
+    /// `Mutex` discipline as the other sinks.  Empty unless an element-owned
+    /// sliver (`RenderSliverList`) completed layout this frame.
+    pending_retain_bands: Mutex<Vec<(flui_foundation::RenderId, usize, usize)>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: PhantomData<&'tree mut ()>,
 }
@@ -222,6 +230,7 @@ impl<'tree> SubtreeArena<'tree> {
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
+            pending_retain_bands: Mutex::new(Vec::new()),
             owner_thread,
             _lifetime: PhantomData,
         }
@@ -320,6 +329,21 @@ impl<'tree> SubtreeArena<'tree> {
     /// live.
     pub(super) fn take_pending_child_requests(&self) -> Vec<(flui_foundation::RenderId, usize)> {
         std::mem::take(&mut *self.pending_child_requests.lock())
+    }
+
+    /// Takes the retain-band signals recorded by element-owned slivers
+    /// (`RenderSliverList`) during this walk.  Returns `(sliver_id,
+    /// cache_first, cache_last)` triples — the `[first, last)` band each
+    /// element-owned sliver retained this frame.  Called in `layout_dirty_root`
+    /// AFTER `take_pending_child_requests` and AFTER `drop(arena)` so no
+    /// `NodePtr` alias is live when the results are consumed.
+    ///
+    /// Symmetric to [`Self::take_pending_child_requests`].  The binding layer
+    /// (U4.3) drives `SparseChildren::retain_band` from these entries.
+    pub(super) fn take_pending_retain_bands(
+        &self,
+    ) -> Vec<(flui_foundation::RenderId, usize, usize)> {
+        std::mem::take(&mut *self.pending_retain_bands.lock())
     }
 
     // =========================================================================
@@ -1453,6 +1477,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             &arena.pending_builds,
             &arena.pending_removes,
             &arena.pending_child_requests,
+            &arena.pending_retain_bands,
         );
         let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 
@@ -1575,6 +1600,7 @@ mod tests {
         assert!(arena.take_pending_builds().is_empty());
         assert!(arena.take_pending_removes().is_empty());
         assert!(arena.take_pending_child_requests().is_empty());
+        assert!(arena.take_pending_retain_bands().is_empty());
     }
 
     /// Verify that `SubtreeArena::new` panics (debug_assert fires) when
@@ -1611,6 +1637,7 @@ mod tests {
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
+            pending_retain_bands: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1665,6 +1692,7 @@ mod tests {
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
+            pending_retain_bands: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1700,6 +1728,7 @@ mod tests {
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
+            pending_retain_bands: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1728,5 +1757,14 @@ mod tests {
         assert_eq!(requests[0], (sliver_id, 7));
         let requests2 = arena.take_pending_child_requests();
         assert!(requests2.is_empty(), "second request drain must be empty");
+
+        // Same for retain-band sink.
+        let band_sliver = RenderId::new(4);
+        arena.pending_retain_bands.lock().push((band_sliver, 3, 8));
+        let bands = arena.take_pending_retain_bands();
+        assert_eq!(bands.len(), 1);
+        assert_eq!(bands[0], (band_sliver, 3, 8));
+        let bands2 = arena.take_pending_retain_bands();
+        assert!(bands2.is_empty(), "second retain-band drain must be empty");
     }
 }

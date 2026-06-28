@@ -39,10 +39,11 @@ use std::{
     sync::Arc,
 };
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, RenderId};
 use parking_lot::Mutex;
 
 use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
+use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
 /// `build_scope` drain runs an element's `build()` (PR-K).
@@ -153,6 +154,14 @@ pub struct ElementOwner<'a> {
     /// path (mount / unmount / update / reconcile). The behavior reads it
     /// to build a live [`BuildCtx`](crate::context::BuildCtx).
     pub(crate) build_view: Option<BuildHandle<'a>>,
+
+    /// Registry of live lazy-sliver `ChildManager`s, keyed by sliver `RenderId`.
+    ///
+    /// Carried as a reference to the `Arc` (same pattern as `external_inbox`)
+    /// so `SliverListAdaptorBehavior::on_mount` / `on_unmount` can mutate the
+    /// registry without re-borrowing `BuildOwner`. `service_child_requests` on
+    /// `BuildOwner` reads it after all `ElementOwner` borrows drop.
+    pub(crate) child_manager_registry: &'a ChildManagerRegistry,
 }
 
 impl ElementOwner<'_> {
@@ -315,6 +324,35 @@ impl ElementOwner<'_> {
     /// Number of dirty elements pending rebuild.
     pub fn dirty_count(&self) -> usize {
         self.dirty_elements.len()
+    }
+
+    // ========================================================================
+    // Child-manager registry (lazy sliver backend)
+    // ========================================================================
+
+    /// Register a `ChildManager` for the given sliver render id.
+    ///
+    /// Called from `SliverListAdaptorBehavior::on_mount` (F8 — NOT from the
+    /// generic `RenderBehavior::on_mount`).  Idempotent: re-registering the
+    /// same `render_id` with a new manager replaces the old entry (last-write
+    /// wins; a single sliver has exactly one live manager at a time).
+    pub(crate) fn register_child_manager(
+        &mut self,
+        render_id: RenderId,
+        manager: Arc<Mutex<dyn ChildManager + Send>>,
+    ) {
+        self.child_manager_registry
+            .lock()
+            .insert(render_id, manager);
+    }
+
+    /// Unregister the `ChildManager` for `render_id`.
+    ///
+    /// Called from `SliverListAdaptorBehavior::on_unmount` so that a stale
+    /// registry entry for the dismounted sliver cannot be serviced post-frame.
+    /// No-op if the id is not present.
+    pub(crate) fn unregister_child_manager(&mut self, render_id: RenderId) {
+        self.child_manager_registry.lock().remove(&render_id);
     }
 }
 

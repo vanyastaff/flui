@@ -777,6 +777,14 @@ pub trait SliverLayoutCtxErased: Send + Sync {
         let _ = index;
         None
     }
+
+    /// Emit the element-owned retain band `[first, last)` for this sliver
+    /// (U4.3 removal half).
+    ///
+    /// Only `ErasedSliverLayoutCtx` (the pipeline-wired context) records the
+    /// band; `Direct` / test / leaf contexts are honestly inert — they carry
+    /// no `pending_retain_bands` sink.  The default is a no-op.
+    fn emit_retain_band(&mut self, _first: usize, _last: usize) {}
 }
 
 impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P> {
@@ -901,6 +909,14 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
             SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_id(index),
         }
     }
+
+    #[inline]
+    fn emit_retain_band(&mut self, first: usize, last: usize) {
+        match &mut self.storage {
+            SliverLayoutCtxStorage::Direct { .. } => {} // honestly inert
+            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.emit_retain_band(first, last),
+        }
+    }
 }
 
 // ============================================================================
@@ -967,6 +983,13 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// Drained after `pending_builds` and exposed via
     /// `PipelineOwner::take_pending_child_requests` for the binding layer.
     pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
+    /// Sink for retain-band signals from element-owned slivers (U4.3 removal
+    /// half).  `RenderSliverList::perform_layout` emits `(sliver_id, first,
+    /// last)` after the band walk via `ctx.emit_retain_band(first, last)`; the
+    /// dirty-root walk drains this into `PipelineOwner::pending_retain_bands`
+    /// for the binding layer.  Element-owned slivers skip `dispose_box_child`
+    /// to prevent a double-remove ABA on the arena slot.
+    pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
 }
 
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
@@ -988,6 +1011,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
         pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
         pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
+        pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
     ) -> Self {
         Self {
             constraints,
@@ -1000,6 +1024,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             pending_builds,
             pending_removes,
             pending_child_requests,
+            pending_retain_bands,
         }
     }
 }
@@ -1142,6 +1167,12 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
 
     fn child_id(&self, index: usize) -> Option<RenderId> {
         self.child_ids.get(index).copied()
+    }
+
+    fn emit_retain_band(&mut self, first: usize, last: usize) {
+        self.pending_retain_bands
+            .lock()
+            .push((self.node_id, first, last));
     }
 }
 
@@ -1492,6 +1523,8 @@ mod tests {
             parking_lot::Mutex::new(Vec::new());
         let pending_child_requests: parking_lot::Mutex<Vec<(RenderId, usize)>> =
             parking_lot::Mutex::new(Vec::new());
+        let pending_retain_bands: parking_lot::Mutex<Vec<(RenderId, usize, usize)>> =
+            parking_lot::Mutex::new(Vec::new());
         let mut ctx = ErasedSliverLayoutCtx::new(
             constraints,
             &mut children,
@@ -1503,6 +1536,7 @@ mod tests {
             &sink,
             &pending_removes,
             &pending_child_requests,
+            &pending_retain_bands,
         );
 
         // index 0 exists -> Ready(handle), builder untouched, nothing parked.

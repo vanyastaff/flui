@@ -41,7 +41,7 @@ use flui_rendering::{
     virtualization::Virtualizer,
 };
 
-use super::virtualized_band::walk_virtualizer_band;
+use super::virtualized_band::{OffBandDisposal, walk_virtualizer_band};
 
 // ============================================================================
 // RENDER OBJECT
@@ -196,7 +196,7 @@ impl RenderSliver for RenderSliverList {
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
 
-        walk_virtualizer_band(
+        let (geometry, cache_first, cache_last) = walk_virtualizer_band(
             &mut self.virtualizer,
             &mut self.logical_to_slot,
             &mut self.item_count,
@@ -205,6 +205,10 @@ impl RenderSliver for RenderSliverList {
             &mut self.attached_child_count,
             &constraints,
             ctx,
+            // Element tree owns the children: skip `dispose_box_child` to
+            // prevent the ABA double-remove.  The element tree drives eviction
+            // via `SparseChildren::retain_band` using the band indices below.
+            OffBandDisposal::ElementOwned,
             // Resident-build fallback: returns `None` because this type carries
             // no owned child-source factory.  A resident child is already in the
             // arena; the fallback fires only if the slot was concurrently evicted,
@@ -217,10 +221,15 @@ impl RenderSliver for RenderSliverList {
             &mut |logical_i, _dense_count, _box_constraints, ctx| {
                 ctx.request_child_build(logical_i)
             },
-            // Dispose hook: no owner-side state to clean up (no source factory,
-            // no dispose callback).  The arena sink handles the tree removal.
+            // Dispose hook: no-op — `ElementOwned` skips the dispose path so
+            // this closure never fires.
             &mut |_logical_i| {},
-        )
+        );
+        // Signal the retained band to the element tree via the pending_retain_bands
+        // channel.  The binding layer forwards this to `SparseChildren::retain_band`
+        // post-frame so out-of-band lazy children are evicted on the element side.
+        ctx.emit_retain_band(cache_first, cache_last);
+        geometry
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

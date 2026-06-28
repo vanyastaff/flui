@@ -548,6 +548,23 @@ where
             logical_index,
         )
     }
+
+    /// Emits the retained logical-index band `[first, last)` for this
+    /// element-owned sliver.
+    ///
+    /// `RenderSliverList` calls this once per layout pass after
+    /// [`walk_virtualizer_band`] returns. The pipeline moves the signal to
+    /// `PipelineOwner::take_pending_retain_bands`; the binding layer (U4.3)
+    /// drives `SparseChildren::retain_band` from it, evicting out-of-band lazy
+    /// children on the element side and bypassing `dispose_box_child` to avoid
+    /// the ABA double-remove.
+    pub fn emit_retain_band(&mut self, first: usize, last: usize) {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::emit_retain_band(
+            &mut self.inner,
+            first,
+            last,
+        )
+    }
 }
 
 // ============================================================================

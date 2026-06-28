@@ -617,6 +617,7 @@ impl PipelineOwner<Layout> {
         let pending_removes = arena.take_pending_removes();
         let pending_builds = arena.take_pending_builds();
         let pending_child_requests = arena.take_pending_child_requests();
+        let pending_retain_bands = arena.take_pending_retain_bands();
         drop(arena);
 
         // Apply removes first (D3 ordering).  Each entry is `(parent, child)`:
@@ -642,6 +643,13 @@ impl PipelineOwner<Layout> {
         // binding layer (U4.3) can consume them after the frame.  No tree
         // mutation here — the requests are inert until U4.3 wires up a manager.
         self.pending_child_requests.extend(pending_child_requests);
+
+        // Move retain-band signals from element-owned slivers (U4.3 removal
+        // half) into the owner's observable buffer.  The binding layer drains
+        // these via `take_pending_retain_bands` to drive `SparseChildren::
+        // retain_band` on the element side, skipping `dispose_box_child` to
+        // avoid the ABA double-remove.
+        self.pending_retain_bands.extend(pending_retain_bands);
 
         result
     }
