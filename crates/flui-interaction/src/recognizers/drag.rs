@@ -24,20 +24,8 @@ use crate::{
     ids::PointerId,
     processing::VelocityTracker,
     settings::GestureSettings,
-    traits::PointerEventExtTrait,
+    traits::{DragAxis, PointerEventExtTrait},
 };
-
-/// Drag axis constraint
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DragAxis {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// Vertical drag only (up/down)
-    Vertical,
-    /// Horizontal drag only (left/right)
-    Horizontal,
-    /// Free drag (any direction)
-    Free,
-}
 
 /// Configures when the drag's initial position is reported.
 ///

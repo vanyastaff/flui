@@ -8,14 +8,83 @@
 
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap, HashSet},
     sync::{Arc, OnceLock},
 };
 
 use flui_foundation::ElementId;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::{tree::ElementTree, view::View};
+
+/// A cloneable, owned handle that lets a listener callback — an animation tick
+/// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
+/// element for the next [`BuildOwner::build_scope`] drain and request a frame.
+///
+/// This is the arena analogue of Flutter's `Element.markNeedsBuild` reaching
+/// `BuildOwner.scheduleBuildFor` + `SchedulerBinding.scheduleFrame`: an
+/// `AnimatedView`'s mark-dirty callback captures one of these at mount (via
+/// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler))
+/// and calls [`schedule`](Self::schedule) when the listenable changes. The
+/// pending ids accumulate in a shared inbox that `build_scope` drains onto its
+/// dirty heap at frame start, so the listener never needs to touch the owner.
+///
+/// The inbox carries the element id ONLY — the dirty-heap ordering key (tree
+/// depth) is read authoritatively from the node at drain time, not captured
+/// here, because `ElementCore` does not know its own tree depth (its `depth`
+/// field is the sibling slot index, not `parent_depth + 1`).
+#[derive(Clone)]
+pub(crate) struct ExternalBuildScheduler {
+    /// Shared inbox drained by `build_scope`; a SET of element ids to rebuild.
+    /// A set (not a `Vec`) so repeated ticks between frames — a 60fps animation
+    /// while the frame driver is stalled — collapse to one entry per element
+    /// instead of growing unbounded.
+    inbox: Arc<Mutex<HashSet<ElementId>>>,
+    /// Frame-request hook (the binding's `on_build_scheduled`), so a tick
+    /// between frames asks the platform for a new frame. `None` in headless
+    /// tests, which drive `build_scope` directly.
+    request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl ExternalBuildScheduler {
+    /// Enqueue `id` for the next `build_scope` drain and request a frame.
+    ///
+    /// Deduplicating: a repeat tick for an id already queued is a no-op and does
+    /// NOT re-request a frame, so a burst of ticks for one element costs one
+    /// inbox slot and one frame request. Thread-safe: the inbox lock is held
+    /// only for the insert and released before `request_frame` runs (no lock
+    /// across the platform wake).
+    pub(crate) fn schedule(&self, id: ElementId) {
+        let newly_queued = self.inbox.lock().insert(id);
+        if newly_queued && let Some(request_frame) = &self.request_frame {
+            request_frame();
+        }
+    }
+
+    /// Build a scheduler from the shared inbox + frame-request handle. Used by
+    /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler).
+    pub(crate) fn from_parts(
+        inbox: Arc<Mutex<HashSet<ElementId>>>,
+        request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Self {
+        Self {
+            inbox,
+            request_frame,
+        }
+    }
+}
+
+impl std::fmt::Debug for ExternalBuildScheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `try_lock`, not `lock`: `parking_lot::Mutex` is non-reentrant, so a
+        // `{:?}` while the inbox is already held (e.g. instrumenting the drain)
+        // would otherwise deadlock silently.
+        f.debug_struct("ExternalBuildScheduler")
+            .field("pending", &self.inbox.try_lock().map(|set| set.len()))
+            .field("has_request_frame", &self.request_frame.is_some())
+            .finish()
+    }
+}
 
 /// Entry in the dirty elements heap.
 ///
@@ -137,9 +206,19 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` so the [`ElementOwner`](super::ElementOwner)
     /// split-borrow can fire it from `schedule_build_for` without
-    /// re-borrowing the owner.
+    /// re-borrowing the owner. Stored as `Arc` (not `Box`) so an
+    /// `ExternalBuildScheduler` captured by an animation listener can clone
+    /// and fire it as a frame request from outside a frame.
     #[allow(clippy::type_complexity)]
-    pub(crate) on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
+    pub(crate) on_build_scheduled: Option<Arc<dyn Fn() + Send + Sync>>,
+
+    /// Inbox of element ids scheduled from *outside* a frame — an
+    /// animation/listenable tick whose mark-dirty callback holds an
+    /// `ExternalBuildScheduler` but no `&mut BuildOwner`. A SET, so repeated
+    /// ticks dedup. Drained onto [`Self::dirty_elements`] at the start of
+    /// [`Self::build_scope`], where each id's tree depth is looked up. Shared
+    /// (`Arc`) so the listener callbacks and the owner reference the same queue.
+    pub(crate) external_inbox: Arc<Mutex<HashSet<ElementId>>>,
 }
 
 /// An element that has been deactivated and is pending unmount.
@@ -232,6 +311,7 @@ impl BuildOwner {
             #[cfg(debug_assertions)]
             scope_depth: 0,
             on_build_scheduled: None,
+            external_inbox: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -261,26 +341,64 @@ impl BuildOwner {
     ///
     /// This is called by `schedule_build_for` to notify the binding
     /// that a visual update is needed.
+    ///
+    /// Set this BEFORE mounting any element. Each element captures a clone of
+    /// the current callback `Arc` into its `ExternalBuildScheduler` at mount
+    /// (for out-of-frame rebuild requests); replacing the callback afterwards
+    /// does not retroactively update already-mounted elements, which keep
+    /// firing the previous `Arc`. The binding wires this once at startup.
     pub fn set_on_build_scheduled<F>(&mut self, callback: F)
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_build_scheduled = Some(Box::new(callback));
+        self.on_build_scheduled = Some(Arc::new(callback));
     }
 
     /// Schedule an element for rebuild.
     ///
-    /// Elements are processed in depth order (shallowest first) to ensure
-    /// parent rebuilds happen before child rebuilds.
+    /// Elements are processed in depth order (shallowest first) so parent
+    /// rebuilds happen before child rebuilds. The `depth` is a best-effort
+    /// ordering hint: [`build_scope`](Self::build_scope) re-derives every
+    /// queued element's authoritative tree depth from its node before draining
+    /// (see `rekey_dirty_depths`), so a caller that
+    /// only knows the sibling slot index (e.g. `setState` via
+    /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize) {
         if self.dirty_set.insert(id) {
             self.dirty_elements
                 .push(Reverse(DirtyElement::new(id, depth)));
 
             // Notify that a build was scheduled
-            if let Some(ref callback) = self.on_build_scheduled {
+            if let Some(callback) = self.on_build_scheduled.as_deref() {
                 callback();
             }
+        }
+    }
+
+    /// Re-key every queued dirty element to its authoritative TREE depth.
+    ///
+    /// The dirty heap orders by depth, but `schedule_build_for` is handed a
+    /// depth by its caller — and the `setState` path
+    /// (`ElementCore::schedule_self_build`) plus the live `BuildCtx` both pass
+    /// `ElementCore::depth`, which is the sibling SLOT index, not
+    /// `parent_depth + 1`. Left as-is, a deeply-nested `setState` would sort as
+    /// if it were shallow and a child could rebuild before its parent —
+    /// violating Flutter's shallowest-first contract. Rebuilding the heap keyed
+    /// on each node's real depth (`ElementNode::depth`, the same authority the
+    /// external-inbox drain uses) restores the contract regardless of what
+    /// `schedule_build_for` was told.
+    fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
+        if self.dirty_elements.is_empty() {
+            return;
+        }
+        let queued: Vec<ElementId> = std::mem::take(&mut self.dirty_elements)
+            .into_iter()
+            .map(|Reverse(dirty)| dirty.id())
+            .collect();
+        for id in queued {
+            let depth = tree.get(id).map_or(0, |node| node.depth);
+            self.dirty_elements
+                .push(Reverse(DirtyElement::new(id, depth)));
         }
     }
 
@@ -302,6 +420,8 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
+            external_inbox: &self.external_inbox,
+            external_request_frame: self.on_build_scheduled.as_ref(),
             // Lifecycle paths (mount/unmount/update) get no live-tree view;
             // only the `build_scope` drain sets `build_view`.
             build_view: None,
@@ -334,6 +454,39 @@ impl BuildOwner {
             self.building = true;
             self.scope_depth += 1;
         }
+
+        // Drain elements scheduled from OUTSIDE a frame (animation / listenable
+        // ticks whose mark-dirty callback holds an `ExternalBuildScheduler`).
+        // Pushed straight onto the heap — we are already in a frame, so the
+        // `on_build_scheduled` frame request the callback already fired is
+        // enough; re-firing it here would loop. A tick landing mid-drain stays
+        // in the inbox for the next frame (Flutter defers mid-frame schedules).
+        //
+        // The heap key is the element's TREE depth, looked up from its node
+        // here (`&mut tree` is in scope) rather than captured in the callback —
+        // `ElementCore::depth` is the sibling slot index, not `parent_depth+1`,
+        // so capturing it would mis-order a nested animated element as if it
+        // were the root.
+        let externally_scheduled: Vec<ElementId> = self.external_inbox.lock().drain().collect();
+        for id in externally_scheduled {
+            if self.dirty_set.insert(id) {
+                let depth = tree.get(id).map_or(0, |node| node.depth);
+                self.dirty_elements
+                    .push(Reverse(DirtyElement::new(id, depth)));
+            }
+        }
+
+        // Re-key every element already on the heap to its AUTHORITATIVE tree
+        // depth before draining. `schedule_build_for` trusts the depth its
+        // caller passes, but the `setState` path (`ElementCore::schedule_self_build`)
+        // and the live `BuildCtx` both pass `ElementCore::depth` — the sibling
+        // SLOT index, not `parent_depth + 1`. Trusting it lets a deeply-nested
+        // `setState` sort as if it were shallow, so a child could build before
+        // its parent and violate Flutter's shallowest-first build contract
+        // (`framework.dart` `_dirtyElements.sort(Element._sort)` keys on the
+        // element's real depth). Re-derive each id's depth from its node — the
+        // same authority the external-inbox drain just above already uses.
+        self.rekey_dirty_depths(tree);
 
         // Process dirty elements in depth order, extract-then-apply
         // (E3 — atomic box→arena swap).
@@ -424,6 +577,8 @@ impl BuildOwner {
                     inactive_elements: &mut self.inactive_elements,
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     on_build_scheduled: self.on_build_scheduled.as_deref(),
+                    external_inbox: &self.external_inbox,
+                    external_request_frame: self.on_build_scheduled.as_ref(),
                     build_view: Some(super::BuildHandle {
                         tree: &*tree,
                         dep_sink: &dep_sink,
@@ -470,6 +625,8 @@ impl BuildOwner {
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 on_build_scheduled: self.on_build_scheduled.as_deref(),
+                external_inbox: &self.external_inbox,
+                external_request_frame: self.on_build_scheduled.as_ref(),
                 build_view: None,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
@@ -479,6 +636,12 @@ impl BuildOwner {
                 &mut element_owner,
             );
         }
+
+        // The build drained: every render child has attached. Settle each
+        // render parent's children into element-slot order (no-op unless an
+        // insert flagged a possible drift), so a render sibling that attached
+        // before a component-deferred sibling does not invert their layout.
+        tree.reorder_render_children_after_build();
 
         #[cfg(debug_assertions)]
         {
@@ -558,6 +721,8 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
+            external_inbox: &self.external_inbox,
+            external_request_frame: self.on_build_scheduled.as_ref(),
             build_view: None,
         };
 
@@ -851,6 +1016,49 @@ mod tests {
 
         let Reverse(third) = owner.dirty_elements.pop().unwrap();
         assert_eq!(third.depth(), 2);
+    }
+
+    /// A `setState` hands `schedule_build_for` the element's SLOT index, not its
+    /// tree depth. `rekey_dirty_depths` (run at the top of `build_scope`) must
+    /// override that with each node's authoritative `parent_depth + 1` so a
+    /// deeply-nested rebuild never drains before its shallower parent.
+    ///
+    /// This is RED without the re-key: the elements are scheduled with
+    /// deliberately INVERTED depths (the deepest leaf gets `0`, the root gets
+    /// `2`), so trusting the scheduled depth would drain the leaf first —
+    /// violating Flutter's shallowest-first contract.
+    #[test]
+    fn rekey_dirty_depths_restores_shallowest_first_from_inverted_slots() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let view = TestView;
+
+        // A single-child chain: root (depth 0) → mid (depth 1) → leaf (depth 2).
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let mid = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
+        let leaf = tree.insert(&view, mid, 0, &mut owner.element_owner_mut());
+        assert_eq!(tree.get(root).map(|n| n.depth), Some(0));
+        assert_eq!(tree.get(mid).map(|n| n.depth), Some(1));
+        assert_eq!(tree.get(leaf).map(|n| n.depth), Some(2));
+
+        // Schedule with INVERTED depths — what a `setState` on each would pass if
+        // it trusted the slot index (all three are slot 0 here; we exaggerate to
+        // an outright inversion to make the mis-order deterministic).
+        owner.schedule_build_for(leaf, 0);
+        owner.schedule_build_for(mid, 1);
+        owner.schedule_build_for(root, 2);
+
+        owner.rekey_dirty_depths(&tree);
+
+        // Drains shallowest-first by AUTHORITATIVE tree depth, not the scheduled
+        // (inverted) depth.
+        let Reverse(first) = owner.dirty_elements.pop().unwrap();
+        let Reverse(second) = owner.dirty_elements.pop().unwrap();
+        let Reverse(third) = owner.dirty_elements.pop().unwrap();
+        assert_eq!(first.id(), root, "root (tree depth 0) drains first");
+        assert_eq!(second.id(), mid, "mid (tree depth 1) drains second");
+        assert_eq!(third.id(), leaf, "leaf (tree depth 2) drains last");
+        assert_eq!((first.depth(), second.depth(), third.depth()), (0, 1, 2));
     }
 
     #[test]

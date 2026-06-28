@@ -7,34 +7,38 @@
 //! routing through `Downcast::into_any` + `Box::downcast::<V>`
 //! — a different syntactic pattern from the FR-033 grep target.
 //! The `tracing::warn!` fall-through of the Phase 1 identity-shim
-//! is removed: on type mismatch the dispatch returns `false`, the
-//! caller (`Phase 2 reconciler`) replaces the element, and no
-//! silent stale state remains in the tree (Flutter-correct).
+//! is removed: after unwrapping any `BoxedView` (below), a genuine
+//! concrete-type mismatch returns `false`, the caller (`Phase 2
+//! reconciler`) replaces the element, and no silent stale state
+//! remains in the tree (Flutter-correct).
 //!
-//! ## Why `as_any().type_id()` and not `view_type_id()`?
+//! ## `BoxedView` unwrap, then `as_any().type_id()`
 //!
-//! `View::view_type_id()` has a default body but is an
-//! **overridable trait method**. `BoxedView` (`view/into_view.rs`)
-//! intentionally forwards its `view_type_id()` to the inner view
-//! so authoring code that returns `Inner.boxed()` in a
-//! conditional-build arm (the canonical SC-009 shape) reads as
-//! type-`Inner` at the trait surface. A naive
-//! `new_view.view_type_id() == TypeId::of::<V>()` guard would let
-//! a `BoxedView` slip through the check (because the inner's
-//! TypeId matches `V`) and then `Box::downcast::<V>` would fail
-//! at runtime (the actual concrete type is `BoxedView`, not
-//! `V`) — a panic on every `.boxed()` rebuild.
+//! Two facts make a raw concrete-`TypeId` comparison wrong on its
+//! own. (1) `View::view_type_id()` is **overridable**, and
+//! `BoxedView` (`view/into_view.rs`) forwards it to its inner, so
+//! the reconciler's `can_update_by_id` treats `Inner.boxed()` as
+//! type-`Inner` and *reuses* the element rather than replacing it.
+//! (2) The single-child build path boxes a child through
+//! `Box<dyn View>: IntoView` (yielding a `BoxedView`), and user
+//! code routinely returns `child.boxed()` — yet the mounted
+//! element is `Element<Inner>` (`BoxedView::create_element`
+//! delegates to the inner). So the value reaching this dispatch is
+//! frequently a `BoxedView` whose **concrete** runtime TypeId is
+//! `BoxedView`, not `V`.
 //!
-//! `Downcast::as_any().type_id()` returns the **concrete runtime
-//! TypeId** (`std::any::Any::type_id` is non-overridable: the
-//! blanket `impl<T: 'static + ?Sized> Any for T` decides the
-//! discriminant from the trait-object vtable). The guard now
-//! discriminates BoxedView from its inner correctly. Defense in
-//! depth: the downcast itself is **fallible** (`match` on
-//! `Box::downcast::<V>` result, return `false` on `Err`) so a
-//! future trait-method override that violates the
-//! `as_any().type_id() == TypeId::of::<V>() ⇒ downcastable to V`
-//! invariant degrades to "replace element" instead of panicking.
+//! Therefore the dispatch first **unwraps** nested `BoxedView`
+//! wrappers to the inner `&dyn View`, then compares its concrete
+//! `Downcast::as_any().type_id()` (non-overridable — the blanket
+//! `impl<T: 'static + ?Sized> Any for T` reads the discriminant
+//! from the vtable) against `TypeId::of::<V>()`. On match the inner
+//! is cloned and `Box::downcast::<V>` succeeds (so the element
+//! updates in place — consistent with `can_update_by_id` and with
+//! Flutter's update-in-place); on a real mismatch it returns
+//! `false` and the reconciler replaces the element. Without the
+//! unwrap a boxed rebuild was neither updated (TypeId saw
+//! `BoxedView`) nor replaced (`can_update` saw `Inner`) — a
+//! silently stale render object after every `setState`.
 //!
 //! The dispatch function is `pub(crate)` because it is not meant
 //! to be called from outside `flui-view` (the call site is
@@ -43,7 +47,7 @@
 use std::any::TypeId;
 
 use super::{arity::ElementArity, generic::ElementCore};
-use crate::view::View;
+use crate::view::{BoxedView, View};
 
 /// Typed view-update dispatch (FR-021).
 ///
@@ -82,8 +86,31 @@ where
     // downcast (actual runtime type is `BoxedView`, not `V`). The
     // `as_any().type_id()` guard discriminates the wrapper from
     // the wrapped concretely.
-    if new_view.as_any().type_id() != TypeId::of::<V>() {
-        // Type-mismatch path: caller (`Phase 2 reconciler`)
+    // Unwrap framework/user `BoxedView` wrappers so an `Inner.boxed()` rebuild
+    // updates the `Inner` element in place. The single-child build path boxes
+    // a child through `Box<dyn View>: IntoView` (→ `BoxedView`), and user code
+    // routinely returns `child.boxed()`; in both cases the mounted element is
+    // `Element<Inner>` (BoxedView::create_element delegates to the inner). The
+    // raw `as_any().type_id()` below sees `BoxedView`, not `V`, while the
+    // reconciler's `can_update_by_id` matched on the BoxedView-forwarded
+    // `view_type_id()` (the inner type) — so without this unwrap such a rebuild
+    // is neither updated (TypeId mismatch here) nor replaced (can_update said
+    // reuse), leaving the element silently stale. Unwrapping is strictly safer
+    // than the old bail-to-`false`: the `Box::downcast::<V>` below now runs on
+    // the inner concrete value and cannot panic.
+    let mut effective: &dyn View = new_view;
+    loop {
+        // Each hop strips one BoxedView layer. The FR-033 whitelist marker is
+        // co-located: this downcasts to the `BoxedView` *wrapper* to unwrap it,
+        // not the `downcast_ref::<V>()` view-type smuggling FR-033 bans.
+        let wrapper = effective.as_any().downcast_ref::<BoxedView>(); // PORT-CHECK-OK-DOWNCAST: unwrap BoxedView wrapper, not V-type smuggling
+        match wrapper {
+            Some(boxed) => effective = &*boxed.0,
+            None => break,
+        }
+    }
+    if effective.as_any().type_id() != TypeId::of::<V>() {
+        // Genuinely different concrete type → caller (`Phase 2 reconciler`)
         // replaces the element. No tracing::warn — Flutter-correct
         // "different type → new element" semantics.
         return false;
@@ -97,7 +124,7 @@ where
     // above means the ref is guaranteed to succeed.
     // Bound to a short `let` so the FR-033 marker stays on the same line as
     // `downcast_ref` and survives rustfmt (the marker must be co-located).
-    let nv = new_view.as_any().downcast_ref::<V>(); // PORT-CHECK-OK-DOWNCAST: type-id guarded
+    let nv = effective.as_any().downcast_ref::<V>(); // PORT-CHECK-OK-DOWNCAST: type-id guarded
     if let Some(new_ref) = nv
         && new_ref.should_skip_rebuild(core.view())
     {
@@ -119,7 +146,7 @@ where
     // panicking. The guard above means the `Err` arm should be
     // unreachable today, but defense in depth costs us one
     // `match` arm.
-    let cloned: Box<dyn View> = dyn_clone::clone_box(new_view);
+    let cloned: Box<dyn View> = dyn_clone::clone_box(effective);
     match cloned.into_any().downcast::<V>() {
         Ok(typed) => {
             core.replace_view_for_dispatch(*typed);

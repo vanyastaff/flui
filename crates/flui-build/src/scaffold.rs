@@ -281,15 +281,21 @@ mod tests {
     fn test_platform_templates_android() {
         let templates = platform_templates("android");
         assert_eq!(templates.len(), 6);
-        assert!(templates
-            .iter()
-            .any(|t| t.rel_path == "app/src/main/AndroidManifest.xml"));
-        assert!(templates
-            .iter()
-            .any(|t| t.rel_path == "app/build.gradle.kts"));
-        assert!(templates
-            .iter()
-            .any(|t| t.rel_path == "settings.gradle.kts"));
+        assert!(
+            templates
+                .iter()
+                .any(|t| t.rel_path == "app/src/main/AndroidManifest.xml")
+        );
+        assert!(
+            templates
+                .iter()
+                .any(|t| t.rel_path == "app/build.gradle.kts")
+        );
+        assert!(
+            templates
+                .iter()
+                .any(|t| t.rel_path == "settings.gradle.kts")
+        );
     }
 
     #[test]
@@ -314,8 +320,7 @@ mod tests {
             assert_eq!(
                 templates.len(),
                 1,
-                "Desktop platform '{}' should have 1 template",
-                platform
+                "Desktop platform '{platform}' should have 1 template"
             );
             assert_eq!(templates[0].rel_path, ".gitignore");
         }

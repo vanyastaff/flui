@@ -239,7 +239,19 @@ mod tests {
 
     #[test]
     fn test_version() {
-        assert_eq!(VERSION, "0.1.0");
+        // `VERSION` is wired from the package version (`env!("CARGO_PKG_VERSION")`);
+        // assert its shape, not a pinned literal — a hardcoded value breaks on
+        // every workspace version bump (it broke at the 0.1.0 -> 0.2.0 bump).
+        let parts: Vec<&str> = VERSION.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "VERSION should be semver `major.minor.patch`, got {VERSION:?}",
+        );
+        assert!(
+            parts.iter().all(|part| part.parse::<u64>().is_ok()),
+            "VERSION components should be numeric, got {VERSION:?}",
+        );
     }
 
     #[test]

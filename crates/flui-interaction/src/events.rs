@@ -681,8 +681,17 @@ pub fn make_move_event_for_id(
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Cancel for testing
 pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
+    make_cancel_event_for_id(PointerId::PRIMARY, pointer_type)
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Cancel for testing with an explicit pointer id.
+///
+/// See [`make_down_event_for_id`] for rationale — a multi-contact stream needs
+/// the cancel routed to the same id its down/up carried.
+pub fn make_cancel_event_for_id(pointer_id: PointerId, pointer_type: PointerType) -> PointerEvent {
     PointerEvent::Cancel(PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
+        pointer_id: Some(pointer_id),
         pointer_type,
         persistent_device_id: None,
     })

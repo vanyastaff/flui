@@ -78,12 +78,27 @@ where
          self_id — a slab-resident element must be set_self_id-stamped at insert"
     );
     match (owner.build_view, core.self_id()) {
-        (Some(handle), Some(element_id)) => BuildCtxChoice::Live(BuildCtx::new(
-            element_id,
-            core.depth(),
-            handle.tree,
-            handle.dep_sink,
-        )),
+        (Some(handle), Some(element_id)) => {
+            // The live context carries the element's AUTHORITATIVE tree depth
+            // (`parent_depth + 1`, from its node), not `ElementCore::depth` — the
+            // sibling SLOT index. `BuildContext::depth` is documented as the tree
+            // depth, and `depend_on` records a dependent at this depth while
+            // `mark_needs_build` schedules a rebuild at it; using the slot would
+            // mis-order a nested dependent / rebuild in the dirty heap (the same
+            // class of bug `rekey_dirty_depths` corrects for the `setState` path).
+            // Falls back to the slot only if the node is unexpectedly absent (a
+            // framework invariant already debug-asserted above).
+            let tree_depth = match handle.tree.get(element_id) {
+                Some(node) => node.depth(),
+                None => core.depth(),
+            };
+            BuildCtxChoice::Live(BuildCtx::new(
+                element_id,
+                tree_depth,
+                handle.tree,
+                handle.dep_sink,
+            ))
+        }
         _ => BuildCtxChoice::Minimal(ElementBuildContext::new_minimal(core.depth())),
     }
 }
@@ -241,6 +256,21 @@ where
     /// `(ancestor as RenderObjectElement).renderObject` after a
     /// runtime-type check.
     fn render_id(&self) -> Option<flui_foundation::RenderId> {
+        None
+    }
+
+    /// The parent-data this element contributes to its render child's nearest
+    /// render parent, if it is a `ParentDataView` (Flexible / Positioned).
+    ///
+    /// Default `None`; `ParentDataBehavior` overrides it. Read at the
+    /// `ElementTree` insert/update seams (`apply_ancestor_parent_data`) — the
+    /// port of Flutter's `RenderObjectElement.attachRenderObject` →
+    /// `_findAncestorParentDataElements` → `ParentDataWidget.applyParentData`.
+    #[allow(unused_variables)]
+    fn parent_data_config(
+        &self,
+        core: &ElementCore<V, A>,
+    ) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
         None
     }
 
@@ -406,6 +436,48 @@ where
 }
 
 // ============================================================================
+// ParentDataBehavior
+// ============================================================================
+
+/// Behavior for `ParentDataView` elements (Flexible / Expanded / Positioned).
+///
+/// A transparent single-child proxy: like [`ProxyBehavior`] it owns no render
+/// object, so the unified `Element` passes the parent's render id straight
+/// through to the wrapped child (whose render object attaches to the nearest
+/// ancestor render object). The parent-data the view contributes is surfaced
+/// via [`parent_data_config`](ElementBehavior::parent_data_config) and written
+/// onto the child render node by the `ElementTree` insert/update seams — the
+/// port of Flutter's `RenderObjectElement.attachRenderObject` →
+/// `_updateParentData`.
+#[derive(Debug, Clone, Copy)]
+pub struct ParentDataBehavior;
+
+impl<V, A> ElementBehavior<V, A> for ParentDataBehavior
+where
+    V: crate::view::ParentDataView,
+    A: ElementArity,
+{
+    fn debug_kind(&self) -> &'static str {
+        "ParentDataElement"
+    }
+
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
+        super::behavior_commons::proxy_style_views(core, "ParentDataBehavior", V::child)
+    }
+
+    fn parent_data_config(
+        &self,
+        core: &ElementCore<V, A>,
+    ) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
+        Some(Box::new(core.view().create_parent_data()))
+    }
+}
+
+// ============================================================================
 // StatefulBehavior
 // ============================================================================
 
@@ -517,11 +589,13 @@ where
 
     fn on_view_updated(
         &mut self,
-        _core: &ElementCore<V, A>,
+        core: &ElementCore<V, A>,
         old_view: &V,
         _owner: &mut crate::ElementOwner<'_>,
     ) {
-        self.state.did_update_view(old_view);
+        // `core.view()` is already the freshly-swapped-in configuration here —
+        // Flutter's `this.widget` at `didUpdateWidget` time.
+        self.state.did_update_view(old_view, core.view());
     }
 
     /// Fire `ViewState::did_change_dependencies` on the owned state.
@@ -730,6 +804,25 @@ where
     }
 
     fn on_update(&mut self, core: &ElementCore<V, A>) {
+        // Apply the widget's new configuration to the *existing* render object
+        // before marking it dirty — Flutter's `RenderObjectElement.update` ->
+        // `widget.updateRenderObject(context, renderObject)`. Without this the
+        // render object keeps its `create_render_object()` configuration and a
+        // `setState` that changes a render-object widget (padding, size, text,
+        // colour, …) would never be reflected after the first frame.
+        if let Some(render_id) = self.render_id
+            && let Some(pipeline_owner) = core.pipeline_owner()
+        {
+            let mut owner = pipeline_owner.write();
+            if let Some(render_object) = owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
+            {
+                core.view().update_render_object(render_object);
+            }
+        }
+
         super::behavior_commons::mark_render_needs_layout_and_paint(
             core,
             self.render_id,

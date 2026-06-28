@@ -407,6 +407,24 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         None
     }
 
+    /// The pointer-event handler this render object contributes to its hit
+    /// entry, if any.
+    ///
+    /// When a hit lands on this node, the pipeline attaches the returned handler
+    /// to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
+    /// [`HitTestResult::dispatch`](crate::hit_testing::HitTestResult) then
+    /// invokes it with the (locally-transformed) [`PointerEvent`], honoring the
+    /// returned [`EventPropagation`]. Default `None` — only a render object that
+    /// listens for pointer events (e.g. `RenderListener`) overrides it. This is
+    /// the arena analogue of Flutter's `RenderPointerListener` registering
+    /// itself as the `HitTestEntry`'s target.
+    ///
+    /// [`PointerEvent`]: crate::hit_testing::PointerEvent
+    /// [`EventPropagation`]: crate::hit_testing::EventPropagation
+    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+        None
+    }
+
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================

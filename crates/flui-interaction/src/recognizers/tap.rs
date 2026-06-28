@@ -455,6 +455,40 @@ impl TapGestureRecognizer {
         }
     }
 
+    /// Deliver the won tap — Flutter's `_checkDown` + `_checkUp`.
+    ///
+    /// Fires the per-button `on_*_tap_down` (idempotent via `pending_down`),
+    /// then `on_*_tap_up` + `on_*_tap`, but ONLY once the arena has accepted
+    /// this recognizer (`accepted == Some(true)`) and a pending up has been
+    /// recorded. Consuming `pending_up` makes it fire exactly once per sequence,
+    /// however many times it is called: from `handle_tap_up` when the arena
+    /// already accepted at close time (single-member private arena), and from
+    /// `accept_gesture` when the win arrives later — via the self-driven sweep,
+    /// or the binding's deferred sweep / release in a shared arena.
+    fn fire_won_tap(&self) {
+        if !matches!(*self.accepted.lock(), Some(true)) {
+            return;
+        }
+        let Some(pending_up) = self.pending_up.lock().take() else {
+            return;
+        };
+        // Fire per-button tap-down first (Flutter ordering), then up + tap.
+        self.fire_pending_tap_down();
+        let (up_cb, tap_cb) = {
+            let cbs = self.callbacks.lock();
+            (
+                cbs.up(pending_up.button).cloned(),
+                cbs.tap(pending_up.button).cloned(),
+            )
+        };
+        if let Some(cb) = up_cb {
+            cb(pending_up.details.clone());
+        }
+        if let Some(cb) = tap_cb {
+            cb(pending_up.details);
+        }
+    }
+
     /// Handle tap up event.
     ///
     /// Review-driven restructure: records pending_up, initiates
@@ -501,35 +535,18 @@ impl TapGestureRecognizer {
             local_position: position,
             kind,
         };
-        // Record pending Up — fired only after arena confirms accept.
+        // Record pending Up — delivered only once the arena confirms accept.
         *self.pending_up.lock() = Some(PendingDown { details, button });
 
-        // Trigger arena resolution. This synchronously dispatches to
-        // either `accept_gesture` or `reject_gesture` below, which sets
-        // `self.accepted`.
+        // Fire now if the arena already accepted us at close time (single-member
+        // private arena). Otherwise `stop_tracking` drives the self-driven sweep
+        // whose `accept_gesture` fires the multi-member case; in a binding-driven
+        // arena `stop_tracking` does not sweep, so nothing fires here and the win
+        // arrives later via the binding's sweep / release. `fire_won_tap` is a
+        // no-op until `accepted == Some(true)`, so the close-before-up ordering
+        // does not double-fire.
+        self.fire_won_tap();
         self.state.stop_tracking();
-
-        // After arena resolution: fire callbacks if we won.
-        if self.accepted.lock().unwrap_or(false) {
-            // Fire per-button tap-down first (Flutter ordering), then up + tap.
-            self.fire_pending_tap_down();
-            let Some(pending_up) = self.pending_up.lock().take() else {
-                return;
-            };
-            let (up_cb, tap_cb) = {
-                let cbs = self.callbacks.lock();
-                (
-                    cbs.up(pending_up.button).cloned(),
-                    cbs.tap(pending_up.button).cloned(),
-                )
-            };
-            if let Some(cb) = up_cb {
-                cb(pending_up.details.clone());
-            }
-            if let Some(cb) = tap_cb {
-                cb(pending_up.details);
-            }
-        }
     }
 
     /// Handle tap cancel event.
@@ -751,6 +768,7 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
             crate::arena::GestureDisposition::Accepted => {
                 // Arena accepted us — same path as accept_gesture below.
                 *self.accepted.lock() = Some(true);
+                self.fire_won_tap();
             }
             crate::arena::GestureDisposition::Rejected => {
                 self.state.reject();
@@ -777,13 +795,15 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognize
 
 impl GestureArenaMember for TapGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
-        // Do NOT invoke user callbacks here. The
-        // arena holds its internal lock while dispatching accept_gesture
-        // → calling user code from this site is a lock-during-callback
-        // hazard (user callback may re-enter arena, panic, or block).
-        // Instead just record acceptance — the handle_tap_up path (or
-        // dispose path) reads this flag after arena resolve returns.
+        // The arena dispatches `accept_gesture` from `dispatch_pending` AFTER
+        // releasing both the per-entry mutex and the DashMap shard guard, so
+        // firing user callbacks here holds no arena lock (the same guarantee
+        // `reject_gesture` already relies on). Record acceptance, then deliver
+        // the won tap: `fire_won_tap` no-ops unless a pending up was recorded,
+        // so the close-time accept (single-member private arena, no up yet) is
+        // silent, while the deferred/shared win fires the tap exactly once.
         *self.accepted.lock() = Some(true);
+        self.fire_won_tap();
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {

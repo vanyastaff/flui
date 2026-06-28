@@ -484,11 +484,16 @@ trigger8_raw=$(rg --line-number --column \
 trigger8_hits=""
 while IFS= read -r match_line; do
   [[ -z "${match_line}" ]] && continue
-  match_file=$(echo "${match_line}" | awk -F':' '{print $1}' | tr '\\' '/')
-  match_lineno=$(echo "${match_line}" | awk -F':' '{print $2}')
+  # Bash parameter expansion — zero subprocesses (replaces echo|awk|tr, echo|awk).
+  match_file="${match_line%%:*}"
+  match_file="${match_file//\\//}"
+  _rest="${match_line#*:}"
+  match_lineno="${_rest%%:*}"
   [[ -z "${match_file}" || -z "${match_lineno}" ]] && continue
-  if head -n "${match_lineno}" "${match_file}" 2>/dev/null \
-      | grep -qE '^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$'; then
+  # Single awk call (replaces head|grep pipeline).
+  if awk -v maxn="${match_lineno}" \
+      'NR>maxn{exit} /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/{found=1; exit} END{exit !found}' \
+      "${match_file}" 2>/dev/null; then
     continue
   fi
   trigger8_hits="${trigger8_hits}${match_line}
@@ -549,25 +554,36 @@ trigger10_defs_raw=$(rg --line-number --no-heading \
 # on the same line OR on the preceding line OR on either of the next
 # 2 lines (rustfmt moves trailing same-line markers on block-opening
 # decls like `pub enum Foo {` into the block body as the first
-# non-blank line). For each candidate line, fetch the surrounding
-# ±2-line window and check if any line carries the marker.
-trigger10_defs=""
-while IFS= read -r raw_line; do
-  [[ -z "${raw_line}" ]] && continue
-  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
-  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
-  # Normalize backslash → forward slash for sed path arg.
-  file_norm=$(echo "${file_part}" | tr '\\' '/')
-  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
-  start=$(( line_part - 1 ))
-  [[ "${start}" -lt 1 ]] && start=1
-  end=$(( line_part + 2 ))
-  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
-  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-SP3:'; then
-    trigger10_defs="${trigger10_defs}${raw_line}
-"
-  fi
-done <<< "${trigger10_defs_raw}"
+# non-blank line).
+# Optimised: one rg call collects all SP3 markers; one awk pass filters
+# defs via a single pipe (no process substitution — <() is ~7s each on
+# Windows Git Bash; {} | awk costs one fork total instead of two
+# <() forks). Window −1..+2 expanded at marker-load time → O(1) lookup.
+trigger10_sp3_markers=$(rg --line-number --no-heading 'PORT-CHECK-OK-SP3:' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!examples/**' \
+    crates/ 2>/dev/null || true)
+trigger10_defs=$(
+  { printf '%s\n' "${trigger10_sp3_markers}"; printf '%s\n' '---T10SPLIT---'; printf '%s\n' "${trigger10_defs_raw}"; } | \
+  awk -F':' '
+  /^---T10SPLIT---$/ { past_split = 1; next }
+  !past_split {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    # Marker at M sanctions def at lines [M-2, M+1] (window def-1..def+2).
+    for (d = -2; d <= 1; d++) covered[fp SUBSEP (ln + d)] = 1
+    next
+  }
+  {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    if (!((fp SUBSEP ln) in covered)) print
+  }'
+)
 
 # Build a tab-separated index: crate \t kind \t name \t full-line.
 # **PR #151 Copilot review #3295220014:** Windows rg output uses `\`
@@ -643,47 +659,55 @@ fi
 # -----------------------------------------------------------------------------
 trigger11_lib_files=$(rg --files --type rust --glob '**/lib.rs' --glob '!**/tests/**' --glob '!examples/**' crates/ 2>/dev/null || true)
 trigger11_violations=""
+# cfg-feature pattern used in backward scan below (stored once; bash =~ avoids echo|grep).
+_t11_cfg_feat_pat='#\[cfg\([^)]*feature[[:space:]]*=[[:space:]]*"(unstable-|testing)"'
 for libfile in ${trigger11_lib_files}; do
   # Extract crate name from path: crates/flui-X/src/lib.rs → flui-X → flui_X
-  # Normalize backslash → forward slash for Windows portability so awk
-  # field splitting on `/` always returns `flui-X` in field 2.
-  libfile_norm=$(echo "${libfile}" | tr '\\' '/')
-  crate_dir=$(echo "${libfile_norm}" | awk -F'/' '{print $2}')
-  crate_underscore=$(echo "${crate_dir}" | tr '-' '_')
+  # Bash parameter expansion — zero subprocesses (replaces echo|tr, echo|awk, echo|tr).
+  libfile_norm="${libfile//\\//}"
+  _t11_tmp="${libfile_norm#*/}"        # strip leading component ("crates/")
+  crate_dir="${_t11_tmp%%/*}"          # keep only the crate directory name
+  crate_underscore="${crate_dir//-/_}"
+
+  # Preload lib.rs into an array for zero-fork backward scan.
+  mapfile -t _t11_lines < "${libfile}" 2>/dev/null || true
 
   # Find every `pub mod NAME;` line in lib.rs (declaration form, not block form).
   mod_lines=$(grep -nE '^[[:space:]]*pub[[:space:]]+mod[[:space:]]+[a-z_][a-z0-9_]*[[:space:]]*;' "${libfile}" 2>/dev/null || true)
   while IFS= read -r mod_line; do
     [[ -z "${mod_line}" ]] && continue
-    lineno=$(echo "${mod_line}" | awk -F':' '{print $1}')
-    content=$(echo "${mod_line}" | cut -d':' -f2-)
+    # Bash parameter expansion replaces echo|awk and echo|cut (zero forks).
+    lineno="${mod_line%%:*}"
+    content="${mod_line#*:}"
 
-    # Skip if marker present on the same line.
-    if echo "${content}" | grep -q 'PORT-CHECK-OK-SP4:'; then
+    # Skip if marker present on the same line (zero-fork string test).
+    if [[ "${content}" == *'PORT-CHECK-OK-SP4:'* ]]; then
       continue
     fi
 
-    # Extract mod name.
-    modname=$(echo "${content}" | sed -E 's/^[[:space:]]*pub[[:space:]]+mod[[:space:]]+([a-z_][a-z0-9_]*).*/\1/')
-    [[ -z "${modname}" ]] && continue
+    # Extract mod name via bash regex (zero forks; replaces echo|sed).
+    if [[ "${content}" =~ ^[[:space:]]*pub[[:space:]]+mod[[:space:]]+([a-z_][a-z0-9_]*) ]]; then
+      modname="${BASH_REMATCH[1]}"
+    else
+      continue
+    fi
 
     # Skip if previous non-blank line is `#[cfg(feature = "unstable-...")]`.
-    # **PR #151 Copilot review #3295220020 + Codex #3295220690:** the
-    # comment promises "previous non-blank line" but pre-fix only
-    # checked `lineno - 1`, so a blank separator between the cfg
-    # attribute and `pub mod` would false-positive. Scan backward
-    # until a non-blank line is found.
-    prev_lineno=$((lineno - 1))
+    # **PR #151 Copilot review #3295220020 + Codex #3295220690:** scan backward
+    # until a non-blank line is found (a blank separator between the attribute
+    # and `pub mod` must not cause a false-positive).
+    # Preloaded array eliminates per-line sed forks.
+    prev_lineno=$(( lineno - 1 ))
     prev_content=""
     while [[ "${prev_lineno}" -gt 0 ]]; do
-      prev_content=$(sed -n "${prev_lineno}p" "${libfile}")
-      # Strip whitespace; if non-empty, this is our target line.
+      prev_content="${_t11_lines[$((prev_lineno - 1))]}"
       if [[ -n "${prev_content// }" ]]; then
         break
       fi
-      prev_lineno=$((prev_lineno - 1))
+      prev_lineno=$(( prev_lineno - 1 ))
     done
-    if echo "${prev_content}" | grep -qE '#\[cfg\([^)]*feature[[:space:]]*=[[:space:]]*"(unstable-|testing)"'; then
+    # Bash =~ replaces echo|grep (zero forks).
+    if [[ "${prev_content}" =~ $_t11_cfg_feat_pat ]]; then
       continue
     fi
 
@@ -754,22 +778,32 @@ trigger12_raw=$(rg --line-number --no-heading \
 # Same ±2 line marker-scan window as trigger #10 — rustfmt may move
 # trailing same-line markers on `pub fn ... -> ... {` block-openings
 # into the function body.
-trigger12_hits=""
-while IFS= read -r raw_line; do
-  [[ -z "${raw_line}" ]] && continue
-  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
-  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
-  file_norm=$(echo "${file_part}" | tr '\\' '/')
-  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
-  start=$(( line_part - 1 ))
-  [[ "${start}" -lt 1 ]] && start=1
-  end=$(( line_part + 2 ))
-  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
-  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-SP6:'; then
-    trigger12_hits="${trigger12_hits}${raw_line}
-"
-  fi
-done <<< "${trigger12_raw}"
+# Optimised: one rg call collects all SP6 markers; one awk pass via
+# single pipe (no process substitution; window −1..+2 at load time).
+trigger12_sp6_markers=$(rg --line-number --no-heading 'PORT-CHECK-OK-SP6:' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!examples/**' \
+    crates/ 2>/dev/null || true)
+trigger12_hits=$(
+  { printf '%s\n' "${trigger12_sp6_markers}"; printf '%s\n' '---T12SPLIT---'; printf '%s\n' "${trigger12_raw}"; } | \
+  awk -F':' '
+  /^---T12SPLIT---$/ { past_split = 1; next }
+  !past_split {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    for (d = -2; d <= 1; d++) covered[fp SUBSEP (ln + d)] = 1
+    next
+  }
+  {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    if (!((fp SUBSEP ln) in covered)) print
+  }'
+)
 
 if [[ -n "${trigger12_hits}" ]]; then
   echo 'VIOLATION 12: SP-6 lock placement in public API'
@@ -864,22 +898,32 @@ trigger14_raw=$(rg --line-number --no-heading \
   | grep -Ev ':\s*(//!|///|//)' \
   || true)
 
-trigger14_hits=""
-while IFS= read -r raw_line; do
-  [[ -z "${raw_line}" ]] && continue
-  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
-  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
-  file_norm=$(echo "${file_part}" | tr '\\' '/')
-  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
-  start=$(( line_part - 2 ))
-  [[ "${start}" -lt 1 ]] && start=1
-  end=$(( line_part + 2 ))
-  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
-  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-UNIT:'; then
-    trigger14_hits="${trigger14_hits}${raw_line}
-"
-  fi
-done <<< "${trigger14_raw}"
+# Optimised: one rg call collects all UNIT markers; one awk pass via
+# single pipe (trigger 14 window −2..+2, no process substitution).
+trigger14_unit_markers=$(rg --line-number --no-heading 'PORT-CHECK-OK-UNIT:' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    crates/flui-geometry/src/ 2>/dev/null || true)
+trigger14_hits=$(
+  { printf '%s\n' "${trigger14_unit_markers}"; printf '%s\n' '---T14SPLIT---'; printf '%s\n' "${trigger14_raw}"; } | \
+  awk -F':' '
+  /^---T14SPLIT---$/ { past_split = 1; next }
+  !past_split {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    # Trigger 14 window is −2..+2: marker at M sanctions def at M−2..M+2.
+    for (d = -2; d <= 2; d++) covered[fp SUBSEP (ln + d)] = 1
+    next
+  }
+  {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    if (!((fp SUBSEP ln) in covered)) print
+  }'
+)
 
 if [[ -n "${trigger14_hits// /}" && -n "$(echo "${trigger14_hits}" | tr -d '[:space:]')" ]]; then
   echo 'VIOLATION 14: U12 unit-barrier escape hatch in flui-geometry (From<scalar>/cross-type f32 op/Float* alias)'
@@ -996,7 +1040,7 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(

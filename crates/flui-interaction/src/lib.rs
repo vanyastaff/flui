@@ -189,12 +189,17 @@ pub mod settings;
 // ============================================================================
 pub use arena::{
     DEFAULT_DISAMBIGUATION_TIMEOUT, GestureArena, GestureArenaEntry, GestureArenaMember,
-    GestureArenaTeam, GestureDisposition, PointerSignalResolver, SignalPriority, TeamEntry,
+    GestureArenaTeam, GestureDisposition, PointerSignalResolver, SignalPriority, SweepModel,
+    TeamEntry, run_pointer_lifecycle,
 };
 // ============================================================================
 // Re-exports: Other
 // ============================================================================
 pub use binding::GestureBinding;
+// The monotonic clock primitive now lives in `flui-foundation`; re-exported here
+// because the gesture arena's public API takes a `MonotonicClock` (and tests /
+// the headless binding construct `ManualClock`/`SystemClock` against the arena).
+pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
 // Re-exports: Events (W3C-compliant types)
 // ============================================================================
@@ -226,13 +231,15 @@ pub use processing::{
     RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityTracker,
 };
 pub use recognizers::{
-    DoubleTapGestureRecognizer, DragGestureRecognizer, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
-    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
-    MultiDragUpdateDetails, MultiTapGestureRecognizer, ScaleGestureRecognizer,
-    TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
-    TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
-    TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
+    DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback, DragDownDetails,
+    DragEndCallback, DragEndDetails, DragGestureRecognizer, DragStartCallback, DragStartDetails,
+    DragUpdateCallback, DragUpdateDetails, EagerGestureRecognizer, ForcePressGestureRecognizer,
+    GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails,
+    MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails,
+    MultiTapGestureRecognizer, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    TapDragDownCallback, TapDragDownDetails, TapDragEndCallback, TapDragEndDetails,
+    TapDragStartCallback, TapDragStartDetails, TapDragUpCallback, TapDragUpDetails,
+    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
 };
 // Re-exports for drag axis sub-recognisers (Flutter parity for
 // `VerticalDragGestureRecognizer` / `HorizontalDragGestureRecognizer` /

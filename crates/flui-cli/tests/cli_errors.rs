@@ -2,8 +2,8 @@
 //!
 //! Tests that invalid inputs produce appropriate error messages and non-zero exit codes.
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 

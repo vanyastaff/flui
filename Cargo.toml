@@ -22,6 +22,8 @@ members = [
     "crates/flui-rendering", # Render tree / engine (ACTIVE)
     "crates/flui-objects",   # Concrete RenderBox/RenderSliver catalog (ACTIVE)
     "crates/flui-view",      # View/Element tree (ACTIVE)
+    "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
+    "crates/flui-binding",   # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app", # Application framework (ACTIVE - Migration)
@@ -46,10 +48,17 @@ members = [
 
     # === Animation Layer ===
     "crates/flui-animation", # Animation system (ACTIVE)
+
+    # === DX tooling ===
+    "crates/flui-devtools", # Profiler / inspector / hot-reload protocol
+    "crates/flui-build",    # Build orchestration (android / cross)
+    "crates/flui-cli",      # `flui` CLI (run / build / devtools / templates)
+    # NOTE: flui-reactivity is excluded — its manifest inherits `any_spawner` from
+    # workspace.dependencies, which is not declared at the root (the reactive
+    # runtime is not wired into the workspace). The crate is standalone-by-design
+    # (0 consumers — "signals locked out by C1"); re-include it only when signals
+    # are integrated into the view layer and its deps are added to the workspace.
     # "crates/flui-reactivity",
-    # "crates/flui-devtools",
-    # "crates/flui-cli",
-    # "crates/flui-build",
 ]
 
 # Default members exclude Android-only crates (ndk-sys won't compile on host)
@@ -70,12 +79,17 @@ default-members = [
     "crates/flui-rendering",
     "crates/flui-objects",
     "crates/flui-view",
+    "crates/flui-widgets",
+    "crates/flui-binding",
     "crates/flui-app",
     "crates/flui-animation",
+    "crates/flui-devtools",
+    "crates/flui-build",
+    "crates/flui-cli",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
@@ -101,11 +115,20 @@ serde_json = "1.0"
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
 
+# DX TOOLING - flui-cli / flui-build / flui-devtools
+indicatif = "0.17" # progress bars (build/cli)
+tempfile = "3"     # scratch dirs/files (build/cli tests)
+which = "7"        # locate toolchain executables (build/cli)
+
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros" }
 
 # OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
 flui-objects = { path = "crates/flui-objects" }
+
+# HEADLESS FRAME DRIVER — deterministic `pump_frame(dt)` over the gesture arena +
+# virtual clock; sits above flui-widgets, below flui-app.
+flui-binding = { path = "crates/flui-binding" }
 
 # ERROR HANDLING & LOGGING - Used everywhere
 thiserror = "2.0"
@@ -239,6 +262,9 @@ flui-objects = { path = "crates/flui-objects" }
 
 # === View Layer ===
 flui-view = { path = "crates/flui-view" }
+
+# === Widget Catalog (widgets_gallery example) ===
+flui-widgets = { path = "crates/flui-widgets" }
 
 # === Reactive Layer (animated_box_app example) ===
 flui-scheduler = { path = "crates/flui-scheduler" }

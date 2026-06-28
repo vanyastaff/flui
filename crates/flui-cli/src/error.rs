@@ -346,7 +346,8 @@ impl CliError {
 ///         .context("Failed to read configuration file")
 /// }
 /// ```
-pub trait ResultExt<T> { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub trait ResultExt<T> {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Add context to an error result.
     ///
     /// Converts any error into a `CliError::WithContext` with the given message.
@@ -454,6 +455,6 @@ mod tests {
     fn command_failed_error() {
         let err = CliError::command_failed("cargo build", Some(1));
         assert!(err.to_string().contains("cargo build"));
-        assert!(err.to_string().contains("1"));
+        assert!(err.to_string().contains('1'));
     }
 }

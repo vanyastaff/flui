@@ -3,8 +3,8 @@
 //! Tests project creation with TempDir, verifying directory structure,
 //! template selection, and `--local` flag behavior.
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 

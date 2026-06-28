@@ -330,6 +330,15 @@ pub struct ElementTree {
     generations: Vec<NonZeroU32>,
     /// Root element ID.
     root: Option<ElementId>,
+    /// Set whenever a render-bearing element is inserted, so the post-build
+    /// pass ([`reorder_render_children_after_build`]) knows a render child may
+    /// have attached out of element-slot order (a component ancestor — a
+    /// `StatelessView`/`ParentDataView` — builds its render descendant in a
+    /// *later* `build_scope` iteration than a render sibling that already
+    /// appended itself). Cleared by that pass. No insert ⇒ no reorder work.
+    ///
+    /// [`reorder_render_children_after_build`]: ElementTree::reorder_render_children_after_build
+    needs_render_reorder: bool,
 }
 
 impl Default for ElementTree {
@@ -345,6 +354,7 @@ impl ElementTree {
             nodes: Slab::new(),
             generations: Vec::new(),
             root: None,
+            needs_render_reorder: false,
         }
     }
 
@@ -354,6 +364,7 @@ impl ElementTree {
             nodes: Slab::with_capacity(capacity),
             generations: Vec::with_capacity(capacity),
             root: None,
+            needs_render_reorder: false,
         }
     }
 
@@ -655,7 +666,182 @@ impl ElementTree {
             view.key().map(ViewKey::key_hash),
         ));
 
+        // A freshly-attached render child reads the parent-data its nearest
+        // ancestor `ParentDataView` (`Expanded`, `Positioned`) contributes — the
+        // E3 analogue of Flutter's `RenderObjectElement.attachRenderObject`
+        // calling `_findAncestorParentDataElement`.
+        self.apply_ancestor_parent_data(id);
+
+        // A render-bearing child appended itself to its render parent in
+        // *attach* order, which only matches element-slot order when no
+        // component ancestor deferred its build. Flag a post-build reorder so
+        // the render children settle into slot order regardless.
+        if self
+            .get(id)
+            .is_some_and(|node| node.element().render_id().is_some())
+        {
+            self.needs_render_reorder = true;
+        }
+
         id
+    }
+
+    /// Write the nearest ancestor `ParentDataView`'s configuration onto
+    /// `child_id`'s render node, and mark the owning render parent dirty.
+    ///
+    /// No-op unless `child_id` owns a render node. Walks strictly upward from
+    /// the child, taking the *nearest* `parent_data_config()` and stopping the
+    /// search at the first ancestor render object (the render parent that reads
+    /// the data during layout) — Flutter's `_findAncestorParentDataElement`
+    /// fused with `_findAncestorRenderObjectElement`. The nearest config wins
+    /// (`set_parent_data` replaces), matching Flutter taking the closest
+    /// `ParentDataWidget`.
+    ///
+    /// Average case O(1) — for a plain render child the very first ancestor is
+    /// the render parent, so the walk stops in one hop and never touches the
+    /// pipeline owner. Worst case O(proxy-nesting depth) between the render
+    /// child and its render parent.
+    ///
+    /// The tree borrow is fully dropped before the pipeline owner is locked:
+    /// the collected config and owner handle are owned values, and the write
+    /// targets the render tree, never `self`.
+    fn apply_ancestor_parent_data(&mut self, child_id: ElementId) {
+        let Some(child) = self.get(child_id) else {
+            return;
+        };
+        let Some(child_render_id) = child.element().render_id() else {
+            return;
+        };
+        let pipeline_any = child.element().pipeline_owner_any();
+        let mut cursor = child.parent();
+
+        let mut nearest_config: Option<Box<dyn flui_rendering::parent_data::ParentData>> = None;
+        let mut parent_render_id: Option<flui_foundation::RenderId> = None;
+        while let Some(ancestor_id) = cursor {
+            let Some(node) = self.get(ancestor_id) else {
+                break;
+            };
+            if let Some(render_id) = node.element().render_id() {
+                parent_render_id = Some(render_id);
+                break;
+            }
+            if nearest_config.is_none() {
+                nearest_config = node.element().parent_data_config();
+            }
+            cursor = node.parent();
+        }
+
+        // Nothing to apply unless a ParentDataView sits between this render
+        // child and its render parent.
+        let Some(config) = nearest_config else {
+            return;
+        };
+        let Some(pipeline_any) = pipeline_any else {
+            return;
+        };
+        let Ok(pipeline_owner) = pipeline_any.downcast::<RwLock<PipelineOwner>>() else {
+            return;
+        };
+
+        // Tree borrows are dropped; the lock guards only the render tree.
+        let mut owner = pipeline_owner.write();
+        if let Some(node) = owner.render_tree_mut().get_mut(child_render_id) {
+            node.set_parent_data(config);
+        }
+        if let Some(parent_render_id) = parent_render_id {
+            owner.mark_needs_layout(parent_render_id);
+        }
+    }
+
+    /// Reorder every render object's children to match element-slot order.
+    ///
+    /// A render child appends itself to its render parent during mount, so when
+    /// a component ancestor (a `StatelessView` / `ParentDataView`) builds its
+    /// render descendant in a *later* `build_scope` iteration than a render
+    /// sibling that already attached, the parent's children list ends up in
+    /// attach order, not slot order. This single post-build pass walks the
+    /// element tree depth-first in slot order, derives each render parent's
+    /// correct child sequence, and rewrites only those that drifted — the
+    /// arena analogue of Flutter slotting each child via `insertRenderObjectChild`.
+    ///
+    /// No-op unless an [`insert`](Self::insert) set `needs_render_reorder`.
+    /// Average/worst case O(element-tree size) for the DFS, plus O(children) per
+    /// drifted render parent. The element walk completes before the pipeline
+    /// owner is locked; the lock guards only the render tree.
+    pub(crate) fn reorder_render_children_after_build(&mut self) {
+        if !self.needs_render_reorder {
+            return;
+        }
+        self.needs_render_reorder = false;
+
+        // Depth-first in slot order, tracking each node's nearest render
+        // ancestor. A render node is appended to that ancestor's target order,
+        // then becomes the render ancestor for its own subtree.
+        let mut target: HashMap<flui_foundation::RenderId, Vec<flui_foundation::RenderId>> =
+            HashMap::new();
+        let mut pipeline_any: Option<Arc<dyn std::any::Any + Send + Sync>> = None;
+
+        let roots: Vec<ElementId> = self
+            .iter_nodes()
+            .filter(|(_, node)| node.parent.is_none())
+            .map(|(id, _)| id)
+            .collect();
+
+        // Children are pushed reversed so siblings pop in ascending slot order.
+        let mut stack: Vec<(ElementId, Option<flui_foundation::RenderId>)> =
+            roots.into_iter().rev().map(|id| (id, None)).collect();
+        while let Some((element_id, render_ancestor)) = stack.pop() {
+            let Some(node) = self.get(element_id) else {
+                continue;
+            };
+            let child_ancestor = if let Some(render_id) = node.element().render_id() {
+                if let Some(parent_render) = render_ancestor {
+                    target.entry(parent_render).or_default().push(render_id);
+                }
+                if pipeline_any.is_none() {
+                    pipeline_any = node.element().pipeline_owner_any();
+                }
+                Some(render_id)
+            } else {
+                render_ancestor
+            };
+            for &child in node.child_ids().iter().rev() {
+                stack.push((child, child_ancestor));
+            }
+        }
+
+        if target.is_empty() {
+            return;
+        }
+        let Some(pipeline_any) = pipeline_any else {
+            return;
+        };
+        let Ok(pipeline_owner) = pipeline_any.downcast::<RwLock<PipelineOwner>>() else {
+            return;
+        };
+
+        // Tree borrows are dropped; the lock guards only the render tree.
+        let mut owner = pipeline_owner.write();
+        let render_tree = owner.render_tree_mut();
+        for (parent_render, order) in target {
+            let Some(parent_node) = render_tree.get_mut(parent_render) else {
+                continue;
+            };
+            // Already in slot order — the common case, so no writes.
+            if parent_node.children() == order.as_slice() {
+                continue;
+            }
+            // Insertion-sort into `order`: at step i, positions `0..i` already
+            // match, so `order[i]` sits at some index `>= i` and resolves. Only
+            // the drifted entries move.
+            for (target_index, &child) in order.iter().enumerate() {
+                if parent_node.children().get(target_index) == Some(&child) {
+                    continue;
+                }
+                parent_node.remove_child(child);
+                parent_node.insert_child(target_index, child);
+            }
+        }
     }
 
     /// Recompute the inherited scope ([`ElementNode::inherited`]) for the
@@ -895,6 +1081,11 @@ impl ElementTree {
             node.element_mut().update(view, owner);
             node.set_key(view.key().map(ViewKey::clone_key));
         }
+        // A reconfigured `ParentDataView` ancestor reaches this render child via
+        // its own re-`update` (the reconciler walks children after their
+        // parent), so re-deriving parent data here keeps it current — e.g.
+        // `Expanded`'s `flex` changing between frames.
+        self.apply_ancestor_parent_data(id);
     }
 
     /// Mark an element as needing rebuild.

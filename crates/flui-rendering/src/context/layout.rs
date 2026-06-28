@@ -372,6 +372,54 @@ where
             baseline,
         )
     }
+
+    /// Queries a child's intrinsic dimension from within `perform_layout`.
+    ///
+    /// On the production pipeline path the call is routed through
+    /// `box_intrinsic_query_borrowed` (the same pre-acquired subtree pool used
+    /// by the Sliver→Box intrinsic path).  On Direct-storage / test contexts
+    /// where no callback is wired, returns `0.0` — the same conservative
+    /// fallback as `layout_child` returning `Size::ZERO`.
+    ///
+    /// Used by `RenderIntrinsicWidth` / `RenderIntrinsicHeight` to measure the
+    /// child's preferred extent before committing to a layout size.
+    pub fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::child_intrinsic(
+            &mut self.inner,
+            index,
+            dimension,
+            extent,
+        )
+    }
+
+    /// Convenience: maximum intrinsic width of child `index` for the given
+    /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
+    }
+
+    /// Convenience: minimum intrinsic width of child `index` for the given
+    /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
+    }
+
+    /// Convenience: maximum intrinsic height of child `index` for the given
+    /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
+    }
+
+    /// Convenience: minimum intrinsic height of child `index` for the given
+    /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
+    }
 }
 
 // ============================================================================

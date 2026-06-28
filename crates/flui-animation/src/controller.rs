@@ -145,6 +145,15 @@ struct AnimationControllerInner {
     /// in-progress rate without a fresh tick.
     last_raw_elapsed_secs: f64,
 
+    /// Monotonically increasing counter, bumped once each time a fresh run is
+    /// established (every [`restart_ticker`](AnimationController::restart_ticker),
+    /// where `run_epoch_secs` is re-zeroed). An external frame driver reads
+    /// [`AnimationController::run_generation`] to detect "a new run's `t = 0`
+    /// was just set" and re-anchor its own per-run epoch — so a controller run
+    /// twice (forward → reverse) is ticked from the second run's start instead
+    /// of a stale anchor. Never reset; stable across `tick_at`.
+    run_generation: u64,
+
     /// Per-run duration override (used by `animate_to`/`animate_back`); does NOT
     /// clobber the controller's base `duration`.
     run_duration: Option<Duration>,
@@ -255,6 +264,7 @@ impl AnimationController {
             target_value: upper_bound,
             run_epoch_secs: 0.0,
             last_raw_elapsed_secs: 0.0,
+            run_generation: 0,
             run_duration: None,
             disposed: false,
             next_listener_id: 1,
@@ -278,6 +288,20 @@ impl AnimationController {
     pub fn set_reverse_duration(&self, duration: Duration) {
         let mut inner = self.inner.lock();
         inner.reverse_duration = Some(duration);
+    }
+
+    /// Set the base forward duration.
+    ///
+    /// Mirrors Flutter's `controller.duration = newDuration`, which an
+    /// [`ImplicitlyAnimatedWidget`](https://api.flutter.dev/flutter/widgets/ImplicitlyAnimatedWidget-class.html)
+    /// assigns on every `didUpdateWidget` so a duration change takes effect on
+    /// the *next* run. It does not retime an in-flight run (the active run keeps
+    /// the duration it started with, since `tick_at` scales against the
+    /// already-captured `run_duration`/`duration`); the new value is read when
+    /// the next `forward`/`reverse` re-establishes the run epoch.
+    pub fn set_duration(&self, duration: Duration) {
+        let mut inner = self.inner.lock();
+        inner.duration = duration;
     }
 
     /// Start animation forward from current value to upper bound.
@@ -380,10 +404,16 @@ impl AnimationController {
 
     /// Stop the animation at its current value.
     ///
-    /// The status is updated based on the current value:
-    /// - [`AnimationStatus::Completed`] at the upper bound
-    /// - [`AnimationStatus::Dismissed`] at the lower bound
-    /// - the previous direction status if stopped in the middle
+    /// The status transitions to a **non-running** settled status:
+    /// - [`AnimationStatus::Completed`] at (or above) the upper bound, or when
+    ///   the active run direction was [`Forward`](AnimationDirection::Forward)
+    /// - [`AnimationStatus::Dismissed`] at (or below) the lower bound, or when
+    ///   the active run direction was [`Reverse`](AnimationDirection::Reverse)
+    ///
+    /// Using a non-running status is critical for frame drivers that poll
+    /// `status().is_running()` (e.g. `Vsync::tick_all`) — a running status
+    /// after `stop()` would allow the driver to continue ticking a stale or
+    /// cleared simulation and produce non-finite pixel values.
     ///
     /// # Errors
     ///
@@ -397,7 +427,7 @@ impl AnimationController {
             ticker.stop();
         }
 
-        let status = inner.settled_status_keep_direction();
+        let status = inner.settled_status_directed();
         inner.status = status;
         Self::emit_status_after_unlock(inner, status);
         Ok(())
@@ -766,6 +796,28 @@ impl AnimationController {
         range / duration.as_secs_f32()
     }
 
+    /// A monotonically increasing run-generation counter, bumped once each time
+    /// a fresh run begins — every `forward`/`reverse`/`animate_to`/`animate_back`/
+    /// `repeat`/`fling`/`animate_with` (i.e. every internal `restart_ticker`
+    /// that re-zeros the run epoch).
+    ///
+    /// An external, deterministic frame driver (e.g. `flui-binding`'s
+    /// `HeadlessBinding`) reads this to detect that a new run's `t = 0` was just
+    /// established and re-anchor the virtual instant it feeds to
+    /// [`tick_at`](Self::tick_at). Without it, a controller run a *second* time
+    /// (forward to completion, then reverse) would be ticked from the first
+    /// run's stale anchor and snap straight to its target on the first frame.
+    ///
+    /// The counter is **stable across [`tick_at`](Self::tick_at)** (ticking
+    /// advances a run, it does not start one), and the settle-without-restart
+    /// paths (`stop`/`reset`/`set_value`/zero-distance `forward`) leave it
+    /// untouched. It wraps on `u64` overflow — only its *change* is observed, so
+    /// the wrap is harmless.
+    #[must_use]
+    pub fn run_generation(&self) -> u64 {
+        self.inner.lock().run_generation
+    }
+
     /// Advance the animation using the ticker's most recent elapsed time.
     ///
     /// Normally driven by the ticker callback; exposed for manual stepping.
@@ -1011,6 +1063,11 @@ impl AnimationController {
     fn restart_ticker(&self, inner: &mut AnimationControllerInner) {
         inner.run_epoch_secs = 0.0;
         inner.last_raw_elapsed_secs = 0.0;
+        // A fresh run's `t = 0` is established here — bump the generation so an
+        // external frame driver re-anchors its per-run epoch (see
+        // [`run_generation`](Self::run_generation)). `restart_ticker` is the
+        // single chokepoint every run-start path funnels through.
+        inner.run_generation = inner.run_generation.wrapping_add(1);
         if let Some(ticker) = &mut inner.ticker {
             // Restart-safe: `Ticker::start` debug-asserts on the Active state, and
             // controller methods can be called repeatedly, so stop a live run first.
@@ -1109,11 +1166,31 @@ impl AnimationControllerInner {
         (dilated - self.run_epoch_secs).max(0.0)
     }
 
+    /// Whether the current value is at (or indistinguishable from) the upper bound.
+    ///
+    /// Uses exact equality for infinite bounds to avoid the `INFINITY - INFINITY = NaN`
+    /// pitfall that breaks the epsilon comparison when the fling controller is created
+    /// with `(NEG_INFINITY, INFINITY)` bounds.
+    fn is_at_upper_bound(&self) -> bool {
+        self.value == self.upper_bound
+            || (!self.upper_bound.is_infinite()
+                && (self.value - self.upper_bound).abs() < BOUND_EPSILON)
+    }
+
+    /// Whether the current value is at (or indistinguishable from) the lower bound.
+    ///
+    /// Uses exact equality for infinite bounds — see [`is_at_upper_bound`](Self::is_at_upper_bound).
+    fn is_at_lower_bound(&self) -> bool {
+        self.value == self.lower_bound
+            || (!self.lower_bound.is_infinite()
+                && (self.value - self.lower_bound).abs() < BOUND_EPSILON)
+    }
+
     /// Status at a settled value, mapping non-bound stops by direction.
     fn settled_status_directed(&self) -> AnimationStatus {
-        if (self.value - self.upper_bound).abs() < BOUND_EPSILON {
+        if self.is_at_upper_bound() {
             AnimationStatus::Completed
-        } else if (self.value - self.lower_bound).abs() < BOUND_EPSILON {
+        } else if self.is_at_lower_bound() {
             AnimationStatus::Dismissed
         } else {
             match self.direction {
@@ -1125,9 +1202,9 @@ impl AnimationControllerInner {
 
     /// Status at a settled value, keeping the running status for non-bound stops.
     fn settled_status_keep_direction(&self) -> AnimationStatus {
-        if (self.value - self.upper_bound).abs() < BOUND_EPSILON {
+        if self.is_at_upper_bound() {
             AnimationStatus::Completed
-        } else if (self.value - self.lower_bound).abs() < BOUND_EPSILON {
+        } else if self.is_at_lower_bound() {
             AnimationStatus::Dismissed
         } else {
             self.direction.running_status()
@@ -1448,6 +1525,50 @@ mod tests {
         let c = controller(100);
         c.dispose();
         assert!(matches!(c.forward(), Err(AnimationError::Disposed)));
+    }
+
+    // ---- run-generation: bumps per run-start, stable across ticks ----
+
+    #[test]
+    fn run_generation_bumps_per_run_not_per_tick() {
+        let _serial = serial();
+        let c = controller(100);
+        let g0 = c.run_generation();
+
+        c.forward().unwrap();
+        let g1 = c.run_generation();
+        assert_eq!(g1, g0 + 1, "forward() establishes a new run");
+
+        // Ticking advances the SAME run — the generation must not move, so the
+        // binding does not spuriously re-anchor mid-run.
+        c.tick_at(0.02);
+        c.tick_at(0.05);
+        assert_eq!(c.run_generation(), g1, "tick_at must not start a new run");
+
+        c.reverse().unwrap();
+        assert_eq!(
+            c.run_generation(),
+            g1 + 1,
+            "reverse() establishes a new run"
+        );
+
+        // A settle-only path (reset) does NOT bump — the controller is not
+        // running afterwards, so there is no run to anchor.
+        c.reset().unwrap();
+        assert_eq!(c.run_generation(), g1 + 1, "reset() does not start a run");
+
+        c.animate_to(1.0, Some(Duration::from_millis(50))).unwrap();
+        assert_eq!(c.run_generation(), g1 + 2, "animate_to starts a new run");
+
+        c.reset().unwrap();
+        c.repeat_with(None, None, false, Some(Duration::from_millis(10)), Some(2))
+            .unwrap();
+        assert_eq!(c.run_generation(), g1 + 3, "repeat starts a new run");
+
+        c.fling(1.0).unwrap();
+        assert_eq!(c.run_generation(), g1 + 4, "fling starts a new run");
+
+        c.dispose();
     }
 
     // ---- B1: animate_to actually advances + does not clobber base duration ----

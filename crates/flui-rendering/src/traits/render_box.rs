@@ -410,6 +410,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The pointer-event handler this box contributes to its hit entry.
+    ///
+    /// Default `None`; override (e.g. `RenderListener`) to receive pointer
+    /// events that land on this box. The blanket `RenderObject<BoxProtocol>`
+    /// impl forwards to this — concrete types override here, not on
+    /// `RenderObject`. See [`RenderObject::pointer_event_handler`].
+    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+        None
+    }
+
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
@@ -442,14 +452,11 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 }
 
 /// Text baseline types for baseline alignment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextBaseline {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// The alphabetic baseline.
-    Alphabetic,
-    /// The ideographic baseline.
-    Ideographic,
-}
+///
+/// Re-exported from [`flui_types`] — the single canonical definition for the
+/// workspace. The former parallel enum here was consolidated into `flui-types`
+/// (its lower, owning layer) in 2026-06.
+pub use flui_types::layout::TextBaseline;
 
 // ============================================================================
 // Blanket Implementation of RenderObject<BoxProtocol> for RenderBox
@@ -649,6 +656,10 @@ where
 
     fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         <T as RenderBox>::hit_test_transform(self, size)
+    }
+
+    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+        <T as RenderBox>::pointer_event_handler(self)
     }
 
     fn describe_semantics_configuration(

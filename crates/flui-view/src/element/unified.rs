@@ -258,6 +258,13 @@ where
         self.behavior.render_id()
     }
 
+    // Routes through the behavior. Only `ParentDataBehavior` overrides the
+    // default `None`, surfacing the view's configured parent-data so the
+    // `ElementTree` insert/update seam can write it onto the child render node.
+    fn parent_data_config(&self) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
+        self.behavior.parent_data_config(&self.core)
+    }
+
     // ========================================================================
     // Notification handler protocol (U13 / R10)
     //

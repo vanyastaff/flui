@@ -61,6 +61,7 @@ use smallvec::SmallVec;
 use tracing::instrument;
 
 use crate::ids::PointerId;
+use flui_foundation::{MonotonicClock, SystemClock};
 
 /// Default timeout for gesture disambiguation (100ms).
 ///
@@ -531,6 +532,62 @@ impl ArenaEntryData {
 }
 
 // ============================================================================
+// SweepModel
+// ============================================================================
+
+/// Who owns the close/sweep lifecycle of an arena.
+///
+/// This is the FLUI-native encoding of the Flutter contract that the
+/// *binding* — not a recognizer — drives `close(pointer)` on pointer-down and
+/// `sweep(pointer)` on pointer-up (`gestures/binding.dart` `handleEvent`).
+///
+/// - [`SelfDriven`](Self::SelfDriven) — the historical private-arena default. A
+///   recognizer (or a detector owning a private arena) closes/sweeps the arena
+///   itself, so [`RecognizerBase::stop_tracking`] sweeps on up. Used by every
+///   standalone recognizer path and a `GestureDetector` with no
+///   `GestureArenaScope` above it.
+/// - [`BindingDriven`](Self::BindingDriven) — a binding owns the arena and runs
+///   the close/sweep lifecycle after routing each pointer event to the hit-test
+///   path. Recognizers below it must *not* self-sweep: a tap's own
+///   `stop_tracking → sweep` on the first up would force-resolve a shared entry
+///   to the front member before a double-tap (or a peer detector) could
+///   complete.
+///
+/// The model is immutable per arena, like the clock; it rides on the
+/// `Arc`-backed handle, so every clone observes it.
+///
+/// [`RecognizerBase::stop_tracking`]: crate::recognizers::RecognizerBase::stop_tracking
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SweepModel {
+    /// The recognizer / detector owns the lifecycle (private arena).
+    SelfDriven,
+    /// A binding owns the lifecycle (shared arena).
+    BindingDriven,
+}
+
+/// Run the binding-owned close/sweep lifecycle for a single pointer event.
+///
+/// Mirrors Flutter's `GestureBinding.handleEvent` (`gestures/binding.dart`):
+/// on `PointerDown` the arena is closed; on `PointerUp` it is swept. Every
+/// other event — including `PointerCancel` — is a no-op for the arena
+/// lifecycle (recognizers self-reject on cancel; sweeping on cancel would
+/// force the first member to win an interrupted gesture). Callers run
+/// their own route (hit-test dispatch) step *first*, then call this kernel
+/// — the route-before-sweep order is load-bearing (it lets a double-tap's
+/// first-up `hold` run before the sweep, so the sweep observes the hold
+/// and defers).
+/// Shared by the headless binding and any future production `GestureBinding`.
+pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
+    use crate::events::PointerEvent;
+    let pointer = crate::events::extract_pointer_id(event);
+    match event {
+        PointerEvent::Down(_) => arena.close(pointer),
+        PointerEvent::Up(_) => arena.sweep(pointer),
+        _ => {}
+    }
+}
+
+// ============================================================================
 // GestureArena
 // ============================================================================
 
@@ -586,14 +643,49 @@ impl ArenaEntryData {
 pub struct GestureArena {
     /// Map from pointer ID to arena entry (lock-free concurrent HashMap).
     entries: Arc<DashMap<PointerId, Mutex<ArenaEntryData>>>,
+    /// The time source deadline-driven recognizers read `now()` from. Defaults
+    /// to the OS clock; a headless frame driver injects a `ManualClock` so a
+    /// deadline (e.g. long-press) elapses deterministically without sleeping.
+    clock: Arc<dyn MonotonicClock>,
+    /// Who owns the close/sweep lifecycle. Immutable per arena (like the clock);
+    /// recognizers read it to decide whether `stop_tracking` should self-sweep.
+    sweep_model: SweepModel,
 }
 
 impl GestureArena {
-    /// Create a new gesture arena.
+    /// Create a new gesture arena driven by the real OS clock.
     #[inline]
     pub fn new() -> Self {
+        Self::with_clock(Arc::new(SystemClock))
+    }
+
+    /// Create a gesture arena with an explicit time source.
+    ///
+    /// Production uses [`new`](Self::new) (the OS clock); a headless frame driver
+    /// passes a [`ManualClock`](flui_foundation::ManualClock) it advances per frame
+    /// so deadline-driven recognizers resolve deterministically with no sleep.
+    #[inline]
+    pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
+            clock,
+            sweep_model: SweepModel::SelfDriven,
+        }
+    }
+
+    /// Create a binding-owned gesture arena driven by the given clock.
+    ///
+    /// The returned arena answers [`SweepModel::BindingDriven`], so recognizers
+    /// added to it never self-sweep in `stop_tracking` — the binding runs the
+    /// close/sweep lifecycle via [`run_pointer_lifecycle`] after routing each
+    /// pointer event. This is the arena a [`HeadlessBinding`](https://docs.rs/flui-binding)
+    /// (or a future production `GestureBinding`) hands down to a subtree.
+    #[inline]
+    pub fn binding_driven(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self {
+            entries: Arc::new(DashMap::new()),
+            clock,
+            sweep_model: SweepModel::BindingDriven,
         }
     }
 
@@ -602,7 +694,26 @@ impl GestureArena {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             entries: Arc::new(DashMap::with_capacity(capacity)),
+            clock: Arc::new(SystemClock),
+            sweep_model: SweepModel::SelfDriven,
         }
+    }
+
+    /// Who owns this arena's close/sweep lifecycle.
+    ///
+    /// [`SelfDriven`](SweepModel::SelfDriven) for a private arena (the
+    /// recognizer sweeps itself); [`BindingDriven`](SweepModel::BindingDriven)
+    /// for a binding-owned shared arena.
+    #[inline]
+    pub fn sweep_model(&self) -> SweepModel {
+        self.sweep_model
+    }
+
+    /// The current instant on this arena's clock — the time a deadline-driven
+    /// recognizer compares its captured down-time against.
+    #[inline]
+    pub fn now(&self) -> Instant {
+        self.clock.now()
     }
 
     /// Add a member to the arena for a specific pointer.
@@ -786,8 +897,19 @@ impl GestureArena {
 
     /// Release the hold on an arena.
     ///
-    /// If arena was waiting to close, it will close now.
-    /// If sweep was pending, it will execute now.
+    /// If the arena was waiting to close, it will close now. If a sweep was
+    /// pending (deferred while held), the deferred sweep drains and the entry
+    /// is removed.
+    ///
+    /// # Contract
+    ///
+    /// The caller is responsible for ensuring the entry is already resolved
+    /// (or has no members) before the deferred sweep drains. Releasing an
+    /// unresolved multi-member entry causes the entry to be silently removed
+    /// without invoking `accept_gesture` or `reject_gesture` on any member.
+    /// The correct pattern: resolve (or `reject_member` until one winner
+    /// remains) *before* calling `release`, so `has_pending_sweep` drains a
+    /// settled entry.
     pub fn release(&self, pointer: PointerId) {
         let mut pending = PendingNotifications::new();
         let should_sweep = {
@@ -846,6 +968,43 @@ impl GestureArena {
             return;
         };
         Self::dispatch_pending(pending, pointer);
+    }
+
+    /// Withdraw a single member from the arena, leaving the others to keep
+    /// competing.
+    ///
+    /// Unlike [`resolve`](Self::resolve) with no winner — which resolves the
+    /// whole entry and rejects *every* member — this removes only `member`.
+    /// When exactly one member remains in a closed arena, that member wins
+    /// (Flutter parity: `GestureArenaEntry.resolve(rejected)` withdraws the
+    /// caller without rejecting its competitors).
+    pub fn reject_member(&self, pointer: PointerId, member: &Arc<dyn GestureArenaMember>) {
+        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
+            entry_ref.lock().reject(member)
+        } else {
+            return;
+        };
+        Self::dispatch_pending(pending, pointer);
+    }
+
+    /// Remove the entry for `pointer` only if it has **settled** — a winner has
+    /// been resolved, or no members remain.
+    ///
+    /// Unlike [`sweep`](Self::sweep), this never force-resolves a still-open
+    /// competition (first-member-wins): an entry that still has rivals is left
+    /// untouched. It is the teardown a withdrawing member uses (after
+    /// [`reject_member`](Self::reject_member)) to clean up the shared entry
+    /// without disturbing the members still competing for the pointer.
+    pub fn remove_if_settled(&self, pointer: PointerId) {
+        let settled = if let Some(entry_ref) = self.entries.get(&pointer) {
+            let entry = entry_ref.lock();
+            entry.is_resolved || entry.members.is_empty()
+        } else {
+            return;
+        };
+        if settled {
+            self.entries.remove(&pointer);
+        }
     }
 
     /// Resolve the arena with multiple winners.
@@ -1535,6 +1694,80 @@ mod tests {
     }
 
     #[test]
+    fn test_reject_member_leaves_a_competitor_to_win() {
+        // Two members compete in a closed arena; one withdraws via
+        // `reject_member`. Withdrawal must reject ONLY the bowing-out member —
+        // the sole survivor then wins. Regression guard: a self-reject used to
+        // resolve the whole entry with no winner, rejecting every competitor
+        // (so e.g. a tap exceeding its slop silently killed the drag it raced).
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+
+        let bowing_out = Arc::new(MockMember::new());
+        let survivor = Arc::new(MockMember::new());
+        arena.add(pointer, bowing_out.clone());
+        arena.add(pointer, survivor.clone());
+        arena.close(pointer); // 2 members, no winner — stays open to compete
+
+        let withdrawing: Arc<dyn GestureArenaMember> = bowing_out.clone();
+        arena.reject_member(pointer, &withdrawing);
+
+        assert!(
+            bowing_out.was_rejected(),
+            "the withdrawing member is rejected"
+        );
+        assert!(
+            survivor.was_accepted(),
+            "the sole remaining member wins — withdrawal must not reject competitors",
+        );
+        assert!(!survivor.was_rejected(), "the survivor is not rejected");
+    }
+
+    #[test]
+    fn test_reject_member_keeps_a_three_way_competition_open() {
+        // With THREE members competing, one withdrawing must leave the other two
+        // STILL competing — never force-resolve to the front member. Guards the
+        // withdrawing-member teardown: `remove_if_settled` must NOT tear down an
+        // unresolved entry that still has rivals (the latent bug a recogniser's
+        // `stop_tracking()`→`sweep()` would have caused for 3+ members).
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+
+        let bowing_out = Arc::new(MockMember::new());
+        let rival_a = Arc::new(MockMember::new());
+        let rival_b = Arc::new(MockMember::new());
+        arena.add(pointer, bowing_out.clone());
+        arena.add(pointer, rival_a.clone());
+        arena.add(pointer, rival_b.clone());
+        arena.close(pointer); // 3 members, unresolved
+
+        let withdrawing: Arc<dyn GestureArenaMember> = bowing_out.clone();
+        arena.reject_member(pointer, &withdrawing);
+        arena.remove_if_settled(pointer); // the teardown a withdrawing member runs
+
+        assert!(
+            bowing_out.was_rejected(),
+            "the withdrawing member is rejected"
+        );
+        assert!(
+            !rival_a.was_accepted() && !rival_a.was_rejected(),
+            "rival A keeps competing — not resolved either way",
+        );
+        assert!(
+            !rival_b.was_accepted() && !rival_b.was_rejected(),
+            "rival B keeps competing — not resolved either way",
+        );
+        assert!(
+            !arena.is_resolved(pointer),
+            "the entry is not force-resolved"
+        );
+        assert!(
+            !arena.is_empty(),
+            "the entry survives — two rivals are still in it"
+        );
+    }
+
+    #[test]
     fn test_force_resolve_does_nothing_if_held() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -1897,5 +2130,75 @@ mod tests {
         entry.resolve(GestureDisposition::Rejected); // Should be ignored
 
         assert!(member.was_accepted());
+    }
+
+    // ========================================================================
+    // SweepModel
+    // ========================================================================
+
+    #[test]
+    fn new_arena_is_self_driven_binding_arena_is_binding_driven() {
+        assert_eq!(GestureArena::new().sweep_model(), SweepModel::SelfDriven);
+        assert_eq!(
+            GestureArena::with_capacity(4).sweep_model(),
+            SweepModel::SelfDriven
+        );
+        let binding = GestureArena::binding_driven(Arc::new(SystemClock));
+        assert_eq!(binding.sweep_model(), SweepModel::BindingDriven);
+        // The model rides on the Arc-backed handle: every clone observes it.
+        assert_eq!(binding.clone().sweep_model(), SweepModel::BindingDriven);
+    }
+
+    #[test]
+    fn run_pointer_lifecycle_closes_on_down_and_sweeps_on_up() {
+        use crate::events::{PointerType, make_down_event, make_up_event};
+        use flui_types::{Offset, geometry::px};
+
+        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
+        let pointer = PointerId::PRIMARY;
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member.clone());
+
+        // Down closes the arena (single member wins on close).
+        let down = make_down_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        run_pointer_lifecycle(&arena, &down);
+        assert!(!arena.is_open(pointer), "down must close the arena");
+        assert!(member.was_accepted(), "the single member wins on close");
+
+        // Up sweeps the (resolved) entry away.
+        let up = make_up_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        run_pointer_lifecycle(&arena, &up);
+        assert!(!arena.contains(pointer), "up must sweep the entry");
+    }
+
+    #[test]
+    fn a_held_entry_defers_the_binding_sweep_until_release() {
+        // The double-tap lifecycle leans on this: a held entry must defer the
+        // binding's first-up sweep (so a competing front-member tap cannot win
+        // early), and `release` must then drain the deferred sweep — removing
+        // the entry. The double-tap resolves the contended entries explicitly
+        // before releasing, so the deferred sweep is pure cleanup here.
+        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
+        let pointer = PointerId::PRIMARY;
+        let first = Arc::new(MockMember::new());
+        let second = Arc::new(MockMember::new());
+        arena.add(pointer, first.clone());
+        arena.add(pointer, second.clone());
+        arena.close(pointer); // 2 members, unresolved
+        arena.hold(pointer);
+
+        // Sweep while held: deferred, nobody resolved.
+        arena.sweep(pointer);
+        assert!(arena.contains(pointer), "the held sweep is deferred");
+        assert!(arena.has_pending_sweep(pointer));
+        assert!(!first.was_accepted(), "no resolution while held");
+        assert!(!second.was_accepted());
+
+        // Release drains the deferred sweep and removes the entry.
+        arena.release(pointer);
+        assert!(
+            !arena.contains(pointer),
+            "release drains the deferred sweep"
+        );
     }
 }

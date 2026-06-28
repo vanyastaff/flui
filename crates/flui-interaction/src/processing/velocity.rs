@@ -347,6 +347,26 @@ impl VelocityTracker {
             ));
         }
 
+        // Guard: if the total time window is effectively zero (all samples at
+        // the same timestamp, which happens when pointer events arrive within a
+        // single OS timer tick — common in headless tests with coarse clocks on
+        // Windows), the least-squares system is singular and would produce NaN.
+        // Report zero velocity with zero confidence so callers can still decide
+        // whether to spring back based on position (e.g. overscroll), rather
+        // than silently corrupting the simulation with NaN.
+        let total_span_ms = ts[..n]
+            .iter()
+            .map(|&t| -t) // ts are stored as negative age_ms; max(-ts) = total age
+            .fold(0.0_f64, f64::max);
+        if total_span_ms < 1e-6 {
+            return Some(VelocityEstimate::new(
+                newest.position - oldest.position,
+                Offset::ZERO,
+                newest.time.saturating_duration_since(oldest.time),
+                0.0,
+            ));
+        }
+
         // Fit a quadratic in milliseconds; velocity in px/ms is the linear
         // coefficient. Scale to px/s (× 1000). The x and y fits share the same
         // sample times and weights, so `solve_two` computes the QR

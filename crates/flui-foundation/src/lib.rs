@@ -147,6 +147,7 @@
 // Core modules - fundamental types with minimal dependencies
 pub mod binding;
 pub mod callbacks;
+pub mod clock;
 pub mod consts;
 pub mod id;
 pub mod key;
@@ -178,6 +179,9 @@ pub use callbacks::{
     FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
     VoidCallback,
 };
+// Monotonic time source (OS / virtual clock) — foundational primitive injected
+// by deadline- and frame-driven subsystems (gesture arena, headless binding).
+pub use clock::{ManualClock, MonotonicClock, SystemClock};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Diagnostics

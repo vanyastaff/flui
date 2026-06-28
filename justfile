@@ -4,7 +4,7 @@
 # Install: https://just.systems/man/en/
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
-set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+set windows-shell := ["bash", "-euo", "pipefail", "-c"]
 set dotenv-load
 set export
 set positional-arguments

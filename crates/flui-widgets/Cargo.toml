@@ -1,0 +1,68 @@
+[package]
+name = "flui-widgets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "User-facing Flutter-style widget catalog for FLUI (configuration objects over the flui-objects render catalog)"
+repository.workspace = true
+readme = "README.md"
+keywords = ["ui", "widget", "flutter", "flui", "gui"]
+categories = ["gui"]
+
+[dependencies]
+# Authoring spine: View/Element traits, BuildContext, ViewSeq, keys, derives
+# (also transitively re-exports flui-foundation's ElementId/RenderId).
+flui-view = { path = "../flui-view" }
+# Concrete RenderBox catalog every render-object widget wraps (also re-exports
+# the flex/stack config enums it owns from flui-types).
+flui-objects = { path = "../flui-objects" }
+# Protocol + RenderObject traits + BoxConstraints referenced by `RenderView`.
+flui-rendering = { path = "../flui-rendering" }
+# Animation primitives (`Animation<T>`) for transition widgets (`FadeTransition`).
+flui-animation = { path = "../flui-animation" }
+# `Listenable` — the subscription `AnimatedView`/`FadeTransition` returns.
+flui-foundation = { path = "../flui-foundation" }
+# Gesture recognizers + arena that `GestureDetector` drives.
+flui-interaction = { path = "../flui-interaction" }
+# Styling + typography + layout value types (Alignment, Color, BoxDecoration,
+# TextStyle, …).
+flui-types = { path = "../flui-types" }
+# Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
+flui-geometry = { path = "../flui-geometry" }
+# Typed error variants for `ImageProviderError` via `#[derive(Error)]`.
+thiserror = { workspace = true }
+# Structured diagnostics for image-provider failures — `tracing::warn!` on
+# provider errors so silent empty-box failures are visible in traces.
+tracing = { workspace = true }
+# Image decoding (PNG, JPEG, GIF, …). Optional: gate behind the `images`
+# feature to avoid pulling in the decode library for apps that only use
+# `Image::from_image` (pre-decoded `PixelImage`).
+image = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Integration tests drive the real layout pipeline through the render harness.
+flui-foundation = { path = "../flui-foundation" }
+flui-rendering = { path = "../flui-rendering", features = ["testing"] }
+flui-objects = { path = "../flui-objects", features = ["testing"] }
+flui-types = { path = "../flui-types" }
+# Drives a real `AnimationController` in the `FadeTransition` integration test.
+flui-scheduler = { path = "../flui-scheduler" }
+# Constructs `PointerEvent`s (make_down_event, behind the `testing` feature) for
+# the `Listener` dispatch test.
+flui-interaction = { path = "../flui-interaction", features = ["testing"] }
+# Headless frame driver: provides the shared clock-bound arena a `GestureArenaScope`
+# hands to detectors, and `pump_frame` to poll deadline-driven gestures in tests.
+flui-binding = { path = "../flui-binding" }
+# Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
+parking_lot = { workspace = true }
+# Deterministic paint/layout snapshot assertions.
+insta = { workspace = true }
+
+[features]
+default = []
+# Activates the `image` crate for decoding PNG/JPEG/GIF/… from bytes or files.
+# Required by `MemoryImage` and `FileImage`; `DirectImageProvider` and
+# `NetworkImage` compile without it.
+images = ["dep:image"]
+serde = ["flui-types/serde"]

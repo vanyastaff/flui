@@ -78,5 +78,11 @@ mod transform;
 // imports compile unchanged.
 pub use entry::HitTestEntry;
 pub use flui_interaction::routing::HitTestBehavior;
+// Pointer-event dispatch surface: a `RenderObject` advertises a
+// `PointerEventHandler` (see `RenderObject::pointer_event_handler`) that the
+// pipeline attaches to its hit entry; `HitTestResult::dispatch` then invokes it
+// with a `PointerEvent`, honoring the returned `EventPropagation`.
+pub use flui_interaction::events::PointerEvent;
+pub use flui_interaction::routing::{EventPropagation, PointerEventHandler};
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;

@@ -870,6 +870,44 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             };
         let sliver_cb_ref: SliverLayoutChildCallback<'_> = &sliver_cb_owned;
 
+        // Box child intrinsic callback: invoked when the Box parent calls
+        // `ctx.child_intrinsic(index, dimension, extent)` from within
+        // `perform_layout` (e.g. `RenderIntrinsicWidth` / `RenderIntrinsicHeight`).
+        // Uses the same `arena_for_cb` pool and `descendant_error_flag` as the
+        // layout callback.  Mirrors the sliver→box intrinsic callback wired in
+        // `layout_sliver_subtree_borrowed_impl` — no extra pre-acquisition needed
+        // because all child slots are already in the pre-acquired `SubtreeArena`.
+        let descendant_error_for_intrinsics_cb = std::sync::Arc::clone(&descendant_error_flag);
+        let box_intrinsic_cb_owned = move |child_id: RenderId,
+                                           dimension: crate::storage::IntrinsicDimension,
+                                           extent: f32|
+              -> f32 {
+            // SAFETY: `arena_for_cb` is alive (held by the outer
+            // layout_dirty_root stack frame for the entire walk).  The
+            // query targets `child_id`'s slot — distinct from the current
+            // Box parent's slot (`LayoutCycleGuard` rejects re-entry into
+            // `id`).  No two concurrent reborrows of the same NodePtr.
+            match unsafe { box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent) }
+            {
+                Ok(value) => value,
+                Err(err) => {
+                    descendant_error_for_intrinsics_cb
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    tracing::error!(
+                        parent = ?id,
+                        ?child_id,
+                        ?err,
+                        "layout_dirty_root: box child intrinsic query failed; \
+                         returning 0.0 to caller's perform_layout. \
+                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                    );
+                    0.0
+                }
+            }
+        };
+        let box_intrinsic_cb_ref: crate::protocol::box_protocol::BoxChildIntrinsicCallback<'_> =
+            &box_intrinsic_cb_owned;
+
         // Construct the driver-side PARENT-DATA-ERASED context.  The walk
         // cannot name the parent's ParentData type (it holds dyn nodes);
         // the typed blanket bridge reconstructs BoxLayoutCtx<T::Arity,
@@ -885,6 +923,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             cb_ref,
             baseline_cb_ref,
             Some(sliver_cb_ref),
+            Some(box_intrinsic_cb_ref),
         );
         let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
 

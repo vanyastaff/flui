@@ -1,0 +1,314 @@
+//! [`EditableText`] — single-line editable text backed by a
+//! [`TextEditingController`].
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
+
+use flui_foundation::ListenerId;
+use flui_foundation::notifier::Listenable;
+use flui_interaction::events::{Key, KeyState, NamedKey};
+use flui_interaction::routing::{FocusManager, FocusNode, KeyEventCallback};
+use flui_types::Color;
+use flui_view::BoxedView;
+use flui_view::prelude::*;
+
+use crate::AnimatedBuilder;
+use crate::layout::SizedBox;
+use crate::paint::ColoredBox;
+use crate::text::controller::TextEditingController;
+use crate::text::text::Text;
+
+// ============================================================================
+// EditableText
+// ============================================================================
+
+/// A single-line text field that accepts keyboard input when focused.
+///
+/// Flutter parity: `widgets/editable_text.dart` `EditableText` — the low-level
+/// editable primitive.  [`TextField`](super::text_field::TextField) wraps this
+/// with decoration and tap-to-focus.
+///
+/// # Key routing
+///
+/// `EditableText` registers a per-node key handler with the
+/// [`FocusManager`] singleton in `init_state`.  Platform key events arrive via
+/// `FocusManager::dispatch_key_event` (wired in `flui-app`), which routes them
+/// to the focused node's handler.  Only `KeyState::Down` events (including
+/// key-repeat) are processed; `KeyState::Up` events are ignored.
+///
+/// # DEFERRED (v1)
+///
+/// The following are absent in v1; do not use these features and expect them
+/// to work:
+/// - **IME / composing region** — CJK input, dead keys, and OS input methods
+///   are not handled.  Printable characters arrive via `Key::Character` which
+///   covers basic ASCII and composed Unicode characters already delivered as a
+///   single string by the platform.
+/// - **Text selection by drag** — only a collapsed caret is tracked; drag
+///   selection, shift-click, and selection rendering are not implemented.
+/// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
+/// - **Multi-line** — newlines are inserted as literal characters but line
+///   wrapping, multi-line layout, and vertical scrolling are not implemented.
+/// - **`obscureText`** — password masking is not implemented.
+/// - **Input formatters** — no validation or transformation pipeline.
+/// - **Scroll when text overflows** — the rendered text clips without scrolling.
+#[derive(Clone, Debug, StatefulView)]
+pub struct EditableText {
+    /// Controller that owns the text buffer and caret.
+    pub(super) controller: TextEditingController,
+    /// Height of the rendered caret bar in logical pixels.
+    pub(super) caret_height: f32,
+    /// Color of the caret bar when the field is focused.
+    pub(super) caret_color: Color,
+}
+
+impl EditableText {
+    /// Create an `EditableText` driven by `controller`.
+    #[must_use]
+    pub fn new(controller: TextEditingController) -> Self {
+        Self {
+            controller,
+            caret_height: 18.0,
+            caret_color: Color::BLACK,
+        }
+    }
+
+    /// Override the caret bar height (default 18 logical pixels).
+    #[must_use]
+    pub fn caret_height(mut self, height: f32) -> Self {
+        self.caret_height = height;
+        self
+    }
+
+    /// Override the caret color (default black).
+    #[must_use]
+    pub fn caret_color(mut self, color: Color) -> Self {
+        self.caret_color = color;
+        self
+    }
+}
+
+// ============================================================================
+// EditableTextState
+// ============================================================================
+
+/// Persistent state for [`EditableText`].
+///
+/// Owns the [`FocusNode`] for this field and wires it to the
+/// [`FocusManager`] key-dispatch machinery on mount.
+pub struct EditableTextState {
+    /// Focus node representing this field in the global focus tree.
+    focus_node: Arc<FocusNode>,
+    /// Clone of the controller captured in `create_state`; used to register
+    /// listeners in `init_state` without needing the `view` reference.
+    controller: TextEditingController,
+    /// ID for the listener we added to `controller` so we can remove it on
+    /// dispose — avoids a `remove_all_listeners` that would disrupt other
+    /// subscribers.
+    controller_listener_id: Option<ListenerId>,
+    /// The single notifier that drives the inner `AnimatedBuilder`.  Fires on
+    /// text changes (forwarded from the controller listener) **and** on focus
+    /// changes (forwarded from the FocusManager listener).
+    rebuild_notifier: flui_foundation::notifier::ChangeNotifier,
+    /// Gate to silence the FocusManager listener after dispose.
+    ///
+    /// `FocusManager::add_listener` has no per-listener removal API; we use
+    /// this flag instead so the closure becomes a no-op once the widget is
+    /// unmounted.
+    is_disposed: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for EditableTextState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditableTextState")
+            .field("focus_node_id", &self.focus_node.id().get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl StatefulView for EditableText {
+    type State = EditableTextState;
+
+    fn create_state(&self) -> EditableTextState {
+        EditableTextState {
+            focus_node: FocusNode::with_debug_label("EditableText"),
+            controller: self.controller.clone(),
+            controller_listener_id: None,
+            rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
+            is_disposed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl ViewState<EditableText> for EditableTextState {
+    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+        // 1. Attach our focus node to the global focus tree so it can receive
+        //    focus and be discovered by Tab traversal.
+        FocusManager::global()
+            .root_scope()
+            .attach_node(&self.focus_node);
+
+        // 2. Register a key handler with the FocusManager.  Only fires when
+        //    this node is the primary-focused node.
+        let key_handler = build_key_handler(self.controller.clone());
+        FocusManager::global().register_key_handler(self.focus_node.id(), key_handler);
+
+        // 3. Forward controller change events into the rebuild notifier so the
+        //    inner AnimatedBuilder rebuilds on every keystroke.
+        let rebuild_notifier_for_text = self.rebuild_notifier.clone();
+        let controller_listener_id = self.controller.add_listener(Arc::new(move || {
+            rebuild_notifier_for_text.notify_listeners();
+        }));
+        self.controller_listener_id = Some(controller_listener_id);
+
+        // 4. Forward FocusManager focus-change events into the rebuild notifier
+        //    so the caret appears / disappears immediately when this field
+        //    gains or loses focus.  A disposed-flag gates the closure since
+        //    FocusManager has no per-listener remove API.
+        let rebuild_notifier_for_focus = self.rebuild_notifier.clone();
+        let is_disposed = Arc::clone(&self.is_disposed);
+        let node_id = self.focus_node.id();
+        FocusManager::global().add_listener(Arc::new(move |previous, current| {
+            if is_disposed.load(AtomicOrdering::Acquire) {
+                return;
+            }
+            // Only rebuild when this node's focus state actually changed.
+            let was_focused = previous == Some(node_id);
+            let now_focused = current == Some(node_id);
+            if was_focused != now_focused {
+                rebuild_notifier_for_focus.notify_listeners();
+            }
+        }));
+    }
+
+    fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
+        let controller = self.controller.clone();
+        let focus_node = Arc::clone(&self.focus_node);
+        let caret_height = view.caret_height;
+        let caret_color = view.caret_color;
+
+        AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
+            build_field_view(&controller, &focus_node, caret_height, caret_color)
+        })
+    }
+
+    fn dispose(&mut self) {
+        // Signal the focus listener closure to become a no-op.
+        self.is_disposed.store(true, AtomicOrdering::Release);
+
+        // Unregister the key handler from the FocusManager.
+        FocusManager::global().unregister_key_handler(self.focus_node.id());
+
+        // Detach the focus node from the global tree (also clears primary focus
+        // if this node held it).
+        FocusManager::global()
+            .root_scope()
+            .detach_node(self.focus_node.id());
+
+        // Remove the controller listener we registered in init_state.
+        if let Some(id) = self.controller_listener_id.take() {
+            self.controller.remove_listener(id);
+        }
+
+        // Dispose the rebuild notifier so any remaining AnimatedBuilder
+        // subscribers can detect the widget is gone.
+        self.rebuild_notifier.dispose();
+    }
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Build the key-event handler closure for `controller`.
+///
+/// Only `KeyState::Down` events (which cover key-repeat) are acted upon.
+/// Returns `true` when the event is consumed so propagation stops.
+fn build_key_handler(controller: TextEditingController) -> KeyEventCallback {
+    Arc::new(move |event| {
+        if event.state != KeyState::Down {
+            return false;
+        }
+        match &event.key {
+            Key::Character(character_string) => {
+                controller.insert_str(character_string.as_str());
+                true
+            }
+            Key::Named(NamedKey::Backspace) => {
+                controller.backspace();
+                true
+            }
+            Key::Named(NamedKey::Delete) => {
+                controller.delete_forward();
+                true
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                controller.move_caret_left();
+                true
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                controller.move_caret_right();
+                true
+            }
+            Key::Named(NamedKey::Home) => {
+                controller.move_caret_home();
+                true
+            }
+            Key::Named(NamedKey::End) => {
+                controller.move_caret_end();
+                true
+            }
+            Key::Named(_) => false,
+        }
+    })
+}
+
+/// Assemble the visual tree for the text field interior.
+///
+/// Splits the text at `caret_byte_offset` and inserts a thin colored bar
+/// between the two halves when the field is focused.  An unfocused field
+/// renders only the complete text (no caret bar).
+fn build_field_view(
+    controller: &TextEditingController,
+    focus_node: &Arc<FocusNode>,
+    caret_height: f32,
+    caret_color: Color,
+) -> BoxedView {
+    use crate::flex::Row;
+    use flui_view::row as row_seq;
+
+    let text = controller.text();
+    let caret_offset = controller.caret_byte_offset();
+    let is_focused = focus_node.has_primary_focus();
+
+    if is_focused {
+        // Guard: clamp to a valid UTF-8 boundary (defensive — the controller
+        // should always maintain this invariant, but be safe under any
+        // future code path).
+        let safe_offset = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(text.len()))
+            .find(|&i| i >= caret_offset)
+            .unwrap_or(text.len());
+
+        let text_before = text[..safe_offset].to_owned();
+        let text_after = text[safe_offset..].to_owned();
+
+        // Caret: a 2 × caret_height colored box.
+        let caret = SizedBox::new(2.0, caret_height)
+            .child(ColoredBox::new(caret_color))
+            .boxed();
+
+        Row::new(row_seq![
+            Text::new(text_before),
+            caret,
+            Text::new(text_after),
+        ])
+        .boxed()
+    } else {
+        Text::new(text).boxed()
+    }
+}

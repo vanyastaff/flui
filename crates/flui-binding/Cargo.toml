@@ -1,0 +1,37 @@
+[package]
+name = "flui-binding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Deterministic headless frame driver (pump_frame) over the gesture arena + virtual clock for FLUI"
+keywords = ["ui", "gesture", "headless", "testing"]
+categories = ["gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline polling).
+flui-interaction = { path = "../flui-interaction" }
+# The element tree + build owner this binding drives each frame (`build_scope`
+# drains the external inbox an animation/listenable tick fills).
+flui-view = { path = "../flui-view" }
+# The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
+flui-rendering = { path = "../flui-rendering" }
+# Registered `AnimationController`s the frame loop ticks on the virtual timeline,
+# restart-aware via the controller's `run_generation` counter.
+flui-animation = { path = "../flui-animation" }
+# Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
+# both hold (render-object attachment shares the owner; the binding does not own
+# it exclusively).
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+# The long-press deadline recognizer + settings exercised by the pump_frame test,
+# plus the geometry/offset types for the synthetic pointer-down. The `testing`
+# feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
+# API, so the deterministic deadline test runs against the public surface.
+flui-types = { path = "../flui-types" }

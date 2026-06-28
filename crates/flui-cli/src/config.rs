@@ -137,7 +137,8 @@ impl FluiConfig {
 
 /// Application metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AppConfig { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub struct AppConfig {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Application name (used as crate name).
     pub name: String,
     /// Application version (semver).
@@ -235,7 +236,8 @@ pub struct FontFamily {
 
 /// Individual font asset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FontAsset { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub struct FontAsset {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Path to font file.
     pub asset: String,
     /// Font weight (100-900).
@@ -386,7 +388,8 @@ impl Default for GlobalBuildConfig {
 
 /// `DevTools` configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DevToolsConfig { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub struct DevToolsConfig {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Default port for `DevTools` server.
     #[serde(default = "default_devtools_port")]
     pub port: u16,
@@ -420,9 +423,7 @@ fn default_channel() -> String {
 
 fn default_jobs() -> usize {
     // Use std::thread::available_parallelism when available
-    std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4)
+    std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
 }
 
 fn default_devtools_port() -> u16 {

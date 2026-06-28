@@ -36,11 +36,13 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
+    sync::Arc,
 };
 
 use flui_foundation::ElementId;
+use parking_lot::Mutex;
 
-use super::build_owner::{DirtyElement, InactiveElement};
+use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
 /// `build_scope` drain runs an element's `build()` (PR-K).
@@ -135,6 +137,17 @@ pub struct ElementOwner<'a> {
     /// and we never mutate it through this handle.
     pub(crate) on_build_scheduled: Option<&'a (dyn Fn() + Send + Sync)>,
 
+    /// Reference to `BuildOwner::external_inbox`, so an element can capture a
+    /// clone at mount (via [`Self::external_scheduler`]) for its mark-dirty
+    /// callback to push onto from outside a frame.
+    pub(crate) external_inbox: &'a Arc<Mutex<HashSet<ElementId>>>,
+
+    /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
+    /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
+    /// for the in-frame fire). An [`ExternalBuildScheduler`] clones this so a
+    /// listener tick can request a frame from outside the build.
+    pub(crate) external_request_frame: Option<&'a Arc<dyn Fn() + Send + Sync>>,
+
     /// Live-tree access during a `build_scope` drain (PR-K). `Some` only
     /// while an element's `build()` runs; `None` on every other lifecycle
     /// path (mount / unmount / update / reconcile). The behavior reads it
@@ -199,6 +212,19 @@ impl ElementOwner<'_> {
                 callback();
             }
         }
+    }
+
+    /// Build an owned [`ExternalBuildScheduler`] for an element to capture at
+    /// mount. Its mark-dirty callback — fired by a listenable tick *outside* a
+    /// frame, with no owner in scope — uses it to enqueue the element onto the
+    /// shared inbox `build_scope` drains, and to request a frame. This is the
+    /// arena analogue of Flutter handing each `Element` a `BuildOwner`
+    /// backreference for `markNeedsBuild`.
+    pub(crate) fn external_scheduler(&self) -> ExternalBuildScheduler {
+        ExternalBuildScheduler::from_parts(
+            Arc::clone(self.external_inbox),
+            self.external_request_frame.map(Arc::clone),
+        )
     }
 
     /// Mark a dependent as having received an inherited-dependency

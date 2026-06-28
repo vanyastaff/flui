@@ -1,0 +1,205 @@
+//! # FLUI Widgets
+//!
+//! The user-facing, Flutter-style widget catalog for FLUI — the layer an app
+//! author composes. Every widget here is a small, immutable **configuration
+//! object** that either:
+//!
+//! - wraps a render object from [`flui_objects`] (a [`RenderView`]), or
+//! - composes other widgets (a [`StatelessView`]), or
+//! - configures parent-layout data on its single child (a [`ParentDataView`]).
+//!
+//! This mirrors Flutter's `widgets/` package: a widget is "a thin configuration
+//! object over a render object." The render *machine* (layout/paint/compositing)
+//! lives in [`flui_rendering`] and [`flui_objects`]; this crate is the
+//! declarative surface over it.
+//!
+//! ## Architecture
+//!
+//! ```text
+//! flui-widgets  ← you are here (declarative config)
+//!     │  View → Element → RenderObject
+//!     ▼
+//! flui-view     ← View/Element lifecycle + reconciliation
+//!     ▼
+//! flui-objects  ← concrete RenderBox catalog
+//!     ▼
+//! flui-rendering ← layout/paint/composite engine
+//! ```
+//!
+//! ## Authoring style
+//!
+//! Widgets favour a Flutter-like constructor + chainable-config surface (with
+//! `bon` builders reserved for the widest future configuration objects). Single
+//! children are taken as `impl IntoView`; heterogeneous child lists use the
+//! [`ViewSeq`](flui_view::seq::ViewSeq)-backed `column!`/`row!` macros (the
+//! static tuple path) or `Vec<BoxedView>` (the dynamic path).
+//!
+//! ```rust
+//! use flui_widgets::prelude::*;
+//! use flui_widgets::{column, row}; // ViewSeq macros (shadow std's same-named)
+//!
+//! let _tree = Container::new()
+//!     .padding(EdgeInsets::all(px(8.0)))
+//!     .color(Color::rgb(26, 102, 230))
+//!     .child(Column::new(column![
+//!         Text::new("Hello"),
+//!         Padding::all(4.0).child(Text::new("World")),
+//!     ]));
+//! ```
+//!
+//! [`RenderView`]: flui_view::prelude::RenderView
+//! [`StatelessView`]: flui_view::prelude::StatelessView
+//! [`ParentDataView`]: flui_view::prelude::ParentDataView
+
+#![warn(
+    missing_docs,
+    missing_debug_implementations,
+    rust_2018_idioms,
+    clippy::all,
+    clippy::pedantic
+)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::doc_markdown,
+    // `flex/flex.rs`, `text/text.rs`: a one-type family module named after its
+    // type is the catalog's house style (matches `flui-view`/`flui-objects`).
+    clippy::module_inception
+)]
+
+// ============================================================================
+// Modules
+// ============================================================================
+
+mod support;
+
+pub mod animated;
+pub mod app;
+pub mod clip;
+mod container;
+pub mod flex;
+pub mod image;
+pub mod interaction;
+pub mod layout;
+pub mod paint;
+pub mod scroll;
+pub mod stack;
+pub mod text;
+pub mod transitions;
+pub mod wrap;
+
+// ============================================================================
+// Flat re-exports — `flui_widgets::Padding`, identical depth to Flutter's
+// single-import surface.
+// ============================================================================
+
+// Application-scoped inherited widgets: ambient screen data and theming.
+pub use app::{MediaQuery, MediaQueryData, Theme, ThemeData};
+// `Brightness` is the value type shared by `MediaQueryData` and `ThemeData`;
+// re-exported here so callers need only `use flui_widgets::Brightness`.
+pub use flui_types::platform::Brightness;
+
+pub use animated::{
+    AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
+    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, VsyncScope,
+};
+pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
+// `Image` widget over `RenderImage`; provider types live in the same module.
+// `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
+// need only import from `flui-widgets`, not from lower-level crates.
+pub use container::Container;
+pub use flex::{Column, Expanded, Flex, Flexible, Row};
+pub use flui_objects::{ImageAlignment, ImageFit};
+pub use image::{
+    DirectImageProvider, FileImage, Image, ImageProvider, ImageProviderError, MemoryImage,
+    NetworkImage,
+};
+pub use interaction::{
+    AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,
+    Listener, Offstage,
+};
+pub use layout::{
+    Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
+    FractionallySizedBox, IntrinsicHeight, IntrinsicWidth, LimitedBox, OverflowBox, Padding,
+    RotatedBox, SizedBox, SizedOverflowBox, Transform,
+};
+// `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
+// so consumers don't need to reach into `flui_objects`.
+pub use flui_objects::OverflowBoxFit;
+pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
+pub use scroll::{
+    BouncingScrollPhysics, ClampingScrollPhysics, ListView, RefreshController, RefreshIndicator,
+    RefreshIndicatorState, ScrollController, ScrollPhysics, Scrollable, Scrollbar,
+    SharedScrollPhysics, SingleChildScrollView, SliverFixedExtentList, SliverOpacity,
+    SliverPadding, SliverToBoxAdapter, Viewport,
+};
+pub use stack::{Positioned, Stack};
+pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
+pub use transitions::{
+    AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
+    RotationTransitionState, ScaleTransition, ScaleTransitionState,
+};
+pub use wrap::Wrap;
+
+// The heterogeneous-children macros (contract C2's static tuple path). Kept out
+// of the prelude glob: their names collide with `std`'s `column!`/`row!`, so
+// they must be imported explicitly (`use flui_widgets::{column, row};`), which
+// shadows the std macros — a glob import would be ambiguous instead.
+pub use flui_view::{column, row};
+
+// Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
+// (re-exported from the `flui-objects` catalog, whose canonical home is
+// `flui-types::layout`).
+pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+// `WrapAlignment`/`WrapCrossAlignment` configure `Wrap`'s main-axis distribution
+// and per-child cross-axis positioning.
+pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
+// `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
+pub use flui_rendering::parent_data::FlexFit;
+// Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
+// `PointerEvent`/`EventPropagation` its callbacks receive/return.
+pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
+// Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
+pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+
+// ============================================================================
+// Prelude
+// ============================================================================
+
+/// Commonly used widgets and supporting types for `use flui_widgets::prelude::*;`.
+pub mod prelude {
+    // Authoring spine re-exported so a single prelude import is enough to write
+    // a widget tree (View traits, BuildContext, ViewSeq, derives). The
+    // `column!`/`row!` macros are intentionally NOT globbed here (they collide
+    // with `std`'s same-named macros) — import them explicitly from the crate
+    // root: `use flui_widgets::{column, row};`.
+    pub use flui_view::prelude::*;
+
+    // The widget catalog.
+    pub use crate::{
+        AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
+        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox,
+        EditableText, EditableTextState, Expanded, FittedBox, Flex, FlexFit, Flexible,
+        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector,
+        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IntrinsicHeight,
+        IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
+        Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
+        Row, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter,
+        Stack, Text, TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Wrap,
+    };
+
+    // Common configuration value types, so an app author needs only this import.
+    pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
+    pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+    pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+    pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
+    pub use flui_rendering::constraints::BoxConstraints;
+    pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
+    pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
+    pub use flui_types::painting::Clip;
+    pub use flui_types::typography::TextBaseline;
+    pub use flui_types::{Alignment, Color};
+}
