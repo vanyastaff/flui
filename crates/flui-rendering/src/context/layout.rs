@@ -522,6 +522,32 @@ where
     pub fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::child_id(&self.inner, index)
     }
+
+    /// Records a child-build request for `logical_index` under this sliver
+    /// (U4.2 request-strategy seam).
+    ///
+    /// Unlike [`Self::build_and_layout_box_child`], no render object is
+    /// supplied — the element tree (U4.3) decides what to build and where to
+    /// insert it.  The request is deposited into the arena's
+    /// `pending_child_requests` sink; after the walk releases its borrows,
+    /// the pipeline moves it to
+    /// [`PipelineOwner::take_pending_child_requests`](crate::pipeline::PipelineOwner::take_pending_child_requests)
+    /// for the binding layer.
+    ///
+    /// Return type is [`ChildLayout<BoxChildRef>`]: `Scheduled` in v1
+    /// (next-frame policy); a true-mid-pass backend may return
+    /// `Ready(BoxChildRef)` without a breaking change — ADR-0003 Decision 2(c)
+    /// forbids narrowing the return type to `Infallible`/`Scheduled` only.
+    /// Returns `Unwired` when this context carries no request sink.
+    pub fn request_child_build(
+        &mut self,
+        logical_index: usize,
+    ) -> crate::protocol::ChildLayout<crate::protocol::BoxChildRef> {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::request_child_build(
+            &mut self.inner,
+            logical_index,
+        )
+    }
 }
 
 // ============================================================================

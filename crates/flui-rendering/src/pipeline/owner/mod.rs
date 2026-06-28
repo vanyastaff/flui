@@ -179,6 +179,13 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
 
+    /// Child-build requests accumulated during the most recent layout pass
+    /// by request-strategy slivers (U4.2).  Each entry is `(sliver_id,
+    /// logical_index)`.  The binding layer drains this via
+    /// [`Self::take_pending_child_requests`] after the frame to service the
+    /// requests through the element tree (U4.3).  Empty between frames.
+    pending_child_requests: Vec<(RenderId, usize)>,
+
     /// Phantom marker for the typestate phase. Always zero-sized.
     /// See `crates/flui-rendering/src/pipeline/phase.rs`.
     _phase: PhantomData<Phase>,
@@ -233,7 +240,29 @@ where
         dirty_rx: from.dirty_rx,
         #[cfg(any(test, feature = "testing"))]
         parent_data_seeds: from.parent_data_seeds,
+        pending_child_requests: from.pending_child_requests,
         _phase: PhantomData,
+    }
+}
+
+// ============================================================================
+// Cross-phase accessors
+// ============================================================================
+
+impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+    /// Takes all child-build requests accumulated during the most recent
+    /// layout pass (U4.2), leaving the buffer empty.
+    ///
+    /// Each entry is `(sliver_id, logical_index)`: the sliver whose
+    /// `request_child_build` fired, and the logical item index it could not
+    /// materialize synchronously.  The binding layer (U4.3) consumes this
+    /// after every frame to drive the element-tree child manager.
+    ///
+    /// This is the U4.3 entry point — `pub` (not `pub(super)`) because no
+    /// in-module consumer exists in U4.2; the only caller is external.
+    #[must_use]
+    pub fn take_pending_child_requests(&mut self) -> Vec<(RenderId, usize)> {
+        std::mem::take(&mut self.pending_child_requests)
     }
 }
 

@@ -170,6 +170,15 @@ pub(super) struct SubtreeArena<'tree> {
     /// `&mut self`.  `Mutex` for the same reason as `pending_builds`
     /// (the layout-child closure requires `&SubtreeArena: Send + Sync`).
     pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
+    /// Child-build requests from `RenderSliverList` (U4.2): `(sliver_id,
+    /// logical_index)` pairs recorded when a request-strategy sliver finds an
+    /// absent in-band child.  Semantically distinct from `pending_builds`
+    /// (which holds a fully-constructed `Box<dyn RenderObject>` and an insert
+    /// position) — here the element tree (U4.3) decides what to build and where
+    /// to insert it.  Drained after `pending_builds` in `layout_dirty_root`
+    /// and moved into `PipelineOwner::pending_child_requests` for the binding
+    /// layer to consume.  Same `Mutex` discipline.
+    pending_child_requests: Mutex<Vec<(flui_foundation::RenderId, usize)>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: PhantomData<&'tree mut ()>,
 }
@@ -212,6 +221,7 @@ impl<'tree> SubtreeArena<'tree> {
             parent_data_seeds,
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
+            pending_child_requests: Mutex::new(Vec::new()),
             owner_thread,
             _lifetime: PhantomData,
         }
@@ -300,6 +310,16 @@ impl<'tree> SubtreeArena<'tree> {
         &self,
     ) -> Vec<(flui_foundation::RenderId, flui_foundation::RenderId)> {
         std::mem::take(&mut *self.pending_removes.lock())
+    }
+
+    /// Takes the child-build requests recorded by request-strategy slivers
+    /// (U4.2) during this walk.  Returns `(sliver_id, logical_index)` pairs
+    /// for the binding layer to service after the frame (U4.3).  Called in
+    /// `layout_dirty_root` AFTER `take_pending_builds` (Remove → Insert →
+    /// Request ordering) and AFTER `drop(arena)` so no `NodePtr` alias is
+    /// live.
+    pub(super) fn take_pending_child_requests(&self) -> Vec<(flui_foundation::RenderId, usize)> {
+        std::mem::take(&mut *self.pending_child_requests.lock())
     }
 
     // =========================================================================
@@ -1432,6 +1452,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             id,
             &arena.pending_builds,
             &arena.pending_removes,
+            &arena.pending_child_requests,
         );
         let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 
@@ -1553,6 +1574,7 @@ mod tests {
         assert!(arena.by_id.is_empty());
         assert!(arena.take_pending_builds().is_empty());
         assert!(arena.take_pending_removes().is_empty());
+        assert!(arena.take_pending_child_requests().is_empty());
     }
 
     /// Verify that `SubtreeArena::new` panics (debug_assert fires) when
@@ -1588,6 +1610,7 @@ mod tests {
             parent_data_seeds: FxHashMap::default(),
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
+            pending_child_requests: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1641,6 +1664,7 @@ mod tests {
             parent_data_seeds: FxHashMap::default(),
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
+            pending_child_requests: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1665,10 +1689,8 @@ mod tests {
         assert!(third.is_ok(), "entry after drop must succeed");
     }
 
-    /// Verify that `take_pending_builds` and `take_pending_removes` drain
-    /// their sinks and leave them empty (pending-sink-after-drop ordering).
-    ///
-    /// This is gate (d) from the adversarial test spec in the plan.
+    /// Verify that all three pending sinks drain and leave themselves empty
+    /// (pending-sink-after-drop ordering, including the U4.2 request sink).
     #[test]
     fn pending_sink_drains_are_idempotent() {
         let arena: SubtreeArena<'_> = SubtreeArena {
@@ -1677,6 +1699,7 @@ mod tests {
             parent_data_seeds: FxHashMap::default(),
             pending_builds: Mutex::new(Vec::new()),
             pending_removes: Mutex::new(Vec::new()),
+            pending_child_requests: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1696,7 +1719,14 @@ mod tests {
         let removes2 = arena.take_pending_removes();
         assert!(removes2.is_empty(), "second drain must be empty");
 
-        // Same for builds (empty in this test — just verifying idempotency).
+        // Same for builds and request sink (empty — idempotency).
         assert!(arena.take_pending_builds().is_empty());
+        let sliver_id = RenderId::new(3);
+        arena.pending_child_requests.lock().push((sliver_id, 7));
+        let requests = arena.take_pending_child_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0], (sliver_id, 7));
+        let requests2 = arena.take_pending_child_requests();
+        assert!(requests2.is_empty(), "second request drain must be empty");
     }
 }

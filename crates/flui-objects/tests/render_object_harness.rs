@@ -42,6 +42,7 @@
 //! | `RenderSliverFillRemainingAndOverscroll` | `harness_sliver_fill_remaining_and_overscroll_*` | yes | — | — | yes | — |
 //! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes | — |
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderSliverList` | `harness_sliver_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverListLazy` | `harness_sliver_list_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
@@ -118,6 +119,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverFillRemainingAndOverscroll",
     "RenderSliverFillRemainingWithScrollable",
     "RenderSliverIgnorePointer",
+    "RenderSliverList",
     "RenderSliverListLazy",
     "RenderSliverOffstage",
     "RenderSliverOpacity",
@@ -1442,6 +1444,68 @@ fn harness_sliver_ignore_pointer_passes_hits_when_inactive() {
     .run_frame();
 
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("item")));
+}
+
+// ─── RenderSliverList (U4.2 request seam — INERT without U4.3 child manager) ─
+
+#[test]
+fn harness_sliver_list_zero_items_reports_zero_geometry() {
+    // An empty RenderSliverList (item_count = 0) must produce zero geometry and
+    // emit no requests.  This is the structural baseline; it would fail if
+    // perform_layout panicked or returned non-zero geometry for an empty source.
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverList::new(0, 48.0)).label("list"),
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("list")).scroll_extent,
+        0.0,
+        "empty RenderSliverList must report zero scroll extent",
+    );
+    let requests = run.owner_mut().take_pending_child_requests();
+    assert!(
+        requests.is_empty(),
+        "empty list must emit no child requests, got {requests:?}",
+    );
+    assert_descendant_properties(&run.diagnostics(), "RenderSliverList", &["item_count"]);
+}
+
+#[test]
+fn harness_sliver_list_layout_emits_absent_requests() {
+    // RenderSliverList with 3 items visible in a 300×400 viewport (48 px
+    // estimate each; all 3 fit in the 400 px paint extent).  Because no
+    // arena children exist yet, every in-band slot fires request_child_build.
+    // The test asserts the request buffer contains exactly the logical indices
+    // 0, 1, 2 — this fails before request_child_build is wired (Unwired
+    // returns, no requests are recorded, buffer is empty).
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverList::new(3, 48.0)).label("list"),
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let mut requests = run.owner_mut().take_pending_child_requests();
+    // Sort by logical index for deterministic comparison.
+    requests.sort_by_key(|&(_id, logical_index)| logical_index);
+    let logical_indices: Vec<usize> = requests
+        .iter()
+        .map(|&(_id, logical_index)| logical_index)
+        .collect();
+    assert_eq!(
+        logical_indices,
+        &[0, 1, 2],
+        "expected requests for logical indices [0, 1, 2], got {logical_indices:?}",
+    );
+    // All requests must carry the same sliver id (the list node itself).
+    let list_id = run.id("list");
+    for &(sliver_id, _) in &requests {
+        assert_eq!(
+            sliver_id, list_id,
+            "all requests must originate from the list sliver",
+        );
+    }
 }
 
 #[test]

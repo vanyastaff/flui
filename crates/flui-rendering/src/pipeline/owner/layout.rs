@@ -605,16 +605,18 @@ impl PipelineOwner<Layout> {
         // enforced by LayoutCycleGuard), but no `unsafe` appears here.
         let result = arena.layout_child(id, constraints);
 
-        // Step 5: drain on-demand child builds AND removals the walk recorded
-        // (re-entrant build contract v1, ADR-0003 Decision 2 + U3c D2).
-        // Take both (owned), then DROP `arena` to release the &mut RenderTree
+        // Step 5: drain all three arena sinks (re-entrant build contract v1,
+        // ADR-0003 Decision 2 + U3c D2 + U4.2 request seam).
+        // Take all three (owned), then DROP `arena` to release the &mut RenderTree
         // subtree borrow before touching `&mut self`.
         //
-        // D3 ordering: Remove → Insert → Update.  Removes are drained first so
-        // that an off-band child evicted this pass does not collide with the
-        // Insert that replaces it in the same batch.
+        // D3 ordering: Remove → Insert → Request.  Removes first so that an
+        // off-band child evicted this pass does not collide with the Insert that
+        // replaces it in the same batch.  Requests last because they carry no
+        // pre-built object and do not mutate the tree in U4.2.
         let pending_removes = arena.take_pending_removes();
         let pending_builds = arena.take_pending_builds();
+        let pending_child_requests = arena.take_pending_child_requests();
         drop(arena);
 
         // Apply removes first (D3 ordering).  Each entry is `(parent, child)`:
@@ -635,6 +637,11 @@ impl PipelineOwner<Layout> {
                 pending.initial_parent_data,
             );
         }
+
+        // Move child-build requests into the owner's observable buffer so the
+        // binding layer (U4.3) can consume them after the frame.  No tree
+        // mutation here — the requests are inert until U4.3 wires up a manager.
+        self.pending_child_requests.extend(pending_child_requests);
 
         result
     }

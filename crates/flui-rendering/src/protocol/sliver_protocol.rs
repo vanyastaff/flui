@@ -744,6 +744,29 @@ pub trait SliverLayoutCtxErased: Send + Sync {
         let _ = id;
     }
 
+    /// Records a child-build request for `logical_index` under this sliver
+    /// (U4.2 request-strategy seam).
+    ///
+    /// Unlike [`Self::build_and_layout_box_child`], the caller does **not**
+    /// supply a pre-built render object — the element tree (U4.3) decides
+    /// what to build and at which dense slot to insert it.  The request is
+    /// parked in the arena's `pending_child_requests` sink; after the walk
+    /// releases its borrows the pipeline moves it into
+    /// `PipelineOwner::pending_child_requests` for the binding layer.
+    ///
+    /// Return type is [`ChildLayout<BoxChildRef>`] (not a narrower type):
+    /// ADR-0003 Decision 2(c) forbids a next-frame-only contract so the
+    /// `Ready(BoxChildRef)` arm must stay reachable for a future true-mid-pass
+    /// backend without a breaking change.  In v1 this always returns
+    /// `Scheduled`; a wired true-mid-pass backend may return `Ready`.
+    ///
+    /// Default: `Unwired` — Direct / test / leaf contexts that carry no sink
+    /// are honestly inert rather than silently discarding the request.
+    fn request_child_build(&mut self, logical_index: usize) -> ChildLayout<BoxChildRef> {
+        let _ = logical_index;
+        ChildLayout::Unwired
+    }
+
     /// Returns the [`RenderId`] of the child at
     /// dense slot `index`, if it exists.
     ///
@@ -860,6 +883,18 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     }
 
     #[inline]
+    fn request_child_build(&mut self, logical_index: usize) -> ChildLayout<BoxChildRef> {
+        match &mut self.storage {
+            // Direct storage carries no request sink — honestly Unwired so the
+            // caller knows no backend is wired (same policy as build_and_layout).
+            SliverLayoutCtxStorage::Direct { .. } => ChildLayout::Unwired,
+            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.request_child_build(logical_index)
+            }
+        }
+    }
+
+    #[inline]
     fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { .. } => None,
@@ -925,6 +960,13 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// pending_builds are applied (Remove → Insert ordering, D3). Same
     /// `Mutex`-for-Send discipline as `pending_builds`.
     pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
+    /// Sink for child-build requests from request-strategy slivers (U4.2):
+    /// `(sliver_id, logical_index)` pairs recorded when an absent in-band
+    /// child is encountered.  Unlike `pending_builds`, no render object is
+    /// pre-built here — the element tree (U4.3) decides what to build.
+    /// Drained after `pending_builds` and exposed via
+    /// `PipelineOwner::take_pending_child_requests` for the binding layer.
+    pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
 }
 
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
@@ -945,6 +987,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         node_id: RenderId,
         pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
         pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
+        pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
     ) -> Self {
         Self {
             constraints,
@@ -956,6 +999,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             node_id,
             pending_builds,
             pending_removes,
+            pending_child_requests,
         }
     }
 }
@@ -1082,6 +1126,18 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         // `mark_needs_layout` to a distant ancestor, preventing the lazy sliver
         // from reflowing after its child list shrinks.
         self.pending_removes.lock().push((self.node_id, id));
+    }
+
+    fn request_child_build(&mut self, logical_index: usize) -> ChildLayout<BoxChildRef> {
+        // Record the request so the binding layer (U4.3) can service it
+        // post-layout.  Returns `Scheduled` — the v1 next-frame policy.
+        // `self.node_id` is the sliver, giving the element tree enough
+        // context to locate the right child manager without leaking any
+        // view-layer type into this crate (H3 seam discipline).
+        self.pending_child_requests
+            .lock()
+            .push((self.node_id, logical_index));
+        ChildLayout::Scheduled
     }
 
     fn child_id(&self, index: usize) -> Option<RenderId> {
@@ -1434,6 +1490,8 @@ mod tests {
 
         let pending_removes: parking_lot::Mutex<Vec<(RenderId, RenderId)>> =
             parking_lot::Mutex::new(Vec::new());
+        let pending_child_requests: parking_lot::Mutex<Vec<(RenderId, usize)>> =
+            parking_lot::Mutex::new(Vec::new());
         let mut ctx = ErasedSliverLayoutCtx::new(
             constraints,
             &mut children,
@@ -1444,6 +1502,7 @@ mod tests {
             parent,
             &sink,
             &pending_removes,
+            &pending_child_requests,
         );
 
         // index 0 exists -> Ready(handle), builder untouched, nothing parked.
