@@ -8,6 +8,7 @@ mod sliver_opacity;
 mod sliver_padding;
 mod sliver_to_box_adapter;
 mod viewport;
+mod virtualized_band;
 
 pub use sliver_fill_remaining::*;
 pub use sliver_fill_viewport::*;
