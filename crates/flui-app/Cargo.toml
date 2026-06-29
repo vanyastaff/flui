@@ -40,6 +40,7 @@ flui-semantics = { path = "../flui-semantics" }
 flui-engine = { path = "../flui-engine" }
 flui-platform = { path = "../flui-platform" }
 flui-hot-reload = { path = "../flui-hot-reload" }
+flui-animation = { path = "../flui-animation" }
 
 # Utilities
 tracing.workspace = true

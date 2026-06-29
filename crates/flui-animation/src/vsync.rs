@@ -118,6 +118,23 @@ impl Vsync {
         self.inner.lock().controllers.is_empty()
     }
 
+    /// Whether at least one registered controller is currently running.
+    ///
+    /// Used by a production frame driver (e.g. `AppBinding`) to decide whether
+    /// to request the next frame: call this after [`tick_all`](Self::tick_all)
+    /// and, if `true`, schedule a wake so the frame loop keeps going. Once the
+    /// last running controller completes, `has_running()` returns `false` and
+    /// the driver does NOT re-request, so the window quiesces cleanly — no
+    /// infinite redraw after all animations settle.
+    #[must_use]
+    pub fn has_running(&self) -> bool {
+        self.inner
+            .lock()
+            .controllers
+            .iter()
+            .any(|c| c.controller.status().is_running())
+    }
+
     /// Advance every registered, running controller to virtual instant
     /// `now_secs` (elapsed seconds on the driver's virtual clock).
     ///

@@ -1476,6 +1476,7 @@ version = "0.2.0"
 dependencies = [
  "android-activity",
  "anyhow",
+ "flui-animation",
  "flui-engine",
  "flui-foundation",
  "flui-hot-reload",
