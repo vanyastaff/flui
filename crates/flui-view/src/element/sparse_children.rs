@@ -13,6 +13,7 @@
 //! FLUI has no equivalent of Flutter's `_currentBeforeChild` insertion cursor.
 
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::collections::btree_map::Keys;
 use std::sync::Arc;
 
@@ -42,15 +43,11 @@ use crate::view::View;
 /// gracefully. `RenderSliverList` indexes children by their
 /// `SliverMultiBoxAdaptorParentData.index` field (stamped at `ensure` time),
 /// not by dense slot order, so the empty `child_ids` is safe and intentional.
-// `SparseChildren` and all its methods are wired up in Step 2 (lazy adaptor
-// element + ChildManager trait).  Suppress dead-code until that consumer lands.
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub(crate) struct SparseChildren {
     by_logical_index: BTreeMap<usize, ElementId>,
 }
 
-#[allow(dead_code)]
 impl SparseChildren {
     /// An empty manager — no children built yet.
     pub(crate) fn new() -> Self {
@@ -63,6 +60,10 @@ impl SparseChildren {
     }
 
     /// Whether no child is currently built.
+    ///
+    /// Used in tests; suppressed in release builds to avoid the dead-code lint
+    /// until a production caller lands.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.by_logical_index.is_empty()
     }
@@ -73,6 +74,10 @@ impl SparseChildren {
     }
 
     /// The logical indices of all currently-built children, ascending.
+    ///
+    /// Used in tests; suppressed in release builds to avoid the dead-code lint
+    /// until a production caller lands.
+    #[cfg(test)]
     pub(crate) fn logical_indices(&self) -> Keys<'_, usize, ElementId> {
         self.by_logical_index.keys()
     }
@@ -156,27 +161,32 @@ impl SparseChildren {
     /// Evict every child whose logical index falls outside the half-open band
     /// `[first, last)` — the children that have scrolled out of the cache band.
     /// `O(K)` in the currently-built child count `K` (bounded by the band).
+    ///
+    /// Returns `true` if at least one child was evicted, `false` if all built
+    /// children were already inside the band (no work done). Callers use this
+    /// to decide whether to mark the sliver dirty for re-layout.
     pub(crate) fn retain_band(
         &mut self,
         first: usize,
         last: usize,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
-    ) {
+    ) -> bool {
         let out_of_band: Vec<usize> = self
             .by_logical_index
             .keys()
             .copied()
             .filter(|&logical_index| logical_index < first || logical_index >= last)
             .collect();
+        let any_evicted = !out_of_band.is_empty();
         for logical_index in out_of_band {
             self.evict(logical_index, tree, owner);
         }
+        any_evicted
     }
 }
 
-// Called from `SparseChildren::ensure` via the Step-2 adaptor element.
-#[allow(dead_code)]
+// Called from `SparseChildren::ensure` via the lazy-sliver adaptor element.
 /// Stamp `child`'s render node with its sliver logical index, so the lazy sliver
 /// can map `logical -> dense slot` from parent-data alone. Fresh render nodes
 /// start with `parent_data = None`; this seeds a full
@@ -212,6 +222,7 @@ fn stamp_logical_index(
 mod tests {
     use std::sync::Arc;
 
+    use flui_foundation::ViewKey;
     use flui_objects::RenderSizedBox;
     use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
     use flui_rendering::pipeline::PipelineOwner;
@@ -219,6 +230,7 @@ mod tests {
     use parking_lot::RwLock;
 
     use super::SparseChildren;
+    use crate::GlobalKey;
     use crate::element::{RenderBehavior, RenderElement};
     use crate::view::{ElementBase, RenderView, View};
     use crate::{BuildOwner, ElementTree};
@@ -244,6 +256,36 @@ mod tests {
     impl View for LeafBox {
         fn create_element(&self) -> Box<dyn ElementBase> {
             Box::new(RenderElement::new(self, RenderBehavior::new()))
+        }
+    }
+
+    /// Like [`LeafBox`] but carries a [`GlobalKey`] so `tree.remove` soft-removes
+    /// it into the inactive queue instead of freeing the slab entry immediately.
+    /// Used to test the globally-keyed eviction → `finalize_tree` → slab-free path.
+    #[derive(Clone)]
+    struct GlobalKeyedLeafBox {
+        side: f32,
+        key: GlobalKey<Self>,
+    }
+
+    impl RenderView for GlobalKeyedLeafBox {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
+        }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    }
+
+    impl View for GlobalKeyedLeafBox {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(RenderElement::new(self, RenderBehavior::new()))
+        }
+
+        fn key(&self) -> Option<&dyn ViewKey> {
+            Some(&self.key)
         }
     }
 
@@ -478,6 +520,21 @@ mod tests {
             "grandchild present before evict"
         );
 
+        // Capture render IDs before eviction to verify render-tree cleanup.
+        let child_render_id = tree.get(child).and_then(|n| n.element().render_id());
+        let grandchild_render_id = tree.get(grandchild).and_then(|n| n.element().render_id());
+
+        // Both render nodes must exist (pipeline is threaded through the parent
+        // element into `tree.insert` via `pipeline_owner_any` propagation).
+        assert!(
+            child_render_id.is_some(),
+            "child element must have a render node before evict"
+        );
+        assert!(
+            grandchild_render_id.is_some(),
+            "grandchild element must have a render node before evict"
+        );
+
         // Evict the list item — the whole subtree must disappear (F2).
         let removed = children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
 
@@ -490,6 +547,106 @@ mod tests {
             tree.get(grandchild).is_none(),
             "descendant element must also be removed (F2 — single-node remove \
              would leak this grandchild as an orphaned slab entry)",
+        );
+
+        // F2: render nodes must also be gone after subtree eviction.
+        let owner = pipeline.read();
+        if let Some(rid) = child_render_id {
+            assert!(
+                owner.render_tree().get(rid).is_none(),
+                "child render node must be removed on subtree evict (F2)",
+            );
+        }
+        if let Some(rid) = grandchild_render_id {
+            assert!(
+                owner.render_tree().get(rid).is_none(),
+                "grandchild render node must also be removed on subtree evict (F2 — \
+                 single-node remove leaks descendant render nodes)",
+            );
+        }
+    }
+
+    /// F5.key: a globally-keyed lazy child pushed to the inactive queue by
+    /// eviction must be slab-freed by `finalize_tree` — not left dangling.
+    ///
+    /// A globally-keyed element is soft-removed by `tree.remove` (called inside
+    /// `remove_subtree`): the slab entry stays alive, the element is placed into
+    /// `BuildOwner::inactive_elements`, and `has_inactive_elements()` returns
+    /// `true`. Only `finalize_tree` drains that queue and calls `remove_finalized`
+    /// which actually frees the slab slot. Without `finalize_tree` the element
+    /// would remain in the slab indefinitely.
+    ///
+    /// The test uses a leaf view so the globally-keyed root has no descendants —
+    /// the non-keyed descendant-leak concern for composite subtrees is a separate,
+    /// orthogonal investigation.
+    #[test]
+    fn evicted_globally_keyed_child_freed_by_finalize_tree() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+        let element_count_before = tree.len();
+
+        let global_key = GlobalKey::<GlobalKeyedLeafBox>::new();
+        let keyed_item = GlobalKeyedLeafBox {
+            side: 4.0,
+            key: global_key.clone(),
+        };
+
+        let mut children = SparseChildren::new();
+        let child_id = children.ensure(
+            0,
+            &keyed_item,
+            host,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert_eq!(
+            tree.len(),
+            element_count_before + 1,
+            "the globally-keyed child must occupy one slab slot after mount"
+        );
+        assert!(
+            tree.get(child_id).is_some(),
+            "child must be accessible in the tree before eviction"
+        );
+
+        // Evict: `remove_subtree` → `remove` → soft-removes because the element
+        // has a `registered_global_key_hash` (GlobalKey). The slab entry survives.
+        children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
+
+        assert_eq!(
+            children.get(0),
+            None,
+            "evict must clear the SparseChildren map entry"
+        );
+        // The node is still in the slab (soft-removed), but pushed to inactive.
+        assert_eq!(
+            tree.len(),
+            element_count_before + 1,
+            "soft-remove must not free the slab slot immediately"
+        );
+        assert!(
+            build_owner.has_inactive_elements(),
+            "a globally-keyed eviction must push the element to the inactive queue, \
+             not free it eagerly — this is what distinguishes soft-remove from eager-remove"
+        );
+
+        // `finalize_tree` drains the inactive queue and calls `remove_finalized`
+        // on each entry, which frees the slab slot.
+        build_owner.finalize_tree(&mut tree);
+
+        assert!(
+            !build_owner.has_inactive_elements(),
+            "finalize_tree must drain the inactive queue completely"
+        );
+        assert_eq!(
+            tree.len(),
+            element_count_before,
+            "the globally-keyed element must be slab-freed by finalize_tree (F5.key)"
+        );
+        assert!(
+            tree.get(child_id).is_none(),
+            "the element must no longer be accessible in the tree after finalize_tree"
         );
     }
 }

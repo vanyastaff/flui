@@ -779,6 +779,12 @@ impl BuildOwner {
         //    ElementOwner split-borrow, calls service (which may call
         //    `ensure`/`evict` and mutate the tree + dirty heap), then drops
         //    the inline owner — the borrow ends before the next iteration.
+        //
+        //    Track whether any manager did real work (built or evicted a child).
+        //    When all managers return `false` (settled state — band unchanged,
+        //    no new requests in-band) we skip `mark_needs_layout` so the sliver
+        //    stays clean and the frame quiesces rather than looping forever.
+        let mut any_service_did_work = false;
         for (sliver_id, manager_arc) in &manager_arcs {
             let requested = requests_by_sliver
                 .get(sliver_id)
@@ -802,7 +808,7 @@ impl BuildOwner {
                 child_manager_registry: &self.child_manager_registry,
             };
 
-            manager_arc.lock().service(
+            let did_work = manager_arc.lock().service(
                 requested,
                 retain_first,
                 retain_last,
@@ -810,6 +816,9 @@ impl BuildOwner {
                 &mut inline_owner,
                 pipeline,
             );
+            if did_work {
+                any_service_did_work = true;
+            }
         } // `inline_owner` drops here — all `&mut` borrows released.
 
         // 5. Second build_scope: expand newly-built children's subtrees.
@@ -818,13 +827,24 @@ impl BuildOwner {
         //    (e.g. a Padding wrapping a Text) need a dedicated build pass.
         self.build_scope(tree);
 
-        // 6. Mark each serviced sliver as needing re-layout so the next frame
-        //    measures with the freshly-present render nodes.
-        {
+        // 6. Mark each serviced sliver as needing re-layout ONLY if service
+        //    did real work (built or evicted children). When all service calls
+        //    returned `false`, the list has settled: the viewport, band, and
+        //    built-child set are all unchanged. Skipping `mark_needs_layout`
+        //    keeps the sliver clean so `flush_layout` skips it, `perform_layout`
+        //    does not run, no new `emit_retain_band` fires, and
+        //    `service_child_requests` early-returns on the next frame.
+        //    This breaks the unconditional dirty-loop that prevented quiescence.
+        if any_service_did_work {
             let mut guard = pipeline.write();
             for (sliver_id, _) in &manager_arcs {
                 guard.mark_needs_layout(*sliver_id);
             }
+        } else {
+            tracing::debug!(
+                "service_child_requests: no work done, skipping mark_needs_layout \
+                 (frame quiesces)"
+            );
         }
 
         // 7. Finalize: unmount evicted children (pushed to inactive by

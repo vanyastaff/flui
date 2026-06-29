@@ -59,7 +59,7 @@ pub use notification::{
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
-pub use sliver_adaptor::SliverListAdaptorView;
+pub use sliver_adaptor::SliverList;
 pub use unified::Element;
 
 /// Slot describing a child element's position in its parent's children list.

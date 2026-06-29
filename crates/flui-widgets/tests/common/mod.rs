@@ -158,6 +158,15 @@ impl LaidOut {
         self.pipeline_owner.read().render_tree().iter().count()
     }
 
+    /// Number of elements currently in the element tree (mounted + soft-removed
+    /// pending `finalize_tree`). Grows with each `ensure` call, shrinks after
+    /// each `finalize_tree` or eager `remove`. Useful for asserting that
+    /// `SparseChildren::evict` + `finalize_tree` fully drains lazy children from
+    /// both trees, not just the render tree.
+    pub fn element_node_count(&mut self) -> usize {
+        self.binding.tree_mut().len()
+    }
+
     /// The `i`-th render-tree child of `id`.
     pub fn child(&self, id: RenderId, index: usize) -> RenderId {
         self.pipeline_owner.read().render_tree().children(id)[index]

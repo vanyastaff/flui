@@ -24,7 +24,7 @@
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_view::ViewExt;
@@ -148,34 +148,54 @@ fn lazy_list_view_builder_multi_node_child() {
 // ============================================================================
 
 /// After the list has settled (two ticks), a third tick must NOT add or remove
-/// any render nodes. The stable state is a fixed point: no new children are
-/// built and no existing ones are evicted on an un-driven frame.
+/// any render nodes, and the builder closure must NOT be called again. The stable
+/// state is a fixed point: no new children are built and no existing ones are
+/// evicted on an un-driven frame.
+///
+/// The `Arc<AtomicUsize>` build counter gives a precise quiescence signal: if any
+/// new build occurs on tick 3, `builds_at_third_tick > builds_at_settle` and the
+/// test fails — proving the `ChildManager::service` bool-gate is working correctly.
 #[test]
 fn lazy_list_view_builder_third_tick_is_idempotent() {
+    let items_built = Arc::new(AtomicUsize::new(0));
+
     let mut laid = lay_out(
-        ListView::builder(3, 48.0, |i| {
-            if i < 3 {
-                Some(SizedBox::new(200.0, 48.0).boxed())
-            } else {
-                None
+        ListView::builder(3, 48.0, {
+            let items_built = Arc::clone(&items_built);
+            move |i| {
+                if i < 3 {
+                    items_built.fetch_add(1, Ordering::Relaxed);
+                    Some(SizedBox::new(200.0, 48.0).boxed())
+                } else {
+                    None
+                }
             }
         }),
         tight(200.0, 200.0),
     );
 
-    laid.tick(); // tick1: build children
-    laid.tick(); // tick2: lay out built children
+    laid.tick(); // tick1: service builds children, build counter increments
+    laid.tick(); // tick2: sliver lays out built children (no new builds needed)
 
     let nodes_at_settle = laid.render_node_count();
+    let builds_at_settle = items_built.load(Ordering::Relaxed);
 
-    // tick3: no-op — neither the element tree nor the sliver is dirty.
+    // tick3: no-op — neither the element tree nor the sliver is dirty after settle.
     laid.tick();
 
     let nodes_at_third_tick = laid.render_node_count();
+    let builds_at_third_tick = items_built.load(Ordering::Relaxed);
+
     assert_eq!(
         nodes_at_settle, nodes_at_third_tick,
         "a third tick must not change the render node count: \
          settled at {nodes_at_settle}, after tick3: {nodes_at_third_tick}"
+    );
+    assert_eq!(
+        builds_at_settle, builds_at_third_tick,
+        "a third tick must trigger zero new item builds (quiescence invariant); \
+         settled after {builds_at_settle} builds, \
+         tick3 raised the count to {builds_at_third_tick}"
     );
 }
 
@@ -254,6 +274,17 @@ fn lazy_list_view_builder_host_unmount_cleans_render_nodes() {
          got {nodes_with_list_mounted}"
     );
 
+    // Element tree includes StatefulView/StatelessView wrapper elements that own
+    // no render nodes (e.g. MaybeListView element, ListView element, Viewport element)
+    // on top of the render-bearing ones — so the element count must be ≥ the render count.
+    let elements_with_list_mounted = laid.element_node_count();
+    assert!(
+        elements_with_list_mounted >= nodes_with_list_mounted,
+        "element tree must have at least as many nodes as the render tree while the list \
+         is mounted (stateless/stateful wrappers add element-only nodes); \
+         render: {nodes_with_list_mounted}, element: {elements_with_list_mounted}"
+    );
+
     // Switch to SizedBox — triggers a StatefulView rebuild that unmounts the list.
     show_list.store(false, Ordering::Relaxed);
     // `pump` marks root dirty and drives one frame. `service_child_requests`
@@ -269,6 +300,14 @@ fn lazy_list_view_builder_host_unmount_cleans_render_nodes() {
         "after unmounting the ListView all lazy children must be cleaned up (F3); \
          got {nodes_after_unmount} render nodes (expected 1 for the SizedBox)"
     );
+
+    // Both the element tree and the render tree must shrink on unmount.
+    let elements_after_unmount = laid.element_node_count();
+    assert!(
+        elements_after_unmount < elements_with_list_mounted,
+        "element tree must shrink after unmounting the ListView: \
+         was {elements_with_list_mounted}, now {elements_after_unmount}"
+    );
 }
 
 // ============================================================================
@@ -278,17 +317,21 @@ fn lazy_list_view_builder_host_unmount_cleans_render_nodes() {
 /// When the actual item extent differs from the estimate the virtualizer
 /// corrects its band on each layout pass. The correction must terminate
 /// (no oscillation) within a small number of frames — a fixed point must
-/// be reached and held.
+/// be reached and held, with only the visible + cache-band items built (not all).
 ///
 /// Here actual extent (64 px) > estimate (24 px). After 6 frames the
 /// render-node count must be stable and must be far fewer than the total
-/// item count (only the visible+cached window is built).
+/// item count (only the visible+cached window is built). We use 50 items so
+/// off-band eviction is guaranteed: 50 × 64 px = 3 200 px  >>  192 px
+/// viewport + 250 px-per-side cache margin = 692 px cache window.
 #[test]
 fn lazy_list_view_builder_convergence_stabilizes() {
-    // 10 items, estimate 24 px, actual 64 px → virtualizer corrects each frame.
+    // 50 items, estimate 24 px, actual 64 px → virtualizer corrects each frame.
+    // Only ~10-11 items fit in the 192 px viewport + 250 px cache margin on
+    // each side; the rest are evicted as the band converges.
     let mut laid = lay_out(
-        ListView::builder(10, 24.0, |i| {
-            if i < 10 {
+        ListView::builder(50, 24.0, |i| {
+            if i < 50 {
                 Some(SizedBox::new(200.0, 64.0).boxed())
             } else {
                 None
@@ -316,12 +359,23 @@ fn lazy_list_view_builder_convergence_stabilizes() {
          (oscillation detected)"
     );
 
-    // Sanity: only visible + cached items built, never all 10.
-    // Subtract 2 structural nodes (viewport + sliver) to get item count.
+    // Subtract 2 structural nodes (viewport + sliver) to get item render-node count.
     let item_render_nodes = nodes_after_stability_check.saturating_sub(2);
+
+    // Lower bound: the 192 px viewport fits exactly 3 items at 64 px each, so all
+    // 3 visible items must be built at convergence.
     assert!(
-        item_render_nodes < 10,
-        "convergence must build only the visible+cached window, not all 10 items; \
+        item_render_nodes >= 3,
+        "192 px viewport / 64 px per item = 3 visible items must all be built at \
+         convergence; got {item_render_nodes} item render nodes"
+    );
+
+    // Upper bound: only visible + cached items built, never all 50.
+    // The 192 px viewport + 250 px cache margins on each side ≈ 692 px cache
+    // window; at 64 px/item that fits at most 11 items — far fewer than 50.
+    assert!(
+        item_render_nodes < 50,
+        "convergence must build only the visible+cached window, not all 50 items; \
          item render nodes built: {item_render_nodes}"
     );
 }

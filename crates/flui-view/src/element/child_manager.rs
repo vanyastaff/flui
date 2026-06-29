@@ -85,6 +85,12 @@ pub(crate) trait ChildManager: Send {
     ///   children to the inactive queue.
     /// - `pipeline`: the shared render-owner — required to stamp the child's
     ///   `SliverMultiBoxAdaptorParentData` logical index at mount.
+    ///
+    /// Returns `true` if any children were built or evicted during this call,
+    /// `false` if this service pass was a no-op (settled state). Callers
+    /// (specifically `BuildOwner::service_child_requests`) gate the
+    /// `mark_needs_layout` call on this return value: when `false`, the sliver
+    /// is not dirtied and the frame becomes quiescent.
     fn service(
         &mut self,
         requested_indices: &[usize],
@@ -93,5 +99,5 @@ pub(crate) trait ChildManager: Send {
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
         pipeline: &Arc<RwLock<PipelineOwner>>,
-    );
+    ) -> bool;
 }

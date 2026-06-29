@@ -78,7 +78,7 @@ use crate::{
 /// never touch the lazy children — they are managed by [`SparseChildren`]
 /// via `BuildOwner::service_child_requests`.
 #[derive(Clone)]
-pub struct SliverListAdaptorView {
+pub struct SliverList {
     /// Total number of items in the data source.
     pub(crate) item_count: usize,
     /// Default per-item extent (logical pixels), used to seed the virtualizer
@@ -89,7 +89,7 @@ pub struct SliverListAdaptorView {
     pub(crate) builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
 }
 
-impl SliverListAdaptorView {
+impl SliverList {
     /// Construct a new lazy-sliver adaptor view configuration.
     ///
     /// # Panics
@@ -113,9 +113,9 @@ impl SliverListAdaptorView {
     }
 }
 
-impl std::fmt::Debug for SliverListAdaptorView {
+impl std::fmt::Debug for SliverList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SliverListAdaptorView")
+        f.debug_struct("SliverList")
             .field("item_count", &self.item_count)
             .field("item_extent_estimate", &self.item_extent_estimate)
             .finish_non_exhaustive()
@@ -126,7 +126,7 @@ impl std::fmt::Debug for SliverListAdaptorView {
 // RenderView impl
 // ============================================================================
 
-impl RenderView for SliverListAdaptorView {
+impl RenderView for SliverList {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverList;
 
@@ -153,7 +153,7 @@ impl RenderView for SliverListAdaptorView {
 // View impl — creates a SliverListAdaptorElement with the custom behavior
 // ============================================================================
 
-impl View for SliverListAdaptorView {
+impl View for SliverList {
     fn create_element(&self) -> Box<dyn ElementBase> {
         // Creates the adaptor element with the custom behavior instead of the
         // generic `RenderBehavior::new()` produced by `impl_render_view!`.
@@ -181,7 +181,7 @@ pub(crate) struct SliverListAdaptorManager {
     /// The element id of the adaptor host element. `None` until `on_mount`
     /// stamps it; the host is always mounted before `service` runs.
     host_element_id: Option<ElementId>,
-    /// Item factory. `Arc` so it's shared with `SliverListAdaptorView` and the
+    /// Item factory. `Arc` so it's shared with `SliverList` and the
     /// behavior without cloning the closure.
     builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
 }
@@ -204,29 +204,36 @@ impl ChildManager for SliverListAdaptorManager {
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
         pipeline: &Arc<RwLock<PipelineOwner>>,
-    ) {
+    ) -> bool {
         let Some(host) = self.host_element_id else {
             // service called before mount: programming-contract violation;
             // warn loudly but do not panic (production robustness).
             tracing::warn!(
                 "SliverListAdaptorManager::service called before host element was mounted"
             );
-            return;
+            return false;
         };
 
         // Evict out-of-band children FIRST so the retain-band contract is
         // satisfied before we try to build new children. An index that falls
         // outside the band and was also requested (rare edge case from a
         // mid-scroll jump) is correctly evicted then not rebuilt.
-        self.sparse_children
-            .retain_band(retain_first, retain_last, tree, owner);
+        let retain_did_work =
+            self.sparse_children
+                .retain_band(retain_first, retain_last, tree, owner);
 
         // Build each requested index that is (a) within the retain band and
-        // (b) not already built (ensure is idempotent but skip the builder
-        // call for already-present indices to avoid unnecessary allocations).
+        // (b) not already built. We check first to avoid calling the builder
+        // for already-present indices (idempotency without closure overhead)
+        // and to accurately track whether any new child was mounted.
+        let mut any_new_build = false;
         for &logical_index in requested_indices {
             if logical_index < retain_first || logical_index >= retain_last {
                 // Fell outside the band we just retained — skip.
+                continue;
+            }
+            if self.sparse_children.get(logical_index).is_some() {
+                // Already built — no work needed.
                 continue;
             }
             if let Some(view) = (self.builder)(logical_index) {
@@ -238,8 +245,11 @@ impl ChildManager for SliverListAdaptorManager {
                     owner,
                     pipeline,
                 );
+                any_new_build = true;
             }
         }
+
+        retain_did_work || any_new_build
     }
 }
 
@@ -249,7 +259,7 @@ impl ChildManager for SliverListAdaptorManager {
 
 /// `ElementBehavior` for the lazy-sliver adaptor element.
 ///
-/// Wraps [`RenderBehavior<SliverListAdaptorView>`] (which handles render-object
+/// Wraps [`RenderBehavior<SliverList>`] (which handles render-object
 /// creation and removal) and additionally:
 /// - **mount**: stamps `host_element_id` on the manager and registers it in
 ///   `BuildOwner::child_manager_registry` keyed by the sliver's `RenderId`.
@@ -260,7 +270,7 @@ impl ChildManager for SliverListAdaptorManager {
 /// `behavior.rs:789` site — F8 in the approved plan.
 pub(crate) struct SliverListAdaptorBehavior {
     /// Handles `RenderSliverList` creation / update / removal.
-    inner: RenderBehavior<SliverListAdaptorView>,
+    inner: RenderBehavior<SliverList>,
     /// Shared manager; Arc lets `on_mount` insert a clone into the registry
     /// without moving out of `self`.
     manager: Arc<Mutex<SliverListAdaptorManager>>,
@@ -276,7 +286,7 @@ impl std::fmt::Debug for SliverListAdaptorBehavior {
 }
 
 impl SliverListAdaptorBehavior {
-    fn new(view: &SliverListAdaptorView) -> Self {
+    fn new(view: &SliverList) -> Self {
         Self {
             inner: RenderBehavior::new(),
             manager: Arc::new(Mutex::new(SliverListAdaptorManager {
@@ -288,7 +298,7 @@ impl SliverListAdaptorBehavior {
     }
 }
 
-impl ElementBehavior<SliverListAdaptorView, Variable> for SliverListAdaptorBehavior
+impl ElementBehavior<SliverList, Variable> for SliverListAdaptorBehavior
 where
     flui_rendering::storage::RenderNode:
         From<Box<dyn flui_rendering::traits::RenderObject<SliverProtocol>>>,
@@ -300,11 +310,11 @@ where
     /// F4: returns empty — the dense reconciler must not touch lazy children.
     ///
     /// The inner `RenderBehavior::build_into_views` also returns empty because
-    /// `SliverListAdaptorView::has_children() = false`; we forward for the
+    /// `SliverList::has_children() = false`; we forward for the
     /// `should_build` guard and `clear_dirty` side effect.
     fn build_into_views(
         &mut self,
-        core: &mut ElementCore<SliverListAdaptorView, Variable>,
+        core: &mut ElementCore<SliverList, Variable>,
         owner: &mut ElementOwner<'_>,
     ) -> Vec<Box<dyn View>> {
         self.inner.build_into_views(core, owner)
@@ -314,7 +324,7 @@ where
     /// `host_element_id` on the manager for later `service` calls.
     fn on_mount(
         &mut self,
-        core: &mut ElementCore<SliverListAdaptorView, Variable>,
+        core: &mut ElementCore<SliverList, Variable>,
         owner: &mut ElementOwner<'_>,
     ) {
         // Step 1: create the render object via the inner RenderBehavior.
@@ -360,7 +370,7 @@ where
     /// manager, and removes the render object.
     fn on_unmount(
         &mut self,
-        core: &mut ElementCore<SliverListAdaptorView, Variable>,
+        core: &mut ElementCore<SliverList, Variable>,
         owner: &mut ElementOwner<'_>,
     ) {
         // F3: host.child_ids is empty (F4 invariant), so `finalize_tree`'s
@@ -396,14 +406,14 @@ where
         self.inner.on_unmount(core, owner);
     }
 
-    fn on_update(&mut self, core: &ElementCore<SliverListAdaptorView, Variable>) {
+    fn on_update(&mut self, core: &ElementCore<SliverList, Variable>) {
         self.inner.on_update(core);
     }
 
     fn on_view_updated(
         &mut self,
-        core: &ElementCore<SliverListAdaptorView, Variable>,
-        old_view: &SliverListAdaptorView,
+        core: &ElementCore<SliverList, Variable>,
+        old_view: &SliverList,
         owner: &mut ElementOwner<'_>,
     ) {
         self.inner.on_view_updated(core, old_view, owner);
@@ -426,10 +436,9 @@ where
 /// drives the manager to build or evict lazy children.
 ///
 /// External consumers create adaptor elements through
-/// [`SliverListAdaptorView::create_element`] — not through this alias
-/// directly — so `pub(crate)` is sufficient.
-pub(crate) type SliverListAdaptorElement =
-    Element<SliverListAdaptorView, Variable, SliverListAdaptorBehavior>;
+/// [`SliverList::create_element`] (or [`ListView::builder`](crate::BuildContext)) —
+/// not through this alias directly — so `pub(crate)` is sufficient.
+pub(crate) type SliverListAdaptorElement = Element<SliverList, Variable, SliverListAdaptorBehavior>;
 
 // ============================================================================
 // UNIT TESTS
@@ -441,13 +450,17 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use flui_foundation::{ElementId, RenderId};
     use flui_objects::RenderSizedBox;
+    use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     use flui_types::geometry::px;
+    use parking_lot::RwLock;
 
     use super::*;
     use crate::element::{RenderBehavior, Variable, unified::Element};
     use crate::view::RenderView;
+    use crate::{BuildOwner, ElementTree};
 
     // -------------------------------------------------------------------------
     // Shared test fixture — minimal item view used as a list placeholder.
@@ -491,22 +504,22 @@ mod tests {
     // Tests
     // -------------------------------------------------------------------------
 
-    /// `SliverListAdaptorView::new` panics on a zero extent estimate.
+    /// `SliverList::new` panics on a zero extent estimate.
     #[test]
     fn new_panics_on_zero_estimate() {
         let builder = make_builder(10);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SliverListAdaptorView::new(10, 0.0, builder)
+            SliverList::new(10, 0.0, builder)
         }));
         assert!(result.is_err(), "zero estimate must panic");
     }
 
-    /// `SliverListAdaptorView::new` panics on a negative extent estimate.
+    /// `SliverList::new` panics on a negative extent estimate.
     #[test]
     fn new_panics_on_negative_estimate() {
         let builder = make_builder(10);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SliverListAdaptorView::new(10, -1.0, builder)
+            SliverList::new(10, -1.0, builder)
         }));
         assert!(result.is_err(), "negative estimate must panic");
     }
@@ -515,7 +528,7 @@ mod tests {
     #[test]
     fn new_succeeds_with_valid_parameters() {
         let builder = make_builder(100);
-        let view = SliverListAdaptorView::new(100, 48.0, builder);
+        let view = SliverList::new(100, 48.0, builder);
         assert_eq!(view.item_count, 100);
         assert!((view.item_extent_estimate - 48.0).abs() < f32::EPSILON);
         assert!(
@@ -541,18 +554,18 @@ mod tests {
                 }
             });
 
-        let view = SliverListAdaptorView::new(5, 48.0, Arc::clone(&builder));
+        let view = SliverList::new(5, 48.0, Arc::clone(&builder));
         assert!(!view.has_children(), "F4: no dense children");
         assert!((view.builder)(3).is_some());
         assert!((view.builder)(5).is_none());
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
     }
 
-    /// `SliverListAdaptorView` is `Clone` (required by `View` + `RenderView`).
+    /// `SliverList` is `Clone` (required by `View` + `RenderView`).
     #[test]
     fn view_is_clone() {
         let builder = make_builder(10);
-        let view = SliverListAdaptorView::new(10, 48.0, builder);
+        let view = SliverList::new(10, 48.0, builder);
         let cloned = view.clone();
         assert_eq!(cloned.item_count, 10);
         assert!((cloned.item_extent_estimate - 48.0).abs() < f32::EPSILON);
@@ -560,14 +573,201 @@ mod tests {
 
     /// `create_element` produces a `SliverListAdaptorElement` (the view type id
     /// round-trips through the `dyn ElementBase` interface).
+    ///
+    /// Specifically: `view_type_id() == TypeId::of::<SliverList>()`, NOT
+    /// `TypeId::of::<SliverListAdaptorElement>()` or any internal adaptor name.
+    /// This is the identity the reconciler checks in `can_update_by_id` — if it
+    /// were wrong, the element would be torn down and rebuilt on every parent
+    /// rebuild that produces a new `SliverList` view (BLOCKER 1).
     #[test]
     fn create_element_produces_adaptor_element() {
         let builder = make_builder(10);
-        let view = SliverListAdaptorView::new(10, 48.0, builder);
+        let view = SliverList::new(10, 48.0, builder);
         let element = view.create_element();
-        assert_eq!(
-            element.view_type_id(),
-            TypeId::of::<SliverListAdaptorView>()
+        assert_eq!(element.view_type_id(), TypeId::of::<SliverList>());
+    }
+
+    // =========================================================================
+    // Helper: minimal tree wired to a PipelineOwner, for service + round-trip.
+    // =========================================================================
+
+    /// Mount a render-bearing `ItemView` root wired to a fresh `PipelineOwner`.
+    /// Returns `(tree, build_owner, pipeline, host_element_id)`.
+    fn host_tree() -> (
+        ElementTree,
+        BuildOwner,
+        Arc<RwLock<PipelineOwner>>,
+        ElementId,
+    ) {
+        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let mut build_owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let host = tree.mount_root_with_pipeline_owner(
+            &ItemView,
+            Some(Arc::clone(&pipeline)),
+            &mut build_owner.element_owner_mut(),
         );
+        (tree, build_owner, pipeline, host)
+    }
+
+    // =========================================================================
+    // Test gap 6a: `ChildManager::service` bool-return unit tests.
+    // =========================================================================
+
+    /// `ChildManager::service` must return `false` when no children are evicted
+    /// and no new children are built — the quiescence signal that prevents
+    /// `service_child_requests` from calling `mark_needs_layout` and therefore
+    /// issuing another layout pass on an already-settled sliver.
+    #[test]
+    fn service_returns_false_when_no_work_done() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+
+        // Manager with no pre-built children; no requested indices; full retain
+        // band [0, usize::MAX) ≡ keep everything.
+        let mut manager = SliverListAdaptorManager {
+            sparse_children: SparseChildren::new(),
+            host_element_id: Some(host),
+            builder: make_builder(5),
+        };
+
+        let did_work = manager.service(
+            &[],        // no children requested
+            0,          // retain_first
+            usize::MAX, // retain_last — nothing is out-of-band
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert!(
+            !did_work,
+            "service with no evictions and no builds must return false (quiescence gate)"
+        );
+    }
+
+    /// `ChildManager::service` must return `true` when it builds at least one
+    /// new child. `true` tells `service_child_requests` to call
+    /// `mark_needs_layout` so the sliver lays out the freshly-built children.
+    #[test]
+    fn service_returns_true_when_children_are_built() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+
+        let mut manager = SliverListAdaptorManager {
+            sparse_children: SparseChildren::new(),
+            host_element_id: Some(host),
+            builder: make_builder(5),
+        };
+
+        // Request index 0, retain band [0, 1): service must build item 0.
+        let did_work = manager.service(
+            &[0],
+            0,
+            1,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert!(
+            did_work,
+            "service that builds at least one child must return true"
+        );
+        assert!(
+            manager.sparse_children.get(0).is_some(),
+            "the requested child must be present in SparseChildren after service"
+        );
+    }
+
+    /// `ChildManager::service` must return `true` when it evicts at least one
+    /// child that has scrolled outside the retain band. This is the off-band
+    /// eviction path (F5).
+    #[test]
+    fn service_returns_true_when_children_are_evicted() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+
+        let mut manager = SliverListAdaptorManager {
+            sparse_children: SparseChildren::new(),
+            host_element_id: Some(host),
+            builder: make_builder(5),
+        };
+
+        // Seed two pre-built children at indices 0 and 1.
+        manager.service(
+            &[0, 1],
+            0,
+            2,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+        assert_eq!(
+            manager.sparse_children.len(),
+            2,
+            "pre-condition: 2 children built"
+        );
+
+        // Retain band [5, 10): both pre-built children (0, 1) are out-of-band.
+        let did_work = manager.service(
+            &[],
+            5,
+            10,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert!(
+            did_work,
+            "service that evicts at least one child must return true"
+        );
+        assert_eq!(
+            manager.sparse_children.len(),
+            0,
+            "all out-of-band children must be evicted"
+        );
+    }
+
+    // =========================================================================
+    // Test gap 6b: register/unregister round-trip via element lifecycle.
+    // =========================================================================
+
+    /// Mounting a `SliverList` element must register its `ChildManager` in the
+    /// `BuildOwner`'s registry (keyed by the sliver's `RenderId`), and unmounting
+    /// it must remove that entry. This end-to-end path exercises
+    /// `SliverListAdaptorBehavior::on_mount` → `ElementOwner::register_child_manager`
+    /// and `on_unmount` → `ElementOwner::unregister_child_manager`.
+    #[test]
+    fn child_manager_registered_on_mount_and_unregistered_on_unmount() {
+        let (mut tree, mut build_owner, _pipeline, host) = host_tree();
+
+        let sliver = SliverList::new(5, 48.0, make_builder(5));
+
+        // Mount: `on_mount` must register the ChildManager.
+        let sliver_id = tree.insert(&sliver, host, 0, &mut build_owner.element_owner_mut());
+
+        // The element's render node carries the RenderId used as the registry key.
+        let sliver_render_id: Option<RenderId> =
+            tree.get(sliver_id).and_then(|n| n.element().render_id());
+        let sliver_render_id =
+            sliver_render_id.expect("SliverList element must have a render node after mount");
+
+        {
+            let registry = build_owner.child_manager_registry.lock();
+            assert!(
+                registry.contains_key(&sliver_render_id),
+                "ChildManager must be registered in the BuildOwner registry after on_mount"
+            );
+        }
+
+        // Unmount: `on_unmount` must unregister the ChildManager.
+        tree.remove_subtree(sliver_id, &mut build_owner.element_owner_mut());
+
+        {
+            let registry = build_owner.child_manager_registry.lock();
+            assert!(
+                !registry.contains_key(&sliver_render_id),
+                "ChildManager must be removed from the BuildOwner registry after on_unmount"
+            );
+        }
     }
 }

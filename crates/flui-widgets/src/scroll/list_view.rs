@@ -1,6 +1,7 @@
 //! [`ListView`] — a scrollable list of fixed-height items (static or lazy-built).
 
 use std::fmt;
+use std::sync::Arc;
 
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
@@ -131,8 +132,19 @@ impl StatelessView for ListView {
         };
         // Both arms produce `Viewport<(BoxedView,)>` by boxing the sliver so
         // the opaque return type is the same concrete type in both branches.
+        //
+        // `SliverList::new` is used directly (not `SliverList::builder`) because
+        // `SliverList` is now defined in `flui-view` and the `builder` method
+        // that accepted a `SliverChildBuilderDelegate` lived only on the old
+        // widgets-side wrapper. The element's `view_type_id()` now returns
+        // `TypeId::of::<SliverList>()`, fixing BLOCKER 1 (element identity).
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
-            SliverList::builder(delegate.clone(), self.item_extent_estimate).boxed()
+            SliverList::new(
+                delegate.item_count,
+                self.item_extent_estimate,
+                Arc::clone(&delegate.builder),
+            )
+            .boxed()
         } else {
             SliverFixedExtentList::new(self.item_extent, self.children.clone()).boxed()
         };

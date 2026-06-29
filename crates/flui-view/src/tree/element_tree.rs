@@ -1025,8 +1025,6 @@ impl ElementTree {
         Some(node)
     }
 
-    // Called via `SparseChildren::evict`, which is wired in Step 2.
-    #[allow(dead_code)]
     /// Remove `id` and its entire descendant subtree.
     ///
     /// Used by [`crate::element::sparse_children::SparseChildren::evict`] to
