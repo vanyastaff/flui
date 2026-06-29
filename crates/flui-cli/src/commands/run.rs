@@ -119,7 +119,7 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
                 cliclack::log::info("Application exited. Watching for changes to restart...")?;
 
                 if let Some(paths) = watcher.recv() {
-                    log_changed_paths(&paths)?;
+                    log_changed_paths(&paths);
                 }
 
                 if run_cargo_build(profile, verbose) {
@@ -140,7 +140,7 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
 
         match watcher.recv_timeout(Duration::from_millis(200)) {
             Ok(Some(paths)) => {
-                log_changed_paths(&paths)?;
+                log_changed_paths(&paths);
 
                 if let Err(e) = child.kill() {
                     tracing::debug!("Could not kill child process: {e}");
@@ -158,8 +158,7 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
                     child = spawn_wait_dummy()?;
                 }
             }
-            Ok(None) => {}
-            Err(RecvTimeoutError::Timeout) => {}
+            Ok(None) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -259,11 +258,10 @@ fn spawn_wait_dummy() -> CliResult<Child> {
         .context("Failed to spawn dummy process")
 }
 
-fn log_changed_paths(paths: &[PathBuf]) -> CliResult<()> {
+fn log_changed_paths(paths: &[PathBuf]) {
     for path in paths {
         let _ = cliclack::log::info(format!("Change detected: {}", style(path.display()).dim()));
     }
-    Ok(())
 }
 
 /// Resolved host/worker project paths for `flui run`.
@@ -320,12 +318,12 @@ fn watch_worker_hot_reload(
     watcher
         .watch(&logic_src, true)
         .map_err(|e| CliError::context(e, format!("Failed to watch {}", logic_src.display())))?;
-    if let Some(ref types) = types_src {
-        if types.exists() {
-            watcher.watch(types, true).map_err(|e| {
-                CliError::context(e, format!("Failed to watch {}", types.display()))
-            })?;
-        }
+    if let Some(ref types) = types_src
+        && types.exists()
+    {
+        watcher
+            .watch(types, true)
+            .map_err(|e| CliError::context(e, format!("Failed to watch {}", types.display())))?;
     }
 
     cliclack::log::info(format!(
@@ -351,8 +349,7 @@ fn watch_worker_hot_reload(
             Ok(Some(paths)) => {
                 handle_worker_watch_event(project, profile, verbose, &paths, &mut child)?;
             }
-            Ok(None) => {}
-            Err(RecvTimeoutError::Timeout) => {}
+            Ok(None) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -369,7 +366,7 @@ fn handle_worker_watch_event(
     paths: &[PathBuf],
     child: &mut Child,
 ) -> CliResult<()> {
-    log_changed_paths(paths)?;
+    log_changed_paths(paths);
 
     let types_src = project
         .config
@@ -424,15 +421,12 @@ fn handle_worker_watch_event(
         let staged = stage_worker_artifact(&built, &canonical, isolate_target)?;
         publish_worker_plugin(&canonical, &staged)?;
         cliclack::log::success("Worker rebuilt — host will hot-reload on next frame (~500ms)")?;
-        match child.try_wait() {
-            Ok(None) => {
-                // Host still running — WorkerReloadDriver picks up the new dylib.
-            }
-            Ok(Some(_)) | Err(_) => {
-                *child =
-                    spawn_host_package(&project.config.host_package, &canonical, profile, verbose)?;
-                cliclack::log::success(format!("Host restarted (PID {})", child.id()))?;
-            }
+        if let Ok(None) = child.try_wait() {
+            // Host still running — WorkerReloadDriver picks up the new dylib.
+        } else {
+            *child =
+                spawn_host_package(&project.config.host_package, &canonical, profile, verbose)?;
+            cliclack::log::success(format!("Host restarted (PID {})", child.id()))?;
         }
     } else {
         cliclack::log::warning("Worker build failed — fix errors and save to retry")?;
@@ -471,8 +465,6 @@ fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> C
 
     let dest = if slot_a.exists() && !slot_b.exists() {
         slot_b
-    } else if slot_b.exists() {
-        slot_a
     } else {
         slot_a
     };
@@ -618,12 +610,11 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
         let cargo = dir.join("Cargo.toml");
-        if cargo.exists() {
-            if let Ok(content) = std::fs::read_to_string(&cargo) {
-                if content.contains("[workspace]") {
-                    return Some(dir);
-                }
-            }
+        if cargo.exists()
+            && let Ok(content) = std::fs::read_to_string(&cargo)
+            && content.contains("[workspace]")
+        {
+            return Some(dir);
         }
         if !dir.pop() {
             break;
@@ -750,12 +741,8 @@ pub fn execute_scene(
         .watch(&scene_src, true)
         .map_err(|e| CliError::context(e, "Failed to watch scene crate"))?;
 
-    loop {
-        let Some(paths) = watcher.recv() else {
-            break;
-        };
-
-        log_changed_paths(&paths)?;
+    while let Some(paths) = watcher.recv() {
+        log_changed_paths(&paths);
 
         let start = Instant::now();
         cliclack::log::step("Rebuilding scene plugin...")?;

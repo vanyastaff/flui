@@ -43,8 +43,7 @@ fn default_worker_path() -> std::path::PathBuf {
 
 fn main() {
     let worker_path = std::env::var(env::WORKER_PLUGIN)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| default_worker_path());
+        .map_or_else(|_| default_worker_path(), std::path::PathBuf::from);
 
     // Ensure the runner's worker poll watches this path.
     std::env::set_var(env::WORKER_PLUGIN, &worker_path);
