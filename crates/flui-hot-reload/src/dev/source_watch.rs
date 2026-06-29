@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use notify_debouncer_mini::{new_debouncer, DebouncedEvent, DebouncedEventKind, Debouncer};
+use notify_debouncer_mini::{DebouncedEvent, DebouncedEventKind, Debouncer, new_debouncer};
 
 use crate::strategy::timing;
 
@@ -102,7 +102,10 @@ impl SourceWatcher {
     }
 
     /// Wait up to `timeout` for changed paths.
-    pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<Vec<PathBuf>>, RecvTimeoutError> {
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<Option<Vec<PathBuf>>, RecvTimeoutError> {
         match self.rx.recv_timeout(timeout) {
             Ok(Ok(events)) => Ok(Self::paths_from_events(&events)),
             Ok(Err(errors)) => {
@@ -120,11 +123,7 @@ impl SourceWatcher {
             .map(|event| event.path.clone())
             .collect();
 
-        if paths.is_empty() {
-            None
-        } else {
-            Some(paths)
-        }
+        if paths.is_empty() { None } else { Some(paths) }
     }
 }
 

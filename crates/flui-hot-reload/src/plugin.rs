@@ -155,9 +155,12 @@ macro_rules! hot_reload_worker {
     };
     ($init_fn:ident, fingerprint: $fp:expr) => {
         /// Worker registration hook — runs on load and after every dylib reload.
+        ///
+        /// `register` is host-owned storage; never write build pointers into
+        /// dylib-local `static` variables.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_worker_init() {
-            $init_fn();
+        pub extern "C" fn flui_worker_init(register: $crate::RegisterWorkerBuildFn) {
+            $init_fn(register);
         }
 
         /// Worker version (for diagnostics).

@@ -121,9 +121,12 @@ pub use driver::HotReloadDriver;
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{PluginKind, ScenePlugin};
 #[cfg(not(target_arch = "wasm32"))]
-pub use worker::{WorkerPlugin, WorkerPollOutcome, WorkerReloadDriver};
+pub use worker::{
+    RegisterWorkerBuildFn, WorkerPlugin, WorkerPollOutcome, WorkerReloadDriver,
+    get_worker_build_ptr, host_register_fn,
+};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
 pub use dispatch::{WorkerBuildEnv, request_rebuild, set_request_rebuild};
-pub use strategy::ReloadStrategy;
 pub use engine::{HotReloadOutcome, HotReloadTier};
+pub use strategy::ReloadStrategy;

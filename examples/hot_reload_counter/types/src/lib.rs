@@ -5,9 +5,8 @@
 //! UI body changes across reload.
 
 use std::sync::{
-    Arc,
     atomic::{AtomicI32, Ordering},
-    OnceLock,
+    Arc,
 };
 
 use flui_hot_reload::WorkerBuildEnv;
@@ -18,11 +17,12 @@ pub const TYPE_FINGERPRINT: u64 = 0xC0_07_EA_0001;
 
 type CounterBuildFn = fn(WorkerBuildEnv<'_>, &CounterAppState, &CounterApp) -> BoxedView;
 
-static COUNTER_BUILD: OnceLock<CounterBuildFn> = OnceLock::new();
-
-/// Register the worker's reloadable UI builder (called from `flui_worker_init`).
-pub fn set_counter_build(build: CounterBuildFn) {
-    let _ = COUNTER_BUILD.set(build);
+fn get_counter_build() -> CounterBuildFn {
+    let ptr = flui_hot_reload::get_worker_build_ptr(TYPE_FINGERPRINT)
+        .expect("counter worker not loaded — build the logic crate and set FLUI_WORKER_PLUGIN");
+    // SAFETY: the worker registers this pointer via host-owned storage in
+    // `flui_worker_init` with the same `CounterBuildFn` signature.
+    unsafe { std::mem::transmute(ptr) }
 }
 
 /// Root stateful widget — `count` is shared with the worker for tap handlers.
@@ -60,9 +60,7 @@ impl StatefulView for CounterApp {
 
 impl ViewState<CounterApp> for CounterAppState {
     fn build(&self, view: &CounterApp, ctx: &dyn BuildContext) -> impl IntoView {
-        let build = COUNTER_BUILD.get().expect(
-            "counter worker not loaded — set FLUI_WORKER_PLUGIN and build the logic crate",
-        );
+        let build = get_counter_build();
         let env = WorkerBuildEnv::new(ctx);
         build(env, self, view)
     }

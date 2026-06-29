@@ -9,15 +9,15 @@
 //! ```
 
 use std::sync::{
-    Arc,
     atomic::{AtomicI32, Ordering},
+    Arc,
 };
 
-use flui_hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
+use flui_hot_reload::{hot_reload_worker, request_rebuild, WorkerBuildEnv};
 use flui_types::Color;
 use flui_view::prelude::*;
 use flui_widgets::{ColoredBox, Column, GestureDetector, Padding, Text};
-use hot_reload_counter_types::{CounterApp, CounterAppState, TYPE_FINGERPRINT, set_counter_build};
+use hot_reload_counter_types::{CounterApp, CounterAppState, TYPE_FINGERPRINT};
 
 /// **Edit this string and rebuild to test hot reload.**
 const INCREMENT_LABEL: &str = "Increment (+1)";
@@ -47,8 +47,8 @@ fn build_counter_ui(
     .boxed()
 }
 
-fn init_counter_worker() {
-    set_counter_build(build_counter_ui);
+fn init_counter_worker(register: flui_hot_reload::RegisterWorkerBuildFn) {
+    register(TYPE_FINGERPRINT, build_counter_ui as *const ());
 }
 
 hot_reload_worker!(init_counter_worker, fingerprint: TYPE_FINGERPRINT);

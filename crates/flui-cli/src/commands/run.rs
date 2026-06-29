@@ -98,7 +98,8 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
     cliclack::log::success(format!("Application started (PID {})", child.id()))?;
     cliclack::log::info("Watching src/ for changes...")?;
 
-    let mut watcher = SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
+    let mut watcher =
+        SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
 
     if let Err(e) = watcher.watch(Path::new("src"), true) {
         let _ = child.kill();
@@ -260,10 +261,7 @@ fn spawn_wait_dummy() -> CliResult<Child> {
 
 fn log_changed_paths(paths: &[PathBuf]) -> CliResult<()> {
     for path in paths {
-        let _ = cliclack::log::info(format!(
-            "Change detected: {}",
-            style(path.display()).dim()
-        ));
+        let _ = cliclack::log::info(format!("Change detected: {}", style(path.display()).dim()));
     }
     Ok(())
 }
@@ -283,35 +281,26 @@ fn watch_worker_hot_reload(
     profile: Option<&str>,
     verbose: bool,
 ) -> CliResult<()> {
-    let worker_path = worker_dylib_path(
-        &project.workspace_root,
-        &project.config.worker_lib,
-        profile,
-    );
+    let worker_path =
+        worker_dylib_path(&project.workspace_root, &project.config.worker_lib, profile);
 
     cliclack::log::step("Building worker and host...")?;
-    if !run_cargo_build_package(&project.config.worker_package, profile, verbose) {
+    if !run_cargo_build_package(&project.config.worker_package, profile, verbose, None) {
         return Err(CliError::BuildFailed {
             platform: "desktop".to_string(),
-            details: format!(
-                "Initial build failed for {}",
-                project.config.worker_package
-            ),
+            details: format!("Initial build failed for {}", project.config.worker_package),
         });
     }
-    if !run_cargo_build_package(&project.config.host_package, profile, verbose) {
+    publish_worker_plugin(&worker_path, &worker_path)?;
+    if !run_cargo_build_package(&project.config.host_package, profile, verbose, None) {
         return Err(CliError::BuildFailed {
             platform: "desktop".to_string(),
             details: format!("Initial build failed for {}", project.config.host_package),
         });
     }
 
-    let mut child = spawn_host_package(
-        &project.config.host_package,
-        &worker_path,
-        profile,
-        verbose,
-    )?;
+    let mut child =
+        spawn_host_package(&project.config.host_package, &worker_path, profile, verbose)?;
     cliclack::log::success(format!(
         "Host started (PID {}) — worker at {}",
         child.id(),
@@ -325,7 +314,8 @@ fn watch_worker_hot_reload(
         .as_ref()
         .map(|p| project.config_dir.join(p));
 
-    let mut watcher = SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
+    let mut watcher =
+        SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
 
     watcher
         .watch(&logic_src, true)
@@ -386,9 +376,7 @@ fn handle_worker_watch_event(
         .types_watch
         .as_ref()
         .map(|p| project.config_dir.join(p));
-    let types_changed = types_src.is_some_and(|types| {
-        paths.iter().any(|p| p.starts_with(&types))
-    });
+    let types_changed = types_src.is_some_and(|types| paths.iter().any(|p| p.starts_with(&types)));
 
     if types_changed {
         cliclack::log::step("Types changed — rebuilding host (hot restart)...")?;
@@ -400,20 +388,14 @@ fn handle_worker_watch_event(
             Ok(Some(_)) => {}
             Err(e) => tracing::warn!("Error checking host status: {e}"),
         }
-        let ok = run_cargo_build_package(&project.config.worker_package, profile, verbose)
-            && run_cargo_build_package(&project.config.host_package, profile, verbose);
+        let ok = run_cargo_build_package(&project.config.worker_package, profile, verbose, None)
+            && run_cargo_build_package(&project.config.host_package, profile, verbose, None);
         if ok {
-            let worker_path = worker_dylib_path(
-                &project.workspace_root,
-                &project.config.worker_lib,
-                profile,
-            );
-            *child = spawn_host_package(
-                &project.config.host_package,
-                &worker_path,
-                profile,
-                verbose,
-            )?;
+            let worker_path =
+                worker_dylib_path(&project.workspace_root, &project.config.worker_lib, profile);
+            publish_worker_plugin(&worker_path, &worker_path)?;
+            *child =
+                spawn_host_package(&project.config.host_package, &worker_path, profile, verbose)?;
             cliclack::log::success(format!("Host restarted (PID {})", child.id()))?;
         } else {
             cliclack::log::warning("Build failed — fix errors and save to retry")?;
@@ -422,26 +404,33 @@ fn handle_worker_watch_event(
     }
 
     cliclack::log::step("Rebuilding worker (state preserved in host)...")?;
-    if run_cargo_build_package(&project.config.worker_package, profile, verbose) {
-        cliclack::log::success(
-            "Worker rebuilt — host will hot-reload on next frame (~500ms)",
-        )?;
+    let host_running = matches!(child.try_wait(), Ok(None));
+    let isolate_target = host_running;
+    let build_root = if isolate_target {
+        worker_isolated_target_dir(&project.workspace_root)
+    } else {
+        project.workspace_root.clone()
+    };
+
+    if run_cargo_build_package(
+        &project.config.worker_package,
+        profile,
+        verbose,
+        isolate_target.then_some(build_root.as_path()),
+    ) {
+        let built = worker_dylib_path(&build_root, &project.config.worker_lib, profile);
+        let canonical =
+            worker_dylib_path(&project.workspace_root, &project.config.worker_lib, profile);
+        let staged = stage_worker_artifact(&built, &canonical, isolate_target)?;
+        publish_worker_plugin(&canonical, &staged)?;
+        cliclack::log::success("Worker rebuilt — host will hot-reload on next frame (~500ms)")?;
         match child.try_wait() {
             Ok(None) => {
                 // Host still running — WorkerReloadDriver picks up the new dylib.
             }
             Ok(Some(_)) | Err(_) => {
-                let worker_path = worker_dylib_path(
-                    &project.workspace_root,
-                    &project.config.worker_lib,
-                    profile,
-                );
-                *child = spawn_host_package(
-                    &project.config.host_package,
-                    &worker_path,
-                    profile,
-                    verbose,
-                )?;
+                *child =
+                    spawn_host_package(&project.config.host_package, &canonical, profile, verbose)?;
                 cliclack::log::success(format!("Host restarted (PID {})", child.id()))?;
             }
         }
@@ -449,6 +438,72 @@ fn handle_worker_watch_event(
         cliclack::log::warning("Worker build failed — fix errors and save to retry")?;
     }
     Ok(())
+}
+
+fn worker_isolated_target_dir(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("target").join("worker-hot-reload")
+}
+
+/// Copy a freshly built worker into a staging file the host can load while the
+/// canonical output remains locked (Windows).
+fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> CliResult<PathBuf> {
+    if !use_staging {
+        return Ok(built.to_path_buf());
+    }
+
+    let parent = canonical.parent().ok_or_else(|| CliError::BuildFailed {
+        platform: "desktop".to_string(),
+        details: "worker dylib path has no parent directory".to_string(),
+    })?;
+    std::fs::create_dir_all(parent).context("Failed to create worker staging directory")?;
+
+    let ext = canonical
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let stem = canonical
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("worker");
+
+    let slot_a = parent.join(format!("{stem}.staging-a{ext}"));
+    let slot_b = parent.join(format!("{stem}.staging-b{ext}"));
+
+    let dest = if slot_a.exists() && !slot_b.exists() {
+        slot_b
+    } else if slot_b.exists() {
+        slot_a
+    } else {
+        slot_a
+    };
+
+    std::fs::copy(built, &dest).with_context(|| {
+        format!(
+            "Failed to stage worker from {} to {}",
+            built.display(),
+            dest.display()
+        )
+    })?;
+    Ok(dest)
+}
+
+/// Write `.flui_worker_plugin` next to the canonical dylib so the host loads
+/// the staged artifact without overwriting a locked file.
+fn publish_worker_plugin(canonical: &Path, load_path: &Path) -> CliResult<()> {
+    let manifest = worker_plugin_manifest_path(canonical);
+    if let Some(parent) = manifest.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create worker manifest directory")?;
+    }
+    std::fs::write(&manifest, load_path.as_os_str().as_encoded_bytes())
+        .with_context(|| format!("Failed to write {}", manifest.display()))?;
+    Ok(())
+}
+
+fn worker_plugin_manifest_path(canonical: &Path) -> PathBuf {
+    canonical.parent().map_or_else(
+        || PathBuf::from(".flui_worker_plugin"),
+        |dir| dir.join(".flui_worker_plugin"),
+    )
 }
 
 fn spawn_host_package(
@@ -477,9 +532,19 @@ fn spawn_host_package(
     cmd.spawn().context("Failed to spawn host application")
 }
 
-fn run_cargo_build_package(package: &str, profile: Option<&str>, verbose: bool) -> bool {
+fn run_cargo_build_package(
+    package: &str,
+    profile: Option<&str>,
+    verbose: bool,
+    target_dir: Option<&Path>,
+) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "-p", package]);
+
+    if let Some(dir) = target_dir {
+        let dir = dir.to_string_lossy();
+        cmd.args(["--target-dir", &dir]);
+    }
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);
@@ -523,9 +588,10 @@ fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>>
     let Some(hot_reload) = config.hot_reload else {
         return Ok(None);
     };
-    let workspace_root = find_workspace_root(&config_dir).ok_or_else(|| CliError::NotFluiProject {
-        reason: "Could not find Cargo workspace root for worker hot reload".to_string(),
-    })?;
+    let workspace_root =
+        find_workspace_root(&config_dir).ok_or_else(|| CliError::NotFluiProject {
+            reason: "Could not find Cargo workspace root for worker hot reload".to_string(),
+        })?;
     Ok(Some(WorkerHotReloadProject {
         config: hot_reload,
         config_dir,

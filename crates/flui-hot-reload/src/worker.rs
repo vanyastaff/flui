@@ -6,14 +6,70 @@
 //!
 //! See `docs/designs/2026-06-28-flutter-parity-hot-reload.md`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use crate::dynlib::{self, DynLib};
 
 /// Default fingerprint when the worker omits `flui_worker_fingerprint`.
 pub const DEFAULT_FINGERPRINT: u64 = 0;
 
-type WorkerInitFn = extern "C" fn();
+/// Host-side callback passed into `flui_worker_init` so worker code can register
+/// reloadable build functions without touching dylib-local statics.
+pub type RegisterWorkerBuildFn = extern "C" fn(fingerprint: u64, build: *const ());
+
+static WORKER_BUILDS: OnceLock<Mutex<HashMap<u64, BuildPtr>>> = OnceLock::new();
+
+fn worker_builds() -> &'static Mutex<HashMap<u64, BuildPtr>> {
+    WORKER_BUILDS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Type-erased function pointer — safe to store in a `Sync` static.
+#[derive(Clone, Copy)]
+struct BuildPtr(*const ());
+
+// Build pointers originate from the host process address space and are only
+// invoked on the main thread during widget builds.
+#[allow(unsafe_code)]
+unsafe impl Send for BuildPtr {}
+#[allow(unsafe_code)]
+unsafe impl Sync for BuildPtr {}
+
+/// Host entry point wired into [`WorkerPlugin::load`].
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+extern "C" fn host_register_worker_build(fingerprint: u64, build: *const ()) {
+    if build.is_null() {
+        tracing::warn!(
+            fingerprint,
+            "worker attempted to register a null build pointer"
+        );
+        return;
+    }
+    worker_builds()
+        .lock()
+        .expect("worker build registry poisoned")
+        .insert(fingerprint, BuildPtr(build));
+    tracing::debug!(fingerprint, "worker build registered in host");
+}
+
+/// Returns the host-side registration callback for `flui_worker_init`.
+#[must_use]
+pub fn host_register_fn() -> RegisterWorkerBuildFn {
+    host_register_worker_build
+}
+
+/// Look up a worker-registered build function by layout fingerprint.
+#[must_use]
+pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
+    worker_builds()
+        .lock()
+        .expect("worker build registry poisoned")
+        .get(&fingerprint)
+        .map(|slot| slot.0)
+}
+
+type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn);
 type WorkerVersionFn = extern "C" fn() -> u32;
 type WorkerFingerprintFn = extern "C" fn() -> u64;
 
@@ -72,7 +128,7 @@ impl WorkerPlugin {
 
     /// Re-run the worker's registration hook (`flui_worker_init`).
     pub fn init(&self) {
-        (self.init_fn)();
+        (self.init_fn)(host_register_fn());
     }
 
     /// Type-layout fingerprint exported by the worker (0 when absent).
@@ -117,11 +173,34 @@ pub enum WorkerPollOutcome {
     ReloadFailed,
 }
 
+/// Sidecar file written by `flui run` when staging worker builds on Windows.
+fn manifest_path_for(lib_path: &Path) -> PathBuf {
+    lib_path.parent().map_or_else(
+        || PathBuf::from(".flui_worker_plugin"),
+        |dir| dir.join(".flui_worker_plugin"),
+    )
+}
+
+/// Resolve the dylib path to load — prefers the sidecar manifest when present.
+fn resolve_worker_path(lib_path: &Path) -> PathBuf {
+    let manifest = manifest_path_for(lib_path);
+    if let Ok(text) = std::fs::read_to_string(&manifest) {
+        let candidate = PathBuf::from(text.trim());
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    lib_path.to_path_buf()
+}
+
 /// Polls a worker dylib path and reloads on mtime changes.
 #[allow(missing_debug_implementations)]
 pub struct WorkerReloadDriver {
     plugin: Option<WorkerPlugin>,
+    /// Canonical path (used for manifest lookup).
     lib_path: PathBuf,
+    /// Path the currently loaded plugin came from.
+    loaded_path: PathBuf,
     poll_interval: std::time::Duration,
     last_poll: std::time::Instant,
     reload_count: u32,
@@ -132,18 +211,20 @@ impl WorkerReloadDriver {
     /// Create a driver for `lib_path` and attempt an immediate load + init.
     pub fn new(lib_path: impl AsRef<Path>) -> Self {
         let lib_path = lib_path.as_ref().to_path_buf();
-        let plugin = WorkerPlugin::load(&lib_path);
+        let load_path = resolve_worker_path(&lib_path);
+        let plugin = WorkerPlugin::load(&load_path);
         let last_fingerprint = plugin.as_ref().map(WorkerPlugin::fingerprint).unwrap_or(0);
         let reload_count = u32::from(plugin.is_some());
 
         if plugin.is_none() {
             tracing::info!(
-                path = %lib_path.display(),
+                path = %load_path.display(),
                 "WorkerReloadDriver: worker not loaded (will retry on poll)"
             );
         }
 
         Self {
+            loaded_path: load_path,
             plugin,
             lib_path,
             poll_interval: crate::strategy::timing::ARTIFACT_POLL,
@@ -186,17 +267,24 @@ impl WorkerReloadDriver {
         }
         self.last_poll = std::time::Instant::now();
 
+        let load_path = resolve_worker_path(&self.lib_path);
+
         if let Some(ref plugin) = self.plugin {
-            if !plugin.has_update() {
+            let path_changed = load_path != self.loaded_path;
+            if !path_changed && !plugin.has_update() {
                 return WorkerPollOutcome::NoChange;
             }
 
-            tracing::info!("WorkerReloadDriver: worker dylib updated — reloading");
+            tracing::info!(
+                path = %load_path.display(),
+                "WorkerReloadDriver: worker dylib updated — reloading"
+            );
             let old = self.plugin.take().expect("plugin was Some");
             old.unload();
 
-            self.plugin = WorkerPlugin::load(&self.lib_path);
+            self.plugin = WorkerPlugin::load(&load_path);
             if let Some(ref plugin) = self.plugin {
+                self.loaded_path = load_path;
                 self.reload_count += 1;
                 self.last_fingerprint = plugin.fingerprint();
                 tracing::info!(
@@ -214,10 +302,17 @@ impl WorkerReloadDriver {
         }
 
         // Lazy load — worker may appear after `cargo build -p logic`.
-        self.plugin = WorkerPlugin::load(&self.lib_path);
+        self.plugin = WorkerPlugin::load(&load_path);
+        if self.plugin.is_some() {
+            self.loaded_path = load_path;
+        }
         if self.plugin.is_some() {
             self.reload_count = 1;
-            self.last_fingerprint = self.plugin.as_ref().map(WorkerPlugin::fingerprint).unwrap_or(0);
+            self.last_fingerprint = self
+                .plugin
+                .as_ref()
+                .map(WorkerPlugin::fingerprint)
+                .unwrap_or(0);
             tracing::info!(
                 path = %self.lib_path.display(),
                 "WorkerReloadDriver: worker now available"

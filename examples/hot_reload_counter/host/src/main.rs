@@ -12,11 +12,11 @@
 //! Edit `logic/src/lib.rs`, rebuild the logic crate, and the counter value is preserved.
 
 use std::sync::{
-    Arc,
     atomic::{AtomicI32, Ordering},
+    Arc,
 };
 
-use flui_app::{AppConfig, run_app_with_config};
+use flui_app::{run_app_with_config, AppConfig};
 use flui_hot_reload::engine::env;
 use hot_reload_counter_types::{CounterApp, CounterShell};
 

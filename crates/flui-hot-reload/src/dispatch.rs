@@ -23,9 +23,7 @@ pub fn request_rebuild() {
     if let Some(hook) = REQUEST_REBUILD.get() {
         hook();
     } else {
-        tracing::warn!(
-            "flui_hot_reload::request_rebuild called before host registered a hook"
-        );
+        tracing::warn!("flui_hot_reload::request_rebuild called before host registered a hook");
     }
 }
 

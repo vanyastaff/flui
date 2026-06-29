@@ -99,12 +99,12 @@ where
 
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
+    use flui_hot_reload::{
+        HotReloadTier, WorkerPollOutcome, WorkerReloadDriver, engine::env, set_request_rebuild,
+    };
     use flui_platform::{
         WindowOptions,
         traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
-    };
-    use flui_hot_reload::{
-        HotReloadTier, WorkerPollOutcome, WorkerReloadDriver, engine::env, set_request_rebuild,
     };
     use flui_scheduler::Scheduler;
     use parking_lot::Mutex;
