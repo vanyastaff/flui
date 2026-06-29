@@ -27,7 +27,7 @@ pub use flui_view::element::SliverList;
 ///
 /// # Headless-only (U4.3)
 ///
-/// Lazy lists are wired into [`flui_binding::HeadlessBinding::pump_frame`];
+/// Lazy lists are wired into `HeadlessBinding::pump_frame`;
 /// production-window support (a `widgets-binding` that owns a `BuildOwner`) is
 /// a deferred unit. The API is forward-compatible — no delegate-shape changes
 /// will be needed.

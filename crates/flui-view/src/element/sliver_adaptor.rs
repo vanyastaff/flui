@@ -68,14 +68,14 @@ use crate::{
 ///
 /// Holds the item count, per-item extent estimate, and the item builder.
 /// The element this view creates wraps [`RenderSliverList`] (the render half)
-/// and owns a [`SliverListAdaptorManager`] that services
-/// [`ChildManager::service`] calls post-layout.
+/// and owns a `SliverListAdaptorManager` that services
+/// `ChildManager::service` calls post-layout.
 ///
 /// # F4 invariant
 ///
 /// [`has_children`](Self::has_children) returns `false` so
 /// `build_into_views` returns an empty `Vec`. The dense reconciler must
-/// never touch the lazy children — they are managed by [`SparseChildren`]
+/// never touch the lazy children — they are managed by `SparseChildren`
 /// via `BuildOwner::service_child_requests`.
 #[derive(Clone)]
 pub struct SliverList {
@@ -431,7 +431,7 @@ where
 /// Element type for the lazy-sliver adaptor.
 ///
 /// Wraps [`RenderSliverList`] (via `SliverListAdaptorBehavior`) and owns
-/// a [`SliverListAdaptorManager`] registered in `BuildOwner`'s
+/// a `SliverListAdaptorManager` registered in `BuildOwner`'s
 /// `child_manager_registry`. Post-layout, `BuildOwner::service_child_requests`
 /// drives the manager to build or evict lazy children.
 ///

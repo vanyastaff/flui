@@ -15,8 +15,8 @@
 //! `BuildOwner::service_child_requests` drains those buffers, groups entries by
 //! sliver `RenderId`, looks up the registered `ChildManager`, and calls
 //! [`ChildManager::service`]. The manager builds missing children via
-//! [`SparseChildren::ensure`] and evicts off-band ones via
-//! [`SparseChildren::retain_band`].
+//! `SparseChildren::ensure` and evicts off-band ones via
+//! `SparseChildren::retain_band`.
 //!
 //! # FR-036 / Port-check #9
 //!
@@ -41,7 +41,7 @@ use crate::{ElementOwner, tree::ElementTree};
 ///
 /// Type alias to satisfy `clippy::type_complexity`. Carried by
 /// [`BuildOwner`](crate::BuildOwner) as an owned `Arc` and borrowed by
-/// [`ElementOwner`](crate::ElementOwner) as `&'a ChildManagerRegistry`.
+/// [`ElementOwner`] as `&'a ChildManagerRegistry`.
 ///
 /// The outer `Arc<Mutex<…>>` lets `service_child_requests` clone individual
 /// manager `Arc`s out of the registry before calling `service` (releasing

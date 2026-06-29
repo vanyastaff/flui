@@ -22,7 +22,7 @@ use crate::scroll::{SliverChildBuilderDelegate, SliverFixedExtentList, SliverLis
 /// - **Lazy** ([`ListView::builder`]): children built on demand from a
 ///   closure, only for the viewport-visible + cache band. Backed by
 ///   [`SliverList`] (variable-height, element-owned). Wired into
-///   [`HeadlessBinding::pump_frame`] in U4.3; production-window support is
+///   `HeadlessBinding::pump_frame` in U4.3; production-window support is
 ///   a deferred unit.
 ///
 /// Both modes compose a [`Viewport`] over their respective sliver. `offset`
@@ -30,8 +30,6 @@ use crate::scroll::{SliverChildBuilderDelegate, SliverFixedExtentList, SliverLis
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `ListView` and
 /// `ListView.builder`.
-///
-/// [`HeadlessBinding::pump_frame`]: flui_binding::HeadlessBinding::pump_frame
 #[derive(Clone, StatelessView)]
 pub struct ListView {
     scroll_direction: Axis,
