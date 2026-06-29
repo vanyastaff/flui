@@ -48,7 +48,7 @@ impl std::error::Error for WatchError {}
 /// callers are responsible for running `cargo build` and/or restarting processes.
 pub struct SourceWatcher {
     rx: Receiver<Result<Vec<DebouncedEvent>, notify_debouncer_mini::notify::Error>>,
-    _debouncer: Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>,
+    debouncer: Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>,
 }
 
 impl SourceWatcher {
@@ -63,7 +63,7 @@ impl SourceWatcher {
         let debouncer = new_debouncer(debounce, tx).map_err(WatchError::create)?;
         Ok(Self {
             rx,
-            _debouncer: debouncer,
+            debouncer,
         })
     }
 
@@ -76,7 +76,7 @@ impl SourceWatcher {
             notify_debouncer_mini::notify::RecursiveMode::NonRecursive
         };
 
-        self._debouncer
+        self.debouncer
             .watcher()
             .watch(path, mode)
             .map_err(|e| WatchError::watch(path, e))

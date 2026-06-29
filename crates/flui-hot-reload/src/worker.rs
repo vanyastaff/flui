@@ -213,7 +213,7 @@ impl WorkerReloadDriver {
         let lib_path = lib_path.as_ref().to_path_buf();
         let load_path = resolve_worker_path(&lib_path);
         let plugin = WorkerPlugin::load(&load_path);
-        let last_fingerprint = plugin.as_ref().map(WorkerPlugin::fingerprint).unwrap_or(0);
+        let last_fingerprint = plugin.as_ref().map_or(0, WorkerPlugin::fingerprint);
         let reload_count = u32::from(plugin.is_some());
 
         if plugin.is_none() {
@@ -311,8 +311,7 @@ impl WorkerReloadDriver {
             self.last_fingerprint = self
                 .plugin
                 .as_ref()
-                .map(WorkerPlugin::fingerprint)
-                .unwrap_or(0);
+                .map_or(0, WorkerPlugin::fingerprint);
             tracing::info!(
                 path = %self.lib_path.display(),
                 "WorkerReloadDriver: worker now available"
