@@ -360,6 +360,19 @@ impl HeadlessBinding {
             // and production frame path expect the same).
             result.expect("headless pump_frame: pipeline run_frame should succeed");
             *guard = owner;
+            // Guard dropped here so the pipeline write-lock is free for the
+            // service calls below.
+            drop(guard);
+
+            // 6. Service lazy-sliver child requests. Layout may have emitted
+            //    build requests for absent children and retain-band signals for
+            //    eviction. Drain both buffers, call each registered ChildManager
+            //    to build/evict, run a second build_scope for newly-built child
+            //    subtrees, mark slivers needing re-layout, and finalize evicted
+            //    elements. This is a no-op when no lazy slivers are mounted.
+            tree_binding
+                .build_owner
+                .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
         }
     }
 }

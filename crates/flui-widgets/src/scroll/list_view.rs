@@ -1,40 +1,93 @@
-//! [`ListView`] — a scrollable list of fixed-height items.
+//! [`ListView`] — a scrollable list of fixed-height items (static or lazy-built).
 
 use std::fmt;
+use std::sync::Arc;
 
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, BuildContext, IntoView};
+use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
-use crate::scroll::{SliverFixedExtentList, Viewport};
+use crate::scroll::{SliverChildBuilderDelegate, SliverFixedExtentList, SliverList, Viewport};
 
 /// A scrollable list that lays out its children sequentially along
-/// `scroll_direction`, each at a fixed `item_extent` — the common, efficient
-/// list case.
+/// `scroll_direction`.
 ///
-/// Flutter parity: `widgets/scroll_view.dart` `ListView` (the
-/// `ListView(itemExtent: …)` constructor). Composes a
-/// [`Viewport`] over a
-/// [`SliverFixedExtentList`]. A first cut requires
-/// a fixed `item_extent`; variable-height and lazily-built lists arrive with the
-/// lazy sliver list. `offset` is programmatic for now.
+/// Two construction modes:
+///
+/// - **Static** ([`ListView::new`]): all children provided up front as a
+///   `ViewSeq`, each at a fixed `item_extent`. Backed by
+///   [`SliverFixedExtentList`] — cheap to lay out.
+///
+/// - **Lazy** ([`ListView::builder`]): children built on demand from a
+///   closure, only for the viewport-visible + cache band. Backed by
+///   [`SliverList`] (variable-height, element-owned). Wired into
+///   `HeadlessBinding::pump_frame` in U4.3; production-window support is
+///   a deferred unit.
+///
+/// Both modes compose a [`Viewport`] over their respective sliver. `offset`
+/// is a programmatic scroll position in logical pixels.
+///
+/// Flutter parity: `widgets/scroll_view.dart` `ListView` and
+/// `ListView.builder`.
 #[derive(Clone, StatelessView)]
 pub struct ListView {
     scroll_direction: Axis,
+    /// Per-item extent for the static variant ([`ListView::new`]).
     item_extent: f32,
+    /// Per-item extent estimate for the lazy variant ([`ListView::builder`]).
+    /// Seeds the virtualizer until real measurements arrive.
+    item_extent_estimate: f32,
     offset: f32,
+    /// Children for the static variant. Empty in the lazy variant.
     children: Vec<BoxedView>,
+    /// Builder delegate for the lazy variant. `None` in the static variant.
+    builder_source: Option<SliverChildBuilderDelegate>,
 }
 
 impl ListView {
     /// A vertical list whose rows are each `item_extent` tall.
+    ///
+    /// All children are given upfront and laid out at the fixed `item_extent`.
+    /// Prefer this constructor when the item count and content are known ahead
+    /// of time; use [`ListView::builder`] for large or dynamically-generated
+    /// lists.
     pub fn new(item_extent: f32, children: impl ViewSeq) -> Self {
         Self {
             scroll_direction: Axis::Vertical,
             item_extent,
+            item_extent_estimate: item_extent,
             offset: 0.0,
             children: children.into_boxed_vec(),
+            builder_source: None,
+        }
+    }
+
+    /// A vertical list that lazily builds its items from `builder`.
+    ///
+    /// Only the children currently visible in the viewport (plus a cache
+    /// margin) are built; items that scroll out of the cache window are
+    /// disposed. `item_extent_estimate` seeds the virtualizer until real
+    /// measurements arrive from laid-out children.
+    ///
+    /// The `builder` closure receives a logical index and returns the item
+    /// view, or `None` when the index is at or past the end of the data
+    /// source.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `item_extent_estimate` is not finite and positive.
+    pub fn builder<F>(item_count: usize, item_extent_estimate: f32, builder: F) -> Self
+    where
+        F: Fn(usize) -> Option<BoxedView> + Send + Sync + 'static,
+    {
+        Self {
+            scroll_direction: Axis::Vertical,
+            item_extent: item_extent_estimate,
+            item_extent_estimate,
+            offset: 0.0,
+            children: Vec::new(),
+            builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
         }
     }
 
@@ -55,12 +108,17 @@ impl ListView {
 
 impl fmt::Debug for ListView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ListView")
-            .field("scroll_direction", &self.scroll_direction)
-            .field("item_extent", &self.item_extent)
-            .field("offset", &self.offset)
-            .field("children", &self.children.len())
-            .finish()
+        let mut s = f.debug_struct("ListView");
+        s.field("scroll_direction", &self.scroll_direction)
+            .field("offset", &self.offset);
+        if self.builder_source.is_some() {
+            s.field("item_extent_estimate", &self.item_extent_estimate);
+            s.field("builder_source", &self.builder_source);
+        } else {
+            s.field("item_extent", &self.item_extent)
+                .field("children", &self.children.len());
+        }
+        s.finish()
     }
 }
 
@@ -70,8 +128,25 @@ impl StatelessView for ListView {
             Axis::Vertical => AxisDirection::TopToBottom,
             Axis::Horizontal => AxisDirection::LeftToRight,
         };
-        let list = SliverFixedExtentList::new(self.item_extent, self.children.clone());
-        Viewport::new((list,))
+        // Both arms produce `Viewport<(BoxedView,)>` by boxing the sliver so
+        // the opaque return type is the same concrete type in both branches.
+        //
+        // `SliverList::new` is used directly (not `SliverList::builder`) because
+        // `SliverList` is now defined in `flui-view` and the `builder` method
+        // that accepted a `SliverChildBuilderDelegate` lived only on the old
+        // widgets-side wrapper. The element's `view_type_id()` now returns
+        // `TypeId::of::<SliverList>()`, fixing BLOCKER 1 (element identity).
+        let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
+            SliverList::new(
+                delegate.item_count,
+                self.item_extent_estimate,
+                Arc::clone(&delegate.builder),
+            )
+            .boxed()
+        } else {
+            SliverFixedExtentList::new(self.item_extent, self.children.clone()).boxed()
+        };
+        Viewport::new((sliver,))
             .axis_direction(axis_direction)
             .offset(self.offset)
     }

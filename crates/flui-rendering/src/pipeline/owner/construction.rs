@@ -54,6 +54,8 @@ impl PipelineOwner<Idle> {
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
+            pending_child_requests: Vec::new(),
+            pending_retain_bands: Vec::new(),
             _phase: PhantomData,
         }
     }
@@ -109,6 +111,8 @@ impl PipelineOwner<Idle> {
             dirty_rx,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
+            pending_child_requests: Vec::new(),
+            pending_retain_bands: Vec::new(),
             _phase: PhantomData,
         }
     }

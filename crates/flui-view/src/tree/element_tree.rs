@@ -1025,6 +1025,54 @@ impl ElementTree {
         Some(node)
     }
 
+    /// Remove `id` and its entire descendant subtree.
+    ///
+    /// Used by [`crate::element::sparse_children::SparseChildren::evict`] to
+    /// evict a lazy sliver child together with all of its own descendant
+    /// elements and render nodes (e.g. a `Container(Padding(Text))` child
+    /// produces three elements; a single-node `remove` would leak the inner
+    /// two).
+    ///
+    /// The algorithm mirrors `id_reconcile::remove_child` / `collect_subtree_preorder`:
+    ///
+    /// 1. Snapshot the subtree in pre-order (parent before children) while all
+    ///    `child_ids` lists are intact.
+    /// 2. Remove the root via `remove` (soft-removes keyed elements).
+    /// 3. If the root was eagerly removed (un-keyed), free its descendants
+    ///    deepest-first via `remove_finalized`.
+    ///
+    /// Complexity: O(n) time + O(n) peak heap for the work-stack (n = subtree
+    /// size), O(h) call-stack for the constant-stack iterative walk.
+    pub(crate) fn remove_subtree(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
+        // Snapshot subtree pre-order (parent before children) before touching
+        // any node, while every `child_ids` list is still intact.
+        let mut subtree: Vec<ElementId> = Vec::new();
+        {
+            let mut work_stack: Vec<ElementId> = vec![id];
+            while let Some(node_id) = work_stack.pop() {
+                subtree.push(node_id);
+                if let Some(node) = self.get(node_id) {
+                    // Push children in reverse slot order so the leftmost child
+                    // is popped next — preserves pre-order on a LIFO stack.
+                    work_stack.extend(node.child_ids().iter().rev().copied());
+                }
+            }
+        }
+
+        // Remove the root; `Some` ⇒ eagerly freed (un-keyed), `None` ⇒
+        // soft-removed (keyed) and parked for `finalize_tree`.
+        let root_removed_eagerly = self.remove(id, owner).is_some();
+
+        if root_removed_eagerly {
+            // Free orphaned descendants deepest-first.  `subtree[0]` is the
+            // root (already freed above); iterating in reverse visits each
+            // child after all of its own descendants.
+            for &descendant in subtree[1..].iter().rev() {
+                self.remove_finalized(descendant, owner);
+            }
+        }
+    }
+
     /// Fully remove an element that has already been unmounted (e.g.
     /// from `BuildOwner::finalize_tree`'s end-of-frame drain).
     ///

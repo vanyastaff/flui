@@ -132,8 +132,8 @@ pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, ListView, RefreshController, RefreshIndicator,
     RefreshIndicatorState, ScrollController, ScrollPhysics, Scrollable, Scrollbar,
-    SharedScrollPhysics, SingleChildScrollView, SliverFixedExtentList, SliverOpacity,
-    SliverPadding, SliverToBoxAdapter, Viewport,
+    SharedScrollPhysics, SingleChildScrollView, SliverChildBuilderDelegate, SliverFixedExtentList,
+    SliverList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
 };
 pub use stack::{Positioned, Stack};
 pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
@@ -187,8 +187,9 @@ pub mod prelude {
         IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
         Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
         Row, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, SliverFixedExtentList, SliverOpacity, SliverPadding, SliverToBoxAdapter,
-        Stack, Text, TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Wrap,
+        SizedOverflowBox, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, TextEditingController,
+        TextField, Theme, ThemeData, Transform, Viewport, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

@@ -179,6 +179,23 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
 
+    /// Child-build requests accumulated during the most recent layout pass
+    /// by request-strategy slivers (U4.2).  Each entry is `(sliver_id,
+    /// logical_index)`.  The binding layer drains this via
+    /// [`Self::take_pending_child_requests`] after the frame to service the
+    /// requests through the element tree (U4.3).  Empty between frames.
+    pending_child_requests: Vec<(RenderId, usize)>,
+    /// Retain-band signals from element-owned slivers (U4.3 removal half).
+    ///
+    /// Each entry is `(sliver_id, cache_first, cache_last)`: the retained
+    /// logical index band `[first, last)` emitted by
+    /// `RenderSliverList::perform_layout` after each walk.  The binding layer
+    /// consumes this via [`Self::take_pending_retain_bands`] after every frame
+    /// to drive `SparseChildren::retain_band` through the element tree, evicting
+    /// out-of-band lazy children rather than calling `dispose_box_child` from
+    /// the render tree (which would double-remove element-owned nodes).
+    pending_retain_bands: Vec<(RenderId, usize, usize)>,
+
     /// Phantom marker for the typestate phase. Always zero-sized.
     /// See `crates/flui-rendering/src/pipeline/phase.rs`.
     _phase: PhantomData<Phase>,
@@ -233,7 +250,43 @@ where
         dirty_rx: from.dirty_rx,
         #[cfg(any(test, feature = "testing"))]
         parent_data_seeds: from.parent_data_seeds,
+        pending_child_requests: from.pending_child_requests,
+        pending_retain_bands: from.pending_retain_bands,
         _phase: PhantomData,
+    }
+}
+
+// ============================================================================
+// Cross-phase accessors
+// ============================================================================
+
+impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+    /// Takes all child-build requests accumulated during the most recent
+    /// layout pass (U4.2), leaving the buffer empty.
+    ///
+    /// Each entry is `(sliver_id, logical_index)`: the sliver whose
+    /// `request_child_build` fired, and the logical item index it could not
+    /// materialize synchronously.  The binding layer (U4.3) consumes this
+    /// after every frame to drive the element-tree child manager.
+    ///
+    /// This is the U4.3 entry point — `pub` (not `pub(super)`) because no
+    /// in-module consumer exists in U4.2; the only caller is external.
+    #[must_use]
+    pub fn take_pending_child_requests(&mut self) -> Vec<(RenderId, usize)> {
+        std::mem::take(&mut self.pending_child_requests)
+    }
+
+    /// Takes all retain-band signals accumulated during the most recent layout
+    /// pass (U4.3 removal half), leaving the buffer empty.
+    ///
+    /// Each entry is `(sliver_id, cache_first, cache_last)`.  The binding
+    /// layer calls this to drive `SparseChildren::retain_band` through the
+    /// element tree, evicting out-of-band lazy children via the element tree
+    /// rather than via `dispose_box_child` (which would ABA-double-remove
+    /// element-owned render nodes).
+    #[must_use]
+    pub fn take_pending_retain_bands(&mut self) -> Vec<(RenderId, usize, usize)> {
+        std::mem::take(&mut self.pending_retain_bands)
     }
 }
 
