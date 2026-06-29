@@ -251,7 +251,7 @@ impl AppBinding {
     /// # Implicit-animation auto-wrap
     ///
     /// The binding automatically wraps `view` in a
-    /// [`VsyncScope`](flui_widgets::VsyncScope) backed by [`Self::vsync()`] before
+    /// [`VsyncScope`] backed by [`Self::vsync()`] before
     /// handing it to the element tree. This means every implicitly-animated widget
     /// below the root (`AnimatedOpacity`, `AnimatedContainer`, …) registers its
     /// controller into the binding's vsync registry without any app-author
@@ -420,7 +420,7 @@ impl AppBinding {
     /// # Customizing the auto-wrapped registry
     ///
     /// [`attach_root_widget`](Self::attach_root_widget) auto-wraps the root in a
-    /// [`VsyncScope`](flui_widgets::VsyncScope) backed by `self.vsync()` and the
+    /// [`VsyncScope`] backed by `self.vsync()` and the
     /// frame driver ticks **that same registry**. To supply a custom registry,
     /// call `set_vsync(custom)` **before** `attach_root_widget` so the binding
     /// wraps with and ticks the same handle:
