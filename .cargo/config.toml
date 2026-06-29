@@ -8,6 +8,11 @@
 # Use all available CPU cores
 jobs = 8
 
+# Override ~/.cargo/config.toml `rustc-wrapper = "sccache"`. An empty string is the
+# only in-tree way to unset a global wrapper; RUSTC_WRAPPER="" does not work.
+# sccache-wrapped rustc crashes with STATUS_ACCESS_VIOLATION on cosmic-text (Windows).
+rustc-wrapper = ""
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Linker configuration - faster linking
 # ═══════════════════════════════════════════════════════════════════════════════
