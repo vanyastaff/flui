@@ -1049,6 +1049,53 @@ impl WidgetsBinding {
         }
     }
 
+    /// Service pending lazy-sliver child-build requests accumulated during the
+    /// most recent layout pass.
+    ///
+    /// This is the **production entry point** for lazy `SliverList` /
+    /// `ListView::builder` child building. It mirrors step 6 of
+    /// `HeadlessBinding::pump_frame`, and must be called immediately after
+    /// `PipelineOwner::run_frame` releases its write-lock so no `NodePtr`
+    /// alias is live.
+    ///
+    /// `AppBinding::draw_frame` calls this method after the `run_frame`
+    /// write-guard drops (~line 459), passing the same `shared_pipeline_owner`
+    /// that `run_frame` used. The lock order is `widgets → pipeline`: the
+    /// `widgets` write-lock (`WidgetsBinding::inner`) is held here; the brief
+    /// `pipeline.write()` taken inside the delegate is a narrower, nested
+    /// acquisition. This matches the order established in Phase 1 (`build_scope`
+    /// → `pipeline`) and does not introduce a new ordering edge.
+    ///
+    /// # True cost on a no-lazy-list app
+    ///
+    /// This method is **not** a free no-op on applications without lazy lists.
+    /// It always takes a brief `pipeline.write()` to drain the two pending
+    /// `Vec`s (`pending_child_requests` and `pending_retain_bands`) before
+    /// the early-return triggered by their being empty. On a no-lazy-list app
+    /// that is two short lock acquisitions on empty vecs per frame (~microseconds
+    /// on an uncontested `parking_lot::RwLock`). Callers that need to avoid even
+    /// this overhead can gate on `pipeline.read().has_pending_child_requests()`
+    /// before calling, but the unconditional call is simpler and the cost is
+    /// negligible in practice.
+    ///
+    /// # Flutter parity — production↔headless convergence point
+    ///
+    /// This call site is the **production↔headless convergence point** for the
+    /// post-`run_frame` pipeline tail steps. `HeadlessBinding::pump_frame`
+    /// step 6 and `AppBinding::draw_frame` (via this method) now execute the
+    /// same code path. Future gap-#2 work (production Vsync / implicit-animation
+    /// tick) will land at the same `draw_frame` call site immediately after this
+    /// call, keeping both bindings in sync.
+    pub fn service_child_requests(&self, pipeline: &Arc<RwLock<PipelineOwner>>) {
+        let mut inner = self.inner.write();
+        let WidgetsBindingInner {
+            ref mut build_owner,
+            ref mut element_tree,
+            ..
+        } = *inner;
+        build_owner.service_child_requests(element_tree, pipeline);
+    }
+
     /// Check if we are currently building dirty elements.
     ///
     /// Reads the atomic flag directly — no lock acquired.

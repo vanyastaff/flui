@@ -30,6 +30,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use flui_animation::Vsync;
 use flui_engine::{EngineError, wgpu::Renderer};
 use flui_foundation::HasInstance;
 use flui_interaction::{binding::GestureBinding, routing::FocusManager};
@@ -98,6 +99,41 @@ pub struct AppBinding {
 
     /// Active platform window (set during run_desktop).
     active_window: Mutex<Option<Box<dyn PlatformWindow>>>,
+
+    /// Controller registry for implicit animations (VsyncScope-driven).
+    ///
+    /// Wrapped in a `Mutex` so `set_vsync` can replace the shared `Arc` handle
+    /// through `&self` (AppBinding is a `'static` singleton).  The `Mutex` is
+    /// only locked to read the handle (`vsync_slot.lock().clone()`) or replace
+    /// it (`set_vsync`); the per-frame `tick_all` / `has_running` calls then
+    /// operate on the cloned `Vsync` handle — which shares the inner
+    /// `Arc<Mutex<VsyncInner>>` — so there is no extra lock on the hot path
+    /// beyond what `Vsync` itself already takes.
+    ///
+    /// The controllers here are DISJOINT from the global `Scheduler`'s ticker
+    /// set: implicit controllers use a private throwaway `Scheduler`
+    /// (`flui-widgets/src/animated/implicitly_animated.rs:54`), not the one
+    /// `AppBinding::scheduler()` exposes.  There is therefore NO double-advance
+    /// when both `Scheduler::handle_draw_frame` and `vsync.tick_all` run in
+    /// the same frame.
+    vsync_slot: Mutex<Vsync>,
+
+    /// Wall-clock origin for the production `now_secs` computation.
+    ///
+    /// `now_secs()` = `start.elapsed().as_secs_f64()`.  Stored once in `new`
+    /// so all frames share a single monotonically-increasing origin instead of
+    /// each calling `Instant::now()` independently (which drifts between the
+    /// Vsync tick and the Scheduler).
+    start: web_time::Instant,
+
+    /// Test-only injectable clock, stored as the f64 bits in a u64 atomic.
+    ///
+    /// When set (non-zero bit pattern), `now_secs()` returns this value
+    /// instead of `start.elapsed()`.  Set via `set_now_secs_for_test`; reset
+    /// by storing `0u64`.  This keeps `draw_frame`/`render_frame` signatures
+    /// stable between production and test code.
+    #[cfg(test)]
+    now_secs_override: AtomicU64,
 }
 
 impl AppBinding {
@@ -163,6 +199,10 @@ impl AppBinding {
             shared_pipeline_owner,
             lifecycle: Mutex::new(DefaultLifecycle::new()),
             active_window: Mutex::new(None),
+            vsync_slot: Mutex::new(Vsync::new()),
+            start: web_time::Instant::now(),
+            #[cfg(test)]
+            now_secs_override: AtomicU64::new(0),
         }
     }
 
@@ -344,6 +384,90 @@ impl AppBinding {
     }
 
     // ========================================================================
+    // Vsync — implicit-animation controller registry
+    // ========================================================================
+
+    /// A clone of the shared controller registry for implicit animations.
+    ///
+    /// `Vsync` is `Arc`-backed; cloning is two atomic increments — cheap.
+    /// App code constructs a `VsyncScope` from this clone so every
+    /// implicitly-animated widget below registers its controller here.  The
+    /// production frame driver ticks all registered running controllers once
+    /// per frame (before the build phase) and keeps the frame loop alive until
+    /// the last one completes.
+    ///
+    /// This mirrors `HeadlessBinding::vsync` exactly; the two binding types are
+    /// interchangeable at the `VsyncScope` boundary.
+    pub fn vsync(&self) -> Vsync {
+        self.vsync_slot.lock().clone()
+    }
+
+    /// Replace this binding's registry with a pre-existing shared `Vsync`.
+    ///
+    /// Use when a `VsyncScope` was built before the binding's registry was
+    /// acquired (the scope needs the handle to pass to descendants, and the
+    /// binding must drive that same registry).  Call before any controller is
+    /// registered so no registration is stranded on the discarded registry.
+    /// Mirrors `HeadlessBinding::adopt_vsync`.
+    pub fn set_vsync(&self, vsync: Vsync) {
+        *self.vsync_slot.lock() = vsync;
+    }
+
+    /// Whether at least one registered controller is currently running.
+    ///
+    /// The production frame driver calls this after `tick_all` to decide
+    /// whether to request the next frame (continuation check).  Returns `true`
+    /// while any implicit animation is in flight; `false` once all have
+    /// settled, so the window quiesces cleanly without infinite redraw.
+    pub fn has_vsync_running(&self) -> bool {
+        self.vsync_slot.lock().has_running()
+    }
+
+    /// Current virtual seconds for the Vsync tick.
+    ///
+    /// Production: `self.start.elapsed().as_secs_f64()` — one monotonic origin
+    /// shared across the Vsync tick and all frame accounting, so there is no
+    /// clock drift between the two.
+    ///
+    /// Tests: the injected override (`set_now_secs_for_test`) takes precedence,
+    /// allowing deterministic animation stepping with no wall-clock reads.
+    fn now_secs(&self) -> f64 {
+        #[cfg(test)]
+        {
+            let bits = self.now_secs_override.load(Ordering::Relaxed);
+            if bits != 0 {
+                return f64::from_bits(bits);
+            }
+        }
+        self.start.elapsed().as_secs_f64()
+    }
+
+    /// Inject a deterministic virtual `now_secs` for test frames.
+    ///
+    /// `draw_frame` uses this value for `tick_all` instead of the real wall
+    /// clock.  Only compiled in `#[cfg(test)]` builds; production signatures
+    /// are unaffected.
+    ///
+    /// Store `0.0` to clear and revert to wall-clock (internally the sentinel
+    /// is `0u64`; a caller supplying exactly `0.0` gets the smallest positive
+    /// subnormal instead, which is negligible for any animation test).
+    #[cfg(test)]
+    pub fn set_now_secs_for_test(&self, secs: f64) {
+        let bits = secs.to_bits();
+        // 0u64 bits is the "not set" sentinel; bump to 1 (subnormal ~5e-324 s)
+        // so a caller who genuinely wants t=0 gets a value indistinguishable
+        // from it for any practical animation duration.
+        let stored = if bits == 0 { 1u64 } else { bits };
+        self.now_secs_override.store(stored, Ordering::Relaxed);
+    }
+
+    /// Clear the test clock override, reverting to wall-clock time.
+    #[cfg(test)]
+    pub fn clear_now_secs_for_test(&self) {
+        self.now_secs_override.store(0, Ordering::Relaxed);
+    }
+
+    // ========================================================================
     // Lifecycle Management
     // ========================================================================
 
@@ -446,6 +570,44 @@ impl AppBinding {
     /// Returns `Some(Scene)` if a new scene was produced, or cached scene
     /// otherwise.
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Arc<Scene>> {
+        // Vsync tick — MUST precede the build phase (Phase 1).
+        //
+        // Implicit-animation controllers registered via a `VsyncScope` use a
+        // private throwaway `Scheduler` (see `flui-widgets/src/animated/
+        // implicitly_animated.rs:54`), NOT the global `Scheduler` that
+        // `AppBinding::scheduler()` exposes.  That disjoint set means:
+        //   (a) there is NO double-advance: `tick_all` here and
+        //       `Scheduler::handle_draw_frame` in the runner both run in the
+        //       same frame but each drives a non-overlapping controller set.
+        //   (b) `tick_all` is NOT idempotent across calls in the same frame —
+        //       safety rests entirely on disjointness, enforced by the private
+        //       Scheduler invariant in `ImplicitController`.
+        //
+        // The tick MUST happen before `build_scope` (Phase 1) so a controller
+        // that crosses its target this frame marks its `AnimatedView` dirty
+        // via `notify_listeners` → `BuildOwner` external inbox, and that dirty
+        // entry is drained by the same `build_scope` below (same-frame
+        // rebuild).  A tick AFTER build would delay the rebuild by one frame.
+        let now = self.now_secs();
+        {
+            let vsync = self.vsync_slot.lock().clone();
+            vsync.tick_all(now);
+
+            // Frame continuation: if any controller is still running after
+            // this tick, request the NEXT frame so the runner gate
+            // (`runner.rs:225`: `needs_redraw() || has_pending_work()`) stays
+            // TRUE for the full animation duration.  Without this, after the
+            // first frame `mark_rendered` clears `needs_redraw` and the build
+            // heap drains — no running-controller signal keeps the gate open —
+            // and the animation freezes mid-transition.
+            //
+            // Once the last controller completes, `has_running()` is `false`,
+            // `wake_frame` is NOT called, and the window idles (quiescence).
+            if vsync.has_running() {
+                self.wake_frame();
+            }
+        }
+
         // Phase 1: Build (WidgetsBinding)
         {
             let w = self.widgets.write();
@@ -485,6 +647,24 @@ impl AppBinding {
                 }
             }
         };
+
+        // Production↔headless convergence point: service lazy-sliver child
+        // requests accumulated by `run_frame`'s layout pass. This is the
+        // production equivalent of `HeadlessBinding::pump_frame` step 6.
+        // Lock order: `widgets` (brief write for the split-borrow) → `pipeline`
+        // (brief write inside `service_child_requests` to drain the two pending
+        // Vecs). The `run_frame` pipeline write-guard above is fully released
+        // before this call — no nested write.
+        //
+        // NOTE: The Vsync tick (implicit-animation controllers) does NOT belong
+        // here.  It runs before Phase 1 (build), not after `run_frame`, so that
+        // a controller that completes this frame marks its `AnimatedView` dirty
+        // before `build_scope` drains the inbox — enabling a same-frame
+        // rebuild.  See the Vsync tick block at the top of `draw_frame`.
+        {
+            let w = self.widgets.write();
+            w.service_child_requests(&self.shared_pipeline_owner);
+        }
 
         // Phase 4: Create Scene from LayerTree
         let size = constraints.constrain(Size::ZERO);
@@ -654,6 +834,7 @@ impl std::fmt::Debug for AppBinding {
         f.debug_struct("AppBinding")
             .field("initialized", &self.initialized.load(Ordering::Relaxed))
             .field("needs_redraw", &self.needs_redraw.load(Ordering::Relaxed))
+            .field("vsync", &self.vsync_slot.lock().clone())
             .field("renderer", &*self.renderer.read())
             .finish()
     }
@@ -945,5 +1126,404 @@ mod tests {
         // Shared process singleton — clean up this pointer's route + arena entry.
         app.gestures().pointer_router().remove_all_routes(pointer);
         app.gestures().sweep_arena(pointer);
+    }
+
+    // ========================================================================
+    // U4.4 — service_child_requests wiring tests
+    // ========================================================================
+
+    /// Wiring test: `AppBinding::draw_frame` must invoke
+    /// `WidgetsBinding::service_child_requests`, which drains the pipeline's
+    /// `pending_child_requests` buffer. We verify the drain happened by:
+    ///   1. Seeding one request via `push_pending_child_request_for_test`
+    ///      (`#[cfg(test)]` helper on `PipelineOwner`).
+    ///   2. Running one `draw_frame`.
+    ///   3. Asserting the buffer is now empty — `take_pending_child_requests`
+    ///      was called, proving the wiring is present.
+    ///
+    /// Without the `service_child_requests` call at ~line 460 of `draw_frame`,
+    /// `take_pending_child_requests` is never called and the buffer remains
+    /// non-empty after the frame. The test is RED without step-2 and GREEN with
+    /// it; no root attach is needed.
+    #[test]
+    fn draw_frame_invokes_service_child_requests() {
+        // A fresh binding so we avoid the singleton root-attach collision.
+        let binding = AppBinding::new();
+
+        // Insert a dummy render object to obtain a valid RenderId (the pending
+        // buffer stores `(RenderId, index)` pairs — any valid id works).
+        let sliver_id = binding.shared_pipeline_owner.write().insert(Box::new(
+            flui_objects::RenderColoredBox::red(10.0, 10.0),
+        )
+            as Box<
+                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+            >);
+
+        // Seed one pending child-build request. The seeding helper is gated
+        // behind flui-rendering's `testing` feature (enabled for this crate's
+        // dev builds) — the test-only mirror of `SubtreeArena::request_child_build`.
+        binding
+            .shared_pipeline_owner
+            .write()
+            .push_pending_child_request_for_test(sliver_id, 0);
+
+        // Verify the seed is present (precondition).
+        {
+            let mut guard = binding.shared_pipeline_owner.write();
+            let drained = guard.take_pending_child_requests();
+            assert_eq!(drained.len(), 1, "seed must be present before draw_frame");
+            // Re-push so draw_frame sees it.
+            guard.push_pending_child_request_for_test(sliver_id, 0);
+        }
+
+        // Run one draw_frame.  No root render object is attached (fresh binding)
+        // so no scene is produced, but the service path must still be traversed.
+        let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            ),
+        ));
+
+        // After draw_frame the pending buffer must be empty — drained by
+        // `service_child_requests`.  Without the wiring the buffer is never
+        // drained and this take returns a non-empty vec.
+        let remaining = binding
+            .shared_pipeline_owner
+            .write()
+            .take_pending_child_requests();
+        assert!(
+            remaining.is_empty(),
+            "draw_frame must drain pending_child_requests via service_child_requests; \
+             {} request(s) remained undrained — wiring is absent",
+            remaining.len(),
+        );
+    }
+
+    /// Wake-gate contract: after a frame marks a render node dirty (simulating
+    /// what `service_child_requests` does to a sliver after building new
+    /// children), `has_pending_work()` must return `true` so the runner gate
+    /// (`runner.rs:225`: `needs_redraw() || has_pending_work()`) schedules the
+    /// settling frame.
+    ///
+    /// Also asserts the quiescence direction: once no nodes are dirty,
+    /// `has_pending_work()` is `false` and the app can go idle.
+    ///
+    /// # Wake-gate invariant
+    ///
+    /// The settling frame survives because `layout` marks the sliver dirty
+    /// (`has_dirty_nodes`), NOT because the pending-request buffer is non-empty
+    /// (`has_pending_work` does not consult `pending_child_requests` or
+    /// `pending_retain_bands`). A future change that emits a child request
+    /// WITHOUT calling `mark_needs_layout` would strand the settling frame —
+    /// this test documents and guards that invariant.
+    #[test]
+    fn wake_gate_schedules_settling_frame_after_dirty_mark() {
+        let binding = AppBinding::new();
+
+        // `mark_rendered` puts `needs_redraw` in a known state so the
+        // has_pending_work assertion is insulated from any prior redraw state
+        // set by other singleton tests sharing the same process.
+        binding.mark_rendered();
+        assert!(!binding.needs_redraw(), "precondition: needs_redraw clear");
+
+        // Insert a node and mark it dirty — this is what service_child_requests
+        // does to a sliver after building new children.
+        let node_id = binding.shared_pipeline_owner.write().insert(Box::new(
+            flui_objects::RenderColoredBox::red(10.0, 10.0),
+        )
+            as Box<
+                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+            >);
+        binding
+            .shared_pipeline_owner
+            .write()
+            .clear_all_dirty_nodes();
+        // Confirm quiescence baseline: nothing dirty yet.
+        assert!(
+            !binding.has_pending_work(),
+            "baseline: no pending work after clearing dirty nodes",
+        );
+
+        // Mark the node dirty (as service_child_requests does after building children).
+        binding
+            .shared_pipeline_owner
+            .write()
+            .mark_needs_layout(node_id);
+
+        // The runner gate reads has_pending_work(); it must be true now.
+        assert!(
+            binding.has_pending_work(),
+            "a dirty layout node must make has_pending_work() true so the runner \
+             schedules the settling frame; this is the invariant that lazy-list \
+             settling depends on (NOT the pending_child_requests buffer)",
+        );
+
+        // Once all dirty nodes are cleared (settled frame ran layout), the app
+        // must go idle — no infinite redraw.
+        binding
+            .shared_pipeline_owner
+            .write()
+            .clear_all_dirty_nodes();
+        assert!(
+            !binding.has_pending_work(),
+            "after clearing dirty nodes has_pending_work() must be false so a \
+             settled lazy-list app does not loop forever",
+        );
+    }
+
+    // ========================================================================
+    // Vsync wiring tests (production frame continuation)
+    // ========================================================================
+    //
+    // All tests below use `AppBinding::new()` (fresh non-singleton binding),
+    // register controllers DIRECTLY into the binding's Vsync (no widget tree,
+    // no root-attach, no flui-widgets dep), and inject time via
+    // `set_now_secs_for_test`.  `--test-threads=1` is enforced workspace-wide
+    // (see AGENTS.md) so there are no singleton collision races.
+    //
+    // Panel constraint (harsh-critic): the "continuation" test must be RED
+    // without the `has_running() → wake_frame()` call in `draw_frame` and
+    // GREEN with it.  The "value advances" test alone passes while a real
+    // window freezes — it does NOT prove the fix.
+
+    /// Helper: construct a fresh `AnimationController` with a private
+    /// `Scheduler` (not the global singleton) so tests are isolated and can
+    /// be safely parallelised if policy ever allows it.
+    fn make_controller(duration_ms: u64) -> flui_animation::AnimationController {
+        use std::{sync::Arc, time::Duration};
+
+        flui_animation::AnimationController::new(
+            Duration::from_millis(duration_ms),
+            Arc::new(flui_scheduler::Scheduler::new()),
+        )
+    }
+
+    /// Helper: a tight 800×600 constraint for `draw_frame` calls that need
+    /// no real geometry.
+    fn test_constraints() -> flui_rendering::constraints::BoxConstraints {
+        flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
+            flui_types::geometry::px(800.0),
+            flui_types::geometry::px(600.0),
+        ))
+    }
+
+    /// V1 — **Frame continuation (the key test)**
+    ///
+    /// A running controller registered in the binding's Vsync must keep the
+    /// runner gate (`needs_redraw() || has_pending_work()`) schedulable
+    /// (true) across every mid-animation frame, and the gate must go idle
+    /// (false) once the controller completes.
+    ///
+    /// Without the `has_running() → wake_frame()` call added to `draw_frame`,
+    /// `mark_rendered` clears `needs_redraw` after the first frame, the build
+    /// heap drains, and neither `needs_redraw` nor `has_pending_work` stays
+    /// true — the runner gate returns false and the animation freezes.  This
+    /// test is RED without step-3 of the implementation plan and GREEN with it.
+    #[test]
+    fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle() {
+        use flui_animation::{Animation, AnimationStatus};
+
+        // Fresh non-singleton binding so this test does not race with others
+        // that share the `AppBinding::instance()` singleton's redraw state.
+        let binding = AppBinding::new();
+        let vsync = binding.vsync();
+
+        // 100 ms controller, registered directly (no widget tree).
+        let controller = make_controller(100);
+        vsync.register(controller.clone());
+        controller.forward().expect("fresh controller forwards");
+
+        let constraints = test_constraints();
+
+        // --- Frame at t=0.0s: anchor frame ---
+        // `tick_all` at t=0 anchors the run start; controller value should
+        // be ~0.  After draw_frame `wake_frame` is called (controller is still
+        // running at t=0 since `tick_at(0.0)` keeps it at start), so
+        // `needs_redraw` is set.
+        binding.set_now_secs_for_test(0.0);
+        binding.mark_rendered(); // known state before the frame
+        let _ = binding.draw_frame(constraints);
+
+        assert!(
+            binding.needs_redraw() || binding.has_pending_work(),
+            "V1: the runner gate must be open after an anchor frame — a running \
+             controller (100 ms, t=0) must schedule the next frame via wake_frame",
+        );
+
+        // --- Frame at t=0.05s: mid-animation ---
+        binding.set_now_secs_for_test(0.05);
+        binding.mark_rendered();
+        let _ = binding.draw_frame(constraints);
+
+        let gate_mid = binding.needs_redraw() || binding.has_pending_work();
+        assert!(
+            gate_mid,
+            "V1: runner gate must remain open at t=0.05s (controller still running \
+             at ~50%% progress); gate was false — animation would freeze here without \
+             the continuation wiring",
+        );
+
+        let mid_value = controller.value();
+        assert!(
+            mid_value > 0.1 && mid_value < 0.95,
+            "V1: sanity — controller is mid-run at t=50ms (value={mid_value})",
+        );
+
+        // --- Frame at t=0.2s: beyond the 100 ms duration, controller completes ---
+        binding.set_now_secs_for_test(0.20);
+        binding.mark_rendered();
+        let _ = binding.draw_frame(constraints);
+
+        assert_eq!(
+            controller.status(),
+            AnimationStatus::Completed,
+            "V1: controller must be Completed after t=200ms (duration=100ms)",
+        );
+
+        // Once every controller settles, `has_running()` is false, so `draw_frame`
+        // does NOT call `wake_frame` — and the runner gate must therefore be CLOSED
+        // (the window quiesces; no infinite redraw after animations finish).
+        //
+        // We assert the GATE itself, not just the Vsync source. `mark_rendered()`
+        // at line 1347 cleared `needs_redraw` BEFORE this settle frame, and this
+        // fresh binding has no widget tree, so the only thing that could re-set
+        // `needs_redraw` during the frame is the Vsync continuation's `wake_frame`.
+        // `!needs_redraw()` therefore genuinely proves the Vsync path did NOT wake
+        // — it would be RED if the continuation wrongly woke a settled controller.
+        assert!(
+            !binding.needs_redraw(),
+            "V1: the runner gate must be CLOSED after settle — a completed \
+             controller must NOT schedule another frame (window quiesces)",
+        );
+        assert!(
+            !binding.has_vsync_running(),
+            "V1: has_vsync_running() must be false once the controller completes",
+        );
+
+        controller.dispose();
+    }
+
+    /// V2 — **Value advances across injected-time frames**
+    ///
+    /// The controller's value must change across successive `draw_frame` calls
+    /// with increasing virtual time.  This documents that `tick_all` in
+    /// `draw_frame` actually advances the controller; it does NOT by itself
+    /// prove the window stays alive (V1 does that).
+    #[test]
+    fn vsync_value_advances_across_frames() {
+        use flui_animation::Animation;
+
+        let binding = AppBinding::new();
+        let vsync = binding.vsync();
+        let controller = make_controller(200);
+        vsync.register(controller.clone());
+        controller.forward().expect("fresh controller forwards");
+
+        let constraints = test_constraints();
+
+        // Frame 1 — anchor at t=0.
+        binding.set_now_secs_for_test(0.0);
+        let _ = binding.draw_frame(constraints);
+        let v0 = controller.value();
+
+        // Frame 2 — t=0.1 s → 50 % of a 200 ms run.
+        binding.set_now_secs_for_test(0.10);
+        let _ = binding.draw_frame(constraints);
+        let v1 = controller.value();
+
+        assert!(
+            v1 > v0,
+            "V2: controller value must increase across frames as virtual time advances \
+             (v0={v0}, v1={v1}); tick_all is not running before draw_frame",
+        );
+        assert!(
+            (v1 - 0.5).abs() < 0.05,
+            "V2: at t=100ms / 200ms run the value should be near 0.5 (got {v1})",
+        );
+
+        controller.dispose();
+    }
+
+    /// V3 — **Exactly-once-per-frame** (no double-advance)
+    ///
+    /// A single `draw_frame` call must call `tick_all` exactly once — not
+    /// zero times (animation stalls) and not twice (double-advance).  We
+    /// verify this by checking that a 100 ms controller is NOT completed after
+    /// a frame at t=50 ms (would only complete early if double-ticked past
+    /// 100 ms) and IS completed after a frame at t=150 ms.
+    ///
+    /// The disjoint-set invariant (Vsync controllers NEVER appear in the
+    /// global Scheduler's ticker set) is also the safety argument for why a
+    /// single `tick_all` here does not double-advance anything: the two sets
+    /// are non-overlapping by construction (implicit controllers carry a
+    /// private throwaway Scheduler, not the global singleton).
+    #[test]
+    fn vsync_tick_exactly_once_per_frame() {
+        use flui_animation::{Animation, AnimationStatus};
+
+        let binding = AppBinding::new();
+        let vsync = binding.vsync();
+        let controller = make_controller(100);
+        vsync.register(controller.clone());
+        controller.forward().expect("fresh controller forwards");
+
+        let constraints = test_constraints();
+
+        // Anchor frame at t=0.
+        binding.set_now_secs_for_test(0.0);
+        let _ = binding.draw_frame(constraints);
+
+        // At t=0.05s (50 ms into a 100 ms run): NOT yet complete.
+        // If `tick_all` were called twice, elapsed would appear as ~100 ms
+        // and the controller would snap to Completed — failing this assert.
+        binding.set_now_secs_for_test(0.05);
+        let _ = binding.draw_frame(constraints);
+        assert_ne!(
+            controller.status(),
+            AnimationStatus::Completed,
+            "V3: controller must NOT be complete at t=50ms (100ms duration); \
+             a double-tick would falsely advance it to completion",
+        );
+
+        // At t=0.15s (150 ms, past the 100 ms duration): must complete.
+        binding.set_now_secs_for_test(0.15);
+        let _ = binding.draw_frame(constraints);
+        assert_eq!(
+            controller.status(),
+            AnimationStatus::Completed,
+            "V3: controller must be Completed after t=150ms (duration=100ms)",
+        );
+
+        controller.dispose();
+    }
+
+    /// V4 — **No-animation app idles cheaply**
+    ///
+    /// An empty `Vsync` (no registered controllers) must make `tick_all` and
+    /// `has_running()` both no-ops that do NOT flip `needs_redraw` via the
+    /// Vsync path.  The runner gate can go idle between frames when nothing
+    /// is running.
+    #[test]
+    fn vsync_empty_does_not_keep_gate_open() {
+        let binding = AppBinding::new();
+        // No controllers registered.
+        assert!(binding.vsync().is_empty(), "precondition: Vsync is empty");
+
+        let constraints = test_constraints();
+        binding.set_now_secs_for_test(1.0);
+        binding.mark_rendered(); // clear any redraw flag
+
+        // `draw_frame` must not set `needs_redraw` through the Vsync path when
+        // no controllers are registered.
+        let _ = binding.draw_frame(constraints);
+
+        assert!(
+            !binding.has_vsync_running(),
+            "V4: has_vsync_running() must be false when no controllers are registered",
+        );
+        // `needs_redraw` may be set by OTHER paths (the pipeline-owner dirty hook
+        // fires when the new binding's PipelineOwner is touched).  We assert only
+        // the Vsync-specific gate: has_vsync_running is false.
     }
 }

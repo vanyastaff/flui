@@ -262,7 +262,13 @@ where
         let now = web_time::Instant::now();
         last_frame_started = Some(now);
 
-        // Scheduler callbacks (animations)
+        // Scheduler callbacks (animations). NOTE: the global `Scheduler` is driven
+        // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
+        // (AppBinding::draw_frame) ticks off `AppBinding`'s own `start` origin —
+        // two separate clocks ON PURPOSE: the controller sets are disjoint (implicit
+        // animations register with `Vsync`; plain controllers carry a private
+        // `Scheduler` ticker, never the global one), so the origins never need to
+        // agree and no controller is advanced twice.
         let _frame_id = scheduler.handle_begin_frame(now);
         scheduler.handle_draw_frame();
 
