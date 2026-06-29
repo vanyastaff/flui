@@ -21,9 +21,17 @@ use crate::scroll::{SliverChildBuilderDelegate, SliverFixedExtentList, SliverLis
 ///
 /// - **Lazy** ([`ListView::builder`]): children built on demand from a
 ///   closure, only for the viewport-visible + cache band. Backed by
-///   [`SliverList`] (variable-height, element-owned). Wired into
-///   `HeadlessBinding::pump_frame` in U4.3; production-window support is
-///   a deferred unit.
+///   [`SliverList`] (variable-height, element-owned). Wired into both
+///   `HeadlessBinding::pump_frame` and the production `AppBinding::draw_frame`
+///   (U4.3 + U4.4 convergence).
+///
+///   **First-frame settling (Flutter divergence):** lazy children are built
+///   *after* the frame's paint, so the first frame a viewport band appears it
+///   paints blank; content lands on the next frame (~16 ms @ 60 fps). The
+///   settling frame is automatically scheduled because layout marks the sliver
+///   dirty. This is a deliberate divergence from Flutter, which builds lazy
+///   children during the same-frame layout pass. See [`SliverChildBuilderDelegate`]
+///   for the full rationale.
 ///
 /// Both modes compose a [`Viewport`] over their respective sliver. `offset`
 /// is a programmatic scroll position in logical pixels.

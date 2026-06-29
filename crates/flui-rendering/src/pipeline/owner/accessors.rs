@@ -1109,4 +1109,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn has_mid_layout_marks(&self) -> bool {
         self.scheduler.has_mid_marks()
     }
+
+    /// Directly seed a pending child-build request for wiring tests.
+    ///
+    /// Mirrors the internal push that `SubtreeArena::request_child_build`
+    /// performs during layout. Exposed as `pub` (not `#[cfg(test)]`) so that
+    /// integration tests in other crates (e.g. `flui-app`) can verify
+    /// `service_child_requests` wiring without attaching a full lazy-sliver
+    /// tree — the same precedent as `clear_all_dirty_nodes`.
+    ///
+    /// The name makes the test-helper intent explicit; production code never
+    /// calls this (layout emits requests through `SubtreeArena` internally).
+    pub fn push_pending_child_request_for_test(
+        &mut self,
+        sliver_id: flui_foundation::RenderId,
+        index: usize,
+    ) {
+        self.pending_child_requests.push((sliver_id, index));
+    }
 }
