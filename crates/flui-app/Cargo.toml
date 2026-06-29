@@ -41,6 +41,12 @@ flui-engine = { path = "../flui-engine" }
 flui-platform = { path = "../flui-platform" }
 flui-hot-reload = { path = "../flui-hot-reload" }
 flui-animation = { path = "../flui-animation" }
+# Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
+# auto-wraps the root in so implicit-animation widgets work with zero boilerplate.
+# Zero new link-time deps: every crate flui-widgets pulls is already transitively
+# present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
+# only a direct Cargo edge + re-exports. FOUNDATIONS.md targets app → widgets.
+flui-widgets = { path = "../flui-widgets" }
 
 # Utilities
 tracing.workspace = true
