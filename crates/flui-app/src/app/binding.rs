@@ -300,9 +300,9 @@ impl AppBinding {
 
     /// Apply a hot reload at the given tier (Flutter parity entry point).
     ///
-    /// - [`HotReloadTier::HotReload`]: `perform_reassemble` on widgets + render pipeline.
-    /// - [`HotReloadTier::HotRestart`]: detach + re-attach root (Phase B — not yet wired).
-    /// - [`HotReloadTier::FullRestart`]: no-op here; use `flui run` process restart.
+    /// - [`flui_hot_reload::HotReloadTier::HotReload`]: `perform_reassemble` on widgets + render pipeline.
+    /// - [`flui_hot_reload::HotReloadTier::HotRestart`]: detach + re-attach root (Phase B — not yet wired).
+    /// - [`flui_hot_reload::HotReloadTier::FullRestart`]: no-op here; use `flui run` process restart.
     pub fn perform_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) {
         use flui_hot_reload::HotReloadTier;
 

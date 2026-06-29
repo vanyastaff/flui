@@ -142,8 +142,8 @@ impl FluiConfig {
 /// Host/worker hot reload layout (Flutter-parity).
 ///
 /// When present, `flui run` keeps the host process alive, rebuilds only the
-/// worker `cdylib` on source changes, and relies on [`WorkerReloadDriver`] in
-/// the host runner to apply `HotReloadTier::HotReload`.
+/// worker `cdylib` on source changes, and relies on `flui_hot_reload::WorkerReloadDriver` in
+/// the host runner to apply `flui_hot_reload::HotReloadTier::HotReload`.
 ///
 /// ```toml
 /// [hot_reload]
