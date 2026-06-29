@@ -61,10 +61,7 @@ impl SourceWatcher {
     pub fn with_debounce(debounce: Duration) -> Result<Self, WatchError> {
         let (tx, rx) = mpsc::channel();
         let debouncer = new_debouncer(debounce, tx).map_err(WatchError::create)?;
-        Ok(Self {
-            rx,
-            debouncer,
-        })
+        Ok(Self { rx, debouncer })
     }
 
     /// Watch a path for changes.

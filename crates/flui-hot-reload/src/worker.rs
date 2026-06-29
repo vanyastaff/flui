@@ -308,10 +308,7 @@ impl WorkerReloadDriver {
         }
         if self.plugin.is_some() {
             self.reload_count = 1;
-            self.last_fingerprint = self
-                .plugin
-                .as_ref()
-                .map_or(0, WorkerPlugin::fingerprint);
+            self.last_fingerprint = self.plugin.as_ref().map_or(0, WorkerPlugin::fingerprint);
             tracing::info!(
                 path = %self.lib_path.display(),
                 "WorkerReloadDriver: worker now available"
