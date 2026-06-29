@@ -1113,13 +1113,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Directly seed a pending child-build request for wiring tests.
     ///
     /// Mirrors the internal push that `SubtreeArena::request_child_build`
-    /// performs during layout. Exposed as `pub` (not `#[cfg(test)]`) so that
-    /// integration tests in other crates (e.g. `flui-app`) can verify
-    /// `service_child_requests` wiring without attaching a full lazy-sliver
-    /// tree — the same precedent as `clear_all_dirty_nodes`.
-    ///
-    /// The name makes the test-helper intent explicit; production code never
-    /// calls this (layout emits requests through `SubtreeArena` internally).
+    /// performs during layout, so a cross-crate test (e.g. `flui-app`) can
+    /// verify `service_child_requests` wiring without building a full
+    /// lazy-sliver tree. Gated behind the `testing` feature (plus this crate's
+    /// own `test` cfg) so it never lands in a normal/release build; downstream
+    /// crates opt in via `flui-rendering = { features = ["testing"] }` in their
+    /// dev-dependencies, exactly as the render-object `testing` harness does.
+    #[cfg(any(test, feature = "testing"))]
     pub fn push_pending_child_request_for_test(
         &mut self,
         sliver_id: flui_foundation::RenderId,

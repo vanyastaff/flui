@@ -964,8 +964,9 @@ mod tests {
                 dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
             >);
 
-        // Seed one pending child-build request.  This is the `#[cfg(test)]`
-        // seeding helper — the test-only mirror of `SubtreeArena::request_child_build`.
+        // Seed one pending child-build request. The seeding helper is gated
+        // behind flui-rendering's `testing` feature (enabled for this crate's
+        // dev builds) — the test-only mirror of `SubtreeArena::request_child_build`.
         binding
             .shared_pipeline_owner
             .write()
