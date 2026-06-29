@@ -1576,9 +1576,12 @@ mod tests {
 
     impl ViewState<VsyncProbeView> for VsyncProbeState {
         fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
-            // Mirror the exact pattern used by `AnimatedOpacity::init_state`:
-            // read the VsyncScope provided by `attach_root_widget`'s auto-wrap,
-            // register our controller in it, and start it so value ticks.
+            // Mirror the VsyncScope LOOKUP path every real implicit widget uses
+            // (`animated_opacity.rs:91` etc.): read the VsyncScope provided by
+            // `attach_root_widget`'s auto-wrap and register our controller in it.
+            // (The real widgets also store the `VsyncRegistration` to unregister
+            // on `dispose`; this probe drops it — harmless, the registry is owned
+            // by an isolated `AppBinding::new()` that drops at test end.)
             if let Some(vsync) =
                 ctx.get::<flui_widgets::VsyncScope, _>(|scope| scope.vsync().clone())
             {
