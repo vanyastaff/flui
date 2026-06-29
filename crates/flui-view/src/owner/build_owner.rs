@@ -700,11 +700,14 @@ impl BuildOwner {
     /// 7. `finalize_tree` cleans up any evicted children pushed to inactive by
     ///    `retain_band` or `on_unmount`.
     ///
-    /// # Headless-binding only
+    /// # Production and headless bindings
     ///
-    /// Production `flui-app` has no `BuildOwner` in scope during `run_frame`;
-    /// production wiring is deferred to when the platform binding has a
-    /// unified tree-holding pattern. Headless tests drive this path directly.
+    /// Called by both `HeadlessBinding::pump_frame` (step 6) and
+    /// `AppBinding::draw_frame` (after `run_frame` drops the pipeline write-lock)
+    /// — the two frame paths are now converged at this call site. Headless
+    /// tests drive it directly via `HeadlessBinding`; a real window drives it via
+    /// `WidgetsBinding::service_child_requests`, which `AppBinding` invokes after
+    /// each `run_frame`.
     pub fn service_child_requests(
         &mut self,
         tree: &mut ElementTree,

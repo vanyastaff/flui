@@ -25,12 +25,19 @@ pub use flui_view::element::SliverList;
 /// lazily-virtualized list that only builds children visible in the viewport
 /// plus a configurable cache margin.
 ///
-/// # Headless-only (U4.3)
+/// # First-frame settling (Flutter divergence)
 ///
-/// Lazy lists are wired into `HeadlessBinding::pump_frame`;
-/// production-window support (a `widgets-binding` that owns a `BuildOwner`) is
-/// a deferred unit. The API is forward-compatible — no delegate-shape changes
-/// will be needed.
+/// Lazy children are built **after** the frame's paint completes, not during
+/// layout as Flutter does. This means the very first frame a viewport band
+/// becomes visible, the children paint blank; content lands on the *next*
+/// frame (~16 ms at 60 fps). The settling frame is automatically scheduled
+/// because layout marks the sliver dirty (`PipelineOwner::has_dirty_nodes`
+/// returns `true`), which keeps the runner's `has_pending_work()` gate open.
+///
+/// This is a deliberate, recorded divergence from Flutter — Flutter builds
+/// lazy children during the same-frame layout pass so no blank frame is
+/// visible. FLUI defers to the post-paint service step for architectural
+/// simplicity; prefetch-hidden items are not affected.
 #[derive(Clone)]
 pub struct SliverChildBuilderDelegate {
     pub(crate) item_count: usize,

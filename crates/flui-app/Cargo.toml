@@ -63,3 +63,7 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.
 flui-interaction = { path = "../flui-interaction", features = ["testing"] }
+# Enable flui-rendering's `testing` feature in test builds so wiring tests can
+# seed pending child-build requests via `push_pending_child_request_for_test`.
+# Same dev-only feature-unification pattern; helper stays out of release builds.
+flui-rendering = { path = "../flui-rendering", features = ["testing"] }

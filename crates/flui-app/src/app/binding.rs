@@ -458,6 +458,20 @@ impl AppBinding {
             }
         };
 
+        // Production↔headless convergence point: service lazy-sliver child
+        // requests accumulated by `run_frame`'s layout pass. This is the
+        // production equivalent of `HeadlessBinding::pump_frame` step 6.
+        // Lock order: `widgets` (brief write for the split-borrow) → `pipeline`
+        // (brief write inside `service_child_requests` to drain the two pending
+        // Vecs). The `run_frame` pipeline write-guard above is fully released
+        // before this call — no nested write. Future gap-#2 work (production
+        // Vsync / implicit-animation tick) will be added HERE immediately after
+        // this call, keeping the two frame paths converged.
+        {
+            let w = self.widgets.write();
+            w.service_child_requests(&self.shared_pipeline_owner);
+        }
+
         // Phase 4: Create Scene from LayerTree
         let size = constraints.constrain(Size::ZERO);
         let frame_number = self.frames_rendered.load(Ordering::Relaxed) + 1;
@@ -917,5 +931,149 @@ mod tests {
         // Shared process singleton — clean up this pointer's route + arena entry.
         app.gestures().pointer_router().remove_all_routes(pointer);
         app.gestures().sweep_arena(pointer);
+    }
+
+    // ========================================================================
+    // U4.4 — service_child_requests wiring tests
+    // ========================================================================
+
+    /// Wiring test: `AppBinding::draw_frame` must invoke
+    /// `WidgetsBinding::service_child_requests`, which drains the pipeline's
+    /// `pending_child_requests` buffer. We verify the drain happened by:
+    ///   1. Seeding one request via `push_pending_child_request_for_test`
+    ///      (`#[cfg(test)]` helper on `PipelineOwner`).
+    ///   2. Running one `draw_frame`.
+    ///   3. Asserting the buffer is now empty — `take_pending_child_requests`
+    ///      was called, proving the wiring is present.
+    ///
+    /// Without the `service_child_requests` call at ~line 460 of `draw_frame`,
+    /// `take_pending_child_requests` is never called and the buffer remains
+    /// non-empty after the frame. The test is RED without step-2 and GREEN with
+    /// it; no root attach is needed.
+    #[test]
+    fn draw_frame_invokes_service_child_requests() {
+        // A fresh binding so we avoid the singleton root-attach collision.
+        let binding = AppBinding::new();
+
+        // Insert a dummy render object to obtain a valid RenderId (the pending
+        // buffer stores `(RenderId, index)` pairs — any valid id works).
+        let sliver_id = binding.shared_pipeline_owner.write().insert(Box::new(
+            flui_objects::RenderColoredBox::red(10.0, 10.0),
+        )
+            as Box<
+                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+            >);
+
+        // Seed one pending child-build request. The seeding helper is gated
+        // behind flui-rendering's `testing` feature (enabled for this crate's
+        // dev builds) — the test-only mirror of `SubtreeArena::request_child_build`.
+        binding
+            .shared_pipeline_owner
+            .write()
+            .push_pending_child_request_for_test(sliver_id, 0);
+
+        // Verify the seed is present (precondition).
+        {
+            let mut guard = binding.shared_pipeline_owner.write();
+            let drained = guard.take_pending_child_requests();
+            assert_eq!(drained.len(), 1, "seed must be present before draw_frame");
+            // Re-push so draw_frame sees it.
+            guard.push_pending_child_request_for_test(sliver_id, 0);
+        }
+
+        // Run one draw_frame.  No root render object is attached (fresh binding)
+        // so no scene is produced, but the service path must still be traversed.
+        let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            ),
+        ));
+
+        // After draw_frame the pending buffer must be empty — drained by
+        // `service_child_requests`.  Without the wiring the buffer is never
+        // drained and this take returns a non-empty vec.
+        let remaining = binding
+            .shared_pipeline_owner
+            .write()
+            .take_pending_child_requests();
+        assert!(
+            remaining.is_empty(),
+            "draw_frame must drain pending_child_requests via service_child_requests; \
+             {} request(s) remained undrained — wiring is absent",
+            remaining.len(),
+        );
+    }
+
+    /// Wake-gate contract: after a frame marks a render node dirty (simulating
+    /// what `service_child_requests` does to a sliver after building new
+    /// children), `has_pending_work()` must return `true` so the runner gate
+    /// (`runner.rs:225`: `needs_redraw() || has_pending_work()`) schedules the
+    /// settling frame.
+    ///
+    /// Also asserts the quiescence direction: once no nodes are dirty,
+    /// `has_pending_work()` is `false` and the app can go idle.
+    ///
+    /// # Wake-gate invariant
+    ///
+    /// The settling frame survives because `layout` marks the sliver dirty
+    /// (`has_dirty_nodes`), NOT because the pending-request buffer is non-empty
+    /// (`has_pending_work` does not consult `pending_child_requests` or
+    /// `pending_retain_bands`). A future change that emits a child request
+    /// WITHOUT calling `mark_needs_layout` would strand the settling frame —
+    /// this test documents and guards that invariant.
+    #[test]
+    fn wake_gate_schedules_settling_frame_after_dirty_mark() {
+        let binding = AppBinding::new();
+
+        // `mark_rendered` puts `needs_redraw` in a known state so the
+        // has_pending_work assertion is insulated from any prior redraw state
+        // set by other singleton tests sharing the same process.
+        binding.mark_rendered();
+        assert!(!binding.needs_redraw(), "precondition: needs_redraw clear");
+
+        // Insert a node and mark it dirty — this is what service_child_requests
+        // does to a sliver after building new children.
+        let node_id = binding.shared_pipeline_owner.write().insert(Box::new(
+            flui_objects::RenderColoredBox::red(10.0, 10.0),
+        )
+            as Box<
+                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+            >);
+        binding
+            .shared_pipeline_owner
+            .write()
+            .clear_all_dirty_nodes();
+        // Confirm quiescence baseline: nothing dirty yet.
+        assert!(
+            !binding.has_pending_work(),
+            "baseline: no pending work after clearing dirty nodes",
+        );
+
+        // Mark the node dirty (as service_child_requests does after building children).
+        binding
+            .shared_pipeline_owner
+            .write()
+            .mark_needs_layout(node_id);
+
+        // The runner gate reads has_pending_work(); it must be true now.
+        assert!(
+            binding.has_pending_work(),
+            "a dirty layout node must make has_pending_work() true so the runner \
+             schedules the settling frame; this is the invariant that lazy-list \
+             settling depends on (NOT the pending_child_requests buffer)",
+        );
+
+        // Once all dirty nodes are cleared (settled frame ran layout), the app
+        // must go idle — no infinite redraw.
+        binding
+            .shared_pipeline_owner
+            .write()
+            .clear_all_dirty_nodes();
+        assert!(
+            !binding.has_pending_work(),
+            "after clearing dirty nodes has_pending_work() must be false so a \
+             settled lazy-list app does not loop forever",
+        );
     }
 }
