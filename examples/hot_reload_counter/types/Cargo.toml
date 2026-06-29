@@ -1,0 +1,13 @@
+[package]
+name = "hot-reload-counter-types"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared types for the hot-reload counter example"
+
+[dependencies]
+flui-hot-reload = { path = "../../../crates/flui-hot-reload", features = ["app-plugin"] }
+flui-view = { path = "../../../crates/flui-view" }
+
+[lints]
+workspace = true

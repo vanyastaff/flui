@@ -15,6 +15,7 @@ mod diagnostics;
 mod layout;
 mod paint;
 mod query;
+mod reassemble;
 mod semantics;
 
 use std::{

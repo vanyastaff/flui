@@ -99,6 +99,9 @@ where
 
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
+    use flui_hot_reload::{
+        HotReloadTier, WorkerPollOutcome, WorkerReloadDriver, engine::env, set_request_rebuild,
+    };
     use flui_platform::{
         WindowOptions,
         traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
@@ -109,6 +112,16 @@ where
     use crate::embedder::PlatformWindowHandle;
 
     tracing::info!("Starting desktop platform via flui-platform");
+
+    let worker_driver = std::env::var(env::WORKER_PLUGIN)
+        .ok()
+        .map(WorkerReloadDriver::new);
+    if worker_driver.is_some() {
+        set_request_rebuild(|| {
+            AppBinding::instance().perform_hot_reload(HotReloadTier::HotReload);
+        });
+    }
+    let worker_driver = Arc::new(Mutex::new(worker_driver));
 
     let platform = flui_platform::current_platform().expect("Failed to initialize platform");
 
@@ -209,10 +222,17 @@ where
 
     // 6. Register frame callback -> scheduler + AppBinding::render_frame()
     let renderer_frame = Arc::clone(&renderer);
+    let worker_driver_frame = Arc::clone(&worker_driver);
     let frame_budget =
         std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
     let mut last_frame_started: Option<web_time::Instant> = None;
     window.on_request_frame(Box::new(move || {
+        if let Some(ref mut driver) = *worker_driver_frame.lock()
+            && matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. })
+        {
+            AppBinding::instance().perform_hot_reload(HotReloadTier::HotReload);
+        }
+
         let binding = AppBinding::instance();
         let scheduler = Scheduler::instance();
 

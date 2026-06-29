@@ -393,6 +393,22 @@ impl BuildOwner {
         }
     }
 
+    /// Mark every live element dirty so the next [`build_scope`](Self::build_scope)
+    /// re-runs all `build()` methods.
+    ///
+    /// Flutter parity: `BuildOwner.reassemble()` / `Element.reassemble()` during
+    /// hot reload. **Does not** unmount elements or dispose `State` — stateful
+    /// elements keep their in-tree `ViewState` across the call.
+    pub fn reassemble(&mut self, tree: &ElementTree) {
+        for (id, node) in tree.iter_nodes() {
+            self.schedule_build_for(id, node.depth);
+        }
+        tracing::info!(
+            count = self.dirty_count(),
+            "BuildOwner::reassemble — all elements marked dirty for hot reload"
+        );
+    }
+
     /// Re-key every queued dirty element to its authoritative TREE depth.
     ///
     /// The dirty heap orders by depth, but `schedule_build_for` is handed a

@@ -117,6 +117,16 @@ impl RenderNode {
             Self::Sliver(_) => "Sliver",
         }
     }
+
+    /// Hot-reload hook: mark this render object for reprocessing.
+    ///
+    /// Dispatches to [`RenderObject::reassemble`] on the underlying object.
+    pub fn reassemble(&mut self) {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().reassemble(),
+            Self::Sliver(entry) => entry.render_object_mut().reassemble(),
+        }
+    }
 }
 
 // ============================================================================

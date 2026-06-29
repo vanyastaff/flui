@@ -298,6 +298,34 @@ impl AppBinding {
         Ok(())
     }
 
+    /// Apply a hot reload at the given tier (Flutter parity entry point).
+    ///
+    /// - [`flui_hot_reload::HotReloadTier::HotReload`]: `perform_reassemble` on widgets + render pipeline.
+    /// - [`flui_hot_reload::HotReloadTier::HotRestart`]: detach + re-attach root (Phase B — not yet wired).
+    /// - [`flui_hot_reload::HotReloadTier::FullRestart`]: no-op here; use `flui run` process restart.
+    pub fn perform_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) {
+        use flui_hot_reload::HotReloadTier;
+
+        match tier {
+            HotReloadTier::HotReload => {
+                self.widgets.read().perform_reassemble();
+                self.render_pipeline_mut().reassemble();
+                self.request_redraw();
+                tracing::info!("Hot reload applied — element and render trees reassembled");
+            }
+            HotReloadTier::HotRestart => {
+                tracing::warn!(
+                    "HotRestart requested — root remount not yet implemented; \
+                     falling back to reassemble (state may be stale)"
+                );
+                self.perform_hot_reload(HotReloadTier::HotReload);
+            }
+            HotReloadTier::FullRestart => {
+                tracing::debug!("FullRestart is handled by the CLI process supervisor");
+            }
+        }
+    }
+
     /// Get read access to WidgetsBinding.
     pub fn widgets(&self) -> parking_lot::RwLockReadGuard<'_, WidgetsBinding> {
         // PORT-CHECK-OK-SP6: AppBinding widgets accessor; pre-existing SP-6

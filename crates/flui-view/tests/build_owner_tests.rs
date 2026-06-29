@@ -429,6 +429,32 @@ fn test_multiple_build_cycles() {
     assert!(!owner.has_dirty_elements());
 }
 
+#[test]
+fn test_reassemble_marks_all_live_elements_dirty() {
+    let mut owner = BuildOwner::new();
+    let mut tree = ElementTree::new();
+
+    let root_id = tree.mount_root(&TestView { id: 1 }, &mut owner.element_owner_mut());
+    let _child1 = tree.insert(
+        &TestView { id: 2 },
+        root_id,
+        0,
+        &mut owner.element_owner_mut(),
+    );
+    let _child2 = tree.insert(
+        &TestView { id: 3 },
+        root_id,
+        1,
+        &mut owner.element_owner_mut(),
+    );
+
+    owner.build_scope(&mut tree);
+    assert!(!owner.has_dirty_elements());
+
+    owner.reassemble(&tree);
+    assert_eq!(owner.dirty_count(), tree.len());
+}
+
 // ============================================================================
 // Memory Layout Tests
 // ============================================================================

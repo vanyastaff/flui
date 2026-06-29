@@ -71,6 +71,9 @@ pub struct FluiConfig {
     /// Custom font families.
     #[serde(default)]
     pub fonts: Vec<FontFamily>,
+    /// Flutter-parity host/worker hot reload (optional).
+    #[serde(default)]
+    pub hot_reload: Option<HotReloadConfig>,
 }
 
 impl FluiConfig {
@@ -131,8 +134,37 @@ impl FluiConfig {
             build: BuildConfig::default(),
             assets: AssetsConfig::default(),
             fonts: Vec::new(),
+            hot_reload: None,
         }
     }
+}
+
+/// Host/worker hot reload layout (Flutter-parity).
+///
+/// When present, `flui run` keeps the host process alive, rebuilds only the
+/// worker `cdylib` on source changes, and relies on `flui_hot_reload::WorkerReloadDriver` in
+/// the host runner to apply `flui_hot_reload::HotReloadTier::HotReload`.
+///
+/// ```toml
+/// [hot_reload]
+/// host_package = "my-app-host"
+/// worker_package = "my-app-logic"
+/// worker_lib = "my_app_logic"
+/// logic_watch = "logic/src"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotReloadConfig {
+    /// Host binary crate (`cargo run -p …`).
+    pub host_package: String,
+    /// Reloadable worker crate (`cargo build -p …`, `cdylib`).
+    pub worker_package: String,
+    /// `cdylib` library name (artifact: `lib{name}.so` / `{name}.dll`).
+    pub worker_lib: String,
+    /// Directory to watch for UI changes, relative to this `flui.toml`.
+    pub logic_watch: String,
+    /// Optional shared types crate — changes trigger a full host restart.
+    #[serde(default)]
+    pub types_watch: Option<String>,
 }
 
 /// Application metadata.
