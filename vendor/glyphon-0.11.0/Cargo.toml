@@ -1,0 +1,51 @@
+[package]
+name = "glyphon"
+description = "Fast, simple 2D text rendering for wgpu"
+version = "0.11.0"
+edition = "2021"
+homepage = "https://github.com/grovesNL/glyphon.git"
+repository = "https://github.com/grovesNL/glyphon"
+license = "MIT OR Apache-2.0 OR Zlib"
+
+[dependencies]
+wgpu = { version = "29.0.0", default-features = false, features = ["wgsl"] }
+etagere = "0.3.0"
+# FLUI patch: cosmic-text `default` enables `fontconfig` (Linux-only). On Windows the
+# feature is inert but forces a heavier build graph; keep shaping deps explicit.
+cosmic-text = { version = "0.18", default-features = false, features = ["std", "swash"] }
+lru = { version = "0.16.2", default-features = false }
+rustc-hash = "2.1.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cosmic-text = { version = "0.18", default-features = false, features = ["fontconfig"] }
+
+[dev-dependencies]
+winit = "0.30.12"
+wgpu = "29.0.0"
+resvg = { version = "0.45.1", default-features = false }
+pollster = "0.4.0"
+criterion = { version = "0.8.1", features = ["html_reports"] }
+
+[[bench]]
+name = "prepare"
+harness = false
+
+[[bench]]
+name = "state"
+harness = false
+
+[[example]]
+name = "custom-glyphs"
+path = "examples/custom-glyphs.rs"
+
+[[example]]
+name = "hello-world"
+path = "examples/hello-world.rs"
+
+[[example]]
+name = "text-sizes"
+path = "examples/text-sizes.rs"
+
+[lib]
+name = "glyphon"
+path = "src/lib.rs"
