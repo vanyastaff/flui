@@ -1353,17 +1353,24 @@ mod tests {
             "V1: controller must be Completed after t=200ms (duration=100ms)",
         );
 
-        // Once every controller in the vsync has settled, `has_running()` is
-        // false, `wake_frame` is NOT called, so `needs_redraw` is NOT set by
-        // the Vsync path — the window quiesces cleanly.
+        // Once every controller settles, `has_running()` is false, so `draw_frame`
+        // does NOT call `wake_frame` — and the runner gate must therefore be CLOSED
+        // (the window quiesces; no infinite redraw after animations finish).
         //
-        // NOTE: `wake_frame` calls `needs_redraw.store(true)` unconditionally;
-        // the pipeline-owner dirty-mark hook can also set it independently.  We
-        // check ONLY the contribution from Vsync here by reading `has_vsync_running`.
+        // We assert the GATE itself, not just the Vsync source. `mark_rendered()`
+        // at line 1347 cleared `needs_redraw` BEFORE this settle frame, and this
+        // fresh binding has no widget tree, so the only thing that could re-set
+        // `needs_redraw` during the frame is the Vsync continuation's `wake_frame`.
+        // `!needs_redraw()` therefore genuinely proves the Vsync path did NOT wake
+        // — it would be RED if the continuation wrongly woke a settled controller.
+        assert!(
+            !binding.needs_redraw(),
+            "V1: the runner gate must be CLOSED after settle — a completed \
+             controller must NOT schedule another frame (window quiesces)",
+        );
         assert!(
             !binding.has_vsync_running(),
-            "V1: has_vsync_running() must be false once the controller completes — \
-             the continuation gate is closed and the window can quiesce",
+            "V1: has_vsync_running() must be false once the controller completes",
         );
 
         controller.dispose();
