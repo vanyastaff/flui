@@ -40,6 +40,7 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::{Size, geometry::px};
 use flui_view::{View, WidgetsBinding};
+use flui_widgets::VsyncScope;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
@@ -247,6 +248,30 @@ impl AppBinding {
     ///
     /// This creates the root element and schedules the first build.
     ///
+    /// # Implicit-animation auto-wrap
+    ///
+    /// The binding automatically wraps `view` in a
+    /// [`VsyncScope`] backed by [`Self::vsync()`] before
+    /// handing it to the element tree. This means every implicitly-animated widget
+    /// below the root (`AnimatedOpacity`, `AnimatedContainer`, …) registers its
+    /// controller into the binding's vsync registry without any app-author
+    /// boilerplate — the binding ticks that registry once per frame
+    /// (before the build phase in [`draw_frame`](Self::draw_frame)).
+    ///
+    /// ## Invariant — the binding owns the root scope
+    ///
+    /// The binding wraps with `self.vsync()` and ticks **that same registry**.
+    /// To supply a custom registry, call [`set_vsync`](Self::set_vsync) **before**
+    /// this method: the binding will then wrap with the custom registry and tick
+    /// it. Never mount a second `VsyncScope` at the root with a *different*
+    /// registry — the binding would tick its own while descendants register into
+    /// the other, leaving them frozen.
+    ///
+    /// A `VsyncScope` nested deeper in the tree with its own registry shadows the
+    /// root scope for that subtree and is **not** ticked by the binding; the app
+    /// must drive it. Nesting with the **same** registry (i.e. the binding's
+    /// `vsync()`) is harmless.
+    ///
     /// # Errors
     ///
     /// Forwards every [`AttachError`](flui_view::AttachError) the
@@ -261,8 +286,13 @@ impl AppBinding {
     where
         V: View + Clone + Send + Sync + 'static,
     {
+        // Auto-wrap: inject a VsyncScope carrying the binding's registry so
+        // every implicitly-animated widget below can register its controller
+        // without any app-author boilerplate. VsyncScope is an InheritedView
+        // with no render object, so the render/hit-test root is unchanged.
+        let wrapped = VsyncScope::new(self.vsync(), view.clone());
         let widgets = self.widgets.write();
-        widgets.attach_root_widget(view)?;
+        widgets.attach_root_widget(&wrapped)?;
         self.initialized.store(true, Ordering::Relaxed);
         self.request_redraw();
         tracing::debug!("Root widget attached");
@@ -277,6 +307,9 @@ impl AppBinding {
     /// window size instead of the 800×600 fallback. This is the runner's
     /// bootstrap entry point.
     ///
+    /// See [`attach_root_widget`](Self::attach_root_widget) for the
+    /// implicit-animation auto-wrap invariant.
+    ///
     /// # Errors
     ///
     /// Forwards every [`AttachError`](flui_view::AttachError) from
@@ -290,8 +323,10 @@ impl AppBinding {
     where
         V: View + Clone + Send + Sync + 'static,
     {
+        // Auto-wrap: same VsyncScope injection as attach_root_widget.
+        let wrapped = VsyncScope::new(self.vsync(), view.clone());
         let widgets = self.widgets.write();
-        widgets.attach_root_widget_with_size(view, width, height)?;
+        widgets.attach_root_widget_with_size(&wrapped, width, height)?;
         self.initialized.store(true, Ordering::Relaxed);
         self.request_redraw();
         tracing::debug!(width, height, "Root widget attached (sized)");
@@ -409,6 +444,25 @@ impl AppBinding {
     /// binding must drive that same registry).  Call before any controller is
     /// registered so no registration is stranded on the discarded registry.
     /// Mirrors `HeadlessBinding::adopt_vsync`.
+    ///
+    /// # Customizing the auto-wrapped registry
+    ///
+    /// [`attach_root_widget`](Self::attach_root_widget) auto-wraps the root in a
+    /// [`VsyncScope`] backed by `self.vsync()` and the
+    /// frame driver ticks **that same registry**. To supply a custom registry,
+    /// call `set_vsync(custom)` **before** `attach_root_widget` so the binding
+    /// wraps with and ticks the same handle:
+    ///
+    /// ```ignore
+    /// let custom = Vsync::new();
+    /// binding.set_vsync(custom.clone());
+    /// binding.attach_root_widget(&root)?;
+    /// // binding.draw_frame ticks `custom` each frame.
+    /// ```
+    ///
+    /// Never mount a second `VsyncScope` at the root with a *different* registry
+    /// — the binding ticks its own while descendants register into the other,
+    /// leaving implicit animations frozen.
     pub fn set_vsync(&self, vsync: Vsync) {
         *self.vsync_slot.lock() = vsync;
     }
@@ -843,6 +897,9 @@ impl std::fmt::Debug for AppBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Required to call `ctx.get::<T, _>(...)` on `&dyn BuildContext`; the method
+    // lives on the `BuildContextExt` extension trait.
+    use flui_view::BuildContextExt as _;
 
     #[test]
     fn test_singleton() {
@@ -1496,6 +1553,234 @@ mod tests {
         );
 
         controller.dispose();
+    }
+
+    // ========================================================================
+    // A-series — auto-wrap VsyncScope tests (core5-vsync-autowrap)
+    // ========================================================================
+    //
+    // These tests verify that `attach_root_widget*` auto-injects a `VsyncScope`
+    // so an implicitly-animated widget below the root registers its controller
+    // into the binding's vsync WITHOUT any app-author boilerplate.
+    //
+    // All three use a fresh `AppBinding::new()` (not the singleton) to avoid
+    // re-attach collisions.  `--test-threads=1` is enforced workspace-wide.
+
+    // -----------------------------------------------------------------------
+    // Test helper: `VsyncProbeView` — a `StatefulView` whose `init_state`
+    // reads the ambient `VsyncScope` and registers a caller-supplied
+    // `AnimationController` into it, then calls `forward()` so the controller
+    // is running and ticking is observable.
+    //
+    // Placed here (module scope, inside `mod tests`) so all A-series tests share it.
+    // -----------------------------------------------------------------------
+    use flui_view::{IntoView, StatefulBehavior, StatefulElement, StatefulView, ViewState};
+
+    /// Test-local view that captures the auto-injected `VsyncScope` in
+    /// `init_state`, registers a caller-supplied controller, and starts it
+    /// running so subsequent `draw_frame` calls advance its value.
+    ///
+    /// Used exclusively to verify the auto-wrap chain; not a real widget.
+    #[derive(Clone)]
+    struct VsyncProbeView {
+        /// The controller to register via the `VsyncScope` found in `init_state`.
+        controller_to_register: flui_animation::AnimationController,
+    }
+
+    /// State for `VsyncProbeView`.
+    struct VsyncProbeState {
+        controller: flui_animation::AnimationController,
+    }
+
+    impl StatefulView for VsyncProbeView {
+        type State = VsyncProbeState;
+
+        fn create_state(&self) -> Self::State {
+            VsyncProbeState {
+                controller: self.controller_to_register.clone(),
+            }
+        }
+    }
+
+    impl ViewState<VsyncProbeView> for VsyncProbeState {
+        fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+            // Mirror the VsyncScope LOOKUP path every real implicit widget uses
+            // (`animated_opacity.rs:91` etc.): read the VsyncScope provided by
+            // `attach_root_widget`'s auto-wrap and register our controller in it.
+            // (The real widgets also store the `VsyncRegistration` to unregister
+            // on `dispose`; this probe drops it — harmless, the registry is owned
+            // by an isolated `AppBinding::new()` that drops at test end.)
+            if let Some(vsync) =
+                ctx.get::<flui_widgets::VsyncScope, _>(|scope| scope.vsync().clone())
+            {
+                vsync.register(self.controller.clone());
+                // Start the controller so `has_running()` / value-advance is
+                // observable in A2 — without forward() the controller stays
+                // Dismissed and tick_all is a no-op for it.
+                self.controller.forward().ok();
+            }
+        }
+
+        fn build(
+            &self,
+            _view: &VsyncProbeView,
+            _ctx: &dyn flui_view::BuildContext,
+        ) -> impl IntoView {
+            // Leaf — no children to build; only the probe's init_state matters.
+            LeafView
+        }
+    }
+
+    impl View for VsyncProbeView {
+        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
+            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        }
+    }
+
+    /// Construct a `VsyncProbeView` with a fresh 200 ms controller on an
+    /// isolated (non-global) `Scheduler`. Returns the view and the controller
+    /// handle so tests can inspect value / dispose after the frame.
+    fn make_vsync_probe() -> (VsyncProbeView, flui_animation::AnimationController) {
+        use std::{sync::Arc, time::Duration};
+        let controller = flui_animation::AnimationController::new(
+            Duration::from_millis(200),
+            Arc::new(flui_scheduler::Scheduler::new()),
+        );
+        let view = VsyncProbeView {
+            controller_to_register: controller.clone(),
+        };
+        (view, controller)
+    }
+
+    /// A1 — **Auto-wrap causes registration (the key red→green test)**
+    ///
+    /// `attach_root_widget` must inject a `VsyncScope` so a descendant widget's
+    /// `init_state` (which calls `ctx.get::<VsyncScope, _>(...)`) finds it and
+    /// registers its controller into `binding.vsync()`.
+    ///
+    /// **Without** the auto-wrap: no `VsyncScope` above the root →
+    /// `ctx.get::<VsyncScope>()` returns `None` → registration never happens →
+    /// `binding.vsync().len()` stays `0` after a build pass. This is genuinely RED
+    /// on a build of this file that omits the `VsyncScope::new(...)` wrap.
+    ///
+    /// **With** the auto-wrap: scope is present → `init_state` registers →
+    /// `len() > 0`. The assertion is causal: the build pass (draw_frame Phase 1)
+    /// is what runs `init_state`; the check before draw_frame is `0` in both worlds.
+    #[test]
+    fn a1_autowrap_causes_registration_after_build_pass() {
+        let binding = AppBinding::new();
+        let (probe, controller) = make_vsync_probe();
+
+        binding
+            .attach_root_widget(&probe)
+            .expect("a fresh AppBinding must accept its first root widget");
+
+        // Before draw_frame: init_state has not run → no registration yet.
+        assert!(
+            binding.vsync().is_empty(),
+            "A1 precondition: controller must not be registered before the first build pass",
+        );
+
+        // draw_frame Phase 1 (build_scope) triggers mount → init_state → registration.
+        let _ = binding.draw_frame(test_constraints());
+
+        assert!(
+            !binding.vsync().is_empty(),
+            "A1: after a build pass the controller registered in init_state must appear \
+             in binding.vsync(); empty means the auto-injected VsyncScope was absent \
+             — the wrap in attach_root_widget is missing or broken",
+        );
+
+        controller.dispose();
+    }
+
+    /// A2 — **End-to-end tick: auto-wrap → register → tick → value advances**
+    ///
+    /// After the build pass runs `init_state` (which reads the auto-injected
+    /// `VsyncScope` and registers + starts the controller), `draw_frame` calls
+    /// `tick_all` before each build phase. The controller's value must advance
+    /// across successive frames, proving the full chain: attach_root_widget
+    /// auto-wrap → VsyncScope in tree → `init_state` registers →
+    /// `tick_all` in draw_frame advances the value.
+    ///
+    /// ## Tick-anchor ordering
+    ///
+    /// `tick_all` runs BEFORE `build_scope` inside each `draw_frame`. The
+    /// controller is registered in `init_state`, which executes during `build_scope`
+    /// of frame 1. Therefore:
+    ///
+    /// - Frame 1 (t=0.0): `tick_all(0.0)` fires with no controller yet;
+    ///   build_scope runs → registration + `forward()`. Value stays at `0`.
+    /// - Frame 2 (t=0.1): `tick_all(0.1)` sees the new run-generation, anchors
+    ///   `run_start = 0.1`, elapsed = 0 → value stays near `0` (anchor frame).
+    /// - Frame 3 (t=0.2): `tick_all(0.2)` computes elapsed = 0.1 s on a 200 ms
+    ///   controller → ~50 % progress → value advances to ~0.5.
+    ///
+    /// This 3-frame sequence is the minimal proof of the end-to-end chain.
+    #[test]
+    fn a2_autowrap_end_to_end_tick_advances_controller_value() {
+        use flui_animation::Animation as _;
+
+        let binding = AppBinding::new();
+        let (probe, controller) = make_vsync_probe();
+        binding
+            .attach_root_widget(&probe)
+            .expect("a fresh AppBinding must accept its first root widget");
+
+        // Frame 1 (t=0.0): build pass runs init_state → registration + forward().
+        // tick_all fires before build_scope, so the controller is not yet known; value = 0.
+        binding.set_now_secs_for_test(0.0);
+        let _ = binding.draw_frame(test_constraints());
+        assert!(
+            !binding.vsync().is_empty(),
+            "A2 precondition: controller must be registered after the first build pass",
+        );
+
+        // Frame 2 (t=0.1): tick_all observes the new run-generation and sets run_start=0.1;
+        // elapsed = 0.1 - 0.1 = 0 → this is the anchor frame; value stays near 0.
+        binding.set_now_secs_for_test(0.1);
+        let _ = binding.draw_frame(test_constraints());
+        let value_after_anchor = controller.value();
+
+        // Frame 3 (t=0.2): elapsed = 0.2 - 0.1 = 0.1 s on a 200 ms run → ~50 % progress.
+        // If the chain is intact, value must be strictly above the anchor-frame value.
+        binding.set_now_secs_for_test(0.2);
+        let _ = binding.draw_frame(test_constraints());
+        let value_at_50_percent = controller.value();
+
+        assert!(
+            value_at_50_percent > value_after_anchor,
+            "A2: controller value must advance from the anchor frame to t=0.2 s \
+             (anchor={value_after_anchor}, t=200ms={value_at_50_percent}); \
+             equal values mean tick_all did not reach the registered controller — \
+             either the VsyncScope was absent (auto-wrap broken) or tick_all was skipped",
+        );
+
+        controller.dispose();
+    }
+
+    /// A3 — **No-animation root: auto-wrap registers nothing itself**
+    ///
+    /// A root with no implicitly-animated widget (plain `LeafView`) must leave
+    /// `binding.vsync()` empty after a build pass. The auto-injected `VsyncScope`
+    /// is present in the tree but passively provides; no self-registration occurs.
+    /// This verifies the wrapper is inert for apps that don't use implicit animations.
+    #[test]
+    fn a3_no_animation_root_vsync_stays_empty_after_build_pass() {
+        let binding = AppBinding::new();
+        binding
+            .attach_root_widget(&LeafView)
+            .expect("a fresh AppBinding must accept its first root widget");
+
+        // Build pass runs — VsyncScope is mounted but LeafView has no init_state
+        // that reads it, so no registration occurs.
+        let _ = binding.draw_frame(test_constraints());
+
+        assert!(
+            binding.vsync().is_empty(),
+            "A3: a root with no implicitly-animated widgets must not register anything \
+             into binding.vsync(); the VsyncScope wrapper must not self-register",
+        );
     }
 
     /// V4 — **No-animation app idles cheaply**
