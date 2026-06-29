@@ -150,8 +150,18 @@ The repository vendors two external codebases for read-only architectural refere
 
 Both are studied, never copied. Patterns are translated to FLUI idioms (Arity, Ambassador delegation, no nullability, strict layered DAG).
 
+## Hot Reload (Dev-Time)
+
+Hot-reload is split into two layers so build tooling and runtime hosts stay decoupled:
+
+1. **Build orchestration** — `SourceWatcher` in `flui-hot-reload` (`source-watch` feature) watches `src/` and triggers `cargo build`. Used by `flui-cli` and `flui-devtools`.
+2. **Artifact reload** — `HotReloadDriver` polls the plugin `.so`/`.dll` mtime and reloads via `dlopen` without restarting the host.
+
+See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration examples.
+
 ## See Also
 
+- [Hot Reload](hot-reload.md) — two-layer dev model, plugin workflows
 - [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns
 - [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.3.0
 - [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph

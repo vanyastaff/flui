@@ -17,8 +17,8 @@ web-time = "1.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Hot reload support
-notify = { version = "8.2", optional = true }
+# Hot reload support (shared watcher in flui-hot-reload)
+flui-hot-reload = { path = "../flui-hot-reload", optional = true, features = ["source-watch"] }
 
 # Data structures
 parking_lot = { workspace = true }
@@ -42,7 +42,7 @@ timeline = []
 
 # === Advanced Features ===
 # Hot code reload for development
-hot-reload = ["notify"]
+hot-reload = ["dep:flui-hot-reload"]
 
 # TODO: Add dependencies for these features:
 # network-monitor = ["tokio", "tokio-tungstenite"]

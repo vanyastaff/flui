@@ -134,6 +134,46 @@ macro_rules! scene_plugin {
 /// app_plugin!(MyApp);
 /// ```
 ///
+/// Generates `extern "C"` entry points for a Flutter-parity **worker** crate.
+///
+/// The worker owns reloadable `build()` logic only; the host binary retains
+/// element-tree `State`. Call an init function that registers build dispatch
+/// (see `examples/hot_reload_counter/`).
+///
+/// # Generated symbols
+///
+/// - `flui_worker_init()` — register build fns (called on load + every reload)
+/// - `flui_worker_version() -> u32`
+/// - `flui_worker_fingerprint() -> u64` — optional layout-change detection
+///
+/// Requires the `app-plugin` feature on `flui-hot-reload`.
+#[cfg(feature = "app-plugin")]
+#[macro_export]
+macro_rules! hot_reload_worker {
+    ($init_fn:ident) => {
+        $crate::hot_reload_worker!($init_fn, fingerprint: $crate::worker::DEFAULT_FINGERPRINT);
+    };
+    ($init_fn:ident, fingerprint: $fp:expr) => {
+        /// Worker registration hook — runs on load and after every dylib reload.
+        #[unsafe(no_mangle)]
+        pub extern "C" fn flui_worker_init() {
+            $init_fn();
+        }
+
+        /// Worker version (for diagnostics).
+        #[unsafe(no_mangle)]
+        pub extern "C" fn flui_worker_version() -> u32 {
+            1
+        }
+
+        /// Stable-layout fingerprint for the shared `types` crate.
+        #[unsafe(no_mangle)]
+        pub extern "C" fn flui_worker_fingerprint() -> u64 {
+            $fp
+        }
+    };
+}
+
 /// Requires the `app-plugin` feature on `flui-hot-reload`.
 #[cfg(feature = "app-plugin")]
 #[macro_export]

@@ -71,15 +71,15 @@ These crates compose the rendering substrate without knowing about each other.
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-hot-reload` | ✅ ACTIVE | `dlopen`-based scene plugin host for desktop iteration. Optional `app-plugin` feature depends on `flui-view`, `flui-rendering`, `flui-types` — placing this crate above `flui-view` in the DAG. |
+| `flui-hot-reload` | ✅ ACTIVE | Two-layer hot-reload: runtime `HotReloadDriver` (layer 2, dlopen) + optional `SourceWatcher` (layer 1, `source-watch` feature). See [hot-reload.md](hot-reload.md). |
 
 ## Layer 8 — Application / CLI / DevTools
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle |
-| `flui-cli` | ⏸️ DISABLED | CLI tooling (`flui new`, `flui build`, `flui run`) |
-| `flui-devtools` | ⏸️ DISABLED | Inspector, element tree viewer, perf overlay |
+| `flui-cli` | ✅ ACTIVE | CLI tooling (`flui run` hot-reload orchestration, Android scene deploy) |
+| `flui-devtools` | ⏸️ PARTIAL | Profiler; `HotReloader` delegates to `flui-hot-reload` |
 
 ## Examples and Tools
 

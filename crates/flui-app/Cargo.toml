@@ -39,7 +39,7 @@ flui-layer = { path = "../flui-layer" }
 flui-semantics = { path = "../flui-semantics" }
 flui-engine = { path = "../flui-engine" }
 flui-platform = { path = "../flui-platform" }
-flui-hot-reload = { path = "../flui-hot-reload" }
+flui-hot-reload = { path = "../flui-hot-reload", features = ["app-plugin"] }
 
 # Utilities
 tracing.workspace = true

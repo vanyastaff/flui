@@ -1,13 +1,25 @@
 //! # FLUI Hot-Reload
 //!
-//! Hot-reload support for FLUI scene plugins via dynamic library loading.
+//! Hot-reload support for FLUI scene and widget plugins via dynamic library loading.
 //!
-//! This crate provides two sides of the hot-reload system:
+//! ## Two-Layer Architecture
 //!
-//! - **Plugin side** ([`scene_plugin!`] macro): Generates `extern "C"` wrappers
-//!   around a user's `fn(f32, f32) -> Scene` function.
-//! - **Host side** ([`ScenePlugin`]): Loads a scene plugin shared library at
-//!   runtime, checks for updates via mtime polling, and reloads automatically.
+//! ```text
+//! Layer 1 — Build orchestration (dev-time, optional `source-watch` feature)
+//!   SourceWatcher  →  cargo build  →  new .so/.dll on disk
+//!        ↑ used by flui-cli, flui-devtools
+//!
+//! Layer 2 — Artifact reload (runtime, always on native targets)
+//!   HotReloadDriver  →  mtime poll  →  unload/load DynLib  →  new Scene
+//!        ↑ used by scene_render, Android host, custom runners
+//! ```
+//!
+//! See [`strategy`] for [`ReloadStrategy`] and shared env/timing constants.
+//!
+//! ## Plugin vs Host
+//!
+//! - **Plugin side** ([`scene_plugin!`] / [`app_plugin!`]): `extern "C"` FFI entry points.
+//! - **Host side** ([`ScenePlugin`], [`HotReloadDriver`]): load, poll, reload.
 //!
 //! ## How It Works
 //!
@@ -74,6 +86,13 @@
     clippy::missing_panics_doc
 )]
 
+pub mod strategy;
+
+#[cfg(feature = "source-watch")]
+pub mod dev;
+
+pub mod engine;
+
 #[cfg(feature = "app-plugin")]
 mod pipeline;
 mod plugin;
@@ -91,7 +110,20 @@ mod driver;
 #[cfg(not(target_arch = "wasm32"))]
 mod host;
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
+mod dispatch;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod worker;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use driver::HotReloadDriver;
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{PluginKind, ScenePlugin};
+#[cfg(not(target_arch = "wasm32"))]
+pub use worker::{WorkerPlugin, WorkerPollOutcome, WorkerReloadDriver};
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
+pub use dispatch::{WorkerBuildEnv, request_rebuild, set_request_rebuild};
+pub use strategy::ReloadStrategy;
+pub use engine::{HotReloadOutcome, HotReloadTier};

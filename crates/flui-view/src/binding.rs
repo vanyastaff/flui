@@ -941,6 +941,24 @@ impl WidgetsBinding {
         self.inner.read().build_owner.dirty_count()
     }
 
+    /// Flutter `WidgetsBinding.performReassemble()` — hot reload entry point.
+    ///
+    /// Marks every element dirty without unmounting or disposing state. The
+    /// next [`draw_frame`](Self::draw_frame) re-runs all `build()` methods while
+    /// preserving [`StatefulView`](crate::StatefulView) state in the element tree.
+    pub fn perform_reassemble(&self) {
+        {
+            let mut inner = self.inner.write();
+            let WidgetsBindingInner {
+                ref mut build_owner,
+                ref element_tree,
+                ..
+            } = *inner;
+            build_owner.reassemble(element_tree);
+        }
+        self.handle_build_scheduled();
+    }
+
     // ========================================================================
     // Frame Drawing
     // ========================================================================
