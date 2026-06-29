@@ -7,7 +7,7 @@
 //! 2. **Artifact reload** (runtime) — detect artifact changes (mtime poll), unload the
 //!    old dynamic library, load the new one, rebuild the scene/widget tree.
 //!
-//! These layers are orthogonal: the CLI handles layer 1; [`HotReloadDriver`] handles
+//! These layers are orthogonal: the CLI handles layer 1; [`crate::HotReloadDriver`] handles
 //! layer 2. They compose for plugin-based workflows (`flui run --scene`, desktop
 //! scene plugins) but can also be used independently.
 

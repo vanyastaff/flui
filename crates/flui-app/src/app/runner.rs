@@ -227,10 +227,10 @@ where
         std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
     let mut last_frame_started: Option<web_time::Instant> = None;
     window.on_request_frame(Box::new(move || {
-        if let Some(ref mut driver) = *worker_driver_frame.lock() {
-            if matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. }) {
-                AppBinding::instance().perform_hot_reload(HotReloadTier::HotReload);
-            }
+        if let Some(ref mut driver) = *worker_driver_frame.lock()
+            && matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. })
+        {
+            AppBinding::instance().perform_hot_reload(HotReloadTier::HotReload);
         }
 
         let binding = AppBinding::instance();

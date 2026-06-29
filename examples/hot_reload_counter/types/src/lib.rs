@@ -13,10 +13,11 @@ use flui_hot_reload::WorkerBuildEnv;
 use flui_view::prelude::*;
 
 /// Stable-layout fingerprint — bump when `CounterAppState` layout changes.
-pub const TYPE_FINGERPRINT: u64 = 0xC0_07_EA_0001;
+pub const TYPE_FINGERPRINT: u64 = 0xC007_EA01;
 
 type CounterBuildFn = fn(WorkerBuildEnv<'_>, &CounterAppState, &CounterApp) -> BoxedView;
 
+#[allow(unsafe_code)]
 fn get_counter_build() -> CounterBuildFn {
     let ptr = flui_hot_reload::get_worker_build_ptr(TYPE_FINGERPRINT)
         .expect("counter worker not loaded — build the logic crate and set FLUI_WORKER_PLUGIN");

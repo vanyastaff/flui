@@ -18,8 +18,8 @@
 //!
 //! ## Plugin vs Host
 //!
-//! - **Plugin side** ([`scene_plugin!`] / [`app_plugin!`]): `extern "C"` FFI entry points.
-//! - **Host side** ([`ScenePlugin`], [`HotReloadDriver`]): load, poll, reload.
+//! - **Plugin side** (`scene_plugin!` / `app_plugin!`): `extern "C"` FFI entry points.
+//! - **Host side** ([`ScenePlugin`], [`crate::HotReloadDriver`]): load, poll, reload.
 //!
 //! ## How It Works
 //!
