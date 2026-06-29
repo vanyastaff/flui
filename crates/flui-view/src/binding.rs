@@ -1034,8 +1034,8 @@ impl WidgetsBinding {
     /// Service pending lazy-sliver child-build requests accumulated during the
     /// most recent layout pass.
     ///
-    /// This is the **production entry point** for lazy [`SliverList`] /
-    /// [`ListView::builder`] child building. It mirrors step 6 of
+    /// This is the **production entry point** for lazy `SliverList` /
+    /// `ListView::builder` child building. It mirrors step 6 of
     /// `HeadlessBinding::pump_frame`, and must be called immediately after
     /// `PipelineOwner::run_frame` releases its write-lock so no `NodePtr`
     /// alias is live.
