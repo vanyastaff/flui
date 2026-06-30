@@ -60,6 +60,36 @@ half-solutions; the leverage is in the context layer.
    `compute_dry_layout`, flex baseline, IntrinsicWidth/Height default forcing —
    each verified against `.flutter/` with the now-working queries.
 
+## Feasibility confirmed + concrete API/wiring points (2026-06-30)
+
+Investigated the dry-layout path (the gateway case). The fix is **feasible** —
+parent-data *is* reachable by the driver; the work is an API-shape decision, not
+a data-availability blocker:
+
+- **Context shape.** `BoxDryLayoutCtx` (`context/intrinsics.rs:174`) is a
+  *non-generic* struct wrapping a single callback
+  `dry: &mut dyn FnMut(usize, BoxConstraints) -> Size`. It exposes `child_count`
+  + `child_dry_layout` and **no parent-data** — unlike `SliverLayoutContext<A, PD>`
+  which is generic over the parent-data type.
+- **Driver has the data.** The dispatcher `dry_layout_query_impl`
+  (`pipeline/owner/query.rs:263`) holds `children: Vec<RenderId>` + the `slots`
+  map, and builds the `child_dry` closure by looking each child up in `slots`.
+  Each child's node carries its parent-data, so the driver can equally build a
+  `child_parent_data(index)` accessor — **no new data plumbing needed**, just an
+  extra closure.
+- **The decision (chief-architect).** To surface *typed* parent-data
+  (`FlexParentData`/`StackParentData`/`WrapParentData`) to a render object's
+  `compute_dry_layout`, choose:
+  (a) make `BoxDryLayoutCtx` generic over `PD` (and the `RenderBox::compute_dry_layout`
+  signature) — type-safe, but ripples to every box render object's signature; or
+  (b) a type-erased accessor (`&dyn Any` / a downcast helper) — localized, but
+  unsafe-ish at the call site.
+  The same choice applies to the intrinsic + baseline contexts. Prefer one
+  consistent mechanism across all three.
+- **Wiring points:** the driver `dry_layout_query_impl` (real pipeline) **and**
+  `RenderTester`'s dry/intrinsic/baseline query paths (`testing/`) — the latter
+  is what unblocks red→green testing of the per-render-object fixes.
+
 ## Scope note
 
 This is the dividing line between the *contained* parity work (done — 13 fixes,
