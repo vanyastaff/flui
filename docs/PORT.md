@@ -261,6 +261,16 @@ Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side 
 
 **Back-references:** [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](adr/ADR-0006-c-ir-record-replay-seam.md) §Decision 4 (C4 rule); engine-overhaul spec `.rust-studio/specs/flui-engine-overhaul/spec.md` acceptance criterion C4; `crates/flui-engine/ARCHITECTURE.md` §Record/replay boundary.
 
+### N-geom.U16. Direct `glam` use outside the wgpu backend
+
+**Option D's glam policy is an engine-edge policy.** `glam` is sanctioned for GPU/painter hot-path math under `crates/flui-engine/src/wgpu/`, where typed `flui_geometry` values are converted into SIMD/Pod-friendly GPU primitives. Direct `glam::...` or `use glam...` code outside that backend widens the bridge policy into unrelated engine modules and bypasses the FLUI-owned public geometry surface documented in `crates/flui-types/README.md`.
+
+**Scope:** `crates/flui-engine/src`, excluding `crates/flui-engine/src/wgpu/**`.
+
+**Allowlist:** none. Add a documented bridge or move the conversion to the wgpu edge instead of importing `glam` directly in other engine modules.
+
+**Back-references:** `docs/ROADMAP-TRACKER.md` `N-geom.U16`; `crates/flui-engine/src/wgpu/mod.rs` §Math-backend policy; `crates/flui-types/README.md` FAQ "Why not use glam or euclid?".
+
 ### 20. Gradient/image SrcOver warn-fallback strings in producer files
 
 **PR-5 deleted three warn-fallback blocks** that previously made gradient and image producers silently fall through to SrcOver when an advanced (dst-read) blend mode was requested. If any of the deleted strings reappear in `batches/`, `renderer.rs`, or `backend.rs`, a producer has regressed to the fallback path: callers requesting Multiply, Screen, Overlay, etc. will silently receive SrcOver output instead of the correct advanced blend result.

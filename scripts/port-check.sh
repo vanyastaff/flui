@@ -3,9 +3,10 @@
 #
 # Verifies the 21 refusal triggers (1-21, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
-# sanctioned-dyn-boundary check. Exits non-zero on the first violation
-# outside the whitelist; prints the offending file:line and the trigger
-# ID. Triggers #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
+# sanctioned-dyn-boundary check and the N-geom.U16 engine-glam boundary
+# guard. Exits non-zero on the first violation outside the whitelist;
+# prints the offending file:line and the trigger ID. Triggers
+# #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
 # (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
 # added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
 # Triggers #15/#16/#17/#18 added in core-0a adversarial-reaudit PR-4 §U5
@@ -27,7 +28,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 21 triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 21 triggers + extra guards; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -1291,6 +1292,22 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# N-geom.U16: direct glam use in flui-engine is confined to the wgpu backend.
+#
+# Option D deliberately uses glam for GPU/painter hot-path math, but that policy
+# is an engine-edge policy, not a blanket license for higher engine modules to
+# reach around FLUI's typed geometry boundary. Keep direct `glam::...` and
+# `use glam...` code under `crates/flui-engine/src/wgpu/`; other engine modules
+# should speak FLUI geometry types or add a documented bridge.
+# -----------------------------------------------------------------------------
+check "N-geom.U16" \
+  "direct glam use outside flui-engine/src/wgpu (GPU math backend must stay at the engine edge)" \
+  '(^\s*use\s+glam\b|glam::)' \
+  --type rust \
+  --glob '!**/wgpu/**' \
+  crates/flui-engine/src
+
+# -----------------------------------------------------------------------------
 # Trigger 20: no warn-fallback strings for gradient/image producers (PR-5)
 #
 # PR-5 deleted three warn-fallback blocks that previously made gradient and
@@ -1361,7 +1378,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 21 refusal triggers + FR-033 grep clean"
+echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B
