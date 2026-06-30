@@ -158,6 +158,10 @@ pub struct FocusNode {
     /// Whether descendants can be focused.
     descendants_are_focusable: AtomicBool,
 
+    /// Weak owner when this node is the backing node for a
+    /// [`FocusScopeNode`].
+    scope_owner: RwLock<Option<Weak<FocusScopeNode>>>,
+
     /// Key event handler.
     on_key_event: RwLock<Option<KeyEventHandler>>,
 
@@ -179,6 +183,7 @@ impl FocusNode {
             can_request_focus: AtomicBool::new(true),
             skip_traversal: AtomicBool::new(false),
             descendants_are_focusable: AtomicBool::new(true),
+            scope_owner: RwLock::new(None),
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
             attached: AtomicBool::new(false),
@@ -195,6 +200,26 @@ impl FocusNode {
             can_request_focus: AtomicBool::new(true),
             skip_traversal: AtomicBool::new(false),
             descendants_are_focusable: AtomicBool::new(true),
+            scope_owner: RwLock::new(None),
+            on_key_event: RwLock::new(None),
+            rect: RwLock::new(Rect::ZERO),
+            attached: AtomicBool::new(false),
+        })
+    }
+
+    fn new_scope_backing_node(
+        label: Option<String>,
+        scope_owner: Weak<FocusScopeNode>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            id: allocate_focus_node_id(),
+            debug_label: label,
+            parent: RwLock::new(None),
+            children: RwLock::new(Vec::new()),
+            can_request_focus: AtomicBool::new(true),
+            skip_traversal: AtomicBool::new(false),
+            descendants_are_focusable: AtomicBool::new(true),
+            scope_owner: RwLock::new(Some(scope_owner)),
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
             attached: AtomicBool::new(false),
@@ -216,7 +241,10 @@ impl FocusNode {
     /// Returns whether this node can request focus.
     #[inline]
     pub fn can_request_focus(&self) -> bool {
-        self.can_request_focus.load(AtomicOrdering::Acquire)
+        self.own_can_request_focus()
+            && self
+                .ancestors()
+                .all(|ancestor| ancestor.allows_descendant_focus())
     }
 
     /// Sets whether this node can request focus.
@@ -339,12 +367,15 @@ impl FocusNode {
     ///
     /// Override in FocusScopeNode.
     pub fn as_scope(&self) -> Option<Arc<FocusScopeNode>> {
-        None
+        self.scope_owner.read().as_ref().and_then(Weak::upgrade)
     }
 
     /// Returns true if this is a FocusScopeNode.
     pub fn is_scope(&self) -> bool {
-        false
+        self.scope_owner
+            .read()
+            .as_ref()
+            .is_some_and(|w| w.strong_count() > 0)
     }
 
     /// Requests primary focus for this node.
@@ -476,6 +507,14 @@ impl FocusNode {
             Self::detach_subtree(grandchild);
         }
     }
+
+    fn own_can_request_focus(&self) -> bool {
+        self.can_request_focus.load(AtomicOrdering::Acquire)
+    }
+
+    fn allows_descendant_focus(&self) -> bool {
+        self.descendants_are_focusable() && (!self.is_scope() || self.own_can_request_focus())
+    }
 }
 
 impl Default for FocusNode {
@@ -488,6 +527,7 @@ impl Default for FocusNode {
             can_request_focus: AtomicBool::new(true),
             skip_traversal: AtomicBool::new(false),
             descendants_are_focusable: AtomicBool::new(true),
+            scope_owner: RwLock::new(None),
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
             attached: AtomicBool::new(false),
@@ -597,8 +637,8 @@ pub struct FocusScopeNode {
 impl FocusScopeNode {
     /// Creates a new focus scope node.
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            inner: FocusNode::new(),
+        Arc::new_cyclic(|weak_self| Self {
+            inner: FocusNode::new_scope_backing_node(None, weak_self.clone()),
             focus_history: Mutex::new(VecDeque::new()),
             autofocus: AtomicBool::new(false),
             traps_focus: AtomicBool::new(false),
@@ -608,8 +648,9 @@ impl FocusScopeNode {
 
     /// Creates a new focus scope with a debug label.
     pub fn with_debug_label(label: impl Into<String>) -> Arc<Self> {
-        Arc::new(Self {
-            inner: FocusNode::with_debug_label(label),
+        let label = label.into();
+        Arc::new_cyclic(|weak_self| Self {
+            inner: FocusNode::new_scope_backing_node(Some(label.clone()), weak_self.clone()),
             focus_history: Mutex::new(VecDeque::new()),
             autofocus: AtomicBool::new(false),
             traps_focus: AtomicBool::new(false),
@@ -741,24 +782,8 @@ impl FocusScopeNode {
     fn collect_focusable_nodes(&self) -> Vec<Arc<FocusNode>> {
         self.inner
             .descendants()
-            .filter(|node| {
-                node.can_request_focus()
-                    && !node.skip_traversal()
-                    && node.descendants_are_focusable()
-            })
+            .filter(|node| node.can_request_focus() && !node.skip_traversal())
             .collect()
-    }
-}
-
-impl Default for FocusScopeNode {
-    fn default() -> Self {
-        Self {
-            inner: FocusNode::new(),
-            focus_history: Mutex::new(VecDeque::new()),
-            autofocus: AtomicBool::new(false),
-            traps_focus: AtomicBool::new(false),
-            traversal_policy: RwLock::new(Arc::new(ReadingOrderPolicy)),
-        }
     }
 }
 
@@ -892,6 +917,10 @@ mod tests {
         assert!(!scope.autofocus());
         assert!(!scope.traps_focus());
         assert!(scope.focused_child().is_none());
+        assert!(
+            scope.as_focus_node().is_scope(),
+            "scope backing node should identify as its FocusScopeNode"
+        );
     }
 
     #[test]
@@ -969,5 +998,31 @@ mod tests {
 
         scope.record_focus(id2);
         assert_eq!(scope.focused_child(), Some(id2));
+    }
+
+    #[test]
+    fn descendants_are_focusable_blocks_descendants_not_self() {
+        let outer = FocusScopeNode::new();
+        let inner_scope = FocusScopeNode::with_debug_label("inner");
+        let child = FocusNode::with_debug_label("child");
+
+        outer.attach_node(inner_scope.as_focus_node());
+        inner_scope.attach_node(&child);
+
+        assert!(inner_scope.as_focus_node().can_request_focus());
+        assert!(child.can_request_focus());
+
+        inner_scope
+            .as_focus_node()
+            .set_descendants_are_focusable(false);
+
+        assert!(
+            inner_scope.as_focus_node().can_request_focus(),
+            "descendants_are_focusable=false must not disable the node itself"
+        );
+        assert!(
+            !child.can_request_focus(),
+            "descendants_are_focusable=false must prevent descendant focus"
+        );
     }
 }

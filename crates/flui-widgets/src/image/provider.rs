@@ -228,7 +228,7 @@ impl ImageProvider for FileImage {
     }
 }
 
-/// A typed stub for HTTP/HTTPS image loading.
+/// A typed placeholder for HTTP/HTTPS image loading.
 ///
 /// [`resolve`](ImageProvider::resolve) always returns
 /// [`ImageProviderError::AsyncNotWired`] because network I/O requires async
@@ -243,11 +243,13 @@ impl ImageProvider for FileImage {
 ///
 /// Prefer [`Image::network`](crate::Image::network) as the ergonomic
 /// constructor.
+#[cfg(feature = "network-images")]
 #[derive(Debug, Clone)]
 pub struct NetworkImage {
     url: String,
 }
 
+#[cfg(feature = "network-images")]
 impl NetworkImage {
     /// Creates a stub provider for `url`.
     ///
@@ -265,6 +267,7 @@ impl NetworkImage {
     }
 }
 
+#[cfg(feature = "network-images")]
 impl ImageProvider for NetworkImage {
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
         Err(ImageProviderError::AsyncNotWired {

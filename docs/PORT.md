@@ -175,6 +175,14 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 
 **Back-references:** [architecture-correction-plan §SP-4](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U43](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md), [view-tree-foundation audit "Post-audit correction"](research/2026-05-21-view-tree-foundation-audit.md) (zero-consumer flui-tree surface is deliberate unified-tree infrastructure, not a deletion signal).
 
+### Cross.H7. Scheduler speculative surface names stay deleted
+
+**`flui-scheduler` stable source/docs must not mention the deleted parallel scheduler/ticker experiments:** `TypestateTicker`, `ScheduledTicker`, `prelude_advanced`, `TypedTask`, priority ZSTs, legacy handles, or extension-trait names such as `ToMilliseconds` / `PriorityExt`.
+
+**Scope:** `crates/flui-scheduler/src`, `crates/flui-scheduler/README.md`, and `crates/flui-scheduler/CHANGELOG.md`. Unlike the generic `check()` helper, this guard intentionally scans Rust doc comments because public source docs are part of the exposed open-source surface.
+
+**Back-references:** `docs/ROADMAP-TRACKER.md` `H7`, [input/frame-loop repair requirements AE15](brainstorms/input-frame-loop-repair-requirements.md#acceptance-examples).
+
 ### 12. Lock placement in public API
 
 **SP-6 — `RwLock` / `Mutex` / `Arc<RwLock<...>>` in a `pub fn` return type OR a `pub` field of a trait/struct.** Lock types leak the framework's concurrency model across module boundaries; every caller has to reason about lock ordering / poisoning / re-entrancy. SP-6's verdict is that locks should live behind private fields; public APIs should expose immutable snapshots or scoped callbacks.

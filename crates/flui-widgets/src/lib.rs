@@ -112,9 +112,10 @@ pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row};
 pub use flui_objects::{ImageAlignment, ImageFit};
+#[cfg(feature = "network-images")]
+pub use image::NetworkImage;
 pub use image::{
     DirectImageProvider, FileImage, Image, ImageProvider, ImageProviderError, MemoryImage,
-    NetworkImage,
 };
 pub use interaction::{
     AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,

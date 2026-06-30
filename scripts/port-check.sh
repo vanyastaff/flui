@@ -4,9 +4,10 @@
 # Verifies the 21 refusal triggers (1-21, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
-# guard, Cross.H2 canonical-type-home guards, and the Cross.H3
-# live-BuildContext guard. Exits non-zero on the first violation outside
-# the whitelist; prints the offending file:line and the trigger ID.
+# guard, Cross.H2 canonical-type-home guards, the Cross.H3
+# live-BuildContext guard, and the Cross.H7 speculative scheduler surface
+# guard. Exits non-zero on the first violation outside the whitelist; prints
+# the offending file:line and the trigger ID.
 # Triggers
 # #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
 # (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
@@ -780,6 +781,28 @@ else
   fi
 fi
 
+# Cross.H7 — scheduler speculative-surface names must not leak back into the
+# canonical ticker/task docs or source. These identifiers belonged to deleted
+# parallel API experiments and are intentionally not feature-gated stable
+# surfaces. This raw check intentionally does NOT use `check()`, because H7
+# must also catch public Rust doc comments (`//!` / `///`).
+cross_h7_pattern='\b(TypestateTicker|prelude_advanced|ScheduledTicker|TypedTask|VsyncDrivenScheduler|FrameHandle|TaskHandle|UserInputPriority|AnimationPriority|BuildPriority|IdlePriority|PriorityExt|FrameBudgetExt|FrameTimingExt|ToMilliseconds|ToSeconds)\b'
+cross_h7_hits=$(rg --line-number --column --no-heading "${cross_h7_pattern}" \
+  crates/flui-scheduler/src \
+  crates/flui-scheduler/README.md \
+  crates/flui-scheduler/CHANGELOG.md 2>/dev/null || true)
+if [[ -n "${cross_h7_hits}" ]]; then
+  echo "VIOLATION Cross.H7/flui-scheduler speculative surfaces: removed flui-scheduler speculative API names in scheduler source/docs"
+  echo "see ${trigger_doc} (trigger Cross.H7)"
+  echo "${cross_h7_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    Cross.H7/flui-scheduler speculative surfaces: removed flui-scheduler speculative API names in scheduler source/docs"
+  fi
+fi
+
 # -----------------------------------------------------------------------------
 # Trigger 12 (D-block PR-C-3 §U44, architecture-correction-plan SP-6) —
 # lock placement in public API.
@@ -1425,7 +1448,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 grep clean"
+echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

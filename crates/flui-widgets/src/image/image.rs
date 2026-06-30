@@ -9,9 +9,7 @@ use flui_types::geometry::px;
 use flui_types::{Pixels, Size, painting::Image as PixelImage};
 use flui_view::{RenderView, View, impl_render_view};
 
-use crate::image::provider::{
-    DirectImageProvider, FileImage, ImageProvider, MemoryImage, NetworkImage,
-};
+use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};
 
 /// Displays a bitmap image.
 ///
@@ -26,8 +24,12 @@ use crate::image::provider::{
 /// | [`from_image`] | Already-decoded [`PixelImage`] | O(1) Arc clone |
 /// | [`memory`] | Encoded bytes in memory | Full decode |
 /// | [`file`] | Local file read + decode | Blocking I/O + decode |
-/// | [`network`] | HTTP URL stub — not yet wired | Always fails |
 /// | [`new`] | Any [`ImageProvider`] impl | Provider-dependent |
+///
+/// The `network-images` feature exposes an HTTP/HTTPS placeholder constructor
+/// (`Image::network`) while async image loading is being wired. It is disabled
+/// by default so stable builds do not advertise a constructor that always
+/// returns `AsyncNotWired`.
 ///
 /// For static or frequently-rebuilt images, pre-decode once and use
 /// [`from_image`] to avoid per-rebuild cost.
@@ -52,7 +54,6 @@ use crate::image::provider::{
 /// [`from_image`]: Image::from_image
 /// [`memory`]: Image::memory
 /// [`file`]: Image::file
-/// [`network`]: Image::network
 /// [`new`]: Image::new
 /// [`width`]: Image::width
 /// [`height`]: Image::height
@@ -114,13 +115,14 @@ impl Image {
         Self::new(FileImage::new(path))
     }
 
-    /// Creates a typed stub for HTTP/HTTPS loading.
+    /// Creates a typed placeholder for HTTP/HTTPS loading.
     ///
     /// Always renders an empty box until async network loading is integrated
     /// with the FLUI view layer. Pre-decode the image outside the widget tree
     /// and supply it via [`from_image`](Image::from_image) as a workaround.
+    #[cfg(feature = "network-images")]
     pub fn network(url: impl Into<String>) -> Self {
-        Self::new(NetworkImage::new(url))
+        Self::new(crate::image::provider::NetworkImage::new(url))
     }
 
     /// Sets how the image is scaled to fit the laid-out box.

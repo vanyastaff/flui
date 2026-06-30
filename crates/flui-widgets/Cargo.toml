@@ -63,7 +63,11 @@ insta = { workspace = true }
 [features]
 default = []
 # Activates the `image` crate for decoding PNG/JPEG/GIF/… from bytes or files.
-# Required by `MemoryImage` and `FileImage`; `DirectImageProvider` and
-# `NetworkImage` compile without it.
+# Required by `MemoryImage` and `FileImage`; `DirectImageProvider` compiles
+# without it.
 images = ["dep:image"]
+# Exposes the HTTP/HTTPS image-provider placeholder while async image loading is
+# still being wired through the view layer. Off by default so stable builds do
+# not advertise a constructor that always resolves to `AsyncNotWired`.
+network-images = []
 serde = ["flui-types/serde"]
