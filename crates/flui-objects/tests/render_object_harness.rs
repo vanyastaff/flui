@@ -77,7 +77,7 @@ use flui_types::{
     geometry::px,
     layout::{AxisDirection, BoxFit, StackFit},
     painting::Clip,
-    styling::{BoxDecoration, Color},
+    styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color},
     typography::{TextDirection, TextSpan},
 };
 
@@ -952,6 +952,26 @@ fn harness_decorated_box_wraps_child() {
 }
 
 #[test]
+fn harness_decorated_box_hit_tests_child_before_decoration_shape() {
+    // Flutter tests the child before hitTestSelf: a rounded decoration excludes
+    // the rect's corners from its own shape, but a child hittable in a cut
+    // corner must still hit. (2,2) is inside the 100×100 box yet outside the
+    // r=50 rounded shape; before the fix the decoration shape was tested first
+    // and rejected it.
+    let run = RenderTester::mount(
+        box_node(RenderDecoratedBox::new(
+            BoxDecoration::with_color(Color::RED)
+                .set_border_radius(Some(BorderRadius::circular(px(50.0)))),
+        ))
+        .child(box_node(RenderColoredBox::blue(100.0, 100.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(run.hit_first(2.0, 2.0), Some(run.id("child")));
+}
+
+#[test]
 fn harness_decorated_box_layout_wraps_child_geometry() {
     let run = RenderTester::mount(
         box_node(RenderDecoratedBox::new(BoxDecoration::with_color(
@@ -1049,6 +1069,21 @@ fn harness_repaint_boundary_splits_layer_tree() {
     .run_frame();
 
     assert_eq!(run.structure(), vec!["Offset", "Picture"]);
+}
+
+#[test]
+fn harness_repaint_boundary_hit_tests_through_to_child() {
+    // A repaint boundary must pass hit-tests through to its child, not absorb
+    // them. Before the fix the trait-default hit_test returned the boundary
+    // itself and never recursed, blocking the entire subtree from pointer events.
+    let run = RenderTester::mount(
+        box_node(RenderRepaintBoundary::new())
+            .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), Some(run.id("child")));
 }
 
 #[test]

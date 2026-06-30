@@ -124,19 +124,25 @@ impl RenderBox for RenderDecoratedBox {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, Self::ParentData>) -> bool {
-        // The decoration's geometry decides (rounded corners exclude
-        // the bounding rect's corners — Flutter `BoxDecoration.hitTest`
-        // via `RenderDecoratedBox.hitTestSelf`).
-        let position = *ctx.position();
-        if !box_decoration_hit_test(self.paint_rect(ctx.own_size()), &self.decoration, position) {
+        // Flutter's default `RenderBox.hitTest` is `hitTestChildren() ||
+        // hitTestSelf()` within the bounding box: the CHILD is tested first, and
+        // the decoration shape (rounded corners exclude the rect's corners) is
+        // only the fallback (`RenderDecoratedBox.hitTestSelf` →
+        // `BoxDecoration.hitTest`). Testing the shape first wrongly rejected a
+        // child hittable in a rounded-corner cut-out.
+        if !ctx.is_within_own_size() {
             return false;
         }
         if self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO) {
             return true;
         }
-        // The decorated area itself is hit-opaque (a Container with a
-        // color absorbs taps).
-        true
+        // hitTestSelf: the decorated area is hit-opaque within the decoration
+        // shape (a Container with a color absorbs taps), excluding cut corners.
+        box_decoration_hit_test(
+            self.paint_rect(ctx.own_size()),
+            &self.decoration,
+            *ctx.position(),
+        )
     }
 }
 
