@@ -2601,6 +2601,26 @@ fn harness_sized_overflow_box_child_lays_out_under_incoming_constraints() {
 }
 
 #[test]
+fn harness_sized_overflow_box_intrinsics_report_requested_size() {
+    // RenderSizedOverflowBox OVERRIDES all four intrinsics to its requested
+    // size (Flutter shifted_box.dart). The child's larger intrinsic (200×100)
+    // must NOT leak through — the box reports 80×60. (Before the fix the
+    // intrinsics delegated to the child and returned 200/100.)
+    let mut run = RenderTester::mount(
+        box_node(RenderSizedOverflowBox::centered(80.0, 60.0))
+            .child(box_node(RenderColoredBox::red(200.0, 100.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let node = run.root();
+    assert_eq!(run.min_intrinsic_width(node, 100.0), 80.0);
+    assert_eq!(run.max_intrinsic_width(node, 100.0), 80.0);
+    assert_eq!(run.min_intrinsic_height(node, 100.0), 60.0);
+    assert_eq!(run.max_intrinsic_height(node, 100.0), 60.0);
+}
+
+#[test]
 fn harness_sized_overflow_box_self_describes() {
     let run = RenderTester::mount(box_node(RenderSizedOverflowBox::centered(80.0, 60.0)))
         .with_constraints(loose(200.0))

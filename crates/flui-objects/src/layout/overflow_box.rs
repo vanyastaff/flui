@@ -383,34 +383,26 @@ impl RenderBox for RenderSizedOverflowBox {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: RenderShiftedBox delegates all four intrinsics to child.
+    // Flutter parity: RenderSizedOverflowBox OVERRIDES all four intrinsics to
+    // report its `requested_size` (the size it claims for itself), regardless of
+    // the child — `shifted_box.dart` RenderSizedOverflowBox.computeMin/MaxIntrinsic*.
+    // (The child is laid out under the incoming constraints and may overflow, so
+    // the child's intrinsics do not describe this box's size.)
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_min_intrinsic_width(0, height)
+    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.width.get()
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_max_intrinsic_width(0, height)
+    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.width.get()
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_min_intrinsic_height(0, width)
+    fn compute_min_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.height.get()
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_max_intrinsic_height(0, width)
+    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.height.get()
     }
 
     fn compute_dry_layout(
