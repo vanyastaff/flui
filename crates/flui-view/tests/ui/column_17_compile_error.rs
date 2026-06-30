@@ -27,8 +27,8 @@ impl flui_view::view::StatelessView for Leaf {
 
 fn main() {
     let _ = column![
-        Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
+        Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
+        Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
         Leaf, // 17th — exceeds the FR-013 cap of 16
-        Leaf,
     ];
 }

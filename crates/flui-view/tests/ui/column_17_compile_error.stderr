@@ -3,9 +3,9 @@ error: column!: more than 16 children exceeds the tuple ViewSeq cap of 16 — us
    |
 29 |       let _ = column![
    |  _____________^
-30 | |         Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
-31 | |         Leaf, // 17th — exceeds the FR-013 cap of 16
-32 | |         Leaf,
+30 | |         Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
+31 | |         Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
+32 | |         Leaf, // 17th — exceeds the FR-013 cap of 16
 33 | |     ];
    | |_____^
    |
