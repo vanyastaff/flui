@@ -111,6 +111,24 @@ pub trait InheritedElementBase: ElementBase {}
 /// variant set.
 pub trait RenderElementBase<A: ElementArity>: ElementBase {}
 
+/// `ElementBase`-equivalent surface tagging the render-tree ROOT element.
+///
+/// Companion to [`ElementKind::Root`]. The root (`RootRenderElement`,
+/// Flutter's `RenderTreeRootElement` / `_RawViewElement`) is a first-class
+/// element *kind*, not a behavior-family element: it owns the `PipelineOwner`
+/// and bootstraps the render tree, so it neither composes a `View`-behavior nor
+/// fits the `Element<V, A, Behavior>` shape. A dedicated sealed sub-trait keeps
+/// it out of the behavior taxonomy without an unsealed `Box<dyn ElementBase>`.
+pub trait RootElementBase: ElementBase {}
+
+/// `ElementBase`-equivalent surface tagging an error-boundary element.
+///
+/// Companion to [`ElementKind::Error`]. `ErrorElement` is the leaf substituted
+/// when `build()` panics (C7 `catch_unwind` → `ErrorView`); it renders its
+/// message directly and has no children, so it is its own element kind rather
+/// than a behavior-family element.
+pub trait ErrorElementBase: ElementBase {}
+
 // ----------------------------------------------------------------------------
 // Blanket impls for the concrete element type aliases.
 //
@@ -192,6 +210,19 @@ where
     Element<V, Single, ParentDataBehavior>: ElementBase,
 {
 }
+
+// Special, non-behavior-family elements get their own kind (see the
+// `Root`/`Error` variants + their marker traits above). Both are standalone
+// `ElementBase` impls (not `Element<V, A, Behavior>`), so a dedicated sealed
+// sub-trait is the type-safe home — no unsealed `Box<dyn ElementBase>`.
+impl<V> RootElementBase for crate::view::RootRenderElement<V>
+where
+    V: crate::view::View + Clone + Send + Sync + 'static,
+    crate::view::RootRenderElement<V>: ElementBase,
+{
+}
+
+impl ErrorElementBase for crate::view::ErrorElement {}
 
 // ============================================================================
 // AnimationListener (Stateful variant extension)
@@ -332,6 +363,15 @@ pub enum ElementKind {
     /// `Stack`). The only render arity with a concrete blanket impl in
     /// Phase 1.
     RenderVariable(Box<dyn RenderElementBase<Variable>>),
+    /// The render-tree ROOT element (`RootRenderElement`, Flutter's
+    /// `RenderTreeRootElement`). Owns the `PipelineOwner` + render-tree
+    /// bootstrap; a first-class kind distinct from the behavior families.
+    /// See [`RootElementBase`].
+    Root(Box<dyn RootElementBase>),
+    /// The error-boundary leaf substituted when `build()` panics
+    /// (`ErrorElement` over `ErrorView`, C7 `catch_unwind`). Renders its
+    /// message directly, no children. See [`ErrorElementBase`].
+    Error(Box<dyn ErrorElementBase>),
 }
 
 impl ElementKind {
@@ -351,6 +391,8 @@ impl ElementKind {
             Self::RenderSingle(e) => &**e,
             Self::RenderOptional(e) => &**e,
             Self::RenderVariable(e) => &**e,
+            Self::Root(e) => &**e,
+            Self::Error(e) => &**e,
         }
     }
 
@@ -370,6 +412,8 @@ impl ElementKind {
             Self::RenderSingle(e) => &mut **e,
             Self::RenderOptional(e) => &mut **e,
             Self::RenderVariable(e) => &mut **e,
+            Self::Root(e) => &mut **e,
+            Self::Error(e) => &mut **e,
         }
     }
 
@@ -384,6 +428,8 @@ impl ElementKind {
             Self::RenderSingle(_) => "RenderSingle",
             Self::RenderOptional(_) => "RenderOptional",
             Self::RenderVariable(_) => "RenderVariable",
+            Self::Root(_) => "Root",
+            Self::Error(_) => "Error",
         }
     }
 }
