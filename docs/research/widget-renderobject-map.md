@@ -14,44 +14,67 @@
 
 ## Summary
 
-- **Total widgets planned:** 87
-- **Distinct render objects needed:** 48
-- **Render objects existing:** 24
-- **Render objects to build in Core.2:** 24
+> **⚠ Reconciled 2026-06-30.** The original draft of this file (summary: "24 existing")
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **48**
+> concrete objects. The counts and the two lists immediately below are the **authoritative**
+> status, verified against `RENDER_OBJECT_TYPES` in
+> [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
+> and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
+> body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
+> that appears in the "Existing (48)" list, the list wins. The body is retained for its
+> accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
+> file), which the Core.2 implementers need.
 
-### Existing render objects (24)
+- **Total widgets planned:** ~87
+- **Distinct concrete render objects for full parity (Core.2 target):** ~71
+- **Render objects existing today:** **48**
+- **Render objects remaining to build (Core.2):** **~23** (verified list below)
 
-| # | Render Object | FLUI Module | Wave |
+### Existing render objects — authoritative (48)
+
+Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
+
+**Box layout (19):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderFittedBox` · `RenderFlex` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderWrap`
+
+**Paint effects (9):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
+
+**Interaction / pointer (5):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderOffstage`
+
+**Leaf (2):** `RenderParagraph` · `RenderImage`
+
+**Slivers + viewport (13):** `RenderViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
+
+### Remaining to build — verified missing (≈23)
+
+Each `grep "struct Render…"`-confirmed absent on 2026-06-30:
+
+| Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
-| 1 | `RenderColoredBox` | `objects::colored_box` | — |
-| 2 | `RenderSizedBox` | `objects::sized_box` | — |
-| 3 | `RenderPadding` | `objects::padding` | — |
-| 4 | `RenderCenter` | `objects::center` | — |
-| 5 | `RenderOpacity` | `objects::opacity` | — |
-| 6 | `RenderTransform` | `objects::transform` | — |
-| 7 | `RenderConstrainedBox` | `objects::constrained_box` | Core.2 |
-| 8 | `RenderLimitedBox` | `objects::limited_box` | Core.2 |
-| 9 | `RenderAspectRatio` | `objects::aspect_ratio` | Core.2 |
-| 10 | `RenderFractionallySizedBox` | `objects::fractionally_sized_box` | Core.2 |
-| 11 | `RenderClipRect` | `objects::clip` | Core.2 |
-| 12 | `RenderClipRRect` | `objects::clip` | Core.2 |
-| 13 | `RenderClipOval` | `objects::clip` | Core.2 |
-| 14 | `RenderClipPath` | `objects::clip` | Core.2 |
-| 15 | `RenderRepaintBoundary` | `objects::repaint_boundary` | Core.2 |
-| 16 | `RenderOffstage` | `objects::offstage` | Core.2 W4 |
-| 17 | `RenderAbsorbPointer` | `objects::absorb_pointer` | Core.2 W4 |
-| 18 | `RenderIgnorePointer` | `objects::ignore_pointer` | Core.2 W4 |
-| 19 | `RenderMetaData` | `objects::meta_data` | Core.2 W4 |
-| 20 | `RenderFractionalTranslation` | `objects::fractional_translation` | Core.2 W4 |
-| 21 | `RenderFittedBox` | `objects::fitted_box` | Core.2 W4 |
-| 22 | `RenderFlex` | `objects::flex` | — |
-| 23 | `RenderStack` | `objects::stack` | Core.2 W2a |
-| 24 | `RenderSliverPadding` | `objects::sliver_padding` | Core.2 W5a |
-| 25 | `RenderSliverOpacity` | `objects::sliver_opacity` | Core.2 W5a |
-| 26 | `RenderSliverIgnorePointer` | `objects::sliver_ignore_pointer` | Core.2 W5a |
-| 27 | `RenderSliverOffstage` | `objects::sliver_offstage` | Core.2 W5a |
+| **`RenderSliverGrid`** | `GridView` | **CRITICAL** (only Business.1 blocker) | `sliver_grid.dart` |
+| `RenderMouseRegion` | `MouseRegion` (hover) | High | `proxy_box.dart` |
+| `RenderCustomPaint` | `CustomPaint` | High | `custom_paint.dart` |
+| `RenderEditable` | `EditableText`/`TextField` | High (App.1 IME) | `editable.dart` |
+| `RenderIndexedStack` | `IndexedStack` | Medium | `stack.dart` |
+| `RenderFlow` | `Flow` | Medium | `flow.dart` |
+| `RenderTable` | `Table`/`DataTable` | Medium | `table.dart` |
+| `RenderCustomSingleChildLayoutBox` | `CustomSingleChildLayout` | Medium | `custom_layout.dart` |
+| `RenderCustomMultiChildLayoutBox` | `CustomMultiChildLayout` | Medium | `custom_layout.dart` |
+| `RenderShrinkWrappingViewport` | shrink-wrap scroll | Medium | `viewport.dart` |
+| `RenderSliverPersistentHeader` family | `SliverAppBar`/pinned headers | Medium | `sliver_persistent_header.dart` |
+| `RenderAnimatedOpacity` | `FadeTransition`/`AnimatedOpacity` | Medium | `proxy_box.dart` |
+| `RenderAnimatedSize` | `AnimatedSize` | Medium | `animated_size.dart` |
+| `RenderBackdropFilter` | `BackdropFilter` | Low | `proxy_box.dart` |
+| `RenderShaderMask` | `ShaderMask` | Low | `proxy_box.dart` |
+| `RenderPhysicalModel` | `PhysicalModel` | Low (Material elevation) | `proxy_box.dart` |
+| `RenderPhysicalShape` | `PhysicalShape` | Low | `proxy_box.dart` |
+| `RenderSemanticsAnnotations` | `Semantics` | Medium (a11y) | `proxy_box.dart` |
+| `RenderMergeSemantics` | `MergeSemantics` | Low | `proxy_box.dart` |
+| `RenderExcludeSemantics` | `ExcludeSemantics` | Low | `proxy_box.dart` |
+| `RenderLeaderLayer` | `CompositedTransformTarget` | Low | `proxy_box.dart` |
+| `RenderFollowerLayer` | `CompositedTransformFollower` | Low | `proxy_box.dart` |
+| `RenderListBody` | `ListBody` | Low | `list_body.dart` |
 
-> Note: 27 entries above — the summary counts "24 existing" as those used directly by widgets; the sliver proxies (24–27) are infrastructure but listed for completeness.
+**Core.2 entry verdict: ✓ READY.** Business.1 needs only `RenderSliverGrid` of the above; the rest phase in by family off the critical path. R2 mitigated.
 
 ---
 
