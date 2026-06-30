@@ -326,6 +326,25 @@ impl ElementKind {
         }
     }
 
+    /// Mutably borrow the underlying element regardless of variant.
+    ///
+    /// The `&mut dyn ElementBase` companion to [`Self::element`], for the
+    /// element-tree accessors that drive lifecycle (`mount`/`update`/
+    /// `unmount`) through the `ElementBase` surface during the Phase 1
+    /// storage migration (FR-019).
+    pub fn element_mut(&mut self) -> &mut dyn ElementBase {
+        match self {
+            Self::Stateless(e) => &mut **e,
+            Self::Stateful { element, .. } => &mut **element,
+            Self::Proxy(e) => &mut **e,
+            Self::Inherited(e) => &mut **e,
+            Self::RenderLeaf(e) => &mut **e,
+            Self::RenderSingle(e) => &mut **e,
+            Self::RenderOptional(e) => &mut **e,
+            Self::RenderVariable(e) => &mut **e,
+        }
+    }
+
     /// Static name of the variant, for logging / debug.
     pub fn variant_name(&self) -> &'static str {
         match self {
