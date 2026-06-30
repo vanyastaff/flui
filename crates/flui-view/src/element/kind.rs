@@ -53,11 +53,15 @@ use flui_foundation::{Listenable, ListenerId};
 use super::{
     arity::{ElementArity, Leaf, Optional, Single, Variable},
     behavior::{
-        InheritedBehavior, ProxyBehavior, RenderBehavior, StatefulBehavior, StatelessBehavior,
+        AnimatedBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior, RenderBehavior,
+        StatefulBehavior, StatelessBehavior,
     },
     unified::Element,
 };
-use crate::view::{ElementBase, InheritedView, ProxyView, RenderView, StatefulView, StatelessView};
+use crate::view::{
+    AnimatedView, ElementBase, InheritedView, ParentDataView, ProxyView, RenderView, StatefulView,
+    StatelessView,
+};
 
 // ============================================================================
 // Sub-trait surface
@@ -162,6 +166,30 @@ where
     V: RenderView + Clone + Send + Sync + 'static,
     RenderBehavior<V>: super::behavior::ElementBehavior<V, Variable>,
     Element<V, Variable, RenderBehavior<V>>: ElementBase,
+{
+}
+
+// Animated + ParentData wiring — resolves the Phase 1 `create_element` blocker
+// (these two families previously had no `ElementKind` mapping; see
+// docs/ROADMAP-TRACKER.md N5.1). `AnimatedView: StatefulView` and
+// `AnimatedBehavior` composes the stateful body, so an `AnimatedElement` routes
+// to the `Stateful` variant — its `AnimationListener` is captured into the
+// variant's `animation_listener` field at `create_element` time (FR-020), NOT
+// here. `ParentDataBehavior` is proxy-shaped (Flutter's `ParentDataWidget
+// extends ProxyWidget`), so a `ParentDataElement` routes to the `Proxy` variant.
+impl<V> StatefulElementBase for Element<V, Single, AnimatedBehavior<V>>
+where
+    V: AnimatedView + Clone + Send + Sync + 'static,
+    AnimatedBehavior<V>: super::behavior::ElementBehavior<V, Single>,
+    Element<V, Single, AnimatedBehavior<V>>: ElementBase,
+{
+}
+
+impl<V> ProxyElementBase for Element<V, Single, ParentDataBehavior>
+where
+    V: ParentDataView + Clone + Send + Sync + 'static,
+    ParentDataBehavior: super::behavior::ElementBehavior<V, Single>,
+    Element<V, Single, ParentDataBehavior>: ElementBase,
 {
 }
 
