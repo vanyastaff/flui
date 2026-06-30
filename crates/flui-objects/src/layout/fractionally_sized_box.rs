@@ -3,10 +3,11 @@
 //!
 //! # Flutter equivalence
 //!
-//! Behavior-faithful port of Flutter's
+//! Port of Flutter's
 //! [`RenderFractionallySizedOverflowBox`](https://api.flutter.dev/flutter/rendering/RenderFractionallySizedOverflowBox-class.html)
 //! restricted to the non-overflow case (matching the `FractionallySizedBox`
-//! widget contract).
+//! widget contract), behavior-faithful except for one deliberate divergence on
+//! unbounded constraints (see *Rust-native improvements*).
 //!
 //! # Rust-native improvements
 //!
@@ -19,6 +20,11 @@
 //! * Alignment uses [`flui_types::Alignment`] (`x`,`y` ∈ `[-1, 1]`) rather
 //!   than the painting-side parallel definition, keeping the alignment
 //!   math consistent with `RenderTransform` / `RenderCenter`.
+//! * **Divergence (intentional):** on a factored axis whose incoming `max` is
+//!   unbounded, the child is sized as `parent_min × factor` rather than
+//!   Flutter's `parent_max × factor` (which would be a degenerate infinite
+//!   child). See the per-axis note on `child_constraints` and the
+//!   infinite-`max` factor tests.
 
 use flui_tree::Single;
 use flui_types::{Alignment, Offset, Pixels, Size, geometry::px};
