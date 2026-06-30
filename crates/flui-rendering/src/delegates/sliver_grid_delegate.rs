@@ -234,7 +234,9 @@ impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
             cross_axis_stride: child_cross_axis_extent + self.cross_axis_spacing,
             child_main_axis_extent,
             child_cross_axis_extent,
-            reverse_cross_axis: false,
+            // Flutter derives this from the cross-axis direction
+            // (axisDirectionIsReversed), not a hardcoded false.
+            reverse_cross_axis: constraints.cross_axis_direction.is_reversed(),
         }
     }
 
@@ -326,7 +328,9 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
             cross_axis_stride: child_cross_axis_extent + self.cross_axis_spacing,
             child_main_axis_extent,
             child_cross_axis_extent,
-            reverse_cross_axis: false,
+            // Flutter derives this from the cross-axis direction
+            // (axisDirectionIsReversed), not a hardcoded false.
+            reverse_cross_axis: constraints.cross_axis_direction.is_reversed(),
         }
     }
 
@@ -409,6 +413,38 @@ mod tests {
         let layout = delegate.get_layout(make_constraints(100.0));
         assert_eq!(layout.child_cross_axis_extent, 0.0);
         assert!(layout.child_main_axis_extent >= 0.0);
+    }
+
+    #[test]
+    fn test_get_layout_wires_reverse_cross_axis_from_direction() {
+        use flui_types::layout::AxisDirection;
+
+        let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(3);
+
+        // Default (LeftToRight) cross axis → forward layout.
+        let forward = delegate.get_layout(make_constraints(320.0));
+        assert!(!forward.reverse_cross_axis);
+        assert_eq!(forward.get_cross_axis_offset_of_child(0), 0.0);
+
+        // RightToLeft cross axis → reversed (Flutter axisDirectionIsReversed),
+        // which activates the mirrored cross-axis offsets. Before this wiring
+        // `get_layout` hardcoded `false`, so the reversed path was unreachable.
+        // 330 / 3 = 110 exactly, so the mirror arithmetic stays free of f32
+        // rounding noise.
+        let constraints = SliverConstraints {
+            scroll_offset: 0.0,
+            remaining_paint_extent: 1000.0,
+            viewport_main_axis_extent: 1000.0,
+            cross_axis_extent: 330.0,
+            cross_axis_direction: AxisDirection::RightToLeft,
+            ..Default::default()
+        };
+        let reversed = delegate.get_layout(constraints);
+        assert!(reversed.reverse_cross_axis);
+        assert_eq!(reversed.cross_axis_stride, 110.0);
+        // Mirror: column 0 sits at the far cross end, column 2 at the near end.
+        assert_eq!(reversed.get_cross_axis_offset_of_child(0), 220.0);
+        assert_eq!(reversed.get_cross_axis_offset_of_child(2), 0.0);
     }
 
     #[test]
