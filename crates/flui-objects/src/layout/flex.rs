@@ -284,8 +284,26 @@ impl RenderBox for RenderFlex {
         self.child_count = child_count;
 
         if child_count == 0 {
-            // No children - use minimum size
-            return constraints.smallest();
+            // No children: the cross axis collapses to 0, but with
+            // MainAxisSize::Max and a bounded main axis the container still
+            // fills the main extent (Flutter flex.dart: `idealMainSize =
+            // maxMainSize` when `max && finite`). MainAxisSize::Min collapses
+            // both axes. (Pre-fix this returned `smallest()`, wrongly collapsing
+            // the main axis under Max too.)
+            let max_main = match self.direction {
+                FlexDirection::Horizontal => constraints.max_width,
+                FlexDirection::Vertical => constraints.max_height,
+            };
+            let ideal_main = if self.main_axis_size == MainAxisSize::Max && max_main.is_finite() {
+                max_main
+            } else {
+                Pixels::ZERO
+            };
+            let size = match self.direction {
+                FlexDirection::Horizontal => Size::new(ideal_main, Pixels::ZERO),
+                FlexDirection::Vertical => Size::new(Pixels::ZERO, ideal_main),
+            };
+            return constraints.constrain(size);
         }
 
         // ====================================================================

@@ -1070,6 +1070,28 @@ fn harness_flex_row_sums_child_min_intrinsic_widths() {
 }
 
 #[test]
+fn harness_flex_empty_row_max_fills_main_axis() {
+    // An empty Row with the default MainAxisSize::Max still fills the bounded
+    // main axis (cross collapses to 0). Flutter flex.dart idealMainSize.
+    // Before the fix the childless short-circuit returned smallest() → (0,0).
+    let run = RenderTester::mount(box_node(RenderFlex::row()))
+        .with_constraints(BoxConstraints::new(px(0.0), px(500.0), px(0.0), px(300.0)))
+        .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(500.0), px(0.0)));
+}
+
+#[test]
+fn harness_flex_empty_row_min_collapses() {
+    // MainAxisSize::Min collapses both axes even under a bounded main axis.
+    let run = RenderTester::mount(box_node(
+        RenderFlex::row().with_main_axis_size(MainAxisSize::Min),
+    ))
+    .with_constraints(BoxConstraints::new(px(0.0), px(500.0), px(0.0), px(300.0)))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(0.0), px(0.0)));
+}
+
+#[test]
 fn harness_flex_row_weights_flexible_child_min_intrinsic_width() {
     let mut run = RenderTester::mount(
         box_node(RenderFlex::row())
