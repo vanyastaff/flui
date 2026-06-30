@@ -1,0 +1,37 @@
+name: Architecture change
+description: Propose a change to FLUI's architecture contract.
+title: "arch: "
+labels: ["architecture"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why does the current architecture fail the target product?
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract impact
+      description: Which contracts in docs/FOUNDATIONS.md, docs/PORT.md, or docs/ROADMAP.md change?
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference behavior
+      description: Flutter reference behavior, or why this is an edge where FLUI should leapfrog.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification plan
+      description: Tests, harness evidence, CI gates, and migration checks that prove the change.
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and alternatives
+      description: Include performance, API stability, and downstream migration risks.
+

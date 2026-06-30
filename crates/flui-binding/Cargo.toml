@@ -15,15 +15,15 @@ workspace = true
 
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline polling).
-flui-interaction = { path = "../flui-interaction" }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
-flui-view = { path = "../flui-view" }
+flui-view = { path = "../flui-view", version = "0.2.0" }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
-flui-rendering = { path = "../flui-rendering" }
+flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Registered `AnimationController`s the frame loop ticks on the virtual timeline,
 # restart-aware via the controller's `run_generation` counter.
-flui-animation = { path = "../flui-animation" }
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
 # Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
 # both hold (render-object attachment shares the owner; the binding does not own
 # it exclusively).
@@ -34,4 +34,4 @@ parking_lot = { workspace = true }
 # plus the geometry/offset types for the synthetic pointer-down. The `testing`
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
 # API, so the deterministic deadline test runs against the public surface.
-flui-types = { path = "../flui-types" }
+flui-types = { path = "../flui-types", version = "0.2.0" }

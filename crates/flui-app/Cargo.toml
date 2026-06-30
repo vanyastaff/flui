@@ -26,27 +26,27 @@ performance-overlay = []
 
 [dependencies]
 # Core FLUI crates
-flui-view = { path = "../flui-view" }
-flui-rendering = { path = "../flui-rendering" }
+flui-view = { path = "../flui-view", version = "0.2.0" }
+flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
-flui-objects = { path = "../flui-objects" }
-flui-types = { path = "../flui-types" }
-flui-foundation = { path = "../flui-foundation" }
-flui-interaction = { path = "../flui-interaction" }
-flui-scheduler = { path = "../flui-scheduler" }
-flui-painting = { path = "../flui-painting" }
-flui-layer = { path = "../flui-layer" }
-flui-semantics = { path = "../flui-semantics" }
-flui-engine = { path = "../flui-engine" }
-flui-platform = { path = "../flui-platform" }
-flui-hot-reload = { path = "../flui-hot-reload", features = ["app-plugin"] }
-flui-animation = { path = "../flui-animation" }
+flui-objects = { path = "../flui-objects", version = "0.2.0" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
+flui-layer = { path = "../flui-layer", version = "0.2.0" }
+flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
+flui-engine = { path = "../flui-engine", version = "0.2.0" }
+flui-platform = { path = "../flui-platform", version = "0.2.0" }
+flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = ["app-plugin"] }
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
 # Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
 # auto-wraps the root in so implicit-animation widgets work with zero boilerplate.
 # Zero new link-time deps: every crate flui-widgets pulls is already transitively
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
 # only a direct Cargo edge + re-exports. FOUNDATIONS.md targets app → widgets.
-flui-widgets = { path = "../flui-widgets" }
+flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
 
 # Utilities
 tracing.workspace = true
@@ -69,8 +69,8 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.
-flui-interaction = { path = "../flui-interaction", features = ["testing"] }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
 # Enable flui-rendering's `testing` feature in test builds so wiring tests can
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.
-flui-rendering = { path = "../flui-rendering", features = ["testing"] }
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }

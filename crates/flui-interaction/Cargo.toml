@@ -11,8 +11,8 @@ keywords = ["gui", "ui", "events", "gestures", "interaction"]
 
 [dependencies]
 # Flui dependencies
-flui-types = { path = "../flui-types" }
-flui-foundation = { path = "../flui-foundation" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # UI Events - Cross-platform input event abstraction (W3C compliant)
 ui-events = { workspace = true }
@@ -51,7 +51,7 @@ criterion = { workspace = true }
 proptest = "1.5"
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).
-flui-interaction = { path = ".", features = ["testing"] }
+flui-interaction = { path = ".", version = "0.2.0", features = ["testing"] }
 
 [[bench]]
 name = "velocity_tracker_bench"

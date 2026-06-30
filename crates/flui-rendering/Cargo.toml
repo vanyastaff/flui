@@ -2,6 +2,7 @@
 name = "flui-rendering"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Rendering layer for Flui framework"
@@ -11,13 +12,13 @@ repository.workspace = true
 autobenches = false
 
 [dependencies]
-flui-types = { path = "../flui-types" }
-flui-painting = { path = "../flui-painting" }
-flui-interaction = { path = "../flui-interaction" }
-flui-foundation = { path = "../flui-foundation" }
-flui-tree = { path = "../flui-tree" }
-flui-layer = { path = "../flui-layer" }
-flui-semantics = { path = "../flui-semantics" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-tree = { path = "../flui-tree", version = "0.2.0" }
+flui-layer = { path = "../flui-layer", version = "0.2.0" }
+flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -70,8 +71,8 @@ proptest = "1.5"
 insta.workspace = true
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers).
-flui-animation = { path = "../flui-animation" }
-flui-scheduler = { path = "../flui-scheduler" }
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Self dev-dependency that turns the off-by-default `testing` feature on
 # for this crate's own integration tests (`tests/*.rs`), benches, and
 # examples. Unit tests reach the harness via `cfg(test)`; the separate
@@ -79,13 +80,13 @@ flui-scheduler = { path = "../flui-scheduler" }
 # so the feature must be flipped on for the dev build graph. This is the
 # standard Cargo pattern for shipping a feature-gated test-support module
 # without making it part of normal/release builds.
-flui-rendering = { path = ".", features = ["testing"] }
+flui-rendering = { path = ".", version = "0.2.0", features = ["testing"] }
 # Concrete render-object catalog. The integration tests in `tests/*.rs`
 # previously imported objects from `flui_rendering::objects`; after the
 # flui-objects extraction (ADR-0008) they import from `flui_objects` instead.
 # This is a dev-only dependency — flui-rendering does not depend on
 # flui-objects in production (that would invert the layer order).
-flui-objects = { path = "../flui-objects", features = ["testing"] }
+flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 
 [features]
 default = []

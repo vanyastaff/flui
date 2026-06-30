@@ -12,7 +12,7 @@ categories = ["gui", "game-development", "rendering"]
 
 [dependencies]
 # Flui foundation (for BindingBase)
-flui-foundation = { path = "../flui-foundation" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # Cross-platform time (web-time is the maintained replacement for instant)
 web-time = "1.1"
