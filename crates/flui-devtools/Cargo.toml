@@ -66,6 +66,12 @@ full = [
 
 [dev-dependencies]
 
+# The profiler demo exercises the `profiling`-gated `profiler` module, so it
+# only builds when that feature is enabled (it is off in the default build).
+[[example]]
+name = "profiler_demo"
+required-features = ["profiling"]
+
 # [[bench]]
 # name = "profiler_bench"
 # harness = false

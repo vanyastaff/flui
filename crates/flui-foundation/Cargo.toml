@@ -55,7 +55,7 @@ default = []
 serde = ["dep:serde", "dep:serde_json"]
 # Enable pretty hierarchical desktop logging via `tracing-forest`.
 # Mobile/WASM backends ignore this flag.
-pretty = ["tracing-forest"]
+pretty = ["dep:tracing-forest"]
 
 [package.metadata.docs.rs]
 all-features = true

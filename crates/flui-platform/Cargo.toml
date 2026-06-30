@@ -121,10 +121,10 @@ console_error_panic_hook = "0.1"
 default = ["desktop"]
 
 # Platform features
-desktop = ["winit"]
+desktop = ["dep:winit"]
 
 # Legacy winit backend (deprecated, optional)
-winit-backend = ["winit", "arboard"]
+winit-backend = ["dep:winit", "dep:arboard"]
 
 # Web platform
 web = []
