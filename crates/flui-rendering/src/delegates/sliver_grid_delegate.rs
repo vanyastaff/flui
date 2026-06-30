@@ -219,9 +219,13 @@ impl SliverGridDelegateWithFixedCrossAxisCount {
 
 impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
     fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+        // Flutter SliverGridDelegateWithFixedCrossAxisCount.getLayout
+        // (.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart:392)
+        // clamps the usable cross extent at 0 so heavy cross-axis spacing can't
+        // drive the per-child extent negative.
         let used_cross_axis = self.cross_axis_spacing * (self.cross_axis_count - 1) as f32;
-        let child_cross_axis_extent =
-            (constraints.cross_axis_extent - used_cross_axis) / self.cross_axis_count as f32;
+        let usable_cross_axis_extent = (constraints.cross_axis_extent - used_cross_axis).max(0.0);
+        let child_cross_axis_extent = usable_cross_axis_extent / self.cross_axis_count as f32;
         let child_main_axis_extent = child_cross_axis_extent / self.child_aspect_ratio;
 
         SliverGridLayout {
@@ -298,16 +302,22 @@ impl SliverGridDelegateWithMaxCrossAxisExtent {
 
 impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
     fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
-        // Calculate the number of columns that fit
-        let cross_axis_count = ((constraints.cross_axis_extent + self.cross_axis_spacing)
+        // Flutter SliverGridDelegateWithMaxCrossAxisExtent.getLayout
+        // (.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart:502):
+        // count = ceil(crossAxisExtent / (maxCrossAxisExtent + crossAxisSpacing)),
+        // floored at 1. The numerator is the bare cross extent — adding the
+        // spacing there (as the prior code did) over-counts columns by one when
+        // the extent is an exact multiple of the denominator.
+        let cross_axis_count = (constraints.cross_axis_extent
             / (self.max_cross_axis_extent + self.cross_axis_spacing))
             .ceil()
             .max(1.0) as usize;
 
-        // Use the fixed count logic with calculated count
+        // Use the fixed-count logic with the calculated count, clamping the
+        // usable cross extent at 0 to match the oracle.
         let used_cross_axis = self.cross_axis_spacing * (cross_axis_count - 1) as f32;
-        let child_cross_axis_extent =
-            (constraints.cross_axis_extent - used_cross_axis) / cross_axis_count as f32;
+        let usable_cross_axis_extent = (constraints.cross_axis_extent - used_cross_axis).max(0.0);
+        let child_cross_axis_extent = usable_cross_axis_extent / cross_axis_count as f32;
         let child_main_axis_extent = child_cross_axis_extent / self.child_aspect_ratio;
 
         SliverGridLayout {
@@ -375,8 +385,30 @@ mod tests {
         let constraints = make_constraints(320.0);
         let layout = delegate.get_layout(constraints);
 
-        // Should fit 3 columns: (320 + 10) / (100 + 10) = 3
+        // Oracle: ceil(crossAxisExtent / (max + spacing)) = ceil(320 / 110) = 3.
         assert_eq!(layout.cross_axis_count, 3);
+    }
+
+    #[test]
+    fn test_max_cross_axis_extent_exact_multiple_does_not_over_count() {
+        // Regression: the prior numerator `(extent + spacing)` over-counted by
+        // one column when the extent was an exact multiple of (max + spacing).
+        // Oracle: ceil(220 / (100 + 10)) = ceil(2.0) = 2 (not 3).
+        let delegate =
+            SliverGridDelegateWithMaxCrossAxisExtent::new(100.0).with_cross_axis_spacing(10.0);
+        let layout = delegate.get_layout(make_constraints(220.0));
+        assert_eq!(layout.cross_axis_count, 2);
+    }
+
+    #[test]
+    fn test_fixed_count_clamps_usable_extent_at_zero() {
+        // Cross-axis spacing larger than the available extent must not drive the
+        // per-child extent negative; the oracle clamps usable extent at 0.
+        let delegate =
+            SliverGridDelegateWithFixedCrossAxisCount::new(3).with_cross_axis_spacing(200.0); // used = 200 * 2 = 400 > 100
+        let layout = delegate.get_layout(make_constraints(100.0));
+        assert_eq!(layout.child_cross_axis_extent, 0.0);
+        assert!(layout.child_main_axis_extent >= 0.0);
     }
 
     #[test]
