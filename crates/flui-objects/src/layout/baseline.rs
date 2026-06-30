@@ -77,7 +77,11 @@ impl RenderBox for RenderBaseline {
         }
 
         self.has_child = true;
-        let child_size = ctx.layout_child(0, constraints);
+        // Flutter parity (`RenderBaseline.performLayout`, shifted_box.dart):
+        // the child is laid out under *loosened* constraints
+        // (`childConstraints = constraints.loosen()`), so a tight incoming axis
+        // does not force the child to fill it.
+        let child_size = ctx.layout_child(0, constraints.loosen());
 
         // Flutter parity (`RenderBaseline.performLayout`): the effective baseline
         // is the child's real baseline distance, or — when the child reports none

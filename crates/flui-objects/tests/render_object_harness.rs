@@ -503,6 +503,31 @@ fn harness_baseline_positions_text_at_offset() {
 }
 
 #[test]
+fn harness_baseline_loosens_child_constraints() {
+    // Flutter RenderBaseline.performLayout lays the child out under
+    // `constraints.loosen()`, so a tight incoming axis does not stretch a small
+    // child. Tight width 100 with a 20×20 child → child stays 20×20 (before the
+    // fix the un-loosened tight width forced it to 100×20).
+    let run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(50.0)))
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(100.0),
+        px(100.0),
+        px(0.0),
+        px(f32::INFINITY),
+    ))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(20.0), px(20.0)),
+        "tight incoming width must be loosened so the child keeps its 20×20 size",
+    );
+}
+
+#[test]
 fn harness_flex_row_baseline_aligns_text_and_box() {
     let run = RenderTester::mount(
         box_node(
