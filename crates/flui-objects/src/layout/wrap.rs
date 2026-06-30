@@ -504,15 +504,12 @@ impl RenderBox for RenderWrap {
 
     fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
-            // Best case: all children on one row → sum of child max widths.
-            Axis::Horizontal => {
-                let n = ctx.child_count();
-                let spacing_total = self.spacing * n.saturating_sub(1) as f32;
-                let sum: f32 = (0..n)
-                    .map(|i| ctx.child_max_intrinsic_width(i, f32::INFINITY))
-                    .sum();
-                sum + spacing_total
-            }
+            // Best case: all children on one row → SUM of child max widths.
+            // Flutter wrap.dart computeMaxIntrinsicWidth sums the children with
+            // NO inter-child `spacing` term; adding it diverged from the oracle.
+            Axis::Horizontal => (0..ctx.child_count())
+                .map(|i| ctx.child_max_intrinsic_width(i, f32::INFINITY))
+                .sum(),
             // Vertical: simulate column wrapping at the given height.
             Axis::Vertical => self.simulate_wrap_cross(height, ctx),
         }
@@ -536,15 +533,12 @@ impl RenderBox for RenderWrap {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),
-            // Best case: all children in one column → sum of child max heights.
-            Axis::Vertical => {
-                let n = ctx.child_count();
-                let spacing_total = self.spacing * n.saturating_sub(1) as f32;
-                let sum: f32 = (0..n)
-                    .map(|i| ctx.child_max_intrinsic_height(i, f32::INFINITY))
-                    .sum();
-                sum + spacing_total
-            }
+            // Best case: all children in one column → SUM of child max heights.
+            // Flutter wrap.dart computeMaxIntrinsicHeight sums with NO `spacing`
+            // term (matches the horizontal max-width path above).
+            Axis::Vertical => (0..ctx.child_count())
+                .map(|i| ctx.child_max_intrinsic_height(i, f32::INFINITY))
+                .sum(),
         }
     }
 

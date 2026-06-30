@@ -1235,6 +1235,23 @@ fn harness_stack_max_child_intrinsic_width() {
 }
 
 #[test]
+fn harness_wrap_max_intrinsic_width_omits_spacing() {
+    // Flutter wrap.dart computeMaxIntrinsicWidth sums child max-intrinsic widths
+    // with NO inter-child spacing term. 3 children (30+50+40 = 120) with
+    // spacing 10 → 120, not the pre-fix spacing-inclusive 140.
+    let mut run = RenderTester::mount(
+        box_node(RenderWrap::new().with_spacing(10.0))
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 20.0)).label("b"))
+            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("c")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.max_intrinsic_width(run.root(), 100.0), 120.0);
+}
+
+#[test]
 fn harness_stack_hit_tests_top_child_first() {
     let run = RenderTester::mount(
         box_node(RenderStack::new())
