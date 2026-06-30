@@ -156,24 +156,24 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 
 ## Core.1 — Vertical slice  *(entry: Core.0 exit)*
 
-> **Status note (2026-06-30 reconciliation).** Core.1 is **not** "all blocked" — substantial implementation has landed ahead of the formal Core.0 exit. `crates/flui-widgets/src/` already contains 15 widget families (`container`, `flex`, `text`, `scroll`, `animated`, `stack`, `clip`, `wrap`, `image`, `transitions`, `paint`, `layout`, `interaction`, `app`) with hundreds of passing tests, `flui-animation` is re-enabled in `[workspace.members]`, and production vsync + lazy slivers run end-to-end in a real window (PRs #320–#324). The rows below track the formal **exit gates** (running demo app + per-contract validation report), which remain to be verified as a unit — they are gated on the **N5 contracts spec** (keyed reconciliation / `IntoView` / `downcast_ref` elimination), the one genuinely multi-session Core.0 blocker. Per-widget implementation status should be re-audited row-by-row before promotion.
+> **Status note (2026-06-30, updated post-N5).** Core.0 has **exited** — N5 contracts spec (keyed reconciliation / `IntoView` / element storage) and N15 (final gate) are ✓ done — so **Core.1 is entered, not blocked**. The earlier note called N5 "the one genuinely multi-session Core.0 blocker"; that blocker is now cleared. Substantial slice implementation has landed: `crates/flui-widgets/src/` holds 14 widget families (`container`, `flex`, `text`, `scroll`, `animated`, `stack`, `clip`, `wrap`, `image`, `transitions`, `paint`, `layout`, `interaction`, plus `app`); `flui-animation` is a `[workspace.members]` entry; production vsync + lazy slivers run end-to-end in a real window (PRs #320–#324). **Verified 2026-06-30:** `flui-widgets` 37, `flui-animation` 187, `flui-interaction` 386 lib tests pass (`cargo nextest run -p <crate> --lib`). The remaining Core.1 gates are now: **(a)** the formal demo-app run + frame-time histogram (C1.10 / C1.12 — need a desktop **display**, not verifiable in this headless checkout); **(b)** the per-contract validation report (C1.11 — **now unblocked**, writeable against the implemented slice); **(c)** parity scaffolding (C1.13 — needs `.flutter/`, **absent** here). Per-widget rows are ⚠ verify pending row-by-row confirmation; only crate-existence and the animation re-enable are promoted to ✓.
 
 | # | Deliverable | Status | Notes |
 |---|---|---|---|
-| C1.0 | Create `flui-widgets` skeleton crate (L6) | 🛇 blocked | gated by Core.0 |
-| C1.1 | Re-enable `flui-animation` (A1) | 🛇 blocked | required for slice |
-| C1.2 | `Container` / `Padding` / `Center` widgets | 🛇 blocked | box layout |
-| C1.3 | `Column` / `Row` widgets | 🛇 blocked | exercises C2 + C6 |
-| C1.4 | `Text` widget (forces `RenderParagraph` over cosmic-text) | 🛇 blocked | leaf + paint |
-| C1.5 | `GestureDetector` widget | 🛇 blocked | input / hit-testing |
-| C1.6 | `SingleChildScrollView` widget | 🛇 blocked | viewport/offset path |
-| C1.7 | **Dynamic-count `ListView`** (Vec-driven children) — **mandatory**, validates C2 dynamic `Vec<BoxedView>` path | 🛇 blocked | without it the slice skips where Material lives |
-| C1.8 | `AnimatedContainer` or `AnimatedOpacity` (implicit animation) | 🛇 blocked | exercises `flui-animation` + `memoize`/`can_update` |
-| C1.9 | `StatefulView` counter | 🛇 blocked | exercises C1 (`setState`) |
-| C1.10 | Demo app assembled entirely from slice widgets, running on one desktop platform with real frame loop | 🛇 blocked | Core.1 ultimate gate |
-| C1.11 | Per-contract test pass: C1 / C2 (both tuple + Vec) / C3 / C4 / C5 / C6 / C7 | 🛇 blocked | report at `docs/research/2026-XX-XX-phase1-contract-validation.md` |
-| C1.12 | Frame-time histogram ≤ 16ms median over 5-second animation run | 🛇 blocked | proves real `Ticker` |
-| C1.13 | Ported Flutter test scaffolding at `crates/flui-widgets/tests/parity/` | 🛇 blocked | parity oracle infrastructure goes live |
+| C1.0 | Create `flui-widgets` skeleton crate (L6) | ✓ done | crate exists with 14 families; `flui-widgets --lib` 37 passed |
+| C1.1 | Re-enable `flui-animation` (A1) | ✓ done | in `[workspace.members]`; `flui-animation --lib` 187 passed |
+| C1.2 | `Container` / `Padding` / `Center` widgets | ⚠ verify | `container`/`layout` families present; per-widget confirm pending |
+| C1.3 | `Column` / `Row` widgets | ⚠ verify | `flex` family present; C2+C6 confirm pending |
+| C1.4 | `Text` widget (forces `RenderParagraph` over cosmic-text) | ⚠ verify | `text` family present |
+| C1.5 | `GestureDetector` widget | ⚠ verify | `interaction` family + `flui-interaction` (386 lib tests) present |
+| C1.6 | `SingleChildScrollView` widget | ⚠ verify | `scroll` family present |
+| C1.7 | **Dynamic-count `ListView`** (Vec-driven children) — **mandatory**, validates C2 dynamic `Vec<BoxedView>` path | ⚠ verify | `scroll` family present; dynamic-Vec path confirm pending |
+| C1.8 | `AnimatedContainer` or `AnimatedOpacity` (implicit animation) | ⚠ verify | `animated`/`transitions` families present |
+| C1.9 | `StatefulView` counter | ⚠ verify | StatefulView/`setState` path present (N5) |
+| C1.10 | Demo app assembled entirely from slice widgets, running on one desktop platform with real frame loop | 🛇 needs display | N5 cleared; gate is a formal windowed run — not verifiable in this headless checkout |
+| C1.11 | Per-contract test pass: C1 / C2 (both tuple + Vec) / C3 / C4 / C5 / C6 / C7 | ☐ todo (unblocked) | **N5 cleared this** — report writeable against the slice at `docs/research/2026-XX-XX-phase1-contract-validation.md` |
+| C1.12 | Frame-time histogram ≤ 16ms median over 5-second animation run | 🛇 needs display | proves real `Ticker`; needs a windowed animation run |
+| C1.13 | Ported Flutter test scaffolding at `crates/flui-widgets/tests/parity/` | 🛇 blocked | needs `.flutter/` (absent in this checkout) |
 
 ---
 
