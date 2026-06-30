@@ -12,7 +12,7 @@ Before opening a PR or even a planning issue, read:
 2. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
 3. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three port rules ("behavior loyal, structure Rust-native").
 4. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
-5. [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the project constitution (v2.3.0). Non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc.
+5. [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the project constitution (last ratified v2.3.0). Non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc. **⚠ The file is currently absent from the repo** (lost in a history squash; pending maintainer restore) — until then [`FOUNDATIONS.md`](FOUNDATIONS.md) is the live architecture contract.
 6. [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns.
 7. [`.ai-factory/rules/base.md`](../.ai-factory/rules/base.md) — project base rules (naming, modules, errors, logging, testing, unsafe).
 8. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
