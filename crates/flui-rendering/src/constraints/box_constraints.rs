@@ -532,17 +532,25 @@ impl BoxConstraints {
         }
     }
 
-    /// Enforces these constraints on another set of constraints.
+    /// Returns these constraints clamped to fit within `other`'s bounds, while
+    /// staying as close as possible to the originals.
     ///
-    /// Constrains the other constraints to fit within these bounds.
+    /// Flutter parity: `BoxConstraints.enforce`
+    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/box.dart`):
+    /// `a.enforce(b)` clamps **`a`'s own** values into `b`'s `[min, max]` range —
+    /// the argument's bounds win — so `additional.enforce(parent)` keeps the
+    /// parent's hard limits. The prior implementation clamped `other`'s values
+    /// into `self`'s range (the reverse), which let additional constraints
+    /// override the parent and silently oversized children whenever the two
+    /// ranges did not overlap.
     #[inline]
     #[must_use]
     pub fn enforce(&self, other: &Self) -> Self {
         Self {
-            min_width: self.constrain_width(other.min_width),
-            max_width: self.constrain_width(other.max_width),
-            min_height: self.constrain_height(other.min_height),
-            max_height: self.constrain_height(other.max_height),
+            min_width: other.constrain_width(self.min_width),
+            max_width: other.constrain_width(self.max_width),
+            min_height: other.constrain_height(self.min_height),
+            max_height: other.constrain_height(self.max_height),
         }
     }
 
@@ -998,5 +1006,27 @@ mod tests {
         assert_eq!(c.min_width, px(10.0));
         assert_eq!(c.max_width, px(100.0));
         assert!(c.has_tight_height());
+    }
+
+    #[test]
+    fn enforce_clamps_self_into_other_bounds() {
+        // Flutter `a.enforce(b)`: a's OWN values are clamped into b's [min,max],
+        // so the argument (parent) bounds win (box.dart BoxConstraints.enforce).
+        // additional minWidth 500 under a parent capped at 100 -> tight 100, not
+        // 500. (The reversed pre-fix impl returned min_width 500 here.)
+        let additional =
+            BoxConstraints::new(px(500.0), Pixels::INFINITY, Pixels::ZERO, Pixels::INFINITY);
+        let parent = BoxConstraints::new(Pixels::ZERO, px(100.0), Pixels::ZERO, px(100.0));
+        let combined = additional.enforce(&parent);
+        assert_eq!(combined.min_width, px(100.0));
+        assert_eq!(combined.max_width, px(100.0));
+
+        // Overlapping ranges are unchanged either way (the common case, which is
+        // why the pre-fix bug stayed hidden).
+        let a = BoxConstraints::new(px(10.0), px(50.0), px(10.0), px(50.0));
+        let b = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+        let c = a.enforce(&b);
+        assert_eq!(c.min_width, px(10.0));
+        assert_eq!(c.max_width, px(50.0));
     }
 }
