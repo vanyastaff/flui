@@ -266,8 +266,8 @@ pub(crate) fn reconcile_children_by_id(
             result.push(old_id);
         } else {
             // `ElementTree::insert` emits the disposition itself — `Mount`
-            // for a fresh element, or `Reparent` when it retakes an inactive
-            // GlobalKey element (`try_retake_inactive`). Emitting `Mount`
+            // for a fresh element, or `Reparent` when it retakes a GlobalKey
+            // element (`try_retake_global_key`). Emitting `Mount`
             // here too would double-fire on the retake path.
             let new_id = tree.insert(new_view, parent_id, new_slot, owner);
             result.push(new_id);
@@ -510,9 +510,10 @@ fn update_child(
 ///   is freed before its children.
 ///
 /// A keyed *descendant* of an unkeyed top is freed (not soft-removed) — it
-/// loses its retake window because its ancestor is already gone. That
-/// cross-parent reparent is the GlobalKey-reparent case deferred to E3.x;
-/// E3's contract is only that every descendant unmounts exactly once.
+/// loses its retake window because its ancestor is already gone. The active
+/// GlobalKey move path only applies while the keyed element itself remains
+/// active and registered; E3's contract here is that every descendant unmounts
+/// exactly once.
 ///
 /// Stale / absent ids are a no-op inside `remove` / `remove_finalized`.
 fn remove_child(tree: &mut ElementTree, id: ElementId, owner: &mut crate::ElementOwner<'_>) {

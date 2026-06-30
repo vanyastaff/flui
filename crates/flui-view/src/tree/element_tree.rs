@@ -4,7 +4,7 @@
 //! This follows Flutter's approach where Elements form the retained tree.
 
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -587,13 +587,13 @@ impl ElementTree {
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
-        // R14 state migration. Before creating a fresh element, check
-        // whether `view` has a `GlobalKey` whose hash points at a
-        // currently-inactive element. If so, pull it back to the new
-        // parent + slot, re-activate, AND apply the new view config
-        // (`framework.dart:4581`).
+        // R14 / ADV-1 state migration. Before creating a fresh element,
+        // check whether `view` has a `GlobalKey` whose hash points at an
+        // existing element. If it is inactive, pull it back; if it is still
+        // active under a different parent, forget it from that parent and move
+        // it here. In both cases the `ElementId` and state survive.
         if let Some(hash) = global_key_hash_of(view)
-            && let Some(retaken_id) = try_retake_inactive(self, owner, hash, view, parent, slot)
+            && let Some(retaken_id) = try_retake_global_key(self, owner, hash, view, parent, slot)
         {
             return retaken_id;
         }
@@ -788,6 +788,10 @@ impl ElementTree {
         // then becomes the render ancestor for its own subtree.
         let mut target: HashMap<flui_foundation::RenderId, Vec<flui_foundation::RenderId>> =
             HashMap::new();
+        let mut desired_parent: HashMap<
+            flui_foundation::RenderId,
+            Option<flui_foundation::RenderId>,
+        > = HashMap::new();
         let mut pipeline_any: Option<Arc<dyn std::any::Any + Send + Sync>> = None;
 
         let roots: Vec<ElementId> = self
@@ -804,6 +808,7 @@ impl ElementTree {
                 continue;
             };
             let child_ancestor = if let Some(render_id) = node.element().render_id() {
+                desired_parent.insert(render_id, render_ancestor);
                 if let Some(parent_render) = render_ancestor {
                     target.entry(parent_render).or_default().push(render_id);
                 }
@@ -819,7 +824,7 @@ impl ElementTree {
             }
         }
 
-        if target.is_empty() {
+        if desired_parent.is_empty() {
             return;
         }
         let Some(pipeline_any) = pipeline_any else {
@@ -831,24 +836,63 @@ impl ElementTree {
 
         // Tree borrows are dropped; the lock guards only the render tree.
         let mut owner = pipeline_owner.write();
-        let render_tree = owner.render_tree_mut();
-        for (parent_render, order) in target {
-            let Some(parent_node) = render_tree.get_mut(parent_render) else {
-                continue;
-            };
-            // Already in slot order — the common case, so no writes.
-            if parent_node.children() == order.as_slice() {
-                continue;
+        let mut dirty_render_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
+        {
+            let render_tree = owner.render_tree_mut();
+            let render_ids: Vec<_> = render_tree.iter().map(|(id, _)| id).collect();
+
+            // Sync render parent pointers first. Sibling sorting alone is not
+            // enough when a GlobalKey move transfers an already-attached
+            // render subtree from one render parent to another.
+            for render_id in &render_ids {
+                let Some(&desired) = desired_parent.get(render_id) else {
+                    continue;
+                };
+                let Some(node) = render_tree.get_mut(*render_id) else {
+                    continue;
+                };
+                let current = node.parent();
+                if current != desired {
+                    if let Some(parent) = current {
+                        dirty_render_parents.insert(parent);
+                    }
+                    if let Some(parent) = desired {
+                        dirty_render_parents.insert(parent);
+                    }
+                    node.set_parent(desired);
+                }
             }
-            // Insertion-sort into `order`: at step i, positions `0..i` already
-            // match, so `order[i]` sits at some index `>= i` and resolves. Only
-            // the drifted entries move.
-            for (target_index, &child) in order.iter().enumerate() {
-                if parent_node.children().get(target_index) == Some(&child) {
+
+            // Sync every element-managed render node's child list exactly to
+            // element slot order. Parents absent from `target` are render
+            // leaves in the element graph, so their desired child list is
+            // empty; clearing them removes donor-side stale children after a
+            // cross-parent move.
+            for parent_render in &render_ids {
+                if !desired_parent.contains_key(parent_render) {
                     continue;
                 }
-                parent_node.remove_child(child);
-                parent_node.insert_child(target_index, child);
+                let desired_children = target.get(parent_render).cloned().unwrap_or_default();
+                let Some(parent_node) = render_tree.get_mut(*parent_render) else {
+                    continue;
+                };
+                if parent_node.children() == desired_children.as_slice() {
+                    continue;
+                }
+                let current = parent_node.children().to_vec();
+                for child in current {
+                    parent_node.remove_child(child);
+                }
+                for (target_index, child) in desired_children.into_iter().enumerate() {
+                    parent_node.insert_child(target_index, child);
+                }
+                dirty_render_parents.insert(*parent_render);
+            }
+        }
+
+        for parent in dirty_render_parents {
+            if owner.render_tree().contains(parent) {
+                owner.mark_needs_layout(parent);
             }
         }
     }
@@ -857,7 +901,7 @@ impl ElementTree {
     /// subtree rooted at `root_id`, top-down against each node's current
     /// parent.
     ///
-    /// Needed after a GlobalKey reparent ([`try_retake_inactive`]): the moved
+    /// Needed after a GlobalKey reparent ([`try_retake_global_key`]): the moved
     /// subtree's nodes carry maps built against their OLD ancestor chain, so
     /// `depend_on` would resolve providers from the old location. A node is
     /// only processed after its parent (the stack guarantees parent-before-
@@ -963,7 +1007,7 @@ impl ElementTree {
     ///   `BuildOwner::inactive_elements` — the slab entry stays alive.
     ///   This enables same-frame state migration: a subsequent
     ///   `insert` with the same GlobalKey pulls the element back via
-    ///   `try_retake_inactive` (private). End-of-frame
+    ///   `try_retake_global_key` (private). End-of-frame
     ///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) drains any stragglers via
     ///   [`Self::remove_finalized`] (full slab-remove + unregister).
     ///   Flutter parity: `framework.dart:4636` `deactivateChild` +
@@ -1256,14 +1300,18 @@ fn register_global_key_with_collision_check(
     owner.register_global_key(hash, id);
 }
 
-/// State-migration entry point. If `hash` resolves to an element
-/// currently in the inactive queue, pop it off and re-attach to
-/// `(new_parent, new_slot)`. Returns the migrated `ElementId` on
-/// success, or `None` when no retakeable element exists (caller falls
-/// back to creating a fresh element).
+/// State-migration entry point. If `hash` resolves to an existing element,
+/// reuse that element instead of mounting a fresh one:
+///
+/// - inactive candidate: pop it out of the inactive queue and re-attach;
+/// - active candidate under a different parent: forget it from that parent,
+///   deactivate/activate it, then attach it at the new `(parent, slot)`.
+///
+/// Returns the migrated `ElementId` on success, or `None` when no retakeable
+/// element exists (caller falls back to creating a fresh element).
 ///
 /// Flutter parity: `framework.dart:4571` `_retakeInactiveElement`.
-fn try_retake_inactive(
+fn try_retake_global_key(
     tree: &mut ElementTree,
     owner: &mut crate::ElementOwner<'_>,
     hash: u64,
@@ -1272,17 +1320,60 @@ fn try_retake_inactive(
     new_slot: usize,
 ) -> Option<ElementId> {
     let candidate_id = owner.element_for_global_key(hash)?;
-
-    // Only retake if the candidate is actually in the inactive queue.
-    // A candidate that's mounted elsewhere in the active tree is a
-    // collision, handled by `register_global_key_with_collision_check`.
-    if !owner.is_inactive(candidate_id) {
+    if !can_retake_global_key_candidate(tree, candidate_id, view) {
         return None;
     }
 
+    if owner.is_inactive(candidate_id) {
+        return retake_inactive_global_key(
+            tree,
+            owner,
+            hash,
+            view,
+            candidate_id,
+            new_parent,
+            new_slot,
+        );
+    }
+
+    retake_active_global_key(tree, owner, hash, view, candidate_id, new_parent, new_slot)
+}
+
+fn can_retake_global_key_candidate(
+    tree: &ElementTree,
+    candidate_id: ElementId,
+    view: &dyn View,
+) -> bool {
+    let Some(node) = tree.get(candidate_id) else {
+        return false;
+    };
+    let element = node.element();
+    if element.view_type_id() != view.view_type_id() {
+        return false;
+    }
+    let Some(new_key) = view.key() else {
+        return false;
+    };
+    element
+        .current_key()
+        .is_some_and(|old_key| new_key.key_eq(old_key))
+}
+
+fn retake_inactive_global_key(
+    tree: &mut ElementTree,
+    owner: &mut crate::ElementOwner<'_>,
+    hash: u64,
+    view: &dyn View,
+    candidate_id: ElementId,
+    new_parent: ElementId,
+    new_slot: usize,
+) -> Option<ElementId> {
     owner.remove_inactive(candidate_id);
 
     let parent_depth = tree.get(new_parent).map_or(0, ElementNode::depth);
+    let child_parent_render_id = tree
+        .get(new_parent)
+        .and_then(|node| node.element().child_render_id());
 
     // Route through the staleness-checked accessor. The candidate came from the
     // live GlobalKey registry and was soft-removed (slot kept, generation NOT
@@ -1291,6 +1382,8 @@ fn try_retake_inactive(
     node.parent = Some(new_parent);
     node.slot = new_slot;
     node.depth = parent_depth + 1;
+    node.element_mut()
+        .set_parent_render_id(child_parent_render_id);
 
     // Re-activate the element. `Lifecycle::Inactive` → `Active`.
     node.element_mut().activate();
@@ -1317,6 +1410,8 @@ fn try_retake_inactive(
     // (`framework.dart:4775`). `node`'s `&mut` borrow ends above, freeing
     // `tree` for this walk.
     tree.recompute_inherited_subtree(candidate_id);
+    tree.apply_ancestor_parent_data(candidate_id);
+    tree.needs_render_reorder = true;
 
     tracing::debug!(
         candidate = ?candidate_id,
@@ -1330,11 +1425,7 @@ fn try_retake_inactive(
     // `from_parent: None` per ADV-1 branch case 1 — there is no prior
     // *active* parent at the moment of reparent; the donor parent
     // already cleared its slot when it pushed the element into the
-    // inactive queue. The cross-parent same-frame Active-to-Active
-    // reparent path (ADV-1 branch case 2) is still deferred: it needs an
-    // explicit active-element move protocol on top of today's id-based
-    // child lists. When it lands, that path emits with
-    // `from_parent: Some(prior_parent)`.
+    // inactive queue.
     super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
         kind: super::reconcile_event::ReconcileEventKind::Reparent,
         parent: new_parent,
@@ -1343,6 +1434,90 @@ fn try_retake_inactive(
         view_type_id: view.view_type_id(),
         from_parent: None,
     });
+
+    Some(candidate_id)
+}
+
+fn retake_active_global_key(
+    tree: &mut ElementTree,
+    owner: &mut crate::ElementOwner<'_>,
+    hash: u64,
+    view: &dyn View,
+    candidate_id: ElementId,
+    new_parent: ElementId,
+    new_slot: usize,
+) -> Option<ElementId> {
+    let from_parent = tree.get(candidate_id)?.parent()?;
+    if from_parent == new_parent {
+        tracing::error!(
+            ?hash,
+            ?candidate_id,
+            ?new_parent,
+            "GlobalKey appears twice under the same active parent"
+        );
+        #[cfg(debug_assertions)]
+        {
+            panic!(
+                "GlobalKey hash {hash} is already active under {new_parent:?}; \
+                 duplicate GlobalKey children are not allowed"
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            return None;
+        }
+    }
+
+    if let Some(old_parent) = tree.get_mut(from_parent) {
+        if let Some(pos) = old_parent
+            .child_ids
+            .iter()
+            .position(|&child| child == candidate_id)
+        {
+            old_parent.child_ids.remove(pos);
+        } else {
+            tracing::warn!(
+                ?candidate_id,
+                ?from_parent,
+                "active GlobalKey candidate was registered under a parent that no longer lists it"
+            );
+        }
+    }
+
+    let (parent_depth, child_parent_render_id) = tree.get(new_parent).map_or((0, None), |node| {
+        (node.depth(), node.element().child_render_id())
+    });
+
+    let node = tree.get_mut(candidate_id)?;
+    node.element_mut().deactivate();
+    node.parent = Some(new_parent);
+    node.slot = new_slot;
+    node.depth = parent_depth + 1;
+    node.element_mut()
+        .set_parent_render_id(child_parent_render_id);
+    node.element_mut().activate();
+    node.element_mut().update(view, owner);
+    node.set_key(view.key().map(ViewKey::clone_key));
+
+    tree.recompute_inherited_subtree(candidate_id);
+    tree.apply_ancestor_parent_data(candidate_id);
+    tree.needs_render_reorder = true;
+
+    tracing::debug!(
+        candidate = ?candidate_id,
+        from_parent = ?from_parent,
+        new_parent = ?new_parent,
+        new_slot,
+        "ElementTree::insert moved active GlobalKey element to a new parent"
+    );
+
+    super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent::reparent(
+        from_parent,
+        new_parent,
+        new_slot,
+        view.view_type_id(),
+        hash,
+    ));
 
     Some(candidate_id)
 }
@@ -1783,7 +1958,7 @@ mod tests {
     }
 
     /// A keyed stateless view used to drive the REAL GlobalKey reparent path
-    /// (`try_retake_inactive` → `recompute_inherited_subtree`). `GlobalKey<T>`
+    /// (`try_retake_global_key` → `recompute_inherited_subtree`). `GlobalKey<T>`
     /// is phantom in `T`, so a stateless `GlobalKey<()>` is enough to register
     /// in the migration registry.
     #[derive(Clone)]
@@ -1849,7 +2024,7 @@ mod tests {
         );
 
         // Soft-remove K (→ inactive queue), then re-insert under provider_b
-        // with the SAME GlobalKey: the real `try_retake_inactive` reactivates
+        // with the SAME GlobalKey: the real `try_retake_global_key` reactivates
         // it and calls `recompute_inherited_subtree`.
         tree.write()
             .remove(k, &mut owner.write().element_owner_mut());
@@ -1869,7 +2044,7 @@ mod tests {
         assert_eq!(
             tree.read().get(c).unwrap().inherited_provider(theme_ty),
             Some(provider_b),
-            "the retaken node's child is recomputed too (try_retake_inactive wiring)",
+            "the retaken node's child is recomputed too (try_retake_global_key wiring)",
         );
 
         crate::test_only_clear_global_key_registry();

@@ -18,16 +18,18 @@
 
 #![cfg(feature = "test-utils")]
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildOwner, ElementTree, RenderView, View, ViewExt,
+    BuildOwner, ElementTree, GlobalKey, RenderView, View, ViewExt,
     tree::ReconcileEventKind,
     tree::test_utils::{CollectedEvent, ReconcileEventCollector},
 };
+use parking_lot::RwLock;
 use serial_test::serial;
 use tracing::dispatcher::Dispatch;
 use tracing_subscriber::Registry;
@@ -84,18 +86,59 @@ impl View for KeyedLeafBox {
 }
 
 #[derive(Clone)]
+struct GlobalLeafBox {
+    key: GlobalKey<()>,
+}
+
+impl GlobalLeafBox {
+    fn new(key: GlobalKey<()>) -> Self {
+        Self { key }
+    }
+}
+
+impl RenderView for GlobalLeafBox {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+}
+
+impl View for GlobalLeafBox {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
+#[derive(Clone)]
 struct MultiBox {
+    key: Option<ValueKey<u32>>,
     children: Vec<flui_view::BoxedView>,
 }
 
 impl MultiBox {
     fn keyed(order: &[u32]) -> Self {
         Self {
+            key: None,
             children: order
                 .iter()
                 .copied()
                 .map(|tag| KeyedLeafBox::new(tag).boxed())
                 .collect(),
+        }
+    }
+
+    fn host(tag: u32, children: Vec<flui_view::BoxedView>) -> Self {
+        Self {
+            key: Some(ValueKey::new(tag)),
+            children,
         }
     }
 }
@@ -124,6 +167,10 @@ impl RenderView for MultiBox {
 impl View for MultiBox {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        self.key.as_ref().map(|key| key as &dyn ViewKey)
     }
 }
 
@@ -220,4 +267,110 @@ fn variable_arity_reorder_through_build_scope_preserves_ids_and_emits_parent_id(
             "production trace event must carry the rebuilding variable parent id",
         );
     }
+}
+
+#[test]
+#[serial]
+fn active_global_key_move_through_build_scope_updates_render_parent_links() {
+    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let mut owner = BuildOwner::new();
+    let mut tree = ElementTree::new();
+
+    let global = GlobalKey::<()>::new();
+    let root_v1 = MultiBox::host(
+        0,
+        vec![
+            MultiBox::host(1, vec![GlobalLeafBox::new(global.clone()).boxed()]).boxed(),
+            MultiBox::host(2, Vec::new()).boxed(),
+        ],
+    );
+    let root_id = tree.mount_root_with_pipeline_owner(
+        &root_v1,
+        Some(Arc::clone(&pipeline_owner)),
+        &mut owner.element_owner_mut(),
+    );
+
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+
+    let parents = direct_children_in_slot_order(&tree, root_id);
+    assert_eq!(parents.len(), 2);
+    let (parent_a, parent_b) = (parents[0], parents[1]);
+    let moved_before = direct_children_in_slot_order(&tree, parent_a);
+    assert_eq!(moved_before.len(), 1);
+    let moved_id = moved_before[0];
+
+    let parent_a_render = tree
+        .get(parent_a)
+        .and_then(|node| node.element().render_id())
+        .expect("parent A has a render object");
+    let parent_b_render = tree
+        .get(parent_b)
+        .and_then(|node| node.element().render_id())
+        .expect("parent B has a render object");
+    let moved_render = tree
+        .get(moved_id)
+        .and_then(|node| node.element().render_id())
+        .expect("moved child has a render object");
+
+    {
+        let pipeline = pipeline_owner.read();
+        let render_tree = pipeline.render_tree();
+        assert_eq!(
+            render_tree.get(parent_a_render).unwrap().children(),
+            &[moved_render],
+            "precondition: parent A owns the moved render child before reparent",
+        );
+    }
+
+    let parent_b_v2 = MultiBox::host(2, vec![GlobalLeafBox::new(global.clone()).boxed()]);
+    tree.update(parent_b, &parent_b_v2, &mut owner.element_owner_mut());
+    owner.schedule_build_for(parent_b, tree.get(parent_b).unwrap().depth());
+
+    let events = capture(|| {
+        owner.build_scope(&mut tree);
+    });
+
+    assert!(
+        direct_children_in_slot_order(&tree, parent_a).is_empty(),
+        "old parent must forget the moved active GlobalKey child",
+    );
+    assert_eq!(
+        direct_children_in_slot_order(&tree, parent_b),
+        vec![moved_id],
+        "new parent must own the moved GlobalKey child",
+    );
+
+    let reparent_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == ReconcileEventKind::Reparent)
+        .collect();
+    assert_eq!(
+        reparent_events.len(),
+        1,
+        "exactly one active Reparent event expected; got {events:?}",
+    );
+    assert_eq!(reparent_events[0].parent, parent_b.as_u64());
+    assert_eq!(reparent_events[0].from_parent, Some(parent_a.as_u64()));
+
+    let pipeline = pipeline_owner.read();
+    let render_tree = pipeline.render_tree();
+    assert!(
+        !render_tree
+            .get(parent_a_render)
+            .unwrap()
+            .children()
+            .contains(&moved_render),
+        "old render parent must no longer list the moved render child",
+    );
+    assert_eq!(
+        render_tree.get(parent_b_render).unwrap().children(),
+        &[moved_render],
+        "new render parent must list the moved render child",
+    );
+    assert_eq!(
+        render_tree.get(moved_render).unwrap().parent(),
+        Some(parent_b_render),
+        "moved render child parent pointer must follow the element reparent",
+    );
 }

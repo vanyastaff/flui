@@ -312,24 +312,22 @@ fn global_key_returns_none_after_full_unmount() {
 }
 
 // ============================================================================
-// §I4 hash collision — debug panic + last-write-wins in release
+// Duplicate GlobalKey — debug panic + release diagnostic
 // ============================================================================
 
-/// §I4 hash-collision policy: two `GlobalKey`s with the same hash. Flutter
-/// panics on collision in debug; we mirror that with `debug_assert!` +
-/// `tracing::error!` in release (last-write-wins). The release path is
-/// what we exercise in CI's debug-assertions=on builds via the
-/// `#[should_panic]` guard.
+/// Two active elements cannot share the same `GlobalKey`. Flutter panics in
+/// debug; FLUI mirrors that with a debug panic before a duplicate child can
+/// enter the element tree.
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "GlobalKey hash collision")]
-fn global_key_hash_collision_panics_in_debug() {
+#[should_panic(expected = "duplicate GlobalKey children are not allowed")]
+fn duplicate_global_key_panics_in_debug() {
     let (tree, owner) = fresh_tree();
 
     // Forge two `KeyedCounter`s that share the same GlobalKey id by
     // cloning. Cloning a GlobalKey preserves the id by design — that's
-    // what tests-of-key-equality rely on. Mounting two distinct elements
-    // with the same key hash is the collision we want to catch.
+    // what tests-of-key-equality rely on. Mounting two distinct active
+    // elements with the same key is the duplicate-GlobalKey defect we catch.
     let key = GlobalKey::<KeyedCounterState>::new();
     let counter_a = KeyedCounter {
         key: key.clone(),
@@ -352,7 +350,7 @@ fn global_key_hash_collision_panics_in_debug() {
         &mut owner.write().element_owner_mut(),
     );
 
-    // Second mount with the same hash should hit the debug-panic.
+    // Second mount with the same GlobalKey should hit the debug-panic.
     let _ = tree.write().insert(
         &counter_b,
         root_id,
