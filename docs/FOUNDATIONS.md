@@ -217,7 +217,7 @@ graph TD
     facade --> widgets
 ```
 
-The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects the pre-PR-C-2 layering snapshot (geometry was in `flui-types`; since [PR #138](https://github.com/vanyastaff/flui/pull/138) it lives in the dedicated `flui-geometry` crate and is re-exported via `flui_types::geometry::*` for compatibility — edition 2024 / Rust 1.96, accurate workspace member list otherwise); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
+The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects the pre-PR-C-2 layering snapshot (geometry was in `flui-types`; since [PR #138](https://github.com/vanyastaff/flui/pull/138) it lives in the dedicated `flui-geometry` crate and is re-exported via `flui_types::geometry::*` for compatibility — edition 2024 / Rust 1.96, accurate workspace member list otherwise); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." *(Status 2026-06-30: the constitution file is currently absent from the repo — see [Governance](#governance) — so Part IV here is the de-facto layer-table source until it is restored.)* Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 
 ---
 
@@ -270,7 +270,7 @@ This document is the **architecture contract** for the port. Its relationship to
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
 - [`PORT.md`](PORT.md) — *how* (the port methodology, refusal triggers, mapping rules).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the ratified rules. **It requires amendment** (MINOR bump): the layer table must be replaced with Part IV's, and the edition/Rust-version line corrected to 2024 / 1.95.
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the ratified rules. **⚠ Currently absent from the repository**: the file is not present in the working tree (lost when history was squashed) and needs a maintainer to restore it from a backup or pre-squash copy. Until then, **Part IV above is the de-facto layer-table source** and the edition/Rust-version of record is **2024 / 1.96** (`Cargo.toml` `[workspace.package]`). Pending amendment once restored (MINOR bump): replace the layer table with Part IV's and correct the edition/Rust-version line to 2024 / 1.96.
 
 **Amendment.** A change to a locked contract (Part III) or the target crate graph (Part IV) requires: documented rationale, a corresponding `STRATEGY.md`/`PORT.md`/constitution sync if affected, and — once construction has begun — an explicit migration assessment, because a contract change after Phase 1 has catalog-wide blast radius. The contracts are locked precisely so that they are *not* casually amended.
 
