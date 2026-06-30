@@ -117,12 +117,8 @@ pub trait AnimatedView: StatefulView {
 macro_rules! impl_animated_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::AnimatedBehavior;
-                Box::new($crate::AnimatedElement::new(
-                    self,
-                    AnimatedBehavior::new(self),
-                ))
+            fn create_element(&self) -> $crate::element::ElementKind {
+                $crate::element::ElementKind::animated(self)
             }
         }
     };
@@ -130,13 +126,14 @@ macro_rules! impl_animated_view {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
 
-    use flui_foundation::{ChangeNotifier, ElementId};
+    use flui_foundation::ChangeNotifier;
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
 
     use super::*;
     use crate::{
@@ -162,29 +159,20 @@ mod tests {
     #[derive(Clone)]
     struct DummyView;
 
+    impl crate::RenderView for DummyView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    }
+
     impl View for DummyView {
-        fn create_element(&self) -> Box<dyn super::super::view::ElementBase> {
-            // Create a minimal element for testing
-            use super::super::stateless::StatelessView;
-            use crate::{element::StatelessBehavior, view::StatelessElement};
-
-            #[derive(Clone)]
-            struct MinimalView;
-            impl StatelessView for MinimalView {
-                fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-                    DummyView.boxed()
-                }
-            }
-            impl View for MinimalView {
-                fn create_element(&self) -> Box<dyn super::super::view::ElementBase> {
-                    Box::new(StatelessElement::new(self, StatelessBehavior::new()))
-                }
-            }
-
-            Box::new(StatelessElement::new(
-                &MinimalView,
-                StatelessBehavior::new(),
-            ))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -221,8 +209,8 @@ mod tests {
     // concrete view supplies it). The unified `Element`'s `ElementBase`
     // impl now demands `V: View`, so this fixture must spell it too.
     impl View for TestAnimatedView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(AnimatedElement::new(self, AnimatedBehavior::new(self)))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::animated(self)
         }
     }
 
@@ -312,38 +300,24 @@ mod tests {
     }
 
     // A true leaf view (its element builds NO children), so a tree-driven
-    // build terminates — unlike `DummyView`, whose `MinimalView` rebuilds
-    // `DummyView` forever (fine for the standalone tests, fatal under a real
-    // `build_scope` drain).
+    // build terminates.
     #[derive(Clone)]
     struct LeafView;
 
-    impl View for LeafView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(LeafElement)
+    impl crate::RenderView for LeafView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
         }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
     }
 
-    struct LeafElement;
-
-    impl ElementBase for LeafElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<LeafView>()
-        }
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Active
-        }
-        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(&mut self, _: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
-        fn deactivate(&mut self) {}
-        fn activate(&mut self) {}
-        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
-        fn depth(&self) -> usize {
-            0
+    impl View for LeafView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -384,8 +358,8 @@ mod tests {
     }
 
     impl View for CountingAnimatedView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(AnimatedElement::new(self, AnimatedBehavior::new(self)))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::animated(self)
         }
     }
 
@@ -403,9 +377,8 @@ mod tests {
     }
 
     impl View for Wrapper {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::{element::StatelessBehavior, view::StatelessElement};
-            Box::new(StatelessElement::new(self, StatelessBehavior::new()))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 

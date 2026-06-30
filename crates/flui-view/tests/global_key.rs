@@ -22,9 +22,8 @@ use std::sync::Arc;
 
 use flui_foundation::ViewKey;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulBehavior,
-    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulElement,
+    StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 
@@ -43,8 +42,8 @@ impl StatelessView for Spacer {
 }
 
 impl View for Spacer {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -96,8 +95,8 @@ impl ViewState<KeyedCounter> for KeyedCounterState {
 }
 
 impl View for KeyedCounter {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {

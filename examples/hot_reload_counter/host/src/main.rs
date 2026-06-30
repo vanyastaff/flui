@@ -12,11 +12,11 @@
 //! Edit `logic/src/lib.rs`, rebuild the logic crate, and the counter value is preserved.
 
 use std::sync::{
-    atomic::{AtomicI32, Ordering},
     Arc,
+    atomic::{AtomicI32, Ordering},
 };
 
-use flui_app::{run_app_with_config, AppConfig};
+use flui_app::{AppConfig, run_app_with_config};
 use flui_hot_reload::engine::env;
 use hot_reload_counter_types::{CounterApp, CounterShell};
 
@@ -45,9 +45,6 @@ fn main() {
     let worker_path = std::env::var(env::WORKER_PLUGIN)
         .map_or_else(|_| default_worker_path(), std::path::PathBuf::from);
 
-    // Ensure the runner's worker poll watches this path.
-    std::env::set_var(env::WORKER_PLUGIN, &worker_path);
-
     tracing::info!(
         worker = %worker_path.display(),
         "Hot-reload counter host — build logic crate and edit INCREMENT_LABEL to test"
@@ -63,7 +60,8 @@ fn main() {
 
     let config = AppConfig::new()
         .with_title("FLUI Hot-Reload Counter")
-        .with_size(480, 320);
+        .with_size(480, 320)
+        .with_worker_plugin_path(worker_path);
 
     run_app_with_config(root, config);
 

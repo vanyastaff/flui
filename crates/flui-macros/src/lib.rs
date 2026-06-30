@@ -84,7 +84,7 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// ```rust,ignore
 /// impl View for Greeting {
-///     fn create_element(&self) -> Box<dyn ElementBase> {
+///     fn create_element(&self) -> crate::element::ElementKind {
 ///         Box::new(StatelessElement::<Self>::new(self, StatelessBehavior))
 ///     }
 ///     fn key(&self) -> Option<&dyn ViewKey> {

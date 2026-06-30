@@ -162,15 +162,13 @@ macro_rules! hot_reload_worker {
 ///
 /// impl StatelessView for MyApp {
 ///     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-///         Box::new(Center::new(
-///             Text::new("Hello from hot-reload!")
-///         ))
+///         Center::new().child(Text::new("Hello from hot-reload!"))
 ///     }
 /// }
 ///
 /// impl View for MyApp {
-///     fn create_element(&self) -> Box<dyn ElementBase> {
-///         Box::new(StatelessElement::new(self, StatelessBehavior))
+///     fn create_element(&self) -> flui_view::element::ElementKind {
+///         flui_view::element::ElementKind::stateless(self)
 ///     }
 /// }
 ///

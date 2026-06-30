@@ -1,5 +1,7 @@
 //! Application configuration.
 
+use std::path::PathBuf;
+
 use flui_types::{Size, geometry::px};
 
 /// Application configuration.
@@ -49,6 +51,12 @@ pub struct AppConfig {
 
     /// Whether to enable debug paint.
     pub debug_paint: bool,
+
+    /// Optional hot-reload worker dylib path for host/worker apps.
+    ///
+    /// When unset, the desktop runner falls back to `FLUI_WORKER_PLUGIN` for
+    /// CLI compatibility.
+    pub worker_plugin_path: Option<PathBuf>,
 }
 
 impl Default for AppConfig {
@@ -65,6 +73,7 @@ impl Default for AppConfig {
             target_fps: 60,
             show_performance_overlay: false,
             debug_paint: false,
+            worker_plugin_path: None,
         }
     }
 }
@@ -140,6 +149,12 @@ impl AppConfig {
         self.debug_paint = enabled;
         self
     }
+
+    /// Set the hot-reload worker dylib path for host/worker apps.
+    pub fn with_worker_plugin_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.worker_plugin_path = Some(path.into());
+        self
+    }
 }
 
 impl From<&AppConfig> for flui_platform::WindowOptions {
@@ -166,6 +181,7 @@ mod tests {
         assert_eq!(config.title, "FLUI App");
         assert_eq!(config.target_fps, 60);
         assert!(config.resizable);
+        assert!(config.worker_plugin_path.is_none());
     }
 
     #[test]
@@ -179,5 +195,15 @@ mod tests {
         assert_eq!(config.size.width, px(1024.0));
         assert_eq!(config.size.height, px(768.0));
         assert!(!config.resizable);
+    }
+
+    #[test]
+    fn test_worker_plugin_path() {
+        let config = AppConfig::new().with_worker_plugin_path("target/debug/libworker.so");
+
+        assert_eq!(
+            config.worker_plugin_path,
+            Some(PathBuf::from("target/debug/libworker.so"))
+        );
     }
 }

@@ -82,13 +82,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         impl #impl_generics ::flui_view::View for #ident #ty_generics
         #augmented_where
         {
-            fn create_element(&self) -> ::std::boxed::Box<dyn ::flui_view::ElementBase> {
-                ::std::boxed::Box::new(
-                    ::flui_view::StatelessElement::<Self>::new(
-                        self,
-                        ::flui_view::StatelessBehavior,
-                    ),
-                )
+            fn create_element(&self) -> ::flui_view::element::ElementKind {
+                ::flui_view::element::ElementKind::stateless(self)
             }
         }
     })

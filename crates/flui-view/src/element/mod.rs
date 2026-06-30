@@ -48,8 +48,8 @@ pub use behavior::{
 pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
 pub use kind::{
-    AnimationListener, ElementKind, InheritedElementBase, ProxyElementBase, RenderElementBase,
-    StatefulElementBase, StatelessElementBase,
+    AnimationListener, ElementKind, InheritedElementBase, NotificationElementBase,
+    ProxyElementBase, RenderElementBase, StatefulElementBase, StatelessElementBase,
 };
 pub use lifecycle::Lifecycle;
 pub use notification::{

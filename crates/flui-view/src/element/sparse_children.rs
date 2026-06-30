@@ -231,8 +231,7 @@ mod tests {
 
     use super::SparseChildren;
     use crate::GlobalKey;
-    use crate::element::{RenderBehavior, RenderElement};
-    use crate::view::{ElementBase, RenderView, View};
+    use crate::view::{RenderView, View};
     use crate::{BuildOwner, ElementTree};
 
     /// A minimal render-bearing leaf view used as both host and child in these
@@ -254,8 +253,8 @@ mod tests {
     }
 
     impl View for LeafBox {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(RenderElement::new(self, RenderBehavior::new()))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -280,8 +279,8 @@ mod tests {
     }
 
     impl View for GlobalKeyedLeafBox {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(RenderElement::new(self, RenderBehavior::new()))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
 
         fn key(&self) -> Option<&dyn ViewKey> {

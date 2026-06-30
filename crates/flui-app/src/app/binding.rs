@@ -963,52 +963,22 @@ mod tests {
     #[derive(Clone)]
     struct LeafView;
 
+    impl flui_view::RenderView for LeafView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+            *render_object = flui_objects::RenderSizedBox::shrink();
+        }
+    }
+
     impl View for LeafView {
-        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-            Box::new(LeafElement {
-                lifecycle: flui_view::element::Lifecycle::Initial,
-            })
-        }
-    }
-
-    struct LeafElement {
-        lifecycle: flui_view::element::Lifecycle,
-    }
-
-    impl flui_view::ElementBase for LeafElement {
-        fn view_type_id(&self) -> std::any::TypeId {
-            std::any::TypeId::of::<LeafView>()
-        }
-        fn depth(&self) -> usize {
-            0
-        }
-        fn lifecycle(&self) -> flui_view::element::Lifecycle {
-            self.lifecycle
-        }
-        fn mount(
-            &mut self,
-            _parent: Option<flui_foundation::ElementId>,
-            _slot: usize,
-            _owner: &mut flui_view::ElementOwner<'_>,
-        ) {
-            self.lifecycle = flui_view::element::Lifecycle::Active;
-        }
-        fn unmount(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {
-            self.lifecycle = flui_view::element::Lifecycle::Defunct;
-        }
-        fn activate(&mut self) {
-            self.lifecycle = flui_view::element::Lifecycle::Active;
-        }
-        fn deactivate(&mut self) {
-            self.lifecycle = flui_view::element::Lifecycle::Inactive;
-        }
-        fn update(&mut self, _new: &dyn View, _owner: &mut flui_view::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(
-            &mut self,
-            _owner: &mut flui_view::ElementOwner<'_>,
-        ) -> Vec<Box<dyn View>> {
-            Vec::new()
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
         }
     }
 
@@ -1574,7 +1544,7 @@ mod tests {
     //
     // Placed here (module scope, inside `mod tests`) so all A-series tests share it.
     // -----------------------------------------------------------------------
-    use flui_view::{IntoView, StatefulBehavior, StatefulElement, StatefulView, ViewState};
+    use flui_view::{IntoView, StatefulView, ViewState};
 
     /// Test-local view that captures the auto-injected `VsyncScope` in
     /// `init_state`, registers a caller-supplied controller, and starts it
@@ -1632,8 +1602,8 @@ mod tests {
     }
 
     impl View for VsyncProbeView {
-        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
         }
     }
 

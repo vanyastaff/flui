@@ -20,7 +20,7 @@ use flui_types::{
     Color,
     typography::{FontWeight, TextDirection, TextSpan, TextStyle},
 };
-use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Builds the styled "Hello, FLUI!" span: a 48px dark base with one bold-red
 /// child word, so the rich-text path (per-span color + weight) is exercised.
@@ -72,11 +72,8 @@ impl StatelessView for App {
 }
 
 impl View for App {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

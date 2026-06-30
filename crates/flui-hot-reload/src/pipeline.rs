@@ -15,6 +15,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use flui_types::{Size, geometry::px};
 use flui_view::{
     ElementBase, RootRenderElement, RootRenderView, StatelessView, View, WidgetsBinding,
+    element::ElementKind,
 };
 use parking_lot::RwLock;
 
@@ -67,7 +68,7 @@ pub struct PluginPipeline {
     /// active. The element tree holds references into the render tree (via
     /// RenderId).
     #[allow(dead_code)]
-    root_element: Option<Box<dyn ElementBase>>,
+    root_element: Option<ElementKind>,
 }
 
 impl PluginPipeline {
@@ -92,7 +93,7 @@ impl PluginPipeline {
 
         // Set PipelineOwner on the root render element before mounting
         if let Some(rre) = root_element
-            .as_any_mut()
+            .element_mut()
             .downcast_mut::<RootRenderElement<V>>()
         {
             rre.set_pipeline_owner(Arc::clone(&pipeline_owner));

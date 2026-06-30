@@ -6,7 +6,7 @@
 //! legacy `Box<dyn ElementBase>` storage). Phase 2 introduces the
 //! production routing through the typed match arms.
 //!
-//! # Why eight variants and not one?
+//! # Why closed variants and not one?
 //!
 //! `Box<dyn ElementBase>` storage paired with a runtime
 //! `downcast_ref::<V>()` (`crates/flui-view/src/element/generic.rs:271`)
@@ -53,8 +53,8 @@ use flui_foundation::{Listenable, ListenerId};
 use super::{
     arity::{ElementArity, Leaf, Optional, Single, Variable},
     behavior::{
-        AnimatedBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior, RenderBehavior,
-        StatefulBehavior, StatelessBehavior,
+        AnimatedBehavior, ElementBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior,
+        RenderBehavior, StatefulBehavior, StatelessBehavior,
     },
     unified::Element,
 };
@@ -128,6 +128,16 @@ pub trait RootElementBase: ElementBase {}
 /// message directly and has no children, so it is its own element kind rather
 /// than a behavior-family element.
 pub trait ErrorElementBase: ElementBase {}
+
+/// `ElementBase`-equivalent surface tagging an element that handles bubbling
+/// notifications.
+///
+/// Companion to [`ElementKind::Notification`]. Notification listener elements
+/// override [`ElementBase::on_notification`] to translate the object-safe
+/// `(TypeId, &dyn Any)` dispatch shape into their typed callback. They are a
+/// distinct family because neither stateless nor render behavior owns that
+/// interception hook.
+pub trait NotificationElementBase: ElementBase {}
 
 // ----------------------------------------------------------------------------
 // Blanket impls for the concrete element type aliases.
@@ -347,6 +357,8 @@ pub enum ElementKind {
     Proxy(Box<dyn ProxyElementBase>),
     /// An `InheritedView` element.
     Inherited(Box<dyn InheritedElementBase>),
+    /// A notification-listener element.
+    Notification(Box<dyn NotificationElementBase>), // PORT-CHECK-OK-DYN: closed ElementKind storage variant
     /// A `RenderView` element with no children (e.g. `Text`, `Image`).
     /// No blanket impl exists in Phase 1; the slot is reserved for
     /// Phase 2/3 leaf-render bodies.
@@ -375,9 +387,116 @@ pub enum ElementKind {
 }
 
 impl ElementKind {
+    /// Get the `TypeId` of the view configuration that created this element.
+    pub fn view_type_id(&self) -> std::any::TypeId {
+        self.element().view_type_id()
+    }
+
+    /// Get the current lifecycle state of the inner element.
+    pub fn lifecycle(&self) -> crate::element::Lifecycle {
+        self.element().lifecycle()
+    }
+
+    /// Create a stateless-family element kind.
+    pub fn stateless<V>(view: &V) -> Self
+    where
+        V: StatelessView + crate::view::View + Clone + Send + Sync + 'static,
+        StatelessBehavior: ElementBehavior<V, Single>,
+        Element<V, Single, StatelessBehavior>: ElementBase,
+    {
+        Self::Stateless(Box::new(Element::<V, Single, StatelessBehavior>::new(
+            view,
+            StatelessBehavior,
+        )))
+    }
+
+    /// Create a stateful-family element kind.
+    pub fn stateful<V>(view: &V) -> Self
+    where
+        V: StatefulView + crate::view::View + Clone + Send + Sync + 'static,
+        StatefulBehavior<V>: ElementBehavior<V, Single>,
+        Element<V, Single, StatefulBehavior<V>>: ElementBase,
+    {
+        Self::Stateful {
+            element: Box::new(Element::<V, Single, StatefulBehavior<V>>::new(
+                view,
+                StatefulBehavior::new(view),
+            )),
+            animation_listener: None,
+        }
+    }
+
+    /// Create a proxy-family element kind.
+    pub fn proxy<V>(view: &V) -> Self
+    where
+        V: ProxyView + crate::view::View + Clone + Send + Sync + 'static,
+        ProxyBehavior: ElementBehavior<V, Single>,
+        Element<V, Single, ProxyBehavior>: ElementBase,
+    {
+        Self::Proxy(Box::new(Element::<V, Single, ProxyBehavior>::new(
+            view,
+            ProxyBehavior,
+        )))
+    }
+
+    /// Create an inherited-family element kind.
+    pub fn inherited<V>(view: &V) -> Self
+    where
+        V: InheritedView + crate::view::View + Clone + Send + Sync + 'static,
+        InheritedBehavior<V>: ElementBehavior<V, Single>,
+        Element<V, Single, InheritedBehavior<V>>: ElementBase,
+    {
+        Self::Inherited(Box::new(Element::<V, Single, InheritedBehavior<V>>::new(
+            view,
+            InheritedBehavior::new(view),
+        )))
+    }
+
+    /// Create a render-object element kind for the currently wired variable arity.
+    pub fn render_variable<V>(view: &V) -> Self
+    where
+        V: RenderView + crate::view::View + Clone + Send + Sync + 'static,
+        RenderBehavior<V>: ElementBehavior<V, Variable>,
+        Element<V, Variable, RenderBehavior<V>>: ElementBase,
+    {
+        Self::RenderVariable(Box::new(Element::<V, Variable, RenderBehavior<V>>::new(
+            view,
+            RenderBehavior::new(),
+        )))
+    }
+
+    /// Create an animated stateful-family element kind.
+    pub fn animated<V>(view: &V) -> Self
+    where
+        V: AnimatedView + crate::view::View + Clone + Send + Sync + 'static,
+        AnimatedBehavior<V>: ElementBehavior<V, Single>,
+        Element<V, Single, AnimatedBehavior<V>>: ElementBase,
+    {
+        Self::Stateful {
+            element: Box::new(Element::<V, Single, AnimatedBehavior<V>>::new(
+                view,
+                AnimatedBehavior::new(view),
+            )),
+            animation_listener: None,
+        }
+    }
+
+    /// Create a parent-data proxy-family element kind.
+    pub fn parent_data<V>(view: &V) -> Self
+    where
+        V: ParentDataView + crate::view::View + Clone + Send + Sync + 'static,
+        ParentDataBehavior: ElementBehavior<V, Single>,
+        Element<V, Single, ParentDataBehavior>: ElementBase,
+    {
+        Self::Proxy(Box::new(Element::<V, Single, ParentDataBehavior>::new(
+            view,
+            ParentDataBehavior,
+        )))
+    }
+
     /// Borrow the underlying element regardless of variant.
     ///
-    /// All eight variants box a sub-trait of [`ElementBase`]; this
+    /// Every variant boxes a sub-trait of [`ElementBase`]; this
     /// helper hides the per-variant match so callers that need only
     /// the `ElementBase` surface (debug printing, lifecycle queries)
     /// can read it generically.
@@ -387,6 +506,7 @@ impl ElementKind {
             Self::Stateful { element, .. } => &**element,
             Self::Proxy(e) => &**e,
             Self::Inherited(e) => &**e,
+            Self::Notification(e) => &**e,
             Self::RenderLeaf(e) => &**e,
             Self::RenderSingle(e) => &**e,
             Self::RenderOptional(e) => &**e,
@@ -408,12 +528,36 @@ impl ElementKind {
             Self::Stateful { element, .. } => &mut **element,
             Self::Proxy(e) => &mut **e,
             Self::Inherited(e) => &mut **e,
+            Self::Notification(e) => &mut **e,
             Self::RenderLeaf(e) => &mut **e,
             Self::RenderSingle(e) => &mut **e,
             Self::RenderOptional(e) => &mut **e,
             Self::RenderVariable(e) => &mut **e,
             Self::Root(e) => &mut **e,
             Self::Error(e) => &mut **e,
+        }
+    }
+
+    /// Consume into a type-erased `Box<dyn ElementBase>` (trait upcast).
+    ///
+    /// Bridges to the `IntoElement` / `BoxedElement` type-erasure utility,
+    /// which is a separate surface from the element-tree's `ElementKind`
+    /// storage — it intentionally re-erases to the base trait for callers that
+    /// only want an opaque element handle.
+    #[must_use]
+    pub fn into_boxed(self) -> Box<dyn ElementBase> {
+        match self {
+            Self::Stateless(e) => e,
+            Self::Stateful { element, .. } => element,
+            Self::Proxy(e) => e,
+            Self::Inherited(e) => e,
+            Self::Notification(e) => e,
+            Self::RenderLeaf(e) => e,
+            Self::RenderSingle(e) => e,
+            Self::RenderOptional(e) => e,
+            Self::RenderVariable(e) => e,
+            Self::Root(e) => e,
+            Self::Error(e) => e,
         }
     }
 
@@ -424,6 +568,7 @@ impl ElementKind {
             Self::Stateful { .. } => "Stateful",
             Self::Proxy(_) => "Proxy",
             Self::Inherited(_) => "Inherited",
+            Self::Notification(_) => "Notification",
             Self::RenderLeaf(_) => "RenderLeaf",
             Self::RenderSingle(_) => "RenderSingle",
             Self::RenderOptional(_) => "RenderOptional",
@@ -446,11 +591,141 @@ impl fmt::Debug for ElementKind {
     }
 }
 
+impl ElementBase for ElementKind {
+    fn view_type_id(&self) -> std::any::TypeId {
+        self.element().view_type_id()
+    }
+
+    fn current_key_hash(&self) -> Option<u64> {
+        self.element().current_key_hash()
+    }
+
+    fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        self.element().current_key()
+    }
+
+    fn set_self_id(&mut self, id: flui_foundation::ElementId) {
+        self.element_mut().set_self_id(id);
+    }
+
+    fn slot(&self) -> usize {
+        self.element().slot()
+    }
+
+    fn depth(&self) -> usize {
+        self.element().depth()
+    }
+
+    fn lifecycle(&self) -> crate::element::Lifecycle {
+        self.element().lifecycle()
+    }
+
+    fn mount(
+        &mut self,
+        parent: Option<flui_foundation::ElementId>,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.element_mut().mount(parent, slot, owner);
+    }
+
+    fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.element_mut().unmount(owner);
+    }
+
+    fn activate(&mut self) {
+        self.element_mut().activate();
+    }
+
+    fn deactivate(&mut self) {
+        self.element_mut().deactivate();
+    }
+
+    fn update(&mut self, new_view: &dyn crate::view::View, owner: &mut crate::ElementOwner<'_>) {
+        self.element_mut().update(new_view, owner);
+    }
+
+    fn mark_needs_build(&mut self) {
+        self.element_mut().mark_needs_build();
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.element().is_dirty()
+    }
+
+    fn build_into_views(
+        &mut self,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn crate::view::View>> {
+        self.element_mut().build_into_views(owner)
+    }
+
+    fn notify_dependency_change(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.element_mut().notify_dependency_change(owner);
+    }
+
+    fn update_slot(&mut self, new_slot: usize) {
+        self.element_mut().update_slot(new_slot);
+    }
+
+    fn deactivate_child(&mut self, child: flui_foundation::ElementId) {
+        self.element_mut().deactivate_child(child);
+    }
+
+    fn debug_description(&self) -> String {
+        self.element().debug_description()
+    }
+
+    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn std::any::Any + Send + Sync>) {
+        self.element_mut().set_pipeline_owner_any(owner);
+    }
+
+    fn pipeline_owner_any(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.element().pipeline_owner_any()
+    }
+
+    fn child_render_id(&self) -> Option<flui_foundation::RenderId> {
+        self.element().child_render_id()
+    }
+
+    fn set_parent_render_id(&mut self, parent_id: Option<flui_foundation::RenderId>) {
+        self.element_mut().set_parent_render_id(parent_id);
+    }
+
+    fn as_inherited(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+        self.element().as_inherited()
+    }
+
+    fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+        self.element_mut().as_inherited_mut()
+    }
+
+    fn view_as_any(&self) -> Option<&dyn std::any::Any> {
+        self.element().view_as_any()
+    }
+
+    fn state_as_any(&self) -> Option<&dyn std::any::Any> {
+        self.element().state_as_any()
+    }
+
+    fn render_id(&self) -> Option<flui_foundation::RenderId> {
+        self.element().render_id()
+    }
+
+    fn parent_data_config(&self) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
+        self.element().parent_data_config()
+    }
+
+    fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
+        self.element().on_notification(type_id, notification)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Exhaustivity check — the closed set is exactly the eight
+    /// Exhaustivity check — the closed set is exactly the eleven
     /// variants below. Adding a new behavior family without updating
     /// this match (and every other consumer) is a compile error,
     /// which is the SC-007 / SC-011 contract.
@@ -464,10 +739,13 @@ mod tests {
             ElementKind::Stateful { .. } => 1,
             ElementKind::Proxy(_) => 2,
             ElementKind::Inherited(_) => 3,
-            ElementKind::RenderLeaf(_) => 4,
-            ElementKind::RenderSingle(_) => 5,
-            ElementKind::RenderOptional(_) => 6,
-            ElementKind::RenderVariable(_) => 7,
+            ElementKind::Notification(_) => 4,
+            ElementKind::RenderLeaf(_) => 5,
+            ElementKind::RenderSingle(_) => 6,
+            ElementKind::RenderOptional(_) => 7,
+            ElementKind::RenderVariable(_) => 8,
+            ElementKind::Root(_) => 9,
+            ElementKind::Error(_) => 10,
         }
     }
 
@@ -487,22 +765,25 @@ mod tests {
         // names themselves are exercised via the discriminant test
         // above (compile-time guarantee). The `variant_name` function
         // is therefore exercised here through a sanity construction
-        // of the simplest non-element variant — but ALL eight variants
+        // of the simplest non-element variant — but ALL variants
         // require an inner box. The static-string return is the actual
-        // contract; we assert the eight strings are distinct so a
+        // contract; we assert the variant strings are distinct so a
         // future typo turns into a test failure.
         let names = [
             "Stateless",
             "Stateful",
             "Proxy",
             "Inherited",
+            "Notification",
             "RenderLeaf",
             "RenderSingle",
             "RenderOptional",
             "RenderVariable",
+            "Root",
+            "Error",
         ];
         let unique: std::collections::HashSet<_> = names.iter().collect();
-        assert_eq!(unique.len(), 8, "variant names must be distinct");
+        assert_eq!(unique.len(), 11, "variant names must be distinct");
     }
 
     /// `AnimationListener` round-trip: construct with a synthetic

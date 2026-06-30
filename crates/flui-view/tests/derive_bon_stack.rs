@@ -86,8 +86,11 @@ fn bon_builder_struct_is_a_view_through_derive() {
     // code applies to the bon-built shape with no attribute-stacking
     // conflict.
     let element = View::create_element(&card);
-    assert_eq!(element.lifecycle(), Lifecycle::Initial);
-    assert_eq!(element.view_type_id(), std::any::TypeId::of::<Card>());
+    assert_eq!(element.element().lifecycle(), Lifecycle::Initial);
+    assert_eq!(
+        element.element().view_type_id(),
+        std::any::TypeId::of::<Card>()
+    );
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use flui_layer::damage::DamageTracker;
-use flui_types::geometry::{px, Rect};
+use flui_types::geometry::{Rect, px};
 
 #[test]
 fn test_new_tracker_needs_full_repaint() {

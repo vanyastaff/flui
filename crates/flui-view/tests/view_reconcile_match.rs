@@ -14,10 +14,7 @@
 use std::sync::Arc;
 
 use flui_foundation::{UniqueKey, ValueKey, ViewKey};
-use flui_view::{
-    BuildContext, ElementBase, GlobalKey, IntoView, ObjectKey, StatelessElement, StatelessView,
-    View, ViewExt,
-};
+use flui_view::{BuildContext, GlobalKey, IntoView, ObjectKey, StatelessView, View, ViewExt};
 
 // ----------------------------------------------------------------------------
 // Two distinct view types so the "type mismatch" axis is unambiguous.
@@ -54,9 +51,8 @@ impl StatelessView for Alpha {
 }
 
 impl View for Alpha {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -95,9 +91,8 @@ impl StatelessView for Beta {
 }
 
 impl View for Beta {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {

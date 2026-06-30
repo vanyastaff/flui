@@ -32,7 +32,6 @@
 //!    which fails E0308. We test the canonical "every arm
 //!    `.boxed()`" shape only.
 
-use flui_view::ElementBase;
 use flui_view::context::BuildContext;
 use flui_view::prelude::*;
 
@@ -44,11 +43,8 @@ impl StatelessView for LeafA {
     }
 }
 impl View for LeafA {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -60,11 +56,8 @@ impl StatelessView for LeafB {
     }
 }
 impl View for LeafB {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -76,11 +69,8 @@ impl StatelessView for LeafC {
     }
 }
 impl View for LeafC {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -104,11 +94,8 @@ impl StatelessView for ConditionalRoot {
 }
 
 impl View for ConditionalRoot {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -129,11 +116,8 @@ impl StatelessView for ThreeWayRoot {
 }
 
 impl View for ThreeWayRoot {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

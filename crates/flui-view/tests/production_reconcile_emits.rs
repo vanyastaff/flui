@@ -63,9 +63,9 @@ impl StatelessView for LeafView {
 }
 
 impl View for LeafView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
+    fn create_element(&self) -> flui_view::element::ElementKind {
         use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {

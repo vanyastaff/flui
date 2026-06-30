@@ -22,10 +22,8 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::geometry::px;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
-    IntoView, RenderElement, RenderView, StatefulBehavior, StatefulElement, StatefulView,
-    StatelessBehavior, StatelessElement, StatelessView, View, ViewExt, ViewState,
-    element::RenderBehavior,
+    BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, IntoView,
+    RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 
@@ -44,8 +42,8 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -61,8 +59,8 @@ impl StatelessView for Spacer {
 }
 
 impl View for Spacer {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -86,8 +84,8 @@ impl StatelessView for LabeledView {
 }
 
 impl View for LabeledView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -116,8 +114,8 @@ impl RenderView for SizedBoxView {
 }
 
 impl View for SizedBoxView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(RenderElement::new(self, RenderBehavior::new()))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -155,8 +153,8 @@ impl ViewState<CounterView> for CounterState {
 }
 
 impl View for CounterView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 

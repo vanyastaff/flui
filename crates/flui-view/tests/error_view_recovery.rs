@@ -82,8 +82,8 @@ impl StatelessView for PanickingView {
 }
 
 impl View for PanickingView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -102,8 +102,8 @@ impl<C: View + Clone + 'static> StatelessView for WrapperView<C> {
 }
 
 impl<C: View + Clone + 'static> View for WrapperView<C> {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -137,8 +137,8 @@ impl ViewState<PanickingStatefulView> for PanickingStatefulState {
 }
 
 impl View for PanickingStatefulView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 

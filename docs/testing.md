@@ -6,11 +6,19 @@ This page documents the test, lint, format, and benchmark commands enforced for 
 
 ## Quality Gates
 
-The following commands must succeed on every change before review:
+The local pre-review gate is:
+
+```bash
+just ci
+```
+
+Expanded, that currently runs:
 
 ```bash
 cargo fmt --all -- --check          # formatter gate (rustfmt.toml is authoritative)
-cargo clippy --workspace -- -D warnings   # lint gate — zero warnings
+bash scripts/check-workspace-inventory.sh # crate inventory drift guard
+bash scripts/port-check.sh           # architecture refusal triggers
+cargo clippy --workspace --all-targets -- -D warnings # lint gate — zero warnings
 cargo test --workspace               # full test suite
 ```
 
@@ -102,8 +110,8 @@ Performance targets defined by the constitution:
 `cargo clippy` is the canonical lint command. The constitution requires `clippy::all` and `clippy::pedantic` at warn level workspace-wide.
 
 ```bash
-cargo clippy --workspace -- -D warnings
-cargo clippy -p flui-engine -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p flui-engine --all-targets -- -D warnings
 cargo clippy --workspace --fix --allow-dirty       # auto-fix where Clippy can
 ```
 
@@ -223,12 +231,16 @@ production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 
 ## CI Expectations
 
-The same three quality gates run in CI on every PR:
+CI runs the same local gates plus repository-wide source checks:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
-cargo test --workspace
+taplo fmt --check
+typos
+bash scripts/check-workspace-inventory.sh
+bash scripts/port-check.sh -v
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace --exclude flui-platform --lib --no-fail-fast --test-threads 1
 ```
 
 A change cannot be merged if any of these fail. If you encounter a flaky test, file a fix issue rather than retrying CI.

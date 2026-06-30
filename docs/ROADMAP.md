@@ -42,7 +42,7 @@ The shape of the work: **front-loaded in machinery, back-loaded in catalog.** `m
 **Definition.** A FLUI widget, render object, or subsystem is at **parity** with its Flutter counterpart when:
 1. It implements the same behavior contract — the same `.flutter/` algorithm, lifecycle, and observable semantics (per [`FOUNDATIONS.md` Part I](FOUNDATIONS.md#part-i--the-target-architecture) "behavior loyal").
 2. It passes the **adapted Flutter widget-test corpus** for that component (the oracle below).
-3. It satisfies the FLUI-side quality bar: Constitution coverage threshold for its crate category, all 13 `port-check.sh` refusal triggers green, no `unimplemented!()`/`todo!()` in its code path.
+3. It satisfies the FLUI-side quality bar: Constitution coverage threshold for its crate category, all 21 `port-check.sh` refusal triggers green, no `unimplemented!()`/`todo!()` in its code path.
 
 **The oracle.** Flutter ships an enormous widget-test corpus under `.flutter/flutter-master/packages/flutter/test/`. Each widget has a `_test.dart` companion exercising layout, paint, gestures, edge cases, accessibility. The parity oracle for FLUI is: **the corresponding Flutter `_test.dart` is ported (mechanically where possible, behavior-faithfully always) and passes against the FLUI widget**. This is the same "behavior loyal, structure Rust-native" rule applied to tests. The ported corpus lives at `crates/<crate>/tests/parity/` and runs in CI.
 
@@ -94,7 +94,7 @@ FLUI's construction divides into **four architectural layers**. Cross supports a
         └─────────────────────────────────────────────────────┘
 ```
 
-- **Cross** — the substrate the rest stands on. Foundation hardening, platform backends, animation/physics, asset pipeline, DX tooling (devtools/build/cli/hot-reload), the 13 refusal triggers, the standing Mythos-derived discipline. Not a phase — it runs the whole duration in tracks.
+- **Cross** — the substrate the rest stands on. Foundation hardening, platform backends, animation/physics, asset pipeline, DX tooling (devtools/build/cli/hot-reload), the 21 refusal triggers, the standing Mythos-derived discipline. Not a phase — it runs the whole duration in tracks.
 - **Core** — the render machine. The spine from `View` through `Element` reconciliation through `RenderObject` layout/paint to layered compositing. Includes the contract design docs (the *core* the widget catalog commits to). Must reach target spec before Business leans on it; the spine-first vertical slice validates Core's contracts on live code before catalog breadth.
 - **Business** — `flui-widgets`. The ~80-widget framework catalog — `Container`/`Row`/`Text`/`Image`/`ListView`/`GestureDetector`/`Navigator`/`Focus`/`AnimatedContainer`/.... The thing an app author composes. Depends on Core + Cross.
 - **Catalog** — design-system component libraries. `flui-material` ∥ `flui-cupertino` (independent siblings) + the `flui-localizations` they share. The thing app authors typically import.
@@ -128,8 +128,8 @@ Each phase states: **Goal**, **Builds** (crates/subsystems), **Entry** (objectiv
 - **Layout / compositing / paint phases wired to spec (D-1, D-3, D-4).** Wire `layout_node_with_children` to invoke per-node `RenderEntry::layout` with constraints propagated parent→child; implement `run_compositing` (the subtree compositing-bits walk); fix `run_paint` to clear the dirty flag only on nodes it paints. **The single most important new work in Core.0** — audited but on no Mythos schedule, per [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md) §6.
 - **Keyed reconciliation (D-2 / Contract C6).** Add `key: Option<Key>` to `ElementNode`; route variable-arity reconciliation through the keyed algorithm (already written, tested, with zero production callers); delete the positional path.
 - **Core contracts spec** ([`specs/004-view-element-core/`](../specs/004-view-element-core/)) — a unified `/ce-plan` covering **C2** (heterogeneous children — **both** `ViewSeq` paths), **C3** (widget-authoring API), and the **C4+C6** core (`View` trait / element storage / keyed reconciliation). Originally scoped as three separate plans; unified after the 2026-05-22 doc-review found the four contracts cannot be locked independently — the `ViewSeq` shape forces the reconciler signature (C6); `impl IntoView` ergonomics force the authoring surface (C3 ↔ C4); element storage couples to the heterogeneous-children boundary (C2 ↔ C4); locking any one in isolation re-opens the others. **Round-5 implementation sequence: 4 PRs** — Phase 0 (3-day spec-validation benchmarks; S1 `KeyId` interning prototype + S2 static-path algorithm sketch; gates Phase 1 by re-opening FR-022 / FR-016 if benchmarks invert), Phase 1 (storage shape + key field + self-validation round-trip tests), Phase 2 (keyed reconciler completion + `ElementCore` rewiring + `ReconcileEvent` trace stream), Phase 3 (`IntoView` surface + `downcast_ref` elimination + derive macros + `port-check.sh` triggers). See `specs/004-view-element-core/spec.md` Implementation Sequence section for the full phase-by-phase FR map.
-- **Standing discipline installed.** Write refusal triggers #8–#13 into [`PORT.md`](PORT.md); make the mechanically-detectable ones `port-check.sh` gates.
-- **Structural do-nows.** Merge `flui-log` → `flui-foundation`; split `flui-geometry` out of `flui-types`; amend the Constitution layer table + edition/Rust-version line. *(Trivial now, catalog-wide later — [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md#part-iv--the-target-crate-decomposition).)*
+- **Standing discipline installed and maintained.** `port-check.sh` currently enforces 21 refusal triggers; new mechanically-detectable architecture rules must land in [`PORT.md`](PORT.md) and the script together.
+- **Structural do-nows.** The `flui-geometry` split has landed and `flui-log` has been removed as a standalone workspace crate; keep the Constitution layer table + edition/Rust-version line aligned as the remaining target crates land. *(Trivial now, catalog-wide later — [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md#part-iv--the-target-crate-decomposition).)*
 - **`RasterBackend` seam** in `flui-engine` (lyon stays the implementation; the seam makes a future Vello swap non-breaking).
 - **Freeze the `Scene` / `DrawCommand` contract** so engine work parallelizes safely.
 - **Widget → render-object mapping checklist** at `docs/research/widget-renderobject-map.md` — every planned `flui-widgets` widget mapped to its render object. Core.2 cannot start without it (mitigates Risk R2).
@@ -142,13 +142,13 @@ Each phase states: **Goal**, **Builds** (crates/subsystems), **Entry** (objectiv
 **Entry.** None — this is the current state.
 
 **Exit.** Every item is a command that exits 0/1 or a test that passes/fails — no prose-only criteria.
-- `cargo build --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` exit 0; `bash scripts/port-check.sh -v` exits 0 with all 13 triggers reporting green.
+- `cargo build --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` exit 0; `bash scripts/port-check.sh -v` exits 0 with all 21 triggers reporting green.
 - Zero `unimplemented!()`/`todo!()` in non-test code (grep gate in CI).
 - Integration test: a `Padding → Center → ColoredBox` 3-level tree lays out with correct constraints and computed sizes (gates D-1).
 - Integration test: `[A(key=1), B(key=2)]` reordered to `[B, A]` preserves element identity (no remount) under a `Variable`-arity element (gates D-2).
 - Integration test: a layer subtree marked dirty triggers compositing-bits propagation (gates D-3); a `RepaintBoundary`-isolated repaint clears `needs_paint` only on painted nodes (gates D-4).
 - The three contract design documents (C2, C3, C4+C6) are merged into `docs/designs/`, each with explicit sign-off recorded in its frontmatter against the contract checklist in [`FOUNDATIONS.md` Part III](FOUNDATIONS.md#part-iii--the-locked-contracts).
-- `flui-geometry` crate is in `[workspace.members]`; `flui-log` is removed from it; constitution version is bumped and the layer table matches [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md#part-iv--the-target-crate-decomposition).
+- `flui-geometry` crate is in `[workspace.members]`; standalone `flui-log` is absent from the workspace; constitution version is bumped and the layer table matches [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md#part-iv--the-target-crate-decomposition).
 - The widget → render-object mapping checklist exists at `docs/research/widget-renderobject-map.md` (gates Core.2 entry).
 - The `flui-types::physics` parity-audit report exists and reports all Spring / Friction / Gravity behavior tests passing against Flutter.
 
@@ -161,8 +161,8 @@ Each phase states: **Goal**, **Builds** (crates/subsystems), **Entry** (objectiv
 **Goal.** Prove the locked contracts and the full pipeline on live widget code. Build ~8–12 widgets — one per render-object family — end-to-end, into a running demo app.
 
 **Builds.**
-- **Create `flui-widgets`** (skeleton crate, L6) — populated with the slice only.
-- **Re-enable `flui-animation`** — it is a near-complete port (~7.5k LOC) sitting disabled; the slice needs an animated widget.
+- **Extend the active `flui-widgets` slice** (L6) until the contract-validation set is fully covered.
+- **Use the active `flui-animation` crate** for the animated-widget slice and continue parity hardening there.
 - The slice widgets, each exercising a distinct render-object family and a distinct contract:
   - `Container` / `Padding` / `Center` — box layout (existing render objects).
   - `Column` / `Row` — flex, `Variable` arity → exercises C2 (`ViewSeq`) and C6 (keyed reconciliation).
@@ -215,7 +215,7 @@ Each phase states: **Goal**, **Builds** (crates/subsystems), **Entry** (objectiv
 
 **Builds.**
 - The Flutter `widgets/` catalog beyond the slice: full layout family, `RichText`/`DefaultTextStyle`, `Icon`, scrolling (`ListView`/`GridView`/`CustomScrollView`/`Scrollable` + scroll physics), input (`Listener`, `MouseRegion`, `Focus`/`FocusScope`, `Actions`/`Shortcuts`), `Navigator`/routing/`PageRoute`, the implicit-animation family, `Hero`, `MediaQuery`, `LayoutBuilder`, `FutureBuilder`/`StreamBuilder`.
-- **Re-enable `flui-assets`** — required for the `Image` widget (network + asset image, font loading).
+- **Integrate the active `flui-assets` crate** — required for the `Image` widget (network + asset image, font loading).
 
 **Entry.** Core.2 exit (render-object catalog complete).
 
@@ -275,11 +275,11 @@ Cross is not a phase — it is the substrate that runs alongside Core / Business
 
 ### Cross.0 — Structural do-nows (one-time, upfront)
 
-Bundled into Core.0 because they are cheap-now / catalog-wide-later: merge `flui-log` → `flui-foundation`; split `flui-geometry` out of `flui-types`; amend the Constitution layer table + edition/Rust-version; install refusal triggers #8–#13 into [`PORT.md`](PORT.md) and make the mechanically-detectable ones `port-check.sh` gates. See Core.0 builds.
+Bundled into Core.0 because they are cheap-now / catalog-wide-later: the `flui-geometry` split has landed, standalone `flui-log` is absent from the workspace, and the refusal-trigger gate has grown to 21 checks in `port-check.sh`. Keep the Constitution layer table, edition/Rust-version line, [`PORT.md`](PORT.md), and the script aligned as new mechanically-detectable rules land. See Core.0 builds.
 
 ### Cross.A — Animation / assets / physics re-entry
 
-**Goal.** Re-enable the Cross-layer crates the Business catalog needs. **Builds:** Re-enable `flui-animation` (the slice in Core.1 needs an animated widget — re-entry begins there); re-enable `flui-assets` before the `Image` widget in Business.1; parity-audit `flui-types/src/physics/` against Flutter (Core.0 deliverable). **Exit:** all three in `[workspace.members]`, parity-tested.
+**Goal.** Keep the Cross-layer crates the Business catalog needs available and parity-tested. **Builds:** use the active `flui-animation` crate for the Core.1 animated-widget slice; wire the active `flui-assets` crate into `Image` before Business.1; parity-audit `flui-types/src/physics/` against Flutter (Core.0 deliverable). **Exit:** animation and assets are in `[workspace.members]`, physics is parity-tested.
 
 ### Cross.P — Platform breadth
 
@@ -340,7 +340,7 @@ Within phases: Core.2's render-object families parallelize (box / sliver / paint
 
 This roadmap is the index, not the work. Each phase (and each large family within a phase) is decomposed through the [Speckit workflow](../CLAUDE.md#speckit-workflow): `spec → plan → tasks → implement`, one `specs/NNN-*` directory per unit. The three open contracts (C2, C3, C4+C6) are the **first** Speckit units — they are Core.0 deliverables and block Core.1.
 
-Every phase exit is enforced by the standing discipline of [`FOUNDATIONS.md` Part VI](FOUNDATIONS.md#part-vi--the-standing-quality-discipline): `cargo build`/`clippy`/`test` green, `bash scripts/port-check.sh` green for all 13 refusal triggers, Constitution coverage thresholds met. A phase is not done because its code is written — it is done when its exit criteria are objectively verified.
+Every phase exit is enforced by the standing discipline of [`FOUNDATIONS.md` Part VI](FOUNDATIONS.md#part-vi--the-standing-quality-discipline): `cargo build`/`clippy`/`test` green, `bash scripts/port-check.sh` green for all 21 refusal triggers, Constitution coverage thresholds met. A phase is not done because its code is written — it is done when its exit criteria are objectively verified.
 
 Progress is reported as **parity against `.flutter/`** — the scoreboard at the top of this document is the live measure. The destination is the column on the right reading ~100%.
 

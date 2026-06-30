@@ -31,8 +31,8 @@ impl StatelessView for TrackingView {
 }
 
 impl View for TrackingView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -80,8 +80,8 @@ impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
 }
 
 impl View for LifecycleTrackingView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 

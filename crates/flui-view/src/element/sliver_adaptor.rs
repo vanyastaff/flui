@@ -57,7 +57,7 @@ use super::{
 use crate::{
     BoxedView, ElementOwner,
     tree::ElementTree,
-    view::{ElementBase, RenderView, View},
+    view::{RenderView, View},
 };
 
 // ============================================================================
@@ -154,17 +154,24 @@ impl RenderView for SliverList {
 // ============================================================================
 
 impl View for SliverList {
-    fn create_element(&self) -> Box<dyn ElementBase> {
+    fn create_element(&self) -> crate::element::ElementKind {
         // Creates the adaptor element with the custom behavior instead of the
         // generic `RenderBehavior::new()` produced by `impl_render_view!`.
         // This is required so on_mount registers the ChildManager — which the
-        // generic RenderBehavior does not do (F8).
-        Box::new(SliverListAdaptorElement::new(
+        // generic RenderBehavior does not do (F8). Routes through the
+        // `RenderVariable` variant via the blanket impl below.
+        crate::element::ElementKind::RenderVariable(Box::new(SliverListAdaptorElement::new(
             self,
             SliverListAdaptorBehavior::new(self),
-        ))
+        )))
     }
 }
+
+// `SliverList` uses a custom adaptor behavior (not the generic `RenderBehavior`),
+// so it needs its own `RenderElementBase<Variable>` tag to route into
+// `ElementKind::RenderVariable`; the `RenderBehavior` blanket impl in
+// `element/kind.rs` does not cover this behavior.
+impl crate::element::RenderElementBase<Variable> for SliverListAdaptorElement {}
 
 // ============================================================================
 // MANAGER
@@ -458,7 +465,6 @@ mod tests {
     use parking_lot::RwLock;
 
     use super::*;
-    use crate::element::{RenderBehavior, Variable, unified::Element};
     use crate::view::RenderView;
     use crate::{BuildOwner, ElementTree};
 
@@ -480,13 +486,8 @@ mod tests {
     }
 
     impl View for ItemView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(
-                Element::<ItemView, Variable, RenderBehavior<ItemView>>::new(
-                    self,
-                    RenderBehavior::new(),
-                ),
-            )
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -584,7 +585,7 @@ mod tests {
         let builder = make_builder(10);
         let view = SliverList::new(10, 48.0, builder);
         let element = view.create_element();
-        assert_eq!(element.view_type_id(), TypeId::of::<SliverList>());
+        assert_eq!(element.element().view_type_id(), TypeId::of::<SliverList>());
     }
 
     // =========================================================================

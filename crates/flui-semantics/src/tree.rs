@@ -6,8 +6,8 @@
 
 use flui_foundation::{ElementId, SemanticsId};
 use flui_tree::{
-    iter::{Ancestors, DescendantsWithDepth},
     TreeNav, TreeRead, TreeWrite,
+    iter::{Ancestors, DescendantsWithDepth},
 };
 use slab::Slab;
 
@@ -195,10 +195,10 @@ impl SemanticsTree {
         }
         // Unlink from parent's children vec — matches the trait
         // contract.
-        if let Some(parent_id) = self.get(id).and_then(SemanticsNode::parent) {
-            if let Some(parent) = self.get_mut(parent_id) {
-                parent.remove_child(id);
-            }
+        if let Some(parent_id) = self.get(id).and_then(SemanticsNode::parent)
+            && let Some(parent) = self.get_mut(parent_id)
+        {
+            parent.remove_child(id);
         }
         if self.root == Some(id) {
             self.root = None;

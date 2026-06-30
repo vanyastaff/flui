@@ -621,9 +621,11 @@ impl BuildOwner {
                     child_manager_registry: &self.child_manager_registry,
                 };
                 if needs_did_change {
-                    element.notify_dependency_change(&mut element_owner);
+                    element
+                        .element_mut()
+                        .notify_dependency_change(&mut element_owner);
                 }
-                element.build_into_views(&mut element_owner)
+                element.element_mut().build_into_views(&mut element_owner)
             })); // `element_owner` + its `&*tree` borrow drop here.
 
             // Restore the element BEFORE anything else — the slot must be whole
@@ -1102,82 +1104,30 @@ impl Drop for BuildScopeGuard<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
 
     use super::*;
-    use crate::{Lifecycle, View, tree::ElementTree};
+    use crate::{View, tree::ElementTree};
 
-    /// A leaf element that doesn't create children (prevents infinite
-    /// recursion)
-    struct LeafElement {
-        depth: usize,
-        lifecycle: Lifecycle,
-    }
-
-    impl LeafElement {
-        fn new() -> Self {
-            Self {
-                depth: 0,
-                lifecycle: Lifecycle::Initial,
-            }
-        }
-    }
-
-    impl crate::ElementBase for LeafElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<TestView>()
-        }
-
-        fn depth(&self) -> usize {
-            self.depth
-        }
-
-        fn lifecycle(&self) -> Lifecycle {
-            self.lifecycle
-        }
-
-        fn mount(
-            &mut self,
-            _parent: Option<ElementId>,
-            slot: usize,
-            _owner: &mut super::super::ElementOwner<'_>,
-        ) {
-            self.depth = slot;
-            self.lifecycle = Lifecycle::Active;
-        }
-
-        fn unmount(&mut self, _owner: &mut super::super::ElementOwner<'_>) {
-            self.lifecycle = Lifecycle::Defunct;
-        }
-
-        fn activate(&mut self) {
-            self.lifecycle = Lifecycle::Active;
-        }
-
-        fn deactivate(&mut self) {
-            self.lifecycle = Lifecycle::Inactive;
-        }
-
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut super::super::ElementOwner<'_>) {}
-
-        fn mark_needs_build(&mut self) {}
-
-        fn build_into_views(
-            &mut self,
-            _owner: &mut super::super::ElementOwner<'_>,
-        ) -> Vec<Box<dyn View>> {
-            // Leaf - no child views.
-            Vec::new()
-        }
-    }
-
-    /// A leaf view that creates a LeafElement (no children)
+    /// A render-family leaf view with no child views.
     #[derive(Clone)]
     struct TestView;
 
+    impl crate::RenderView for TestView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    }
+
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            Box::new(LeafElement::new())
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 

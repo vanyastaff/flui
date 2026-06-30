@@ -13,9 +13,9 @@ use crate::{
     action::{SemanticsAction, SemanticsActionHandler},
     flags::{SemanticsFlag, SemanticsFlags},
     properties::{
-        concat_attributed_string, AttributedString, CustomSemanticsAction, SemanticsHintOverrides,
-        SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
-        UNBLOCKED_USER_ACTIONS_MASK,
+        AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
+        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
+        concat_attributed_string,
     },
     role::SemanticsRole,
 };

@@ -102,9 +102,8 @@ pub trait RenderView: Clone + Send + Sync + 'static + Sized {
 macro_rules! impl_render_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::RenderBehavior;
-                Box::new($crate::RenderElement::new(self, RenderBehavior::new()))
+            fn create_element(&self) -> $crate::element::ElementKind {
+                $crate::element::ElementKind::render_variable(self)
             }
         }
     };
@@ -155,8 +154,8 @@ mod tests {
     }
 
     impl View for SizedBoxView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(RenderElement::new(self, RenderBehavior::new()))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 

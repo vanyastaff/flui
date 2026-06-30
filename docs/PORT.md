@@ -129,7 +129,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
 
-**Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
+**Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase` / `RootElementBase` / `ErrorElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
 
 **Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`).
 
@@ -417,7 +417,7 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `ValueNotifier<T>` | `ValueNotifier<T>` struct implementing `Listenable` | `flui-foundation`. |
 | `ValueChanged<T>` callback | `Arc<dyn Fn(T) + Send + Sync>` (owned storage — matches `crates/flui-foundation/src/callbacks.rs:70`) or `&dyn Fn(T)` (borrowed param) | Storage form sanctioned by FR-029 #5. `Arc` not `Box` because the listener registry clones callbacks across notifier fan-out. Note: `crates/flui-foundation/ARCHITECTURE.md:62` is stale and still says `Box<dyn Fn(T)>` — graft pending. |
 | `VoidCallback` | `Arc<dyn Fn() + Send + Sync>` (storage — matches `crates/flui-foundation/src/callbacks.rs:51`) or `&dyn Fn()` (param) | Same. |
-| `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (currently disabled — see `## Index`). |
+| `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (active; see `## Index`). |
 | `Listenable` (Dart base class) | `Listenable` trait — `flui-foundation` | Multiple-source: also see `Animation` for animation-as-listenable. |
 | `mixin Foo on Bar` | `trait Foo` + `#[delegate(Foo)]` via `ambassador` (workspace dep) | See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "mixin". |
 
@@ -875,7 +875,7 @@ Three crates already hold port-flavoured documents that predate this template:
 - [`crates/flui-rendering/flutter-rendering-hierarchy.md`](../crates/flui-rendering/flutter-rendering-hierarchy.md) — 1352-LOC Flutter class hierarchy dump; remains as a sibling appendix linked from the templated `crates/flui-rendering/ARCHITECTURE.md`.
 - [`crates/flui-view/UNIFIED_ELEMENT.md`](../crates/flui-view/UNIFIED_ELEMENT.md) — element behaviour taxonomy; remains as a sibling appendix linked from the future templated `crates/flui-view/ARCHITECTURE.md` when that crate is templated.
 
-Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-painting`, `flui-interaction`, plus disabled crates `flui-animation`, `flui-assets`). Relocating those to the crate root per the `AGENTS.md` convention is deferred to a follow-up doc-tidying PR; this methodology does not require relocation upfront.
+Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-painting`, `flui-interaction`, `flui-animation`, `flui-assets`). Relocating those to the crate root per the `AGENTS.md` convention is deferred to a follow-up doc-tidying PR; this methodology does not require relocation upfront.
 
 ---
 
@@ -887,8 +887,10 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | --- | --- | --- |
 | [`flui-foundation`](../crates/flui-foundation/ARCHITECTURE.md) | Templated (grafted 2026-05-19) | Active |
 | [`flui-rendering`](../crates/flui-rendering/ARCHITECTURE.md) | Templated 2026-05-20 (exemplar instance, U2 refactor recorded) | Active |
+| `flui-geometry` | Not yet templated | Active |
 | `flui-types` | Not yet templated | Active |
 | `flui-tree` | Not yet templated | Active |
+| `flui-macros` | Not yet templated | Active |
 | `flui-platform` | Not yet templated | Active |
 | [`flui-painting`](../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-semantics` | Not yet templated | Active |
@@ -896,16 +898,18 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | [`flui-layer`](../crates/flui-layer/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-interaction` | `crates/flui-interaction/docs/ARCHITECTURE.md` (pre-template; precedent for `## Thread safety` format) | Active |
 | [`flui-engine`](../crates/flui-engine/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
-| `flui-log` | Not yet templated | Active |
 | `flui-hot-reload` | Not yet templated | Active |
+| `flui-objects` | Not yet templated | Active |
 | `flui-view` | `crates/flui-view/UNIFIED_ELEMENT.md` (companion; not templated) | Active |
+| `flui-widgets` | Not yet templated | Active |
+| `flui-binding` | Not yet templated | Active |
 | `flui-app` | Not yet templated | Active |
-| `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Disabled |
+| `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Active |
 | `flui-reactivity` | Not yet templated | Disabled |
-| `flui-devtools` | Not yet templated | Disabled |
-| `flui-cli` | Not yet templated | Disabled |
-| `flui-build` | Not yet templated | Disabled |
-| `flui-assets` | `crates/flui-assets/docs/ARCHITECTURE.md` (pre-template) | Disabled |
+| `flui-devtools` | Not yet templated | Active |
+| `flui-cli` | Not yet templated | Active |
+| `flui-build` | Not yet templated | Active |
+| `flui-assets` | `crates/flui-assets/docs/ARCHITECTURE.md` (pre-template) | Active |
 
 Authoritative workspace state lives in [`AGENTS.md`](../AGENTS.md) and [`docs/crates.md`](crates.md); this index restates "templated yes/no" only.
 
@@ -932,13 +936,13 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 20 refusal triggers plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 21 refusal triggers plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 
 **Cross-platform note.** The script is bash. On Windows, run via Git Bash or WSL — both ship with `bash` and modern `rg` on PATH. A PowerShell sibling is not provided in this iteration because the regex set is identical and dual-maintenance is not warranted at solo-maintainer scale.
 
-The recipe is not part of `just ci` by default — refusal triggers are a write-time guard, and CI carries the lint baseline plus the test suite. When a trigger is promoted to a clippy lint per the [Reactive lint promotion](#reactive-lint-promotion) rule, that lint runs under `cargo clippy --workspace -- -D warnings` (already in `just ci`); the doc entry stays as the human-readable surface for the rule.
+The recipe is part of `just ci` and the GitHub `checks` job. When a trigger is promoted to a clippy lint per the [Reactive lint promotion](#reactive-lint-promotion) rule, that lint runs under `cargo clippy --workspace --all-targets -- -D warnings`; the doc entry stays as the human-readable surface for the rule.
 
 ### Self-test (negative-test confirmation)
 

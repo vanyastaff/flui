@@ -214,8 +214,8 @@ mod tests {
 
     // Implement View for TestCounter
     impl View for TestCounter {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
         }
     }
 

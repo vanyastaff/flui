@@ -157,14 +157,8 @@ pub trait ParentDataView: Clone + Send + Sync + 'static + Sized {
 macro_rules! impl_parent_data_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                // `ParentDataElement<V> = Element<V, Single, ParentDataBehavior>`
-                // pins the arity; the bare `Element::new` would leave `A`
-                // unconstrained (the behavior is arity-generic).
-                Box::new($crate::element::ParentDataElement::new(
-                    self,
-                    $crate::element::ParentDataBehavior,
-                ))
+            fn create_element(&self) -> $crate::element::ElementKind {
+                $crate::element::ElementKind::parent_data(self)
             }
         }
     };
@@ -180,13 +174,10 @@ macro_rules! impl_parent_data_view {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
 
-    use flui_foundation::ElementId;
-
-    use super::super::view::ElementBase;
     use super::*;
-    use crate::element::Lifecycle;
 
     // A real render-side parent-data type — satisfies the `ParentDataConfig`
     // blanket via `flui_rendering::parent_data::ParentData`, so it is the exact
@@ -203,32 +194,20 @@ mod tests {
     #[derive(Clone)]
     struct DummyChild;
 
-    impl View for DummyChild {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(DummyChildElement)
+    impl crate::RenderView for DummyChild {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
         }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
     }
 
-    struct DummyChildElement;
-
-    impl ElementBase for DummyChildElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<DummyChild>()
-        }
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Active
-        }
-        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(&mut self, _: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
-        fn deactivate(&mut self) {}
-        fn activate(&mut self) {}
-        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
-        fn depth(&self) -> usize {
-            0
+    impl View for DummyChild {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -272,6 +251,7 @@ mod tests {
 
         let element = view.create_element();
         let config = element
+            .element()
             .parent_data_config()
             .expect("ParentDataBehavior must surface a parent-data config");
         let data = config

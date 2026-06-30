@@ -998,7 +998,7 @@ impl ElementBuildContextBuilder {
 mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
-    use crate::{StatelessElement, StatelessView, View};
+    use crate::{StatelessView, View};
 
     #[derive(Clone)]
     struct TestView {
@@ -1013,9 +1013,8 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 

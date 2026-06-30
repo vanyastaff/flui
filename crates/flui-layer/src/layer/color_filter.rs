@@ -2,7 +2,7 @@
 //!
 //! Corresponds to Flutter's `ColorFilterLayer`.
 
-use flui_types::painting::{effects::ColorMatrix, ColorFilter};
+use flui_types::painting::{ColorFilter, effects::ColorMatrix};
 
 /// Layer that applies a [`ColorFilter`] to its children.
 ///
@@ -104,7 +104,7 @@ impl Default for ColorFilterLayer {
 #[cfg(test)]
 mod tests {
     use flui_types::{
-        painting::{effects::ColorMatrix, BlendMode, ColorFilter},
+        painting::{BlendMode, ColorFilter, effects::ColorMatrix},
         styling::Color,
     };
 

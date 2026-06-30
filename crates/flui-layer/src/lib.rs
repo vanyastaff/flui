@@ -231,7 +231,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use flui_types::{
-        geometry::{px, Rect},
+        geometry::{Rect, px},
         painting::Clip,
     };
 

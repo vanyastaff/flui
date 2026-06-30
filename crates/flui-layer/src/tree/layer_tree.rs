@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::{Diagnosticable, ElementId, LayerId};
-use flui_types::{geometry::Pixels, Offset};
+use flui_types::{Offset, geometry::Pixels};
 use slab::Slab;
 
 use crate::layer::Layer;
@@ -519,10 +519,10 @@ impl LayerTree {
         }
         // Unlink from parent's children vec — matches the trait
         // contract.
-        if let Some(parent_id) = self.get(id).and_then(LayerNode::parent) {
-            if let Some(parent) = self.get_mut(parent_id) {
-                parent.remove_child(id);
-            }
+        if let Some(parent_id) = self.get(id).and_then(LayerNode::parent)
+            && let Some(parent) = self.get_mut(parent_id)
+        {
+            parent.remove_child(id);
         }
         if self.root == Some(id) {
             self.root = None;

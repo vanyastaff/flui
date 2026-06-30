@@ -31,8 +31,7 @@
 //! do not use `Memo<V>` — the default `should_skip_rebuild = false` is
 //! always safe.
 
-use super::view::{ElementBase, View};
-use crate::{ProxyElement, element::ProxyBehavior};
+use super::view::View;
 
 /// Memoization wrapper that skips rebuilds when the inner view is
 /// [`PartialEq`]-equal to the previous version.
@@ -58,8 +57,8 @@ use crate::{ProxyElement, element::ProxyBehavior};
 /// # Element kind
 ///
 /// `Memo<V>` is a **proxy-family** wrapper: it reuses
-/// [`ProxyElement`]/[`ProxyBehavior`] and does not introduce a new
-/// `ElementKind` variant.
+/// [`crate::element::ProxyElement`]/[`crate::element::ProxyBehavior`] and does
+/// not introduce a new `ElementKind` variant.
 ///
 /// # Constitution compliance
 ///
@@ -94,8 +93,8 @@ impl<V: View + PartialEq + Clone> Memo<V> {
 }
 
 impl<V: View + PartialEq + Clone> View for Memo<V> {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(ProxyElement::new(self, ProxyBehavior))
+    fn create_element(&self) -> crate::element::ElementKind {
+        crate::element::ElementKind::proxy(self)
     }
 
     /// Skip the rebuild when `self.inner == prev.inner`.
@@ -144,10 +143,8 @@ mod tests {
     }
 
     impl View for ProbeView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::StatelessElement;
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -265,10 +262,8 @@ mod tests {
     }
 
     impl View for ViewWithCallback {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::StatelessElement;
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 

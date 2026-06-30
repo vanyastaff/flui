@@ -14,10 +14,8 @@ use flui_view::column;
 struct Leaf;
 
 impl flui_view::view::View for Leaf {
-    fn create_element(&self) -> Box<dyn flui_view::view::ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        use flui_view::view::StatelessElement;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

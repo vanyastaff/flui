@@ -13,6 +13,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 use slab::Slab;
 
+use crate::element::ElementKind;
 use crate::view::{ElementBase, View};
 
 /// A node in the Element tree.
@@ -30,7 +31,7 @@ pub struct ElementNode {
     /// without aliasing. Outside that window every accessor assumes `Some`;
     /// during it, ancestor walks read [`Self::element_opt`] (which returns
     /// `None` for the hole rather than panicking).
-    pub(crate) element: Option<Box<dyn ElementBase>>,
+    pub(crate) kind: Option<ElementKind>,
     /// Parent Element ID (None for root).
     pub(crate) parent: Option<ElementId>,
     /// Depth in the tree (root = 0).
@@ -146,10 +147,10 @@ impl ElementNode {
     /// and `ElementTree::insert`) thread the key in immediately
     /// after `ElementNode::new` so the field is populated before
     /// the element is returned.
-    pub fn new(element: Box<dyn ElementBase>, parent: Option<ElementId>, slot: usize) -> Self {
+    pub fn new(kind: ElementKind, parent: Option<ElementId>, slot: usize) -> Self {
         let depth = if parent.is_some() { 1 } else { 0 }; // Will be updated by tree
         Self {
-            element: Some(element),
+            kind: Some(kind),
             parent,
             depth,
             slot,
@@ -189,7 +190,7 @@ impl ElementNode {
     /// (every `BuildCtx` ancestor walk) must go through [`Self::element_opt`]
     /// instead, so reaching the in-flight node is a clean miss, not a panic.
     pub fn element(&self) -> &dyn ElementBase {
-        &**self.element.as_ref().expect(Self::ELEMENT_PRESENT)
+        self.kind.as_ref().expect(Self::ELEMENT_PRESENT).element()
     }
 
     /// Get the Element mutably.
@@ -199,7 +200,10 @@ impl ElementNode {
     /// Panics on the same extracted-element hole as [`Self::element`] — see
     /// its `# Panics` note.
     pub fn element_mut(&mut self) -> &mut dyn ElementBase {
-        &mut **self.element.as_mut().expect(Self::ELEMENT_PRESENT)
+        self.kind
+            .as_mut()
+            .expect(Self::ELEMENT_PRESENT)
+            .element_mut()
     }
 
     /// Get the Element, or `None` if it is currently extracted (the
@@ -209,7 +213,7 @@ impl ElementNode {
     /// lookup that reaches the in-flight node returns a clean miss in every
     /// build profile rather than panicking.
     pub fn element_opt(&self) -> Option<&dyn ElementBase> {
-        self.element.as_deref()
+        self.kind.as_ref().map(ElementKind::element)
     }
 
     /// Get the parent ElementId.
@@ -291,7 +295,10 @@ impl std::fmt::Debug for ElementNode {
             .field("parent", &self.parent)
             .field("depth", &self.depth)
             .field("slot", &self.slot)
-            .field("lifecycle", &self.element.as_ref().map(|e| e.lifecycle()))
+            .field(
+                "lifecycle",
+                &self.kind.as_ref().map(|k| k.element().lifecycle()),
+            )
             .finish()
     }
 }
@@ -507,7 +514,7 @@ impl ElementTree {
         if let Some(ref pipeline) = pipeline_owner {
             let owner_any: Arc<dyn std::any::Any + Send + Sync> =
                 Arc::clone(pipeline) as Arc<dyn std::any::Any + Send + Sync>;
-            element.set_pipeline_owner_any(owner_any);
+            element.element_mut().set_pipeline_owner_any(owner_any);
             tracing::debug!(
                 "ElementTree::mount_root_with_pipeline_owner: passed PipelineOwner to root element"
             );
@@ -617,9 +624,11 @@ impl ElementTree {
             };
 
         if let Some(owner_any) = parent_owner {
-            element.set_pipeline_owner_any(owner_any);
+            element.element_mut().set_pipeline_owner_any(owner_any);
         }
-        element.set_parent_render_id(child_parent_render_id);
+        element
+            .element_mut()
+            .set_parent_render_id(child_parent_render_id);
 
         let mut node = ElementNode::new(element, Some(parent), slot);
         node.depth = parent_depth + 1;
@@ -923,9 +932,9 @@ impl ElementTree {
         dead_code,
         reason = "consumed by the build-context wiring (PR-K wire-real)"
     )]
-    pub(crate) fn take_element(&mut self, id: ElementId) -> Option<Box<dyn ElementBase>> {
+    pub(crate) fn take_element(&mut self, id: ElementId) -> Option<ElementKind> {
         let index = self.resolve_index(id)?;
-        self.nodes.get_mut(index)?.element.take()
+        self.nodes.get_mut(index)?.kind.take()
     }
 
     /// Restore an element previously removed by [`Self::take_element`] into
@@ -936,11 +945,11 @@ impl ElementTree {
         dead_code,
         reason = "consumed by the build-context wiring (PR-K wire-real)"
     )]
-    pub(crate) fn put_element(&mut self, id: ElementId, element: Box<dyn ElementBase>) {
+    pub(crate) fn put_element(&mut self, id: ElementId, kind: ElementKind) {
         if let Some(index) = self.resolve_index(id)
             && let Some(node) = self.nodes.get_mut(index)
         {
-            node.element = Some(element);
+            node.kind = Some(kind);
         }
     }
 
@@ -1350,7 +1359,7 @@ impl std::fmt::Debug for ElementTree {
 mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
-    use crate::{BuildContext, BuildOwner, StatelessElement, StatelessView, View};
+    use crate::{BuildContext, BuildOwner, StatelessView, View};
 
     #[derive(Clone)]
     struct TestView {
@@ -1365,9 +1374,8 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -1605,10 +1613,8 @@ mod tests {
     }
 
     impl View for Theme {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            use crate::InheritedElement;
-            use crate::element::InheritedBehavior;
-            Box::new(InheritedElement::new(self, InheritedBehavior::new(self)))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::inherited(self)
         }
     }
 
@@ -1791,9 +1797,8 @@ mod tests {
     }
 
     impl View for Keyed {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
 
         fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {

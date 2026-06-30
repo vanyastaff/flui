@@ -23,13 +23,13 @@
 //! non-recording read), and `framework.dart:6414`
 //! (`InheritedElement.notifyClients`).
 
-use std::{any::TypeId, sync::Arc};
+use std::sync::Arc;
 
-use flui_foundation::ElementId;
+use flui_objects::RenderSizedBox;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementOwner,
-    ElementTree, InheritedElement, IntoView, Lifecycle, StatelessBehavior, StatelessElement,
-    StatelessView, View, ViewExt, element::InheritedBehavior, view::InheritedView,
+    BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, InheritedElement,
+    IntoView, Lifecycle, RenderView, StatelessView, View, ViewExt, view::InheritedView,
 };
 use parking_lot::RwLock;
 
@@ -52,8 +52,8 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -81,8 +81,8 @@ impl InheritedView for ThemeProvider {
 }
 
 impl View for ThemeProvider {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(InheritedElement::new(self, InheritedBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::inherited(self)
     }
 }
 
@@ -96,62 +96,20 @@ impl View for ThemeProvider {
 #[derive(Clone)]
 struct LeafView;
 
+impl RenderView for LeafView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+}
+
 impl View for LeafView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(LeafElement::new())
-    }
-}
-
-struct LeafElement {
-    depth: usize,
-    lifecycle: Lifecycle,
-}
-
-impl LeafElement {
-    fn new() -> Self {
-        Self {
-            depth: 0,
-            lifecycle: Lifecycle::Initial,
-        }
-    }
-}
-
-impl ElementBase for LeafElement {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<LeafView>()
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
-        self.depth = slot;
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = Lifecycle::Inactive;
-    }
-
-    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
-
-    fn mark_needs_build(&mut self) {}
-
-    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
-        Vec::new()
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -491,8 +449,7 @@ mod did_change_dependencies_on_inherited_update {
     use std::sync::{Arc, Mutex};
 
     use flui_view::{
-        BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatefulBehavior,
-        StatefulElement, StatefulView, View, ViewExt, ViewState,
+        BuildContext, BuildOwner, ElementTree, IntoView, StatefulView, View, ViewExt, ViewState,
     };
 
     use super::{DummyChild, LeafView, MyTheme};
@@ -544,8 +501,8 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for ProbeDependent {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
         }
     }
 
@@ -565,11 +522,8 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for StatelessProbeDependent {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(flui_view::StatelessElement::new(
-                self,
-                flui_view::StatelessBehavior,
-            ))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
         }
     }
 
@@ -928,8 +882,8 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl View for PanicDcd {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
         }
     }
 
@@ -986,9 +940,8 @@ mod live_inherited_during_build {
 
     use flui_foundation::ElementId;
     use flui_view::{
-        BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, InheritedElement,
-        IntoView, StatelessBehavior, StatelessElement, StatelessView, View, ViewExt,
-        element::InheritedBehavior, view::InheritedView,
+        BuildContext, BuildContextExt, BuildOwner, ElementTree, InheritedElement, IntoView,
+        StatelessView, View, ViewExt, view::InheritedView,
     };
 
     use super::{LeafView, MyTheme};
@@ -1024,8 +977,8 @@ mod live_inherited_during_build {
     }
 
     impl View for ThemeRoot {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(InheritedElement::new(self, InheritedBehavior::new(self)))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::inherited(self)
         }
     }
 
@@ -1047,8 +1000,8 @@ mod live_inherited_during_build {
     }
 
     impl View for Middle {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
         }
     }
 
@@ -1070,8 +1023,8 @@ mod live_inherited_during_build {
     }
 
     impl View for Consumer {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
         }
     }
 
@@ -1178,8 +1131,8 @@ mod live_inherited_during_build {
     }
 
     impl View for OuterConsumer {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
         }
     }
 
@@ -1248,8 +1201,8 @@ mod live_inherited_during_build {
     }
 
     impl View for PanicInDependCallback {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
         }
     }
 
@@ -1305,8 +1258,7 @@ mod build_window_panic_restores_slot {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use flui_view::{
-        BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatefulBehavior,
-        StatefulElement, StatefulView, View, ViewExt, ViewState,
+        BuildContext, BuildOwner, ElementTree, IntoView, StatefulView, View, ViewExt, ViewState,
     };
 
     use super::LeafView;
@@ -1336,8 +1288,8 @@ mod build_window_panic_restores_slot {
     }
 
     impl View for PanicOnInit {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
         }
     }
 

@@ -1,12 +1,12 @@
 error: column!: more than 16 children exceeds the tuple ViewSeq cap of 16 — use vec![child.boxed(), ...] for >16 children. The Vec<BoxedView> path is monomorphism-free (per-child dyn-dispatch); consider splitting into nested sub-tuples (e.g., column![column![a..p], column![q..]]) to retain static-tuple monomorphism for sub-segments.
-  --> tests/ui/column_17_compile_error.rs:31:13
+  --> tests/ui/column_17_compile_error.rs:29:13
    |
-31 |       let _ = column![
+29 |       let _ = column![
    |  _____________^
-32 | |         Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
-33 | |         Leaf, // 17th — exceeds the FR-013 cap of 16
-34 | |         Leaf,
-35 | |     ];
+30 | |         Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf, Leaf,
+31 | |         Leaf, // 17th — exceeds the FR-013 cap of 16
+32 | |         Leaf,
+33 | |     ];
    | |_____^
    |
    = note: this error originates in the macro `column` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -113,8 +113,10 @@ where
 
     tracing::info!("Starting desktop platform via flui-platform");
 
-    let worker_driver = std::env::var(env::WORKER_PLUGIN)
-        .ok()
+    let worker_driver = config
+        .worker_plugin_path
+        .clone()
+        .or_else(|| std::env::var(env::WORKER_PLUGIN).ok().map(Into::into))
         .map(WorkerReloadDriver::new);
     if worker_driver.is_some() {
         set_request_rebuild(|| {
@@ -846,11 +848,8 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-            Box::new(flui_view::StatelessElement::new(
-                self,
-                flui_view::element::StatelessBehavior,
-            ))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
         }
     }
 

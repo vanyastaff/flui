@@ -11,26 +11,26 @@ For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules
 20+ crates are organized into a strict directed acyclic graph (DAG). Dependencies flow downward only; circular dependencies are forbidden. Each crate exposes its public API exclusively through `lib.rs` (and an optional `prelude` module). Internal modules default to `pub(crate)`.
 
 ```
-Layer 8  ── flui-app, flui-cli*, flui-devtools*
-                │  (* currently disabled)
+Layer 8  ── flui-app, flui-cli, flui-devtools
 Layer 7  ── flui-hot-reload   (depends on flui-view via `app-plugin` feature)
                 │
-Layer 6  ── flui-view, flui-assets*, flui-build*
+Layer 6  ── flui-view, flui-objects, flui-widgets, flui-binding,
+                │  flui-build, flui-assets
                 │
-Layer 5  ── flui-engine, flui-platform, flui-log
+Layer 5  ── flui-engine, flui-platform
                 │
-Layer 4  ── flui-scheduler, flui-rendering, flui-animation*
+Layer 4  ── flui-scheduler, flui-rendering, flui-animation
                 │
 Layer 3  ── flui-painting, flui-layer, flui-semantics, flui-interaction
                 │
 Layer 2  ── flui-reactivity*
                 │
-Layer 1  ── flui-tree, flui-foundation
+Layer 1  ── flui-tree, flui-foundation, flui-macros
                 │   (flui-foundation = framework primitives:
                 │    ChangeNotifier, Id system, BindingBase, Key, diagnostics)
-Layer 0  ── flui-types
+Layer 0  ── flui-geometry, flui-types
                 (geometry, styling, typography, layout, gestures, physics,
-                 platform value types; base units and IDs)
+                 platform value types; base units)
 ```
 
 Note on `flui-foundation` placement: in the current workspace its Cargo deps are leaf (no internal-crate runtime deps), but its *responsibility* is framework primitives that operate on top of `flui-types`' value types — so it is placed above `flui-types` in the layered table. The target crate graph in [`FOUNDATIONS.md`](FOUNDATIONS.md) Part IV makes that placement an enforced edge.
@@ -143,12 +143,12 @@ Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformT
 
 ## Reference Sources
 
-The repository vendors two external codebases for read-only architectural reference:
+FLUI is designed against two external codebases for read-only architectural reference:
 
-- `.flutter/` — Flutter framework source (UI architecture, widget patterns, layout algorithms).
-- `.gpui/` — GPUI Rust UI library (platform abstraction, callback registries, type erasure patterns).
+- Flutter framework source (UI architecture, widget patterns, layout algorithms).
+- GPUI Rust UI library (platform abstraction, callback registries, type erasure patterns).
 
-Both are studied, never copied. Patterns are translated to FLUI idioms (Arity, Ambassador delegation, no nullability, strict layered DAG).
+Maintainer checkouts may include local `.flutter/` and `.gpui/` mirrors for parity work, but those external source trees are not required for normal builds. Both references are studied, never copied. Patterns are translated to FLUI idioms (Arity, Ambassador delegation, no nullability, strict layered DAG).
 
 ## Hot Reload (Dev-Time)
 

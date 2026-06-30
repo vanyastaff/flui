@@ -587,7 +587,7 @@ fn set_child_slot(tree: &mut ElementTree, id: ElementId, slot: usize) {
 mod tests {
     use super::*;
     use crate::view::{IntoView, View, ViewExt};
-    use crate::{BuildContext, BuildOwner, StatelessElement, StatelessView};
+    use crate::{BuildContext, BuildOwner, StatelessView};
     use flui_foundation::{ValueKey, ViewKey};
 
     /// A keyless leaf-ish stateless test view. `tag` distinguishes
@@ -616,9 +616,8 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -645,9 +644,8 @@ mod tests {
     }
 
     impl View for KeyedView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
 
         fn key(&self) -> Option<&dyn ViewKey> {
@@ -708,9 +706,8 @@ mod tests {
     }
 
     impl View for ColliderView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
 
         fn key(&self) -> Option<&dyn ViewKey> {

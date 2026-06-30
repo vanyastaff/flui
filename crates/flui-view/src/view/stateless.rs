@@ -110,8 +110,8 @@ mod tests {
 
     // Implement View for TestView using the macro pattern
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 

@@ -55,7 +55,7 @@ pub trait View: Downcast + DynClone + Send + Sync + 'static {
     /// # Returns
     ///
     /// A boxed Element that will manage this View's lifecycle.
-    fn create_element(&self) -> Box<dyn ElementBase>;
+    fn create_element(&self) -> crate::element::ElementKind;
 
     /// Get the type ID of this View for runtime type checking.
     ///

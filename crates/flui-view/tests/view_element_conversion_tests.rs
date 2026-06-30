@@ -8,7 +8,7 @@ use std::any::TypeId;
 use flui_view::{
     BoxedElement, BoxedView, BuildContext, ElementBase, IntoElement, IntoView, Lifecycle,
     StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
-    element::{StatefulBehavior, StatelessBehavior},
+    element::StatelessBehavior,
 };
 
 // ============================================================================
@@ -27,8 +27,8 @@ impl StatelessView for SimpleView {
 }
 
 impl View for SimpleView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior::new()))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -60,8 +60,8 @@ impl ViewState<CounterView> for CounterState {
 }
 
 impl View for CounterView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 

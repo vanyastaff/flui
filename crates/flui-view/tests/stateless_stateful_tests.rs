@@ -11,11 +11,12 @@ use std::{
     },
 };
 
-use flui_foundation::ElementId;
+use flui_objects::RenderSizedBox;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementOwner, ElementTree, IntoView, Lifecycle,
-    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
-    StatelessView, View, ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatefulBehavior,
+    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
+    ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -38,8 +39,8 @@ impl StatelessView for SimpleStatelessView {
 }
 
 impl View for SimpleStatelessView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -48,62 +49,20 @@ impl View for SimpleStatelessView {
 #[derive(Clone)]
 struct LeafView;
 
+impl flui_view::RenderView for LeafView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+}
+
 impl View for LeafView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(LeafElement::new())
-    }
-}
-
-struct LeafElement {
-    depth: usize,
-    lifecycle: Lifecycle,
-}
-
-impl LeafElement {
-    fn new() -> Self {
-        Self {
-            depth: 0,
-            lifecycle: Lifecycle::Initial,
-        }
-    }
-}
-
-impl ElementBase for LeafElement {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<LeafView>()
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
-        self.depth = slot;
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = Lifecycle::Inactive;
-    }
-
-    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
-
-    fn mark_needs_build(&mut self) {}
-
-    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
-        Vec::new()
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -133,8 +92,8 @@ impl StatelessView for NestedView {
 }
 
 impl View for NestedView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -145,8 +104,11 @@ fn test_stateless_view_create_element() {
     };
     let element = view.create_element();
 
-    assert_eq!(element.view_type_id(), TypeId::of::<SimpleStatelessView>());
-    assert_eq!(element.lifecycle(), Lifecycle::Initial);
+    assert_eq!(
+        element.element().view_type_id(),
+        TypeId::of::<SimpleStatelessView>()
+    );
+    assert_eq!(element.element().lifecycle(), Lifecycle::Initial);
 }
 
 #[test]
@@ -206,7 +168,7 @@ fn test_nested_stateless_views() {
     let view = NestedView { depth: 3 };
     let element = view.create_element();
 
-    assert_eq!(element.view_type_id(), TypeId::of::<NestedView>());
+    assert_eq!(element.element().view_type_id(), TypeId::of::<NestedView>());
 }
 
 // ============================================================================
@@ -248,8 +210,8 @@ impl ViewState<CounterView> for CounterState {
 }
 
 impl View for CounterView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -378,8 +340,8 @@ impl ViewState<LifecycleCallbackView> for LifecycleCallbackState {
 }
 
 impl View for LifecycleCallbackView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -576,8 +538,8 @@ impl StatelessView for DepthProbe {
 }
 
 impl View for DepthProbe {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

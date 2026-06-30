@@ -298,9 +298,6 @@ mod tests {
     //! regression in extraction quality is caught locally before the
     //! integration suite runs.
 
-    use dyn_clone::clone_box;
-    use flui_foundation::ElementId;
-
     use super::*;
     use crate::view::ViewExt;
     use crate::{
@@ -311,8 +308,9 @@ mod tests {
             behavior::{ElementBehavior, StatelessBehavior},
             generic::ElementCore,
         },
-        view::{ElementBase, StatelessView, View},
+        view::{StatelessView, View},
     };
+    use dyn_clone::clone_box;
 
     // ------------------------------------------------------------------
     // Synthetic fixtures
@@ -324,11 +322,15 @@ mod tests {
     #[derive(Clone, Debug)]
     struct TestView;
 
+    impl StatelessView for TestView {
+        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> impl IntoView {
+            crate::view::ErrorView::new("test fixture leaf")
+        }
+    }
+
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            // Helpers under test never call `create_element`, but we
-            // need a real impl so the trait bound is satisfied.
-            Box::new(NopElement)
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -346,42 +348,16 @@ mod tests {
         }
     }
 
-    impl View for WrapperView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(NopElement)
+    impl StatelessView for WrapperView {
+        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> impl IntoView {
+            self.child.clone()
         }
     }
 
-    /// Stub element that satisfies `ElementBase` without doing any work;
-    /// used only as the `Box<dyn ElementBase>` payload for the
-    /// `create_element` return value above.
-    struct NopElement;
-
-    impl ElementBase for NopElement {
-        fn view_type_id(&self) -> std::any::TypeId {
-            std::any::TypeId::of::<TestView>()
+    impl View for WrapperView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Initial
-        }
-        fn depth(&self) -> usize {
-            0
-        }
-        fn mark_needs_build(&mut self) {}
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
-        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-        fn mount(
-            &mut self,
-            _parent: Option<ElementId>,
-            _slot: usize,
-            _owner: &mut crate::ElementOwner<'_>,
-        ) {
-        }
-        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
-        fn activate(&mut self) {}
-        fn deactivate(&mut self) {}
     }
 
     // ------------------------------------------------------------------
@@ -444,8 +420,8 @@ mod tests {
     }
 
     impl View for CountingView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(NopElement)
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
