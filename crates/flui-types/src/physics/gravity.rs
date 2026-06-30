@@ -24,6 +24,31 @@ pub struct GravitySimulation {
 }
 
 impl GravitySimulation {
+    /// Creates a gravity simulation.
+    ///
+    /// # Parameter convention — intentional divergence from Flutter
+    ///
+    /// Flutter's `GravitySimulation` constructor signature is
+    /// `(acceleration, distance, endDistance, velocity)` where `endDistance`
+    /// is a **non-negative magnitude threshold**: the simulation finishes when
+    /// `|x(t)| >= endDistance`, allowing the particle to cross that magnitude
+    /// in either direction (source:
+    /// `packages/flutter/lib/src/physics/gravity_simulation.dart`, line 71).
+    ///
+    /// This type uses a **signed target position** for `end`: the simulation
+    /// finishes when the particle reaches or passes `end` in the direction
+    /// implied by the sign of `acceleration` (or `velocity` when `acceleration`
+    /// is zero). Using a signed target is more explicit and avoids the
+    /// surprising Flutter behaviour where `endDistance = 6.0` catches the
+    /// particle at `x = −6` just as well as `x = 6`.
+    ///
+    /// `flui_animation::GravitySimulation` uses the same signed-target
+    /// convention, making both FLUI physics layers consistent with each other.
+    ///
+    /// Migration note: to convert a Flutter-style call
+    /// `GravitySimulation(a, x₀, endDist, v₀)` to this type, pass
+    /// `end = sign(a) * endDist` (choose the sign matching the direction of
+    /// travel).
     #[must_use]
     #[inline]
     pub fn new(acceleration: f32, start: f32, end: f32, velocity: f32) -> Self {
@@ -158,5 +183,125 @@ impl Simulation for GravitySimulation {
     #[inline]
     fn tolerance(&self) -> Tolerance {
         self.tolerance
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Assert two f32 values are within `epsilon` of each other.
+    #[track_caller]
+    fn assert_approx(actual: f32, expected: f32, epsilon: f32) {
+        assert!(
+            (actual - expected).abs() <= epsilon,
+            "expected {expected} ± {epsilon}, got {actual}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Position and velocity — formulae verified against Flutter's gravity test
+    // (`packages/flutter/test/physics/gravity_simulation_test.dart`, line 14).
+    //
+    // Flutter test: GravitySimulation(-10, 0.0, 6.0, 10.0)
+    // FLUI mapping: acceleration=-10, start=0.0, end=-6.0, velocity=10.0
+    //   (end is the signed target in the direction of travel: the particle
+    //    starts going up, reverses, then falls; we stop it when x ≤ −6.0)
+    //
+    // x(t) = 0 + 10t + 0.5·(−10)·t² = 10t − 5t²
+    // v(t) = 10 + (−10)·t = 10 − 10t
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn gravity_position_at_t0() {
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.position(0.0), 0.0, 1e-4);
+    }
+
+    #[test]
+    fn gravity_velocity_at_t0() {
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.velocity(0.0), 10.0, 1e-4);
+    }
+
+    #[test]
+    fn gravity_position_at_t1() {
+        // x(1) = 10·1 − 5·1 = 5.0
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.position(1.0), 5.0, 1e-4);
+    }
+
+    #[test]
+    fn gravity_velocity_at_t1() {
+        // v(1) = 10 − 10 = 0.0  (apex)
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.velocity(1.0), 0.0, 1e-4);
+    }
+
+    #[test]
+    fn gravity_position_at_t2() {
+        // x(2) = 20 − 20 = 0.0  (back at origin)
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.position(2.0), 0.0, 1e-4);
+    }
+
+    #[test]
+    fn gravity_velocity_at_t2() {
+        // v(2) = 10 − 20 = −10.0
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.velocity(2.0), -10.0, 1e-4);
+    }
+
+    #[test]
+    fn gravity_position_at_t3() {
+        // x(3) = 30 − 45 = −15.0
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.position(3.0), -15.0, 1e-4);
+    }
+
+    #[test]
+    fn gravity_velocity_at_t3() {
+        // v(3) = 10 − 30 = −20.0
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert_approx(sim.velocity(3.0), -20.0, 1e-4);
+    }
+
+    // -----------------------------------------------------------------------
+    // is_done — mirrors Flutter's isDone from the same test
+    // Flutter: isDone(t) = |x(t)| >= endDistance (6.0)
+    // FLUI:   is_done uses signed end = −6.0; acceleration < 0 → pos <= end+ε
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn gravity_not_done_at_t0() {
+        // x(0) = 0, not yet past −6
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert!(!sim.is_done(0.0));
+    }
+
+    #[test]
+    fn gravity_not_done_at_t2() {
+        // Flutter isDone(2.0) is false: |x(2)| = 0 < 6.
+        // FLUI: x(2) = 0 > −6 + ε → not done.
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert!(!sim.is_done(2.0));
+    }
+
+    #[test]
+    fn gravity_done_at_t3() {
+        // Flutter isDone(3.0) is true: |x(3)| = 15 >= 6.
+        // FLUI: x(3) = −15 <= −6 + ε → done.
+        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
+        assert!(sim.is_done(3.0));
+    }
+
+    #[test]
+    fn gravity_positive_acceleration_example() {
+        // Flutter test: GravitySimulation(9.81, 10.0, 0.0, 0.0)
+        //   expects x(10) ≈ 50·9.81 + 10 = 500.5
+        // FLUI mapping: acceleration=9.81, start=10.0, end=500.0, velocity=0.0
+        let sim = GravitySimulation::new(9.81, 10.0, 500.0, 0.0);
+        // x(10) = 10 + 0 + 0.5·9.81·100 = 10 + 490.5 = 500.5
+        assert_approx(sim.position(10.0), 10.0 + 0.5 * 9.81 * 100.0, 1.0);
     }
 }
