@@ -41,15 +41,30 @@ impl SliverGridLayout {
         row as f32 * self.main_axis_stride
     }
 
-    /// Returns the cross axis offset of the child at the given index.
-    pub fn get_cross_axis_offset_of_child(&self, index: usize, cross_axis_extent: f32) -> f32 {
+    /// Returns the cross-axis offset (leading edge) of the child at `index`.
+    ///
+    /// Flutter parity: `SliverGridRegularTileLayout.getGeometryForChildIndex` /
+    /// `_getOffsetFromStartInCrossAxis`
+    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart`).
+    /// The cross-axis offset is determined entirely by the layout's own fields
+    /// (`cross_axis_count`, `cross_axis_stride`, `child_cross_axis_extent`); the
+    /// prior signature took an external `cross_axis_extent` and dropped the
+    /// `(stride − child_extent)` spacing term, so reversed grids were off by the
+    /// cross-axis spacing.
+    pub fn get_cross_axis_offset_of_child(&self, index: usize) -> f32 {
         let column = index % self.cross_axis_count;
-        let offset = column as f32 * self.cross_axis_stride;
+        let cross_axis_start = column as f32 * self.cross_axis_stride;
 
         if self.reverse_cross_axis {
-            cross_axis_extent - offset - self.child_cross_axis_extent
+            // Oracle: crossAxisCount*stride − start − childExtent − (stride − childExtent),
+            // which simplifies to (crossAxisCount − 1 − column) * stride.
+            let total = self.cross_axis_count as f32 * self.cross_axis_stride;
+            total
+                - cross_axis_start
+                - self.child_cross_axis_extent
+                - (self.cross_axis_stride - self.child_cross_axis_extent)
         } else {
-            offset
+            cross_axis_start
         }
     }
 
@@ -400,10 +415,33 @@ mod tests {
             reverse_cross_axis: false,
         };
 
-        assert_eq!(layout.get_cross_axis_offset_of_child(0, 320.0), 0.0);
-        assert_eq!(layout.get_cross_axis_offset_of_child(1, 320.0), 110.0);
-        assert_eq!(layout.get_cross_axis_offset_of_child(2, 320.0), 220.0);
-        assert_eq!(layout.get_cross_axis_offset_of_child(3, 320.0), 0.0); // Next row
+        assert_eq!(layout.get_cross_axis_offset_of_child(0), 0.0);
+        assert_eq!(layout.get_cross_axis_offset_of_child(1), 110.0);
+        assert_eq!(layout.get_cross_axis_offset_of_child(2), 220.0);
+        assert_eq!(layout.get_cross_axis_offset_of_child(3), 0.0); // Next row
+    }
+
+    #[test]
+    fn test_grid_layout_cross_axis_offset_reversed() {
+        // reverse_cross_axis mirrors columns: column c sits where column
+        // (cross_axis_count - 1 - c) sits in the forward layout. Verified
+        // against Flutter's `_getOffsetFromStartInCrossAxis`
+        // (.flutter/.../rendering/sliver_grid.dart). With a 10px cross-axis
+        // spacing (stride 110, child extent 100), the prior formula was off
+        // by that 10px.
+        let layout = SliverGridLayout {
+            cross_axis_count: 3,
+            main_axis_stride: 110.0,
+            cross_axis_stride: 110.0,
+            child_main_axis_extent: 100.0,
+            child_cross_axis_extent: 100.0,
+            reverse_cross_axis: true,
+        };
+
+        assert_eq!(layout.get_cross_axis_offset_of_child(0), 220.0); // col 0 → far end
+        assert_eq!(layout.get_cross_axis_offset_of_child(1), 110.0); // col 1 → middle
+        assert_eq!(layout.get_cross_axis_offset_of_child(2), 0.0); // col 2 → near end
+        assert_eq!(layout.get_cross_axis_offset_of_child(3), 220.0); // next row, col 0
     }
 
     #[test]
