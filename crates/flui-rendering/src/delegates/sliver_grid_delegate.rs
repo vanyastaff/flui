@@ -184,7 +184,14 @@ pub struct SliverGridDelegateWithFixedCrossAxisCount {
     pub cross_axis_spacing: f32,
 
     /// The ratio of the cross-axis to the main-axis extent of each child.
+    ///
+    /// Ignored when [`main_axis_extent`](Self::main_axis_extent) is set.
     pub child_aspect_ratio: f32,
+
+    /// Explicit main-axis extent per child. When `Some`, it overrides
+    /// `child_aspect_ratio`; when `None`, the main-axis extent is derived from
+    /// the aspect ratio (Flutter's `mainAxisExtent`).
+    pub main_axis_extent: Option<f32>,
 }
 
 impl SliverGridDelegateWithFixedCrossAxisCount {
@@ -195,6 +202,7 @@ impl SliverGridDelegateWithFixedCrossAxisCount {
             main_axis_spacing: 0.0,
             cross_axis_spacing: 0.0,
             child_aspect_ratio: 1.0,
+            main_axis_extent: None,
         }
     }
 
@@ -215,6 +223,12 @@ impl SliverGridDelegateWithFixedCrossAxisCount {
         self.child_aspect_ratio = ratio;
         self
     }
+
+    /// Sets an explicit main-axis extent per child, overriding the aspect ratio.
+    pub fn with_main_axis_extent(mut self, extent: f32) -> Self {
+        self.main_axis_extent = Some(extent);
+        self
+    }
 }
 
 impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
@@ -226,7 +240,10 @@ impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
         let used_cross_axis = self.cross_axis_spacing * (self.cross_axis_count - 1) as f32;
         let usable_cross_axis_extent = (constraints.cross_axis_extent - used_cross_axis).max(0.0);
         let child_cross_axis_extent = usable_cross_axis_extent / self.cross_axis_count as f32;
-        let child_main_axis_extent = child_cross_axis_extent / self.child_aspect_ratio;
+        // Flutter: `mainAxisExtent ?? childCrossAxisExtent / childAspectRatio`.
+        let child_main_axis_extent = self
+            .main_axis_extent
+            .unwrap_or(child_cross_axis_extent / self.child_aspect_ratio);
 
         SliverGridLayout {
             cross_axis_count: self.cross_axis_count,
@@ -246,6 +263,9 @@ impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
                 || (self.main_axis_spacing - old.main_axis_spacing).abs() > f32::EPSILON
                 || (self.cross_axis_spacing - old.cross_axis_spacing).abs() > f32::EPSILON
                 || (self.child_aspect_ratio - old.child_aspect_ratio).abs() > f32::EPSILON
+                // Exact bit compare so any change to the explicit override (incl.
+                // Some<->None) forces relayout without tripping float-cmp lints.
+                || self.main_axis_extent.map(f32::to_bits) != old.main_axis_extent.map(f32::to_bits)
         } else {
             true
         }
@@ -269,7 +289,13 @@ pub struct SliverGridDelegateWithMaxCrossAxisExtent {
     pub cross_axis_spacing: f32,
 
     /// The ratio of the cross-axis to the main-axis extent of each child.
+    ///
+    /// Ignored when [`main_axis_extent`](Self::main_axis_extent) is set.
     pub child_aspect_ratio: f32,
+
+    /// Explicit main-axis extent per child. When `Some`, it overrides
+    /// `child_aspect_ratio` (Flutter's `mainAxisExtent`).
+    pub main_axis_extent: Option<f32>,
 }
 
 impl SliverGridDelegateWithMaxCrossAxisExtent {
@@ -280,6 +306,7 @@ impl SliverGridDelegateWithMaxCrossAxisExtent {
             main_axis_spacing: 0.0,
             cross_axis_spacing: 0.0,
             child_aspect_ratio: 1.0,
+            main_axis_extent: None,
         }
     }
 
@@ -298,6 +325,12 @@ impl SliverGridDelegateWithMaxCrossAxisExtent {
     /// Sets the child aspect ratio.
     pub fn with_child_aspect_ratio(mut self, ratio: f32) -> Self {
         self.child_aspect_ratio = ratio;
+        self
+    }
+
+    /// Sets an explicit main-axis extent per child, overriding the aspect ratio.
+    pub fn with_main_axis_extent(mut self, extent: f32) -> Self {
+        self.main_axis_extent = Some(extent);
         self
     }
 }
@@ -320,7 +353,10 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
         let used_cross_axis = self.cross_axis_spacing * (cross_axis_count - 1) as f32;
         let usable_cross_axis_extent = (constraints.cross_axis_extent - used_cross_axis).max(0.0);
         let child_cross_axis_extent = usable_cross_axis_extent / cross_axis_count as f32;
-        let child_main_axis_extent = child_cross_axis_extent / self.child_aspect_ratio;
+        // Flutter: `mainAxisExtent ?? childCrossAxisExtent / childAspectRatio`.
+        let child_main_axis_extent = self
+            .main_axis_extent
+            .unwrap_or(child_cross_axis_extent / self.child_aspect_ratio);
 
         SliverGridLayout {
             cross_axis_count,
@@ -340,6 +376,7 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
                 || (self.main_axis_spacing - old.main_axis_spacing).abs() > f32::EPSILON
                 || (self.cross_axis_spacing - old.cross_axis_spacing).abs() > f32::EPSILON
                 || (self.child_aspect_ratio - old.child_aspect_ratio).abs() > f32::EPSILON
+                || self.main_axis_extent.map(f32::to_bits) != old.main_axis_extent.map(f32::to_bits)
         } else {
             true
         }
@@ -445,6 +482,30 @@ mod tests {
         // Mirror: column 0 sits at the far cross end, column 2 at the near end.
         assert_eq!(reversed.get_cross_axis_offset_of_child(0), 220.0);
         assert_eq!(reversed.get_cross_axis_offset_of_child(2), 0.0);
+    }
+
+    #[test]
+    fn test_main_axis_extent_overrides_aspect_ratio() {
+        // Flutter `mainAxisExtent`: when set, the per-child main extent is taken
+        // verbatim and the aspect ratio is ignored.
+
+        // Fixed-count: aspect 0.5 alone would give main extent 200 (100 / 0.5);
+        // the explicit 150 must win.
+        let fixed = SliverGridDelegateWithFixedCrossAxisCount::new(2)
+            .with_child_aspect_ratio(0.5)
+            .with_main_axis_extent(150.0)
+            .with_main_axis_spacing(10.0);
+        let layout = fixed.get_layout(make_constraints(200.0));
+        assert_eq!(layout.child_main_axis_extent, 150.0);
+        assert_eq!(layout.main_axis_stride, 160.0); // 150 + 10 spacing
+
+        // Max-extent: aspect 2.0 alone would give 50 (100 / 2.0); the explicit
+        // 80 must win.
+        let maxed = SliverGridDelegateWithMaxCrossAxisExtent::new(100.0)
+            .with_child_aspect_ratio(2.0)
+            .with_main_axis_extent(80.0);
+        let layout = maxed.get_layout(make_constraints(200.0));
+        assert_eq!(layout.child_main_axis_extent, 80.0);
     }
 
     #[test]
