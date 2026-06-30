@@ -145,8 +145,8 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 | # | Deliverable | Status | Owner | Notes / gate |
 |---|---|---|---|---|
 | H1 | **D-7 layer lifecycle protocol** | 🛇 part of M3 | layer/semantics repair plan | **gates App.1** |
-| H2 | **D-8 parallel-type collapses** | ☐ todo | — | `port-check.sh` parallel-type trigger green |
-| H3 | **D-9 `BuildContext.new_minimal` hole** | ☐ todo | — | **gates Catalog.1**; no `new_minimal` callers outside tests |
+| H2 | **D-8 parallel-type collapses** | ✓ done (2026-06-30) | `port-check` trigger #10 + `Cross.H2` | The historical collisions stay collapsed: `ViewKey` is defined only in `flui-foundation`, `IndexedSlot` only in `flui-tree`, and `TargetPlatform` only in `flui-types`. `port-check` keeps the general SP-3 duplicate-type scan and now adds explicit `Cross.H2` canonical-home guards for those three seams. |
+| H3 | **D-9 `BuildContext.new_minimal` hole** | ✓ done (2026-06-30) | `flui-view` live `BuildCtx` + `port-check` `Cross.H3` | **Catalog.1 gate closed:** component builds now require the live `BuildOwner::build_scope` `BuildHandle`; the dummy `ElementBuildContext::new_minimal` factory and shared dummy owner/tree cache were deleted; `port-check` bans `new_minimal(` returning to `crates/flui-view/src`. Tests must use `ElementBuildContext::for_element` or drive `build_scope`. |
 | H4 | **D-10 focus / tab navigation** | ☐ todo | — | focus traversal contract documented + tested |
 | H5 | **D-11 `TreeWrite::remove` cascade** | ☐ todo | — | removal cascade tested under nested-tree scenarios |
 | H6 | **D-12 Ticker lifecycle** | ☐ todo | gated near Core.1 (animation re-entry) | Ticker dispose order documented + tested |

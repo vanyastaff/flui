@@ -29,14 +29,10 @@
 //!     fn lifecycle(&self) -> Lifecycle { self.core.lifecycle() }
 //!     fn mount(&mut self, p: Option<ElementId>, s: usize) { self.core.mount(p, s) }
 //!
-//!     // Only view-specific logic remains
+//!     // Only view-specific logic remains. Real component builds run through
+//!     // BuildOwner::build_scope, which supplies a live tree-backed BuildCtx.
 //!     fn perform_build(&mut self) {
 //!         if !self.core.should_build() { return; }
-//!
-//!         let ctx = ElementBuildContext::new_minimal(self.core.depth());
-//!         let child_view = self.core.view().build(&ctx);
-//!
-//!         self.core.update_or_create_child(child_view);
 //!         self.core.clear_dirty();
 //!     }
 //! }

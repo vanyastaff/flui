@@ -9,7 +9,7 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use flui_foundation::{ElementId, RenderId};
@@ -274,46 +274,6 @@ impl Default for BuildOwner {
     }
 }
 
-/// Process-global cache of the dummy `ElementTree` handed out by
-/// [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal).
-///
-/// Plan §U12 / R15 — audit V-13 (cheap separable part). Each
-/// `StatelessView::build` / `StatefulView::build` allocates a fresh
-/// `ElementBuildContext` to satisfy the `&dyn BuildContext` parameter
-/// shape. Before V-13 each one called
-/// `Arc::new(RwLock::new(ElementTree::new()))` — heap-allocating an Arc
-/// inner, a `RwLock` payload, and an empty `Slab`-backed `ElementTree`
-/// per build. For animation-driven full-tree rebuilds, that is N heap
-/// allocations per frame.
-///
-/// The dummy is functionally read-only on the production path:
-/// `BuildContext::find_ancestor_*`, `depend_on_inherited`, and
-/// `find_render_object` all return `None`/`false` immediately because
-/// the dummy tree is empty. Every build can safely share one
-/// `Arc<RwLock<ElementTree>>` — clones of the shared Arc bump the
-/// atomic refcount only.
-///
-/// The cache is initialized lazily via `OnceLock` and lives for the
-/// lifetime of the process. A test or future code path that wants
-/// strictly per-binding isolation can still construct an
-/// `ElementBuildContext` manually via
-/// [`ElementBuildContext::new`](crate::ElementBuildContext::new).
-static SHARED_DUMMY_TREE: OnceLock<Arc<RwLock<ElementTree>>> = OnceLock::new();
-
-/// Process-global cache of the dummy `BuildOwner` handed out by
-/// [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal). Companion to
-/// [`SHARED_DUMMY_TREE`] — see that doc for the rationale.
-///
-/// The inner `BuildOwner` is itself constructed via [`BuildOwner::new`],
-/// which sets `on_build_scheduled = None`, so calls to
-/// `BuildContext::mark_needs_build` from inside a stateless `build()`
-/// (a Flutter-forbidden anti-pattern; flui matches Flutter's policy by
-/// design) silently accumulate entries in this shared dummy's
-/// `dirty_elements` heap. The accumulation is bounded by however many
-/// times misuse occurs and never read because nothing ever calls
-/// `build_scope` on the shared dummy.
-static SHARED_DUMMY_OWNER: OnceLock<Arc<RwLock<BuildOwner>>> = OnceLock::new();
-
 impl BuildOwner {
     /// Create a new BuildOwner.
     pub fn new() -> Self {
@@ -331,28 +291,6 @@ impl BuildOwner {
             external_inbox: Arc::new(Mutex::new(HashSet::new())),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    /// Acquire a clone of the process-shared dummy `ElementTree` handle
-    /// used to back [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal).
-    ///
-    /// First call lazily allocates the empty tree behind a `OnceLock`;
-    /// every subsequent call returns an `Arc::clone` of the same inner
-    /// pointer — observable via `Arc::ptr_eq`. Audit V-13 (cheap part)
-    /// — eliminates the per-build `Arc::new(RwLock::new(_))` allocation
-    /// in the stateless/stateful build paths.
-    pub fn shared_dummy_tree() -> Arc<RwLock<ElementTree>> {
-        // PORT-CHECK-OK-SP6: shared_dummy_tree test-harness accessor; pre-existing SP-6
-        Arc::clone(SHARED_DUMMY_TREE.get_or_init(|| Arc::new(RwLock::new(ElementTree::new()))))
-    }
-
-    /// Acquire a clone of the process-shared dummy `BuildOwner` handle
-    /// used to back [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal). See
-    /// [`shared_dummy_tree`](Self::shared_dummy_tree) for the
-    /// allocation-elimination rationale.
-    pub fn shared_dummy_owner() -> Arc<RwLock<BuildOwner>> {
-        // PORT-CHECK-OK-SP6: shared_dummy_owner test-harness accessor; pre-existing SP-6
-        Arc::clone(SHARED_DUMMY_OWNER.get_or_init(|| Arc::new(RwLock::new(BuildOwner::new()))))
     }
 
     /// Set the callback for when a build is scheduled.
@@ -1334,75 +1272,5 @@ mod tests {
         // Known mapping unaffected by the failed claim on a different
         // hash.
         assert_eq!(owner.element_for_global_key(known), Some(id));
-    }
-
-    // ========================================================================
-    // V-13 (cheap part) — process-shared dummy tree / owner reuse
-    // ========================================================================
-
-    /// `BuildOwner::shared_dummy_tree` returns `Arc::clone`s of the same
-    /// inner pointer on every call — proven via `Arc::ptr_eq`. This is
-    /// the cache-reuse contract underpinning
-    /// `ElementBuildContext::new_minimal`.
-    #[test]
-    fn test_shared_dummy_tree_returns_ptr_equal_handles() {
-        let first = BuildOwner::shared_dummy_tree();
-        let second = BuildOwner::shared_dummy_tree();
-        let third = BuildOwner::shared_dummy_tree();
-
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "two shared_dummy_tree calls must alias the same Arc inner"
-        );
-        assert!(
-            Arc::ptr_eq(&second, &third),
-            "every shared_dummy_tree call must alias the same Arc inner"
-        );
-    }
-
-    /// Companion test for `shared_dummy_owner` — same Arc-aliasing
-    /// guarantee.
-    #[test]
-    fn test_shared_dummy_owner_returns_ptr_equal_handles() {
-        let first = BuildOwner::shared_dummy_owner();
-        let second = BuildOwner::shared_dummy_owner();
-
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "two shared_dummy_owner calls must alias the same Arc inner"
-        );
-    }
-
-    /// End-to-end: two `ElementBuildContext::new_minimal` calls reuse
-    /// the same dummy `tree` and `owner` Arc handles. Proves the
-    /// per-build allocation is eliminated on the production stateless /
-    /// stateful build path.
-    #[test]
-    fn test_new_minimal_reuses_shared_dummy_handles() {
-        let ctx_a = crate::ElementBuildContext::new_minimal(0);
-        let ctx_b = crate::ElementBuildContext::new_minimal(3);
-
-        assert!(
-            Arc::ptr_eq(ctx_a.tree(), ctx_b.tree()),
-            "two new_minimal contexts must share the dummy ElementTree Arc"
-        );
-        assert!(
-            Arc::ptr_eq(ctx_a.build_owner(), ctx_b.build_owner()),
-            "two new_minimal contexts must share the dummy BuildOwner Arc"
-        );
-    }
-
-    /// The per-call `depth` argument is recorded on the context even
-    /// though the underlying Arc handles are shared. Pins the
-    /// "depth varies, infrastructure shared" contract.
-    #[test]
-    fn test_new_minimal_records_per_call_depth() {
-        use crate::BuildContext as _;
-
-        let shallow = crate::ElementBuildContext::new_minimal(0);
-        let deeper = crate::ElementBuildContext::new_minimal(7);
-
-        assert_eq!(shallow.depth(), 0);
-        assert_eq!(deeper.depth(), 7);
     }
 }

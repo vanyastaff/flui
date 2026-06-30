@@ -3,9 +3,11 @@
 #
 # Verifies the 21 refusal triggers (1-21, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
-# sanctioned-dyn-boundary check and the N-geom.U16 engine-glam boundary
-# guard. Exits non-zero on the first violation outside the whitelist;
-# prints the offending file:line and the trigger ID. Triggers
+# sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
+# guard, Cross.H2 canonical-type-home guards, and the Cross.H3
+# live-BuildContext guard. Exits non-zero on the first violation outside
+# the whitelist; prints the offending file:line and the trigger ID.
+# Triggers
 # #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
 # (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
 # added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
@@ -634,6 +636,36 @@ else
     echo "ok    10: SP-3 parallel cross-crate type definitions"
   fi
 fi
+
+# -----------------------------------------------------------------------------
+# Cross.H2: historical parallel-type collapse must stay collapsed.
+#
+# Trigger 10 catches arbitrary duplicate pub struct/enum/trait names across
+# crates. These three were the concrete D-8 collisions that blocked the
+# framework spine: ViewKey, IndexedSlot, and TargetPlatform. Guard their
+# canonical homes explicitly so a future rename/reintroduction cannot drift
+# unnoticed behind a same-name duplicate scan.
+# -----------------------------------------------------------------------------
+check "Cross.H2/ViewKey" \
+  "ViewKey trait outside flui-foundation (canonical home is flui-foundation::ViewKey)" \
+  'pub\s+trait\s+ViewKey\b' \
+  --type rust \
+  --glob '!**/flui-foundation/src/key.rs' \
+  crates
+
+check "Cross.H2/IndexedSlot" \
+  "IndexedSlot struct outside flui-tree (canonical home is flui_tree::IndexedSlot)" \
+  'pub\s+struct\s+IndexedSlot\b' \
+  --type rust \
+  --glob '!**/flui-tree/src/iter/slot.rs' \
+  crates
+
+check "Cross.H2/TargetPlatform" \
+  "TargetPlatform enum outside flui-types (canonical home is flui_types::platform::TargetPlatform)" \
+  'pub\s+enum\s+TargetPlatform\b' \
+  --type rust \
+  --glob '!**/flui-types/src/platform/target_platform.rs' \
+  crates
 
 # -----------------------------------------------------------------------------
 # Trigger 11 (D-block PR-C-3 §U43, architecture-correction-plan SP-4) —
@@ -1308,6 +1340,21 @@ check "N-geom.U16" \
   crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
+# Cross.H3: no `ElementBuildContext::new_minimal` resurrection in flui-view.
+#
+# Catalog theming depends on `build()` receiving a live tree-backed context:
+# inherited lookups, ancestor walks, and notification dispatch must see the
+# real ElementTree. The old `new_minimal` dummy context made those operations
+# silently return None/false during production builds. Tests should use
+# `ElementBuildContext::for_element` or drive `BuildOwner::build_scope`.
+# -----------------------------------------------------------------------------
+check "Cross.H3" \
+  "new_minimal BuildContext factory in flui-view source (builds must use live BuildCtx)" \
+  '\bnew_minimal\s*\(' \
+  --type rust \
+  crates/flui-view/src
+
+# -----------------------------------------------------------------------------
 # Trigger 20: no warn-fallback strings for gradient/image producers (PR-5)
 #
 # PR-5 deleted three warn-fallback blocks that previously made gradient and
@@ -1378,7 +1425,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 grep clean"
+echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

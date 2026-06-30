@@ -13,7 +13,7 @@ use flui_rendering::{
 
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
-    context::{BuildContext, BuildCtx, ElementBuildContext},
+    context::{BuildContext, BuildCtx},
     element::RenderSlot,
     view::{
         AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
@@ -26,18 +26,15 @@ use crate::{
 /// During a [`BuildOwner::build_scope`](crate::BuildOwner) drain the owner
 /// carries a [`BuildHandle`](crate::ElementOwner) — a borrowed live view of
 /// the real tree — so the variant resolves to [`BuildCtx`] and ancestor
-/// walks / `depend_on` hit real nodes (PR-K). Outside a drain (mount-time
-/// first build, unit tests that call a behavior directly) no handle is
-/// present and it falls back to the read-only minimal context, which returns
-/// `None`/`false` from every tree walk exactly as before.
+/// walks / `depend_on` hit real nodes (PR-K). A component build outside a
+/// `build_scope` drain is a framework bug: it would otherwise resurrect the
+/// inert `new_minimal` context and make `InheritedView` reads silently fail.
 ///
 /// Holding the concrete value in a local lets the caller hand out a
 /// `&dyn BuildContext` whose borrow outlives the user `build()` closure.
 enum BuildCtxChoice<'a> {
     /// Live context over the borrowed real tree (inside `build_scope`).
     Live(BuildCtx<'a>),
-    /// Read-only minimal fallback (outside `build_scope`).
-    Minimal(ElementBuildContext),
 }
 
 impl BuildCtxChoice<'_> {
@@ -45,7 +42,6 @@ impl BuildCtxChoice<'_> {
     fn as_ctx(&self) -> &dyn BuildContext {
         match self {
             Self::Live(ctx) => ctx,
-            Self::Minimal(ctx) => ctx,
         }
     }
 }
@@ -56,8 +52,6 @@ impl BuildCtxChoice<'_> {
 /// tree/sink references (lifetime `'a`, tied to the data — not to this `&`
 /// borrow of `owner`) out cleanly; the returned `BuildCtxChoice<'a>` does not
 /// keep `owner` borrowed, so the caller can still pass `owner` on mutably.
-/// Falls back to the minimal context when there is no handle (out of a drain)
-/// or the element is not slab-stamped (`self_id == None`).
 fn make_build_ctx<'a, V, A>(
     core: &ElementCore<V, A>,
     owner: &crate::ElementOwner<'a>,
@@ -66,41 +60,34 @@ where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
 {
-    // A build-time handle without a stamped `self_id` is a framework
-    // invariant violation, not an out-of-drain call: every slab-resident
-    // element is `set_self_id`-stamped at insert, and only slab ids reach
-    // `build_scope`. Surface it loudly instead of silently degrading to the
-    // inert context (which would resurrect the very dead-inherited-lookup
-    // divergence this wiring removes).
-    debug_assert!(
-        owner.build_view.is_none() || core.self_id().is_some(),
-        "ElementOwner::build_view set during build_scope but the element has no \
-         self_id — a slab-resident element must be set_self_id-stamped at insert"
+    let handle = owner.build_view.expect(
+        "component build requires BuildOwner::build_scope live BuildHandle; \
+         ElementBuildContext::new_minimal is not a production fallback",
     );
-    match (owner.build_view, core.self_id()) {
-        (Some(handle), Some(element_id)) => {
-            // The live context carries the element's AUTHORITATIVE tree depth
-            // (`parent_depth + 1`, from its node), not `ElementCore::depth` — the
-            // sibling SLOT index. `BuildContext::depth` is documented as the tree
-            // depth, and `depend_on` records a dependent at this depth while
-            // `mark_needs_build` schedules a rebuild at it; using the slot would
-            // mis-order a nested dependent / rebuild in the dirty heap (the same
-            // class of bug `rekey_dirty_depths` corrects for the `setState` path).
-            // Falls back to the slot only if the node is unexpectedly absent (a
-            // framework invariant already debug-asserted above).
-            let tree_depth = match handle.tree.get(element_id) {
-                Some(node) => node.depth(),
-                None => core.depth(),
-            };
-            BuildCtxChoice::Live(BuildCtx::new(
-                element_id,
-                tree_depth,
-                handle.tree,
-                handle.dep_sink,
-            ))
-        }
-        _ => BuildCtxChoice::Minimal(ElementBuildContext::new_minimal(core.depth())),
-    }
+    let element_id = core
+        .self_id()
+        .expect("component build requires ElementCore::self_id stamped by ElementTree insertion");
+
+    // The live context carries the element's AUTHORITATIVE tree depth
+    // (`parent_depth + 1`, from its node), not `ElementCore::depth` — the
+    // sibling SLOT index. `BuildContext::depth` is documented as the tree
+    // depth, and `depend_on` records a dependent at this depth while
+    // `mark_needs_build` schedules a rebuild at it; using the slot would
+    // mis-order a nested dependent / rebuild in the dirty heap (the same
+    // class of bug `rekey_dirty_depths` corrects for the `setState` path).
+    // Falling back to the slot only keeps release builds whole if the tree
+    // node vanished despite the stamped id; the preceding `expect`s catch the
+    // intended invariants.
+    let tree_depth = match handle.tree.get(element_id) {
+        Some(node) => node.depth(),
+        None => core.depth(),
+    };
+    BuildCtxChoice::Live(BuildCtx::new(
+        element_id,
+        tree_depth,
+        handle.tree,
+        handle.dep_sink,
+    ))
 }
 
 // ============================================================================
@@ -364,11 +351,10 @@ where
         if !super::behavior_commons::should_build_with_trace(core, "StatelessBehavior") {
             return Vec::new();
         }
-        // Live tree-backed context inside a `build_scope` drain (PR-K),
-        // read-only minimal fallback otherwise. Held in a local so the
-        // `&dyn BuildContext` outlives the `catch_unwind` closure below; it
-        // borrows the tree/sink, not `owner`, so the mutable `owner` reborrow
-        // for `build_or_recover` is still free.
+        // Live tree-backed context inside a `build_scope` drain (PR-K). Held
+        // in a local so the `&dyn BuildContext` outlives the `catch_unwind`
+        // closure below; it borrows the tree/sink, not `owner`, so the
+        // mutable `owner` reborrow for `build_or_recover` is still free.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
         // The user `build()` is wrapped in `catch_unwind`: a panicking
@@ -536,11 +522,10 @@ where
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> Vec<Box<dyn View>> {
-        // Live tree-backed context inside a `build_scope` drain (PR-K), else
-        // the read-only minimal fallback. One context serves both the
-        // first-build `init_state` and the `build` below; it borrows the
-        // tree/sink, not `owner`/`self`, so the later mutable reborrows stay
-        // free.
+        // Live tree-backed context inside a `build_scope` drain (PR-K). One
+        // context serves both the first-build `init_state` and the `build`
+        // below; it borrows the tree/sink, not `owner`/`self`, so the later
+        // mutable reborrows stay free.
         let ctx_choice = make_build_ctx(core, owner);
         let ctx = ctx_choice.as_ctx();
 
@@ -622,8 +607,7 @@ where
         // drain — so a user `did_change_dependencies` that re-reads the
         // changed inherited value via `depend_on` resolves against the real
         // ancestor chain, matching Flutter (`framework.dart:5977-5982` runs
-        // the hook with the element's live `BuildContext`). Outside a drain
-        // (no handle) this degrades to the read-only minimal context.
+        // the hook with the element's live `BuildContext`).
         let ctx_choice = make_build_ctx(core, owner);
         self.state.did_change_dependencies(ctx_choice.as_ctx());
     }

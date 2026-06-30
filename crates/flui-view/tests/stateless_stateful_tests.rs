@@ -149,17 +149,30 @@ fn test_stateless_element_mark_needs_build() {
     let view = SimpleStatelessView {
         label: "Dirty".to_string(),
     };
-    let mut element = StatelessElement::new(&view, StatelessBehavior);
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
-    // build_into_views runs the build half (clears the dirty flag).
-    let _ = element.build_into_views(&mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+    assert!(
+        !tree.get(root_id).unwrap().element().is_dirty(),
+        "initial build_scope clears the dirty flag"
+    );
 
-    // mark_needs_build sets it again
-    element.mark_needs_build();
+    tree.get_mut(root_id)
+        .unwrap()
+        .element_mut()
+        .mark_needs_build();
+    assert!(
+        tree.get(root_id).unwrap().element().is_dirty(),
+        "mark_needs_build sets the dirty flag again"
+    );
 
-    // Element should be functional
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+    let element = tree.get(root_id).unwrap().element();
+    assert!(!element.is_dirty(), "second build_scope clears dirty again");
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 }
 

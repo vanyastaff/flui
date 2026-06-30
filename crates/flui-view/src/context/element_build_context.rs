@@ -49,17 +49,6 @@ pub struct ElementBuildContext {
     /// Reference to the build owner.
     owner: Arc<RwLock<BuildOwner>>,
 
-    /// Whether this context is the minimal/dummy variant created by
-    /// [`Self::new_minimal`]. The `tree` and `owner` Arcs of a minimal
-    /// context point at the process-shared dummy cache (plan §U12 /
-    /// audit V-13 — cheap part); mutating that shared state from a
-    /// user `build()` accumulates writes into a long-lived global heap.
-    /// [`BuildContext::mark_needs_build`] checks this flag and degrades
-    /// to a `tracing::warn!`-and-no-op on minimal contexts to prevent
-    /// unbounded growth of the shared dummy's `dirty_elements` heap
-    /// (PR #119 review — copilot).
-    is_minimal: bool,
-
     /// Whether we're currently in a build phase (debug only).
     #[cfg(debug_assertions)]
     is_building: bool,
@@ -98,7 +87,6 @@ impl ElementBuildContext {
             mounted,
             tree,
             owner,
-            is_minimal: false,
             #[cfg(debug_assertions)]
             is_building: false,
         }
@@ -122,7 +110,6 @@ impl ElementBuildContext {
             mounted: node.element().mounted(),
             tree: tree.clone(),
             owner,
-            is_minimal: false,
             #[cfg(debug_assertions)]
             is_building: false,
         })
@@ -203,54 +190,6 @@ impl ElementBuildContext {
                 std::ops::ControlFlow::Continue(()) => {}
             }
             current_id = parent_id;
-        }
-    }
-
-    /// Create a minimal context for use when full tree/owner aren't available.
-    ///
-    /// This is useful for StatelessElement::perform_build where we just need
-    /// a context to pass to view.build() but don't have full tree
-    /// infrastructure.
-    ///
-    /// The dummy `tree` / `owner` Arcs are pulled from a process-shared
-    /// cache initialized lazily on first call — see
-    /// [`BuildOwner::shared_dummy_tree`] /
-    /// [`BuildOwner::shared_dummy_owner`]. Plan §U12 / R15, audit V-13
-    /// (cheap separable part). Eliminates the
-    /// `Arc::new(RwLock::new(ElementTree::new()))` /
-    /// `Arc::new(RwLock::new(BuildOwner::new()))` allocations from the
-    /// per-build hot path — each call now does two `Arc::clone`s
-    /// (atomic refcount bumps) instead of two heap-arena allocations
-    /// plus two `RwLock` payload allocations plus two empty inner
-    /// structures.
-    ///
-    /// **Why this is sound.** The dummy tree is empty, so every
-    /// production `BuildContext` accessor that consults the tree
-    /// (`find_inherited_provider`, `find_ancestor_element`, …)
-    /// returns `None` / `false` after the first `tree.get(id)` lookup —
-    /// the same return shape as the previous per-build dummy. The dummy
-    /// is never written to during build because the early-`None` exit
-    /// happens before any `write()` site. A user `build()` that calls
-    /// `ctx.mark_needs_build()` (Flutter-forbidden, flui matches that
-    /// policy) does write into the shared dummy's `BuildOwner`, but
-    /// that owner's `dirty_elements` is never drained — the write is as
-    /// lossy as the per-build dummy was, just to a different heap
-    /// location.
-    pub fn new_minimal(depth: usize) -> Self {
-        let tree = BuildOwner::shared_dummy_tree();
-        let owner = BuildOwner::shared_dummy_owner();
-        // ElementId::new(1) is safe - 1 is non-zero
-        let element_id = ElementId::new(1);
-
-        Self {
-            element_id,
-            depth,
-            mounted: true,
-            tree,
-            owner,
-            is_minimal: true,
-            #[cfg(debug_assertions)]
-            is_building: true,
         }
     }
 }
@@ -575,20 +514,6 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn mark_needs_build(&self) {
-        if self.is_minimal {
-            // The minimal/dummy context backs `new_minimal` builds and
-            // shares a single process-global `BuildOwner` (plan §U12 /
-            // audit V-13 — cheap part). Scheduling a build on it would
-            // accumulate a sentinel `ElementId(1)` into the shared
-            // dummy's long-lived `dirty_elements` heap with no drain
-            // path — unbounded growth on a Flutter-forbidden misuse
-            // path. Degrade to a warning instead (PR #119 review —
-            // copilot).
-            tracing::warn!(
-                "mark_needs_build called on minimal ElementBuildContext — no-op (Flutter-forbidden during build; ctx.mark_needs_build would corrupt the process-shared dummy BuildOwner's dirty_elements heap)"
-            );
-            return;
-        }
         let mut owner = self.owner.write();
         owner.schedule_build_for(self.element_id, self.depth);
     }

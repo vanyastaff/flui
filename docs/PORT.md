@@ -151,6 +151,20 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 
 **Back-references:** [architecture-correction-plan §SP-3](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U42](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
 
+### Cross.H2. Canonical homes for historical parallel-type collapses
+
+**The three D-8 collisions must stay collapsed.** Trigger 10 catches arbitrary same-name duplicate `pub struct` / `pub enum` / `pub trait` definitions, but D-8 had three concrete historical seams that downstream code depends on staying canonical:
+
+- `ViewKey` trait: canonical home is `flui-foundation`.
+- `IndexedSlot` struct: canonical home is `flui-tree`.
+- `TargetPlatform` enum: canonical home is `flui-types`.
+
+**Scope:** `crates/`, Rust source only.
+
+**Allowlist:** none. Re-export the canonical type if ergonomics require it; do not define a second local copy.
+
+**Back-references:** [framework spine repair plan §U1-U3](plans/2026-05-21-002-feat-framework-spine-repair-plan.md), `docs/ROADMAP-TRACKER.md` `H2`.
+
 ### 11. Speculative scaffolding: `pub mod` with zero workspace consumers
 
 **SP-4 — `pub mod <name>;` declared in `lib.rs` that is (a) not behind `#[cfg(feature = "unstable-*")]` on its preceding non-blank line, (b) not re-exported via `pub use [crate::]<name>::` in the same `lib.rs`, AND (c) not referenced as `<crate>::<name>` anywhere in the workspace outside the defining crate.** This catches speculative `pub mod` surfaces that publish API without consumers.
@@ -270,6 +284,16 @@ Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side 
 **Allowlist:** none. Add a documented bridge or move the conversion to the wgpu edge instead of importing `glam` directly in other engine modules.
 
 **Back-references:** `docs/ROADMAP-TRACKER.md` `N-geom.U16`; `crates/flui-engine/src/wgpu/mod.rs` §Math-backend policy; `crates/flui-types/README.md` FAQ "Why not use glam or euclid?".
+
+### Cross.H3. `ElementBuildContext::new_minimal` resurrection
+
+**Production builds must receive a live tree-backed `BuildContext`.** Catalog theming is an `InheritedView` consumer, so `build()` must resolve inherited providers, ancestor walks, render-object lookup, and notification bubbling against the real `ElementTree`. The old `ElementBuildContext::new_minimal` dummy context made those APIs silently return `None`/`false` during production builds and is not a valid fallback.
+
+**Scope:** `crates/flui-view/src`.
+
+**Allowlist:** none. Tests and helper code that need a context should use `ElementBuildContext::for_element` over a real tree or drive `BuildOwner::build_scope`, which supplies the borrowed live `BuildCtx`.
+
+**Back-references:** `docs/ROADMAP-TRACKER.md` `H3`; `docs/designs/2026-06-25-pr-k-live-buildcontext-execution-spec.md`; `crates/flui-view/src/context/element_build_context.rs` `BuildCtx`.
 
 ### 20. Gradient/image SrcOver warn-fallback strings in producer files
 
@@ -420,7 +444,7 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Picture` / `Scene` | `DisplayList` (recorded) → `LayerTree` (composited) → wgpu draw | `flui-painting` → `flui-layer` → `flui-engine`. |
 | `Rect`, `RRect`, `Offset`, `Size`, `EdgeInsets` | identically-named structs in `flui-types` | `flui-types`. `Copy` types. |
 | `Color` | `Color` (`flui-types`, sRGB by default) | `flui-types`. Alpha is straight (not pre-multiplied) at the API surface; the engine pre-multiplies before upload. |
-| `Key` (`ValueKey`, `ObjectKey`, `UniqueKey`, etc.) | `ViewKey` (sealed enum — sanctioned by FR-029) | `flui-view`. Storage via `Option<ViewKey>` on every `Element`. |
+| `Key` (`ValueKey`, `ObjectKey`, `UniqueKey`, etc.) | `ViewKey` trait (sanctioned by FR-029) | `flui-foundation` owns the trait and base key types; `flui-view` owns `ObjectKey` / `GlobalKey`. Storage on `ElementNode` is `Option<Box<dyn ViewKey>>`, populated via `ViewKey::clone_key()`. |
 | `GlobalKey<T>` | typestate-checked `GlobalKey<T>` — separate machinery, not all keys are global | `flui-view`. |
 | `Notification` | `Notification` trait (sanctioned by FR-029) + `NotifiableElement` | `flui-view`. Bubble dispatch via element walk. |
 | `ChangeNotifier` | `Listenable` trait (sanctioned by FR-029) | `flui-foundation`. Multiple impls; `ChangeNotifier` struct is a default fan-out impl. |
@@ -620,7 +644,7 @@ Dart conflates "UI text", "identifier", "syscall byte sequence", "source code", 
 
 7. **Filesystem paths** → `std::path::PathBuf` (owned) / `&std::path::Path` (borrowed). `PathBuf` handles OS-specific encoding (UTF-16 on Windows, bytes on Unix). **Never** `String` for paths — Windows paths can contain unpaired surrogates that `String` rejects.
 
-8. **Widget keys, identifier-shaped data** (`ValueKey<&'static str>`, `ObjectKey`, debug IDs) → `ViewKey` enum (sealed, sanctioned by FR-029). The enum carries the typed payload; do not flatten to `String`.
+8. **Widget keys, identifier-shaped data** (`ValueKey<&'static str>`, `ObjectKey`, debug IDs) → concrete `ViewKey` impls (`ValueKey`, `ObjectKey`, `UniqueKey`, `Key`, `GlobalKey<T>`), stored as `Box<dyn ViewKey>` only at the sanctioned element-key boundary. Do not flatten identity to `String`.
 
 ### Anti-patterns
 
