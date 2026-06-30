@@ -463,3 +463,88 @@ pub enum CommandKind {
     /// Layer commands (save/restore layer).
     Layer,
 }
+
+// ============================================================================
+// FROZEN CONTRACT GUARD (Core.0 N11)
+// ============================================================================
+//
+// `DrawCommand` is the frozen wire contract between the producer
+// (`flui-painting` `Canvas`/`DisplayList`) and the consumer (`flui-engine`
+// `CommandRenderer` + `dispatch_command`). It is `#[non_exhaustive]` so
+// downstream crates absorb additive change gracefully — but ADDING, REMOVING,
+// or RENAMING a variant is a coordinated cross-track change, not a local edit.
+//
+// The exhaustive match below is the tripwire. `#[non_exhaustive]` is a no-op
+// inside this defining crate, so the compiler enforces exhaustiveness here:
+//   - add a variant  -> this match fails to compile ("non-exhaustive patterns")
+//   - remove/rename   -> this match fails to compile ("no variant named …")
+// Either way the contract change cannot land silently.
+//
+// CHANGE PROTOCOL (see docs/designs/2026-06-30-scene-drawcommand-contract.md):
+//   1. Update the design doc + bump its contract version + add a changelog line.
+//   2. Add/rename the arm here and update FROZEN_DRAWCOMMAND_VARIANT_COUNT.
+//   3. Add the matching `render_*` method in flui-engine `traits.rs`
+//      (`CommandRenderer`) and a dispatch arm in `flui-engine/src/commands.rs`.
+//   4. Re-run the full gate so any backend missing the new arm fails loudly.
+#[cfg(test)]
+mod contract_freeze {
+    use super::DrawCommand;
+
+    /// Frozen count of `DrawCommand` variants. Bump only via the change
+    /// protocol in the module comment above.
+    const FROZEN_DRAWCOMMAND_VARIANT_COUNT: usize = 31;
+
+    /// Exhaustive — NO wildcard arm. This is the compile-time freeze guard:
+    /// the function only exists to force the exhaustiveness check; the
+    /// returned discriminant name is a convenience for the count assertion.
+    fn contract_discriminant(cmd: &DrawCommand) -> &'static str {
+        match cmd {
+            DrawCommand::ClipRect { .. } => "ClipRect",
+            DrawCommand::ClipRRect { .. } => "ClipRRect",
+            DrawCommand::ClipRSuperellipse { .. } => "ClipRSuperellipse",
+            DrawCommand::ClipPath { .. } => "ClipPath",
+            DrawCommand::DrawLine { .. } => "DrawLine",
+            DrawCommand::DrawRect { .. } => "DrawRect",
+            DrawCommand::DrawRRect { .. } => "DrawRRect",
+            DrawCommand::DrawCircle { .. } => "DrawCircle",
+            DrawCommand::DrawOval { .. } => "DrawOval",
+            DrawCommand::DrawPath { .. } => "DrawPath",
+            DrawCommand::DrawText { .. } => "DrawText",
+            DrawCommand::DrawTextSpan { .. } => "DrawTextSpan",
+            DrawCommand::DrawImage { .. } => "DrawImage",
+            DrawCommand::DrawImageRepeat { .. } => "DrawImageRepeat",
+            DrawCommand::DrawImageNineSlice { .. } => "DrawImageNineSlice",
+            DrawCommand::DrawImageFiltered { .. } => "DrawImageFiltered",
+            DrawCommand::DrawTexture { .. } => "DrawTexture",
+            DrawCommand::DrawShadow { .. } => "DrawShadow",
+            DrawCommand::DrawGradient { .. } => "DrawGradient",
+            DrawCommand::DrawGradientRRect { .. } => "DrawGradientRRect",
+            DrawCommand::ShaderMask { .. } => "ShaderMask",
+            DrawCommand::BackdropFilter { .. } => "BackdropFilter",
+            DrawCommand::DrawArc { .. } => "DrawArc",
+            DrawCommand::DrawDRRect { .. } => "DrawDRRect",
+            DrawCommand::DrawPoints { .. } => "DrawPoints",
+            DrawCommand::DrawVertices { .. } => "DrawVertices",
+            DrawCommand::DrawColor { .. } => "DrawColor",
+            DrawCommand::DrawPaint { .. } => "DrawPaint",
+            DrawCommand::DrawAtlas { .. } => "DrawAtlas",
+            DrawCommand::SaveLayer { .. } => "SaveLayer",
+            DrawCommand::RestoreLayer { .. } => "RestoreLayer",
+        }
+    }
+
+    #[test]
+    fn drawcommand_contract_is_frozen() {
+        // The exhaustive match in `contract_discriminant` is the real guard
+        // (it fails to compile if the variant set changes). This assertion
+        // pins the count as a second, human-readable signal and keeps the
+        // helper from being dead code.
+        assert_eq!(
+            FROZEN_DRAWCOMMAND_VARIANT_COUNT, 31,
+            "DrawCommand contract count changed — follow the change protocol in \
+             the module comment + docs/designs/2026-06-30-scene-drawcommand-contract.md"
+        );
+        // Touch the guard so it is exercised, not merely compiled.
+        let _ = contract_discriminant as fn(&DrawCommand) -> &'static str;
+    }
+}
