@@ -95,6 +95,17 @@ pub mod traits;
 /// RenderCommand dispatch functions
 pub mod commands;
 
+/// Backend-agnostic superellipse (iOS squircle) path generation.
+/// Pure geometry — no wgpu, no lyon. Declared here, outside the
+/// wgpu-backend feature gate, so `CommandRenderer`'s default impl
+/// can call it without the abstract trait depending on the concrete backend.
+pub(crate) mod superellipse;
+
+/// Backend-agnostic frame-driver trait ([`RasterBackend`]).
+/// The trait itself is unconditional; `impl RasterBackend for Renderer`
+/// is gated on the `wgpu-backend` feature.
+pub mod raster;
+
 // ============================================================================
 // BACKENDS
 // ============================================================================
@@ -123,6 +134,9 @@ pub use flui_painting::Paint;
 // commands implement CommandRenderer only; compositors implement
 // both. See traits.rs E-9 commentary.
 pub use traits::{CommandRenderer, LayerStateStack};
+// RasterBackend: the frame-driver swap point. The trait is unconditional;
+// only the wgpu impl is feature-gated.
+pub use raster::RasterBackend;
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
 // wgpu backend exports

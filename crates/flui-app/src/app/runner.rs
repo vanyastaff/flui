@@ -274,7 +274,7 @@ where
 
         // Render frame via AppBinding
         let mut r = renderer_frame.lock();
-        binding.render_frame(&mut r);
+        binding.render_frame(&mut *r);
 
         // GPU device-loss recovery: if the device was lost during this frame
         // (detected by the wgpu callback that fired between render_frame calls),
@@ -553,7 +553,7 @@ where
         scheduler.handle_draw_frame();
 
         let mut r = renderer_frame.lock();
-        binding.render_frame(&mut r);
+        binding.render_frame(&mut *r);
 
         // GPU device-loss recovery (same logic as the desktop path).
         if r.is_device_lost() {

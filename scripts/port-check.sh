@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 20 refusal triggers (1-20, with #9 numbered for FR-036)
+# Verifies the 21 refusal triggers (1-21, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check. Exits non-zero on the first violation
 # outside the whitelist; prints the offending file:line and the trigger
@@ -14,7 +14,9 @@
 # added in engine overhaul T9f (C4: Matrix4 must not appear on the
 # record/pipeline side; convert at the Backend trait boundary). Trigger #20
 # added in advanced-blend PR-5 (gradient/image producers must not regress
-# to SrcOver warn-fallback; deleted strings must not reappear).
+# to SrcOver warn-fallback; deleted strings must not reappear). Trigger #21
+# added in Core.0 N10 (RasterBackend seam): lyon CODE must stay confined to
+# wgpu/tessellator.rs so the rendering backend stays swappable.
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -25,7 +27,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 20 triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 21 triggers; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -1324,6 +1326,31 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 21 (Core.0 N10 RasterBackend seam) — lyon confined to the wgpu
+# tessellator.
+#
+# The rendering-backend swap seam (CommandRenderer + the RasterBackend driver
+# trait) only stays non-breaking if the lyon tessellation library is an
+# *internal detail* of the wgpu backend, not a dependency the rest of the
+# engine reaches into. All lyon CODE use (`lyon::…`, `use lyon …`) must live in
+# `crates/flui-engine/src/wgpu/tessellator.rs`. A future Vello/software backend
+# does not tessellate to triangles at all; any `lyon::` outside the tessellator
+# couples the codebase to one rasterization strategy and breaks the seam.
+#
+# Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by
+# the shared doc-comment filter in `check`; only real code constructs match.
+# Allowlist: none — if a second site ever legitimately needs lyon, widen this
+# trigger's glob in the same PR with a documented reason. See
+# docs/designs/2026-06-30-rasterbackend-seam.md.
+# -----------------------------------------------------------------------------
+check "21" \
+  "lyon used outside wgpu/tessellator.rs (raster backend must stay swappable)" \
+  'lyon::|use\s+lyon\b' \
+  --type rust \
+  --glob '!**/tessellator.rs' \
+  crates/flui-engine/src
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1332,7 +1359,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 20 refusal triggers + FR-033 grep clean"
+echo "port-check: all 21 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

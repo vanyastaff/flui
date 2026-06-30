@@ -31,7 +31,7 @@ use std::sync::{
 };
 
 use flui_animation::Vsync;
-use flui_engine::{EngineError, wgpu::Renderer};
+use flui_engine::{EngineError, RasterBackend};
 use flui_foundation::HasInstance;
 use flui_interaction::{binding::GestureBinding, routing::FocusManager};
 use flui_layer::Scene;
@@ -752,7 +752,7 @@ impl AppBinding {
     ///
     /// Orchestrates: flush_coalesced_moves → draw → render → mark_rendered
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn render_frame(&self, renderer: &mut Renderer) -> Option<Arc<Scene>> {
+    pub fn render_frame<R: RasterBackend>(&self, renderer: &mut R) -> Option<Arc<Scene>> {
         // 1. Flush coalesced pointer moves (GestureBinding handles coalescing)
         self.gestures.flush_pending_moves();
 
