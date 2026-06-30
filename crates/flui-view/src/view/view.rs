@@ -235,10 +235,9 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///
     /// Default impl is a no-op. The unified `Element<V, A, B>`
     /// overrides this to forward to `ElementCore::set_self_id`, so
-    /// `ElementCore<V, Variable>::update_or_create_children` can
-    /// stamp the real parent id onto every emitted
-    /// [`ReconcileEvent`](crate::tree::ReconcileEvent) instead of
-    /// the §U13 placeholder.
+    /// `BuildOwner::build_scope` can stamp the rebuilding parent's real
+    /// id onto every emitted [`ReconcileEvent`](crate::tree::ReconcileEvent)
+    /// when it feeds `build_into_views` output to the slab reconciler.
     ///
     /// Called by [`crate::tree::ElementTree::insert`] +
     /// [`crate::tree::ElementTree::mount_root_with_pipeline_owner`]

@@ -99,11 +99,11 @@ The C2 design document must specify **both** paths to equal depth — most real 
 
 ### C3 — Widget-authoring API: `impl IntoView`, derive, `bon`
 
-`View::build()` returns `impl IntoView`, never `Box<dyn View>` (the trait `IntoView` exists — verified at `crates/flui-view/src/view/into_view.rs`; the change is half-applied — doc-comments were updated to show `impl IntoView` but the signatures still return `Box<dyn View>`, verified at `crates/flui-view/src/view/stateful.rs:116`). A `#[derive(StatelessView)]` (or a coherent blanket impl) removes the hand-written `impl View` boilerplate. Many-field widget constructors use `bon` builders (the workspace's stated builder dependency, currently unused). This is the single most-touched public surface in the framework — it is the adoption metric. It needs its own design document.
+`StatelessView::build()` and `ViewState::build()` return `impl IntoView`, never `Box<dyn View>`. `IntoView` is the authoring bridge; `View::create_element()` returns the closed `ElementKind` storage enum, and the derive macros emit that boilerplate for ordinary stateless/stateful views. Many-field widget constructors use `bon` builders where the field surface is large enough to justify them. This is the single most-touched public surface in the framework — it is the adoption metric.
 
 ### C4 — `View` trait & element storage
 
-The `View` trait stays object-safe (the children machinery needs it) with **no lifetime parameter** on the public surface. Element storage moves from `Box<dyn ElementBase>` toward a **closed `enum ElementNode`** over the finite element-behavior set (Stateless/Stateful/Proxy/Inherited/Render/Animation) — so reconciliation `match`es instead of vtable-dispatching, and the runtime `downcast_ref::<V>()` in the update path becomes a typed match arm. `Downcast`/`DynClone` leave the public bound surface where possible. Co-designed with C6.
+The `View` trait stays object-safe (the children machinery needs it) with **no lifetime parameter** on the public surface. Element storage is slab-backed `ElementNode` carrying the closed `ElementKind` enum over the finite element families (Stateless/Stateful/Proxy/Inherited/Notification/Render/Root/Error, with animation and parent-data folded into their host families). Reconciliation and lifecycle drive the `ElementBase` surface through this closed storage boundary; the runtime `downcast_ref::<V>()` update path is replaced by typed dispatch guarded by port-check. Co-designed with C6.
 
 ### C5 — `BuildContext`: callback-form, no lifetime, single-threaded
 

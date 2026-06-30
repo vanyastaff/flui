@@ -9,9 +9,10 @@
 //! `ReconcileEventCollector` and asserts the disposition
 //! distribution matches the contract.
 //!
-//! Cross-parent same-frame ACTIVE reparent (ADV-1 case 2) requires
-//! KTD-9's ID-based Variable child storage; deferred to Phase 2.5 /
-//! Phase 3 per §U17 commit message.
+//! Cross-parent same-frame ACTIVE reparent (ADV-1 case 2) remains
+//! deferred: today's id-based child lists can represent it, but the
+//! tree still needs an explicit active-element move protocol before
+//! `from_parent: Some(_)` can be emitted.
 
 #![cfg(feature = "test-utils")]
 
@@ -19,8 +20,8 @@ use std::sync::Arc;
 
 use flui_foundation::ViewKey;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulView, View,
-    ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatefulView, View, ViewExt,
+    ViewState,
     tree::{
         ReconcileEventKind,
         test_utils::{CollectedEvent, ReconcileEventCollector},
@@ -58,8 +59,6 @@ impl ViewState<Spacer> for SpacerState {
 
 impl View for Spacer {
     fn create_element(&self) -> flui_view::element::ElementKind {
-        use flui_view::StatefulElement;
-        use flui_view::element::StatefulBehavior;
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -102,8 +101,6 @@ impl ViewState<KeyedCounter> for CounterState {
 
 impl View for KeyedCounter {
     fn create_element(&self) -> flui_view::element::ElementKind {
-        use flui_view::StatefulElement;
-        use flui_view::element::StatefulBehavior;
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -236,8 +233,8 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
     let reparent = reparent_events[0];
 
     // Contract: from_parent is None for the inactive-queue path
-    // (ADV-1 case 1). Cross-parent ACTIVE reparent (case 2) lands
-    // with from_parent: Some(...) once KTD-9 ships.
+    // (ADV-1 case 1). Cross-parent ACTIVE reparent (case 2) will emit
+    // from_parent: Some(...) once the active-element move protocol lands.
     assert!(
         reparent.from_parent.is_none(),
         "inactive-queue path emits from_parent=None; got {:?}",

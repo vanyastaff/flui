@@ -1331,9 +1331,10 @@ fn try_retake_inactive(
     // *active* parent at the moment of reparent; the donor parent
     // already cleared its slot when it pushed the element into the
     // inactive queue. The cross-parent same-frame Active-to-Active
-    // reparent path (ADV-1 branch case 2) requires KTD-9's ID-based
-    // Variable storage shape and is deferred — when it lands, that
-    // path emits with `from_parent: Some(prior_parent)`.
+    // reparent path (ADV-1 branch case 2) is still deferred: it needs an
+    // explicit active-element move protocol on top of today's id-based
+    // child lists. When it lands, that path emits with
+    // `from_parent: Some(prior_parent)`.
     super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
         kind: super::reconcile_event::ReconcileEventKind::Reparent,
         parent: new_parent,
