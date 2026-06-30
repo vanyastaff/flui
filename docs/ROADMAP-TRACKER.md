@@ -179,16 +179,29 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 
 ## Core.2 — Render-object catalog  *(entry: Core.1 exit + N12)*
 
-Roughly **73 render objects** to build. Tracked by family — full enumeration deferred to the Core.2 task spec.
+Roughly **73 render objects** targeted. Tracked by family — full enumeration deferred to the Core.2 task spec.
+
+> **Status note (2026-06-30 parity sweep).** The catalog is **not** "all blocked":
+> ~48 render objects already exist (N12), and a systematic oracle parity sweep this
+> day verified the major **box / flex / transform-fit / sliver / wrap** families
+> faithful to Flutter and **fixed 16 real divergences** (research docs
+> `2026-06-30-{box-render-object,renderflex,transform-fit,sliver,renderwrap}-parity-audit.md`).
+> The genuine remaining work is: **(a)** the *secondary-query* architectural gap —
+> `compute_dry_layout` / baseline / intrinsics for multi-child objects
+> (`2026-06-30-secondary-query-layout-gap.md`, design-ready); **(b)** the
+> `RenderSliverGrid` *render object* (its geometry delegate is now oracle-faithful);
+> **(c)** the still-unbuilt family members listed below; **(d)** maintainer
+> decisions on the documented *intentional* divergences. Per-RO promotion still
+> requires the Core.2 exit gate (per-RO tests + 1000-item sliver scroll + coverage).
 
 | Family | Status | Notes |
 |---|---|---|
-| Box layout (`RenderStack`, `RenderPositioned`, `RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFlow`, `RenderTable`, `RenderFractionallySizedBox`) | 🛇 blocked | gated by Core.1 |
-| Paint effects (`RenderClipRect/RRect/Path/Oval`, `RenderDecoratedBox`, `RenderOpacity` variants, `RenderTransform` family, `RenderCustomPaint`, `RenderRepaintBoundary`) | 🛇 blocked | partial: see existing `flui-rendering/src/objects/` |
-| Slivers (`RenderViewport`, `RenderSliverList/Grid/Padding/FillViewport/ToBoxAdapter`) | 🛇 blocked | sliver constraint protocol already typed |
-| Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`, `RenderListBody`) | 🛇 blocked | `RenderParagraph` likely lands in Core.1 |
+| Box layout (`RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFractionallySizedBox`, `RenderStack`, `RenderPositioned`, `RenderFlow`, `RenderTable`) | ⚠ mostly exist + audited | ConstrainedBox/LimitedBox/AspectRatio/Baseline/Wrap/FractionallySizedBox/Stack/Flex **exist + oracle-verified faithful or fixed** 2026-06-30. `RenderFlow`/`RenderTable` not yet built. |
+| Paint effects (`RenderClipRect/RRect/Path/Oval`, `RenderDecoratedBox`, `RenderOpacity` variants, `RenderTransform` family, `RenderFittedBox`, `RenderCustomPaint`, `RenderRepaintBoundary`) | ⚠ mostly exist | `RenderTransform`/`RenderFittedBox`/`RenderFractionalTranslation` audited+fixed 2026-06-30; clip/opacity/decorated_box exist (proxy-paint parity audit in progress). |
+| Slivers (`RenderViewport`, `RenderSliverList/Padding/FillViewport/FillRemaining/ToBoxAdapter/Offstage/Opacity`, **`RenderSliverGrid`**) | ⚠ mostly exist; Grid render-object missing | Contained slivers audited+fixed 2026-06-30 (offstage correction, overscroll positioning). `RenderSliverGrid` render object still to build (delegate oracle-faithful); lazy `RenderSliverList` virtualizer present. |
+| Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`, `RenderListBody`) | ◐ partial | `RenderParagraph`/`RenderImage` exist; not yet parity-audited. |
 
-**Exit:** widget→render-object checklist complete; per-RO layout + paint tests; intrinsic-size tests where applicable; 1000-item sliver scroll test green; `flui-rendering` coverage ≥ 80%.
+**Exit:** widget→render-object checklist complete; per-RO layout + paint tests; intrinsic-size tests where applicable; 1000-item sliver scroll test green; `flui-rendering` coverage ≥ 80%; **secondary-query gap closed** (dry-layout/baseline/intrinsics for multi-child objects).
 
 ---
 
