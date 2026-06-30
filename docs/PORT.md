@@ -1022,7 +1022,7 @@ Authoritative workspace state lives in [`AGENTS.md`](../AGENTS.md) and [`docs/cr
 
 External references this methodology builds on:
 
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — v2.2.0 anti-patterns and architectural rules.
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — v2.2.0 anti-patterns and architectural rules (⚠ file currently absent from the repo — pending maintainer restore).
 - [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full anti-pattern list with code examples.
 - [`STRATEGY.md`](../STRATEGY.md) — port rationale, Bun precedent, three architectural clauses.
 - [`docs/plans/2026-03-31-core-crates-hardening.md`](plans/2026-03-31-core-crates-hardening.md) — `Weak<RwLock<PipelineOwner>>` precedent.

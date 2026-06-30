@@ -257,4 +257,4 @@ A change cannot be merged if any of these fail. If you encounter a flaky test, f
 
 - [Getting Started](getting-started.md) — toolchain setup and first build
 - [Contributing](contributing.md) — workflow, commits, speckit
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitutional performance and testing requirements
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitutional performance and testing requirements (⚠ file currently absent from the repo — pending maintainer restore)
