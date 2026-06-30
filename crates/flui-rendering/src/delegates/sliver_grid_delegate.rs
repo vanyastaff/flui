@@ -63,14 +63,24 @@ impl SliverGridLayout {
         row * self.cross_axis_count
     }
 
-    /// Returns the maximum index of children visible at the given scroll
-    /// offset.
+    /// Returns the maximum child index reachable by the given scroll offset.
+    ///
+    /// Callers pass the *trailing* edge of the visible-plus-cache region
+    /// (`targetEndScrollOffset`); the result is the last child of the rows whose
+    /// top lies strictly above that offset.
+    ///
+    /// Flutter parity: `SliverGridRegularTileLayout.getMaxChildIndexForScrollOffset`
+    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart`),
+    /// `max(0, crossAxisCount * ceil(scrollOffset / mainAxisStride) - 1)`. The
+    /// prior `(row + 1) * crossAxisCount - 1` form over-counted by one full row.
     pub fn get_max_child_index_for_scroll_offset(&self, scroll_offset: f32) -> usize {
         if self.main_axis_stride <= 0.0 {
             return 0;
         }
-        let row = (scroll_offset / self.main_axis_stride).ceil() as usize;
-        (row + 1) * self.cross_axis_count - 1
+        let main_axis_count = (scroll_offset / self.main_axis_stride).ceil() as usize;
+        // `saturating_sub` is the `usize` form of Flutter's `math.max(0, … - 1)`:
+        // at `scroll_offset == 0` the count is 0 and the result clamps to 0.
+        (self.cross_axis_count * main_axis_count).saturating_sub(1)
     }
 }
 
@@ -407,13 +417,26 @@ mod tests {
             reverse_cross_axis: false,
         };
 
-        // At scroll offset 0, first visible row is 0
-        assert_eq!(layout.get_min_child_index_for_scroll_offset(0.0), 0);
-        assert_eq!(layout.get_max_child_index_for_scroll_offset(0.0), 2);
+        // `get_min_*` and `get_max_*` are independent formulas; real callers
+        // pass different offsets to each (scrollOffset vs targetEndScrollOffset).
+        // Values verified against Flutter's SliverGridRegularTileLayout
+        // (`.flutter/.../rendering/sliver_grid.dart`):
+        //   min = crossAxisCount * (offset ~/ stride)
+        //   max = max(0, crossAxisCount * ceil(offset / stride) - 1)
 
-        // At scroll offset 110, first visible row is 1
+        // min: first child of the row containing the offset.
+        assert_eq!(layout.get_min_child_index_for_scroll_offset(0.0), 0);
         assert_eq!(layout.get_min_child_index_for_scroll_offset(110.0), 3);
-        assert_eq!(layout.get_max_child_index_for_scroll_offset(110.0), 5);
+
+        // max: ceil(offset/stride) rows fit, so last child is count*ceil - 1.
+        // At offset 0 no full row is above it → child 0 (oracle clamps to 0).
+        assert_eq!(layout.get_max_child_index_for_scroll_offset(0.0), 0);
+        // targetEnd == one stride → exactly row 0 above it → last child 2.
+        assert_eq!(layout.get_max_child_index_for_scroll_offset(110.0), 2);
+        // targetEnd spanning two full rows → children 0..=5.
+        assert_eq!(layout.get_max_child_index_for_scroll_offset(220.0), 5);
+        // A partial row rounds up (ceil) → still two rows → children 0..=5.
+        assert_eq!(layout.get_max_child_index_for_scroll_offset(165.0), 5);
     }
 
     #[test]
