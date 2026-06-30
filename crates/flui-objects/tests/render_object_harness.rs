@@ -528,6 +528,33 @@ fn harness_baseline_loosens_child_constraints() {
 }
 
 #[test]
+fn harness_baseline_dry_baseline_handles_cross_kind_query() {
+    // The box's baseline type is Alphabetic; a parent querying a DIFFERENT kind
+    // (Ideographic) must still get a value — Flutter computes
+    // `baseline_offset + child(requested) - child(own)`. The prior code returned
+    // None for any cross-kind dry-baseline query.
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(0.0))).child(
+            box_node(RenderParagraph::new(
+                TextSpan::new("Ag"),
+                TextDirection::Ltr,
+            ))
+            .label("text"),
+        ),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    let root = run.root();
+    let constraints = BoxConstraints::loose(Size::new(px(200.0), px(100.0)));
+    assert!(
+        run.dry_baseline(root, constraints, TextBaseline::Ideographic)
+            .is_some(),
+        "cross-kind dry baseline query must return a value, not None",
+    );
+}
+
+#[test]
 fn harness_flex_row_baseline_aligns_text_and_box() {
     let run = RenderTester::mount(
         box_node(
