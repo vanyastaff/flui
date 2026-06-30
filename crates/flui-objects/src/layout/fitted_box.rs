@@ -196,6 +196,30 @@ impl RenderFittedBox {
         self.align_offset = Offset::ZERO;
         self.has_visual_overflow = false;
     }
+
+    /// The box's own size: honours the parent `constraints` while preserving
+    /// the child's aspect ratio. Flutter `RenderFittedBox.performLayout`
+    /// (`proxy_box.dart`) uses `constrainSizeAndAttemptToPreserveAspectRatio`;
+    /// `ScaleDown` loosens first then re-constrains. Shared by `perform_layout`
+    /// and `compute_dry_layout` so the wet and dry sizes can never drift.
+    fn fitted_size(&self, constraints: BoxConstraints, child_size: Size) -> Size {
+        match self.fit {
+            BoxFit::ScaleDown => {
+                let loosened = constraints.loosen();
+                constraints.constrain(
+                    loosened.constrain_size_and_attempt_to_preserve_aspect_ratio(child_size),
+                )
+            }
+            BoxFit::Contain
+            | BoxFit::Cover
+            | BoxFit::Fill
+            | BoxFit::FitHeight
+            | BoxFit::FitWidth
+            | BoxFit::None => {
+                constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(child_size)
+            }
+        }
+    }
 }
 
 impl Default for RenderFittedBox {
@@ -242,9 +266,12 @@ impl RenderBox for RenderFittedBox {
             return incoming.smallest();
         }
 
-        // (4) Our size = constrain(child_size) — we honour the parent
-        //     constraints even though the child was given unconstrained.
-        let size = incoming.constrain(child_size);
+        // (4) Our size honours the parent constraints while preserving the
+        //     child's aspect ratio (Flutter uses
+        //     constrainSizeAndAttemptToPreserveAspectRatio, not a plain
+        //     constrain). Shared with compute_dry_layout via `fitted_size` so
+        //     the wet and dry sizes agree.
+        let size = self.fitted_size(incoming, child_size);
 
         // (5) Resolve the fit math via the typed BoxFit helper.
         let FittedSizes {
@@ -297,22 +324,7 @@ impl RenderBox for RenderFittedBox {
         if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
             return constraints.smallest();
         }
-        match self.fit {
-            BoxFit::ScaleDown => {
-                let loosened = constraints.loosen();
-                constraints.constrain(
-                    loosened.constrain_size_and_attempt_to_preserve_aspect_ratio(child_size),
-                )
-            }
-            BoxFit::Contain
-            | BoxFit::Cover
-            | BoxFit::Fill
-            | BoxFit::FitHeight
-            | BoxFit::FitWidth
-            | BoxFit::None => {
-                constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(child_size)
-            }
-        }
+        self.fitted_size(constraints, child_size)
     }
 
     fn compute_dry_baseline(

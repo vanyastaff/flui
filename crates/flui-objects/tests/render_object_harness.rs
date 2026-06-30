@@ -821,6 +821,31 @@ fn harness_fitted_box_sizes_to_parent() {
 }
 
 #[test]
+fn harness_fitted_box_preserves_aspect_ratio_when_sizing_box() {
+    // child 100×50 (aspect 2.0); under maxW=60 with loose height, Contain sizes
+    // the BOX preserving aspect → (60, 30), not a plain clamp (60, 50). Flutter
+    // uses constrainSizeAndAttemptToPreserveAspectRatio. Before the fix
+    // perform_layout used a plain constrain → (60, 50), disagreeing with
+    // compute_dry_layout.
+    let run = RenderTester::mount(
+        box_node(RenderFittedBox::new(
+            BoxFit::Contain,
+            Alignment::CENTER,
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(100.0, 50.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(0.0),
+        px(60.0),
+        px(0.0),
+        px(f32::INFINITY),
+    ))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(60.0), px(30.0)));
+}
+
+#[test]
 fn harness_fractionally_sized_box_applies_width_factor() {
     let run = RenderTester::mount(
         box_node(RenderFractionallySizedBox::new().with_width_factor(FractionFactor::HALF))
