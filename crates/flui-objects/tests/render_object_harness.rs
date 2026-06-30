@@ -918,6 +918,25 @@ fn harness_fractional_translation_without_hit_transform_uses_layout_bounds() {
 }
 
 #[test]
+fn harness_fractional_translation_hits_shifted_child_outside_own_bounds() {
+    // translation (1.0, 0.0) shifts the 40×40 child to visual x ∈ [40, 80). A
+    // pointer at (50, 20) is OUTSIDE the box's own [0,40) bounds but inside the
+    // shifted child → must hit (child-local (10, 20)). Flutter's
+    // RenderFractionalTranslation.hitTest skips the own-bounds check; the prior
+    // `is_within_own_size` gate returned no hit here.
+    let run = RenderTester::mount(
+        box_node(RenderFractionalTranslation::translated(
+            TranslationFraction::new(1.0, 0.0),
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 20.0), Some(run.id("child")));
+}
+
+#[test]
 fn harness_decorated_box_wraps_child() {
     let run = RenderTester::mount(
         box_node(RenderDecoratedBox::new(BoxDecoration::with_color(

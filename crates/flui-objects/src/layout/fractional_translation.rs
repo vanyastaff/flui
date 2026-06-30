@@ -196,9 +196,11 @@ impl RenderBox for RenderFractionalTranslation {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
+        // Flutter RenderFractionalTranslation overrides `hitTest` to skip the
+        // own-bounds check and delegate straight to `hitTestChildren`
+        // (proxy_box.dart), so a pointer over the SHIFTED child still hits even
+        // when it lies outside the box's original bounds. (RenderTransform does
+        // the same; the prior `is_within_own_size` gate here rejected those hits.)
         if !self.has_child {
             return false;
         }
