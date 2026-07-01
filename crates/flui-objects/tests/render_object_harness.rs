@@ -440,6 +440,29 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
 }
 
 #[test]
+fn harness_listener_childless_fills_parent() {
+    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
+    let constraints = loose(200.0);
+    let mut run = RenderTester::mount(box_node(RenderListener::new(
+        handler,
+        HitTestBehavior::Opaque,
+    )))
+    .with_constraints(constraints)
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(200.0), px(200.0)),
+        "childless RenderListener must use constraints.biggest like Flutter's RenderPointerListener",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        Size::new(px(200.0), px(200.0)),
+        "childless RenderListener dry layout must mirror computeSizeForNoChild",
+    );
+}
+
+#[test]
 fn harness_mouse_region_childless_fills_parent_and_self_describes() {
     let run = RenderTester::mount(box_node(RenderMouseRegion::new()))
         .with_constraints(BoxConstraints::tight(Size::new(px(80.0), px(40.0))))

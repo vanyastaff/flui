@@ -9,9 +9,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, size, tight};
+use flui_interaction::events::pointer::{
+    PointerButtons, PointerGesture, PointerGestureEvent, PointerInfo, PointerState, PointerType,
+    PointerUpdate,
+};
 use flui_types::Color;
+use flui_types::{Offset, geometry::px};
 use flui_widgets::prelude::HitTestBehavior;
-use flui_widgets::{ColoredBox, Listener, SizedBox};
+use flui_widgets::{ColoredBox, Listener, PointerPanZoomEvent, SizedBox};
 
 /// A counter callback + a readable handle.
 fn counter() -> (
@@ -21,6 +26,21 @@ fn counter() -> (
     let count = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&count);
     (count, move |_event| {
+        in_cb.fetch_add(1, Ordering::SeqCst);
+    })
+}
+
+fn pan_zoom_counter() -> (
+    Arc<AtomicUsize>,
+    impl Fn(&PointerPanZoomEvent) + Send + Sync,
+) {
+    let count = Arc::new(AtomicUsize::new(0));
+    let in_cb = Arc::clone(&count);
+    (count, move |event| {
+        assert!(
+            event.is_update(),
+            "current FLUI PointerEvent::Gesture conversion should produce pan/zoom updates",
+        );
         in_cb.fetch_add(1, Ordering::SeqCst);
     })
 }
@@ -124,5 +144,110 @@ fn listener_routes_down_and_up_to_their_own_callbacks() {
         downs.load(Ordering::SeqCst),
         1,
         "up does not re-invoke on_pointer_down",
+    );
+}
+
+#[test]
+fn listener_routes_buttonless_move_to_hover_callback() {
+    let (moves, on_move) = counter();
+    let (hovers, on_hover) = counter();
+
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_move(on_move)
+            .on_pointer_hover(on_hover)
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+
+    let event = flui_interaction::events::PointerEvent::Move(PointerUpdate {
+        pointer: PointerInfo {
+            pointer_id: Some(flui_interaction::PointerId::PRIMARY),
+            pointer_type: PointerType::Mouse,
+            persistent_device_id: None,
+        },
+        current: PointerState {
+            buttons: PointerButtons::new(),
+            ..PointerState::default()
+        },
+        coalesced: Vec::new(),
+        predicted: Vec::new(),
+    });
+
+    laid.route_event(&event, 40.0, 40.0);
+
+    assert_eq!(
+        hovers.load(Ordering::SeqCst),
+        1,
+        "buttonless PointerEvent::Move should route to on_pointer_hover",
+    );
+    assert_eq!(
+        moves.load(Ordering::SeqCst),
+        0,
+        "buttonless hover must not route to on_pointer_move",
+    );
+
+    laid.dispatch_pointer_move(40.0, 40.0);
+    assert_eq!(
+        moves.load(Ordering::SeqCst),
+        1,
+        "pressed-button PointerEvent::Move should still route to on_pointer_move",
+    );
+}
+
+#[test]
+fn listener_routes_scroll_to_pointer_signal_callback() {
+    let (signals, on_signal) = counter();
+
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_signal(on_signal)
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+
+    let position = Offset::new(px(40.0), px(40.0));
+    let event =
+        flui_interaction::events::make_scroll_event(position, Offset::new(px(0.0), px(12.0)));
+
+    laid.route_event(&event, 40.0, 40.0);
+
+    assert_eq!(
+        signals.load(Ordering::SeqCst),
+        1,
+        "scroll events are FLUI's concrete pointer-signal payload",
+    );
+}
+
+#[test]
+fn listener_routes_gesture_to_pan_zoom_update_callback() {
+    let (updates, on_update) = pan_zoom_counter();
+
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_pan_zoom_update(on_update)
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+
+    let event = flui_interaction::events::PointerEvent::Gesture(PointerGestureEvent {
+        pointer: PointerInfo {
+            pointer_id: Some(flui_interaction::PointerId::PRIMARY),
+            pointer_type: PointerType::Touch,
+            persistent_device_id: None,
+        },
+        gesture: PointerGesture::Pinch(0.25),
+        state: PointerState::default(),
+    });
+
+    laid.route_event(&event, 40.0, 40.0);
+
+    assert_eq!(
+        updates.load(Ordering::SeqCst),
+        1,
+        "PointerEvent::Gesture should route through Listener's pan/zoom update callback",
     );
 }

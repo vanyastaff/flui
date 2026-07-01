@@ -171,12 +171,14 @@ pub use flui_rendering::delegates::{
     SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
 };
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
-// `PointerEvent`/`EventPropagation` its callbacks receive/return.
+// pointer event types its callbacks receive.
 pub use flui_rendering::hit_testing::{
     CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
 };
 // Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
-pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+pub use flui_interaction::{
+    DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
+};
 
 // ============================================================================
 // Prelude
@@ -215,7 +217,9 @@ pub mod prelude {
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
     };
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
-    pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+    pub use flui_interaction::{
+        DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
+    };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
     pub use flui_rendering::constraints::BoxConstraints;

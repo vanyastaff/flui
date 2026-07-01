@@ -79,6 +79,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 > **`RenderListBody` closure note (verified 2026-07-01):** `RenderListBody` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `ListBody` widget. Harness coverage pins vertical and horizontal axis-direction layout, reverse positioning, cross-axis stretching, hit testing, dry layout, and dry-baseline ordering against Flutter's `rendering/list_body.dart` behavior.
 >
 > **`RenderMouseRegion` closure note (verified 2026-07-01):** `RenderMouseRegion` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `MouseRegion` widget. Harness coverage pins childless `constraints.biggest` sizing, hit-entry cursor propagation, mouse-tracker annotation propagation, pointer-move hover dispatch, and `MouseTracker` enter/hover/exit callbacks. Remaining edge: Flutter's `opaque = false` lets regions behind it remain active while this region still contributes an annotation; FLUI's current hit-test pipeline still couples "add self hit entry" with "blocks siblings below", so transparent behind-region behavior remains an explicit pipeline follow-up.
+>
+> **`RenderPointerListener` catalog note (verified 2026-07-01):** Flutter's `RenderPointerListener` is implemented as FLUI's Rust-native `RenderListener` and backs the public `Listener` widget. Harness/widget coverage pins child pass-through layout, childless live/dry `constraints.biggest` sizing, hit-entry handler propagation, down/up routing, hover routing via buttonless `PointerEvent::Move`, pointer-signal routing through FLUI's concrete `PointerEvent::Scroll`, and trackpad pan/zoom update routing through `PointerEvent::Gesture` → `PointerPanZoomEvent::Update`. Remaining edges: Flutter's pan/zoom start/end callbacks are not yet exposed on `Listener`, and `HitTestBehavior.translucent` registers self without blocking siblings behind; FLUI's current hit-test pipeline still couples "add self hit entry" with "blocks siblings below", so translucent behind-target behavior remains an explicit pipeline follow-up.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -176,7 +178,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
 | `GestureDetector` | *(composes)* | N/A | Single | Composes `Listener` + gesture recognizers; no own RO |
-| `Listener` | `RenderPointerListener` | Needed | Single | Raw pointer event callbacks |
+| `Listener` | `RenderPointerListener` | **Exists** (as `RenderListener`) | Single | Raw pointer callbacks; buttonless move maps to hover, scroll maps to pointer signals, gesture maps to pan/zoom updates |
 | `MouseRegion` | `RenderMouseRegion` | **Exists** | Single | Mouse hover enter/exit tracking |
 | `AbsorbPointer` | `RenderAbsorbPointer` | **Exists** | Single | Catches hits, blocks child |
 | `IgnorePointer` | `RenderIgnorePointer` | **Exists** | Single | Pointers pass through subtree |
@@ -191,7 +193,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
-| `RichText` | `RenderParagraph` | Needed | Leaf | Core text rendering; drives cosmic-text in FLUI |
+| `RichText` | `RenderParagraph` | **Exists** | Leaf | Core text rendering; drives cosmic-text in FLUI |
 | `Text` | *(composes)* | N/A | Leaf | Wraps `RichText` with `DefaultTextStyle` |
 | `DefaultTextStyle` | *(InheritedWidget)* | N/A | Single | Provides inherited text style; no own RO |
 | `EditableText` | `RenderEditable` | Needed | Leaf | Text editing with cursor, selection, IME |
@@ -202,7 +204,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
-| `Image` | `RenderImage` | Needed | Leaf | Displays decoded image with fit/alignment |
+| `Image` | `RenderImage` | **Exists** | Leaf | Displays decoded image with fit/alignment |
 | `Icon` | *(composes)* | N/A | Leaf | Composes `RichText` with icon font glyph |
 
 ---
@@ -308,14 +310,11 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 5 | `RenderPhysicalShape` | `proxy_box.dart` | `PhysicalShape` |
 | 6 | `RenderRotatedBox` | `rotated_box.dart` | `RotatedBox` |
 
-### Wave 4 — Input / Leaf (4 objects)
+### Wave 4 — Input / Leaf (1 object remaining)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
-| 1 | `RenderPointerListener` | `proxy_box.dart` | `Listener` |
-| 2 | `RenderParagraph` | `paragraph.dart` | `RichText`, `Text` |
-| 3 | `RenderEditable` | `editable.dart` | `EditableText` |
-| 4 | `RenderImage` | `image.dart` | `Image` |
+| 1 | `RenderEditable` | `editable.dart` | `EditableText` |
 
 ### Wave 5 — Slivers / Viewport (8 objects)
 
