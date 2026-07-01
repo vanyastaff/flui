@@ -482,3 +482,321 @@ pub mod test_support {
         f(&mut BoxDryBaselineCtx::new(0, &[], &mut deny))
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use flui_types::{Offset, geometry::px};
+
+    use super::*;
+    use crate::parent_data::{BoxParentData, FlexFit, FlexParentData};
+
+    // ------------------------------------------------------------------
+    // BoxIntrinsicsCtx
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn box_intrinsics_ctx_dispatches_and_reports_child_count() {
+        let mut query = |index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
+            assert_eq!(index, 2);
+            assert_eq!(dim, IntrinsicDimension::MaxHeight);
+            assert_eq!(extent, 42.0);
+            99.0
+        };
+        let mut ctx = BoxIntrinsicsCtx::new(3, &[], &mut query);
+
+        assert_eq!(ctx.child_count(), 3);
+        assert_eq!(
+            ctx.child_intrinsic(2, IntrinsicDimension::MaxHeight, 42.0),
+            99.0
+        );
+    }
+
+    #[test]
+    fn box_intrinsics_ctx_named_convenience_methods_pass_the_correct_dimension() {
+        let mut query = |_index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
+            // Encode which dimension fired into the return value so each
+            // convenience wrapper's assertion can tell them apart.
+            match dim {
+                IntrinsicDimension::MinWidth => extent + 1.0,
+                IntrinsicDimension::MaxWidth => extent + 2.0,
+                IntrinsicDimension::MinHeight => extent + 3.0,
+                IntrinsicDimension::MaxHeight => extent + 4.0,
+            }
+        };
+        let mut ctx = BoxIntrinsicsCtx::new(1, &[], &mut query);
+
+        assert_eq!(ctx.child_min_intrinsic_width(0, 10.0), 11.0);
+        assert_eq!(ctx.child_max_intrinsic_width(0, 10.0), 12.0);
+        assert_eq!(ctx.child_min_intrinsic_height(0, 10.0), 13.0);
+        assert_eq!(ctx.child_max_intrinsic_height(0, 10.0), 14.0);
+    }
+
+    #[test]
+    fn box_intrinsics_ctx_parent_data_accessors_downcast_and_report_out_of_range() {
+        let flex_data = FlexParentData::flexible(3);
+        let slots: [Option<&dyn ParentData>; 2] = [Some(&flex_data), None];
+        let mut query = |_i: usize, _d: IntrinsicDimension, _e: f32| -> f32 { 0.0 };
+        let ctx = BoxIntrinsicsCtx::new(2, &slots, &mut query);
+
+        assert!(ctx.child_parent_data(0).is_some());
+        assert!(
+            ctx.child_parent_data(1).is_none(),
+            "no parent data set for this slot"
+        );
+        assert!(
+            ctx.child_parent_data(5).is_none(),
+            "index beyond child_count"
+        );
+
+        assert_eq!(
+            ctx.child_parent_data_as::<FlexParentData>(0).unwrap().flex,
+            Some(3)
+        );
+        assert!(
+            ctx.child_parent_data_as::<BoxParentData>(0).is_none(),
+            "downcast to the wrong concrete type must fail cleanly, not panic"
+        );
+    }
+
+    #[test]
+    fn box_intrinsics_ctx_child_flex_defaults_to_zero_and_clamps_negative() {
+        let flexible = FlexParentData::flexible(5);
+        let negative = FlexParentData::new(Offset::ZERO, Some(-2), FlexFit::Loose);
+        let inflexible = FlexParentData::inflexible();
+        let wrong_type = BoxParentData::zero();
+        let slots: [Option<&dyn ParentData>; 4] = [
+            Some(&flexible),
+            Some(&negative),
+            Some(&inflexible),
+            Some(&wrong_type),
+        ];
+        let mut query = |_i: usize, _d: IntrinsicDimension, _e: f32| -> f32 { 0.0 };
+        let ctx = BoxIntrinsicsCtx::new(4, &slots, &mut query);
+
+        assert_eq!(ctx.child_flex(0), 5);
+        assert_eq!(ctx.child_flex(1), 0, "negative flex must clamp to zero");
+        assert_eq!(ctx.child_flex(2), 0, "None flex (inflexible) reports zero");
+        assert_eq!(
+            ctx.child_flex(3),
+            0,
+            "wrong parent-data type reports zero, not a panic"
+        );
+        assert_eq!(ctx.child_flex(9), 0, "out-of-range index reports zero");
+    }
+
+    // ------------------------------------------------------------------
+    // BoxDryLayoutCtx
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn box_dry_layout_ctx_dispatches_dry_layout_and_intrinsic_requests() {
+        let expected_size = Size::new(px(30.0), px(40.0));
+        let mut query = |_index: usize, request: DryLayoutChildRequest| -> DryLayoutChildResponse {
+            match request {
+                DryLayoutChildRequest::DryLayout(_) => {
+                    DryLayoutChildResponse::DryLayout(expected_size)
+                }
+                DryLayoutChildRequest::Intrinsic(_, extent) => {
+                    DryLayoutChildResponse::Intrinsic(extent * 2.0)
+                }
+            }
+        };
+        let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut query);
+
+        assert_eq!(ctx.child_count(), 1);
+        assert_eq!(
+            ctx.child_dry_layout(0, BoxConstraints::tight(Size::ZERO)),
+            expected_size
+        );
+        assert_eq!(
+            ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 21.0),
+            42.0
+        );
+        assert_eq!(ctx.child_max_intrinsic_width(0, 5.0), 10.0);
+        assert_eq!(ctx.child_min_intrinsic_width(0, 5.0), 10.0);
+        assert_eq!(ctx.child_max_intrinsic_height(0, 5.0), 10.0);
+        assert_eq!(ctx.child_min_intrinsic_height(0, 5.0), 10.0);
+    }
+
+    #[test]
+    fn box_dry_layout_ctx_falls_back_to_a_safe_default_on_a_mismatched_response() {
+        // A misbehaving driver that always answers with the WRONG response
+        // variant must not panic or return garbage -- the ctx methods
+        // defensively coerce to Size::ZERO / 0.0 rather than trusting the
+        // driver's response shape.
+        let mut always_wrong_kind =
+            |_index: usize, request: DryLayoutChildRequest| -> DryLayoutChildResponse {
+                match request {
+                    DryLayoutChildRequest::DryLayout(_) => DryLayoutChildResponse::Intrinsic(1.0),
+                    DryLayoutChildRequest::Intrinsic(..) => {
+                        DryLayoutChildResponse::DryLayout(Size::new(px(1.0), px(1.0)))
+                    }
+                }
+            };
+        let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut always_wrong_kind);
+
+        assert_eq!(
+            ctx.child_dry_layout(0, BoxConstraints::tight(Size::ZERO)),
+            Size::ZERO
+        );
+        assert_eq!(
+            ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 1.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn box_dry_layout_ctx_parent_data_accessor_downcasts_by_index() {
+        let flex_data = FlexParentData::flexible(1);
+        let slots: [Option<&dyn ParentData>; 1] = [Some(&flex_data)];
+        let mut query = |_i: usize, _r: DryLayoutChildRequest| -> DryLayoutChildResponse {
+            DryLayoutChildResponse::DryLayout(Size::ZERO)
+        };
+        let ctx = BoxDryLayoutCtx::new(1, &slots, &mut query);
+
+        assert_eq!(
+            ctx.child_parent_data_as::<FlexParentData>(0).unwrap().flex,
+            Some(1)
+        );
+        assert!(ctx.child_parent_data_as::<BoxParentData>(0).is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // BoxDryBaselineCtx
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn box_dry_baseline_ctx_dispatches_baseline_layout_and_intrinsic_requests() {
+        let expected_size = Size::new(px(11.0), px(22.0));
+        let mut query =
+            |_index: usize, request: DryBaselineChildRequest| -> DryBaselineChildResponse {
+                match request {
+                    DryBaselineChildRequest::Baseline(_, _) => {
+                        DryBaselineChildResponse::Baseline(Some(17.0))
+                    }
+                    DryBaselineChildRequest::DryLayout(_) => {
+                        DryBaselineChildResponse::DryLayout(expected_size)
+                    }
+                    DryBaselineChildRequest::Intrinsic(_, extent) => {
+                        DryBaselineChildResponse::Intrinsic(extent + 1.0)
+                    }
+                }
+            };
+        let mut ctx = BoxDryBaselineCtx::new(1, &[], &mut query);
+
+        assert_eq!(ctx.child_count(), 1);
+        assert_eq!(
+            ctx.child_dry_baseline(
+                0,
+                BoxConstraints::tight(Size::ZERO),
+                TextBaseline::Alphabetic
+            ),
+            Some(17.0)
+        );
+        assert_eq!(
+            ctx.child_dry_layout(0, BoxConstraints::tight(Size::ZERO)),
+            expected_size
+        );
+        assert_eq!(
+            ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 9.0),
+            10.0
+        );
+        assert_eq!(ctx.child_max_intrinsic_width(0, 9.0), 10.0);
+        assert_eq!(ctx.child_min_intrinsic_width(0, 9.0), 10.0);
+        assert_eq!(ctx.child_max_intrinsic_height(0, 9.0), 10.0);
+        assert_eq!(ctx.child_min_intrinsic_height(0, 9.0), 10.0);
+    }
+
+    #[test]
+    fn box_dry_baseline_ctx_falls_back_to_a_safe_default_on_a_mismatched_response() {
+        let mut always_wrong_kind = |_index: usize,
+                                     request: DryBaselineChildRequest|
+         -> DryBaselineChildResponse {
+            match request {
+                DryBaselineChildRequest::Baseline(..) => {
+                    DryBaselineChildResponse::DryLayout(Size::ZERO)
+                }
+                DryBaselineChildRequest::DryLayout(_) => DryBaselineChildResponse::Intrinsic(1.0),
+                DryBaselineChildRequest::Intrinsic(..) => {
+                    DryBaselineChildResponse::Baseline(Some(1.0))
+                }
+            }
+        };
+        let mut ctx = BoxDryBaselineCtx::new(1, &[], &mut always_wrong_kind);
+
+        assert_eq!(
+            ctx.child_dry_baseline(
+                0,
+                BoxConstraints::tight(Size::ZERO),
+                TextBaseline::Alphabetic
+            ),
+            None
+        );
+        assert_eq!(
+            ctx.child_dry_layout(0, BoxConstraints::tight(Size::ZERO)),
+            Size::ZERO
+        );
+        assert_eq!(
+            ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 1.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn box_dry_baseline_ctx_parent_data_accessor_downcasts_by_index() {
+        let flex_data = FlexParentData::flexible(4);
+        let slots: [Option<&dyn ParentData>; 1] = [Some(&flex_data)];
+        let mut query = |_i: usize, _r: DryBaselineChildRequest| -> DryBaselineChildResponse {
+            DryBaselineChildResponse::Baseline(None)
+        };
+        let ctx = BoxDryBaselineCtx::new(1, &slots, &mut query);
+
+        assert_eq!(
+            ctx.child_parent_data_as::<FlexParentData>(0).unwrap().flex,
+            Some(4)
+        );
+        assert!(ctx.child_parent_data_as::<BoxParentData>(0).is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // test_support leaf helpers -- the panic-on-child-query contract
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn leaf_intrinsics_reports_zero_children_and_never_queries_when_unused() {
+        let result = test_support::leaf_intrinsics(|ctx| ctx.child_count());
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "a childless compute_* must not consult children")]
+    fn leaf_intrinsics_panics_if_a_child_is_queried() {
+        test_support::leaf_intrinsics(|ctx| {
+            ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 0.0)
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "a childless compute_dry_layout must not consult children")]
+    fn leaf_dry_layout_panics_if_a_child_is_queried() {
+        test_support::leaf_dry_layout(|ctx| {
+            ctx.child_dry_layout(0, BoxConstraints::tight(Size::ZERO))
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "a childless compute_dry_baseline must not consult children")]
+    fn leaf_dry_baseline_panics_if_a_child_is_queried() {
+        test_support::leaf_dry_baseline(|ctx| {
+            ctx.child_dry_baseline(
+                0,
+                BoxConstraints::tight(Size::ZERO),
+                TextBaseline::Alphabetic,
+            )
+        });
+    }
+}
