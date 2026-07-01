@@ -45,9 +45,11 @@ use flui_types::{Alignment, Offset, Pixels, Point, Rect, Size, painting::Clip};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{
+        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+    },
     parent_data::StackParentData,
-    traits::RenderBox,
+    traits::{RenderBox, TextBaseline},
 };
 
 // =============================================================================
@@ -163,6 +165,15 @@ impl PositionedSpec {
 #[inline]
 fn alignment_along_axis(component: f32, free: Pixels) -> Pixels {
     Pixels::new(free.get() * (component + 1.0) * 0.5)
+}
+
+/// Maps a [`TextBaseline`] kind into compact per-kind storage.
+#[inline]
+const fn baseline_kind_index(baseline: TextBaseline) -> usize {
+    match baseline {
+        TextBaseline::Alphabetic => 0,
+        TextBaseline::Ideographic => 1,
+    }
 }
 
 // =============================================================================
@@ -563,6 +574,345 @@ impl RenderBox for RenderStack {
             }
         }
         false
+    }
+}
+
+// =============================================================================
+// RenderIndexedStack
+// =============================================================================
+
+/// A stack that lays out all children but paints and hit-tests only one child.
+///
+/// Flutter parity: `RenderIndexedStack` uses the same layout algorithm as
+/// [`RenderStack`] and keeps the layout cost O(N), but only the child at
+/// [`index`](Self::index) participates in paint, hit testing, semantics, and
+/// baseline reporting. `None` means no child is displayed.
+#[derive(Debug, Clone)]
+pub struct RenderIndexedStack {
+    stack: RenderStack,
+    index: Option<usize>,
+    /// Baselines recorded during layout for the displayed child only.
+    reported_baselines: [Option<f32>; 2],
+}
+
+impl RenderIndexedStack {
+    /// Creates an indexed stack that displays child `0`, matching Flutter's
+    /// `IndexedStack(index: 0)` default.
+    pub const fn new() -> Self {
+        Self {
+            stack: RenderStack::new(),
+            index: Some(0),
+            reported_baselines: [None; 2],
+        }
+    }
+
+    /// Builder: set the displayed child index. `None` displays nothing.
+    #[must_use]
+    pub const fn with_index(mut self, index: Option<usize>) -> Self {
+        self.index = index;
+        self
+    }
+
+    /// Builder: set the fit applied to non-positioned children.
+    #[must_use]
+    pub const fn with_fit(mut self, fit: StackFit) -> Self {
+        self.stack.fit = fit;
+        self
+    }
+
+    /// Builder: set the alignment used by stack positioning.
+    #[must_use]
+    pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
+        self.stack.alignment = alignment;
+        self
+    }
+
+    /// Builder: set the clip behavior used when any child geometry overflows.
+    #[must_use]
+    pub const fn with_clip_behavior(mut self, clip_behavior: Clip) -> Self {
+        self.stack.clip_behavior = clip_behavior;
+        self
+    }
+
+    /// The displayed child index, or `None` if no child is displayed.
+    #[inline]
+    pub const fn index(&self) -> Option<usize> {
+        self.index
+    }
+
+    /// Updates the displayed child index; returns true if the value changed.
+    pub fn set_index(&mut self, index: Option<usize>) -> bool {
+        if self.index == index {
+            return false;
+        }
+        self.index = index;
+        true
+    }
+
+    /// Returns the current fit.
+    #[inline]
+    pub fn fit(&self) -> StackFit {
+        self.stack.fit()
+    }
+
+    /// Returns the current alignment.
+    #[inline]
+    pub fn alignment(&self) -> Alignment {
+        self.stack.alignment()
+    }
+
+    /// Returns the current clip behavior.
+    #[inline]
+    pub fn clip_behavior(&self) -> Clip {
+        self.stack.clip_behavior()
+    }
+
+    /// Whether the last layout produced direct-child geometry overflow.
+    #[inline]
+    pub fn has_visual_overflow(&self) -> bool {
+        self.stack.has_visual_overflow()
+    }
+
+    /// Updates the fit; returns true if the value changed.
+    pub fn set_fit(&mut self, fit: StackFit) -> bool {
+        self.stack.set_fit(fit)
+    }
+
+    /// Updates the alignment; returns true if the value changed.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+        self.stack.set_alignment(alignment)
+    }
+
+    /// Updates the clip behavior; returns true if the value changed.
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> bool {
+        self.stack.set_clip_behavior(clip_behavior)
+    }
+
+    fn displayed_index(&self, child_count: usize) -> Option<usize> {
+        if let Some(index) = self.index {
+            debug_assert!(
+                index < child_count || child_count == 0,
+                "RenderIndexedStack index ({index}) must reference an existing child"
+            );
+            (index < child_count).then_some(index)
+        } else {
+            None
+        }
+    }
+
+    fn build_specs_from_layout_ctx(
+        ctx: &BoxLayoutContext<'_, Variable, StackParentData>,
+    ) -> Vec<Option<PositionedSpec>> {
+        let mut specs = Vec::with_capacity(ctx.child_count());
+        for i in 0..ctx.child_count() {
+            specs.push(
+                ctx.child_parent_data(i)
+                    .and_then(PositionedSpec::from_parent_data),
+            );
+        }
+        specs
+    }
+
+    fn build_specs_from_dry_layout_ctx(ctx: &BoxDryLayoutCtx<'_>) -> Vec<Option<PositionedSpec>> {
+        let mut specs = Vec::with_capacity(ctx.child_count());
+        for i in 0..ctx.child_count() {
+            specs.push(
+                ctx.child_parent_data_as::<StackParentData>(i)
+                    .and_then(PositionedSpec::from_parent_data),
+            );
+        }
+        specs
+    }
+
+    fn build_specs_from_dry_baseline_ctx(
+        ctx: &BoxDryBaselineCtx<'_>,
+    ) -> Vec<Option<PositionedSpec>> {
+        let mut specs = Vec::with_capacity(ctx.child_count());
+        for i in 0..ctx.child_count() {
+            specs.push(
+                ctx.child_parent_data_as::<StackParentData>(i)
+                    .and_then(PositionedSpec::from_parent_data),
+            );
+        }
+        specs
+    }
+}
+
+impl Default for RenderIndexedStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl flui_foundation::Diagnosticable for RenderIndexedStack {
+    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+        flui_foundation::Diagnosticable::debug_fill_properties(&self.stack, builder);
+        match self.index {
+            Some(index) => {
+                builder.add_int("index", index as i64, None);
+            }
+            None => {
+                builder.add("index", "null");
+            }
+        }
+    }
+}
+
+impl RenderBox for RenderIndexedStack {
+    type Arity = Variable;
+    type ParentData = StackParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
+    ) -> Size {
+        let incoming = *ctx.constraints();
+        let child_count = ctx.child_count();
+        self.stack.child_count = child_count;
+        self.stack.has_visual_overflow = false;
+        self.reported_baselines = [None; 2];
+        let displayed_index = self.displayed_index(child_count);
+
+        let specs = Self::build_specs_from_layout_ctx(ctx);
+        let sized = self
+            .stack
+            .compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c));
+        let size = sized.size;
+        let mut child_sizes = sized.child_sizes;
+
+        for i in 0..child_count {
+            let offset = match specs[i] {
+                None => {
+                    let child_size = child_sizes[i];
+                    Offset::new(
+                        alignment_along_axis(self.stack.alignment.x, size.width - child_size.width),
+                        alignment_along_axis(
+                            self.stack.alignment.y,
+                            size.height - child_size.height,
+                        ),
+                    )
+                }
+                Some(spec) => {
+                    let cc = spec.child_constraints(size);
+                    let child_size = ctx.layout_child(i, cc);
+                    child_sizes[i] = child_size;
+                    let offset = spec.child_offset(size, child_size, self.stack.alignment);
+                    if RenderStack::child_overflows(size, offset, child_size) {
+                        self.stack.has_visual_overflow = true;
+                    }
+                    offset
+                }
+            };
+
+            ctx.position_child(i, offset);
+
+            if displayed_index == Some(i) {
+                for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
+                    let slot = baseline_kind_index(kind);
+                    self.reported_baselines[slot] = ctx
+                        .child_distance_to_actual_baseline(i, kind)
+                        .map(|baseline| baseline + offset.dy.get());
+                }
+            }
+        }
+
+        size
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        let specs = Self::build_specs_from_dry_layout_ctx(ctx);
+        self.stack
+            .compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))
+            .size
+    }
+
+    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
+            ctx.child_min_intrinsic_width(i, extent)
+        })
+    }
+
+    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
+            ctx.child_max_intrinsic_width(i, extent)
+        })
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
+            ctx.child_min_intrinsic_height(i, extent)
+        })
+    }
+
+    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
+            ctx.child_max_intrinsic_height(i, extent)
+        })
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        let child_count = ctx.child_count();
+        let displayed_index = self.displayed_index(child_count)?;
+        let specs = Self::build_specs_from_dry_baseline_ctx(ctx);
+        let size = self
+            .stack
+            .compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))
+            .size;
+        let child_constraints = match specs[displayed_index] {
+            Some(spec) => spec.child_constraints(size),
+            None => self.stack.non_positioned_constraints(constraints),
+        };
+        let child_baseline =
+            ctx.child_dry_baseline(displayed_index, child_constraints, baseline)?;
+        let child_size = ctx.child_dry_layout(displayed_index, child_constraints);
+        let offset = match specs[displayed_index] {
+            Some(spec) => spec.child_offset(size, child_size, self.stack.alignment),
+            None => Offset::new(
+                alignment_along_axis(self.stack.alignment.x, size.width - child_size.width),
+                alignment_along_axis(self.stack.alignment.y, size.height - child_size.height),
+            ),
+        };
+        Some(child_baseline + offset.dy.get())
+    }
+
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        self.reported_baselines[baseline_kind_index(baseline)]
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
+        let Some(index) = self.displayed_index(self.stack.child_count) else {
+            return;
+        };
+
+        let paint_displayed_child = |ctx: &mut flui_rendering::context::PaintCx<'_, Variable>| {
+            ctx.paint_child(index);
+        };
+
+        if self.stack.has_visual_overflow && self.stack.clip_behavior != Clip::None {
+            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+            ctx.with_clip_rect(bounds, self.stack.clip_behavior, paint_displayed_child);
+        } else {
+            paint_displayed_child(ctx);
+        }
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, StackParentData>) -> bool {
+        if !ctx.is_within_own_size() {
+            return false;
+        }
+        let Some(index) = self.displayed_index(self.stack.child_count) else {
+            return false;
+        };
+        ctx.hit_test_child_at_layout_offset(index)
     }
 }
 

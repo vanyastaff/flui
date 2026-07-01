@@ -128,13 +128,18 @@ pub trait CustomPainter: Send + Sync + Debug {
 
     /// Hit test at the given position.
     ///
-    /// Returns `true` if the painter considers the given position to be "hit".
-    /// This is used for event handling.
+    /// The given position is relative to the same coordinate space as the
+    /// last [`Self::paint`] call. Return `true` if the position is a "hit",
+    /// `false` if it is a miss, and `None` to use the caller's default
+    /// behavior.
     ///
-    /// The default implementation returns `false`, meaning the painter doesn't
-    /// handle hit testing and events pass through to children.
-    fn hit_test(&self, _position: Offset) -> bool {
-        false
+    /// The default implementation returns `None`. `RenderCustomPaint`
+    /// resolves the tri-state per Flutter parity: a *background* painter
+    /// defaults to hit (`None` → `true`) and a *foreground* painter defaults
+    /// to miss (`None` → `false`) — the trait itself is direction-agnostic,
+    /// so it cannot pick a single default for both roles.
+    fn hit_test(&self, _position: Offset) -> Option<bool> {
+        None
     }
 
     /// Build semantics information for accessibility.
@@ -200,7 +205,7 @@ mod tests {
     #[test]
     fn test_default_hit_test() {
         let painter = TestPainter { color: 0xFF0000 };
-        assert!(!painter.hit_test(Offset::ZERO));
+        assert_eq!(painter.hit_test(Offset::ZERO), None);
     }
 
     #[test]

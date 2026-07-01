@@ -1,8 +1,8 @@
-//! [`Stack`] — overlaps children, aligning non-positioned ones.
+//! [`Stack`] and [`IndexedStack`] — overlap children, aligning non-positioned ones.
 
 use std::fmt;
 
-use flui_objects::{RenderStack, StackFit};
+use flui_objects::{RenderIndexedStack, RenderStack, StackFit};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Alignment;
 use flui_view::BoxedView;
@@ -91,3 +91,93 @@ where
 }
 
 generic_render_view_element!(Stack);
+
+/// Overlaps its children like [`Stack`], but displays only one child by index.
+///
+/// Flutter parity: all children are still laid out, so the stack's size is
+/// resolved exactly like [`Stack`]. Only the selected child participates in
+/// paint, hit testing, semantics, and baseline reporting. `index = None`
+/// displays no child.
+#[derive(Clone)]
+pub struct IndexedStack<C = Vec<BoxedView>> {
+    alignment: Alignment,
+    fit: StackFit,
+    index: Option<usize>,
+    children: C,
+}
+
+impl<C> IndexedStack<C> {
+    /// An indexed stack with Flutter's default alignment, fit, and `index = 0`.
+    pub fn new(children: C) -> Self {
+        Self {
+            alignment: Alignment::TOP_LEFT,
+            fit: StackFit::Loose,
+            index: Some(0),
+            children,
+        }
+    }
+
+    /// How non-positioned children are aligned within the stack.
+    #[must_use]
+    pub fn alignment(mut self, alignment: Alignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// How non-positioned children are sized (`Loose` = own size, `Expand` =
+    /// fill the stack).
+    #[must_use]
+    pub fn fit(mut self, fit: StackFit) -> Self {
+        self.fit = fit;
+        self
+    }
+
+    /// Which child is displayed. `None` displays no child.
+    #[must_use]
+    pub fn index(mut self, index: Option<usize>) -> Self {
+        self.index = index;
+        self
+    }
+}
+
+impl<C: ViewSeq> fmt::Debug for IndexedStack<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexedStack")
+            .field("alignment", &self.alignment)
+            .field("fit", &self.fit)
+            .field("index", &self.index)
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
+impl<C> flui_view::RenderView for IndexedStack<C>
+where
+    C: ViewSeq + Clone + Send + Sync + 'static,
+{
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderIndexedStack;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderIndexedStack::new()
+            .with_alignment(self.alignment)
+            .with_fit(self.fit)
+            .with_index(self.index)
+    }
+
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_alignment(self.alignment);
+        render_object.set_fit(self.fit);
+        render_object.set_index(self.index);
+    }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+        self.children.for_each(|_index, child| visitor(child));
+    }
+}
+
+generic_render_view_element!(IndexedStack);

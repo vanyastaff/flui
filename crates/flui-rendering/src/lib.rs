@@ -57,11 +57,12 @@ pub mod constraints;
 pub mod context;
 // Cycle 4 R-16 partial un-gate: `sliver_grid_delegate` is promoted to
 // the default build because `RenderSliverGrid` now ships unconditionally
-// in `flui-objects`. The remaining five companion-less delegates
-// (`custom_painter`, `flow_delegate`, `multi_child_layout_delegate`,
-// `single_child_layout_delegate`, `custom_clipper`) stay gated inside
-// `delegates/mod.rs` until their render objects land — opt in via
-// `--features experimental-delegates`.
+// in `flui-objects`. `custom_painter` is promoted the same way now that
+// `RenderCustomPaint` ships unconditionally too (ADR-0007 amendment). The
+// remaining four companion-less delegates (`flow_delegate`,
+// `multi_child_layout_delegate`, `single_child_layout_delegate`,
+// `custom_clipper`) stay gated inside `delegates/mod.rs` until their render
+// objects land — opt in via `--features experimental-delegates`.
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
@@ -175,19 +176,21 @@ pub mod prelude {
             SliverPaintOrder, ViewConfiguration, ViewportOffset,
         },
     };
-    // Grid delegate — always available because RenderSliverGrid ships in the
-    // default build (Cycle 4 R-16 partial un-gate).
+    // Grid + custom-paint delegates — always available because
+    // RenderSliverGrid and RenderCustomPaint both ship in the default build
+    // (Cycle 4 R-16 partial un-gate; ADR-0007 amendment for CustomPainter).
     pub use crate::delegates::{
-        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+        CustomPainter, SemanticsBuilder, SliverGridDelegate,
+        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
+        SliverGridLayout,
     };
     // Remaining companion-less delegates still gated until their render
     // objects land (Cycle 4 R-16).
     #[cfg(feature = "experimental-delegates")]
     pub use crate::delegates::{
-        AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,
+        AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, RectClipper,
-        SemanticsBuilder, SingleChildLayoutDelegate,
+        SingleChildLayoutDelegate,
     };
 }
 

@@ -19,7 +19,7 @@ Render tree: `RenderObject` / `RenderBox` / `RenderSliver` with Protocol-based l
 - **No `RwLock<Box<dyn RenderObject>>`** — enforced by port-check trigger #1. Boxed trait objects are owned by value in `RenderEntry<P>`.
 - **Stack safety via `stacker::maybe_grow`** — recursive layout/paint/hit-test walks use `ensure_stack` (128KiB red zone / 4MiB segment). Not on wasm32.
 - **`testing` feature** — opt-in test harness (`RenderTester`/`Probe` API). Forwards to `flui-layer/testing`. See `crates/flui-rendering/docs/TESTING.md` for the catalog rules.
-- **`experimental-delegates` feature** — gates delegate trait modules (~1800 LOC): custom_painter, flow, multi_child_layout, single_child_layout, sliver_grid, custom_clipper. Zero production impls.
+- **`experimental-delegates` feature** — gates delegate trait modules with zero production impls: flow, multi_child_layout, single_child_layout, custom_clipper. (`sliver_grid`/`custom_painter` ship unconditionally now that `RenderSliverGrid`/`RenderCustomPaint` landed — ADR-0007.)
 - **Benchmarks** — `layout` and `paint` benches. `autobenches = false` (shared `benches/helpers.rs` module).
 - **Integration tests** — 31 test files under `tests/`: render_object_harness.rs (catalog CI guard), pipeline_scenarios.rs, deep_tree_stack.rs, etc.
 

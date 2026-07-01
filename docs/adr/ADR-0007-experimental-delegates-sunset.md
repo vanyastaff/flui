@@ -95,3 +95,13 @@ The trigger is intentionally **any** companion render-object, not **all** four �
 | **(b) Un-gate now (make default)** | Adds dead surface to every default build. ~1 800 LOC of traits with zero production impls appear as public API. Confuses agents and reviewers. Undoes the Cycle 4 R-16 gate without any new evidence the delegates are being consumed. |
 | **(c) Keep indefinitely with no sunset rule** | The current implicit policy. The problem is that 18 months of zero activity already indicates drift; keeping without a deadline invites perpetual deferral. A hard trigger converts an implicit "maybe later" into an accountable decision point. |
 | **(d) Extract to a separate `flui-delegates` crate** | One consumer (the render-objects, not yet written) does not justify a crate boundary. Would be premature decomposition for the same reason rejected in ADR-0003 (Decision 1). Revisit if the delegates prove useful outside `flui-rendering`. |
+
+---
+
+## Amendment (2026-07-01): `CustomPainter` un-gated — sunset cancelled for that module
+
+`RenderCustomPaint` landed in `crates/flui-objects/src/proxy/custom_paint.rs`, with the `CustomPaint` widget in `crates/flui-widgets/src/paint/custom_paint.rs`. Per this ADR's own rule ("one landing render-object proves the pattern is active"), this satisfies the sunset-cancelling condition for `delegates/custom_painter.rs` specifically — the same event that already cancelled it for `delegates/sliver_grid_delegate.rs` when `RenderSliverGrid` landed (Cycle 4 R-16, prior to this ADR being written).
+
+**Consequence:** `delegates/custom_painter.rs` is un-gated (moved out of `#[cfg(feature = "experimental-delegates")]` in `delegates/mod.rs`) and ships unconditionally, alongside `sliver_grid_delegate.rs`. `CustomPainter::hit_test` was also corrected from `-> bool` to `-> Option<bool>` (Flutter's `bool?` tri-state — `None` means "use the caller's default") while making this change, since `RenderCustomPaint`'s hit-test order depends on the tri-state default.
+
+**Still gated, unchanged by this amendment:** `delegates/flow_delegate.rs`, `delegates/multi_child_layout_delegate.rs`, `delegates/single_child_layout_delegate.rs`, and `delegates/custom_clipper.rs` — none of their companion render objects (`RenderFlow`, `RenderCustomMultiChildLayoutBox`) has landed. The sunset trigger in the Decision section above still applies to these four modules.

@@ -191,7 +191,15 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > `GridView.builder` lazy tests). `RenderShrinkWrappingViewport` is also closed
 > and backs both the low-level `ShrinkWrappingViewport` widget and high-level
 > `CustomScrollView`/`ListView`/`GridView` `shrink_wrap` composition. The genuine
-> remaining work is: **(a)** the
+> `RenderIndexedStack` gap is closed as well: it now backs the public
+> `IndexedStack` widget and has harness coverage for selected-child paint,
+> hit-test, `None`, and baseline behavior. `RenderCustomPaint` is now in the
+> object catalog with harness coverage for preferred sizing, painter paint order,
+> and foreground hit-test precedence; repaint-listenable/semantics/cache hints
+> remain documented deferred edges. `RenderListBody` is now in the object catalog,
+> backs the public `ListBody` widget, and has harness coverage for axis-direction
+> layout, reverse positioning, hit testing, dry layout, and dry-baseline behavior.
+> The genuine remaining work is: **(a)** the
 > *secondary-query* architectural gap — `compute_dry_layout` / baseline /
 > intrinsics for multi-child objects (`2026-06-30-secondary-query-layout-gap.md`,
 > design-ready); **(b)** the still-unbuilt family members listed below;
@@ -201,10 +209,10 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 
 | Family | Status | Notes |
 |---|---|---|
-| Box layout (`RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFractionallySizedBox`, `RenderStack`, `RenderPositioned`, `RenderFlow`, `RenderTable`) | ⚠ mostly exist + audited | ConstrainedBox/LimitedBox/AspectRatio/Baseline/Wrap/FractionallySizedBox/Stack/Flex **exist + oracle-verified faithful or fixed** 2026-06-30. `RenderFlow`/`RenderTable` not yet built. |
-| Paint effects (`RenderClipRect/RRect/Path/Oval`, `RenderDecoratedBox`, `RenderOpacity` variants, `RenderTransform` family, `RenderFittedBox`, `RenderCustomPaint`, `RenderRepaintBoundary`) | ⚠ mostly exist | `RenderTransform`/`RenderFittedBox`/`RenderFractionalTranslation` audited+fixed 2026-06-30; clip/opacity/decorated_box exist (proxy-paint parity audit in progress). |
+| Box layout (`RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFractionallySizedBox`, `RenderStack`, `RenderIndexedStack`, `RenderListBody`, `RenderPositioned`, `RenderFlow`, `RenderTable`) | ⚠ mostly exist + audited | ConstrainedBox/LimitedBox/AspectRatio/Baseline/Wrap/FractionallySizedBox/Stack/Flex **exist + oracle-verified faithful or fixed** 2026-06-30. `RenderIndexedStack` and `RenderListBody` exist + oracle-verified 2026-07-01. `RenderFlow`/`RenderTable` not yet built. |
+| Paint effects (`RenderClipRect/RRect/Path/Oval`, `RenderDecoratedBox`, `RenderOpacity` variants, `RenderTransform` family, `RenderFittedBox`, `RenderCustomPaint`, `RenderRepaintBoundary`) | ⚠ mostly exist | `RenderTransform`/`RenderFittedBox`/`RenderFractionalTranslation` audited+fixed 2026-06-30; clip/opacity/decorated_box exist (proxy-paint parity audit in progress). `RenderCustomPaint` exists with first harness slice 2026-07-01; repaint-listenable/semantics/cache hints remain deferred. |
 | Slivers (`RenderViewport`, `RenderShrinkWrappingViewport`, `RenderSliverList/Grid/Padding/FillViewport/FillRemaining/ToBoxAdapter/Offstage/Opacity`) | ⚠ mostly exist; grid + shrink-wrap viewport blockers closed | Contained slivers audited+fixed 2026-06-30 (offstage correction, overscroll positioning). `RenderSliverGrid` and `RenderSliverGridLazy` now back eager `SliverGrid`/`GridView.count`/`GridView.extent` and lazy `GridView.builder`; lazy grid has a 1000-item scroll-bounded test. `RenderShrinkWrappingViewport` now backs `ShrinkWrappingViewport` plus `CustomScrollView`/`ListView`/`GridView` `shrink_wrap`; persistent-header families remain open. |
-| Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`, `RenderListBody`) | ◐ partial | `RenderParagraph`/`RenderImage` exist; not yet parity-audited. |
+| Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`) | ◐ partial | `RenderParagraph`/`RenderImage` exist; not yet parity-audited. |
 
 **Exit:** widget→render-object checklist complete; per-RO layout + paint tests; intrinsic-size tests where applicable; 1000-item sliver scroll test green; `flui-rendering` coverage ≥ 80%; **secondary-query gap closed** (dry-layout/baseline/intrinsics for multi-child objects).
 

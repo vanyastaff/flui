@@ -33,6 +33,9 @@ mod sliver_grid_test;
 mod spacer_test;
 mod visibility_test;
 
+// ── Business.1 slice — CustomPaint ───────────────────────────────────────────
+mod custom_paint_test;
+
 // ── Business.1 slice 2 — CustomScrollView + eager sliver-fill wrappers ───────
 mod custom_scroll_view_test;
 mod sliver_fill_remaining_test;

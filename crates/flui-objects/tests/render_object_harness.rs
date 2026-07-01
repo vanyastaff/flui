@@ -8,6 +8,7 @@
 //! |------|-----------------|--------|----------|-------|-------------|---------|
 //! | `RenderSizedBox` | `harness_sized_box_*` | yes | — | — | yes | queries |
 //! | `RenderColoredBox` | `harness_colored_box_*` | yes | yes | yes | yes | — |
+//! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
 //! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
 //! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
@@ -31,6 +32,8 @@
 //! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
 //! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
+//! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
+//! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
@@ -60,12 +63,13 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
 use flui_objects::*;
+use flui_painting::{Canvas, Paint};
 use flui_rendering::{
     constraints::BoxConstraints,
-    delegates::SliverGridDelegateWithFixedCrossAxisCount,
+    delegates::{CustomPainter, SliverGridDelegateWithFixedCrossAxisCount},
     hit_testing::{EventPropagation, HitTestBehavior, HitTestResult, PointerEventHandler},
     parent_data::{FlexParentData, SliverMultiBoxAdaptorParentData, StackParentData},
     testing::{
@@ -90,6 +94,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAlign",
     "RenderSizedBox",
     "RenderColoredBox",
+    "RenderCustomPaint",
     "RenderImage",
     "RenderParagraph",
     "RenderPadding",
@@ -113,6 +118,8 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderMetaData",
     "RenderFlex",
     "RenderStack",
+    "RenderIndexedStack",
+    "RenderListBody",
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
     "RenderListener",
@@ -142,6 +149,55 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
 
 fn loose(max: f32) -> BoxConstraints {
     BoxConstraints::new(px(0.0), px(max), px(0.0), px(max))
+}
+
+#[derive(Debug)]
+struct HarnessPainter {
+    color: Color,
+    hit: Option<bool>,
+}
+
+impl HarnessPainter {
+    fn new(color: Color) -> Self {
+        Self { color, hit: None }
+    }
+
+    fn with_hit(mut self, hit: Option<bool>) -> Self {
+        self.hit = hit;
+        self
+    }
+}
+
+impl CustomPainter for HarnessPainter {
+    fn paint(&self, canvas: &mut Canvas, size: Size) {
+        canvas.draw_rect(
+            Rect::from_origin_size(Point::ZERO, size),
+            &Paint::fill(self.color),
+        );
+    }
+
+    fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
+        old_delegate
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_none_or(|old| old.color != self.color || old.hit != self.hit)
+    }
+
+    fn hit_test(&self, _position: Offset) -> Option<bool> {
+        self.hit
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn custom_painter(color: Color) -> Arc<dyn CustomPainter> {
+    Arc::new(HarnessPainter::new(color))
+}
+
+fn custom_hit_painter(color: Color, hit: Option<bool>) -> Arc<dyn CustomPainter> {
+    Arc::new(HarnessPainter::new(color).with_hit(hit))
 }
 
 fn viewport(sliver: TreeNode) -> TreeNode {
@@ -259,6 +315,81 @@ fn harness_colored_box_hit_test_within_bounds() {
 
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.root()));
     assert!(run.hit(50.0, 50.0).is_empty());
+}
+
+#[test]
+fn harness_custom_paint_childless_uses_preferred_size_and_paints() {
+    let run = RenderTester::mount(box_node(RenderCustomPaint::new(
+        Some(custom_painter(Color::RED)),
+        None,
+        Size::new(px(30.0), px(20.0)),
+    )))
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(30.0), px(20.0)));
+    assert!(run.hit_first(10.0, 10.0).is_some());
+    assert!(
+        run.display_commands()
+            .iter()
+            .any(|cmd| cmd.line.contains("#FF0000FF")),
+        "background painter must emit a red draw command",
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderCustomPaint",
+        &["preferred_size", "has_painter"],
+    );
+}
+
+#[test]
+fn harness_custom_paint_orders_background_child_foreground() {
+    let run = RenderTester::mount(
+        box_node(RenderCustomPaint::new(
+            Some(custom_painter(Color::RED)),
+            Some(custom_painter(Color::BLUE)),
+            Size::ZERO,
+        ))
+        .child(box_node(RenderColoredBox::green(20.0, 10.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let painted = run
+        .display_commands()
+        .into_iter()
+        .map(|cmd| cmd.line)
+        .collect::<Vec<_>>();
+    let rects = painted
+        .iter()
+        .filter(|line| line.contains("DrawRect"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rects.len(),
+        3,
+        "expected background painter, child, foreground painter; commands:\n{}",
+        painted.join("\n"),
+    );
+    assert!(
+        rects[0].contains("#FF0000FF")
+            && rects[1].contains("#00FF00FF")
+            && rects[2].contains("#0000FFFF"),
+        "paint order must be background red -> child green -> foreground blue; commands:\n{}",
+        painted.join("\n"),
+    );
+}
+
+#[test]
+fn harness_custom_paint_foreground_hit_test_wins() {
+    let run = RenderTester::mount(box_node(RenderCustomPaint::new(
+        Some(custom_hit_painter(Color::RED, Some(false))),
+        Some(custom_hit_painter(Color::BLUE, Some(true))),
+        Size::new(px(30.0), px(20.0)),
+    )))
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(10.0, 10.0), Some(run.root()));
 }
 
 #[test]
@@ -1509,6 +1640,232 @@ fn harness_stack_positioned_child_layout_and_hit_test() {
     assert_eq!(run.offset(run.id("badge")), Offset::new(px(16.0), px(8.0)));
     assert_eq!(run.hit_first(20.0, 12.0), Some(run.id("badge")));
     assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("base")));
+}
+
+#[test]
+fn harness_indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_child() {
+    let run = RenderTester::mount(
+        box_node(RenderIndexedStack::new().with_index(Some(1)))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(box_node(RenderColoredBox::green(80.0, 60.0)).label("selected"))
+            .child(box_node(RenderColoredBox::blue(30.0, 30.0)).label("hidden_top")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(80.0), px(60.0)),
+        "indexed stack must size with the same all-child Stack layout pass",
+    );
+    assert_eq!(
+        run.hit_first(10.0, 10.0),
+        Some(run.id("selected")),
+        "hit testing must visit only the selected child, not the later hidden child",
+    );
+
+    let painted = run
+        .display_commands()
+        .into_iter()
+        .map(|cmd| cmd.line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        painted.contains("#00FF00FF"),
+        "selected green child must paint; commands:\n{painted}",
+    );
+    assert!(
+        !painted.contains("#FF0000FF") && !painted.contains("#0000FFFF"),
+        "hidden red/blue children must not paint; commands:\n{painted}",
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderIndexedStack",
+        &["fit", "clip_behavior", "index"],
+    );
+}
+
+#[test]
+fn harness_indexed_stack_none_lays_out_but_displays_no_child() {
+    let run = RenderTester::mount(
+        box_node(RenderIndexedStack::new().with_index(None))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(80.0, 60.0)).label("b")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(80.0), px(60.0)),
+        "index None must not skip layout of children",
+    );
+    assert_eq!(
+        run.hit_first(10.0, 10.0),
+        None,
+        "index None must display and hit-test no child",
+    );
+    assert!(
+        run.display_commands().is_empty(),
+        "index None must produce no child paint commands",
+    );
+}
+
+#[test]
+fn harness_indexed_stack_reports_selected_child_baseline() {
+    let constraints = loose(200.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(100.0)))
+            .label("outer")
+            .child(
+                box_node(RenderIndexedStack::new().with_index(Some(1)))
+                    .label("indexed")
+                    .child(box_node(RenderColoredBox::red(40.0, 50.0)).label("hidden"))
+                    .child(
+                        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(10.0)))
+                            .child(box_node(RenderParagraph::new(
+                                TextSpan::new("Ag"),
+                                TextDirection::Ltr,
+                            )))
+                            .label("selected"),
+                    ),
+            ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("indexed")).dy.get(),
+        90.0,
+        "outer baseline must use the selected child's 10px baseline, not the \
+         hidden child's larger stack height",
+    );
+    let dry = run
+        .dry_baseline(run.id("indexed"), constraints, TextBaseline::Alphabetic)
+        .expect("indexed stack must report the selected child's dry baseline");
+    assert!(
+        (dry - 10.0).abs() < 0.01,
+        "dry baseline must also resolve through the selected child only; got {dry}",
+    );
+}
+
+#[test]
+fn harness_list_body_vertical_down_stretches_cross_axis_and_hits_children() {
+    let constraints = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(f32::INFINITY));
+    let run = RenderTester::mount(
+        box_node(RenderListBody::new())
+            .child(box_node(RenderSizedBox::fixed(px(20.0), px(10.0))).label("first"))
+            .child(box_node(RenderSizedBox::fixed(px(30.0), px(20.0))).label("second")),
+    )
+    .with_constraints(constraints)
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(100.0), px(30.0)),
+        "vertical ListBody must take the bounded cross-axis width and summed child heights",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("first")),
+        Size::new(px(100.0), px(10.0)),
+        "children are tight to the cross-axis width",
+    );
+    assert_eq!(run.offset(run.id("first")), Offset::ZERO);
+    assert_eq!(run.offset(run.id("second")), Offset::new(px(0.0), px(10.0)));
+    assert_eq!(run.hit_first(5.0, 15.0), Some(run.id("second")));
+    assert_descendant_properties(&run.diagnostics(), "RenderListBody", &["axis_direction"]);
+}
+
+#[test]
+fn harness_list_body_vertical_up_positions_children_from_bottom() {
+    let constraints = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(f32::INFINITY));
+    let run = RenderTester::mount(
+        box_node(RenderListBody::with_axis_direction(
+            AxisDirection::BottomToTop,
+        ))
+        .child(box_node(RenderSizedBox::fixed(px(20.0), px(10.0))).label("first"))
+        .child(box_node(RenderSizedBox::fixed(px(30.0), px(20.0))).label("second")),
+    )
+    .with_constraints(constraints)
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(100.0), px(30.0)));
+    assert_eq!(
+        run.offset(run.id("first")),
+        Offset::new(px(0.0), px(20.0)),
+        "first child is visually last for AxisDirection::BottomToTop",
+    );
+    assert_eq!(run.offset(run.id("second")), Offset::ZERO);
+    assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("second")));
+}
+
+#[test]
+fn harness_list_body_horizontal_right_to_left_stretches_height() {
+    let constraints = BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(50.0));
+    let run = RenderTester::mount(
+        box_node(RenderListBody::with_axis_direction(
+            AxisDirection::RightToLeft,
+        ))
+        .child(box_node(RenderSizedBox::fixed(px(20.0), px(10.0))).label("first"))
+        .child(box_node(RenderSizedBox::fixed(px(30.0), px(20.0))).label("second")),
+    )
+    .with_constraints(constraints)
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(50.0), px(50.0)));
+    assert_eq!(
+        run.box_geometry(run.id("first")),
+        Size::new(px(20.0), px(50.0)),
+    );
+    assert_eq!(run.offset(run.id("first")), Offset::new(px(30.0), px(0.0)));
+    assert_eq!(run.offset(run.id("second")), Offset::ZERO);
+}
+
+#[test]
+fn harness_list_body_dry_layout_and_baseline_follow_oracle_order() {
+    let constraints = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(f32::INFINITY));
+    let mut dry_run = RenderTester::mount(
+        box_node(RenderListBody::new())
+            .label("list")
+            .child(box_node(RenderSizedBox::fixed(px(20.0), px(10.0))))
+            .child(box_node(RenderSizedBox::fixed(px(30.0), px(20.0)))),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    assert_eq!(
+        dry_run.dry_layout(dry_run.id("list"), constraints),
+        Size::new(px(100.0), px(30.0)),
+        "dry layout must take the bounded cross axis and sum child main extents",
+    );
+
+    let mut baseline_run = RenderTester::mount(
+        box_node(RenderListBody::new())
+            .label("list")
+            .child(box_node(RenderSizedBox::fixed(px(20.0), px(10.0))).label("box"))
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(5.0)))
+                    .child(box_node(RenderParagraph::new(
+                        TextSpan::new("Ag"),
+                        TextDirection::Ltr,
+                    )))
+                    .label("baseline"),
+            ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let dry = baseline_run
+        .dry_baseline(
+            baseline_run.id("list"),
+            constraints,
+            TextBaseline::Alphabetic,
+        )
+        .expect("second child reports a baseline");
+    assert!(
+        (dry - 15.0).abs() < 0.01,
+        "vertical down dry baseline must skip the first non-baseline child and add its height; got {dry}",
+    );
 }
 
 // ── RenderStack dry layout ────────────────────────────────────────────────────

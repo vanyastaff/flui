@@ -123,13 +123,13 @@ pub use interaction::{
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
-    FractionallySizedBox, IntrinsicHeight, IntrinsicWidth, LimitedBox, OverflowBox, Padding,
-    RotatedBox, SizedBox, SizedOverflowBox, Transform,
+    FractionallySizedBox, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListBody, OverflowBox,
+    Padding, RotatedBox, SizedBox, SizedOverflowBox, Transform,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
-pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
+pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
     RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollPhysics,
@@ -139,7 +139,7 @@ pub use scroll::{
     SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
     SliverToBoxAdapter, Viewport,
 };
-pub use stack::{Positioned, Stack};
+pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
@@ -162,11 +162,12 @@ pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, Stac
 pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
 // `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
 pub use flui_rendering::parent_data::FlexFit;
-// Grid delegates — always available (un-gated since `RenderSliverGrid` ships in
-// the default build). Re-exported here so widget authors need only import from
-// `flui_widgets`, matching Flutter's single-import surface.
+// Grid + custom-paint delegates — always available (un-gated since
+// `RenderSliverGrid`/`RenderCustomPaint` ship in the default build).
+// Re-exported here so widget authors need only import from `flui_widgets`,
+// matching Flutter's single-import surface.
 pub use flui_rendering::delegates::{
-    SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+    CustomPainter, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
     SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
 };
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
@@ -191,23 +192,24 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
-        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomScrollView,
-        DecoratedBox, EditableText, EditableTextState, Expanded, FittedBox, Flex, FlexFit,
-        Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector,
-        GridView, IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IntrinsicHeight,
-        IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
-        Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
-        Row, SafeArea, ScrollController, Scrollable, Scrollbar, ShrinkWrappingViewport,
-        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
-        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Text,
-        TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
+        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomPaint,
+        CustomScrollView, DecoratedBox, EditableText, EditableTextState, Expanded, FittedBox, Flex,
+        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
+        GestureDetector, GridView, IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider,
+        IndexedStack, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListBody, ListView, Listener,
+        MediaQuery, MediaQueryData, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding,
+        Positioned, RepaintBoundary, RotatedBox, Row, SafeArea, ScrollController, Scrollable,
+        Scrollbar, ShrinkWrappingViewport, SingleChildScrollView, SizedBox, SizedOverflowBox,
+        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+        SliverToBoxAdapter, Spacer, Stack, Text, TextEditingController, TextField, Theme,
+        ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
     pub use crate::{
-        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        CustomPainter, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
     };
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};

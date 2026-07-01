@@ -15,28 +15,28 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **51**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **54**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
 > and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
 > body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
-> that appears in the "Existing (51)" list, the list wins. The body is retained for its
+> that appears in the "Existing (54)" list, the list wins. The body is retained for its
 > accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
 > file), which the Core.2 implementers need.
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **51**
-- **Render objects remaining to build (Core.2):** **~21** (verified list below)
+- **Render objects existing today:** **54**
+- **Render objects remaining to build (Core.2):** **~18** (verified list below)
 
-### Existing render objects — authoritative (51)
+### Existing render objects — authoritative (54)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
-**Box layout (19):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderFittedBox` · `RenderFlex` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderWrap`
+**Box layout (21):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderFittedBox` · `RenderFlex` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderWrap`
 
-**Paint effects (9):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
+**Paint effects (10):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
 
 **Interaction / pointer (5):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderOffstage`
 
@@ -44,16 +44,14 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈21)
+### Remaining to build — verified missing (≈18)
 
 Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
 | `RenderMouseRegion` | `MouseRegion` (hover) | High | `proxy_box.dart` |
-| `RenderCustomPaint` | `CustomPaint` | High | `custom_paint.dart` |
 | `RenderEditable` | `EditableText`/`TextField` | High (App.1 IME) | `editable.dart` |
-| `RenderIndexedStack` | `IndexedStack` | Medium | `stack.dart` |
 | `RenderFlow` | `Flow` | Medium | `flow.dart` |
 | `RenderTable` | `Table`/`DataTable` | Medium | `table.dart` |
 | `RenderCustomSingleChildLayoutBox` | `CustomSingleChildLayout` | Medium | `custom_layout.dart` |
@@ -70,11 +68,16 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `RenderExcludeSemantics` | `ExcludeSemantics` | Low | `proxy_box.dart` |
 | `RenderLeaderLayer` | `CompositedTransformTarget` | Low | `proxy_box.dart` |
 | `RenderFollowerLayer` | `CompositedTransformFollower` | Low | `proxy_box.dart` |
-| `RenderListBody` | `ListBody` | Low | `list_body.dart` |
 
 > **`RenderSliverGrid` closure note (verified 2026-07-01):** eager `RenderSliverGrid` and request-strategy `RenderSliverGridLazy` now ship in `flui-objects`, are listed in the render-object harness catalog, and back `SliverGrid` / `GridView.count` / `GridView.extent` / `GridView.builder`. `GridView.builder` uses the same next-frame lazy-child service model as `ListView.builder`, so first-frame blank settling remains an explicit FLUI divergence until a true mid-pass build backend exists.
 >
 > **`RenderShrinkWrappingViewport` closure note (verified 2026-07-01):** `RenderShrinkWrappingViewport` now ships in `flui-objects`, is listed in the harness catalog, and backs both the low-level `ShrinkWrappingViewport` widget and the high-level `CustomScrollView::shrink_wrap` / `ListView::shrink_wrap` / `GridView::shrink_wrap` composition path. It matches Flutter's bounded-cross-axis / shrink-wrapped-main-axis layout shape. Lazy `builder` views still keep FLUI's documented next-frame child-settling divergence until a true mid-pass build backend exists.
+>
+> **`RenderIndexedStack` closure note (verified 2026-07-01):** `RenderIndexedStack` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `IndexedStack` widget. It preserves Flutter's O(N) stack layout behavior while restricting paint, hit-test, and baseline reporting to the selected child; `index = None` displays no child.
+>
+> **`RenderCustomPaint` closure note (verified 2026-07-01):** `RenderCustomPaint` now ships in `flui-objects`, is listed in the harness catalog, and uses `flui-rendering`'s `CustomPainter` delegate feature. Harness coverage pins childless preferred sizing, background/child/foreground paint order, and foreground hit-test precedence. Repaint-listenable, semantics-builder, and raster-cache hint plumbing remain documented deferred edges in the render object module.
+>
+> **`RenderListBody` closure note (verified 2026-07-01):** `RenderListBody` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `ListBody` widget. Harness coverage pins vertical and horizontal axis-direction layout, reverse positioning, cross-axis stretching, hit testing, dry layout, and dry-baseline ordering against Flutter's `rendering/list_body.dart` behavior.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -106,7 +109,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `Spacer` | *(composes)* | N/A | Leaf | Wraps `Expanded(child: SizedBox.shrink())` |
 | `Stack` | `RenderStack` | **Exists** | Variable | |
 | `Positioned` | *(ParentDataWidget)* | N/A | — | Sets `StackParentData` offsets |
-| `IndexedStack` | `RenderIndexedStack` | Needed | Variable | Extends `RenderStack`, shows only one child |
+| `IndexedStack` | `RenderIndexedStack` | **Exists** | Variable | Extends `RenderStack`, shows only one child |
 | `Wrap` | `RenderWrap` | Needed | Variable | From `wrap.dart` |
 | `Flow` | `RenderFlow` | Needed | Variable | Paint-time transforms via `FlowDelegate` |
 | `Table` | `RenderTable` | Needed | Variable | From `table.dart` |
@@ -131,7 +134,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `ClipOval` | `RenderClipOval` | **Exists** | Single | |
 | `ClipPath` | `RenderClipPath` | **Exists** | Single | |
 | `DecoratedBox` | `RenderDecoratedBox` | Needed | Single | Paints `BoxDecoration` (borders, gradients, shadows, images) |
-| `CustomPaint` | `RenderCustomPaint` | Needed | Single | User-supplied foreground/background painters |
+| `CustomPaint` | `RenderCustomPaint` | **Exists** | Single | User-supplied foreground/background painters |
 | `BackdropFilter` | `RenderBackdropFilter` | Needed | Single | Applies image filter to backdrop |
 | `ShaderMask` | `RenderShaderMask` | Needed | Single | Applies shader as color mask |
 | `PhysicalModel` | `RenderPhysicalModel` | Needed | Single | Rounded-rect clip + elevation shadow |
@@ -266,7 +269,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `MetaData` | `RenderMetaData` | **Exists** | Single | Attaches opaque data to hit-test entries |
 | `CompositedTransformTarget` | `RenderLeaderLayer` | Needed | Single | Anchor for follower layer |
 | `CompositedTransformFollower` | `RenderFollowerLayer` | Needed | Single | Follows leader layer position |
-| `ListBody` | `RenderListBody` | Needed | Variable | Sequential body layout (used by `Dialog`) |
+| `ListBody` | `RenderListBody` | **Exists** | Variable | Sequential body layout (used by `Dialog`) |
 
 ---
 
@@ -285,26 +288,24 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 5 | `RenderCustomSingleChildLayoutBox` | `custom_layout.dart` | `CustomSingleChildLayout` |
 | 6 | `RenderCustomMultiChildLayoutBox` | `custom_layout.dart` | `CustomMultiChildLayout` |
 
-### Wave 2 — Multi-Child Layout (4 objects)
+### Wave 2 — Multi-Child Layout (3 objects)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
-| 1 | `RenderIndexedStack` | `stack.dart` | `IndexedStack` |
-| 2 | `RenderWrap` | `wrap.dart` | `Wrap` |
-| 3 | `RenderFlow` | `flow.dart` | `Flow` |
-| 4 | `RenderTable` | `table.dart` | `Table` |
+| 1 | `RenderWrap` | `wrap.dart` | `Wrap` |
+| 2 | `RenderFlow` | `flow.dart` | `Flow` |
+| 3 | `RenderTable` | `table.dart` | `Table` |
 
-### Wave 3 — Paint Effects (7 objects)
+### Wave 3 — Paint Effects (6 objects)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
 | 1 | `RenderDecoratedBox` | `proxy_box.dart` | `DecoratedBox`, `Container` |
-| 2 | `RenderCustomPaint` | `custom_paint.dart` | `CustomPaint` |
-| 3 | `RenderBackdropFilter` | `proxy_box.dart` | `BackdropFilter` |
-| 4 | `RenderShaderMask` | `proxy_box.dart` | `ShaderMask` |
-| 5 | `RenderPhysicalModel` | `proxy_box.dart` | `PhysicalModel` |
-| 6 | `RenderPhysicalShape` | `proxy_box.dart` | `PhysicalShape` |
-| 7 | `RenderRotatedBox` | `rotated_box.dart` | `RotatedBox` |
+| 2 | `RenderBackdropFilter` | `proxy_box.dart` | `BackdropFilter` |
+| 3 | `RenderShaderMask` | `proxy_box.dart` | `ShaderMask` |
+| 4 | `RenderPhysicalModel` | `proxy_box.dart` | `PhysicalModel` |
+| 5 | `RenderPhysicalShape` | `proxy_box.dart` | `PhysicalShape` |
+| 6 | `RenderRotatedBox` | `rotated_box.dart` | `RotatedBox` |
 
 ### Wave 4 — Input / Leaf (5 objects)
 
@@ -340,12 +341,11 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 5 | `RenderLeaderLayer` | `proxy_box.dart` | `CompositedTransformTarget` |
 | 6 | `RenderFollowerLayer` | `proxy_box.dart` | `CompositedTransformFollower` |
 
-### Wave 7 — Secondary (2 objects)
+### Wave 7 — Secondary (1 object)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
-| 1 | `RenderListBody` | `list_body.dart` | `ListBody` |
-| 2 | `RenderExcludeSemantics` | `proxy_box.dart` | `ExcludeSemantics` |
+| 1 | `RenderExcludeSemantics` | `proxy_box.dart` | `ExcludeSemantics` |
 
 ---
 
