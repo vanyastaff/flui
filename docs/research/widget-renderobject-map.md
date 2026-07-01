@@ -131,24 +131,28 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 > (needs `Scrollable`/`SliverAppBar`-layer integration, a separate future pass); the widget-layer
 > `SliverPersistentHeader`/`SliverAppBar` themselves are also not in this pass.
 >
-> **Two pre-existing infrastructure defects discovered while building this family (not
-> introduced by it, not yet fixed — tracked here as follow-up work):**
-> 1. **`RenderViewport::attempt_layout` reports the wrong sign for `constraints.overlap`**
->    (`crates/flui-objects/src/sliver/viewport.rs`, the forward-sequence `overlap: center_offset.min(0.0)`
->    line, where `center_offset = -corrected_offset`). Independently re-derived against the oracle
+> **Two pre-existing infrastructure defects discovered while building this family:**
+> 1. **FIXED (2026-07-01).** `RenderViewport::attempt_layout` reported the wrong sign for
+>    `constraints.overlap` (`crates/flui-objects/src/sliver/viewport.rs`, the forward-sequence
+>    `overlap: center_offset.min(0.0)` line, where `center_offset = -corrected_offset`).
+>    Independently re-derived against the oracle
 >    (`rendering/viewport.dart:1834`: `overlap: leadingNegativeChild == null ? math.min(0.0, -centerOffset) : 0.0`,
 >    with `centerOffset = mainAxisExtent * anchor - correctedOffset`; for a top-anchored
 >    viewport with no leading reverse slivers this reduces to `overlap = min(0.0, correctedOffset)`)
 >    and confirmed by hand: at `scroll_offset = 300` a correct top-anchored forward viewport
->    must report `overlap == 0.0`, but FLUI's current formula gives `overlap == -300.0`.
->    `RenderShrinkWrappingViewport::attempt_layout` (same file) already has the correct formula
->    (`overlap: corrected_offset.min(0.0)`) — this is a `RenderViewport`-only regression, not a
->    systemic pattern. Zero prior test coverage caught it because no earlier sliver asserted on
->    `constraints.overlap` through a real viewport; this family's harness tests route around it
->    by asserting only quantities that don't round-trip through the buggy value in their specific
->    scenarios. Likely also affects `RenderSliverFillRemainingAndOverscroll`/
->    `RenderSliverFillRemainingWithScrollable`, which already read `constraints.overlap`.
-> 2. **No insertion path calls `RenderObject::attach` for a Sliver child.** `PipelineOwner::insert_child_render_object`
+>    must report `overlap == 0.0`, but the old formula gave `overlap == -300.0`.
+>    `RenderShrinkWrappingViewport::attempt_layout` (same file) already had the correct formula
+>    (`overlap: corrected_offset.min(0.0)`) — this was a `RenderViewport`-only regression, not a
+>    systemic pattern. Fixed to force `overlap == 0.0` for both sequences whenever a leading
+>    reverse-growth group exists (`center_sliver_index` splits the children), matching the
+>    oracle's `leadingNegativeChild != null` branch, and to `corrected_offset.min(0.0)` otherwise.
+>    Two harness regression tests added (`harness_viewport_forward_overlap_is_zero_without_leading_reverse_group`,
+>    `harness_viewport_reverse_group_overlap_is_always_zero`), including one through
+>    `RenderSliverFillRemainingWithScrollable` (which reads `constraints.overlap` directly into
+>    its `extent` formula — the sign bug inflated `extent` and silently un-clamped `paint_extent`).
+>    No existing test's expected value needed to change (zero prior coverage asserted on
+>    `constraints.overlap` through a real viewport).
+> 2. **Still open.** No insertion path calls `RenderObject::attach` for a Sliver child. `PipelineOwner::insert_child_render_object`
 >    (`crates/flui-rendering/src/pipeline/owner/accessors.rs`) is hard-coded to `BoxProtocol` and
 >    is the only caller of `attach_inserted_node` (the ADR-0013 wiring); Sliver children are
 >    inserted via the lower-level `render_tree_mut().insert_sliver_child(...)`

@@ -284,9 +284,27 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             }
         };
 
+        // Oracle (`rendering/viewport.dart:1810-1834`): the forward sequence's
+        // `overlap` is `min(0.0, -centerOffset)` — i.e. `corrected_offset.min(0.0)`
+        // here, since `center_offset == -corrected_offset` — ONLY when there is no
+        // reverse-growth sliver group ahead of it (`leadingNegativeChild == null`);
+        // otherwise BOTH the forward and reverse sequences pin `overlap` to `0.0`
+        // unconditionally. The previous formula, `center_offset.min(0.0)`, had the
+        // opposite sign whenever `corrected_offset` was positive (a scrolled-forward
+        // viewport with no reverse group always reported a negative `overlap`
+        // instead of `0.0`) — see the closure note in
+        // docs/research/widget-renderobject-map.md ("Two pre-existing
+        // infrastructure defects").
+        let has_reverse_group = center < child_count;
+        let forward_overlap = if has_reverse_group {
+            0.0
+        } else {
+            corrected_offset.min(0.0)
+        };
+
         let sequence_base = LayoutChildSequenceParams {
             scroll_offset: corrected_offset.max(0.0),
-            overlap: center_offset.min(0.0),
+            overlap: forward_overlap,
             layout_offset: 0.0,
             remaining_paint_extent: main_axis_extent,
             main_axis_extent,
@@ -306,11 +324,16 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             }
         }
 
-        if center < child_count {
+        if has_reverse_group {
             // W3.2 limitation: reverse pass reuses the forward-pass cache window.
             // Flutter recomputes cache parameters from forward results (Wave 3.3).
             let reverse_params = LayoutChildSequenceParams {
                 growth_direction: GrowthDirection::Reverse,
+                // Oracle: the reverse sequence always lays out with `overlap: 0.0`
+                // unconditionally (`rendering/viewport.dart:1818`), independent of
+                // `forward_overlap` above — stated explicitly so this invariant
+                // survives future changes to the `has_reverse_group` branch.
+                overlap: 0.0,
                 child_start: center,
                 child_end: child_count,
                 ..sequence_base

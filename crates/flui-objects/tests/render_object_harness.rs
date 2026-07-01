@@ -3545,6 +3545,79 @@ fn harness_viewport_stacks_two_slivers() {
     assert_eq!(run.sliver_geometry(run.id("body")).scroll_extent, 80.0);
 }
 
+// Regression coverage for the `RenderViewport::attempt_layout` sign bug
+// documented in docs/research/widget-renderobject-map.md ("Two pre-existing
+// infrastructure defects"): the forward sequence's `overlap` used
+// `center_offset.min(0.0)` (== `(-corrected_offset).min(0.0)`) instead of the
+// oracle's `corrected_offset.min(0.0)` (`rendering/viewport.dart:1834`,
+// `overlap: leadingNegativeChild == null ? math.min(0.0, -centerOffset) :
+// 0.0`). At a positive scroll offset with no leading reverse-growth group,
+// `overlap` must be `0.0`; with one, it must be `0.0` for BOTH sequences.
+// `RenderSliverFillRemainingWithScrollable` reads `constraints.overlap.min(0.0)`
+// directly into its `extent` formula, so a wrong sign inflates `extent` and
+// silently un-clamps `paint_extent` — the exact failure mode this guards.
+
+#[test]
+fn harness_viewport_forward_overlap_is_zero_without_leading_reverse_group() {
+    let run = RenderTester::mount(viewport_with_scroll(
+        50.0,
+        sliver_node(RenderSliverFillRemainingWithScrollable::new())
+            .label("fill")
+            .child(box_node(RenderColoredBox::red(300.0, 10.0)).label("fill_child")),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("fill")).paint_extent,
+        50.0,
+        "overlap == -50.0 (the sign bug) inflates `extent` to 150.0, which \
+         un-clamps `paint_extent` to 100.0 instead of the correct 50.0 \
+         (100px viewport minus the 50px already-consumed scroll offset)",
+    );
+}
+
+#[test]
+fn harness_viewport_reverse_group_overlap_is_always_zero() {
+    let mut viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::new(50.0),
+    );
+    // `center_sliver_index(1)` splits the two children: child 0 (a plain
+    // filler) lays out with forward growth, giving the viewport real forward
+    // scroll range so `50.0` is a valid, unclamped offset; child 1 lays out
+    // with reverse growth — the oracle's `leadingNegativeChild` case, where
+    // `overlap` must be `0.0` for BOTH sequences (not just the forward one).
+    viewport.set_center_sliver_index(Some(1));
+    let node = box_node(viewport)
+        .label("viewport")
+        .child(
+            sliver_node(RenderSliverToBoxAdapter::new())
+                .label("forward_filler")
+                .child(box_node(RenderColoredBox::red(300.0, 250.0)).label("forward_child")),
+        )
+        .child(
+            sliver_node(RenderSliverFillRemainingWithScrollable::new())
+                .label("fill")
+                .child(box_node(RenderColoredBox::green(300.0, 10.0)).label("fill_child")),
+        );
+
+    let run = RenderTester::mount(node)
+        .with_size(Size::new(px(300.0), px(100.0)))
+        .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("fill")).paint_extent,
+        50.0,
+        "the reverse sequence must also report overlap == 0.0 (oracle: \
+         unconditionally, `rendering/viewport.dart:1818`); before the fix \
+         this reverse-group sliver saw the same wrongly-negative overlap \
+         (inherited from the forward sequence's buggy value) and reported an \
+         un-clamped paint_extent of 100.0",
+    );
+}
+
 #[test]
 fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_axis() {
     let run = RenderTester::mount(shrink_wrapping_viewport(
@@ -5619,29 +5692,31 @@ fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_off
 // *real* `RenderViewport` to a nonzero scroll offset and inspecting the first
 // sliver's `constraints.overlap` revealed that `RenderViewport::attempt_layout`
 // (`crates/flui-objects/src/sliver/viewport.rs`, the `overlap: center_offset
-// .min(0.0)` line) computes the wrong sign relative to both the oracle
+// .min(0.0)` line) computed the wrong sign relative to both the oracle
 // (`rendering/viewport.dart:1834`: `overlap: ... math.min(0.0, -centerOffset)`)
 // and FLUI's own `RenderShrinkWrappingViewport::attempt_layout` sibling
 // (already correct: `overlap: corrected_offset.min(0.0)`) — confirmed
 // empirically (a Pinned header at scroll_offset=300 reported
 // `paint_origin == -300.0`, i.e. `overlap == -300.0`, where a correct
 // top-anchored forward viewport must report `overlap == 0.0` for its first
-// sliver). This is a **pre-existing, out-of-scope defect** in `RenderViewport`
-// itself, not something introduced by this pass — no existing sliver in the
-// catalog reads `constraints.overlap` in a way any prior test asserted on, so
-// it had zero coverage until these headers exercised it. Flagged for a
-// separate fix; not touched here (a `RenderViewport` core-geometry change is
-// its own reviewed task, and would also affect `RenderSliverFillRemainingAndOverscroll`/
-// `RenderSliverFillRemainingWithScrollable`, which already read
-// `constraints.overlap`). The tests below are written to avoid depending on
-// `overlap`-derived quantities through a real viewport (they assert
-// `paint_extent`/`effective_scroll_offset`/`max_scroll_obstruction_extent`,
-// none of which round-trip through the buggy value at scroll_offset > 0 in a
-// way that would be affected by it in these specific scenarios); the
-// stretch-configuration formulas that DO need a specific `overlap` are
-// covered by the pure unit test in `sliver_persistent_header.rs` using a
-// directly-constructed `SliverConstraints`, sidestepping the viewport bug
-// entirely.
+// sliver). **Fixed** (see `harness_viewport_forward_overlap_is_zero_without_
+// leading_reverse_group` / `harness_viewport_reverse_group_overlap_is_always_
+// zero` above, near the other `RenderViewport` harness tests): the formula now
+// matches the oracle for both the no-reverse-group case and the
+// leading-negative-child case (which forces `overlap` to `0.0` for both
+// sequences). It was a pre-existing defect, not something introduced by this
+// family's pass — no existing sliver in the catalog read `constraints.overlap`
+// in a way any prior test asserted on, so it had zero coverage until these
+// headers exercised it and it also would have affected
+// `RenderSliverFillRemainingAndOverscroll`/`RenderSliverFillRemainingWithScrollable`,
+// which already read `constraints.overlap`. The tests below still avoid
+// depending on `overlap`-derived quantities through a real viewport (they
+// assert `paint_extent`/`effective_scroll_offset`/`max_scroll_obstruction_extent`,
+// none of which round-trip through `overlap` at scroll_offset > 0 in these
+// specific scenarios); the stretch-configuration formulas that DO need a
+// specific `overlap` are covered by the pure unit test in
+// `sliver_persistent_header.rs` using a directly-constructed
+// `SliverConstraints`, sidestepping the viewport entirely.
 //
 // A second, separate finding: `RenderTester::mount` never calls
 // `RenderObject::attach` for a Sliver child. Tracing `crate::testing::tree::
