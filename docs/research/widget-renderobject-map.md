@@ -42,17 +42,14 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Leaf (2):** `RenderParagraph` · `RenderImage`
 
-**Slivers + viewport (13):** `RenderViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
+**Slivers + viewport (15):** `RenderViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈23)
+### Remaining to build — verified missing (≈22)
 
-Each `grep "struct Render…"`-confirmed absent on 2026-06-30:
+Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
-| **`RenderSliverGrid`** | `GridView` | **CRITICAL** (only Business.1 blocker) | `sliver_grid.dart` |
-
-> **`RenderSliverGrid` build note (verified 2026-06-30):** the RO impl itself is ~140 lines — an eager attached-child grid mirroring `RenderSliverFixedExtentList` (lay out each child tight to the delegate's per-child extents; position at `(main, cross)` via `child_paint_offset` for the main axis + the cross-axis component on the perpendicular axis; `scroll_extent = (rows-1)*main_axis_stride + child_main_axis_extent`). **BUT it is coupled to a feature-policy decision, not a clean drop-in:** its `SliverGridDelegate` / `SliverGridLayout` / both delegate impls already exist in `flui-rendering/src/delegates/sliver_grid_delegate.rs` **but are gated behind `#[cfg(feature = "experimental-delegates")]` (default OFF — `flui-rendering/src/lib.rs:186`)** because the delegate API isn't stabilized. So adding `RenderSliverGrid` to default `flui-objects` first requires a deliberate call: (a) stabilize the delegate API and ungate it; (b) feature-gate `RenderSliverGrid` (+ its `RENDER_OBJECT_TYPES` entry + harness test) behind the same `experimental-delegates` feature plumbed through `flui-objects`; or (c) enable `experimental-delegates` by default for `flui-objects` (spreads unstable API — discouraged). Recommended: (b) until the delegate API is reviewed/stabilized, then (a). This is a workspace feature-policy decision (per `architecture.md`), which is why `RenderSliverGrid` is *not* a tail-of-session quick win.
 | `RenderMouseRegion` | `MouseRegion` (hover) | High | `proxy_box.dart` |
 | `RenderCustomPaint` | `CustomPaint` | High | `custom_paint.dart` |
 | `RenderEditable` | `EditableText`/`TextField` | High (App.1 IME) | `editable.dart` |
@@ -76,7 +73,9 @@ Each `grep "struct Render…"`-confirmed absent on 2026-06-30:
 | `RenderFollowerLayer` | `CompositedTransformFollower` | Low | `proxy_box.dart` |
 | `RenderListBody` | `ListBody` | Low | `list_body.dart` |
 
-**Core.2 entry verdict: ✓ READY.** Business.1 needs only `RenderSliverGrid` of the above; the rest phase in by family off the critical path. R2 mitigated.
+> **`RenderSliverGrid` closure note (verified 2026-07-01):** eager `RenderSliverGrid` and request-strategy `RenderSliverGridLazy` now ship in `flui-objects`, are listed in the render-object harness catalog, and back `SliverGrid` / `GridView.count` / `GridView.extent` / `GridView.builder`. `GridView.builder` uses the same next-frame lazy-child service model as `ListView.builder`, so first-frame blank settling remains an explicit FLUI divergence until a true mid-pass build backend exists.
+
+**Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
 ---
 
@@ -151,13 +150,13 @@ Each `grep "struct Render…"`-confirmed absent on 2026-06-30:
 | `ListView` | *(composes)* | N/A | Variable | `CustomScrollView` + `SliverList` |
 | `GridView` | *(composes)* | N/A | Variable | `CustomScrollView` + `SliverGrid` |
 | `CustomScrollView` | *(composes Viewport)* | N/A | Variable | Creates `Viewport` with sliver children |
-| `Viewport` | `RenderViewport` | Needed | Variable(Sliver) | Bridge: box → sliver protocol; from `viewport.dart` |
+| `Viewport` | `RenderViewport` | **Exists** | Variable(Sliver) | Bridge: box -> sliver protocol; from `viewport.dart` |
 | `ShrinkWrappingViewport` | `RenderShrinkWrappingViewport` | Needed | Variable(Sliver) | Viewport that sizes to content |
-| `SliverList` | `RenderSliverList` | Needed | Variable(Box) | Lazy linear list of box children |
-| `SliverGrid` | `RenderSliverGrid` | Needed | Variable(Box) | Lazy 2D grid of box children |
+| `SliverList` | `RenderSliverList` / `RenderSliverListLazy` | **Exists** | Variable(Box) | Eager and request-strategy lazy linear list paths |
+| `SliverGrid` | `RenderSliverGrid` / `RenderSliverGridLazy` | **Exists** | Variable(Box) | Eager and request-strategy lazy 2D grid paths |
 | `SliverFixedExtentList` | `RenderSliverFixedExtentList` | **Exists** | Variable(Box) | Eager attached-child fixed extent; lazy adaptor pending |
-| `SliverFillViewport` | `RenderSliverFillViewport` | Needed | Variable(Box) | Each child fills viewport main-axis extent |
-| `SliverToBoxAdapter` | `RenderSliverToBoxAdapter` | Needed | Single(Box) | Wraps single box child in sliver protocol |
+| `SliverFillViewport` | `RenderSliverFillViewport` | **Exists** | Variable(Box) | Each child fills viewport main-axis extent |
+| `SliverToBoxAdapter` | `RenderSliverToBoxAdapter` | **Exists** | Single(Box) | Wraps single box child in sliver protocol |
 | `SliverPadding` | `RenderSliverPadding` | **Exists** | Single(Sliver) | Pads a sliver child |
 | `SliverAppBar` | *(composes)* | N/A | — | Material widget — uses `SliverPersistentHeader` internally |
 | `SliverPersistentHeader` | `RenderSliverPersistentHeader` family | Needed | Single(Box) | Pinned/floating/scrolling persistent headers |

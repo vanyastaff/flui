@@ -8,13 +8,46 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use flui_foundation::{ElementId, ViewKey};
-use flui_rendering::pipeline::PipelineOwner;
+use flui_foundation::{ElementId, RenderId, ViewKey};
+use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineOwner};
 use parking_lot::RwLock;
 use slab::Slab;
 
 use crate::element::ElementKind;
 use crate::view::{ElementBase, View};
+
+fn append_sparse_sliver_children(
+    render_tree: &flui_rendering::storage::RenderTree,
+    parent_render: RenderId,
+    desired_children: &mut Vec<RenderId>,
+) {
+    // Lazy sliver children intentionally stay out of ElementNode::child_ids;
+    // their render order is recovered from SliverMultiBoxAdaptorParentData.
+    let Some(parent_node) = render_tree.get(parent_render) else {
+        return;
+    };
+
+    let mut sparse_children = parent_node
+        .children()
+        .iter()
+        .copied()
+        .filter(|child| !desired_children.contains(child))
+        .filter_map(|child| {
+            let child_node = render_tree.get(child)?;
+            if child_node.parent() != Some(parent_render) {
+                return None;
+            }
+            let index = child_node
+                .parent_data()?
+                .downcast_ref::<SliverMultiBoxAdaptorParentData>()?
+                .index;
+            Some((index, child))
+        })
+        .collect::<Vec<_>>();
+
+    sparse_children.sort_by_key(|&(index, child)| (index, child));
+    desired_children.extend(sparse_children.into_iter().map(|(_, child)| child));
+}
 
 /// A node in the Element tree.
 ///
@@ -872,7 +905,8 @@ impl ElementTree {
                 if !desired_parent.contains_key(parent_render) {
                     continue;
                 }
-                let desired_children = target.get(parent_render).cloned().unwrap_or_default();
+                let mut desired_children = target.get(parent_render).cloned().unwrap_or_default();
+                append_sparse_sliver_children(render_tree, *parent_render, &mut desired_children);
                 let Some(parent_node) = render_tree.get_mut(*parent_render) else {
                     continue;
                 };

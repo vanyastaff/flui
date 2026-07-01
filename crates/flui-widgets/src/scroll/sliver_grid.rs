@@ -1,7 +1,14 @@
-//! [`SliverGrid`] — an eager 2-D grid sliver.
+//! [`SliverGrid`] — eager 2-D grid sliver.
+//! [`SliverGridLazy`] — lazy (element-owned) 2-D grid sliver, re-exported from
+//! `flui-view` where its element lifecycle lives.
 
 use std::fmt;
 use std::sync::Arc;
+
+// The lazy-grid view type lives in `flui-view` (co-located with its element
+// implementation).  Re-exporting it here keeps the widgets-crate API surface
+// consistent with how `SliverList` re-exports from `sliver_list.rs`.
+pub use flui_view::element::SliverGridLazy;
 
 use flui_objects::RenderSliverGrid;
 use flui_rendering::delegates::SliverGridDelegate;

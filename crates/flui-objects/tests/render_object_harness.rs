@@ -36,6 +36,7 @@
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | — | — | yes | — |
+//! | `RenderSliverGridLazy` | `harness_render_sliver_grid_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes | — |
 //! | `RenderSliverToBoxAdapter` | `harness_sliver_to_box_adapter_*` | yes | — | — | yes | — |
 //! | `RenderSliverFillViewport` | `harness_sliver_fill_viewport_*` | yes | — | — | yes | — |
@@ -116,6 +117,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderListener",
     "RenderSliverFixedExtentList",
     "RenderSliverGrid",
+    "RenderSliverGridLazy",
     "RenderSliverPadding",
     "RenderSliverToBoxAdapter",
     "RenderSliverFillViewport",
@@ -1765,6 +1767,110 @@ fn harness_render_sliver_grid_lays_out_two_column_grid() {
     let tree = run.diagnostics();
     let sliver_node_diag = tree.find_descendant("RenderSliverGrid").unwrap();
     assert_has_committed_geometry(sliver_node_diag);
+}
+
+// ── RenderSliverGridLazy ──────────────────────────────────────────────────────
+
+#[test]
+fn harness_render_sliver_grid_lazy_zero_items_reports_zero_geometry() {
+    // Empty source — no build requests should be emitted and the reported
+    // scroll extent must be zero.
+    let grid = RenderSliverGridLazy::new(
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+        0,
+    );
+    let run = RenderTester::mount(viewport(sliver_node(grid).label("lazy_grid")))
+        .with_size(Size::new(px(200.0), px(400.0)))
+        .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("lazy_grid")).scroll_extent,
+        0.0,
+        "empty RenderSliverGridLazy must report zero scroll extent",
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderSliverGridLazy",
+        &["item_count", "attached_child_count"],
+    );
+}
+
+#[test]
+fn harness_render_sliver_grid_lazy_pre_seeded_tiles_lay_out_correctly() {
+    // 4 items, 2 columns, 200×200 viewport → 2 rows of 100×100 tiles.
+    // All 4 tiles are pre-seeded with correct SliverMultiBoxAdaptorParentData so
+    // they are "resident" during layout; no build requests should be emitted.
+    // scroll_extent = compute_max_scroll_offset(4) = 2 rows × 100px = 200px.
+    let grid = RenderSliverGridLazy::new(
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+        4,
+    );
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(grid)
+            .label("lazy_grid")
+            .child(
+                box_node(RenderColoredBox::red(100.0, 100.0))
+                    .label("tile0")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(0),
+                    )),
+            )
+            .child(
+                box_node(RenderColoredBox::green(100.0, 100.0))
+                    .label("tile1")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(1),
+                    )),
+            )
+            .child(
+                box_node(RenderColoredBox::blue(100.0, 100.0))
+                    .label("tile2")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(2),
+                    )),
+            )
+            .child(
+                box_node(RenderColoredBox::red(100.0, 100.0))
+                    .label("tile3")
+                    .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                        SliverMultiBoxAdaptorParentData::new(3),
+                    )),
+            ),
+    ))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_layout();
+
+    // Scroll extent: 2 rows × 100px.
+    assert_eq!(
+        run.sliver_geometry(run.id("lazy_grid")).scroll_extent,
+        200.0,
+        "4 items in a 2-column 100px-tile grid = 2 rows × 100px = 200px scroll extent",
+    );
+
+    // Every tile must receive tight 100×100 constraints from the delegate.
+    assert_eq!(
+        run.box_geometry(run.id("tile0")),
+        Size::new(px(100.0), px(100.0)),
+        "tile0 must be sized 100×100 by the delegate",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("tile2")),
+        Size::new(px(100.0), px(100.0)),
+        "tile2 (second row) must also be 100×100",
+    );
+
+    // All 4 tiles are resident — no build requests should be pending.
+    let pending = run.owner_mut().take_pending_child_requests();
+    assert!(
+        pending.is_empty(),
+        "all tiles are pre-seeded; no build requests should be emitted but got {pending:?}",
+    );
+
+    let tree = run.diagnostics();
+    let grid_diag = tree
+        .find_descendant("RenderSliverGridLazy")
+        .expect("RenderSliverGridLazy must appear in diagnostics");
+    assert_has_committed_geometry(grid_diag);
 }
 
 #[test]

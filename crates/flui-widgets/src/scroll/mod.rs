@@ -47,7 +47,7 @@ pub use sliver_fill_remaining::{
 };
 pub use sliver_fill_viewport::SliverFillViewport;
 pub use sliver_fixed_extent_list::SliverFixedExtentList;
-pub use sliver_grid::SliverGrid;
+pub use sliver_grid::{SliverGrid, SliverGridLazy};
 pub use sliver_ignore_pointer::SliverIgnorePointer;
 pub use sliver_list::{SliverChildBuilderDelegate, SliverList};
 pub use sliver_offstage::SliverOffstage;

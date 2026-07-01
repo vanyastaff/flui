@@ -42,7 +42,7 @@
 use std::sync::Arc;
 
 use flui_foundation::{ElementId, RenderId};
-use flui_objects::RenderSliverList;
+use flui_objects::{RenderSliverGridLazy, RenderSliverList};
 use flui_rendering::{pipeline::PipelineOwner, protocol::SliverProtocol};
 use parking_lot::{Mutex, RwLock};
 
@@ -446,6 +446,368 @@ where
 /// [`SliverList::create_element`] (or [`ListView::builder`](crate::BuildContext)) —
 /// not through this alias directly — so `pub(crate)` is sufficient.
 pub(crate) type SliverListAdaptorElement = Element<SliverList, Variable, SliverListAdaptorBehavior>;
+
+// ============================================================================
+// SLIVER GRID LAZY — view + adaptor element
+// ============================================================================
+//
+// Parallel implementation to the SliverList adaptor above.  The manager
+// (SliverGridLazyAdaptorManager) and behavior (SliverGridLazyAdaptorBehavior)
+// are structurally identical to their list counterparts; the differences are:
+//  - The render object is RenderSliverGridLazy instead of RenderSliverList.
+//  - The view config carries a grid_delegate instead of item_extent_estimate.
+//  - The view_type_id is TypeId::of::<SliverGridLazy>() (F4 identity).
+//
+// If a generic LazySliverAdaptor<V> is introduced later to deduplicate this
+// code, the behaviour contract stays the same.
+
+// ── VIEW CONFIG ──────────────────────────────────────────────────────────────
+
+/// View configuration for a lazy-grid adaptor element.
+///
+/// Holds the grid delegate, item count, and the per-item view builder.  The
+/// element this view creates wraps [`RenderSliverGridLazy`] and owns a
+/// `SliverGridLazyAdaptorManager` that services `ChildManager::service` calls
+/// post-layout.
+///
+/// # F4 invariant
+///
+/// [`has_children`](Self::has_children) returns `false` — the dense reconciler
+/// must not touch lazy grid children.
+///
+/// [`RenderSliverGridLazy`]: flui_objects::RenderSliverGridLazy
+#[derive(Clone)]
+pub struct SliverGridLazy {
+    /// Grid layout delegate — controls tile sizes and cross-axis count.
+    pub(crate) grid_delegate: std::sync::Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+    /// Total number of items in the data source.
+    pub(crate) item_count: usize,
+    /// Given a logical index, produces the item's view.  Returns `None` when
+    /// the index is past the end of the data source.
+    pub(crate) builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+}
+
+impl SliverGridLazy {
+    /// Constructs a new lazy-grid view configuration.
+    pub fn new(
+        grid_delegate: std::sync::Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
+        item_count: usize,
+        builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    ) -> Self {
+        Self {
+            grid_delegate,
+            item_count,
+            builder,
+        }
+    }
+}
+
+impl std::fmt::Debug for SliverGridLazy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SliverGridLazy")
+            .field("item_count", &self.item_count)
+            .field("grid_delegate", &self.grid_delegate)
+            .finish_non_exhaustive()
+    }
+}
+
+// ── RenderView impl ───────────────────────────────────────────────────────────
+
+impl crate::view::RenderView for SliverGridLazy {
+    type Protocol = flui_rendering::protocol::SliverProtocol;
+    type RenderObject = flui_objects::RenderSliverGridLazy;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        flui_objects::RenderSliverGridLazy::new(
+            std::sync::Arc::clone(&self.grid_delegate),
+            self.item_count,
+        )
+    }
+
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_item_count(self.item_count);
+        render_object.set_grid_delegate(std::sync::Arc::clone(&self.grid_delegate));
+    }
+
+    /// F4 invariant: no dense children — the dense reconciler must not touch
+    /// lazy grid children.
+    fn has_children(&self) -> bool {
+        false
+    }
+
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn crate::view::View)) {
+        // F4: no dense children to visit.
+    }
+}
+
+// ── View impl — creates a SliverGridLazyAdaptorElement ───────────────────────
+
+impl crate::view::View for SliverGridLazy {
+    fn create_element(&self) -> crate::element::ElementKind {
+        crate::element::ElementKind::RenderVariable(Box::new(SliverGridLazyAdaptorElement::new(
+            self,
+            SliverGridLazyAdaptorBehavior::new(self),
+        )))
+    }
+}
+
+impl crate::element::RenderElementBase<Variable> for SliverGridLazyAdaptorElement {}
+
+// ── MANAGER ───────────────────────────────────────────────────────────────────
+
+/// `ChildManager` implementation for one live lazy-grid adaptor element.
+///
+/// Structurally identical to `SliverListAdaptorManager` — the builder closure
+/// and `SparseChildren` are grid-agnostic.
+pub(crate) struct SliverGridLazyAdaptorManager {
+    sparse_children: SparseChildren,
+    host_element_id: Option<ElementId>,
+    render_id: Option<RenderId>,
+    builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+}
+
+impl std::fmt::Debug for SliverGridLazyAdaptorManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SliverGridLazyAdaptorManager")
+            .field("built_children", &self.sparse_children.len())
+            .field("host_element_id", &self.host_element_id)
+            .field("render_id", &self.render_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SliverGridLazyAdaptorManager {
+    fn clamp_render_item_count(
+        &mut self,
+        end_index: usize,
+        pipeline: &Arc<RwLock<PipelineOwner>>,
+    ) -> bool {
+        let Some(render_id) = self.render_id else {
+            return false;
+        };
+
+        let mut owner = pipeline.write();
+        let Some(render_object) = owner
+            .render_tree_mut()
+            .get_mut(render_id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderSliverGridLazy>())
+        else {
+            return false;
+        };
+
+        if end_index < render_object.item_count() {
+            render_object.set_item_count(end_index);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl ChildManager for SliverGridLazyAdaptorManager {
+    fn service(
+        &mut self,
+        requested_indices: &[usize],
+        retain_first: usize,
+        retain_last: usize,
+        tree: &mut crate::tree::ElementTree,
+        owner: &mut ElementOwner<'_>,
+        pipeline: &Arc<RwLock<PipelineOwner>>,
+    ) -> bool {
+        let Some(host) = self.host_element_id else {
+            tracing::warn!(
+                "SliverGridLazyAdaptorManager::service called before host element was mounted"
+            );
+            return false;
+        };
+
+        // Evict out-of-band children first so the retain-band contract is
+        // satisfied before building new ones (same ordering as SliverList).
+        let eviction_did_work =
+            self.sparse_children
+                .retain_band(retain_first, retain_last, tree, owner);
+
+        let mut any_new_build = false;
+        let mut reached_end_at: Option<usize> = None;
+        for &logical_index in requested_indices {
+            if logical_index < retain_first || logical_index >= retain_last {
+                continue;
+            }
+            if reached_end_at.is_some_and(|end_index| logical_index >= end_index) {
+                continue;
+            }
+            if self.sparse_children.get(logical_index).is_some() {
+                continue;
+            }
+            if let Some(view) = (self.builder)(logical_index) {
+                self.sparse_children.ensure(
+                    logical_index,
+                    view.0.as_ref(),
+                    host,
+                    tree,
+                    owner,
+                    pipeline,
+                );
+                any_new_build = true;
+            } else {
+                reached_end_at = Some(
+                    reached_end_at
+                        .map(|end_index| end_index.min(logical_index))
+                        .unwrap_or(logical_index),
+                );
+            }
+        }
+
+        let count_clamped = reached_end_at
+            .map(|end_index| self.clamp_render_item_count(end_index, pipeline))
+            .unwrap_or(false);
+
+        eviction_did_work || any_new_build || count_clamped
+    }
+}
+
+// ── BEHAVIOR ──────────────────────────────────────────────────────────────────
+
+/// `ElementBehavior` for the lazy-grid adaptor element.
+///
+/// Mirrors `SliverListAdaptorBehavior` exactly — create, register, and
+/// unregister a `SliverGridLazyAdaptorManager` keyed by the sliver's
+/// `RenderId`.
+pub(crate) struct SliverGridLazyAdaptorBehavior {
+    inner: RenderBehavior<SliverGridLazy>,
+    manager: Arc<Mutex<SliverGridLazyAdaptorManager>>,
+}
+
+impl std::fmt::Debug for SliverGridLazyAdaptorBehavior {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SliverGridLazyAdaptorBehavior")
+            .field("render_id", &self.inner.render_id)
+            .field("manager", &*self.manager.lock())
+            .finish()
+    }
+}
+
+impl SliverGridLazyAdaptorBehavior {
+    fn new(view: &SliverGridLazy) -> Self {
+        Self {
+            inner: RenderBehavior::new(),
+            manager: Arc::new(Mutex::new(SliverGridLazyAdaptorManager {
+                sparse_children: SparseChildren::new(),
+                host_element_id: None,
+                render_id: None,
+                builder: Arc::clone(&view.builder),
+            })),
+        }
+    }
+}
+
+impl ElementBehavior<SliverGridLazy, Variable> for SliverGridLazyAdaptorBehavior
+where
+    flui_rendering::storage::RenderNode: From<
+        Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>>,
+    >,
+{
+    fn debug_kind(&self) -> &'static str {
+        "SliverGridLazyAdaptorElement"
+    }
+
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<SliverGridLazy, Variable>,
+        owner: &mut ElementOwner<'_>,
+    ) -> Vec<Box<dyn crate::view::View>> {
+        self.inner.build_into_views(core, owner)
+    }
+
+    fn on_mount(
+        &mut self,
+        core: &mut ElementCore<SliverGridLazy, Variable>,
+        owner: &mut ElementOwner<'_>,
+    ) {
+        self.inner.on_mount(core, owner);
+
+        if let Some(self_id) = core.self_id() {
+            self.manager.lock().host_element_id = Some(self_id);
+        } else {
+            tracing::warn!(
+                "SliverGridLazyAdaptorBehavior::on_mount: no self_id stamped — \
+                 ChildManager service will be a no-op"
+            );
+        }
+
+        match self.inner.render_id {
+            Some(render_id) => {
+                self.manager.lock().render_id = Some(render_id);
+                owner.register_child_manager(
+                    render_id,
+                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager + Send>>,
+                );
+                tracing::debug!(
+                    ?render_id,
+                    "SliverGridLazyAdaptorBehavior: registered child manager"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    "SliverGridLazyAdaptorBehavior::on_mount: no render_id yet (no \
+                     PipelineOwner) — child manager not registered"
+                );
+            }
+        }
+    }
+
+    fn on_unmount(
+        &mut self,
+        core: &mut ElementCore<SliverGridLazy, Variable>,
+        owner: &mut ElementOwner<'_>,
+    ) {
+        // F3: push all live sparse children to the inactive queue so
+        // `finalize_tree` unmounts them and recurses into their descendants.
+        {
+            let manager = self.manager.lock();
+            for (_logical_index, child_id) in manager.sparse_children.iter_built() {
+                owner.push_inactive(child_id, 1);
+            }
+        }
+
+        if let Some(render_id) = self.inner.render_id {
+            owner.unregister_child_manager(render_id);
+            tracing::debug!(
+                ?render_id,
+                "SliverGridLazyAdaptorBehavior: unregistered child manager"
+            );
+        }
+        self.manager.lock().render_id = None;
+
+        self.inner.on_unmount(core, owner);
+    }
+
+    fn on_update(&mut self, core: &ElementCore<SliverGridLazy, Variable>) {
+        self.inner.on_update(core);
+    }
+
+    fn on_view_updated(
+        &mut self,
+        core: &ElementCore<SliverGridLazy, Variable>,
+        old_view: &SliverGridLazy,
+        owner: &mut ElementOwner<'_>,
+    ) {
+        self.inner.on_view_updated(core, old_view, owner);
+    }
+
+    fn render_id(&self) -> Option<RenderId> {
+        self.inner.render_id()
+    }
+}
+
+// ── TYPE ALIAS ────────────────────────────────────────────────────────────────
+
+/// Element type for the lazy-grid adaptor.
+///
+/// Analogous to [`SliverListAdaptorElement`]; external consumers create adaptor
+/// elements through [`SliverGridLazy::create_element`].
+pub(crate) type SliverGridLazyAdaptorElement =
+    Element<SliverGridLazy, Variable, SliverGridLazyAdaptorBehavior>;
 
 // ============================================================================
 // UNIT TESTS

@@ -19,7 +19,7 @@
 //!
 //! # Flat public surface
 //!
-//! All 43 types are re-exported flat from this crate root so the consumer
+//! All 44 types are re-exported flat from this crate root so the consumer
 //! import path is simply `flui_objects::RenderPadding` — identical depth to the
 //! old `flui_rendering::objects::RenderPadding`.
 //!
@@ -74,7 +74,7 @@ pub use image::{ImageAlignment, ImageFit, RenderImage};
 pub use sliver::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
     RenderSliverFillRemainingWithScrollable, RenderSliverFillViewport, RenderSliverFixedExtentList,
-    RenderSliverGrid, RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy,
-    RenderSliverOffstage, RenderSliverOpacity, RenderSliverPadding, RenderSliverToBoxAdapter,
-    RenderViewport,
+    RenderSliverGrid, RenderSliverGridLazy, RenderSliverIgnorePointer, RenderSliverList,
+    RenderSliverListLazy, RenderSliverOffstage, RenderSliverOpacity, RenderSliverPadding,
+    RenderSliverToBoxAdapter, RenderViewport,
 };
