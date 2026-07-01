@@ -611,9 +611,9 @@ mod tests {
 
     #[test]
     fn positioned_spec_child_constraints_explicit_width_with_anchor() {
-        // Per Flutter: `width` alone doesn't make a child positioned
-        // (only top/right/bottom/left do). `width` is meaningful only
-        // alongside one of the four edge anchors.
+        // `width` with a `left` anchor: the explicit width tightens the child
+        // width to 80 (Flutter layoutPositionedChild). `width` alone likewise
+        // makes a child positioned — see `positioned_spec_width_only_is_positioned`.
         let pd = StackParentData::new().with_left(0.0).with_width(80.0);
         let spec = PositionedSpec::from_parent_data(&pd).unwrap();
         let cc = spec.child_constraints(Size::new(px(200.0), px(100.0)));
@@ -622,12 +622,30 @@ mod tests {
     }
 
     #[test]
-    fn positioned_spec_width_only_is_not_positioned() {
-        // Flutter parity: width without an anchor doesn't trigger the
-        // positioned flow at all — the child remains a non-positioned
-        // stack child sized via StackFit/Alignment.
+    fn positioned_spec_width_only_is_positioned() {
+        // Flutter parity (stack.dart:242-249): an explicit `width` with no edge
+        // anchor DOES make the child positioned. It is excluded from stack
+        // sizing and sized to the width, with unanchored axes falling back to
+        // the stack's alignment (RenderStack.layoutPositionedChild). The prior
+        // assertion (width-only -> non-positioned) mis-cited Flutter.
         let pd = StackParentData::new().with_width(80.0);
-        assert!(PositionedSpec::from_parent_data(&pd).is_none());
+        let spec = PositionedSpec::from_parent_data(&pd).expect("a width-only child is positioned");
+
+        // Width tightens to 80; height stays loose (no top+bottom, no height).
+        let cc = spec.child_constraints(Size::new(px(200.0), px(100.0)));
+        assert_eq!(cc.min_width, px(80.0));
+        assert_eq!(cc.max_width, px(80.0));
+        assert_eq!(cc.min_height, px(0.0));
+        assert_eq!(cc.max_height, Pixels::INFINITY);
+
+        // No horizontal anchor -> x from alignment (CENTER of the free width).
+        let off = spec.child_offset(
+            Size::new(px(200.0), px(100.0)),
+            Size::new(px(80.0), px(40.0)),
+            Alignment::CENTER,
+        );
+        assert_eq!(off.dx, px(60.0)); // free_w = 200 - 80 = 120; CENTER -> 60
+        assert_eq!(off.dy, px(30.0)); // free_h = 100 - 40 = 60; CENTER -> 30
     }
 
     #[test]

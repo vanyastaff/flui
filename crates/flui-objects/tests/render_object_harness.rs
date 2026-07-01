@@ -1456,6 +1456,40 @@ fn harness_stack_dry_layout_all_positioned_takes_biggest() {
     );
 }
 
+/// A width-only Stack child IS positioned (Flutter stack.dart:242-249): it is
+/// excluded from sizing (so the stack shrink-wraps to the non-positioned base)
+/// and sized to its explicit width. Regression guard for the is_positioned fix
+/// — before it, a width-only child was treated as non-positioned and its size
+/// leaked into the stack size (would be 100×50 instead of 50×50 here).
+#[test]
+fn harness_stack_dry_layout_width_only_child_is_positioned() {
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderSizedBox::fixed(px(50.0), px(50.0))).label("base"))
+            .child(
+                box_node(RenderSizedBox::fixed(px(100.0), px(30.0)))
+                    .with_stack_parent_data(StackParentData::new().with_width(80.0))
+                    .label("width_only"),
+            ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let expected = Size::new(px(50.0), px(50.0));
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        expected,
+        "a width-only child is positioned and excluded from sizing; the stack \
+         shrink-wraps to the non-positioned 50x50 base",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        run.box_geometry(run.root()),
+        "dry layout must agree with committed layout geometry",
+    );
+}
+
 // ============================================================================
 // Pointer semantics
 // ============================================================================
