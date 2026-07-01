@@ -74,7 +74,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 > **`RenderSliverGrid` closure note (verified 2026-07-01):** eager `RenderSliverGrid` and request-strategy `RenderSliverGridLazy` now ship in `flui-objects`, are listed in the render-object harness catalog, and back `SliverGrid` / `GridView.count` / `GridView.extent` / `GridView.builder`. `GridView.builder` uses the same next-frame lazy-child service model as `ListView.builder`, so first-frame blank settling remains an explicit FLUI divergence until a true mid-pass build backend exists.
 >
-> **`RenderShrinkWrappingViewport` closure note (verified 2026-07-01):** `RenderShrinkWrappingViewport` now ships in `flui-objects`, is listed in the harness catalog, and backs the low-level `ShrinkWrappingViewport` widget. It matches Flutter's bounded-cross-axis / shrink-wrapped-main-axis layout shape; higher-level `ListView(shrinkWrap)` and `GridView(shrinkWrap)` sugar is still future widget work.
+> **`RenderShrinkWrappingViewport` closure note (verified 2026-07-01):** `RenderShrinkWrappingViewport` now ships in `flui-objects`, is listed in the harness catalog, and backs both the low-level `ShrinkWrappingViewport` widget and the high-level `CustomScrollView::shrink_wrap` / `ListView::shrink_wrap` / `GridView::shrink_wrap` composition path. It matches Flutter's bounded-cross-axis / shrink-wrapped-main-axis layout shape. Lazy `builder` views still keep FLUI's documented next-frame child-settling divergence until a true mid-pass build backend exists.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
