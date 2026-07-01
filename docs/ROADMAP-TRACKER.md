@@ -245,13 +245,30 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > Harness coverage drives the retarget state machine (`Start`/`Stable`/`Changed`/`Unstable`) across
 > real multi-frame interpolation, clip-on-overflow, alignment, baseline, and the tight/no-child fast
 > path; a widget-level regression test proves an unrelated rebuild does not reset an in-flight resize.
+> **The *secondary-query* architectural gap is CLOSED** (verified 2026-07-01 — this tracker
+> entry was stale; `ADR-0010`/`ADR-0011`/`ADR-0012` were already implemented and committed
+> before this pass, this note just hadn't caught up). `ADR-0010`
+> (`docs/adr/ADR-0010-secondary-query-parent-data-accessor.md`) gave `BoxDryLayoutCtx`/
+> `BoxIntrinsicsCtx`/`BoxDryBaselineCtx` a type-erased per-child parent-data accessor
+> (`child_parent_data`/`child_parent_data_as::<T>`), unifying production and test-harness
+> access without a ~122-signature ripple across every `compute_*` overrider. `ADR-0011`
+> (D-C) wired the layout-time child-intrinsic channel into the harness, closing
+> `RenderIntrinsicWidth`/`Height`'s default (no-`step_width`) forcing gap. `ADR-0012` (D-B)
+> gave the live baseline path an eager-record channel, closing flex's container-baseline
+> report (`compute_distance_to_actual_baseline`) that previously returned `None`.
+> `RenderFlex`/`RenderStack`/`RenderWrap` all now implement `compute_dry_layout` returning
+> real sizes (not `Size::ZERO`); flex's `compute_dry_baseline`/`compute_distance_to_actual_baseline`
+> both return real values matching the committed layout. 34 harness/unit tests cover this
+> (`harness_flex_dry_layout_returns_real_size`, `harness_flex_dry_baseline_equals_committed`,
+> `harness_stack_dry_layout_*` ×4, `harness_render_wrap_dry_layout_*` ×2,
+> `harness_intrinsic_width_forces_filling_child`, `harness_dry_layout_child_intrinsic_channel_matches_standalone_query`,
+> among others) — all independently re-run and passing.
 > The genuine remaining work is: **(a)** the
-> *secondary-query* architectural gap — `compute_dry_layout` / baseline /
-> intrinsics for multi-child objects (`2026-06-30-secondary-query-layout-gap.md`,
-> design-ready); **(b)** the still-unbuilt family members listed below;
-> **(c)** maintainer decisions on the documented *intentional* divergences.
-> Per-RO promotion still requires the Core.2 exit gate (per-RO tests +
-> 1000-item sliver scroll + coverage).
+> still-unbuilt family members listed below (now just the deferred/documented edges within
+> otherwise-existing families, not missing objects — the render-object catalog itself is
+> 74/74 complete per `docs/research/widget-renderobject-map.md`); **(b)** maintainer decisions
+> on the documented *intentional* divergences. Per-RO promotion still requires the Core.2 exit
+> gate (per-RO tests + 1000-item sliver scroll + coverage).
 
 | Family | Status | Notes |
 |---|---|---|
@@ -260,7 +277,7 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 | Slivers (`RenderViewport`, `RenderShrinkWrappingViewport`, `RenderSliverList/Grid/Padding/FillViewport/FillRemaining/ToBoxAdapter/Offstage/Opacity/PersistentHeader`) | ⚠ mostly exist; grid + shrink-wrap viewport + persistent-header blockers closed | Contained slivers audited+fixed 2026-06-30 (offstage correction, overscroll positioning). `RenderSliverGrid` and `RenderSliverGridLazy` now back eager `SliverGrid`/`GridView.count`/`GridView.extent` and lazy `GridView.builder`; lazy grid has a 1000-item scroll-bounded test. `RenderShrinkWrappingViewport` now backs `ShrinkWrappingViewport` plus `CustomScrollView`/`ListView`/`GridView` `shrink_wrap`. `RenderSliverScrollingPersistentHeader`/`RenderSliverPinnedPersistentHeader`/`RenderSliverFloatingPersistentHeader`/`RenderSliverFloatingPinnedPersistentHeader` now exist (no widget-layer `SliverPersistentHeader`/`SliverAppBar` yet — see `docs/research/widget-renderobject-map.md`'s closure note). **Follow-up defects surfaced while building the header family, both now FIXED 2026-07-01:** (1) `RenderViewport::attempt_layout`'s `overlap` field had a wrong sign vs. the oracle (`RenderShrinkWrappingViewport`'s sibling formula was already correct); two harness regression tests added. (2) No insertion path called `RenderObject::attach` for a Sliver child (`PipelineOwner::insert_child_render_object` was Box-protocol-only) — fixed via a new `insert_sliver_child_render_object` plus a protocol-generic `attach_inserted_node` call in `apply_deferred_mutation` (which also collaterally fixed the same gap for lazily-built Box children); proven red-then-green in `attach_detach_lifecycle.rs`. Both cited with file:line in `docs/research/widget-renderobject-map.md`. |
 | Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`, `RenderEditable`) | ◐ partial | `RenderMouseRegion`, FLUI's `RenderListener`/Flutter `RenderPointerListener`, and the first `RenderEditable` visual-core slice exist + first oracle-verified harness/widget slices 2026-07-01. `RenderParagraph`/`RenderImage` exist; not yet parity-audited. Full text input still needs IME/composing/selection/platform work. |
 
-**Exit:** widget→render-object checklist complete; per-RO layout + paint tests; intrinsic-size tests where applicable; 1000-item sliver scroll test green; `flui-rendering` coverage ≥ 80%; **secondary-query gap closed** (dry-layout/baseline/intrinsics for multi-child objects).
+**Exit:** widget→render-object checklist complete; per-RO layout + paint tests; intrinsic-size tests where applicable; 1000-item sliver scroll test green; `flui-rendering` coverage ≥ 80%. **Secondary-query gap CLOSED** (verified 2026-07-01 — `ADR-0010`/`ADR-0011`/`ADR-0012`, see the closure note above); 1000-item scroll coverage exists in multiple test files (`crates/flui-objects/tests/harness_snapshot.rs`, `crates/flui-rendering/tests/u3c_lazy_sliver_contract.rs`) but has not been re-audited end-to-end against this specific exit-gate wording in this pass — the ≥80% coverage figure likewise has not been freshly measured here.
 
 ---
 
