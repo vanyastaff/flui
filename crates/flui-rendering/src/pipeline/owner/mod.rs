@@ -25,6 +25,7 @@ use std::{
 
 use flui_foundation::RenderId;
 use flui_layer::LayerTree;
+use flui_semantics::SemanticsOwner;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
 
@@ -142,6 +143,15 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
 
+    /// The semantics tree owner (ADR-0014 D1; Flutter `PipelineOwner
+    /// ._semanticsOwner` parity). `None` until semantics is enabled via
+    /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
+    /// fires `fire_semantics_owner_created`; disposed (firing
+    /// `fire_semantics_owner_disposed`) on the next `false` transition.
+    /// `Semantics::run_semantics` (`pipeline/owner/semantics.rs`) is the
+    /// sole writer of its tree contents.
+    semantics_owner: Option<SemanticsOwner>,
+
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
@@ -226,6 +236,7 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
             )
             .field("has_layer_tree", &self.last_layer_tree.is_some())
             .field("has_link_registry", &self.last_link_registry.is_some())
+            .field("has_semantics_owner", &self.semantics_owner.is_some())
             .finish()
     }
 }
@@ -252,6 +263,7 @@ where
         scheduler: from.scheduler,
         root_constraints: from.root_constraints,
         semantics_enabled: from.semantics_enabled,
+        semantics_owner: from.semantics_owner,
         last_layer_tree: from.last_layer_tree,
         last_link_registry: from.last_link_registry,
         device_pixel_ratio: from.device_pixel_ratio,
@@ -354,6 +366,95 @@ mod tests {
         }
     }
 
+    /// Minimal leaf that contributes semantics without depending on
+    /// `flui-objects`.
+    #[derive(Debug)]
+    struct SemanticLeaf {
+        label: Option<&'static str>,
+        boundary: bool,
+        merge_descendants: bool,
+        exclude_descendants: bool,
+        size: Size,
+    }
+
+    impl SemanticLeaf {
+        fn labeled(label: &'static str) -> Self {
+            Self {
+                label: Some(label),
+                boundary: false,
+                merge_descendants: false,
+                exclude_descendants: false,
+                size: Size::new(px(10.0), px(10.0)),
+            }
+        }
+
+        fn boundary_labeled(label: &'static str) -> Self {
+            Self {
+                label: Some(label),
+                boundary: true,
+                merge_descendants: false,
+                exclude_descendants: false,
+                size: Size::new(px(10.0), px(10.0)),
+            }
+        }
+
+        fn merge_labeled(label: &'static str) -> Self {
+            Self {
+                label: Some(label),
+                boundary: true,
+                merge_descendants: true,
+                exclude_descendants: false,
+                size: Size::new(px(10.0), px(10.0)),
+            }
+        }
+
+        fn excluding() -> Self {
+            Self {
+                label: None,
+                boundary: false,
+                merge_descendants: false,
+                exclude_descendants: true,
+                size: Size::new(px(10.0), px(10.0)),
+            }
+        }
+
+        fn empty() -> Self {
+            Self {
+                label: None,
+                boundary: false,
+                merge_descendants: false,
+                exclude_descendants: false,
+                size: Size::new(px(10.0), px(10.0)),
+            }
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for SemanticLeaf {}
+
+    impl RenderBox for SemanticLeaf {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(self.size)
+        }
+
+        fn describe_semantics_configuration(
+            &self,
+            config: &mut crate::semantics::SemanticsConfiguration,
+        ) {
+            config.set_semantics_boundary(self.boundary);
+            config.set_merging_semantics_of_descendants(self.merge_descendants);
+            if let Some(label) = self.label {
+                config.set_label(label);
+            }
+        }
+
+        fn excludes_semantics_subtree(&self) -> bool {
+            self.exclude_descendants
+        }
+    }
+
     #[test]
     fn test_pipeline_owner_new() {
         let owner = PipelineOwner::new();
@@ -452,7 +553,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_owner_semantics_enabled() {
-        let owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new();
         assert!(!owner.semantics_enabled());
 
         owner.set_semantics_enabled(true);
@@ -460,6 +561,118 @@ mod tests {
 
         owner.set_semantics_enabled(false);
         assert!(!owner.semantics_enabled());
+    }
+
+    #[test]
+    fn run_semantics_builds_owner_tree() {
+        let mut owner = PipelineOwner::new();
+        owner.set_root_render_object(Box::new(SemanticLeaf::labeled("Submit")));
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("semantics build should succeed");
+
+        let semantics_owner = owner
+            .semantics_owner()
+            .expect("test installed a semantics owner");
+        let root = semantics_owner.root().expect("root semantics node");
+        let root_node = semantics_owner.get(root).expect("root node is live");
+        assert_eq!(root_node.label(), Some("Submit"));
+    }
+
+    #[test]
+    fn run_semantics_merges_non_boundary_child_into_root() {
+        let mut owner = PipelineOwner::new();
+        let root_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        owner
+            .insert_child_render_object(root_id, Box::new(SemanticLeaf::labeled("Child label")))
+            .expect("child inserted");
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("semantics build should succeed");
+
+        let semantics_owner = owner
+            .semantics_owner()
+            .expect("test installed a semantics owner");
+        let root = semantics_owner.root().expect("root semantics node");
+        let root_node = semantics_owner.get(root).expect("root node is live");
+        assert_eq!(root_node.label(), Some("Child label"));
+        assert!(
+            root_node.children().is_empty(),
+            "non-boundary child config should merge into the root node"
+        );
+    }
+
+    #[test]
+    fn run_semantics_merge_descendants_collapses_boundary_grandchild() {
+        let mut owner = PipelineOwner::new();
+        let root_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        let merge_id = owner
+            .insert_child_render_object(root_id, Box::new(SemanticLeaf::merge_labeled("Group")))
+            .expect("merge child inserted");
+        owner
+            .insert_child_render_object(merge_id, Box::new(SemanticLeaf::boundary_labeled("Child")))
+            .expect("boundary grandchild inserted");
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("semantics build should succeed");
+
+        let semantics_owner = owner
+            .semantics_owner()
+            .expect("test installed a semantics owner");
+        let root = semantics_owner.root().expect("root semantics node");
+        let root_node = semantics_owner.get(root).expect("root node is live");
+        assert_eq!(root_node.children().len(), 1);
+
+        let merged = semantics_owner
+            .get(root_node.children()[0])
+            .expect("merged child node is live");
+        assert_eq!(merged.label(), Some("Group Child"));
+        assert!(
+            merged.children().is_empty(),
+            "merge-descendants should suppress descendant boundary nodes"
+        );
+    }
+
+    #[test]
+    fn run_semantics_excluding_node_skips_descendant_subtree() {
+        let mut owner = PipelineOwner::new();
+        let root_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        let excluding_id = owner
+            .insert_child_render_object(root_id, Box::new(SemanticLeaf::excluding()))
+            .expect("excluding child inserted");
+        owner
+            .insert_child_render_object(
+                excluding_id,
+                Box::new(SemanticLeaf::labeled("Hidden label")),
+            )
+            .expect("excluded grandchild inserted");
+        owner.set_semantics_enabled(true);
+
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner
+            .run_semantics()
+            .expect("semantics build should succeed");
+
+        let semantics_owner = owner
+            .semantics_owner()
+            .expect("test installed a semantics owner");
+        let root = semantics_owner.root().expect("root semantics node");
+        let root_node = semantics_owner.get(root).expect("root node is live");
+        assert_eq!(root_node.label(), None);
+        assert!(root_node.children().is_empty());
     }
 
     #[test]

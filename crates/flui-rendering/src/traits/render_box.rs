@@ -448,6 +448,14 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ) {
     }
 
+    /// Whether the semantics assembly walk should skip this box's entire
+    /// child subtree.
+    ///
+    /// Default: `false`. See [`RenderObject::excludes_semantics_subtree`].
+    fn excludes_semantics_subtree(&self) -> bool {
+        false
+    }
+
     /// Marks this render object for reprocessing after hot reload.
     ///
     /// Default: no-op. See
@@ -724,6 +732,10 @@ where
         config: &mut crate::semantics::SemanticsConfiguration,
     ) {
         <T as RenderBox>::describe_semantics_configuration(self, config)
+    }
+
+    fn excludes_semantics_subtree(&self) -> bool {
+        <T as RenderBox>::excludes_semantics_subtree(self)
     }
 
     fn reassemble(&mut self) {

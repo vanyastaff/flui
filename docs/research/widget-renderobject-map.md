@@ -15,22 +15,22 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **71**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **74**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
 > and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
 > body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
-> that appears in the "Existing (60)" list, the list wins. The body is retained for its
+> that appears in the "Existing (74)" list, the list wins. The body is retained for its
 > accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
 > file), which the Core.2 implementers need.
 
 - **Total widgets planned:** ~87
-- **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **71**
-- **Render objects remaining to build (Core.2):** **~3** (verified list below)
+- **Distinct concrete render objects for full parity (Core.2 target):** ~74
+- **Render objects existing today:** **74**
+- **Render objects remaining to build (Core.2):** **0 verified missing** in this map
 
-### Existing render objects — authoritative (71)
+### Existing render objects — authoritative (74)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
@@ -40,19 +40,19 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Interaction / pointer (6):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderMouseRegion` · `RenderOffstage`
 
+**Semantics proxies (3):** `RenderSemanticsAnnotations` · `RenderMergeSemantics` · `RenderExcludeSemantics`
+
 **Leaf (3):** `RenderEditable` · `RenderParagraph` · `RenderImage`
 
 **Slivers + viewport (20):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity` · `RenderSliverScrollingPersistentHeader` · `RenderSliverPinnedPersistentHeader` · `RenderSliverFloatingPersistentHeader` · `RenderSliverFloatingPinnedPersistentHeader`
 
-### Remaining to build — verified missing (≈3, see `RenderAnimatedOpacity` note)
+### Remaining to build — verified missing (0)
 
-Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize`, the `RenderSliverPersistentHeader` family, `RenderPhysicalModel`/`RenderPhysicalShape`, `RenderBackdropFilter`/`RenderShaderMask`, and `RenderLeaderLayer`/`RenderFollowerLayer` closed same day — see closure notes below). **These three are all the Semantics family, and all genuinely need a semantics tree FLUI doesn't have yet — see the reclassification note below rather than a build plan:**
-
-| Render object | Unblocks | Priority | Flutter source |
-|---|---|---|---|
-| `RenderSemanticsAnnotations` | `Semantics` | Medium (a11y) | `proxy_box.dart` |
-| `RenderMergeSemantics` | `MergeSemantics` | Low | `proxy_box.dart` |
-| `RenderExcludeSemantics` | `ExcludeSemantics` | Low | `proxy_box.dart` |
+No render-object names are currently verified missing from the Core.2 map. The
+former final semantics-family gap is closed: `RenderSemanticsAnnotations`,
+`RenderMergeSemantics`, and `RenderExcludeSemantics` ship in `flui-objects`,
+are listed in the render-object harness catalog, and back the public
+`Semantics`, `MergeSemantics`, and `ExcludeSemantics` widgets.
 
 > **`RenderSliverGrid` closure note (verified 2026-07-01):** eager `RenderSliverGrid` and request-strategy `RenderSliverGridLazy` now ship in `flui-objects`, are listed in the render-object harness catalog, and back `SliverGrid` / `GridView.count` / `GridView.extent` / `GridView.builder`. `GridView.builder` uses the same next-frame lazy-child service model as `ListView.builder`, so first-frame blank settling remains an explicit FLUI divergence until a true mid-pass build backend exists.
 >
@@ -281,6 +281,33 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 > still implements only the structural forward (has a child → hit-test it at its own
 > layout-relative offset) — a tap on a moved follower will hit-test at its pre-resolution tree
 > position until that ADR lands.
+>
+> **Semantics family closure note (verified 2026-07-01) — the last catalog gap is closed via
+> `ADR-0014`.** `RenderSemanticsAnnotations`/`RenderMergeSemantics`/`RenderExcludeSemantics` now
+> ship in `crates/flui-objects/src/proxy/semantics.rs`, back the public `Semantics`/
+> `MergeSemantics`/`ExcludeSemantics` widgets (`crates/flui-widgets/src/semantics/`), and are
+> listed in the render-object harness catalog. Per `ADR-0014`
+> (`docs/adr/ADR-0014-semantics-assembly-integration.md`), this required porting Flutter's
+> CLASSIC full-rebuild semantics assembly — not the modern `_RenderObjectSemantics` incremental
+> compiler current Flutter master runs — into the previously-stubbed `PipelineOwner::run_semantics`
+> phase: a `SemanticsOwner` field with created/disposed lifecycle notifications, a depth-first
+> assembly walk (structurally a sibling of the paint walk, reusing its `offset()`/
+> `paint_transform()` geometry inputs rather than a new transform mechanism), the classic
+> boundary-vs-merge decision (`SemanticsConfiguration::absorb` merges non-boundary content up
+> into the nearest boundary ancestor), and two small additive hooks:
+> `is_merging_semantics_of_descendants` (`RenderMergeSemantics`) and `excludes_semantics_subtree`
+> (`RenderExcludeSemantics`). The trickiest correctness case — a nested descendant that
+> independently declares its own semantics boundary, still correctly collapsing into one node
+> under a `MergeSemantics` ancestor — is proven end-to-end against the real assembled
+> `SemanticsOwner`/`SemanticsNode` tree (`crates/flui-rendering/tests/semantics_assembly.rs`,
+> plus `harness_merge_semantics_collapses_descendant_boundaries` in the render-object harness).
+> **This closes the render-object catalog: 74/74, zero verified-missing entries.** Deferred,
+> documented per `ADR-0014` D6: the modern incremental compiler, sibling-merge-groups/
+> `RenderBlockSemantics`, cross-frame stable `SemanticsId` reuse, sliver semantics geometry, and
+> the OS accessibility bridge — `flui-platform` has no AT-SPI/UIAccessibility/MSAA and no
+> downstream consumer exists yet, so the assembled tree is verified via the harness and
+> `debug_dump_semantics_tree`, not a live screen reader, until that bridge lands as its own
+> multi-session effort.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -458,9 +485,9 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
 | `Visibility` | *(composes)* | N/A | Single | Composes `Offstage` + `IgnorePointer` + `TickerMode` |
-| `Semantics` | `RenderSemanticsAnnotations` | Needed | Single | Accessibility annotation proxy |
-| `MergeSemantics` | `RenderMergeSemantics` | Needed | Single | Merges child semantics into one node |
-| `ExcludeSemantics` | `RenderExcludeSemantics` | Needed | Single | Drops child semantics |
+| `Semantics` | `RenderSemanticsAnnotations` | **Exists** | Single | Accessibility annotation proxy |
+| `MergeSemantics` | `RenderMergeSemantics` | **Exists** | Single | Merges child semantics into one node |
+| `ExcludeSemantics` | `RenderExcludeSemantics` | **Exists** | Single | Drops child semantics |
 | `Builder` | *(framework)* | N/A | Single | Convenience StatelessWidget with inline builder; no own RO |
 | `MediaQuery` | *(InheritedWidget)* | N/A | Single | Provides device metrics; no own RO |
 | `InheritedWidget` | *(framework)* | N/A | Single | Data-sharing base class; no own RO |

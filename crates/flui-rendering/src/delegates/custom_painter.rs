@@ -11,9 +11,9 @@ use flui_types::{Offset, Size};
 
 /// Builder for semantics information.
 ///
-/// **INCOMPLETE**: This is a placeholder type. Semantics support is not
-/// yet wired; the builder accepts no operations and is consumed by
-/// platform integrations as an empty shell.
+/// **INCOMPLETE**: This is a placeholder type. Custom-painter semantics
+/// callbacks are not yet modeled; the builder accepts no operations and is
+/// consumed by platform integrations as an empty shell.
 ///
 /// Cycle 4 R-3: pre-cycle `SemanticsBuilder::new` panicked via
 /// `unimplemented!()` on construction — a Constitution Principle 6
@@ -38,8 +38,8 @@ static WARN_ONCE: Once = Once::new();
 impl SemanticsBuilder {
     /// Creates a new empty semantics builder.
     ///
-    /// Currently a no-op shell — semantics build operations land when
-    /// the `SemanticsConfiguration` integration plumbing is complete.
+    /// Currently a no-op shell — custom-painter semantics build operations
+    /// land when `CustomPainter` exposes a real semantics-builder contract.
     /// See audit R-3 in
     /// `docs/research/2026-05-22-flui-rendering-engine-audit.md`.
     ///
@@ -50,8 +50,8 @@ impl SemanticsBuilder {
     pub fn new() -> Self {
         WARN_ONCE.call_once(|| {
             tracing::warn!(
-                "SemanticsBuilder: semantics build operations are a no-op \
-                 until RenderObject → SemanticsConfiguration plumbing lands; \
+                "SemanticsBuilder: custom-painter semantics build operations are a no-op \
+                 until CustomPainter exposes a real semantics-builder contract; \
                  the returned builder accepts no operations (this warn fires \
                  once per process)"
             );

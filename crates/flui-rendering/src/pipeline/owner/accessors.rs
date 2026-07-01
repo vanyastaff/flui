@@ -1169,15 +1169,73 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     /// Sets whether semantics are enabled.
-    pub fn set_semantics_enabled(&self, enabled: bool) {
+    ///
+    /// **ADR-0014 D1.** Lazily creates a [`SemanticsOwner`](flui_semantics::SemanticsOwner) on the
+    /// `false` → `true` transition (unless one was already installed via
+    /// [`Self::set_semantics_owner`] — e.g. a platform binding that needs
+    /// its own update callback — in which case that owner is kept as-is),
+    /// firing the already-scaffolded
+    /// [`fire_semantics_owner_created`](crate::pipeline::notifier::VisualUpdateNotifier::fire_semantics_owner_created).
+    /// Disposes the owner on the `true` → `false` transition, firing
+    /// `fire_semantics_owner_disposed` — Flutter's `PipelineOwner
+    /// .ensureSemantics()` / handle-drop parity, collapsed onto the single
+    /// boolean flag this crate already used to gate `run_semantics`.
+    ///
+    /// A freshly-created owner has an empty tree even though the render
+    /// tree may already hold content built while semantics was off, so this
+    /// also seeds the root as needing a semantics rebuild (mirrors
+    /// `insert()`'s "new nodes need layout and paint" seeding) — without
+    /// it, nothing would ever push the first `run_semantics` assembly pass.
+    ///
+    /// No OS accessibility bridge exists yet (ADR-0014 D6): a lazily-created
+    /// owner is constructed with a no-op platform callback. The assembled
+    /// tree is inspected via [`Self::semantics_owner`], the render harness,
+    /// or `debug_dump_semantics_tree` until a real bridge lands.
+    pub fn set_semantics_enabled(&mut self, enabled: bool) {
         let was_enabled = self
             .semantics_enabled
             .swap(enabled, std::sync::atomic::Ordering::Relaxed);
         if enabled && !was_enabled {
+            if self.semantics_owner.is_none() {
+                self.semantics_owner = Some(flui_semantics::SemanticsOwner::new(
+                    no_op_semantics_update_callback(),
+                ));
+            }
             self.notifier.read().fire_semantics_owner_created();
+            if let Some(root_id) = self.root_id {
+                let depth = self.render_tree.depth(root_id).unwrap_or(0) as usize;
+                self.add_node_needing_semantics(root_id, depth);
+            }
         } else if !enabled && was_enabled {
+            if let Some(mut owner) = self.semantics_owner.take() {
+                owner.dispose();
+            }
             self.notifier.read().fire_semantics_owner_disposed();
         }
+    }
+
+    /// Returns the semantics owner, if semantics is currently enabled.
+    ///
+    /// `None` until [`Self::set_semantics_enabled`]`(true)` lazily creates
+    /// one; `None` again once the matching `false` transition disposes it.
+    /// Read-only by design (SP-6 / port-check: no lock, no `&mut` escape —
+    /// the owner's tree is written only by `Semantics::run_semantics`).
+    #[inline]
+    pub fn semantics_owner(&self) -> Option<&flui_semantics::SemanticsOwner> {
+        self.semantics_owner.as_ref()
+    }
+
+    /// Installs (or removes) the semantics owner directly, bypassing the
+    /// lazy-creation path in [`Self::set_semantics_enabled`].
+    ///
+    /// The escape hatch for a platform binding that needs its own update
+    /// callback (forwarding [`flui_semantics::SemanticsNodeUpdate`] batches
+    /// to a real OS accessibility bridge once one exists), or a test that
+    /// wants to observe `flush()`'s callback invocations directly. Call
+    /// this *before* `set_semantics_enabled(true)` — the enable path only
+    /// lazily creates a no-op-callback owner when none is installed yet.
+    pub fn set_semantics_owner(&mut self, owner: Option<flui_semantics::SemanticsOwner>) {
+        self.semantics_owner = owner;
     }
 
     // ========================================================================
@@ -1262,4 +1320,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) {
         self.pending_child_requests.push((sliver_id, index));
     }
+}
+
+/// A no-op semantics-update callback for a freshly lazily-created
+/// [`SemanticsOwner`](flui_semantics::SemanticsOwner).
+///
+/// FLUI has no OS accessibility bridge yet (ADR-0014 D6) — there is
+/// nowhere for a real platform callback to forward
+/// [`flui_semantics::SemanticsNodeUpdate`] batches to. Swallowing updates
+/// here is an explicit, documented placeholder (not a silent gap): the
+/// assembled tree is inspected via [`PipelineOwner::semantics_owner`], the
+/// render harness, or `debug_dump_semantics_tree` until a real bridge
+/// lands.
+fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
+    std::sync::Arc::new(|_updates: &[flui_semantics::SemanticsNodeUpdate]| {})
 }

@@ -93,6 +93,7 @@ fn edit_object<T: 'static, P: crate::pipeline::PipelinePhase>(
 pub struct RenderTester {
     spec: TreeNode,
     constraints: Option<BoxConstraints>,
+    semantics_enabled: bool,
 }
 
 impl RenderTester {
@@ -103,6 +104,7 @@ impl RenderTester {
         Self {
             spec,
             constraints: None,
+            semantics_enabled: false,
         }
     }
 
@@ -120,12 +122,27 @@ impl RenderTester {
         self
     }
 
+    /// Enables semantics on the built [`PipelineOwner`] before any phase
+    /// runs (ADR-0014 D1: lazily creates a `SemanticsOwner`).
+    ///
+    /// Without this, `run_semantics` (and therefore [`Self::run_to_semantics`]
+    /// / [`Self::run_frame`]'s semantics phase) is a no-op — semantics stays
+    /// disabled by default so every other harness test is unaffected.
+    #[must_use]
+    pub fn with_semantics_enabled(mut self) -> Self {
+        self.semantics_enabled = true;
+        self
+    }
+
     /// Builds the owner, mounts the spec, and seeds the root + constraints.
     fn build(self) -> (PipelineOwner<Idle>, RenderId, RenderLabelRegistry) {
         let mut owner = PipelineOwner::new();
         let (root_id, registry) = tree::mount(&mut owner, self.spec);
         owner.set_root_id(Some(root_id));
         owner.set_root_constraints(Some(self.constraints.unwrap_or_else(default_constraints)));
+        if self.semantics_enabled {
+            owner.set_semantics_enabled(true);
+        }
         (owner, root_id, registry)
     }
 
@@ -674,9 +691,9 @@ impl RenderTester {
     /// semantics), then stops, returning a [`SemanticsRun`] parked in the
     /// `Semantics` phase.
     ///
-    /// The semantics pass is a stub in the current implementation; this handle
-    /// exists so semantics-aware tests can be authored now and will gain
-    /// real assertions once the semantics owner is wired.
+    /// The semantics pass builds a `SemanticsOwner` only when the caller has
+    /// installed one and enabled semantics on the pipeline. Raw owner access
+    /// via [`Probe::pipeline`] is the inspection surface.
     #[must_use]
     pub fn run_to_semantics(self) -> SemanticsRun {
         let (owner, root_id, registry) = self.build();
@@ -836,9 +853,7 @@ impl Probe for CompositingRun {
 /// The result of [`RenderTester::run_to_semantics`]: a pipeline parked in the
 /// `Semantics` phase after all four pipeline phases have executed.
 ///
-/// The semantics pass is a stub in the current implementation; raw owner
-/// access via [`Probe::pipeline`] is the primary inspection surface until the
-/// semantics owner is wired.
+/// Semantics inspection goes through raw owner access via [`Probe::pipeline`].
 #[derive(Debug)]
 pub struct SemanticsRun {
     owner: PipelineOwner<Semantics>,
@@ -851,6 +866,16 @@ impl SemanticsRun {
     #[must_use]
     pub fn root(&self) -> RenderId {
         self.root_id
+    }
+
+    /// The assembled semantics owner, if semantics was enabled for this run
+    /// (see [`RenderTester::with_semantics_enabled`]).
+    ///
+    /// `None` when semantics was never enabled — `run_semantics` is then a
+    /// no-op and no `SemanticsOwner` was ever lazily created (ADR-0014 D1).
+    #[must_use]
+    pub fn semantics_owner(&self) -> Option<&crate::semantics::SemanticsOwner> {
+        self.owner.semantics_owner()
     }
 }
 

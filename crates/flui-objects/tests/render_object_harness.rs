@@ -38,6 +38,9 @@
 //! | `RenderPhysicalModel` | `harness_physical_model_*` | yes | yes | yes | yes | — |
 //! | `RenderPhysicalShape` | `harness_physical_shape_*` | yes | yes | yes | yes | — |
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
+//! | `RenderSemanticsAnnotations` | `harness_semantics_annotations_*` | yes | — | — | yes | semantics |
+//! | `RenderMergeSemantics` | `harness_merge_semantics_*` | yes | — | — | yes | semantics |
+//! | `RenderExcludeSemantics` | `harness_exclude_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
 //! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
@@ -111,6 +114,7 @@ use flui_rendering::{
         FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
         StackParentData, TableCellParentData,
     },
+    semantics::SemanticsProperties,
     testing::{
         BoxQueryRun, DrawKind, ParentDataSeed, Probe, RenderTester, TreeNode,
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
@@ -167,6 +171,9 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderPhysicalModel",
     "RenderPhysicalShape",
     "RenderRepaintBoundary",
+    "RenderSemanticsAnnotations",
+    "RenderMergeSemantics",
+    "RenderExcludeSemantics",
     "RenderMetaData",
     "RenderFlex",
     "RenderStack",
@@ -1537,6 +1544,117 @@ fn harness_opacity_paints_with_alpha_layer() {
 
     assert!(run.painted());
     assert!(run.structure().contains(&"Opacity"));
+}
+
+#[test]
+fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
+    let mut properties = SemanticsProperties::new()
+        .with_label("Submit")
+        .with_button(true)
+        .with_enabled(true);
+    properties.toggled = Some(false);
+
+    let run = RenderTester::mount(
+        box_node(RenderSemanticsAnnotations::new(properties).with_container(true))
+            .label("semantics")
+            .child(box_node(RenderSizedBox::new(
+                Some(px(40.0)),
+                Some(px(20.0)),
+            ))),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    assert_eq!(
+        run.box_geometry(run.id("semantics")),
+        Size::new(px(40.0), px(20.0)),
+    );
+    assert_eq!(
+        run.property(run.id("semantics"), "container"),
+        Some("container".to_string()),
+    );
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root semantics node");
+    let node = owner.get(root_id).expect("root id must resolve");
+
+    assert_eq!(owner.tree().len(), 1);
+    assert_eq!(node.label(), Some("Submit"));
+    assert!(node.config().is_button());
+    assert_eq!(node.config().is_enabled(), Some(true));
+    assert_eq!(node.config().is_toggled(), Some(false));
+}
+
+#[test]
+fn harness_merge_semantics_collapses_descendant_boundaries() {
+    let alpha = SemanticsProperties::new().with_label("Alpha");
+    let beta = SemanticsProperties::new()
+        .with_label("Beta")
+        .with_button(true);
+
+    let run = RenderTester::mount(
+        box_node(RenderMergeSemantics::default())
+            .label("merge")
+            .child(box_node(RenderSemanticsAnnotations::new(alpha)))
+            .child(box_node(
+                RenderSemanticsAnnotations::new(beta).with_container(true),
+            )),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("merge semantics root");
+    let node = owner.get(root_id).expect("root id must resolve");
+
+    assert_eq!(
+        owner.tree().len(),
+        1,
+        "RenderMergeSemantics must collapse both descendants into one node",
+    );
+    assert!(node.children().is_empty());
+    assert!(node.config().is_button());
+    let label = node.label().expect("merged label");
+    assert!(label.contains("Alpha") && label.contains("Beta"));
+}
+
+#[test]
+fn harness_exclude_semantics_drops_descendant_content_but_keeps_layout() {
+    let hidden = SemanticsProperties::new().with_label("Hidden");
+
+    let run = RenderTester::mount(
+        box_node(RenderExcludeSemantics::default())
+            .label("exclude")
+            .child(
+                box_node(RenderSemanticsAnnotations::new(hidden)).child(box_node(
+                    RenderSizedBox::new(Some(px(24.0)), Some(px(16.0))),
+                )),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    assert_eq!(
+        run.box_geometry(run.id("exclude")),
+        Size::new(px(24.0), px(16.0)),
+    );
+    assert_eq!(
+        run.property(run.id("exclude"), "excluding"),
+        Some("excluding".to_string()),
+    );
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root_id = owner.root().expect("root semantics node");
+    let node = owner.get(root_id).expect("root id must resolve");
+
+    assert_eq!(owner.tree().len(), 1);
+    assert!(
+        node.label().is_none(),
+        "excluded descendant label must not merge into the root semantics node",
+    );
 }
 
 #[test]

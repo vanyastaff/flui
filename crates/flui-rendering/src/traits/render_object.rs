@@ -538,6 +538,24 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// labels, actions, or other semantic information. Default: no-op.
     fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
 
+    /// Whether the semantics assembly walk should skip this render
+    /// object's entire child subtree.
+    ///
+    /// Consulted by `flui-rendering`'s `run_semantics` assembly walk
+    /// (ADR-0014 D5) before it recurses into children — the least-privilege
+    /// counterpart of Flutter's `visitChildrenForSemantics` override that
+    /// `RenderExcludeSemantics` uses to visit no children while excluding.
+    /// This node's own config is still built and merged/boundary-decided
+    /// normally; only its descendants are dropped from the walk.
+    ///
+    /// Default: `false` (children are always visited). Override on
+    /// [`RenderBox`](crate::traits::RenderBox) or
+    /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
+    /// forward the call here.
+    fn excludes_semantics_subtree(&self) -> bool {
+        false
+    }
+
     /// Marks this render object for reprocessing after hot reload.
     ///
     /// Default: no-op. See the *Hot-reload note* in the trait doc for the

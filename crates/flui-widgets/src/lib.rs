@@ -85,6 +85,7 @@ pub mod interaction;
 pub mod layout;
 pub mod paint;
 pub mod scroll;
+pub mod semantics;
 pub mod stack;
 pub mod text;
 pub mod transitions;
@@ -146,6 +147,7 @@ pub use scroll::{
     SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
     SliverToBoxAdapter, Viewport,
 };
+pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
 pub use transitions::{
@@ -188,6 +190,10 @@ pub use flui_rendering::hit_testing::{
 pub use flui_interaction::{
     DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
 };
+pub use flui_rendering::semantics::{
+    SemanticsConfiguration, SemanticsProperties, SemanticsRole,
+    TextDirection as SemanticsTextDirection,
+};
 
 // ============================================================================
 // Prelude
@@ -207,25 +213,26 @@ pub mod prelude {
         AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
         ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomMultiChildLayout,
         CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox, EditableText,
-        EditableTextState, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
+        EditableTextState, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
         FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector, GridView,
         IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedStack,
         IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, ListView, Listener,
-        MediaQuery, MediaQueryData, MouseRegion, Offstage, Opacity, OverflowBox, OverflowBoxFit,
-        Padding, Positioned, RepaintBoundary, RotatedBox, Row, SafeArea, ScrollController,
-        Scrollable, Scrollbar, ShrinkWrappingViewport, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
-        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Table, TableCell,
-        TableRow, Text, TextEditingController, TextField, Theme, ThemeData, Transform, Viewport,
-        Visibility, Wrap,
+        MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Offstage, Opacity, OverflowBox,
+        OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox, Row, SafeArea,
+        ScrollController, Scrollable, Scrollbar, Semantics, ShrinkWrappingViewport,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Table,
+        TableCell, TableRow, Text, TextEditingController, TextField, Theme, ThemeData, Transform,
+        Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
     pub use crate::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
+        SemanticsConfiguration, SemanticsProperties, SemanticsRole, SemanticsTextDirection,
         SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
         TableCellVerticalAlignment, TableColumnWidth,

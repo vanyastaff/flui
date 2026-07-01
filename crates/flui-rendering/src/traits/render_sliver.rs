@@ -450,6 +450,14 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     ) {
     }
 
+    /// Whether the semantics assembly walk should skip this sliver's entire
+    /// child subtree.
+    ///
+    /// Default: `false`. See [`RenderObject::excludes_semantics_subtree`].
+    fn excludes_semantics_subtree(&self) -> bool {
+        false
+    }
+
     /// Marks this render object for reprocessing after hot reload.
     ///
     /// Default: no-op. See
@@ -601,6 +609,10 @@ where
         config: &mut crate::semantics::SemanticsConfiguration,
     ) {
         <T as RenderSliver>::describe_semantics_configuration(self, config)
+    }
+
+    fn excludes_semantics_subtree(&self) -> bool {
+        <T as RenderSliver>::excludes_semantics_subtree(self)
     }
 
     fn reassemble(&mut self) {

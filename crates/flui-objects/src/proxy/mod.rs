@@ -8,6 +8,7 @@ mod leader;
 mod opacity;
 mod physical_model;
 mod repaint_boundary;
+mod semantics;
 mod shader_mask;
 
 pub use backdrop_filter::*;
@@ -20,4 +21,5 @@ pub use leader::*;
 pub use opacity::*;
 pub use physical_model::*;
 pub use repaint_boundary::*;
+pub use semantics::*;
 pub use shader_mask::*;

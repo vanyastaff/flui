@@ -458,12 +458,15 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
 
     ids.into_iter()
         .map(|id| {
-            // Note: Semantics tree integration is not yet implemented.
+            // Note: Binding-level semantics dump routing is not yet wired.
             // This would require:
             // 1. View to expose its PipelineOwner
-            // 2. PipelineOwner to build and expose SemanticsTree
+            // 2. RendererBinding to route each view id to that PipelineOwner
             // 3. SemanticsTree to implement Debug or custom formatting
-            let mut message = format!("=== SemanticsTree {} ===\nSemantics not generated.", id);
+            let mut message = format!(
+                "=== SemanticsTree {} ===\nSemantics dump not available via binding.",
+                id
+            );
             if !printed_explanation {
                 printed_explanation = true;
                 message.push('\n');
