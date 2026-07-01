@@ -171,9 +171,9 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 | C1.8 | `AnimatedContainer` or `AnimatedOpacity` (implicit animation) | ⚠ verify | `animated`/`transitions` families present |
 | C1.9 | `StatefulView` counter | ⚠ verify | StatefulView/`setState` path present (N5) |
 | C1.10 | Demo app assembled entirely from slice widgets, running on one desktop platform with real frame loop | 🛇 needs display | N5 cleared; gate is a formal windowed run — not verifiable in this headless checkout |
-| C1.11 | Per-contract test pass: C1 / C2 (both tuple + Vec) / C3 / C4 / C5 / C6 / C7 | ☐ todo (unblocked) | **N5 cleared this** — report writeable against the slice at `docs/research/2026-XX-XX-phase1-contract-validation.md` |
+| C1.11 | Per-contract test pass: C1 / C2 (both tuple + Vec) / C3 / C4 / C5 / C6 / C7 | ✅ MET (2026-06-30) | Report at `docs/research/2026-06-30-phase1-contract-validation.md`; all 9 contracts (C1–C9) have a passing proving test (C8/C9 via port-check). Proving tests independently re-run (8/8 + C6 production 1/1 + C1 signal-independence grep). Full workspace run 4,847 passed / 4 skipped (contract-unrelated). |
 | C1.12 | Frame-time histogram ≤ 16ms median over 5-second animation run | 🛇 needs display | proves real `Ticker`; needs a windowed animation run |
-| C1.13 | Ported Flutter test scaffolding at `crates/flui-widgets/tests/parity/` | 🛇 blocked | needs `.flutter/` (absent in this checkout) |
+| C1.13 | Ported Flutter test scaffolding at `crates/flui-widgets/tests/parity/` | ☐ todo (unblocked) | `.flutter/flutter-master` restored 2026-06-30 (gitignored oracle) — the "absent" blocker is cleared; parity scaffolding is now writeable, not yet written |
 
 ---
 
