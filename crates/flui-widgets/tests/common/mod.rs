@@ -22,7 +22,7 @@ use flui_interaction::events::{
     make_move_event_for_id, make_up_event_for_id,
 };
 use flui_objects::{RenderOpacity, RenderTransform};
-use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
@@ -181,6 +181,12 @@ impl LaidOut {
     pub fn size(&self, id: RenderId) -> Size {
         inspect::box_geometry(&self.pipeline_owner.read(), id)
             .expect("render node should have box geometry after layout")
+    }
+
+    /// The committed sliver geometry of a render node.
+    pub fn sliver_geometry(&self, id: RenderId) -> SliverGeometry {
+        inspect::sliver_geometry(&self.pipeline_owner.read(), id)
+            .expect("render node should have sliver geometry after layout")
     }
 
     /// The paint offset of a render node relative to its parent.

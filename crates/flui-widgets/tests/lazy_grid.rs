@@ -310,4 +310,17 @@ fn lazy_grid_view_builder_none_at_k_caps_build_count() {
         "None-at-K must cap build count: expected {expected} nodes, \
          got {nodes_after_settle}"
     );
+
+    let sliver = laid.find_by_render_type("RenderSliverGridLazy");
+    let geometry = laid.sliver_geometry(sliver);
+    assert_eq!(
+        geometry.scroll_extent, 200.0,
+        "None-at-K must cap scroll extent to the actual 3-tile grid: \
+         2 rows × 100px = 200px; got {}",
+        geometry.scroll_extent
+    );
+    assert_eq!(
+        geometry.max_paint_extent, 200.0,
+        "None-at-K must cap max paint extent with the same effective child count"
+    );
 }
