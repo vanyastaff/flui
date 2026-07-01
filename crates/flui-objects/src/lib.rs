@@ -40,18 +40,18 @@ mod text;
 
 // --- flat re-exports (layout) ---
 pub use layout::{
-    AspectRatioFactor, FractionFactor, RenderAlign, RenderAspectRatio, RenderBaseline,
-    RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox,
+    AnimatedSizeState, CrossAxisAlignment, DelegateChange, FlexDirection, MainAxisAlignment,
+    MainAxisSize, OverflowBoxFit, PositionedSpec, StackFit, TranslationFraction, WrapAlignment,
+    WrapCrossAlignment,
+};
+pub use layout::{
+    AspectRatioFactor, FractionFactor, RenderAlign, RenderAnimatedSize, RenderAspectRatio,
+    RenderBaseline, RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox,
     RenderCustomMultiChildLayoutBox, RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex,
     RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLimitedBox, RenderListBody, RenderPadding,
     RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox, RenderStack, RenderTable,
     RenderTransform, RenderWrap,
-};
-pub use layout::{
-    CrossAxisAlignment, DelegateChange, FlexDirection, MainAxisAlignment, MainAxisSize,
-    OverflowBoxFit, PositionedSpec, StackFit, TranslationFraction, WrapAlignment,
-    WrapCrossAlignment,
 };
 
 // --- flat re-exports (proxy) ---

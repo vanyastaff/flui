@@ -82,6 +82,26 @@ impl AligningShiftedBox {
         }
     }
 
+    /// Returns the current alignment.
+    #[inline]
+    pub(crate) fn alignment(&self) -> Alignment {
+        self.alignment
+    }
+
+    /// Updates the alignment; returns `true` if the value changed.
+    ///
+    /// Mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
+    /// (`shifted_box.dart:339-345`), which triggers a relayout (not just a
+    /// repaint) because the child offset depends on it — the caller is
+    /// responsible for marking the owning render object dirty on `true`.
+    pub(crate) fn set_alignment(&mut self, alignment: Alignment) -> bool {
+        if self.alignment == alignment {
+            return false;
+        }
+        self.alignment = alignment;
+        true
+    }
+
     /// Returns the child offset set by the most recent [`align_child`] call.
     ///
     /// Returns `Offset::ZERO` before the first layout.

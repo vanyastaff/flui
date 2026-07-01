@@ -65,6 +65,7 @@
 //! | `RenderConstrainedOverflowBox` | `harness_constrained_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | — |
+//! | `RenderAnimatedSize` | `harness_render_animated_size_*` | yes | — | yes | yes | state machine |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
@@ -76,8 +77,11 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
+use flui_animation::curve::ArcCurve;
+use flui_animation::{AnimationController, Curves, Scheduler};
 use flui_interaction::MouseTracker;
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
@@ -177,6 +181,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderConstrainedOverflowBox",
     "RenderSizedOverflowBox",
     "RenderRotatedBox",
+    "RenderAnimatedSize",
 ];
 
 fn loose(max: f32) -> BoxConstraints {
@@ -5231,6 +5236,370 @@ fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_expl
         px(0.0),
         "a cell with an explicit vertical_alignment must NOT follow a later \
          default_vertical_alignment change",
+    );
+}
+
+// ============================================================================
+// RenderAnimatedSize
+// ============================================================================
+//
+// Every test below constructs its own `AnimationController` (a fresh,
+// never-pumped `Scheduler`, per ADR-0013 D2) and, where the test needs to
+// drive the retarget animation across frames, keeps a `Clone` of it (`driver`)
+// to call `tick_at(seconds_since_the_current_run_started)` directly —
+// mirroring how `flui-animation`'s own controller tests and `Vsync::tick_all`
+// drive deterministic virtual time, with no `thread::sleep`. `run.pump()`
+// only re-runs the render pipeline; it does not itself advance the
+// controller, so a value-listener-driven `mark_needs_layout` (buffered by
+// `attach`) is drained on the very next `pump()`/`run_frame()` after a tick.
+
+fn animated_size_controller(ms: u64) -> (AnimationController, AnimationController) {
+    let controller =
+        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()));
+    let driver = controller.clone();
+    (controller, driver)
+}
+
+fn assert_size_approx(actual: Size, expected: Size, eps: f32, what: &str) {
+    assert!(
+        (actual.width.get() - expected.width.get()).abs() < eps
+            && (actual.height.get() - expected.height.get()).abs() < eps,
+        "{what}: expected ~{expected:?} (±{eps}), got {actual:?}",
+    );
+}
+
+#[test]
+fn harness_render_animated_size_start_state_snaps_to_child_size_with_no_animation() {
+    let (controller, _driver) = animated_size_controller(100);
+    let ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        Alignment::CENTER,
+        Clip::HardEdge,
+        None,
+    );
+
+    let run = RenderTester::mount(
+        box_node(ro)
+            .label("root")
+            .child(box_node(RenderColoredBox::red(30.0, 30.0)).label("child")),
+    )
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(30.0), px(30.0)),
+        "the very first layout must snap to the child's size, no animation",
+    );
+    assert!(
+        !run.structure().contains(&"ClipRect"),
+        "a settled first layout must not clip"
+    );
+}
+
+#[test]
+fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
+    let (controller, driver) = animated_size_controller(100);
+    let ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        Alignment::CENTER,
+        Clip::HardEdge,
+        None,
+    );
+
+    let mut run = RenderTester::mount(
+        box_node(ro)
+            .label("root")
+            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(10.0), px(10.0)));
+
+    // Grow the child: Stable -> Changed (begin = last committed size = 10,
+    // end = 50), controller restarts at t = 0.
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+    });
+    run.pump();
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(10.0), px(10.0)),
+        "the retarget frame itself reports t=0 (still the begin size) — no snap to end",
+    );
+
+    // Tick the controller to known fractions of the 100ms run and confirm the
+    // reported size actually interpolates (hand-computed against
+    // Tween::transform), not just holds or jumps straight to the target.
+    driver.tick_at(0.025); // 25ms of 100ms => t=0.25
+    run.pump();
+    assert_size_approx(
+        run.box_geometry(run.root()),
+        Size::new(px(20.0), px(20.0)), // 10 + 0.25 * (50-10)
+        0.5,
+        "t=0.25",
+    );
+
+    driver.tick_at(0.05); // t=0.5
+    run.pump();
+    assert_size_approx(
+        run.box_geometry(run.root()),
+        Size::new(px(30.0), px(30.0)),
+        0.5,
+        "t=0.5",
+    );
+
+    driver.tick_at(0.075); // t=0.75
+    run.pump();
+    assert_size_approx(
+        run.box_geometry(run.root()),
+        Size::new(px(40.0), px(40.0)),
+        0.5,
+        "t=0.75",
+    );
+
+    driver.tick_at(0.1); // t=1.0, run completes
+    run.pump();
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(50.0), px(50.0)),
+        "a completed run must land exactly on the target size",
+    );
+}
+
+#[test]
+fn harness_render_animated_size_clip_appears_mid_animation_and_disappears_once_settled() {
+    let (controller, driver) = animated_size_controller(100);
+    let ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        Alignment::CENTER,
+        Clip::HardEdge,
+        None,
+    );
+
+    let mut run = RenderTester::mount(
+        box_node(ro)
+            .label("root")
+            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+    assert!(
+        !run.structure().contains(&"ClipRect"),
+        "a settled 10x10 box must not clip"
+    );
+
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+    });
+    run.pump();
+    assert!(
+        run.structure().contains(&"ClipRect"),
+        "mid-animation, the reported size (10) is smaller than the tween's \
+         target (50) — the child's full-size paint must be clipped; structure: {:?}",
+        run.structure(),
+    );
+
+    driver.tick_at(0.1); // settle fully at the target
+    run.pump();
+    assert!(
+        !run.structure().contains(&"ClipRect"),
+        "once settled at the target size there is no overflow to clip; structure: {:?}",
+        run.structure(),
+    );
+}
+
+#[test]
+fn harness_render_animated_size_respects_alignment_for_the_oversized_child_mid_animation() {
+    let (controller, _driver) = animated_size_controller(100);
+    let ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        Alignment::BOTTOM_RIGHT,
+        Clip::HardEdge,
+        None,
+    );
+
+    let mut run = RenderTester::mount(
+        box_node(ro)
+            .label("root")
+            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+    });
+    run.pump();
+
+    // Retarget frame: reported size is still 10x10 (t=0) while the child is
+    // laid out at its full 50x50 — BOTTOM_RIGHT must offset the (oversized)
+    // child by exactly `size - child_size = (10-50, 10-50) = (-40, -40)`.
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::new(px(-40.0), px(-40.0)),
+        "BOTTOM_RIGHT alignment must reach the child even while it is larger \
+         than the still-animating parent box",
+    );
+}
+
+#[test]
+fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() {
+    let (controller, driver) = animated_size_controller(100);
+    let ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        Alignment::CENTER,
+        Clip::HardEdge,
+        None,
+    );
+
+    let mut run = RenderTester::mount(
+        box_node(ro)
+            .label("root")
+            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+
+    // First retarget: 10 -> 50, let it run to t=0.5 and settle into `Stable`
+    // (the child's size holds steady for one frame, so the ORIGINAL
+    // interpolation span is left running rather than being touched).
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+    });
+    run.pump();
+    driver.tick_at(0.05); // t=0.5 of the 10->50 span
+    run.pump();
+    let mid_flight_size = run.box_geometry(run.root());
+    assert_size_approx(
+        mid_flight_size,
+        Size::new(px(30.0), px(30.0)),
+        0.5,
+        "midpoint of the first span",
+    );
+
+    // Second retarget while STILL mid-flight (the 10->50 run has not reached
+    // t=1.0): begin must be the CURRENT committed value (continuous), not a
+    // degenerate collapse — this is the Stable->Changed formula, distinct
+    // from the Changed->Unstable degenerate-collapse case tested at the unit
+    // level.
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        b.set_preferred_size(Size::new(px(90.0), px(90.0)));
+    });
+    run.pump();
+    let retarget_frame_size = run.box_geometry(run.root());
+
+    assert_eq!(
+        retarget_frame_size, mid_flight_size,
+        "retargeting mid-flight must begin exactly at the last committed \
+         size — no discontinuous jump on the retarget frame itself",
+    );
+}
+
+#[test]
+fn harness_render_animated_size_baseline_matches_child_baseline_plus_recorded_offset() {
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    const PROBE_OFFSET_PX: f32 = 100.0;
+
+    let (controller, _driver) = animated_size_controller(100);
+    let ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        Alignment::CENTER,
+        Clip::HardEdge,
+        None,
+    );
+
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(
+            TextBaseline::Alphabetic,
+            px(PROBE_OFFSET_PX),
+        ))
+        .label("probe")
+        .child(box_node(ro).label("animated_size").child(
+            box_node(RenderParagraph::new(TextSpan::new("A"), TextDirection::Ltr)).label("text"),
+        )),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    // The first (Start-state) layout has no active animation, so the live
+    // baseline must equal the dry baseline computed against the same
+    // (already-loosened-by-the-probe) constraints — the same "live == dry
+    // for a statically laid out tree" argument `align_live_baseline_adds_child_offset_dy`
+    // relies on for `RenderAlign`.
+    let animated_size_constraints = constraints.loosen();
+    let animated_size_bl_dry = run
+        .dry_baseline(
+            run.id("animated_size"),
+            animated_size_constraints,
+            TextBaseline::Alphabetic,
+        )
+        .expect("RenderAnimatedSize with a paragraph child must report a dry baseline");
+
+    let animated_size_offset_dy = run.offset(run.id("animated_size")).dy.get();
+    let expected_dy = PROBE_OFFSET_PX - animated_size_bl_dry;
+
+    assert!(
+        (animated_size_offset_dy - expected_dy).abs() < 0.5,
+        "RenderAnimatedSize must forward the child's live baseline (+ its own \
+         recorded child offset) through AligningShiftedBox, so the probe \
+         positions it at probe_offset - (child_bl + align_dy) (got dy={animated_size_offset_dy}, \
+         expected {expected_dy})",
+    );
+}
+
+#[test]
+fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_offset_stale() {
+    let (controller, _driver) = animated_size_controller(100);
+    let ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        Alignment::BOTTOM_RIGHT,
+        Clip::HardEdge,
+        None,
+    );
+
+    let mut run = RenderTester::mount(
+        box_node(ro)
+            .label("root")
+            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+
+    // Grow the child under loose constraints (the general path): BOTTOM_RIGHT
+    // records a real, non-zero offset for the (temporarily oversized) child.
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        b.set_preferred_size(Size::new(px(50.0), px(50.0)));
+    });
+    run.pump();
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::new(px(-40.0), px(-40.0)),
+    );
+
+    // Now force TIGHT root constraints — the fast path. The child is still
+    // laid out (and, under a tight incoming constraint, its own
+    // `RenderColoredBox::perform_layout` reports the constrained size), but
+    // `align_child` must NOT run: the child's offset stays exactly what it
+    // was, matching the oracle's stale-offset quirk (animated_size.dart
+    // fast-path branch has no `alignChild()` call).
+    run.owner_mut()
+        .set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    let root = run.root();
+    run.owner_mut().mark_needs_layout(root);
+    run.pump();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(100.0), px(100.0)),
+        "the fast path must snap to the incoming tight size",
+    );
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::new(px(-40.0), px(-40.0)),
+        "the fast path must NOT call align_child — the child's offset must \
+         stay exactly what it was before the tight constraints landed",
     );
 }
 

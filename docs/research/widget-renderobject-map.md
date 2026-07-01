@@ -15,7 +15,7 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **60**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **61**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
@@ -27,14 +27,14 @@
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **60**
-- **Render objects remaining to build (Core.2):** **~12** (verified list below)
+- **Render objects existing today:** **61**
+- **Render objects remaining to build (Core.2):** **~10** (verified list below)
 
-### Existing render objects — authoritative (60)
+### Existing render objects — authoritative (61)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
-**Box layout (25):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderTable` · `RenderWrap`
+**Box layout (26):** `RenderAlign` · `RenderAnimatedSize` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderTable` · `RenderWrap`
 
 **Paint effects (10):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
 
@@ -44,14 +44,13 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈11, see `RenderAnimatedOpacity` note)
+### Remaining to build — verified missing (≈10, see `RenderAnimatedOpacity` note)
 
-Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
+Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize` closed same day — see closure note below):
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
 | `RenderSliverPersistentHeader` family | `SliverAppBar`/pinned headers | Medium | `sliver_persistent_header.dart` |
-| `RenderAnimatedSize` | `AnimatedSize` | Medium — **ADR-blocked, see note** | `animated_size.dart` |
 | `RenderBackdropFilter` | `BackdropFilter` | Low | `proxy_box.dart` |
 | `RenderShaderMask` | `ShaderMask` | Low | `proxy_box.dart` |
 | `RenderPhysicalModel` | `PhysicalModel` | Low (Material elevation) | `proxy_box.dart` |
@@ -87,6 +86,27 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 > **`RenderAnimatedOpacity` correction (investigated 2026-07-01):** removed from "remaining to build" — it is not a real gap. `FadeTransition` (`crates/flui-widgets/src/transitions/fade_transition.rs`) and `AnimatedOpacity` (`crates/flui-widgets/src/animated/animated_opacity.rs`) already compose the plain `Opacity` widget/`RenderOpacity`, rebuilding `Opacity::new(value)` on every animation tick — `RenderOpacity` (`crates/flui-objects/src/proxy/opacity.rs`) already implements the oracle's boundary fast paths (`paint_alpha()` → `None` and paint is skipped at alpha 0/255), so no behavior is missing. The oracle's `RenderAnimatedOpacity` differs only in *how* it stays current: it holds the `Animation<double>` itself and self-subscribes (`proxy_box.dart` `RenderAnimatedOpacityMixin`), bypassing a widget rebuild per tick — a pure performance shape, not a correctness one, and it depends on a `Listenable`/`Animation` attach-to-render-object mechanism FLUI's `RenderObject` trait does not have yet (the same gap already documented in `RenderFlow`'s and `RenderCustomPaint`'s module docs for their own painter/delegate `Listenable` wiring). Tracked as a cross-cutting FLUI-wide performance item, not a per-widget catalog gap.
 >
 > **`RenderAnimatedSize` investigation (2026-07-01): genuinely ADR-blocked, not just unbuilt.** Unlike `RenderAnimatedOpacity`, this is not a false positive — `AnimatedSize` does not exist in FLUI in any form (no widget, no composition, no stub; confirmed absent by grep across `flui-widgets`/`flui-objects`/`flui-animation`). Flutter's oracle `RenderAnimatedSize` (`rendering/animated_size.dart`) is architecturally different from `RenderAnimatedOpacity`'s shape: it owns and drives its **own** `AnimationController` (attached via a `vsync: TickerProvider` passed once at construction), detects a child size change during its own `performLayout`, and interpolates its reported size across many of *its own* frames — independent of any widget rebuild. This needs infrastructure that does not exist anywhere in this codebase today: (1) a lifecycle hook on FLUI's `RenderObject` trait for attach/detach-to-tree (to register/unregister a ticker), (2) a path for a render object to reach a `Vsync`/`TickerProvider` — today `Vsync` only reaches the `View`/`State` layer via `VsyncScope`, and `flui-rendering` has no dependency edge to `flui-animation` at all (crate-layering, not one-file), and (3) a way for a render-object-driven tick to trigger `markNeedsLayout` from outside the normal widget-rebuild entry point. This is a materially bigger gap than `RenderFlow`'s missing paint-time-transform primitive — it needs a cross-cutting architectural decision (an ADR) before any implementation plan can be written, since it would also be the mechanism that eventually unblocks `RenderAnimatedOpacity`'s and `RenderFlow`'s own deferred `Listenable` items. Not attempted in this pass; flagged for a chief-architect ADR rather than a build plan.
+>
+> **`RenderAnimatedSize` closure note (verified 2026-07-01):** the blocking architectural gap is closed by
+> [`ADR-0013`](../adr/ADR-0013-render-object-attach-self-dirty-handle.md) — a defaulted `attach`/`detach`
+> lifecycle pair on `RenderObject`/`RenderBox`/`RenderSliver` (mirroring the existing `reassemble` forwarded
+> default), firing off the pipeline's insert/remove paths and reusing the existing `RepaintHandle`
+> (extended with `mark_needs_layout`) plus `AnimationController`'s existing `Listenable` impl — no new ticker
+> subsystem, no new `flui-rendering` → `flui-animation` dependency edge. `RenderAnimatedSize` now ships in
+> `flui-objects` (`crates/flui-objects/src/layout/animated_size.rs`), is listed in the render-object harness
+> catalog, and backs the public `AnimatedSize` widget (`crates/flui-widgets/src/animated/animated_size.rs`).
+> It owns an injected (never self-built — ADR-0013 D2) `AnimationController` and subscribes to it in `attach`,
+> implementing the oracle's four-state retarget machine (`Start`/`Stable`/`Changed`/`Unstable`,
+> `animated_size.dart:15-51`) with its one subtlety intact: only the `Stable → Changed` transition begins the
+> tween at the live current size (genuine interpolation span); every later retarget while already
+> `Changed`/`Unstable` collapses to a degenerate zero-span tween (`begin = end = child's raw size`), not a
+> uniform "begin = current interpolated value" — both formulas have dedicated unit + harness regression tests.
+> Because it must persist its retarget state and controller subscription across rebuilds, its widget does not
+> follow the sibling `AnimatedBuilder`/rebuild-per-tick convention (`AnimatedOpacity`, `AnimatedAlign`) or the
+> `Align`-style whole-object-replace `update_render_object` convention — `AnimatedSizeRenderView` reaches the
+> persistent render object through targeted setters only, with a widget regression test proving an unrelated
+> (alignment-only) rebuild does not reset an in-flight resize animation. Deferred/documented: `reverseDuration`
+> is confirmed inert (this object never runs its controller in reverse).
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -238,7 +258,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `AnimatedPositioned` | *(composes)* | N/A | Single | Implicitly animates Positioned in Stack |
 | `AnimatedAlign` | *(composes)* | N/A | Single | Implicitly animates Align |
 | `AnimatedDefaultTextStyle` | *(composes)* | N/A | Single | Implicitly animates DefaultTextStyle |
-| `AnimatedSize` | `RenderAnimatedSize` | Needed | Single | Animates size changes over time |
+| `AnimatedSize` | `RenderAnimatedSize` | **Exists** | Single | Animates size changes over time; see ADR-0013 closure note above |
 
 ### Hero
 

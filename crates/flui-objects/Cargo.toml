@@ -14,7 +14,9 @@ flui-painting = { path = "../flui-painting", version = "0.2.0" }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-tree = { path = "../flui-tree", version = "0.2.0" }
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
 tracing = { workspace = true }
+parking_lot = { workspace = true }
 
 [features]
 default = []
@@ -28,6 +30,5 @@ flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["t
 flui-objects = { path = ".", version = "0.2.0", features = ["testing"] }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 insta = { workspace = true }
-flui-animation = { path = "../flui-animation", version = "0.2.0" }
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }

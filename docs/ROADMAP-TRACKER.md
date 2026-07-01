@@ -237,6 +237,14 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > line placement, per-cell hit testing, and baseline row alignment.
 > `MaxColumnWidth`/`MinColumnWidth` combinators, RTL column order, and
 > `TableBorder.border_radius` remain documented deferred edges.
+> `RenderAnimatedSize` now exists, backs the public `AnimatedSize` widget, and closes the
+> render-object-ticker architectural gap via `ADR-0013`
+> (`docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`): a defaulted `attach`/`detach`
+> lifecycle pair on `RenderObject`/`RenderBox`/`RenderSliver` lets a render object subscribe to its
+> own injected `AnimationController` and self-mark layout dirty, decoupled from widget rebuilds.
+> Harness coverage drives the retarget state machine (`Start`/`Stable`/`Changed`/`Unstable`) across
+> real multi-frame interpolation, clip-on-overflow, alignment, baseline, and the tight/no-child fast
+> path; a widget-level regression test proves an unrelated rebuild does not reset an in-flight resize.
 > The genuine remaining work is: **(a)** the
 > *secondary-query* architectural gap — `compute_dry_layout` / baseline /
 > intrinsics for multi-child objects (`2026-06-30-secondary-query-layout-gap.md`,
