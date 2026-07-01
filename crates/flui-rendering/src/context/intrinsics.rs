@@ -40,7 +40,7 @@ pub struct BoxDryBaselineCtx<'a> {
     child_count: usize,
     /// Erased per-child parent data; indexed by child position.
     ///
-    /// Populated by the driver from each child's [`RenderState::parent_data`]
+    /// Populated by the driver from each child's `RenderNode::parent_data`
     /// (plus harness seeds when `test`/`testing` is active). Container
     /// objects downcast entries via [`Self::child_parent_data_as`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
@@ -215,7 +215,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
 pub struct BoxDryLayoutCtx<'a> {
     child_count: usize,
     /// Erased per-child parent data populated by the driver from each child's
-    /// [`RenderState::parent_data`]. Indexed by child position; entries are `None`
+    /// `RenderNode::parent_data`. Indexed by child position; entries are `None`
     /// when the child has no parent data set.
     ///
     /// Downcasting: container objects call [`Self::child_parent_data_as`] with their

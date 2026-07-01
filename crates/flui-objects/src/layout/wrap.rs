@@ -476,7 +476,7 @@ impl RenderBox for RenderWrap {
 
     /// Three-phase layout matching Flutter's `RenderWrap.performLayout`.
     ///
-    /// **Phases 1-2** are delegated to [`RenderWrap::compute_runs`] so that
+    /// **Phases 1-2** are delegated to the private `compute_runs` so that
     /// `compute_dry_layout` can reuse identical sizing logic.
     ///
     /// **Phase 3 — child positioning** (`_positionChildren`): distribute
