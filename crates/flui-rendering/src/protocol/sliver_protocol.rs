@@ -1694,4 +1694,175 @@ mod tests {
             "main_axis_position must reflect the context position at call time"
         );
     }
+
+    // ========================================================================
+    // SliverLayoutCtx (Direct storage) — scalar accessors and child dispatch
+    // ========================================================================
+
+    #[test]
+    fn direct_ctx_scalar_accessors_read_from_constraints() {
+        let constraints = SliverConstraints {
+            scroll_offset: 12.0,
+            remaining_paint_extent: 340.0,
+            viewport_main_axis_extent: 600.0,
+            cross_axis_extent: 250.0,
+            ..SliverConstraints::default()
+        };
+        let ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(constraints);
+
+        assert_eq!(ctx.scroll_offset(), 12.0);
+        assert_eq!(ctx.remaining_paint_extent(), 340.0);
+        assert_eq!(ctx.viewport_main_axis_extent(), 600.0);
+        assert_eq!(ctx.cross_axis_extent(), 250.0);
+    }
+
+    #[test]
+    fn layout_box_child_and_box_child_intrinsic_return_zero_without_callbacks_wired() {
+        let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(SliverConstraints::default());
+
+        assert_eq!(
+            ctx.layout_box_child(0, BoxConstraints::tight(Size::new(px(10.0), px(10.0)))),
+            Size::ZERO
+        );
+        assert_eq!(
+            ctx.box_child_intrinsic(0, IntrinsicDimension::MinWidth, 100.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn with_children_exposes_count_geometry_and_parent_data_by_index() {
+        let mut children = vec![
+            SliverChildState::<SliverParentData>::new(RenderId::new(1)),
+            SliverChildState::<SliverParentData>::new(RenderId::new(2)),
+        ];
+        children[0].geometry = SliverGeometry {
+            paint_extent: 40.0,
+            ..SliverGeometry::ZERO
+        };
+        children[1].geometry = SliverGeometry {
+            paint_extent: 80.0,
+            ..SliverGeometry::ZERO
+        };
+
+        {
+            let constraints = SliverConstraints::default();
+            let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::with_children(
+                constraints,
+                &mut children,
+            );
+
+            assert_eq!(LayoutContextApi::child_count(&ctx), 2);
+            assert_eq!(ctx.child_geometry(0).unwrap().paint_extent, 40.0);
+            assert_eq!(ctx.child_geometry(1).unwrap().paint_extent, 80.0);
+            assert!(ctx.child_geometry(2).is_none());
+
+            assert_eq!(ctx.child_parent_data(0), Some(&SliverParentData::default()));
+            assert!(ctx.child_parent_data(5).is_none());
+            assert!(ctx.child_parent_data_mut(5).is_none());
+
+            ctx.child_parent_data_mut(0).unwrap().layout_offset = 99.0;
+            LayoutContextApi::position_child(&mut ctx, 1, Offset::new(px(3.0), px(4.0)));
+        }
+
+        assert_eq!(children[0].parent_data.layout_offset, 99.0);
+        assert_eq!(children[1].offset, Offset::new(px(3.0), px(4.0)));
+    }
+
+    #[test]
+    fn layout_child_falls_back_to_cached_geometry_when_no_callback_is_wired() {
+        let mut children = vec![SliverChildState::<SliverParentData>::new(RenderId::new(1))];
+        children[0].geometry = SliverGeometry {
+            paint_extent: 55.0,
+            ..SliverGeometry::ZERO
+        };
+
+        let constraints = SliverConstraints::default();
+        let mut ctx =
+            SliverLayoutCtx::<Leaf, SliverParentData>::with_children(constraints, &mut children);
+
+        // No `layout_child_callback` was wired (plain `with_children`), so the
+        // Direct-mode dispatch must fall back to the already-cached geometry
+        // rather than invoking a nonexistent callback.
+        let geometry = LayoutContextApi::layout_child(&mut ctx, 0, constraints);
+        assert_eq!(geometry.paint_extent, 55.0);
+    }
+
+    #[test]
+    fn layout_child_returns_zero_geometry_with_no_children_and_no_callback() {
+        let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(SliverConstraints::default());
+        assert_eq!(
+            LayoutContextApi::layout_child(&mut ctx, 0, SliverConstraints::default()),
+            SliverGeometry::ZERO
+        );
+    }
+
+    #[test]
+    fn with_layout_callback_dispatches_child_layout_box_child_and_intrinsic_by_child_id() {
+        use parking_lot::Mutex;
+
+        let child_a = RenderId::new(10);
+        let child_b = RenderId::new(20);
+        let child_ids = [child_a, child_b];
+        let mut children = vec![
+            SliverChildState::<SliverParentData>::new(child_a),
+            SliverChildState::<SliverParentData>::new(child_b),
+        ];
+
+        let sliver_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
+        let layout_child_callback = |id: RenderId, _c: SliverConstraints| -> SliverGeometry {
+            sliver_calls.lock().push(id);
+            SliverGeometry {
+                paint_extent: 123.0,
+                ..SliverGeometry::ZERO
+            }
+        };
+
+        let box_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
+        let layout_box_child_callback = |id: RenderId, _c: BoxConstraints| -> Size {
+            box_calls.lock().push(id);
+            Size::new(px(11.0), px(22.0))
+        };
+
+        let intrinsic_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
+        let box_child_intrinsic_callback = |id: RenderId, _d: IntrinsicDimension, _e: f32| -> f32 {
+            intrinsic_calls.lock().push(id);
+            77.0
+        };
+
+        let constraints = SliverConstraints::default();
+        let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::with_layout_callback(
+            constraints,
+            &mut children,
+            &child_ids,
+            &layout_child_callback,
+            Some(&layout_box_child_callback),
+            Some(&box_child_intrinsic_callback),
+        );
+
+        // `layout_child` on index 1 must resolve child_ids[1] == child_b, invoke
+        // the callback with that id, and write the returned geometry through to
+        // the cached child state at the same index.
+        let geometry = LayoutContextApi::layout_child(&mut ctx, 1, constraints);
+        assert_eq!(geometry.paint_extent, 123.0);
+        assert_eq!(*sliver_calls.lock(), vec![child_b]);
+        assert_eq!(ctx.child_geometry(1).unwrap().paint_extent, 123.0);
+
+        let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(px(11.0), px(22.0))));
+        assert_eq!(size, Size::new(px(11.0), px(22.0)));
+        assert_eq!(*box_calls.lock(), vec![child_a]);
+
+        let extent = ctx.box_child_intrinsic(0, IntrinsicDimension::MinWidth, 50.0);
+        assert_eq!(extent, 77.0);
+        assert_eq!(*intrinsic_calls.lock(), vec![child_a]);
+
+        // An index beyond `child_ids` must not dispatch to any callback.
+        let out_of_range = ctx.layout_box_child(5, BoxConstraints::tight(Size::ZERO));
+        assert_eq!(out_of_range, Size::ZERO);
+        assert_eq!(
+            box_calls.lock().len(),
+            1,
+            "no additional dispatch for an out-of-range index"
+        );
+    }
 }
