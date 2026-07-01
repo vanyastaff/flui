@@ -265,6 +265,18 @@ impl MouseTracker {
             _ => return, // Not a mouse tracking event
         };
 
+        // Cache annotations contributed by the current hit-test path. This
+        // lets enter/exit callbacks survive the frame where the pointer leaves
+        // a region: the exited region is absent from the new result, but its
+        // last annotation is still available in the tracker map.
+        for entry in hit_test_result.iter() {
+            if let Some(annotation) = &entry.mouse_annotation {
+                inner
+                    .annotations
+                    .insert(annotation.region_id, annotation.clone());
+            }
+        }
+
         // Get or create device state
         let state = inner
             .devices
@@ -418,6 +430,14 @@ impl MouseTracker {
             // regions, update state, collect callbacks.
             let work = {
                 let mut inner = self.inner.lock();
+                for entry in result.iter() {
+                    if let Some(annotation) = &entry.mouse_annotation {
+                        inner
+                            .annotations
+                            .insert(annotation.region_id, annotation.clone());
+                    }
+                }
+
                 let Some(state) = inner.devices.get_mut(&device_id) else {
                     continue; // device removed between snapshot and now
                 };

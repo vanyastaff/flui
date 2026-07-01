@@ -6,7 +6,7 @@ use flui_types::{Point, Size};
 use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::HitTestBehavior,
+    hit_testing::{CursorIcon, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
     traits::RenderObject,
@@ -420,6 +420,20 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The mouse cursor this box contributes to its hit entry.
+    fn mouse_cursor(&self) -> CursorIcon {
+        CursorIcon::Default
+    }
+
+    /// Mouse-tracker annotation contributed to this box's hit entry.
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        let _ = id;
+        None
+    }
+
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
@@ -665,6 +679,17 @@ where
 
     fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
         <T as RenderBox>::pointer_event_handler(self)
+    }
+
+    fn mouse_cursor(&self) -> CursorIcon {
+        <T as RenderBox>::mouse_cursor(self)
+    }
+
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        <T as RenderBox>::mouse_tracker_annotation(self, id)
     }
 
     fn describe_semantics_configuration(

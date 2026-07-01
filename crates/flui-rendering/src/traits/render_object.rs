@@ -37,6 +37,7 @@ use downcast_rs::{DowncastSync, impl_downcast};
 use flui_foundation::Diagnosticable;
 
 use crate::{
+    hit_testing::{CursorIcon, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
@@ -430,6 +431,27 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// [`PointerEvent`]: crate::hit_testing::PointerEvent
     /// [`EventPropagation`]: crate::hit_testing::EventPropagation
     fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+        None
+    }
+
+    /// The mouse cursor this render object contributes to its hit entry.
+    ///
+    /// Default `CursorIcon::Default`; `RenderMouseRegion` overrides this so
+    /// [`MouseTracker`](crate::prelude::MouseTracker) can resolve the active
+    /// platform cursor from the leaf-first hit-test path.
+    fn mouse_cursor(&self) -> CursorIcon {
+        CursorIcon::Default
+    }
+
+    /// Mouse-tracker annotation contributed to this render object's hit entry.
+    ///
+    /// The pipeline passes the entry's render id so the annotation can use the
+    /// same stable region identity as the hit-test path. Default `None`.
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        let _ = id;
         None
     }
 

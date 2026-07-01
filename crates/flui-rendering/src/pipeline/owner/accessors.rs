@@ -403,6 +403,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 Some(handler) => entry.handler(handler),
                 None => entry,
             };
+            let entry = entry.cursor(render_object.mouse_cursor());
+            let entry = match render_object.mouse_tracker_annotation(id) {
+                Some(annotation) => entry.mouse_annotation(annotation),
+                None => entry,
+            };
             result.add(entry);
         }
 
@@ -651,7 +656,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit {
-            result.add(crate::hit_testing::HitTestEntry::new(id));
+            let entry =
+                crate::hit_testing::HitTestEntry::new(id).cursor(render_object.mouse_cursor());
+            let entry = match render_object.mouse_tracker_annotation(id) {
+                Some(annotation) => entry.mouse_annotation(annotation),
+                None => entry,
+            };
+            result.add(entry);
         }
         hit
     }
