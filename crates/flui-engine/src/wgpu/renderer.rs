@@ -1404,6 +1404,7 @@ impl Renderer {
         if let Some(root_id) = scene.root() {
             Self::render_layer_recursive(
                 scene.layer_tree(),
+                scene.link_registry(),
                 root_id,
                 &mut backend,
                 ctx,
@@ -1507,6 +1508,9 @@ impl Renderer {
     ///
     /// `BackdropFilterLayer` is handled specially at the Renderer level when
     /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
+    /// `FollowerLayer` is handled specially too — its render-time position
+    /// is resolved against `link_registry` and the already-fully-built
+    /// `tree` (design research plan §4) before its children render.
     ///
     /// # Occlusion culling
     ///
@@ -1516,6 +1520,7 @@ impl Renderer {
     /// requires a separate pre-pass that is a future optimization opportunity.
     fn render_layer_recursive(
         tree: &flui_layer::LayerTree,
+        link_registry: &flui_layer::LinkRegistry,
         layer_id: flui_foundation::LayerId,
         backend: &mut super::backend::Backend<'_>,
         ctx: &RenderContext,
@@ -1543,11 +1548,45 @@ impl Renderer {
                 bf_layer,
                 node,
                 tree,
+                link_registry,
                 backend,
                 ctx,
                 surface_texture,
                 surface_view,
             );
+            return;
+        }
+
+        // Special handling for Follower — resolve its render-time position
+        // (leader pose, or the plain unlinked fallback) before descending
+        // into children; hide the subtree entirely when unlinked with
+        // `show_when_unlinked == false` (oracle `FollowerLayer.addToScene`,
+        // `layer.dart:2857-2865`).
+        if let flui_layer::Layer::Follower(follower_layer) = layer {
+            if let Some(resolved) =
+                flui_layer::resolve_follower_offset(tree, link_registry, layer_id, follower_layer)
+            {
+                use crate::traits::LayerStateStack;
+
+                let has_offset = resolved != flui_types::geometry::Offset::ZERO;
+                if has_offset {
+                    backend.push_offset(resolved);
+                }
+                for &child_id in node.children() {
+                    Self::render_layer_recursive(
+                        tree,
+                        link_registry,
+                        child_id,
+                        backend,
+                        ctx,
+                        surface_texture,
+                        surface_view,
+                    );
+                }
+                if has_offset {
+                    backend.pop_transform();
+                }
+            }
             return;
         }
         // Fall through to normal LayerRender path (clip + filter fallback)
@@ -1560,6 +1599,7 @@ impl Renderer {
         for &child_id in node.children() {
             Self::render_layer_recursive(
                 tree,
+                link_registry,
                 child_id,
                 backend,
                 ctx,
@@ -1589,6 +1629,7 @@ impl Renderer {
         bf_layer: &flui_layer::BackdropFilterLayer,
         node: &flui_layer::tree::LayerNode,
         tree: &flui_layer::LayerTree,
+        link_registry: &flui_layer::LinkRegistry,
         backend: &mut super::backend::Backend<'_>,
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
@@ -1609,6 +1650,7 @@ impl Renderer {
             for &child_id in node.children() {
                 Self::render_layer_recursive(
                     tree,
+                    link_registry,
                     child_id,
                     backend,
                     ctx,
@@ -1640,6 +1682,7 @@ impl Renderer {
         for &child_id in node.children() {
             Self::render_layer_recursive(
                 tree,
+                link_registry,
                 child_id,
                 backend,
                 ctx,
@@ -1873,6 +1916,7 @@ mod tests {
             bf_layer,
             node,
             &tree,
+            &flui_layer::LinkRegistry::new(),
             &mut backend,
             &ctx,
             &surface_texture,
@@ -1991,6 +2035,7 @@ mod tests {
             bf_layer,
             node,
             &tree,
+            &flui_layer::LinkRegistry::new(),
             &mut backend,
             &ctx,
             &surface_texture,
@@ -2122,6 +2167,7 @@ mod tests {
             bf_layer,
             node,
             &tree,
+            &flui_layer::LinkRegistry::new(),
             &mut backend,
             &ctx,
             &surface_texture,
@@ -2871,6 +2917,7 @@ mod tests {
         // Walk the layer tree.
         Renderer::render_layer_recursive(
             &tree,
+            &flui_layer::LinkRegistry::new(),
             root_id,
             &mut backend,
             &ctx,
@@ -2892,6 +2939,443 @@ mod tests {
              after rendering; got {filter_op_count}. Zero means the foreground CanvasLayer \
              was culled by the unsound back-to-front occlusion check (or a regression \
              reintroduced equivalent culling)."
+        );
+    }
+
+    // =========================================================================
+    // Tier-2 Follower render-time resolution — GPU-level, end-to-end
+    // pixel-readback proof.
+    //
+    // Render-object-harness-level testing cannot check on-screen positioning
+    // (design research plan §6, "explicitly out of harness scope") — these
+    // tests exercise the REAL `render_layer_recursive` Follower special case
+    // (not a hand-rolled stand-in) against a real GPU texture, reading back
+    // actual rendered pixels.
+    // =========================================================================
+
+    /// Clears `view` to `color`. Mirrors `Renderer::run_clear_pass`'s body;
+    /// duplicated here because these tests build `WgpuPainter`/`Backend`
+    /// manually (like OCR-1 above) rather than through a full `Renderer`, so
+    /// `run_clear_pass` (an inherent `&mut Renderer` method) isn't reachable.
+    /// `painter.render` uses `LoadOp::Load` (see the C2-full test's own
+    /// pre-clear), so every one of these tests must pre-clear its target.
+    fn clear_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        color: wgpu::Color,
+    ) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Follower Test Clear Encoder"),
+        });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Follower Test Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(color),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// (a) A `Layer::Follower` linked to a `Layer::Leader` under a DIFFERENT
+    /// `Layer::Offset` ancestor (the cross-repaint-boundary case that
+    /// motivated the whole render-time-resolution design, plan §4) must
+    /// render its subtree at the LEADER's resolved position, not at its own
+    /// natural (pre-resolution) tree position.
+    #[test]
+    fn follower_gpu_renders_at_resolved_position_across_repaint_boundaries() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_layer::{
+            CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, LinkRegistry,
+            OffsetLayer,
+        };
+        use flui_painting::{Canvas, Paint};
+        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let width = 200u32;
+        let height = 200u32;
+
+        let link = LayerLink::new();
+        let mut tree = LayerTree::new();
+
+        let root_id = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        tree.set_root(Some(root_id));
+
+        // Leader lives under `branch_a`, offset (60,0) from root.
+        let branch_a = tree.insert(Layer::Offset(OffsetLayer::new(Offset::new(
+            px(60.0),
+            px(0.0),
+        ))));
+        tree.add_child(root_id, branch_a);
+        let leader_id = tree.insert(Layer::Leader(LeaderLayer::with_offset(
+            link,
+            Size::new(px(20.0), px(20.0)),
+            Offset::new(px(5.0), px(5.0)),
+        )));
+        tree.add_child(branch_a, leader_id);
+
+        // Follower lives under a DIFFERENT boundary, `branch_b`, offset
+        // (0,90) from root.
+        let branch_b = tree.insert(Layer::Offset(OffsetLayer::new(Offset::new(
+            px(0.0),
+            px(90.0),
+        ))));
+        tree.add_child(root_id, branch_b);
+        let follower_id = tree.insert(Layer::Follower(
+            FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0))),
+        ));
+        tree.add_child(branch_b, follower_id);
+
+        // The follower's child: a 10×10 opaque red rect at its own local origin.
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            &Paint::fill(Color::rgba(255, 0, 0, 255)),
+        );
+        let child_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))));
+        tree.add_child(follower_id, child_id);
+
+        let mut registry = LinkRegistry::new();
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::new(px(5.0), px(5.0)),
+            Size::new(px(20.0), px(20.0)),
+        );
+        registry.register_follower(follower_id, link);
+
+        let render_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Follower GPU Test Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        clear_texture(&device, &queue, &render_view, wgpu::Color::WHITE);
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (width, height),
+        );
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        let ctx = RenderContext {
+            supports_copy_src: true,
+            intermediate_active: false,
+        };
+        Renderer::render_layer_recursive(
+            &tree,
+            &registry,
+            root_id,
+            &mut backend,
+            &ctx,
+            &render_texture,
+            &render_view,
+        );
+        drop(backend);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Follower GPU Test Render Encoder"),
+        });
+        let render_target = RenderTarget::sampleable(&render_view, &render_texture);
+        painter
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Resolved leader-relative position: branch_a (60,0) + leader local
+        // (5,5) = (65,5). Sample a couple pixels inset to dodge edge AA.
+        let resolved_pixel = readback_rgba_pixel(&device, &queue, &render_texture, 67, 7)
+            .expect("resolved-position readback must succeed");
+        assert!(
+            resolved_pixel[0] > 200 && resolved_pixel[1] < 50,
+            "follower content must render at the LEADER's resolved position \
+             (65,5)-ish; expected opaque red, got {resolved_pixel:?}"
+        );
+
+        // The follower's own NATURAL (pre-resolution) tree position: branch_b
+        // (0,90) + local (0,0). Must stay untouched white background,
+        // proving the content actually MOVED to the leader's position rather
+        // than painting at (or in addition to) its natural slot.
+        let natural_pixel = readback_rgba_pixel(&device, &queue, &render_texture, 2, 92)
+            .expect("natural-position readback must succeed");
+        assert!(
+            natural_pixel[1] > 200,
+            "follower must NOT render at its own natural (pre-resolution) \
+             tree position; expected untouched white background, got {natural_pixel:?}"
+        );
+    }
+
+    /// (b) An unlinked Follower (no `Layer::Leader` registered under its
+    /// `link`) with `show_when_unlinked = true` renders its subtree at its
+    /// own `target_offset` — the plain paint-origin-relative fallback, NOT
+    /// routed through `calculate_offset` (plan §7.4).
+    #[test]
+    fn follower_gpu_unlinked_show_when_unlinked_true_renders_at_target_offset() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_layer::{
+            CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, LinkRegistry, OffsetLayer,
+        };
+        use flui_painting::{Canvas, Paint};
+        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let width = 100u32;
+        let height = 100u32;
+
+        let link = LayerLink::new();
+        let mut tree = LayerTree::new();
+
+        let root_id = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        tree.set_root(Some(root_id));
+
+        // `target_offset` is large relative to the child's 10×10 rect so the
+        // shifted and un-shifted rects don't overlap — a naive "no
+        // resolution at all" implementation (rendering the child at its
+        // natural, un-shifted local position) must fail the assertions
+        // below, not accidentally satisfy them via overlap.
+        let follower = FollowerLayer::new(link)
+            .with_show_when_unlinked(true)
+            .with_target_offset(Offset::new(px(30.0), px(30.0)))
+            .with_size(Size::new(px(10.0), px(10.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.add_child(root_id, follower_id);
+
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            &Paint::fill(Color::rgba(255, 0, 0, 255)),
+        );
+        let child_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))));
+        tree.add_child(follower_id, child_id);
+
+        // No leader registered under `link` at all — genuinely unlinked.
+        let registry = LinkRegistry::new();
+
+        let render_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Follower Unlinked-Shown GPU Test Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        clear_texture(&device, &queue, &render_view, wgpu::Color::WHITE);
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (width, height),
+        );
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        let ctx = RenderContext {
+            supports_copy_src: true,
+            intermediate_active: false,
+        };
+        Renderer::render_layer_recursive(
+            &tree,
+            &registry,
+            root_id,
+            &mut backend,
+            &ctx,
+            &render_texture,
+            &render_view,
+        );
+        drop(backend);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Follower Unlinked-Shown GPU Test Render Encoder"),
+        });
+        let render_target = RenderTarget::sampleable(&render_view, &render_texture);
+        painter
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Unlinked fallback position: root (0,0) + target_offset (30,30).
+        let shifted_pixel = readback_rgba_pixel(&device, &queue, &render_texture, 35, 35)
+            .expect("readback must succeed");
+        assert!(
+            shifted_pixel[0] > 200 && shifted_pixel[1] < 50,
+            "an unlinked follower with show_when_unlinked=true must render \
+             at its own target_offset; expected opaque red at (35,35), got {shifted_pixel:?}"
+        );
+
+        // The child's own NATURAL (un-shifted) local position must stay
+        // untouched — proves the fallback actually applied `target_offset`
+        // rather than rendering the child at its plain local position.
+        let natural_pixel = readback_rgba_pixel(&device, &queue, &render_texture, 5, 5)
+            .expect("readback must succeed");
+        assert!(
+            natural_pixel[1] > 200,
+            "the unlinked follower's un-shifted local position must stay \
+             untouched white background; expected no draw at (5,5), got {natural_pixel:?}"
+        );
+    }
+
+    /// (c) An unlinked Follower with `show_when_unlinked = false` renders
+    /// NOTHING at all — the subtree is not painted anywhere (oracle
+    /// `FollowerLayer.addToScene`'s early return, `layer.dart:2857-2865`).
+    #[test]
+    fn follower_gpu_unlinked_show_when_unlinked_false_hides_subtree() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_layer::{
+            CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, LinkRegistry, OffsetLayer,
+        };
+        use flui_painting::{Canvas, Paint};
+        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let width = 100u32;
+        let height = 100u32;
+
+        let link = LayerLink::new();
+        let mut tree = LayerTree::new();
+
+        let root_id = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        tree.set_root(Some(root_id));
+
+        let follower = FollowerLayer::new(link)
+            .with_show_when_unlinked(false)
+            .with_target_offset(Offset::new(px(5.0), px(5.0)))
+            .with_size(Size::new(px(10.0), px(10.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.add_child(root_id, follower_id);
+
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            &Paint::fill(Color::rgba(255, 0, 0, 255)),
+        );
+        let child_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))));
+        tree.add_child(follower_id, child_id);
+
+        // No leader registered under `link` at all — genuinely unlinked.
+        let registry = LinkRegistry::new();
+
+        let render_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Follower Unlinked-Hidden GPU Test Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        clear_texture(&device, &queue, &render_view, wgpu::Color::WHITE);
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (width, height),
+        );
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        let ctx = RenderContext {
+            supports_copy_src: true,
+            intermediate_active: false,
+        };
+        Renderer::render_layer_recursive(
+            &tree,
+            &registry,
+            root_id,
+            &mut backend,
+            &ctx,
+            &render_texture,
+            &render_view,
+        );
+        drop(backend);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Follower Unlinked-Hidden GPU Test Render Encoder"),
+        });
+        let render_target = RenderTarget::sampleable(&render_view, &render_texture);
+        painter
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // The spot the content WOULD have rendered at if shown (target_offset
+        // (5,5)) must stay untouched white background — the subtree must not
+        // be painted anywhere.
+        let pixel = readback_rgba_pixel(&device, &queue, &render_texture, 7, 7)
+            .expect("readback must succeed");
+        assert!(
+            pixel[1] > 200,
+            "an unlinked follower with show_when_unlinked=false must render \
+             nothing at all; expected untouched white background, got {pixel:?}"
         );
     }
 }

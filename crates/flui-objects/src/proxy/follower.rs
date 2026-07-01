@@ -9,26 +9,26 @@
 //! (`packages/flutter/lib/src/rendering/proxy_box.dart:4550-4753`), backing
 //! `CompositedTransformFollower`.
 //!
-//! # Scope — Tier 1 of a two-tier plan; the on-screen position is NOT
-//! resolved yet
+//! # Scope — Tier 1 (structural) + Tier 2 (render-time position); hit-test
+//! resolution remains deferred
 //!
 //! This type makes the `LayerTree` node structurally correct and
 //! harness-verifiable — a real `Layer::Follower` with the right `link`/
 //! `show_when_unlinked`/`offset`/anchor fields — exactly like the
 //! ShaderMask/BackdropFilter precedent's own "structurally correct,
-//! visually not yet" scoping.
+//! visually not yet" scoping (Tier 1). **The on-screen position is now
+//! resolved at render time**: `paint` publishes this node's own laid-out
+//! size onto the pushed `Layer::Follower` (mirroring how
+//! `RenderLeaderLayer` publishes its size), and `flui-engine`'s
+//! `render_layer_recursive` resolves the actual pixel offset against the
+//! already-fully-built `LayerTree` and a per-frame `LinkRegistry` — see
+//! `flui_layer::resolve_follower_offset` (Tier 2).
 //!
-//! **`RenderFollowerLayer` does NOT yet position itself correctly on
-//! screen relative to its leader.** Actually resolving a follower's
-//! on-screen position requires summing `Layer::Offset` deltas along the
-//! ancestor chains from both the leader and follower nodes to their
-//! common ancestor in the fully-built `LayerTree` — a real, scoped
-//! `flui-engine`/`flui-layer` follow-up (Tier 2), deliberately NOT
-//! attempted here. Hit-testing is similarly limited to the structural
-//! forward only (see [`RenderBox::hit_test`] below) — resolved-transform-
-//! aware hit-testing is a genuine chief-architect ADR question, not a
-//! shortcut to invent in this pass. See
-//! `docs/research/2026-07-01-render-leader-follower-layer-plan.md` §4/§8.
+//! **Hit-testing remains limited to the structural forward only** (see
+//! [`RenderBox::hit_test`] below) — resolved-transform-aware hit-testing is
+//! a genuine chief-architect ADR question, not a shortcut to invent in this
+//! pass. See `docs/research/2026-07-01-render-leader-follower-layer-plan.md`
+//! §4/§4.4/§8.
 //!
 //! # Rust-native shape
 //!
@@ -249,9 +249,14 @@ impl RenderBox for RenderFollowerLayer {
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         // Oracle `:4708-4721` — pushes the FollowerLayer regardless of
         // child presence; the no-leader/hidden decision resolves at a
-        // later render-time pass (module doc), not here.
+        // later render-time pass (module doc), not here. This node's own
+        // paint-time size is published the same way `RenderLeaderLayer`
+        // publishes its size — the Tier-2 render-time resolution needs it
+        // for `FollowerLayer::calculate_offset`'s `follower_size` param.
+        let size = ctx.size();
         ctx.with_follower(
             self.link,
+            size,
             self.offset,
             self.show_when_unlinked,
             self.leader_anchor,

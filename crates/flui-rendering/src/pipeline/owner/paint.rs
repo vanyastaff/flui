@@ -3,7 +3,7 @@
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
-    LayerTree, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer,
+    LayerTree, LeaderLayer, LinkRegistry, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer,
     TransformLayer,
 };
 use flui_painting::DisplayList;
@@ -83,9 +83,10 @@ impl PipelineOwner<PaintPhase> {
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
             match self.paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids) {
                 Ok(()) => {
-                    let layer_tree = composer.finish();
+                    let (layer_tree, link_registry) = composer.finish();
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
                     self.last_layer_tree = Some(layer_tree);
+                    self.last_link_registry = Some(link_registry);
                 }
                 Err(e) => {
                     // Restore the debug invariant before propagating so
@@ -345,6 +346,12 @@ struct FragmentComposer {
     tree: LayerTree,
     stack: Vec<LayerId>,
     open: DisplayList,
+    /// Leader/follower link relationships, populated as a byproduct of
+    /// [`Self::push_layer`] pushing a `Layer::Leader`/`Layer::Follower`.
+    /// Handed to `Scene::with_links` by the binding layer so `flui-engine`
+    /// can resolve follower positions at render time against this same
+    /// frame's fully-built `tree` (design research plan §4.3).
+    link_registry: LinkRegistry,
 }
 
 impl FragmentComposer {
@@ -369,6 +376,7 @@ impl FragmentComposer {
             tree,
             stack: vec![root],
             open: DisplayList::new(),
+            link_registry: LinkRegistry::new(),
         }
     }
 
@@ -394,7 +402,22 @@ impl FragmentComposer {
 
     fn push_layer(&mut self, layer: Layer) {
         self.seal_picture();
+        // Extract the link-registry-relevant fields BEFORE `layer` moves
+        // into the tree — `Leader`/`Follower` are `Copy`-field-bearing, so
+        // this is a cheap read, not a clone of the layer itself.
+        let leader_registration = layer
+            .as_leader()
+            .map(|leader| (leader.link(), leader.get_offset(), leader.size()));
+        let follower_link = layer.as_follower().map(FollowerLayer::link);
+
         let id = self.tree.insert(layer);
+        if let Some((link, offset, size)) = leader_registration {
+            self.link_registry.register_leader(link, id, offset, size);
+        }
+        if let Some(link) = follower_link {
+            self.link_registry.register_follower(id, link);
+        }
+
         let parent = *self
             .stack
             .last()
@@ -416,7 +439,7 @@ impl FragmentComposer {
         }
     }
 
-    fn finish(mut self) -> LayerTree {
+    fn finish(mut self) -> (LayerTree, LinkRegistry) {
         self.seal_picture();
         debug_assert_eq!(
             self.stack.len(),
@@ -424,7 +447,7 @@ impl FragmentComposer {
             "composer finished with unbalanced layer stack — every \
              push_layer in the replay loop must have a matching pop_layer",
         );
-        self.tree
+        (self.tree, self.link_registry)
     }
 }
 
@@ -518,12 +541,14 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
         // follow-up, not performed here).
         FragmentScope::Follower {
             link,
+            size,
             target_offset,
             show_when_unlinked,
             leader_anchor,
             follower_anchor,
         } => Layer::Follower(
             FollowerLayer::new(link)
+                .with_size(size)
                 .with_target_offset(target_offset)
                 .with_show_when_unlinked(show_when_unlinked)
                 .with_leader_anchor(leader_anchor)

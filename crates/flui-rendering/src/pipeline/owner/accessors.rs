@@ -221,6 +221,21 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.last_layer_tree.take()
     }
 
+    /// Returns a reference to the leader/follower link registry produced as
+    /// a byproduct of the last paint phase (see `FragmentComposer::link_registry`).
+    pub fn link_registry(&self) -> Option<&flui_layer::LinkRegistry> {
+        self.last_link_registry.as_ref()
+    }
+
+    /// Takes the link registry from the last paint phase.
+    ///
+    /// Pairs with [`Self::take_layer_tree`] — the caller hands both to
+    /// `Scene::with_links` so `flui-engine` can resolve `Layer::Follower`
+    /// positions at render time against the SAME frame's layer tree.
+    pub fn take_link_registry(&mut self) -> Option<flui_layer::LinkRegistry> {
+        self.last_link_registry.take()
+    }
+
     /// Device pixel ratio threaded into every paint pass.
     pub fn device_pixel_ratio(&self) -> f32 {
         self.device_pixel_ratio

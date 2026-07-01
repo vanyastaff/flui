@@ -682,7 +682,7 @@ impl AppBinding {
         // the frame errored (e.g. a render object panicked and was
         // caught by `catch_unwind`), we log via tracing and drop the
         // frame -- the owner is still usable for the next call.
-        let layer_tree = {
+        let (layer_tree, link_registry) = {
             let mut guard = self.shared_pipeline_owner.write();
             // The window's constraints ARE the root constraints — without
             // this, frame 1 has neither cached state nor root_constraints
@@ -691,13 +691,18 @@ impl AppBinding {
             // so the per-frame call is idempotent and resize-correct.
             guard.set_root_constraints(Some(constraints));
             let owner = std::mem::take(&mut *guard);
-            let (owner, result) = owner.run_frame();
+            let (mut owner, result) = owner.run_frame();
+            // Taken alongside the layer tree so `Scene::with_links` (below)
+            // gets the SAME frame's leader/follower registry — resolving a
+            // `Layer::Follower` position against a stale or empty registry
+            // would silently misposition tooltips/dropdowns.
+            let link_registry = owner.take_link_registry();
             *guard = owner;
             match result {
-                Ok(layer_tree) => layer_tree,
+                Ok(layer_tree) => (layer_tree, link_registry),
                 Err(e) => {
                     tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                    None
+                    (None, link_registry)
                 }
             }
         };
@@ -735,7 +740,17 @@ impl AppBinding {
             // the binding thread is the sole reader of this `Arc<Scene>`,
             // so the lint is suppressed with an honest justification.
             let root = layer_tree.root();
-            let scene = Scene::new(size, layer_tree, root, frame_number);
+            // `with_links` (not `Scene::new`, which always builds an empty
+            // registry) — `link_registry` is this SAME frame's paint-phase
+            // byproduct, letting the engine resolve `Layer::Follower`
+            // positions against the leaders that were just composed.
+            let scene = Scene::with_links(
+                size,
+                layer_tree,
+                root,
+                link_registry.unwrap_or_default(),
+                frame_number,
+            );
             #[expect(
                 clippy::arc_with_non_send_sync,
                 reason = "Scene: Send but !Sync due to CompositionCallback (FnOnce + Send + 'static, no Sync). Sole reader is the binding thread; relaxing the callback bound is tracked under the engine composition redesign."

@@ -185,6 +185,11 @@ pub enum FragmentScope {
     Follower {
         /// The link this scope targets.
         link: LayerLink,
+        /// This node's laid-out size (node-local), published the same way
+        /// [`Leader::size`](FragmentScope::Leader) is — required by
+        /// `FollowerLayer::calculate_offset`'s `follower_size` parameter
+        /// whenever `follower_anchor` is not top-left.
+        size: Size<Pixels>,
         /// Pixel gap added on top of the anchor-derived linked
         /// position, AND the standalone position used when unlinked
         /// (oracle's dual-purpose `offset` field, `:4555`).
@@ -529,7 +534,8 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     }
 
     /// Wraps everything painted inside `f` in a `FollowerLayer` tagged
-    /// with `link` (`RenderFollowerLayer`).
+    /// with `link`, publishing this node's own paint-time `size` to the
+    /// layer the same way [`Self::with_leader`] does (`RenderFollowerLayer`).
     ///
     /// Also pushed UNCONDITIONALLY (oracle `:4708-4721`) — the
     /// no-leader/hidden decision and the resolved on-screen position are
@@ -540,6 +546,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     pub fn with_follower(
         &mut self,
         link: LayerLink,
+        size: Size<Pixels>,
         target_offset: Offset<Pixels>,
         show_when_unlinked: bool,
         leader_anchor: Alignment,
@@ -548,6 +555,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     ) {
         self.rec.push_scope(FragmentScope::Follower {
             link,
+            size,
             target_offset,
             show_when_unlinked,
             leader_anchor,

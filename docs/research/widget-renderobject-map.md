@@ -255,20 +255,32 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 > already-complete retained layer tree regardless of which subtree painted first — genuine
 > same-frame, order-independent resolution, not a one-frame lag. FLUI's paint pipeline is a single
 > recursive pass that directly builds the `LayerTree`, so this guarantee does not fall out "for
-> free" — closing it needs a translation-only ancestor-chain-sum algorithm at RENDER time (after
+> free" — closing it needed a translation-only ancestor-chain-sum algorithm at RENDER time (after
 > the `LayerTree` is already complete for the frame), mirroring the already-existing
-> `Layer::BackdropFilter` special-case in `render_layer_recursive`. This is a real, scoped,
-> tractable `flui-layer`/`flui-engine` follow-up — **not built in this pass**. Resolved-transform-
-> aware hit-testing for `RenderFollowerLayer` is correctly reclassified as needing a genuine
-> chief-architect ADR (mirroring ADR-0013's own precedent): `RenderObject::hit_test_transform`
-> takes no external context, `PipelineOwner::hit_test` has no coupling to any `LayerTree`, and no
+> `Layer::BackdropFilter` special-case in `render_layer_recursive`.
+>
+> **Tier 2 closure note (verified 2026-07-01): the render-time resolution is now built and
+> GPU-tested.** `crates/flui-layer::resolve_follower_offset` walks the leader's and follower's
+> ancestor chains in the already-built `LayerTree` to their nearest common ancestor, summing
+> `Layer::Offset` deltas along each side — a per-frame `LinkRegistry` is populated as a byproduct
+> of the same paint-pass `FragmentComposer` walk that pushes `Layer::Leader`/`Layer::Follower`
+> (no `PipelineOwner`-level persistent-registry redesign needed, matching the plan's own
+> prediction), and handed to `Scene::with_links` (replacing the always-empty `Scene::new`) so
+> `flui-engine`'s `render_layer_recursive` can resolve a `Layer::Follower`'s position against it
+> before rendering its subtree — the identical `push_offset`/`pop_transform` mechanism
+> `Layer::Leader` already used correctly. Proven with 3 real GPU pixel-readback tests (not
+> harness-level stand-ins, per the plan's own "explicitly out of harness scope" note): a
+> cross-repaint-boundary leader/follower pair resolves correctly, an unlinked
+> `show_when_unlinked = true` follower renders at its own `target_offset`, and an unlinked
+> `show_when_unlinked = false` follower renders nothing. `CompositedTransformFollower` (tooltips,
+> dropdown menus) now positions correctly on screen. **Resolved-transform-aware hit-testing
+> remains the one deferred piece**, correctly reclassified as needing a genuine chief-architect
+> ADR (mirroring ADR-0013's own precedent): `RenderObject::hit_test_transform` takes no external
+> context, `PipelineOwner::hit_test` has no coupling to any `LayerTree`, and no
 > `RenderId↔LayerId` correlation exists anywhere in FLUI today. `RenderFollowerLayer::hit_test`
-> in this pass implements only the structural forward (has a child → hit-test it at its own
-> layout-relative offset), explicitly not a self-cached shortcut. **Net effect**: the `LayerTree`
-> nodes are structurally correct and harness-verifiable (fields round-trip correctly), but a
-> `CompositedTransformFollower` does not yet actually render or hit-test at its resolved on-screen
-> position relative to its target — this needs the deferred render-time resolution follow-up
-> before it is usable in a real app.
+> still implements only the structural forward (has a child → hit-test it at its own
+> layout-relative offset) — a tap on a moved follower will hit-test at its pre-resolution tree
+> position until that ADR lands.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -459,7 +471,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 | `TickerProvider` | *(framework)* | N/A | — | Mixin providing `Ticker` for animations; no own RO |
 | `MetaData` | `RenderMetaData` | **Exists** | Single | Attaches opaque data to hit-test entries |
 | `CompositedTransformTarget` | `RenderLeaderLayer` | **Exists** | Single | Anchor for follower layer; see closure note above |
-| `CompositedTransformFollower` | `RenderFollowerLayer` | **Exists** (render-tree only — see closure note) | Single | Follows leader layer position; on-screen resolution not yet wired |
+| `CompositedTransformFollower` | `RenderFollowerLayer` | **Exists** (Tier 2 landed — see closure note) | Single | Follows leader layer position; resolved-transform hit-testing remains ADR-deferred |
 | `ListBody` | `RenderListBody` | **Exists** | Variable | Sequential body layout (used by `Dialog`) |
 
 ---
