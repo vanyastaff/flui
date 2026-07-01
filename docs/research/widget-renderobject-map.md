@@ -15,7 +15,7 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **69**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **71**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
@@ -27,16 +27,16 @@
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **69**
-- **Render objects remaining to build (Core.2):** **~5** (verified list below)
+- **Render objects existing today:** **71**
+- **Render objects remaining to build (Core.2):** **~3** (verified list below)
 
-### Existing render objects — authoritative (69)
+### Existing render objects — authoritative (71)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
 **Box layout (26):** `RenderAlign` · `RenderAnimatedSize` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderTable` · `RenderWrap`
 
-**Paint effects (14):** `RenderBackdropFilter` · `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderPhysicalModel` · `RenderPhysicalShape` · `RenderRepaintBoundary` · `RenderShaderMask` · `RenderTransform`
+**Paint effects (16):** `RenderBackdropFilter` · `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderFollowerLayer` · `RenderLeaderLayer` · `RenderOpacity` · `RenderPhysicalModel` · `RenderPhysicalShape` · `RenderRepaintBoundary` · `RenderShaderMask` · `RenderTransform`
 
 **Interaction / pointer (6):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderMouseRegion` · `RenderOffstage`
 
@@ -44,17 +44,15 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Slivers + viewport (20):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity` · `RenderSliverScrollingPersistentHeader` · `RenderSliverPinnedPersistentHeader` · `RenderSliverFloatingPersistentHeader` · `RenderSliverFloatingPinnedPersistentHeader`
 
-### Remaining to build — verified missing (≈5, see `RenderAnimatedOpacity` note)
+### Remaining to build — verified missing (≈3, see `RenderAnimatedOpacity` note)
 
-Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize`, the `RenderSliverPersistentHeader` family, `RenderPhysicalModel`/`RenderPhysicalShape`, and `RenderBackdropFilter`/`RenderShaderMask` closed same day — see closure notes below):
+Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize`, the `RenderSliverPersistentHeader` family, `RenderPhysicalModel`/`RenderPhysicalShape`, `RenderBackdropFilter`/`RenderShaderMask`, and `RenderLeaderLayer`/`RenderFollowerLayer` closed same day — see closure notes below). **These three are all the Semantics family, and all genuinely need a semantics tree FLUI doesn't have yet — see the reclassification note below rather than a build plan:**
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
 | `RenderSemanticsAnnotations` | `Semantics` | Medium (a11y) | `proxy_box.dart` |
 | `RenderMergeSemantics` | `MergeSemantics` | Low | `proxy_box.dart` |
 | `RenderExcludeSemantics` | `ExcludeSemantics` | Low | `proxy_box.dart` |
-| `RenderLeaderLayer` | `CompositedTransformTarget` | Low | `proxy_box.dart` |
-| `RenderFollowerLayer` | `CompositedTransformFollower` | Low | `proxy_box.dart` |
 
 > **`RenderSliverGrid` closure note (verified 2026-07-01):** eager `RenderSliverGrid` and request-strategy `RenderSliverGridLazy` now ship in `flui-objects`, are listed in the render-object harness catalog, and back `SliverGrid` / `GridView.count` / `GridView.extent` / `GridView.builder`. `GridView.builder` uses the same next-frame lazy-child service model as `ListView.builder`, so first-frame blank settling remains an explicit FLUI divergence until a true mid-pass build backend exists.
 >
@@ -235,6 +233,42 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 > the oracle's current `ImageFilterConfig`/`BackdropKey` surface (bounded blur, shared-backdrop
 > sampling) to the classic `filter`/`blend_mode`/`enabled` fields — neither newer feature has any
 > FLUI-side backing, so building them now would be dead plumbing.
+>
+> **`RenderLeaderLayer`/`RenderFollowerLayer` closure note (verified 2026-07-01) — Tier 1 only;
+> followers do NOT yet position correctly on screen.** Both now ship in
+> `crates/flui-objects/src/proxy/leader.rs`/`follower.rs`, two independent non-generic structs
+> (Leader has zero hit-test override in oracle at all; Follower has a materially different custom
+> `hitTest` plus three extra fields). Extends the same `PaintCx`/`FragmentScope` closure-scoped
+> mechanism `RenderShaderMask`/`RenderBackdropFilter` just proved out — `with_leader`/`with_follower`
+> plus two new composer match arms producing real `Layer::Leader`/`Layer::Follower` nodes. **Key
+> divergence from the immediately-preceding pair, gotten right**: both push their layer
+> UNCONDITIONALLY and report `always_needs_compositing() == true` unconditionally, regardless of
+> child presence — oracle never gates either on `child != null` for this family (a childless
+> `CompositedTransformTarget` is still a coordinate anchor, not a visual effect), unlike
+> ShaderMask/BackdropFilter's `has_child`-gated version. Regression-tested by mounting each with
+> zero children and asserting the layer is still present (the direct opposite of the sibling
+> pair's own no-child test).
+>
+> This pass precisely pinned down (not guessed) how Flutter resolves a follower's on-screen
+> position independent of paint order: Flutter's `flushPaint` and `compositeFrame`/`buildScene`
+> are two structurally separate phases, so a follower's transform resolves against an
+> already-complete retained layer tree regardless of which subtree painted first — genuine
+> same-frame, order-independent resolution, not a one-frame lag. FLUI's paint pipeline is a single
+> recursive pass that directly builds the `LayerTree`, so this guarantee does not fall out "for
+> free" — closing it needs a translation-only ancestor-chain-sum algorithm at RENDER time (after
+> the `LayerTree` is already complete for the frame), mirroring the already-existing
+> `Layer::BackdropFilter` special-case in `render_layer_recursive`. This is a real, scoped,
+> tractable `flui-layer`/`flui-engine` follow-up — **not built in this pass**. Resolved-transform-
+> aware hit-testing for `RenderFollowerLayer` is correctly reclassified as needing a genuine
+> chief-architect ADR (mirroring ADR-0013's own precedent): `RenderObject::hit_test_transform`
+> takes no external context, `PipelineOwner::hit_test` has no coupling to any `LayerTree`, and no
+> `RenderId↔LayerId` correlation exists anywhere in FLUI today. `RenderFollowerLayer::hit_test`
+> in this pass implements only the structural forward (has a child → hit-test it at its own
+> layout-relative offset), explicitly not a self-cached shortcut. **Net effect**: the `LayerTree`
+> nodes are structurally correct and harness-verifiable (fields round-trip correctly), but a
+> `CompositedTransformFollower` does not yet actually render or hit-test at its resolved on-screen
+> position relative to its target — this needs the deferred render-time resolution follow-up
+> before it is usable in a real app.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -424,8 +458,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 | `StreamBuilder` | *(framework)* | N/A | Single | Rebuilds on `Stream` events; no own RO |
 | `TickerProvider` | *(framework)* | N/A | — | Mixin providing `Ticker` for animations; no own RO |
 | `MetaData` | `RenderMetaData` | **Exists** | Single | Attaches opaque data to hit-test entries |
-| `CompositedTransformTarget` | `RenderLeaderLayer` | Needed | Single | Anchor for follower layer |
-| `CompositedTransformFollower` | `RenderFollowerLayer` | Needed | Single | Follows leader layer position |
+| `CompositedTransformTarget` | `RenderLeaderLayer` | **Exists** | Single | Anchor for follower layer; see closure note above |
+| `CompositedTransformFollower` | `RenderFollowerLayer` | **Exists** (render-tree only — see closure note) | Single | Follows leader layer position; on-screen resolution not yet wired |
 | `ListBody` | `RenderListBody` | **Exists** | Variable | Sequential body layout (used by `Dialog`) |
 
 ---

@@ -33,6 +33,8 @@
 //! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes | — |
 //! | `RenderShaderMask` | `harness_shader_mask_*` | yes | yes | yes | yes | — |
 //! | `RenderBackdropFilter` | `harness_backdrop_filter_*` | yes | yes | yes | yes | — |
+//! | `RenderLeaderLayer` | `harness_leader_layer_*` | yes | yes | yes | yes | — |
+//! | `RenderFollowerLayer` | `harness_follower_layer_*` | yes | yes | yes | yes | — |
 //! | `RenderPhysicalModel` | `harness_physical_model_*` | yes | yes | yes | yes | — |
 //! | `RenderPhysicalShape` | `harness_physical_shape_*` | yes | yes | yes | yes | — |
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
@@ -104,6 +106,7 @@ use flui_rendering::{
         CursorIcon, EventPropagation, HitTestBehavior, HitTestResult, InputEvent,
         MouseEnterCallback, MouseExitCallback, MouseHoverCallback, PointerEventHandler,
     },
+    layer::LayerLink,
     parent_data::{
         FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
         StackParentData, TableCellParentData,
@@ -113,7 +116,7 @@ use flui_rendering::{
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
         box_node, localize_hit_point, sliver_node,
     },
-    traits::TextBaseline,
+    traits::{RenderBox, TextBaseline},
     view::{ScrollDirection, ScrollableViewportOffset},
 };
 use flui_types::{
@@ -159,6 +162,8 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderClipPath",
     "RenderShaderMask",
     "RenderBackdropFilter",
+    "RenderLeaderLayer",
+    "RenderFollowerLayer",
     "RenderPhysicalModel",
     "RenderPhysicalShape",
     "RenderRepaintBoundary",
@@ -2069,6 +2074,241 @@ fn harness_backdrop_filter_self_describes() {
         &run.diagnostics(),
         "RenderBackdropFilter",
         &["filter", "blend_mode", "enabled"],
+    );
+}
+
+// ============================================================================
+// RenderLeaderLayer / RenderFollowerLayer
+// ============================================================================
+
+#[test]
+fn harness_leader_layer_layout_passes_through_to_child() {
+    let run = RenderTester::mount(
+        box_node(RenderLeaderLayer::new(LayerLink::new()))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(40.0), px(40.0)));
+}
+
+#[test]
+fn harness_leader_layer_layout_uses_smallest_when_no_child() {
+    let run = RenderTester::mount(box_node(RenderLeaderLayer::new(LayerLink::new())))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+}
+
+#[test]
+fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
+    // Regression test for the highest-risk trap in the design research
+    // plan (§7.1/§7.2): unlike ShaderMask/BackdropFilter's OWN no-child
+    // test (which asserts the layer is ABSENT), oracle's
+    // `RenderLeaderLayer.paint` pushes its `LeaderLayer` UNCONDITIONALLY
+    // (`proxy_box.dart:4513-4528`) — a childless leader is still a
+    // coordinate anchor and must still appear in the structure.
+    let run = RenderTester::mount(box_node(RenderLeaderLayer::new(LayerLink::new())))
+        .with_constraints(loose(200.0))
+        .run_frame();
+
+    assert!(
+        run.structure().contains(&"Leader"),
+        "a childless Leader MUST still push its layer (oracle: unconditional \
+         push, unlike ShaderMask/BackdropFilter): {:?}",
+        run.structure(),
+    );
+}
+
+#[test]
+fn harness_leader_layer_field_round_trip() {
+    let link = LayerLink::new();
+    let run = RenderTester::mount(
+        box_node(RenderLeaderLayer::new(link))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let (_, node) = run
+        .layer_tree()
+        .expect("frame must have painted a layer tree")
+        .iter()
+        .find(|(_, n)| n.layer().is_leader())
+        .expect("Leader layer must be present");
+    let leader = node.layer().as_leader().unwrap();
+    assert_eq!(
+        leader.link(),
+        link,
+        "link must reach the composed LeaderLayer unchanged"
+    );
+    assert_eq!(
+        leader.size(),
+        Size::new(px(40.0), px(40.0)),
+        "size must be published as this node's committed paint size"
+    );
+}
+
+#[test]
+fn harness_leader_layer_always_needs_compositing_is_unconditional() {
+    // Contrasts with ShaderMask/BackdropFilter's `self.has_child`-gated
+    // version (oracle `proxy_box.dart:4498-4499`).
+    assert!(RenderLeaderLayer::new(LayerLink::new()).always_needs_compositing());
+}
+
+#[test]
+fn harness_leader_layer_hit_tests_through_to_child() {
+    let run = RenderTester::mount(
+        box_node(RenderLeaderLayer::new(LayerLink::new()))
+            .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), Some(run.id("child")));
+}
+
+#[test]
+fn harness_leader_layer_self_describes() {
+    let run = RenderTester::mount(
+        box_node(RenderLeaderLayer::new(LayerLink::new()))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_descendant_properties(&run.diagnostics(), "RenderLeaderLayer", &["link"]);
+}
+
+#[test]
+fn harness_follower_layer_layout_passes_through_to_child() {
+    let run = RenderTester::mount(
+        box_node(RenderFollowerLayer::new(LayerLink::new()))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(40.0), px(40.0)));
+}
+
+#[test]
+fn harness_follower_layer_layout_uses_smallest_when_no_child() {
+    let run = RenderTester::mount(box_node(RenderFollowerLayer::new(LayerLink::new())))
+        .with_constraints(loose(200.0))
+        .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+}
+
+#[test]
+fn harness_follower_layer_always_pushes_layer_even_with_zero_children() {
+    // Regression test for the highest-risk trap (design research plan
+    // §7.1/§7.2), the direct opposite of ShaderMask/BackdropFilter's own
+    // no-child test: oracle's `RenderFollowerLayer.paint` pushes its
+    // `FollowerLayer` UNCONDITIONALLY (`proxy_box.dart:4708-4721`) — the
+    // no-leader/hidden decision is resolved later, not by skipping the
+    // push here.
+    let run = RenderTester::mount(box_node(RenderFollowerLayer::new(LayerLink::new())))
+        .with_constraints(loose(200.0))
+        .run_frame();
+
+    assert!(
+        run.structure().contains(&"Follower"),
+        "a childless Follower MUST still push its layer (oracle: unconditional \
+         push, unlike ShaderMask/BackdropFilter): {:?}",
+        run.structure(),
+    );
+}
+
+#[test]
+fn harness_follower_layer_field_round_trip() {
+    // Non-default values for every field, catching a composer wiring bug
+    // that drops or defaults a field (the same class of test the
+    // ShaderMask/BackdropFilter plan used for `blend_mode`).
+    let link = LayerLink::new();
+    let target_offset = Offset::new(px(3.0), px(7.0));
+    let run = RenderTester::mount(
+        box_node(
+            RenderFollowerLayer::new(link)
+                .with_show_when_unlinked(false)
+                .with_offset(target_offset)
+                .with_leader_anchor(Alignment::BOTTOM_CENTER)
+                .with_follower_anchor(Alignment::TOP_CENTER),
+        )
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let (_, node) = run
+        .layer_tree()
+        .expect("frame must have painted a layer tree")
+        .iter()
+        .find(|(_, n)| n.layer().is_follower())
+        .expect("Follower layer must be present");
+    let follower = node.layer().as_follower().unwrap();
+    assert_eq!(follower.link(), link);
+    assert!(!follower.show_when_unlinked());
+    assert_eq!(follower.target_offset(), target_offset);
+    assert_eq!(follower.leader_anchor(), Alignment::BOTTOM_CENTER);
+    assert_eq!(follower.follower_anchor(), Alignment::TOP_CENTER);
+}
+
+#[test]
+fn harness_follower_layer_always_needs_compositing_is_unconditional() {
+    // Contrasts with ShaderMask/BackdropFilter's `self.has_child`-gated
+    // version (oracle `proxy_box.dart:4656`).
+    assert!(RenderFollowerLayer::new(LayerLink::new()).always_needs_compositing());
+}
+
+#[test]
+fn harness_follower_layer_hit_tests_through_to_child_structurally_only() {
+    // Structural-forward half ONLY: a child positioned at the follower's
+    // own layout-relative offset is hit. This does NOT cover
+    // resolved-transform-aware hit-testing — that is the genuinely
+    // deferred ADR-level gap (design research plan §4.4/§8), not
+    // implemented by this render object today.
+    let run = RenderTester::mount(
+        box_node(RenderFollowerLayer::new(LayerLink::new()))
+            .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), Some(run.id("child")));
+}
+
+#[test]
+fn harness_follower_layer_hit_test_misses_when_no_child() {
+    let run = RenderTester::mount(box_node(RenderFollowerLayer::new(LayerLink::new())))
+        .with_size(Size::new(px(100.0), px(100.0)))
+        .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), None);
+}
+
+#[test]
+fn harness_follower_layer_self_describes() {
+    let run = RenderTester::mount(
+        box_node(RenderFollowerLayer::new(LayerLink::new()))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderFollowerLayer",
+        &[
+            "link",
+            "show_when_unlinked",
+            "offset",
+            "leader_anchor",
+            "follower_anchor",
+        ],
     );
 }
 

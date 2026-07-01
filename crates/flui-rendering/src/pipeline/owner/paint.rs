@@ -2,8 +2,9 @@
 
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, Layer, LayerTree,
-    OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
+    BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
+    LayerTree, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer,
+    TransformLayer,
 };
 use flui_painting::DisplayList;
 use flui_types::Offset;
@@ -499,5 +500,34 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             blend_mode,
             bounds.translate_offset(origin),
         )),
+        // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
+        // this node's own accumulated position, exactly what `origin`
+        // already is at this call site (`:270`). Unlike the clip/mask
+        // variants above, `size` is NOT shifted by `origin` — it is a
+        // pure dimension, not a position.
+        FragmentScope::Leader { link, size } => {
+            Layer::Leader(LeaderLayer::with_offset(link, size, origin))
+        }
+        // `Layer::Follower` carries no resolved position at all —
+        // matching oracle, where a `FollowerLayer`'s `linkedOffset`/
+        // `unlinkedOffset` are inputs to a LATER resolution pass, never
+        // stored as the final on-screen transform. `target_offset` is
+        // recorded as-authored (not origin-shifted): resolving it against
+        // the leader's position is deliberately deferred past this pass
+        // (design research plan §4/§8 — a `flui-engine`/`flui-layer`
+        // follow-up, not performed here).
+        FragmentScope::Follower {
+            link,
+            target_offset,
+            show_when_unlinked,
+            leader_anchor,
+            follower_anchor,
+        } => Layer::Follower(
+            FollowerLayer::new(link)
+                .with_target_offset(target_offset)
+                .with_show_when_unlinked(show_when_unlinked)
+                .with_leader_anchor(leader_anchor)
+                .with_follower_anchor(follower_anchor),
+        ),
     }
 }

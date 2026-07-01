@@ -45,11 +45,12 @@
 
 use std::marker::PhantomData;
 
+use flui_layer::LayerLink;
 use flui_painting::{Canvas, DisplayList, DisplayListCore};
 use flui_tree::{Arity, Optional, Single, Variable};
 use flui_types::{
     Matrix4, Offset, Pixels, Point, Rect, Size,
-    painting::{BlendMode, Clip, ImageFilter, Shader},
+    painting::{Alignment, BlendMode, Clip, ImageFilter, Shader},
 };
 
 // ============================================================================
@@ -160,6 +161,41 @@ pub enum FragmentScope {
         blend_mode: BlendMode,
         /// The backdrop-sampling rect in node-local coordinates.
         bounds: Rect<Pixels>,
+    },
+    /// Leader-layer link tag (`RenderLeaderLayer`) — publishes this
+    /// node's paint-time size under `link` so followers can later
+    /// resolve their anchor pose against it. Pushed UNCONDITIONALLY,
+    /// regardless of child presence (oracle `proxy_box.dart:4513-4528`;
+    /// see the design research plan's trap §7.1). Carries no clip/mask
+    /// geometry, just link identity + size.
+    Leader {
+        /// The link this node publishes itself under.
+        link: LayerLink,
+        /// This node's laid-out size (node-local — the composer shifts
+        /// the paired offset by the accumulated origin the same way it
+        /// does for every other scope's `bounds`).
+        size: Size<Pixels>,
+    },
+    /// Follower-layer link tag (`RenderFollowerLayer`) — positions
+    /// everything painted inside relative to whichever `Leader`
+    /// currently publishes under `link`. Also pushed UNCONDITIONALLY
+    /// (oracle `:4708-4721`); resolving the actual on-screen position is
+    /// deferred to a later render-time pass, not performed here (design
+    /// research plan §4/§8 — genuinely out of this pass's Tier-1 scope).
+    Follower {
+        /// The link this scope targets.
+        link: LayerLink,
+        /// Pixel gap added on top of the anchor-derived linked
+        /// position, AND the standalone position used when unlinked
+        /// (oracle's dual-purpose `offset` field, `:4555`).
+        target_offset: Offset<Pixels>,
+        /// Whether to remain visible when no leader currently publishes
+        /// under `link`.
+        show_when_unlinked: bool,
+        /// Anchor point on the leader's rect.
+        leader_anchor: Alignment,
+        /// Anchor point on this follower's own rect.
+        follower_anchor: Alignment,
     },
 }
 
@@ -472,6 +508,50 @@ impl<'a, A: Arity> PaintCx<'a, A> {
             filter,
             blend_mode,
             bounds,
+        });
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Wraps everything painted inside `f` in a `LeaderLayer` tagged with
+    /// `link`, publishing this node's own paint-time `size` to the layer
+    /// (`RenderLeaderLayer`).
+    ///
+    /// Pushed UNCONDITIONALLY, unlike [`Self::with_shader_mask`]/
+    /// [`Self::with_backdrop_filter`] — oracle's `RenderLeaderLayer.paint`
+    /// never gates on child presence (`proxy_box.dart:4513-4528`): a
+    /// childless leader still needs its own compositor layer, since it is
+    /// a coordinate anchor, not a visual effect.
+    pub fn with_leader(&mut self, link: LayerLink, size: Size<Pixels>, f: impl FnOnce(&mut Self)) {
+        self.rec.push_scope(FragmentScope::Leader { link, size });
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Wraps everything painted inside `f` in a `FollowerLayer` tagged
+    /// with `link` (`RenderFollowerLayer`).
+    ///
+    /// Also pushed UNCONDITIONALLY (oracle `:4708-4721`) — the
+    /// no-leader/hidden decision and the resolved on-screen position are
+    /// both determined at a later composite/render-time pass
+    /// (`FollowerLayer.addToScene`, `layer.dart:2857-2865`), not here.
+    // clippy::too_many_arguments is crate-wide allowed (lib.rs) — this
+    // mirrors oracle's full RenderFollowerLayer constructor surface.
+    pub fn with_follower(
+        &mut self,
+        link: LayerLink,
+        target_offset: Offset<Pixels>,
+        show_when_unlinked: bool,
+        leader_anchor: Alignment,
+        follower_anchor: Alignment,
+        f: impl FnOnce(&mut Self),
+    ) {
+        self.rec.push_scope(FragmentScope::Follower {
+            link,
+            target_offset,
+            show_when_unlinked,
+            leader_anchor,
+            follower_anchor,
         });
         f(self);
         self.rec.pop_scope();
