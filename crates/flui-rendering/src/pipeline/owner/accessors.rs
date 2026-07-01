@@ -798,6 +798,66 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         Some(child_id)
     }
 
+    /// Inserts a Sliver-protocol render object as a child and marks it as
+    /// needing layout.
+    ///
+    /// The Sliver-protocol counterpart of [`Self::insert_child_render_object`]
+    /// — same dirty tracking and ADR-0013 attach wiring, backed by
+    /// [`crate::storage::RenderTree::insert_sliver_child`] instead of
+    /// `insert_box_child`. Prefer this over calling
+    /// `render_tree_mut().insert_sliver_child(..)` directly: the raw tree
+    /// method inserts the node but skips dirty tracking AND the
+    /// ADR-0013 `attach` handshake, silently starving any Sliver render
+    /// object that subscribes to a `Listenable` in `attach` (e.g. a
+    /// snap-animation controller) of its self-dirty handle.
+    ///
+    /// This method:
+    /// 1. Inserts the render object as a Sliver child in the RenderTree
+    /// 2. Hands it its ADR-0013 self-dirty handle via `attach`
+    /// 3. Adds the node to the dirty layout list
+    /// 4. Adds the node to the dirty paint list
+    /// 5. Marks the parent as needing layout (since child structure changed)
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - The parent node ID
+    /// * `render_object` - The Sliver render object to insert as child
+    ///
+    /// # Returns
+    ///
+    /// The `RenderId` of the inserted child, or `None` if parent doesn't exist.
+    pub fn insert_sliver_child_render_object(
+        &mut self,
+        parent_id: RenderId,
+        render_object: Box<dyn crate::traits::RenderObject<SliverProtocol>>,
+    ) -> Option<RenderId> {
+        // Get parent depth before insertion
+        let parent_depth = self.render_tree.depth(parent_id)?;
+
+        // Insert child (using Sliver protocol)
+        let child_id = self
+            .render_tree
+            .insert_sliver_child(parent_id, render_object)?;
+        let child_depth = parent_depth + 1;
+
+        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag from the
+        // child render_object's static answer before any compositing
+        // walk runs.
+        self.bootstrap_repaint_boundary_flag(child_id);
+
+        // ADR-0013: hand the freshly-inserted child its self-dirty handle.
+        self.attach_inserted_node(child_id);
+
+        // Mark child as needing layout and paint
+        self.add_node_needing_layout(child_id, child_depth as usize);
+        self.add_node_needing_paint(child_id, child_depth as usize);
+
+        // Mark parent as needing layout (child structure changed)
+        self.add_node_needing_layout(parent_id, parent_depth as usize);
+
+        Some(child_id)
+    }
+
     /// Inserts a raw `RenderNode` directly into the tree.
     ///
     /// This bypasses the `RenderObject<P>` trait requirement and is used for
@@ -888,12 +948,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// [`RenderObject::attach`](crate::traits::RenderObject::attach).
     ///
     /// Called by every insertion path (`insert`, `insert_child_render_object`,
-    /// `insert_render_node`) right after the id is minted and its
-    /// `NodeLinks` are wired, alongside the initial dirty marks those
-    /// methods already issue. No-op if `id` is somehow not present
-    /// (defensive — every call site holds a freshly-inserted id).
+    /// `insert_sliver_child_render_object`, `insert_render_node`) right after
+    /// the id is minted and its `NodeLinks` are wired, alongside the initial
+    /// dirty marks those methods already issue. Also called by
+    /// `apply_deferred_mutation`'s `Insert` arm (`pipeline/owner/layout.rs`)
+    /// for both `DeferredRenderObject::Box` and `::Sliver` — the lazy
+    /// list/grid child-building path bypasses the methods above and used to
+    /// skip `attach` entirely for every protocol. `pub(super)` (rather than
+    /// private) so that call site can reach it. No-op if `id` is somehow not
+    /// present (defensive — every call site holds a freshly-inserted id).
     #[inline]
-    fn attach_inserted_node(&mut self, id: RenderId) {
+    pub(super) fn attach_inserted_node(&mut self, id: RenderId) {
         let Some(handle) = self.repaint_handle(id) else {
             return;
         };

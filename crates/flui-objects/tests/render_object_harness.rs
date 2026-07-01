@@ -5718,31 +5718,23 @@ fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_off
 // `sliver_persistent_header.rs` using a directly-constructed
 // `SliverConstraints`, sidestepping the viewport entirely.
 //
-// A second, separate finding: `RenderTester::mount` never calls
-// `RenderObject::attach` for a Sliver child. Tracing `crate::testing::tree::
-// mount_child` (`crates/flui-rendering/src/testing/tree.rs`) shows Box
-// children go through `PipelineOwner::insert_child_render_object`, which
-// calls `attach_inserted_node` — but Sliver children are inserted via the
+// A second, separate finding (since fixed): `RenderTester::mount` used to
+// never call `RenderObject::attach` for a Sliver child. Box children went
+// through `PipelineOwner::insert_child_render_object`, which calls
+// `attach_inserted_node` — but Sliver children were inserted via the
 // low-level `render_tree_mut().insert_sliver_child(...)`
-// (`crates/flui-rendering/src/storage/tree.rs`), which does not.
-// `PipelineOwner` has no Sliver-protocol equivalent of
-// `insert_child_render_object` to call instead — `insert_child_render_object`
-// is hard-coded to `BoxProtocol`. The `apply_deferred_mutation` path
-// (`crates/flui-rendering/src/pipeline/owner/layout.rs`, used by lazy-sliver
-// child building) has the same gap for both protocols. Net effect: nothing in
-// the codebase today calls `attach()` on a freshly-inserted Sliver render
-// object — the exact mechanism ADR-0013 extended to `RenderSliver` and
-// `RenderSliverFloatingPersistentHeader`/`RenderSliverFloatingPinnedPersistentHeader`
-// rely on for their snap-animation controller subscription. This was
-// confirmed empirically while writing the snap-animation test below (a debug
-// print inside `attach()` never fired for the mounted header). It is a
-// pre-existing, out-of-scope infrastructure gap — not a defect in this pass's
-// render objects, whose `attach`/`detach` overrides are structurally
-// identical to `RenderAnimatedSize`'s already-shipped, working pattern — and
-// not touched here; whether `flui-view`'s real element-reconciliation path
-// has the same gap was not traced. The snap-animation test below forces the
-// dirty mark explicitly (see its own inline comment) rather than relying on
-// `attach`'s listener, so it still proves the animation formula is correct.
+// (`crates/flui-rendering/src/storage/tree.rs`), which did not, and
+// `apply_deferred_mutation` (`crates/flui-rendering/src/pipeline/owner/
+// layout.rs`, used by lazy-sliver child building) had the same gap for both
+// protocols. `crate::testing::tree::mount_child` now inserts Sliver children
+// via the new `PipelineOwner::insert_sliver_child_render_object` (the
+// Sliver-protocol counterpart of `insert_child_render_object`), and
+// `apply_deferred_mutation`'s `Insert` arm now calls `attach_inserted_node`
+// for both `DeferredRenderObject` variants (see
+// `crates/flui-rendering/tests/attach_detach_lifecycle.rs` for the
+// regression coverage). The snap-animation test below no longer forces its
+// own dirty mark — the real `attach()`-registered controller listener
+// drives it end-to-end.
 
 fn viewport_multi_with_scroll(
     offset: f32,
@@ -6156,31 +6148,10 @@ fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scr
         h.maybe_start_snap_animation(ScrollDirection::Forward);
     });
 
-    // NOTE on the `run.update::<RenderSliverFloatingPersistentHeader>(header_id, |_| {})`
-    // no-op calls below: this test cannot exercise the real `attach()`
-    // listener end-to-end. Tracing `RenderTester::mount` ->
-    // `crate::testing::tree::mount_child` (`crates/flui-rendering/src/testing/tree.rs`)
-    // shows Sliver children are inserted via the low-level
-    // `render_tree_mut().insert_sliver_child(...)` (`crates/flui-rendering/src/storage/tree.rs`),
-    // which never calls `attach_inserted_node`/`RenderObject::attach` —
-    // unlike the Box-child path, which goes through
-    // `PipelineOwner::insert_child_render_object` and does. `PipelineOwner`
-    // has no Sliver-protocol equivalent of `insert_child_render_object`
-    // either (confirmed: only `insert_child_render_object` exists, hard-coded
-    // to `BoxProtocol`), so a Sliver render object's `attach()` — the exact
-    // mechanism ADR-0013 extended to `RenderSliver` and this render object
-    // relies on for its snap-animation controller subscription — is
-    // currently **never invoked for a sliver child by any insertion path in
-    // the codebase** (test harness included; whether `flui-view`'s real
-    // element-reconciliation path has an equivalent gap was not traced here
-    // and needs its own follow-up). This is a pre-existing, out-of-scope
-    // infrastructure gap, not a defect in this render object — the formula
-    // this test actually verifies (the animation's interpolation and
-    // completion values) is exercised correctly regardless; only the
-    // "ticking the controller alone triggers relayout via `attach`" half is
-    // untestable today, so this test forces the dirty mark explicitly
-    // instead of relying on it.
-    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |_| {});
+    // The controller's own `Listenable` subscription (registered in
+    // `RenderSliverFloatingPersistentHeader::attach`, now genuinely called
+    // by `mount_child` for this Sliver header — see the module note above)
+    // drives the relayout on tick: no manual dirty mark needed here.
     driver.tick_at(0.05); // t = 0.5 of the 100ms run (Linear curve)
     run.pump();
     let paint_extent_mid = run.sliver_geometry(header_id).paint_extent;
@@ -6190,7 +6161,6 @@ fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scr
          toward 0 (currently ~50), giving paint_extent ~= 120 - 50 = 70; got {paint_extent_mid}",
     );
 
-    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |_| {});
     driver.tick_at(0.1); // t = 1.0, run completes
     run.pump();
     assert_eq!(

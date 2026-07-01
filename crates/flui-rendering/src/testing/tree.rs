@@ -9,9 +9,10 @@
 //!
 //! - Box child -> [`PipelineOwner::insert_child_render_object`] (full dirty
 //!   tracking, the same path the box pipeline tests use);
-//! - Sliver child -> [`crate::storage::RenderTree::insert_sliver_child`]
-//!   (the path the sliver tests use; the root layout pass cascades into
-//!   the sliver subtree).
+//! - Sliver child -> [`PipelineOwner::insert_sliver_child_render_object`]
+//!   (full dirty tracking + ADR-0013 attach wiring, the Sliver-protocol
+//!   counterpart of `insert_child_render_object`; the root layout pass
+//!   cascades into the sliver subtree).
 //!
 //! The tree root must be a Box render object — the layout pass drives the
 //! root via [`BoxConstraints`](crate::constraints::BoxConstraints), and
@@ -235,8 +236,7 @@ fn mount_child(
             .insert_child_render_object(parent_id, render_object)
             .expect("Box child insert must succeed: the parent id was just inserted and is valid"),
         NodePayload::Sliver(render_object) => owner
-            .render_tree_mut()
-            .insert_sliver_child(parent_id, render_object)
+            .insert_sliver_child_render_object(parent_id, render_object)
             .expect(
                 "Sliver child insert must succeed: the parent id was just inserted and is valid",
             ),

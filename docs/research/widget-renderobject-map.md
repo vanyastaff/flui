@@ -152,19 +152,30 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 >    its `extent` formula — the sign bug inflated `extent` and silently un-clamped `paint_extent`).
 >    No existing test's expected value needed to change (zero prior coverage asserted on
 >    `constraints.overlap` through a real viewport).
-> 2. **Still open.** No insertion path calls `RenderObject::attach` for a Sliver child. `PipelineOwner::insert_child_render_object`
->    (`crates/flui-rendering/src/pipeline/owner/accessors.rs`) is hard-coded to `BoxProtocol` and
->    is the only caller of `attach_inserted_node` (the ADR-0013 wiring); Sliver children are
->    inserted via the lower-level `render_tree_mut().insert_sliver_child(...)`
->    (called from `crates/flui-rendering/src/pipeline/owner/layout.rs:279`), which never calls
->    it. Confirmed empirically while writing the snap-animation harness test (an `attach()` debug
->    print never fired for a mounted sliver header). Net effect: ADR-0013's self-dirty-handle
->    mechanism — which `RenderSliverFloatingPersistentHeader`'s snap-animation controller
->    subscription depends on, and which is structurally identical to `RenderAnimatedSize`'s
->    already-working Box-protocol case — is currently unexercised for any sliver anywhere,
->    including by the test harness. Whether `flui-view`'s real element-reconciliation path has
->    the same gap was not traced. Needs a `PipelineOwner` Sliver-protocol equivalent of
->    `insert_child_render_object` (or a protocol-generic `attach_inserted_node` call site).
+> 2. **FIXED (2026-07-01).** No insertion path called `RenderObject::attach` for a Sliver child.
+>    `PipelineOwner::insert_child_render_object` (`crates/flui-rendering/src/pipeline/owner/accessors.rs`)
+>    was hard-coded to `BoxProtocol` and was the only caller of `attach_inserted_node` (the
+>    ADR-0013 wiring); Sliver children were inserted via the lower-level
+>    `render_tree_mut().insert_sliver_child(...)`, which never called it, and
+>    `apply_deferred_mutation`'s `Insert` arm (`pipeline/owner/layout.rs:279`, the
+>    lazy-list/grid-child-building path) had the same gap for **both** protocols (an additional
+>    discovery beyond the original finding — the Box side of the *lazy* path was equally broken,
+>    just masked because the non-lazy Box path was already correct). Fixed by adding
+>    `PipelineOwner::insert_sliver_child_render_object` (the Sliver-protocol counterpart of
+>    `insert_child_render_object`, same dirty-tracking + `attach_inserted_node` shape) and calling
+>    it from `crate::testing::tree::mount_child`'s Sliver branch, plus adding one
+>    `self.attach_inserted_node(child_id)` call in `apply_deferred_mutation`'s shared `Insert` arm
+>    (protocol-generic, so it covers `DeferredRenderObject::Box` and `::Sliver` in one place).
+>    `flui-view`'s real element-reconciliation path (`RenderBehavior::on_mount`) was confirmed
+>    already correct and untouched — it always went through the protocol-generic `PipelineOwner::insert<P>`,
+>    which already called `attach`; the gap was confined to the lazy/deferred-mutation queue and the
+>    test harness. Proven red-then-green: `crates/flui-rendering/tests/attach_detach_lifecycle.rs`
+>    gained a `LifecycleProbeSliver` and three tests (direct sliver-child insert,
+>    deferred-sliver-insert via `apply_deferred_mutation`, and the collateral deferred-box-insert
+>    case); `crates/flui-objects/tests/render_object_harness.rs`'s
+>    `harness_sliver_persistent_header_floating_snap_animation_drives_effective_scroll_offset_across_ticks`
+>    had its manual dirty-mark workaround removed and now proves the real `attach()`-registered
+>    controller listener drives the relayout end-to-end.
 >
 > Both defects are independent of this render-object family's own correctness (verified by
 > reading the implementation directly: the re-reveal state machine and `attach`/`detach`
