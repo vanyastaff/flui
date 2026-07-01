@@ -12,12 +12,11 @@
 //!    controller when the node is focused, and are silently ignored when it is
 //!    not.
 //!
-//! CI runs these with `--test-threads 1` so the global `FocusManager` singleton
-//! is safe to use: tests run sequentially and clean up their registered nodes
-//! before returning.
+//! Key-routing tests serialize themselves around the global `FocusManager`
+//! singleton and clean up their registered nodes before returning.
 
 use std::sync::{
-    Arc,
+    Arc, Mutex, MutexGuard,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -32,6 +31,16 @@ use flui_widgets::TextEditingController;
 // ============================================================================
 // Helpers
 // ============================================================================
+
+static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn focus_test_guard() -> MutexGuard<'static, ()> {
+    let guard = FOCUS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    FocusManager::global().unfocus();
+    guard
+}
 
 /// A guard that unregisters the key handler and detaches the focus node from
 /// the root scope when dropped, ensuring the global `FocusManager` singleton
@@ -302,6 +311,7 @@ fn remove_listener_stops_notifications() {
 
 #[test]
 fn focused_character_key_inserts_into_controller() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
@@ -325,6 +335,7 @@ fn focused_character_key_inserts_into_controller() {
 
 #[test]
 fn focused_backspace_key_deletes_char_before_caret() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     controller.insert_str("hi");
 
@@ -350,6 +361,7 @@ fn focused_backspace_key_deletes_char_before_caret() {
 
 #[test]
 fn focused_arrow_keys_move_the_caret() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     controller.insert_str("abc"); // caret at 3
 
@@ -385,6 +397,7 @@ fn focused_arrow_keys_move_the_caret() {
 
 #[test]
 fn key_up_events_are_not_consumed_by_the_handler() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
@@ -409,6 +422,7 @@ fn key_up_events_are_not_consumed_by_the_handler() {
 
 #[test]
 fn unfocused_field_does_not_receive_key_events() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     // Register the handler but DO NOT request focus.
