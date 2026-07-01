@@ -486,14 +486,51 @@ impl Hash for SliverPhysicalContainerParentData {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
     use flui_types::geometry::px;
 
     use super::*;
+    use crate::parent_data::base::LogicalIndexParentData;
+
+    fn hash_of<T: Hash>(value: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
 
     #[test]
     fn test_sliver_logical_parent_data() {
         let data = SliverLogicalParentData::new(100.0);
         assert_eq!(data.layout_offset, 100.0);
+    }
+
+    #[test]
+    fn sliver_logical_parent_data_zero_reset_and_default() {
+        assert_eq!(
+            SliverLogicalParentData::default(),
+            SliverLogicalParentData::zero()
+        );
+        assert!(SliverLogicalParentData::zero().is_zero());
+
+        let mut data = SliverLogicalParentData::new(42.0).with_layout_offset(7.0);
+        assert_eq!(data.layout_offset, 7.0);
+        assert!(!data.is_zero());
+
+        data.reset();
+        assert!(data.is_zero());
+        assert_eq!(data, SliverLogicalParentData::zero());
+    }
+
+    #[test]
+    fn sliver_logical_parent_data_hash_matches_for_equal_values() {
+        let a = SliverLogicalParentData::new(12.5);
+        let b = SliverLogicalParentData::new(12.5);
+        let c = SliverLogicalParentData::new(3.0);
+
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
     }
 
     #[test]
@@ -505,11 +542,93 @@ mod tests {
     }
 
     #[test]
+    fn sliver_multi_box_adaptor_parent_data_zero_default_and_index_builder() {
+        assert_eq!(
+            SliverMultiBoxAdaptorParentData::default(),
+            SliverMultiBoxAdaptorParentData::zero()
+        );
+        assert!(SliverMultiBoxAdaptorParentData::zero().is_zero());
+        assert_eq!(SliverMultiBoxAdaptorParentData::zero().index, 0);
+
+        let data = SliverMultiBoxAdaptorParentData::zero().with_index(9);
+        assert_eq!(data.index, 9);
+        assert!(data.is_zero());
+
+        let moved = data.with_layout_offset(3.0);
+        assert!(!moved.is_zero());
+    }
+
+    #[test]
+    fn sliver_multi_box_adaptor_parent_data_hash_matches_for_equal_values() {
+        let a = SliverMultiBoxAdaptorParentData::new(2).with_layout_offset(1.0);
+        let b = SliverMultiBoxAdaptorParentData::new(2).with_layout_offset(1.0);
+        let c = SliverMultiBoxAdaptorParentData::new(3).with_layout_offset(1.0);
+
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
+    fn sliver_multi_box_adaptor_parent_data_logical_index_channel() {
+        let mut data = SliverMultiBoxAdaptorParentData::new(1);
+
+        // Exercise the concrete inherent setter directly.
+        data.set_logical_index(5);
+        assert_eq!(data.index, 5);
+
+        // Exercise the type-erased `ParentData::as_logical_index_mut` channel
+        // the pipeline uses to reach `set_logical_index` through `dyn ParentData`.
+        let erased: &mut dyn ParentData = &mut data;
+        let logical = erased
+            .as_logical_index_mut()
+            .expect("multi-box adaptor parent data must expose the logical-index channel");
+        logical.set_logical_index(11);
+        assert_eq!(data.index, 11);
+    }
+
+    #[test]
     fn test_sliver_grid_parent_data() {
         let data = SliverGridParentData::new(3, 50.0).with_layout_offset(100.0);
 
         assert_eq!(data.index, 3);
         assert_eq!(data.cross_axis_offset, 50.0);
+    }
+
+    #[test]
+    fn sliver_grid_parent_data_zero_default_and_cross_axis_builder() {
+        assert_eq!(
+            SliverGridParentData::default(),
+            SliverGridParentData::zero()
+        );
+        assert_eq!(SliverGridParentData::zero().index, 0);
+        assert_eq!(SliverGridParentData::zero().cross_axis_offset, 0.0);
+
+        let data = SliverGridParentData::zero().with_cross_axis_offset(25.0);
+        assert_eq!(data.cross_axis_offset, 25.0);
+        assert_eq!(data.layout_offset, 0.0);
+    }
+
+    #[test]
+    fn sliver_grid_parent_data_hash_matches_for_equal_values() {
+        let a = SliverGridParentData::new(1, 2.0);
+        let b = SliverGridParentData::new(1, 2.0);
+        let c = SliverGridParentData::new(1, 3.0);
+
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
+    fn sliver_grid_parent_data_logical_index_channel() {
+        let mut data = SliverGridParentData::new(0, 0.0);
+        let erased: &mut dyn ParentData = &mut data;
+        let logical = erased
+            .as_logical_index_mut()
+            .expect("grid parent data must expose the logical-index channel");
+        logical.set_logical_index(7);
+        assert_eq!(data.index, 7);
     }
 
     #[test]
@@ -522,8 +641,127 @@ mod tests {
     }
 
     #[test]
+    fn tree_sliver_node_parent_data_zero_default_and_depth_builder() {
+        assert_eq!(
+            TreeSliverNodeParentData::default(),
+            TreeSliverNodeParentData::zero()
+        );
+        assert!(TreeSliverNodeParentData::zero().is_root());
+
+        let data = TreeSliverNodeParentData::new(2, 0).with_depth(4);
+        assert_eq!(data.depth, 4);
+        assert!(!data.is_root());
+    }
+
+    #[test]
+    fn tree_sliver_node_parent_data_hash_matches_for_equal_values() {
+        let a = TreeSliverNodeParentData::new(1, 2);
+        let b = TreeSliverNodeParentData::new(1, 2);
+        let c = TreeSliverNodeParentData::new(1, 3);
+
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
+    fn tree_sliver_node_parent_data_logical_index_channel() {
+        let mut data = TreeSliverNodeParentData::new(0, 3);
+        let erased: &mut dyn ParentData = &mut data;
+        let logical = erased
+            .as_logical_index_mut()
+            .expect("tree sliver node parent data must expose the logical-index channel");
+        logical.set_logical_index(9);
+        assert_eq!(data.index, 9);
+        // Setting the logical index must not disturb unrelated fields.
+        assert_eq!(data.depth, 3);
+    }
+
+    #[test]
+    fn sliver_logical_container_parent_data_construction_and_builders() {
+        assert_eq!(
+            SliverLogicalContainerParentData::default(),
+            SliverLogicalContainerParentData::zero()
+        );
+
+        let zero = SliverLogicalContainerParentData::zero();
+        assert_eq!(zero.layout_offset, 0.0);
+        assert!(zero.container.is_first_child());
+        assert!(zero.container.is_last_child());
+        assert!(!zero.container.has_previous_sibling());
+        assert!(!zero.container.has_next_sibling());
+
+        let data = SliverLogicalContainerParentData::new(10.0).with_layout_offset(20.0);
+        assert_eq!(data.layout_offset, 20.0);
+    }
+
+    #[test]
+    fn sliver_logical_container_parent_data_hash_matches_for_equal_values() {
+        let a = SliverLogicalContainerParentData::new(1.0);
+        let b = SliverLogicalContainerParentData::new(1.0);
+        let c = SliverLogicalContainerParentData::new(2.0);
+
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
     fn test_sliver_physical_parent_data() {
         let data = SliverPhysicalParentData::new(Offset::new(px(10.0), px(20.0)));
         assert_eq!(data.paint_offset.dx, px(10.0));
+    }
+
+    #[test]
+    fn sliver_physical_parent_data_zero_default_and_builder() {
+        assert_eq!(
+            SliverPhysicalParentData::default(),
+            SliverPhysicalParentData::zero()
+        );
+        assert!(SliverPhysicalParentData::zero().is_zero());
+
+        let data =
+            SliverPhysicalParentData::zero().with_paint_offset(Offset::new(px(5.0), px(6.0)));
+        assert!(!data.is_zero());
+        assert_eq!(data.paint_offset, Offset::new(px(5.0), px(6.0)));
+    }
+
+    #[test]
+    fn sliver_physical_parent_data_hash_matches_for_equal_values() {
+        let a = SliverPhysicalParentData::new(Offset::new(px(1.0), px(2.0)));
+        let b = SliverPhysicalParentData::new(Offset::new(px(1.0), px(2.0)));
+        let c = SliverPhysicalParentData::new(Offset::new(px(1.0), px(3.0)));
+
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
+    fn sliver_physical_container_parent_data_construction_and_builders() {
+        assert_eq!(
+            SliverPhysicalContainerParentData::default(),
+            SliverPhysicalContainerParentData::zero()
+        );
+
+        let zero = SliverPhysicalContainerParentData::zero();
+        assert_eq!(zero.paint_offset, Offset::ZERO);
+        assert!(zero.container.is_first_child());
+        assert!(zero.container.is_last_child());
+
+        let data = SliverPhysicalContainerParentData::new(Offset::new(px(1.0), px(2.0)))
+            .with_paint_offset(Offset::new(px(3.0), px(4.0)));
+        assert_eq!(data.paint_offset, Offset::new(px(3.0), px(4.0)));
+    }
+
+    #[test]
+    fn sliver_physical_container_parent_data_hash_matches_for_equal_values() {
+        let a = SliverPhysicalContainerParentData::new(Offset::new(px(1.0), px(2.0)));
+        let b = SliverPhysicalContainerParentData::new(Offset::new(px(1.0), px(2.0)));
+        let c = SliverPhysicalContainerParentData::new(Offset::new(px(9.0), px(2.0)));
+
+        assert_eq!(a, b);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
     }
 }
