@@ -4,6 +4,8 @@
 
 mod flex;
 mod flexible;
+mod spacer;
 
 pub use flex::{Column, Flex, Row};
 pub use flexible::{Expanded, Flexible};
+pub use spacer::Spacer;

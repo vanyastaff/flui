@@ -10,7 +10,9 @@
 //! | [`Theme`] | [`ThemeData`] | `Theme` / `ThemeData` |
 
 mod media_query;
+mod safe_area;
 mod theme;
 
 pub use media_query::{MediaQuery, MediaQueryData};
+pub use safe_area::SafeArea;
 pub use theme::{Theme, ThemeData};

@@ -25,3 +25,10 @@ mod flex_test;
 mod harness_self_test;
 mod sized_box_test;
 mod text_test;
+
+// ── Business.1 slice — widget-catalog first five ──────────────────────────────
+mod grid_view_test;
+mod safe_area_test;
+mod sliver_grid_test;
+mod spacer_test;
+mod visibility_test;

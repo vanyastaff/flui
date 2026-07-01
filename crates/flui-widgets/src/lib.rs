@@ -96,7 +96,7 @@ pub mod wrap;
 // ============================================================================
 
 // Application-scoped inherited widgets: ambient screen data and theming.
-pub use app::{MediaQuery, MediaQueryData, Theme, ThemeData};
+pub use app::{MediaQuery, MediaQueryData, SafeArea, Theme, ThemeData};
 // `Brightness` is the value type shared by `MediaQueryData` and `ThemeData`;
 // re-exported here so callers need only `use flui_widgets::Brightness`.
 pub use flui_types::platform::Brightness;
@@ -110,7 +110,7 @@ pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 // `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
 // need only import from `flui-widgets`, not from lower-level crates.
 pub use container::Container;
-pub use flex::{Column, Expanded, Flex, Flexible, Row};
+pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
 #[cfg(feature = "network-images")]
 pub use image::NetworkImage;
@@ -119,7 +119,7 @@ pub use image::{
 };
 pub use interaction::{
     AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,
-    Listener, Offstage,
+    Listener, Offstage, Visibility,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
@@ -131,10 +131,11 @@ pub use layout::{
 pub use flui_objects::OverflowBoxFit;
 pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ListView, RefreshController, RefreshIndicator,
-    RefreshIndicatorState, ScrollController, ScrollPhysics, Scrollable, Scrollbar,
-    SharedScrollPhysics, SingleChildScrollView, SliverChildBuilderDelegate, SliverFixedExtentList,
-    SliverList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
+    BouncingScrollPhysics, ClampingScrollPhysics, GridView, ListView, RefreshController,
+    RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollPhysics, Scrollable,
+    Scrollbar, SharedScrollPhysics, SingleChildScrollView, SliverChildBuilderDelegate,
+    SliverFixedExtentList, SliverGrid, SliverList, SliverOpacity, SliverPadding,
+    SliverToBoxAdapter, Viewport,
 };
 pub use stack::{Positioned, Stack};
 pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
@@ -159,6 +160,13 @@ pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, Stac
 pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
 // `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
 pub use flui_rendering::parent_data::FlexFit;
+// Grid delegates — always available (un-gated since `RenderSliverGrid` ships in
+// the default build). Re-exported here so widget authors need only import from
+// `flui_widgets`, matching Flutter's single-import surface.
+pub use flui_rendering::delegates::{
+    SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+    SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+};
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
 // `PointerEvent`/`EventPropagation` its callbacks receive/return.
 pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
@@ -183,17 +191,21 @@ pub mod prelude {
         AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
         ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox,
         EditableText, EditableTextState, Expanded, FittedBox, Flex, FlexFit, Flexible,
-        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector,
+        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector, GridView,
         IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IntrinsicHeight,
         IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
         Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
-        Row, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, TextEditingController,
-        TextField, Theme, ThemeData, Transform, Viewport, Wrap,
+        Row, SafeArea, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, SliverChildBuilderDelegate, SliverFixedExtentList, SliverGrid,
+        SliverList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Text,
+        TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
+    pub use crate::{
+        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+    };
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
     pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
