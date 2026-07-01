@@ -651,16 +651,13 @@ impl ChildManager for SliverGridLazyAdaptorManager {
                 any_new_build = true;
             } else {
                 reached_end_at = Some(
-                    reached_end_at
-                        .map(|end_index| end_index.min(logical_index))
-                        .unwrap_or(logical_index),
+                    reached_end_at.map_or(logical_index, |end_index| end_index.min(logical_index)),
                 );
             }
         }
 
         let count_clamped = reached_end_at
-            .map(|end_index| self.clamp_render_item_count(end_index, pipeline))
-            .unwrap_or(false);
+            .is_some_and(|end_index| self.clamp_render_item_count(end_index, pipeline));
 
         eviction_did_work || any_new_build || count_clamped
     }
