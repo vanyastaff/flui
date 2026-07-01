@@ -19,7 +19,7 @@
 //!
 //! # Deferred functionality
 //!
-//! - **Network loading** ([`NetworkImage`]) — returns
+//! - **Network loading** (`NetworkImage`, behind the `network-images` feature) — returns
 //!   [`ImageProviderError::AsyncNotWired`] until the async path lands.
 //! - **Image cache** — will be integrated when the scheduler gains async
 //!   rebuild support.
