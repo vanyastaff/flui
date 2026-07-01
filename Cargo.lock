@@ -1710,6 +1710,7 @@ version = "0.2.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
+ "flui-interaction",
  "flui-objects",
  "flui-painting",
  "flui-rendering",

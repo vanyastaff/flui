@@ -7,6 +7,7 @@ mod gesture_arena_scope;
 mod gesture_detector;
 mod ignore_pointer;
 mod listener;
+mod mouse_region;
 mod offstage;
 mod visibility;
 
@@ -15,5 +16,6 @@ pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
 pub use ignore_pointer::IgnorePointer;
 pub use listener::Listener;
+pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
 pub use visibility::Visibility;

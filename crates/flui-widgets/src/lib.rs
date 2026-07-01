@@ -119,7 +119,7 @@ pub use image::{
 };
 pub use interaction::{
     AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,
-    Listener, Offstage, Visibility,
+    Listener, MouseRegion, Offstage, Visibility,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
@@ -172,7 +172,9 @@ pub use flui_rendering::delegates::{
 };
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
 // `PointerEvent`/`EventPropagation` its callbacks receive/return.
-pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
+pub use flui_rendering::hit_testing::{
+    CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
+};
 // Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
 pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 
@@ -197,14 +199,14 @@ pub mod prelude {
         FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
         GestureDetector, GridView, IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider,
         IndexedStack, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListBody, ListView, Listener,
-        MediaQuery, MediaQueryData, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding,
-        Positioned, RepaintBoundary, RotatedBox, Row, SafeArea, ScrollController, Scrollable,
-        Scrollbar, ShrinkWrappingViewport, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, Text, TextEditingController, TextField, Theme,
-        ThemeData, Transform, Viewport, Visibility, Wrap,
+        MediaQuery, MediaQueryData, MouseRegion, Offstage, Opacity, OverflowBox, OverflowBoxFit,
+        Padding, Positioned, RepaintBoundary, RotatedBox, Row, SafeArea, ScrollController,
+        Scrollable, Scrollbar, ShrinkWrappingViewport, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Text,
+        TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
@@ -217,7 +219,9 @@ pub mod prelude {
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
     pub use flui_rendering::constraints::BoxConstraints;
-    pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
+    pub use flui_rendering::hit_testing::{
+        CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
+    };
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
     pub use flui_types::painting::Clip;
     pub use flui_types::typography::TextBaseline;

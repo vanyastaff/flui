@@ -199,6 +199,11 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > remain documented deferred edges. `RenderListBody` is now in the object catalog,
 > backs the public `ListBody` widget, and has harness coverage for axis-direction
 > layout, reverse positioning, hit testing, dry layout, and dry-baseline behavior.
+> `RenderMouseRegion` now backs the public `MouseRegion` widget with harness
+> coverage for childless sizing, cursor/annotation hit-entry propagation, hover
+> dispatch, and MouseTracker enter/hover/exit callback flow; the remaining
+> `opaque = false` behind-region edge waits on decoupling hit-entry registration
+> from sibling blocking in the hit-test pipeline.
 > The genuine remaining work is: **(a)** the
 > *secondary-query* architectural gap — `compute_dry_layout` / baseline /
 > intrinsics for multi-child objects (`2026-06-30-secondary-query-layout-gap.md`,
@@ -212,7 +217,7 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 | Box layout (`RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFractionallySizedBox`, `RenderStack`, `RenderIndexedStack`, `RenderListBody`, `RenderPositioned`, `RenderFlow`, `RenderTable`) | ⚠ mostly exist + audited | ConstrainedBox/LimitedBox/AspectRatio/Baseline/Wrap/FractionallySizedBox/Stack/Flex **exist + oracle-verified faithful or fixed** 2026-06-30. `RenderIndexedStack` and `RenderListBody` exist + oracle-verified 2026-07-01. `RenderFlow`/`RenderTable` not yet built. |
 | Paint effects (`RenderClipRect/RRect/Path/Oval`, `RenderDecoratedBox`, `RenderOpacity` variants, `RenderTransform` family, `RenderFittedBox`, `RenderCustomPaint`, `RenderRepaintBoundary`) | ⚠ mostly exist | `RenderTransform`/`RenderFittedBox`/`RenderFractionalTranslation` audited+fixed 2026-06-30; clip/opacity/decorated_box exist (proxy-paint parity audit in progress). `RenderCustomPaint` exists with first harness slice 2026-07-01; repaint-listenable/semantics/cache hints remain deferred. |
 | Slivers (`RenderViewport`, `RenderShrinkWrappingViewport`, `RenderSliverList/Grid/Padding/FillViewport/FillRemaining/ToBoxAdapter/Offstage/Opacity`) | ⚠ mostly exist; grid + shrink-wrap viewport blockers closed | Contained slivers audited+fixed 2026-06-30 (offstage correction, overscroll positioning). `RenderSliverGrid` and `RenderSliverGridLazy` now back eager `SliverGrid`/`GridView.count`/`GridView.extent` and lazy `GridView.builder`; lazy grid has a 1000-item scroll-bounded test. `RenderShrinkWrappingViewport` now backs `ShrinkWrappingViewport` plus `CustomScrollView`/`ListView`/`GridView` `shrink_wrap`; persistent-header families remain open. |
-| Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`) | ◐ partial | `RenderParagraph`/`RenderImage` exist; not yet parity-audited. |
+| Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`) | ◐ partial | `RenderMouseRegion` exists + first oracle-verified harness/widget slice 2026-07-01. `RenderParagraph`/`RenderImage` exist; not yet parity-audited. |
 
 **Exit:** widget→render-object checklist complete; per-RO layout + paint tests; intrinsic-size tests where applicable; 1000-item sliver scroll test green; `flui-rendering` coverage ≥ 80%; **secondary-query gap closed** (dry-layout/baseline/intrinsics for multi-child objects).
 

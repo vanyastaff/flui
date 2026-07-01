@@ -37,6 +37,7 @@
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
+//! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | — | — | yes | — |
 //! | `RenderSliverGridLazy` | `harness_render_sliver_grid_lazy_*` | yes | — | — | yes | — |
@@ -63,14 +64,24 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
+use flui_interaction::MouseTracker;
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
     constraints::BoxConstraints,
     delegates::{CustomPainter, SliverGridDelegateWithFixedCrossAxisCount},
-    hit_testing::{EventPropagation, HitTestBehavior, HitTestResult, PointerEventHandler},
+    hit_testing::{
+        CursorIcon, EventPropagation, HitTestBehavior, HitTestResult, InputEvent,
+        MouseEnterCallback, MouseExitCallback, MouseHoverCallback, PointerEventHandler,
+    },
     parent_data::{FlexParentData, SliverMultiBoxAdaptorParentData, StackParentData},
     testing::{
         BoxQueryRun, ParentDataSeed, Probe, RenderTester, TreeNode, assert_descendant_properties,
@@ -123,6 +134,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
     "RenderListener",
+    "RenderMouseRegion",
     "RenderSliverFixedExtentList",
     "RenderSliverGrid",
     "RenderSliverGridLazy",
@@ -424,6 +436,147 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
         result.path().iter().any(|entry| entry.handler.is_some()),
         "the listener's hit entry must carry a pointer handler:\n{}",
         run.diagnostics(),
+    );
+}
+
+#[test]
+fn harness_mouse_region_childless_fills_parent_and_self_describes() {
+    let run = RenderTester::mount(box_node(RenderMouseRegion::new()))
+        .with_constraints(BoxConstraints::tight(Size::new(px(80.0), px(40.0))))
+        .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(80.0), px(40.0)),
+        "childless RenderMouseRegion must use constraints.biggest like Flutter's computeSizeForNoChild",
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderMouseRegion",
+        &["cursor", "valid_for_mouse_tracker", "opaque", "behavior"],
+    );
+}
+
+#[test]
+fn harness_mouse_region_hit_entry_carries_cursor_and_annotation() {
+    let enters = Arc::new(AtomicUsize::new(0));
+    let enter_counter = Arc::clone(&enters);
+    let on_enter: MouseEnterCallback = Arc::new(move |_device, _position| {
+        enter_counter.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let mut region = RenderMouseRegion::new();
+    region.set_cursor(CursorIcon::Pointer);
+    region.set_on_enter(Some(on_enter));
+
+    let run = RenderTester::mount(box_node(region))
+        .with_constraints(BoxConstraints::tight(Size::new(px(60.0), px(30.0))))
+        .run_frame();
+
+    let mut result = HitTestResult::new();
+    run.pipeline()
+        .hit_test(Offset::new(px(10.0), px(10.0)), &mut result);
+
+    let entry = result
+        .path()
+        .iter()
+        .find(|entry| entry.target == run.root())
+        .expect("mouse region must contribute a hit-test entry");
+    assert_eq!(
+        entry.cursor,
+        CursorIcon::Pointer,
+        "mouse region cursor must be copied into the hit-test entry",
+    );
+    let annotation = entry
+        .mouse_annotation
+        .as_ref()
+        .expect("mouse region must contribute MouseTrackerAnnotation");
+    assert_eq!(annotation.region_id, run.root());
+    assert!(annotation.on_enter.is_some());
+}
+
+#[test]
+fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
+    let hovers = Arc::new(AtomicUsize::new(0));
+    let hover_counter = Arc::clone(&hovers);
+    let on_hover: MouseHoverCallback = Arc::new(move |_device, _position| {
+        hover_counter.fetch_add(1, Ordering::SeqCst);
+    });
+    let exits = Arc::new(AtomicUsize::new(0));
+    let exit_counter = Arc::clone(&exits);
+    let on_exit: MouseExitCallback = Arc::new(move |_device, _position| {
+        exit_counter.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let mut region = RenderMouseRegion::new();
+    region.set_on_hover(Some(on_hover));
+    region.set_on_exit(Some(on_exit));
+
+    let run = RenderTester::mount(box_node(region))
+        .with_constraints(BoxConstraints::tight(Size::new(px(60.0), px(30.0))))
+        .run_frame();
+
+    let mut inside = HitTestResult::new();
+    let inside_position = Offset::new(px(10.0), px(10.0));
+    run.pipeline().hit_test(inside_position, &mut inside);
+    inside.dispatch(&flui_interaction::events::make_move_event(
+        inside_position,
+        flui_interaction::events::PointerType::Mouse,
+    ));
+    assert_eq!(
+        hovers.load(Ordering::SeqCst),
+        1,
+        "PointerEvent::Move dispatch should invoke RenderMouseRegion's hover handler",
+    );
+
+    let tracker = MouseTracker::new();
+    tracker.update_with_event(
+        &InputEvent::DeviceAdded {
+            device_id: 0,
+            pointer_type: flui_interaction::events::PointerType::Mouse,
+        },
+        &HitTestResult::new(),
+    );
+    tracker.update_with_event(
+        &InputEvent::Pointer(flui_interaction::events::make_move_event(
+            inside_position,
+            flui_interaction::events::PointerType::Mouse,
+        )),
+        &inside,
+    );
+    assert_eq!(
+        hovers.load(Ordering::SeqCst),
+        1,
+        "first tracker update is an enter, not a hover",
+    );
+
+    tracker.update_with_event(
+        &InputEvent::Pointer(flui_interaction::events::make_move_event(
+            inside_position,
+            flui_interaction::events::PointerType::Mouse,
+        )),
+        &inside,
+    );
+    assert_eq!(
+        hovers.load(Ordering::SeqCst),
+        2,
+        "second tracker update over the same region is a hover",
+    );
+
+    let mut outside = HitTestResult::new();
+    let outside_position = Offset::new(px(80.0), px(10.0));
+    run.pipeline().hit_test(outside_position, &mut outside);
+    tracker.update_with_event(
+        &InputEvent::Pointer(flui_interaction::events::make_move_event(
+            outside_position,
+            flui_interaction::events::PointerType::Mouse,
+        )),
+        &outside,
+    );
+    assert_eq!(
+        exits.load(Ordering::SeqCst),
+        1,
+        "tracker must retain the prior annotation long enough to fire exit",
     );
 }
 

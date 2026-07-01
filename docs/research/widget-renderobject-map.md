@@ -15,22 +15,22 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **54**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **55**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
 > and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
 > body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
-> that appears in the "Existing (54)" list, the list wins. The body is retained for its
+> that appears in the "Existing (55)" list, the list wins. The body is retained for its
 > accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
 > file), which the Core.2 implementers need.
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **54**
-- **Render objects remaining to build (Core.2):** **~18** (verified list below)
+- **Render objects existing today:** **55**
+- **Render objects remaining to build (Core.2):** **~17** (verified list below)
 
-### Existing render objects — authoritative (54)
+### Existing render objects — authoritative (55)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
@@ -38,19 +38,18 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Paint effects (10):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
 
-**Interaction / pointer (5):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderOffstage`
+**Interaction / pointer (6):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderMouseRegion` · `RenderOffstage`
 
 **Leaf (2):** `RenderParagraph` · `RenderImage`
 
 **Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈18)
+### Remaining to build — verified missing (≈17)
 
 Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
-| `RenderMouseRegion` | `MouseRegion` (hover) | High | `proxy_box.dart` |
 | `RenderEditable` | `EditableText`/`TextField` | High (App.1 IME) | `editable.dart` |
 | `RenderFlow` | `Flow` | Medium | `flow.dart` |
 | `RenderTable` | `Table`/`DataTable` | Medium | `table.dart` |
@@ -78,6 +77,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 > **`RenderCustomPaint` closure note (verified 2026-07-01):** `RenderCustomPaint` now ships in `flui-objects`, is listed in the harness catalog, and uses `flui-rendering`'s `CustomPainter` delegate feature. Harness coverage pins childless preferred sizing, background/child/foreground paint order, and foreground hit-test precedence. Repaint-listenable, semantics-builder, and raster-cache hint plumbing remain documented deferred edges in the render object module.
 >
 > **`RenderListBody` closure note (verified 2026-07-01):** `RenderListBody` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `ListBody` widget. Harness coverage pins vertical and horizontal axis-direction layout, reverse positioning, cross-axis stretching, hit testing, dry layout, and dry-baseline ordering against Flutter's `rendering/list_body.dart` behavior.
+>
+> **`RenderMouseRegion` closure note (verified 2026-07-01):** `RenderMouseRegion` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `MouseRegion` widget. Harness coverage pins childless `constraints.biggest` sizing, hit-entry cursor propagation, mouse-tracker annotation propagation, pointer-move hover dispatch, and `MouseTracker` enter/hover/exit callbacks. Remaining edge: Flutter's `opaque = false` lets regions behind it remain active while this region still contributes an annotation; FLUI's current hit-test pipeline still couples "add self hit entry" with "blocks siblings below", so transparent behind-region behavior remains an explicit pipeline follow-up.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -176,7 +177,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 |--------|---------------------|-------------|-------|-------|
 | `GestureDetector` | *(composes)* | N/A | Single | Composes `Listener` + gesture recognizers; no own RO |
 | `Listener` | `RenderPointerListener` | Needed | Single | Raw pointer event callbacks |
-| `MouseRegion` | `RenderMouseRegion` | Needed | Single | Mouse hover enter/exit tracking |
+| `MouseRegion` | `RenderMouseRegion` | **Exists** | Single | Mouse hover enter/exit tracking |
 | `AbsorbPointer` | `RenderAbsorbPointer` | **Exists** | Single | Catches hits, blocks child |
 | `IgnorePointer` | `RenderIgnorePointer` | **Exists** | Single | Pointers pass through subtree |
 | `Focus` | *(framework)* | N/A | Single | Focus node management; no own RO |
@@ -307,15 +308,14 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 5 | `RenderPhysicalShape` | `proxy_box.dart` | `PhysicalShape` |
 | 6 | `RenderRotatedBox` | `rotated_box.dart` | `RotatedBox` |
 
-### Wave 4 — Input / Leaf (5 objects)
+### Wave 4 — Input / Leaf (4 objects)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
 | 1 | `RenderPointerListener` | `proxy_box.dart` | `Listener` |
-| 2 | `RenderMouseRegion` | `proxy_box.dart` | `MouseRegion` |
-| 3 | `RenderParagraph` | `paragraph.dart` | `RichText`, `Text` |
-| 4 | `RenderEditable` | `editable.dart` | `EditableText` |
-| 5 | `RenderImage` | `image.dart` | `Image` |
+| 2 | `RenderParagraph` | `paragraph.dart` | `RichText`, `Text` |
+| 3 | `RenderEditable` | `editable.dart` | `EditableText` |
+| 4 | `RenderImage` | `image.dart` | `Image` |
 
 ### Wave 5 — Slivers / Viewport (8 objects)
 
