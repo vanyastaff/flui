@@ -8,7 +8,9 @@ use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
-use crate::scroll::{SliverChildBuilderDelegate, SliverFixedExtentList, SliverList, Viewport};
+use crate::scroll::{
+    ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList, Viewport,
+};
 
 /// A scrollable list that lays out its children sequentially along
 /// `scroll_direction`.
@@ -33,8 +35,9 @@ use crate::scroll::{SliverChildBuilderDelegate, SliverFixedExtentList, SliverLis
 ///   children during the same-frame layout pass. See [`SliverChildBuilderDelegate`]
 ///   for the full rationale.
 ///
-/// Both modes compose a [`Viewport`] over their respective sliver. `offset`
-/// is a programmatic scroll position in logical pixels.
+/// Both modes compose a [`Viewport`] over their respective sliver, or a
+/// [`ShrinkWrappingViewport`] when [`ListView::shrink_wrap`] is enabled.
+/// `offset` is a programmatic scroll position in logical pixels.
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `ListView` and
 /// `ListView.builder`.
@@ -47,6 +50,7 @@ pub struct ListView {
     /// Seeds the virtualizer until real measurements arrive.
     item_extent_estimate: f32,
     offset: f32,
+    shrink_wrap: bool,
     /// Children for the static variant. Empty in the lazy variant.
     children: Vec<BoxedView>,
     /// Builder delegate for the lazy variant. `None` in the static variant.
@@ -66,6 +70,7 @@ impl ListView {
             item_extent,
             item_extent_estimate: item_extent,
             offset: 0.0,
+            shrink_wrap: false,
             children: children.into_boxed_vec(),
             builder_source: None,
         }
@@ -94,6 +99,7 @@ impl ListView {
             item_extent: item_extent_estimate,
             item_extent_estimate,
             offset: 0.0,
+            shrink_wrap: false,
             children: Vec::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
         }
@@ -112,13 +118,25 @@ impl ListView {
         self.offset = offset;
         self
     }
+
+    /// Whether the list should size itself to its sliver contents in the scroll
+    /// axis.
+    ///
+    /// Defaults to `false`, matching Flutter. Use `true` when the parent gives
+    /// unbounded main-axis constraints.
+    #[must_use]
+    pub fn shrink_wrap(mut self, shrink_wrap: bool) -> Self {
+        self.shrink_wrap = shrink_wrap;
+        self
+    }
 }
 
 impl fmt::Debug for ListView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = f.debug_struct("ListView");
         s.field("scroll_direction", &self.scroll_direction)
-            .field("offset", &self.offset);
+            .field("offset", &self.offset)
+            .field("shrink_wrap", &self.shrink_wrap);
         if self.builder_source.is_some() {
             s.field("item_extent_estimate", &self.item_extent_estimate);
             s.field("builder_source", &self.builder_source);
@@ -154,8 +172,16 @@ impl StatelessView for ListView {
         } else {
             SliverFixedExtentList::new(self.item_extent, self.children.clone()).boxed()
         };
-        Viewport::new((sliver,))
-            .axis_direction(axis_direction)
-            .offset(self.offset)
+        if self.shrink_wrap {
+            ShrinkWrappingViewport::new((sliver,))
+                .axis_direction(axis_direction)
+                .offset(self.offset)
+                .boxed()
+        } else {
+            Viewport::new((sliver,))
+                .axis_direction(axis_direction)
+                .offset(self.offset)
+                .boxed()
+        }
     }
 }

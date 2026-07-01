@@ -15,10 +15,12 @@ use common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
 use flui_animation::Vsync;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;
+use flui_types::geometry::px;
 use flui_view::ViewExt;
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, ListView, ScrollController,
-    ScrollPhysics, Scrollable, SharedScrollPhysics, SingleChildScrollView, SizedBox, VsyncScope,
+    BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GridView, ListView,
+    ScrollController, ScrollPhysics, Scrollable, SharedScrollPhysics, SingleChildScrollView,
+    SizedBox, SliverFixedExtentList, VsyncScope,
 };
 
 #[test]
@@ -80,6 +82,60 @@ fn list_view_gives_each_row_the_fixed_item_extent() {
     let list = laid.only_child(viewport);
     let first_row = laid.child(list, 0);
     assert_eq!(laid.size(first_row), size(200.0, 50.0));
+}
+
+#[test]
+fn list_view_shrink_wrap_sizes_to_static_fixed_extent_content() {
+    let rows: Vec<_> = (0..4).map(|_| SizedBox::shrink().boxed()).collect();
+    let laid = lay_out(
+        ListView::new(50.0, rows).shrink_wrap(true),
+        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+    );
+
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert!(laid.find_all_by_render_type("RenderViewport").is_empty());
+    assert_eq!(
+        laid.size(viewport),
+        size(200.0, 200.0),
+        "4 fixed-extent rows at 50px must shrink-wrap to 200px high"
+    );
+}
+
+#[test]
+fn custom_scroll_view_shrink_wrap_sizes_to_sliver_content() {
+    let laid = lay_out(
+        CustomScrollView::new((SliverFixedExtentList::new(
+            30.0,
+            vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()],
+        ),))
+        .shrink_wrap(true),
+        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+    );
+
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert!(laid.find_all_by_render_type("RenderViewport").is_empty());
+    assert_eq!(
+        laid.size(viewport),
+        size(200.0, 60.0),
+        "2 fixed-extent sliver rows at 30px must shrink-wrap to 60px high"
+    );
+}
+
+#[test]
+fn grid_view_shrink_wrap_sizes_to_grid_rows() {
+    let tiles: Vec<_> = (0..4).map(|_| SizedBox::shrink().boxed()).collect();
+    let laid = lay_out(
+        GridView::count(2, tiles).shrink_wrap(true),
+        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+    );
+
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert!(laid.find_all_by_render_type("RenderViewport").is_empty());
+    assert_eq!(
+        laid.size(viewport),
+        size(200.0, 200.0),
+        "4 square grid tiles in 2 columns must form 2 rows at 100px each"
+    );
 }
 
 #[test]

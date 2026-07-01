@@ -12,7 +12,9 @@ use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
-use crate::scroll::{SliverChildBuilderDelegate, SliverGrid, SliverGridLazy, Viewport};
+use crate::scroll::{
+    ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverGrid, SliverGridLazy, Viewport,
+};
 
 /// A scrollable 2-D grid.
 ///
@@ -37,6 +39,8 @@ use crate::scroll::{SliverChildBuilderDelegate, SliverGrid, SliverGridLazy, View
 ///
 /// `offset` is a programmatic scroll position in logical pixels;
 /// gesture-driven scrolling is provided by [`Scrollable`](crate::Scrollable).
+/// Set [`GridView::shrink_wrap`] when the grid is placed under unbounded
+/// constraints in the scroll axis.
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `GridView.count`,
 /// `GridView.extent`, and `GridView.builder`.
@@ -44,6 +48,7 @@ use crate::scroll::{SliverChildBuilderDelegate, SliverGrid, SliverGridLazy, View
 pub struct GridView {
     scroll_direction: Axis,
     offset: f32,
+    shrink_wrap: bool,
     grid_delegate: Arc<dyn SliverGridDelegate>,
     /// Children for the eager variants.  Empty in the lazy variant.
     children: Vec<BoxedView>,
@@ -63,6 +68,7 @@ impl GridView {
         Self {
             scroll_direction: Axis::Vertical,
             offset: 0.0,
+            shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
             children: children.into_boxed_vec(),
             builder_source: None,
@@ -82,6 +88,7 @@ impl GridView {
         Self {
             scroll_direction: Axis::Vertical,
             offset: 0.0,
+            shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
             children: children.into_boxed_vec(),
             builder_source: None,
@@ -108,6 +115,7 @@ impl GridView {
         Self {
             scroll_direction: Axis::Vertical,
             offset: 0.0,
+            shrink_wrap: false,
             grid_delegate,
             children: Vec::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
@@ -127,13 +135,25 @@ impl GridView {
         self.offset = offset;
         self
     }
+
+    /// Whether the grid should size itself to its sliver contents in the scroll
+    /// axis.
+    ///
+    /// Defaults to `false`, matching Flutter. Use `true` when the parent gives
+    /// unbounded main-axis constraints.
+    #[must_use]
+    pub fn shrink_wrap(mut self, shrink_wrap: bool) -> Self {
+        self.shrink_wrap = shrink_wrap;
+        self
+    }
 }
 
 impl fmt::Debug for GridView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = f.debug_struct("GridView");
         s.field("scroll_direction", &self.scroll_direction)
-            .field("offset", &self.offset);
+            .field("offset", &self.offset)
+            .field("shrink_wrap", &self.shrink_wrap);
         if self.builder_source.is_some() {
             s.field("builder_source", &self.builder_source);
         } else {
@@ -164,8 +184,16 @@ impl StatelessView for GridView {
             SliverGrid::new(Arc::clone(&self.grid_delegate), self.children.clone()).boxed()
         };
 
-        Viewport::new((sliver,))
-            .axis_direction(axis_direction)
-            .offset(self.offset)
+        if self.shrink_wrap {
+            ShrinkWrappingViewport::new((sliver,))
+                .axis_direction(axis_direction)
+                .offset(self.offset)
+                .boxed()
+        } else {
+            Viewport::new((sliver,))
+                .axis_direction(axis_direction)
+                .offset(self.offset)
+                .boxed()
+        }
     }
 }

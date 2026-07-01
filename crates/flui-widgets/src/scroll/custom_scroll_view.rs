@@ -6,9 +6,9 @@ use std::fmt;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, BuildContext, IntoView};
+use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
-use crate::scroll::Viewport;
+use crate::scroll::{ShrinkWrappingViewport, Viewport};
 
 /// A scrollable area whose scroll body is composed from an arbitrary list of
 /// **sliver** widgets.
@@ -23,6 +23,8 @@ use crate::scroll::Viewport;
 /// `offset` is a programmatic scroll position in logical pixels.
 /// Gesture-driven scrolling is provided by [`Scrollable`] + a
 /// [`ScrollController`].
+/// Set [`CustomScrollView::shrink_wrap`] when the scroll view is placed under
+/// unbounded constraints in the scroll axis.
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `CustomScrollView`.
 ///
@@ -37,6 +39,7 @@ use crate::scroll::Viewport;
 pub struct CustomScrollView {
     scroll_direction: Axis,
     offset: f32,
+    shrink_wrap: bool,
     slivers: Vec<BoxedView>,
 }
 
@@ -46,6 +49,7 @@ impl CustomScrollView {
         Self {
             scroll_direction: Axis::Vertical,
             offset: 0.0,
+            shrink_wrap: false,
             slivers: slivers.into_boxed_vec(),
         }
     }
@@ -63,6 +67,17 @@ impl CustomScrollView {
         self.offset = offset;
         self
     }
+
+    /// Whether the scroll view should size itself to its sliver contents in the
+    /// scroll axis.
+    ///
+    /// Defaults to `false`, matching Flutter. Use `true` when the parent gives
+    /// unbounded main-axis constraints.
+    #[must_use]
+    pub fn shrink_wrap(mut self, shrink_wrap: bool) -> Self {
+        self.shrink_wrap = shrink_wrap;
+        self
+    }
 }
 
 impl fmt::Debug for CustomScrollView {
@@ -70,6 +85,7 @@ impl fmt::Debug for CustomScrollView {
         f.debug_struct("CustomScrollView")
             .field("scroll_direction", &self.scroll_direction)
             .field("offset", &self.offset)
+            .field("shrink_wrap", &self.shrink_wrap)
             .field("sliver_count", &self.slivers.len())
             .finish()
     }
@@ -81,8 +97,16 @@ impl StatelessView for CustomScrollView {
             Axis::Vertical => AxisDirection::TopToBottom,
             Axis::Horizontal => AxisDirection::LeftToRight,
         };
-        Viewport::new(self.slivers.clone())
-            .axis_direction(axis_direction)
-            .offset(self.offset)
+        if self.shrink_wrap {
+            ShrinkWrappingViewport::new(self.slivers.clone())
+                .axis_direction(axis_direction)
+                .offset(self.offset)
+                .boxed()
+        } else {
+            Viewport::new(self.slivers.clone())
+                .axis_direction(axis_direction)
+                .offset(self.offset)
+                .boxed()
+        }
     }
 }
