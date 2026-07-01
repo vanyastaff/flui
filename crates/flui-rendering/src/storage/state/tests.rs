@@ -160,3 +160,183 @@ fn compute_relayout_boundary_root_is_always_boundary() {
         "root must always be a boundary"
     );
 }
+
+// ========================================================================
+// Construction, parent data, and layout-cache accessors
+// ========================================================================
+
+#[test]
+fn with_flags_seeds_exactly_the_given_flags() {
+    // `new()` always seeds NEEDS_LAYOUT | NEEDS_PAINT; `with_flags` must be
+    // able to bypass that default for tests/special init (e.g. a state that
+    // starts already laid out).
+    let clean = BoxRenderState::with_flags(RenderFlags::empty());
+    assert!(!clean.needs_layout());
+    assert!(!clean.needs_paint());
+
+    let dirty = BoxRenderState::with_flags(RenderFlags::NEEDS_LAYOUT);
+    assert!(dirty.needs_layout());
+    assert!(!dirty.needs_paint());
+}
+
+#[test]
+fn default_matches_new() {
+    let default_state = BoxRenderState::default();
+    let new_state = BoxRenderState::new();
+
+    assert_eq!(default_state.needs_layout(), new_state.needs_layout());
+    assert_eq!(default_state.needs_paint(), new_state.needs_paint());
+    assert_eq!(default_state.geometry(), new_state.geometry());
+    assert_eq!(default_state.offset(), new_state.offset());
+    assert!(default_state.parent_data().is_none());
+}
+
+#[test]
+fn parent_data_round_trips_through_typed_and_erased_accessors() {
+    use crate::parent_data::BoxParentData;
+
+    let mut state = BoxRenderState::new();
+    assert!(state.parent_data().is_none());
+    assert!(state.parent_data_as::<BoxParentData>().is_none());
+
+    let offset = Offset::new(px(3.0), px(4.0));
+    state.set_parent_data(Box::new(BoxParentData::new(offset)));
+
+    // Type-erased read.
+    assert!(state.parent_data().is_some());
+
+    // Typed downcast read.
+    let typed = state
+        .parent_data_as::<BoxParentData>()
+        .expect("parent data was just set to BoxParentData");
+    assert_eq!(typed.offset, offset);
+
+    // Typed mutation round-trips.
+    state
+        .parent_data_as_mut::<BoxParentData>()
+        .expect("parent data is BoxParentData")
+        .offset = Offset::new(px(7.0), px(8.0));
+    assert_eq!(
+        state.parent_data_as::<BoxParentData>().unwrap().offset,
+        Offset::new(px(7.0), px(8.0))
+    );
+
+    // Erased mutation reaches the same storage as the typed accessors.
+    state
+        .parent_data_mut()
+        .expect("parent data is set")
+        .downcast_mut::<BoxParentData>()
+        .expect("still BoxParentData")
+        .offset = Offset::new(px(1.0), px(2.0));
+    assert_eq!(
+        state.parent_data_as::<BoxParentData>().unwrap().offset,
+        Offset::new(px(1.0), px(2.0))
+    );
+
+    // Replacing with a new value overwrites rather than accumulating state.
+    state.set_parent_data(Box::new(BoxParentData::zero()));
+    assert_eq!(
+        state.parent_data_as::<BoxParentData>().unwrap().offset,
+        Offset::ZERO
+    );
+}
+
+#[test]
+fn parent_data_as_returns_none_for_mismatched_type() {
+    use crate::parent_data::{BoxParentData, SliverLogicalParentData};
+
+    let mut state = BoxRenderState::new();
+    state.set_parent_data(Box::new(BoxParentData::zero()));
+
+    // Downcasting to an unrelated concrete ParentData type must fail cleanly,
+    // not panic — this is the guard the parent-side typed read path relies on.
+    assert!(state.parent_data_as::<SliverLogicalParentData>().is_none());
+    assert!(
+        state
+            .parent_data_as_mut::<SliverLogicalParentData>()
+            .is_none()
+    );
+}
+
+#[test]
+fn layout_cache_insert_peek_and_clear_round_trip() {
+    let mut state = BoxRenderState::new();
+
+    assert!(
+        state
+            .layout_cache()
+            .peek_intrinsic(IntrinsicDimension::MinWidth, 100.0)
+            .is_none()
+    );
+
+    state
+        .layout_cache_mut()
+        .insert_intrinsic(IntrinsicDimension::MinWidth, 100.0, 42.0);
+    assert_eq!(
+        state
+            .layout_cache()
+            .peek_intrinsic(IntrinsicDimension::MinWidth, 100.0),
+        Some(42.0)
+    );
+
+    // A miss (different extent) must not spuriously hit the memoized entry.
+    assert!(
+        state
+            .layout_cache()
+            .peek_intrinsic(IntrinsicDimension::MinWidth, 200.0)
+            .is_none()
+    );
+
+    // Clearing a populated cache reports that something WAS cached (the
+    // pipeline uses this to decide whether to escalate invalidation past a
+    // relayout boundary — box.dart:2840).
+    assert!(state.clear_layout_cache());
+    assert!(
+        state
+            .layout_cache()
+            .peek_intrinsic(IntrinsicDimension::MinWidth, 100.0)
+            .is_none()
+    );
+
+    // Clearing an already-empty cache reports nothing was cached.
+    assert!(!state.clear_layout_cache());
+}
+
+#[test]
+fn clone_preserves_geometry_constraints_offset_and_parent_data_but_resets_layout_cache() {
+    use crate::constraints::BoxConstraints;
+    use crate::parent_data::BoxParentData;
+    use flui_types::Size;
+
+    let mut state = BoxRenderState::new();
+    let size = Size::new(px(30.0), px(40.0));
+    let constraints = BoxConstraints::tight(size);
+    let offset = Offset::new(px(5.0), px(6.0));
+
+    state.set_geometry(size);
+    state.set_constraints(constraints);
+    state.set_offset(offset);
+    state.set_parent_data(Box::new(BoxParentData::new(offset)));
+    state
+        .layout_cache_mut()
+        .insert_intrinsic(IntrinsicDimension::MinWidth, 100.0, 1.0);
+
+    let cloned = state.clone();
+
+    assert_eq!(cloned.geometry(), Some(size));
+    assert_eq!(cloned.constraints(), Some(&constraints));
+    assert_eq!(cloned.offset(), offset);
+    assert_eq!(
+        cloned.parent_data_as::<BoxParentData>().unwrap().offset,
+        offset
+    );
+
+    // Memoized layout-cache results are node-local; a clone must start cold
+    // rather than sharing (or duplicating) the source node's cached entries.
+    assert!(
+        cloned
+            .layout_cache()
+            .peek_intrinsic(IntrinsicDimension::MinWidth, 100.0)
+            .is_none()
+    );
+}
