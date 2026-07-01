@@ -97,6 +97,23 @@ impl SliverGridLayout {
         // at `scroll_offset == 0` the count is 0 and the result clamps to 0.
         (self.cross_axis_count * main_axis_count).saturating_sub(1)
     }
+
+    /// Returns the maximum scroll extent for a grid with `child_count` items.
+    ///
+    /// Flutter parity: `SliverGridRegularTileLayout.computeMaxScrollOffset`
+    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart:257-266`).
+    ///
+    /// The result is the scroll offset of the trailing edge of the last row:
+    /// `main_axis_stride * row_count - main_axis_spacing`, where
+    /// `main_axis_spacing = main_axis_stride - child_main_axis_extent`.
+    pub fn compute_max_scroll_offset(&self, child_count: usize) -> f32 {
+        if child_count == 0 {
+            return 0.0;
+        }
+        let row_count = ((child_count - 1) / self.cross_axis_count) + 1;
+        let main_axis_spacing = self.main_axis_stride - self.child_main_axis_extent;
+        self.main_axis_stride * row_count as f32 - main_axis_spacing
+    }
 }
 
 /// A delegate that defines grid layout in slivers.
@@ -614,5 +631,62 @@ mod tests {
 
         assert!(!delegate1.should_relayout(&delegate2));
         assert!(delegate1.should_relayout(&delegate3));
+    }
+
+    // Oracle: `.flutter/.../rendering/sliver_grid.dart:257-266`
+    // Layout: stride=100, child_main=100, cross_count=2, no spacing.
+    fn two_column_layout() -> SliverGridLayout {
+        SliverGridLayout {
+            cross_axis_count: 2,
+            main_axis_stride: 100.0,
+            cross_axis_stride: 100.0,
+            child_main_axis_extent: 100.0,
+            child_cross_axis_extent: 100.0,
+            reverse_cross_axis: false,
+        }
+    }
+
+    #[test]
+    fn compute_max_scroll_offset_zero_children_returns_zero() {
+        assert_eq!(two_column_layout().compute_max_scroll_offset(0), 0.0);
+    }
+
+    #[test]
+    fn compute_max_scroll_offset_one_child_fills_one_row() {
+        // 1 child → 1 row; spacing=0 → stride * 1 - 0 = 100
+        assert_eq!(two_column_layout().compute_max_scroll_offset(1), 100.0);
+    }
+
+    #[test]
+    fn compute_max_scroll_offset_six_children_fills_three_rows() {
+        // 6 children → rows = (6-1)/2 + 1 = 3; result = 100*3 - 0 = 300
+        assert_eq!(two_column_layout().compute_max_scroll_offset(6), 300.0);
+    }
+
+    #[test]
+    fn compute_max_scroll_offset_seven_children_fills_four_rows() {
+        // 7 children → rows = (7-1)/2 + 1 = 4; result = 100*4 - 0 = 400
+        assert_eq!(two_column_layout().compute_max_scroll_offset(7), 400.0);
+    }
+
+    #[test]
+    fn compute_max_scroll_offset_eight_children_same_as_seven() {
+        // 8 children → rows = (8-1)/2 + 1 = 4 (still 4 rows); result = 400
+        assert_eq!(two_column_layout().compute_max_scroll_offset(8), 400.0);
+    }
+
+    #[test]
+    fn compute_max_scroll_offset_subtracts_main_axis_spacing() {
+        // stride=120, child_main=100, spacing=20; cross=2
+        // 4 children → rows=2 → 120*2 - 20 = 220
+        let layout = SliverGridLayout {
+            cross_axis_count: 2,
+            main_axis_stride: 120.0,
+            cross_axis_stride: 100.0,
+            child_main_axis_extent: 100.0,
+            child_cross_axis_extent: 100.0,
+            reverse_cross_axis: false,
+        };
+        assert_eq!(layout.compute_max_scroll_offset(4), 220.0);
     }
 }

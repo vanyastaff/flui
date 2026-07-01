@@ -1,6 +1,7 @@
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
 mod sliver_fixed_extent_list;
+mod sliver_grid;
 mod sliver_ignore_pointer;
 mod sliver_list;
 mod sliver_list_lazy;
@@ -14,6 +15,7 @@ mod virtualized_band;
 pub use sliver_fill_remaining::*;
 pub use sliver_fill_viewport::*;
 pub use sliver_fixed_extent_list::*;
+pub use sliver_grid::*;
 pub use sliver_ignore_pointer::*;
 pub use sliver_list::*;
 pub use sliver_list_lazy::*;

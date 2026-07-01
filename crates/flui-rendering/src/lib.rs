@@ -55,20 +55,13 @@
 pub mod binding;
 pub mod constraints;
 pub mod context;
-// Cycle 4 R-16: delegates gated behind `experimental-delegates`
-// (default off). The 6 delegate trait modules (~1,800 LOC at
-// `delegates/{custom_painter, flow_delegate, multi_child_layout_delegate,
-// single_child_layout_delegate, sliver_grid_delegate,
-// custom_clipper}.rs`) had zero production impls -- only test mocks.
-// The 2026-05-20 audit flagged at MEDIUM with the verdict "wait for
-// companion render-objects"; 18 months later those render-objects
-// still don't exist. Gating removes the dead surface from default
-// builds + prelude while preserving the design work behind a feature
-// flag. Opt in via `--features experimental-delegates` when the
-// companion render-objects (RenderCustomPaint, RenderFlow,
-// RenderCustomMultiChildLayoutBox, RenderSliverGrid, RenderCustomClip,
-// RenderSingleChildLayoutBox) land.
-#[cfg(feature = "experimental-delegates")]
+// Cycle 4 R-16 partial un-gate: `sliver_grid_delegate` is promoted to
+// the default build because `RenderSliverGrid` now ships unconditionally
+// in `flui-objects`. The remaining five companion-less delegates
+// (`custom_painter`, `flow_delegate`, `multi_child_layout_delegate`,
+// `single_child_layout_delegate`, `custom_clipper`) stay gated inside
+// `delegates/mod.rs` until their render objects land — opt in via
+// `--features experimental-delegates`.
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
@@ -182,15 +175,19 @@ pub mod prelude {
             SliverPaintOrder, ViewConfiguration, ViewportOffset,
         },
     };
-    // Cycle 4 R-16: delegates surface only when
-    // `experimental-delegates` is enabled (default off).
+    // Grid delegate — always available because RenderSliverGrid ships in the
+    // default build (Cycle 4 R-16 partial un-gate).
+    pub use crate::delegates::{
+        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+    };
+    // Remaining companion-less delegates still gated until their render
+    // objects land (Cycle 4 R-16).
     #[cfg(feature = "experimental-delegates")]
     pub use crate::delegates::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, RectClipper,
-        SemanticsBuilder, SingleChildLayoutDelegate, SliverGridDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
-        SliverGridLayout,
+        SemanticsBuilder, SingleChildLayoutDelegate,
     };
 }
 

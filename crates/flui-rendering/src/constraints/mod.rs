@@ -91,7 +91,7 @@ pub use sliver_geometry::SliverGeometry;
 /// Paint-offset math shared by sliver render objects and the pipeline.
 /// Moved from `pub(crate)` to `pub` so `flui_objects` sliver implementations
 /// can call it without adding an internal API surface.
-pub use sliver_layout::child_paint_offset;
+pub use sliver_layout::{child_paint_offset, grid_child_paint_offset};
 
 /// Abstract constraint trait following Flutter's protocol.
 ///

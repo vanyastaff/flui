@@ -35,6 +35,7 @@
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
+//! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | — | — | yes | — |
 //! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes | — |
 //! | `RenderSliverToBoxAdapter` | `harness_sliver_to_box_adapter_*` | yes | — | — | yes | — |
 //! | `RenderSliverFillViewport` | `harness_sliver_fill_viewport_*` | yes | — | — | yes | — |
@@ -62,6 +63,7 @@ use std::sync::Arc;
 use flui_objects::*;
 use flui_rendering::{
     constraints::BoxConstraints,
+    delegates::SliverGridDelegateWithFixedCrossAxisCount,
     hit_testing::{EventPropagation, HitTestBehavior, HitTestResult, PointerEventHandler},
     parent_data::{FlexParentData, SliverMultiBoxAdaptorParentData, StackParentData},
     testing::{
@@ -113,6 +115,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderIgnorePointer",
     "RenderListener",
     "RenderSliverFixedExtentList",
+    "RenderSliverGrid",
     "RenderSliverPadding",
     "RenderSliverToBoxAdapter",
     "RenderSliverFillViewport",
@@ -1585,6 +1588,53 @@ fn harness_sliver_fixed_extent_list_geometry() {
     let tree = run.diagnostics();
     let sliver = tree.find_descendant("RenderSliverFixedExtentList").unwrap();
     assert_has_committed_geometry(sliver);
+}
+
+// ── RenderSliverGrid ─────────────────────────────────────────────────────────
+
+#[test]
+fn harness_render_sliver_grid_lays_out_two_column_grid() {
+    // 4 children, 2 columns, viewport 200×200: 2 rows of 100×100 tiles.
+    // scroll_extent = compute_max_scroll_offset(4) = 100*2 - 0 = 200.
+    // All 4 tiles fit in the 200px viewport so all receive layout.
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverGrid::new(Arc::new(
+            SliverGridDelegateWithFixedCrossAxisCount::new(2),
+        )))
+        .label("grid")
+        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"))
+        .child(box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"))
+        .child(box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"))
+        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3")),
+    ))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_layout();
+
+    // Sliver geometry.
+    let geom = run.sliver_geometry(run.id("grid"));
+    assert_eq!(
+        geom.scroll_extent, 200.0,
+        "4 children × 2 columns = 2 rows × 100px = 200px total extent",
+    );
+    assert!(geom.paint_extent > 0.0);
+
+    // Each tile must receive tight 100×100 constraints from the delegate.
+    assert_eq!(
+        run.box_geometry(run.id("tile0")),
+        Size::new(px(100.0), px(100.0)),
+        "tile0 must be sized 100×100 by the delegate",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("tile2")),
+        Size::new(px(100.0), px(100.0)),
+        "tile2 (second row) must also be 100×100",
+    );
+
+    // Diagnostics must surface child_count and committed geometry.
+    assert_descendant_properties(&run.diagnostics(), "RenderSliverGrid", &["child_count"]);
+    let tree = run.diagnostics();
+    let sliver_node_diag = tree.find_descendant("RenderSliverGrid").unwrap();
+    assert_has_committed_geometry(sliver_node_diag);
 }
 
 #[test]

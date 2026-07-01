@@ -74,6 +74,7 @@ pub use image::{ImageAlignment, ImageFit, RenderImage};
 pub use sliver::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
     RenderSliverFillRemainingWithScrollable, RenderSliverFillViewport, RenderSliverFixedExtentList,
-    RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy, RenderSliverOffstage,
-    RenderSliverOpacity, RenderSliverPadding, RenderSliverToBoxAdapter, RenderViewport,
+    RenderSliverGrid, RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy,
+    RenderSliverOffstage, RenderSliverOpacity, RenderSliverPadding, RenderSliverToBoxAdapter,
+    RenderViewport,
 };
