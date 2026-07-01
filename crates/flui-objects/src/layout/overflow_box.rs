@@ -264,6 +264,16 @@ impl RenderBox for RenderConstrainedOverflowBox {
         ctx.child_max_intrinsic_height(0, width)
     }
 
+    /// Dry layout uses the SAME inner (override) constraints as `perform_layout`,
+    /// so FLUI's dry size always equals its laid-out size (the dry==committed
+    /// invariant). This is an INTENTIONAL divergence from Flutter, whose
+    /// `RenderConstrainedOverflowBox` dry path passes the OUTER constraints
+    /// (`shifted_box.dart:737`) and therefore disagrees with its own
+    /// `performLayout` (which uses inner constraints) — a Flutter dry/layout
+    /// inconsistency FLUI deliberately does not replicate (Prime Directive
+    /// rule #2). Concretely, with override `maxW=50` under incoming `(0,200)`
+    /// and a child intrinsic of 100, FLUI dry = 50 (== its committed layout),
+    /// whereas Flutter dry = 100 (≠ its own committed layout).
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
