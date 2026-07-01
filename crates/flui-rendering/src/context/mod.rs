@@ -63,7 +63,7 @@ pub use hit_test::HitTestContext;
 pub use intrinsics::test_support as intrinsics_test_support;
 pub use intrinsics::{
     BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, DryBaselineChildRequest,
-    DryBaselineChildResponse,
+    DryBaselineChildResponse, DryLayoutChildRequest, DryLayoutChildResponse,
 };
 pub use layout::LayoutContext;
 // FragmentRecorder and PaintCx are unconditionally pub: FragmentRecorder

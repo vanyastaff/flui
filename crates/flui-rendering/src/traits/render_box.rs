@@ -594,17 +594,17 @@ where
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_dry: &mut (
+        child_query: &mut (
                  dyn FnMut(
             usize,
-            crate::protocol::ProtocolConstraints<BoxProtocol>,
-        ) -> crate::protocol::ProtocolGeometry<BoxProtocol>
+            crate::context::DryLayoutChildRequest,
+        ) -> crate::context::DryLayoutChildResponse
                      + Send
                      + Sync
              ),
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
         let mut ctx =
-            crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_dry);
+            crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query);
         T::compute_dry_layout(self, constraints, &mut ctx)
     }
 

@@ -14,23 +14,75 @@ use crate::parent_data::{FlexParentData, ParentData};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
 
+// ============================================================================
+// DryBaselineChildRequest / DryBaselineChildResponse
+// ============================================================================
+
 /// Child probe kinds issued during a dry-baseline computation.
+///
+/// `#[non_exhaustive]`: this protocol enum is demonstrably growing; future
+/// child-query kinds are additive variants rather than a breaking change.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum DryBaselineChildRequest {
     /// Dry baseline under `constraints`.
     Baseline(BoxConstraints, TextBaseline),
     /// Dry layout size under `constraints`.
     DryLayout(BoxConstraints),
+    /// Intrinsic dimension value: `(dimension, extent)`.
+    Intrinsic(IntrinsicDimension, f32),
 }
 
 /// Answers to [`DryBaselineChildRequest`].
+///
+/// `#[non_exhaustive]`: mirrors [`DryBaselineChildRequest`] — grows together.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum DryBaselineChildResponse {
     /// Child dry-baseline result.
     Baseline(Option<f32>),
     /// Child dry-layout size.
     DryLayout(Size),
+    /// Child intrinsic value for a given dimension + extent.
+    Intrinsic(f32),
 }
+
+// ============================================================================
+// DryLayoutChildRequest / DryLayoutChildResponse  (new for ADR-0011)
+// ============================================================================
+
+/// Child probe kinds issued during a dry-layout computation.
+///
+/// A single enum so `BoxDryLayoutCtx` can hold one `&mut`-capturing callback
+/// instead of two (which would require two simultaneous `&mut` borrows of the
+/// slot map).  ISP: only the sub-query kinds a dry-layout pass legitimately
+/// issues are present here.
+///
+/// `#[non_exhaustive]`: future child-query kinds are additive variants.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub enum DryLayoutChildRequest {
+    /// Dry layout size under `constraints`.
+    DryLayout(BoxConstraints),
+    /// Intrinsic dimension value: `(dimension, extent)`.
+    Intrinsic(IntrinsicDimension, f32),
+}
+
+/// Answers to [`DryLayoutChildRequest`].
+///
+/// `#[non_exhaustive]`: mirrors [`DryLayoutChildRequest`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub enum DryLayoutChildResponse {
+    /// Child dry-layout size.
+    DryLayout(Size),
+    /// Child intrinsic value for a given dimension + extent.
+    Intrinsic(f32),
+}
+
+// ============================================================================
+// BoxDryBaselineCtx
+// ============================================================================
 
 /// Child-query channel for one dry-baseline computation.
 ///
@@ -102,7 +154,7 @@ impl<'a> BoxDryBaselineCtx<'a> {
             DryBaselineChildRequest::Baseline(constraints, baseline),
         ) {
             DryBaselineChildResponse::Baseline(v) => v,
-            DryBaselineChildResponse::DryLayout(_) => None,
+            DryBaselineChildResponse::DryLayout(_) | DryBaselineChildResponse::Intrinsic(_) => None,
         }
     }
 
@@ -110,10 +162,52 @@ impl<'a> BoxDryBaselineCtx<'a> {
     pub fn child_dry_layout(&mut self, index: usize, constraints: BoxConstraints) -> Size {
         match (self.query)(index, DryBaselineChildRequest::DryLayout(constraints)) {
             DryBaselineChildResponse::DryLayout(size) => size,
-            DryBaselineChildResponse::Baseline(_) => Size::ZERO,
+            DryBaselineChildResponse::Baseline(_) | DryBaselineChildResponse::Intrinsic(_) => {
+                Size::ZERO
+            }
         }
     }
+
+    /// The child's intrinsic value for an arbitrary dimension and extent.
+    ///
+    /// Routes through the same memoized take-out `intrinsic_query` the real-layout
+    /// path uses — dry baseline passes share the per-node intrinsic cache.
+    pub fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        match (self.query)(index, DryBaselineChildRequest::Intrinsic(dimension, extent)) {
+            DryBaselineChildResponse::Intrinsic(v) => v,
+            DryBaselineChildResponse::Baseline(_) | DryBaselineChildResponse::DryLayout(_) => 0.0,
+        }
+    }
+
+    /// The child's maximum intrinsic width for the given height.
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
+    }
+
+    /// The child's minimum intrinsic width for the given height.
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
+    }
+
+    /// The child's maximum intrinsic height for the given width.
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
+    }
+
+    /// The child's minimum intrinsic height for the given width.
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
+    }
 }
+
+// ============================================================================
+// BoxIntrinsicsCtx
+// ============================================================================
 
 /// Child-query channel for one intrinsic computation.
 ///
@@ -205,11 +299,24 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     }
 }
 
+// ============================================================================
+// BoxDryLayoutCtx
+// ============================================================================
+
 /// Child-query channel for one dry-layout computation.
 ///
 /// Handed to [`RenderBox::compute_dry_layout`]; `child_dry_layout`
 /// answers what size the child WOULD take under the given constraints,
-/// memoized per child and constraints by the pipeline.
+/// memoized per child and constraints by the pipeline. `child_intrinsic`
+/// and the named convenience methods answer the child's intrinsic dimensions
+/// through the same memoized take-out walk — identical to `BoxIntrinsicsCtx`
+/// and `BoxLayoutContext::child_intrinsic` so a proxy can share one
+/// `child_constraints` helper across all three compute paths.
+///
+/// The backing field is a dispatched `query` callback rather than two
+/// separate callbacks so the slot-map `&mut` is borrowed once: two
+/// simultaneous `&mut` borrows of the slot map are impossible, so the
+/// two sub-query kinds are packed into one enum-dispatched call.
 ///
 /// [`RenderBox::compute_dry_layout`]: crate::traits::RenderBox::compute_dry_layout
 pub struct BoxDryLayoutCtx<'a> {
@@ -222,20 +329,23 @@ pub struct BoxDryLayoutCtx<'a> {
     /// own `<Self as RenderBox>::ParentData` — the type they install on children — so
     /// mismatches are impossible in correctly-constructed trees.
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    dry: &'a mut (dyn FnMut(usize, BoxConstraints) -> Size + Send + Sync),
+    query:
+        &'a mut (dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse + Send + Sync),
 }
 
 impl<'a> BoxDryLayoutCtx<'a> {
-    /// Wraps the driver's child dry-layout callback.
+    /// Wraps the driver's dispatched child-query callback.
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        dry: &'a mut (dyn FnMut(usize, BoxConstraints) -> Size + Send + Sync),
+        query: &'a mut (
+                    dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse + Send + Sync
+                ),
     ) -> Self {
         Self {
             child_count,
             child_parent_data,
-            dry,
+            query,
         }
     }
 
@@ -262,9 +372,53 @@ impl<'a> BoxDryLayoutCtx<'a> {
     /// The size the child would take under `constraints`, without
     /// laying it out.
     pub fn child_dry_layout(&mut self, index: usize, constraints: BoxConstraints) -> Size {
-        (self.dry)(index, constraints)
+        match (self.query)(index, DryLayoutChildRequest::DryLayout(constraints)) {
+            DryLayoutChildResponse::DryLayout(size) => size,
+            DryLayoutChildResponse::Intrinsic(_) => Size::ZERO,
+        }
+    }
+
+    /// The child's intrinsic value for an arbitrary dimension and extent.
+    ///
+    /// Routes through the same memoized take-out `intrinsic_query` the real-layout
+    /// path uses — dry layout passes share the per-node intrinsic cache, so a child
+    /// whose intrinsic was queried during `perform_layout` costs nothing here.
+    pub fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        match (self.query)(index, DryLayoutChildRequest::Intrinsic(dimension, extent)) {
+            DryLayoutChildResponse::Intrinsic(v) => v,
+            DryLayoutChildResponse::DryLayout(_) => 0.0,
+        }
+    }
+
+    /// The child's maximum intrinsic width for the given height.
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
+    }
+
+    /// The child's minimum intrinsic width for the given height.
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
+    }
+
+    /// The child's maximum intrinsic height for the given width.
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
+    }
+
+    /// The child's minimum intrinsic height for the given width.
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 }
+
+// ============================================================================
+// test_support
+// ============================================================================
 
 /// Test helpers for exercising `compute_*` intrinsic implementations.
 ///
@@ -287,19 +441,25 @@ pub mod test_support {
         f(&mut BoxIntrinsicsCtx::new(0, &[], &mut deny_query))
     }
 
-    /// Leaf context for `compute_dry_layout` tests; mirrors
-    /// [`leaf_intrinsics`].
+    /// Leaf context for `compute_dry_layout` tests; panics on any child query
+    /// (both `DryLayout` and `Intrinsic` kinds).
     pub fn leaf_dry_layout<R>(f: impl FnOnce(&mut BoxDryLayoutCtx<'_>) -> R) -> R {
-        let mut deny = |index: usize, constraints: BoxConstraints| -> Size {
-            panic!(
-                "leaf object dry-laid-out child {index} ({constraints:?}) — \
-                 a childless compute_dry_layout must not consult children"
-            )
+        let mut deny = |index: usize, request: DryLayoutChildRequest| -> DryLayoutChildResponse {
+            match request {
+                DryLayoutChildRequest::DryLayout(constraints) => panic!(
+                    "leaf object dry-laid-out child {index} ({constraints:?}) — \
+                         a childless compute_dry_layout must not consult children"
+                ),
+                DryLayoutChildRequest::Intrinsic(dim, extent) => panic!(
+                    "leaf object queried intrinsic of child {index} ({dim:?} @ {extent}) \
+                         during dry layout — a childless compute_dry_layout must not consult children"
+                ),
+            }
         };
         f(&mut BoxDryLayoutCtx::new(0, &[], &mut deny))
     }
 
-    /// Leaf context for `compute_dry_baseline` tests.
+    /// Leaf context for `compute_dry_baseline` tests; panics on any child query.
     pub fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineCtx<'_>) -> R) -> R {
         let mut deny = |index: usize,
                         request: DryBaselineChildRequest|
@@ -312,6 +472,10 @@ pub mod test_support {
                 DryBaselineChildRequest::DryLayout(constraints) => panic!(
                     "leaf object dry-laid out child {index} ({constraints:?}) during dry baseline — \
                  a childless compute_dry_baseline must not consult children"
+                ),
+                DryBaselineChildRequest::Intrinsic(dim, extent) => panic!(
+                    "leaf object queried intrinsic of child {index} ({dim:?} @ {extent}) \
+                     during dry baseline — a childless compute_dry_baseline must not consult children"
                 ),
             }
         };

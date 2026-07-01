@@ -255,8 +255,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         _constraints: ProtocolConstraints<P>,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        _child_dry: &mut (
-                 dyn FnMut(usize, ProtocolConstraints<P>) -> ProtocolGeometry<P> + Send + Sync
+        _child_query: &mut (
+                 dyn FnMut(
+            usize,
+            crate::context::DryLayoutChildRequest,
+        ) -> crate::context::DryLayoutChildResponse
+                     + Send
+                     + Sync
              ),
     ) -> ProtocolGeometry<P> {
         P::default_geometry()

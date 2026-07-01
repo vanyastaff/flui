@@ -361,28 +361,50 @@ fn dry_layout_query_impl(
         let mut child_err: Option<crate::error::RenderError> = None;
         let value = {
             let child_err = &mut child_err;
-            let mut child_dry =
-                |index: usize, c: crate::constraints::BoxConstraints| -> flui_types::Size {
-                    let Some(&child_id) = children.get(index) else {
-                        child_err.get_or_insert(crate::error::RenderError::contract_violation(
-                            "dry-layout child query",
-                            "child index out of range for this node's children",
-                        ));
-                        return flui_types::Size::ZERO;
+            let mut child_query = |index: usize,
+                                   request: crate::context::DryLayoutChildRequest|
+             -> crate::context::DryLayoutChildResponse {
+                use crate::context::{DryLayoutChildRequest, DryLayoutChildResponse};
+                let Some(&child_id) = children.get(index) else {
+                    child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                        "dry-layout child query",
+                        "child index out of range for this node's children",
+                    ));
+                    return match request {
+                        DryLayoutChildRequest::DryLayout(_) => {
+                            DryLayoutChildResponse::DryLayout(flui_types::Size::ZERO)
+                        }
+                        DryLayoutChildRequest::Intrinsic(_, _) => {
+                            DryLayoutChildResponse::Intrinsic(0.0)
+                        }
                     };
-                    match dry_layout_query(slots, child_id, c, parent_data_seeds) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            child_err.get_or_insert(err);
-                            flui_types::Size::ZERO
+                };
+                match request {
+                    DryLayoutChildRequest::DryLayout(c) => {
+                        match dry_layout_query(slots, child_id, c, parent_data_seeds) {
+                            Ok(v) => DryLayoutChildResponse::DryLayout(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryLayoutChildResponse::DryLayout(flui_types::Size::ZERO)
+                            }
                         }
                     }
-                };
+                    DryLayoutChildRequest::Intrinsic(dim, e) => {
+                        match intrinsic_query(slots, child_id, dim, e, parent_data_seeds) {
+                            Ok(v) => DryLayoutChildResponse::Intrinsic(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryLayoutChildResponse::Intrinsic(0.0)
+                            }
+                        }
+                    }
+                }
+            };
             entry.render_object().dry_layout_raw(
                 constraints,
                 children.len(),
                 &child_parent_data_refs,
-                &mut child_dry,
+                &mut child_query,
             )
         };
         if let Some(err) = child_err {
@@ -476,6 +498,9 @@ fn dry_baseline_query_impl(
                         DryBaselineChildRequest::DryLayout(_) => {
                             DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
                         }
+                        DryBaselineChildRequest::Intrinsic(_, _) => {
+                            DryBaselineChildResponse::Intrinsic(0.0)
+                        }
                     };
                 };
                 match request {
@@ -494,6 +519,15 @@ fn dry_baseline_query_impl(
                             Err(err) => {
                                 child_err.get_or_insert(err);
                                 DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
+                            }
+                        }
+                    }
+                    DryBaselineChildRequest::Intrinsic(dim, e) => {
+                        match intrinsic_query(slots, child_id, dim, e, parent_data_seeds) {
+                            Ok(v) => DryBaselineChildResponse::Intrinsic(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryBaselineChildResponse::Intrinsic(0.0)
                             }
                         }
                     }
