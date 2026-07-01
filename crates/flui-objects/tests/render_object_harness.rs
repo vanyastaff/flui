@@ -1255,6 +1255,38 @@ fn harness_flex_column_max_child_intrinsic_width() {
     assert_eq!(run.max_intrinsic_width(run.root(), 100.0), 50.0);
 }
 
+/// `compute_dry_layout` returns the real flex size, not `Size::ZERO`.
+///
+/// Oracle: a 500×300 tight box containing a 200px fixed child and a flex=1
+/// Tight child distributes the remaining 300px to the flex child, giving a
+/// total of 500px main × 300px cross = (500, 300). This test would fail with
+/// the default trait implementation (`Size::ZERO`) and passes only once
+/// `RenderFlex::compute_dry_layout` is wired through `compute_sizes`.
+#[test]
+fn harness_flex_dry_layout_returns_real_size() {
+    let constraints = BoxConstraints::tight(Size::new(px(500.0), px(300.0)));
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(box_node(RenderSizedBox::fixed(px(200.0), px(300.0))).label("fixed"))
+            .child(
+                box_node(RenderSizedBox::fixed(px(100.0), px(300.0)))
+                    .with_flex_parent_data(FlexParentData::flexible(1))
+                    .label("flex_child"),
+            ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    // Tight 500×300: fixed child takes 200px, flex=1 Tight child takes the
+    // remaining 300px. The container fills its bounded main axis (MainAxisSize::Max
+    // default), so the dry size equals the tight constraint size.
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        Size::new(px(500.0), px(300.0)),
+        "flex dry layout must return the real sized result, not Size::ZERO",
+    );
+}
+
 #[test]
 fn harness_stack_max_child_intrinsic_width() {
     let mut run = RenderTester::mount(

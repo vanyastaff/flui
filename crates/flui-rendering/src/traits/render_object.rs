@@ -37,6 +37,7 @@ use downcast_rs::{DowncastSync, impl_downcast};
 use flui_foundation::Diagnosticable;
 
 use crate::{
+    parent_data::ParentData,
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
 };
@@ -231,10 +232,10 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         _dimension: crate::storage::IntrinsicDimension,
         _extent: f32,
         _child_count: usize,
+        _child_parent_data: &[Option<&dyn ParentData>],
         _child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
-        _child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         0.0
     }
@@ -253,6 +254,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         &self,
         _constraints: ProtocolConstraints<P>,
         _child_count: usize,
+        _child_parent_data: &[Option<&dyn ParentData>],
         _child_dry: &mut (
                  dyn FnMut(usize, ProtocolConstraints<P>) -> ProtocolGeometry<P> + Send + Sync
              ),
@@ -272,6 +274,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         _constraints: ProtocolConstraints<P>,
         _baseline: crate::traits::TextBaseline,
         _child_count: usize,
+        _child_parent_data: &[Option<&dyn ParentData>],
         _child_query: &mut (
                  dyn FnMut(
             usize,

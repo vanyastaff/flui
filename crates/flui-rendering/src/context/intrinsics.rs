@@ -10,6 +10,7 @@
 use flui_types::Size;
 
 use crate::constraints::BoxConstraints;
+use crate::parent_data::{FlexParentData, ParentData};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
 
@@ -37,6 +38,12 @@ pub enum DryBaselineChildResponse {
 /// child probes share one driver callback so the slot map is borrowed once.
 pub struct BoxDryBaselineCtx<'a> {
     child_count: usize,
+    /// Erased per-child parent data; indexed by child position.
+    ///
+    /// Populated by the driver from each child's [`RenderState::parent_data`]
+    /// (plus harness seeds when `test`/`testing` is active). Container
+    /// objects downcast entries via [`Self::child_parent_data_as`].
+    child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut (
                 dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse + Send + Sync
             ),
@@ -46,19 +53,41 @@ impl<'a> BoxDryBaselineCtx<'a> {
     /// Wraps the driver's child dry-baseline callback.
     pub(crate) fn new(
         child_count: usize,
+        child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut (
                     dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse
                         + Send
                         + Sync
                 ),
     ) -> Self {
-        Self { child_count, query }
+        Self {
+            child_count,
+            child_parent_data,
+            query,
+        }
     }
 
     /// Number of tree children.
     #[must_use]
     pub fn child_count(&self) -> usize {
         self.child_count
+    }
+
+    /// Type-erased parent data the parent stored on child `index`, or `None`
+    /// if no parent data has been set for that child.
+    ///
+    /// Use [`Self::child_parent_data_as`] to downcast to the concrete type.
+    pub fn child_parent_data(&self, index: usize) -> Option<&'a dyn ParentData> {
+        self.child_parent_data.get(index).copied().flatten()
+    }
+
+    /// Parent data for child `index`, downcast to the concrete type `T`.
+    ///
+    /// Returns `None` if the child has no parent data or if it is not of type `T`.
+    /// Container objects call this with their own `Self::ParentData` associated type,
+    /// which is the type they installed — mismatches surface as `None` rather than UB.
+    pub fn child_parent_data_as<T: ParentData>(&self, index: usize) -> Option<&'a T> {
+        self.child_parent_data(index)?.downcast_ref::<T>()
     }
 
     /// The dry baseline the child would report under `constraints`.
@@ -86,14 +115,6 @@ impl<'a> BoxDryBaselineCtx<'a> {
     }
 }
 
-/// Driver callbacks for one intrinsic computation.
-pub struct IntrinsicChildChannel<'a> {
-    /// Memoized child intrinsic probes.
-    pub query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
-    /// Flex factor for child `index` (`0` when inflexible or unknown).
-    pub flex: &'a mut (dyn FnMut(usize) -> i32 + Send + Sync),
-}
-
 /// Child-query channel for one intrinsic computation.
 ///
 /// Handed to [`RenderBox::compute_min_intrinsic_width`] and friends.
@@ -104,21 +125,22 @@ pub struct IntrinsicChildChannel<'a> {
 /// [`RenderBox::compute_min_intrinsic_width`]: crate::traits::RenderBox::compute_min_intrinsic_width
 pub struct BoxIntrinsicsCtx<'a> {
     child_count: usize,
+    /// Erased per-child parent data; same semantics as [`BoxDryLayoutCtx::child_parent_data`].
+    child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
-    flex: &'a mut (dyn FnMut(usize) -> i32 + Send + Sync),
 }
 
 impl<'a> BoxIntrinsicsCtx<'a> {
-    /// Wraps the driver's child-query and flex-factor callbacks.
+    /// Wraps the driver's child-query callback.
     pub(crate) fn new(
         child_count: usize,
+        child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
-        flex: &'a mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> Self {
         Self {
             child_count,
+            child_parent_data,
             query,
-            flex,
         }
     }
 
@@ -126,6 +148,18 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     #[must_use]
     pub fn child_count(&self) -> usize {
         self.child_count
+    }
+
+    /// Type-erased parent data the parent stored on child `index`, or `None`.
+    ///
+    /// Use [`Self::child_parent_data_as`] for a typed downcast.
+    pub fn child_parent_data(&self, index: usize) -> Option<&'a dyn ParentData> {
+        self.child_parent_data.get(index).copied().flatten()
+    }
+
+    /// Parent data for child `index`, downcast to the concrete type `T`.
+    pub fn child_parent_data_as<T: ParentData>(&self, index: usize) -> Option<&'a T> {
+        self.child_parent_data(index)?.downcast_ref::<T>()
     }
 
     /// The child's intrinsic value for an arbitrary dimension.
@@ -159,8 +193,15 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     }
 
     /// Flex factor for child `index` (`0` when inflexible or unknown).
-    pub fn child_flex(&mut self, index: usize) -> i32 {
-        (self.flex)(index).max(0)
+    ///
+    /// Convenience downcast to [`FlexParentData`]; replaces the former bespoke
+    /// `flex` closure. Multi-axis intrinsic implementations call this instead of
+    /// going through [`Self::child_parent_data_as`] directly.
+    pub fn child_flex(&self, index: usize) -> i32 {
+        self.child_parent_data_as::<FlexParentData>(index)
+            .and_then(|pd| pd.flex)
+            .unwrap_or(0)
+            .max(0)
     }
 }
 
@@ -173,6 +214,14 @@ impl<'a> BoxIntrinsicsCtx<'a> {
 /// [`RenderBox::compute_dry_layout`]: crate::traits::RenderBox::compute_dry_layout
 pub struct BoxDryLayoutCtx<'a> {
     child_count: usize,
+    /// Erased per-child parent data populated by the driver from each child's
+    /// [`RenderState::parent_data`]. Indexed by child position; entries are `None`
+    /// when the child has no parent data set.
+    ///
+    /// Downcasting: container objects call [`Self::child_parent_data_as`] with their
+    /// own `<Self as RenderBox>::ParentData` — the type they install on children — so
+    /// mismatches are impossible in correctly-constructed trees.
+    child_parent_data: &'a [Option<&'a dyn ParentData>],
     dry: &'a mut (dyn FnMut(usize, BoxConstraints) -> Size + Send + Sync),
 }
 
@@ -180,15 +229,34 @@ impl<'a> BoxDryLayoutCtx<'a> {
     /// Wraps the driver's child dry-layout callback.
     pub(crate) fn new(
         child_count: usize,
+        child_parent_data: &'a [Option<&'a dyn ParentData>],
         dry: &'a mut (dyn FnMut(usize, BoxConstraints) -> Size + Send + Sync),
     ) -> Self {
-        Self { child_count, dry }
+        Self {
+            child_count,
+            child_parent_data,
+            dry,
+        }
     }
 
     /// Number of tree children.
     #[must_use]
     pub fn child_count(&self) -> usize {
         self.child_count
+    }
+
+    /// Type-erased parent data the parent stored on child `index`, or `None`.
+    ///
+    /// Use [`Self::child_parent_data_as`] for a typed downcast.
+    pub fn child_parent_data(&self, index: usize) -> Option<&'a dyn ParentData> {
+        self.child_parent_data.get(index).copied().flatten()
+    }
+
+    /// Parent data for child `index`, downcast to the concrete type `T`.
+    ///
+    /// Returns `None` if the child has no parent data or if it is not of type `T`.
+    pub fn child_parent_data_as<T: ParentData>(&self, index: usize) -> Option<&'a T> {
+        self.child_parent_data(index)?.downcast_ref::<T>()
     }
 
     /// The size the child would take under `constraints`, without
@@ -216,17 +284,7 @@ pub mod test_support {
                  a childless compute_* must not consult children"
             )
         };
-        let mut deny_flex = |index: usize| -> i32 {
-            panic!(
-                "leaf object queried flex for child {index} — \
-                 a childless compute_* must not consult children"
-            )
-        };
-        let channel = IntrinsicChildChannel {
-            query: &mut deny_query,
-            flex: &mut deny_flex,
-        };
-        f(&mut BoxIntrinsicsCtx::new(0, channel.query, channel.flex))
+        f(&mut BoxIntrinsicsCtx::new(0, &[], &mut deny_query))
     }
 
     /// Leaf context for `compute_dry_layout` tests; mirrors
@@ -238,7 +296,7 @@ pub mod test_support {
                  a childless compute_dry_layout must not consult children"
             )
         };
-        f(&mut BoxDryLayoutCtx::new(0, &mut deny))
+        f(&mut BoxDryLayoutCtx::new(0, &[], &mut deny))
     }
 
     /// Leaf context for `compute_dry_baseline` tests.
@@ -257,6 +315,6 @@ pub mod test_support {
                 ),
             }
         };
-        f(&mut BoxDryBaselineCtx::new(0, &mut deny))
+        f(&mut BoxDryBaselineCtx::new(0, &[], &mut deny))
     }
 }

@@ -48,6 +48,7 @@ use crate::testing::parent_data::ParentDataSeed;
 
 use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
+    parent_data::ParentData,
     protocol::{
         BoxProtocol, Protocol, SliverProtocol,
         box_protocol::{
@@ -558,39 +559,68 @@ pub(super) fn ensure_stack<R>(f: impl FnOnce() -> R) -> R {
 // Testing helpers
 // ============================================================================
 
-/// Returns the flex factor for a child at `index` by looking up the child's
-/// [`ParentDataSeed`] in the seed map (test/testing feature only).
+/// Builds the per-child parent-data slice for the current node's children,
+/// reading from the [`SubtreeArena`] (production) with harness seed overlay
+/// (test/testing feature only).
 ///
-/// Used by both the subtree layout walk ([`box_intrinsic_query_borrowed_impl`])
-/// and the take-out intrinsic query in `owner/mod.rs`.  Exposed as
-/// `pub(super)` so the latter can import it without duplicating the logic.
-#[cfg(any(test, feature = "testing"))]
-fn flex_factor_from_seed(seed: &ParentDataSeed) -> i32 {
-    match seed {
-        ParentDataSeed::Flex(data) => data.flex.unwrap_or(0).max(0),
-        _ => 0,
-    }
-}
-
-pub(super) fn child_flex_from_seeds(
-    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
-    #[cfg(not(any(test, feature = "testing")))] _parent_data_seeds: &(),
-    children: &[RenderId],
-    index: usize,
-) -> i32 {
-    #[cfg(any(test, feature = "testing"))]
-    {
-        children
-            .get(index)
-            .and_then(|child_id| parent_data_seeds.get(child_id))
-            .map(flex_factor_from_seed)
-            .unwrap_or(0)
-    }
-    #[cfg(not(any(test, feature = "testing")))]
-    {
-        let _ = (children, index);
-        0
-    }
+/// The returned vec of owned `Box<dyn ParentData>` can coexist with the
+/// mutable child-query closure that follows because the slice is fully
+/// constructed from read-only accesses before any recursion descends.
+///
+/// # Safety
+///
+/// Each shared `&RenderNode` this derives must not alias a live
+/// `&mut RenderNode` for the same slot. `links().children()` lists are NOT
+/// statically acyclic — a cyclic edge whose child is also an in-flight ancestor
+/// is a reachable input (`LayoutCycleGuard`, `tests/u21_layout_cycle.rs`) — so
+/// this function gates every deref on [`SubtreeArena::is_in_flight`] and yields
+/// `None` for any in-flight slot, exactly like the canonical position/offset
+/// sites in this file (the `set_offset` loop). The remaining preconditions:
+/// - No other arena walk may run concurrently; `arena.get()` enforces the
+///   single-thread check (`check_thread`) at every call.
+/// - The arena pointer is allocation-stable for the arena's lifetime
+///   (pre-acquired slab; slots are not moved during the borrow window).
+/// - This must be called BEFORE the child-recursion closure is created, so no
+///   *non-cyclic* child slot has been entered yet either.
+unsafe fn build_intrinsic_child_parent_data(
+    arena: &SubtreeArena<'_>,
+    child_ids: &[RenderId],
+    #[cfg(any(test, feature = "testing"))] seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] _seeds: &(),
+) -> Vec<Option<Box<dyn ParentData>>> {
+    child_ids
+        .iter()
+        .map(|child_id| {
+            // Harness seeds overlay production parent data so headless tests
+            // can provide widget-level configuration without an element tree.
+            // (Seed reads never deref the arena, so they need no in-flight gate.)
+            #[cfg(any(test, feature = "testing"))]
+            if let Some(seed) = seeds.get(child_id) {
+                return Some(seed.to_box());
+            }
+            // A cyclic children() edge can name a slot whose `&mut` is live on
+            // an ancestor frame; a shared read of it would be aliasing UB
+            // (Stacked/Tree Borrows). Skip it — its parent data is unobservable
+            // this pass, which is correct: the cycle already degrades that child
+            // to a LayoutCycle / Size::ZERO result, so a `None` (no flex/parent
+            // data) entry matches the degraded geometry.
+            if arena.is_in_flight(*child_id) {
+                return None;
+            }
+            // Production: derive a shared borrow to read `parent_data` from
+            // the child node's raw pointer.
+            arena.get(*child_id).and_then(|NodePtr(ptr)| {
+                // SAFETY: `child_id` is NOT in-flight (guard above), so no
+                // ancestor frame holds a live `&mut` to this slot. The arena
+                // pointer is allocation-stable (pre-acquired slab; slots are not
+                // moved during the borrow window). The derived `&RenderNode` is
+                // the only live borrow of the slot and feeds a read-only
+                // `parent_data()` access.
+                let child_node: &RenderNode = unsafe { &*ptr };
+                child_node.parent_data().map(dyn_clone::clone_box)
+            })
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -1156,6 +1186,32 @@ unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
     }
 
     let child_ids: Vec<RenderId> = entry.links().children().to_vec();
+
+    // Build the per-child parent-data slice before creating the child-query
+    // closure. The owned boxes coexist with the `&mut` the closure captures
+    // because the slice is read-only and refers to different nodes.
+    //
+    // SAFETY: `child_ids` are the current node's children. The tree is not
+    // statically acyclic — a cyclic edge can name an in-flight ancestor — so
+    // `build_intrinsic_child_parent_data` gates each deref on `is_in_flight`
+    // and skips any in-flight slot (see its `# Safety`). This call precedes the
+    // child-query closure, so no non-cyclic child slot has been entered yet, and
+    // `arena.get` enforces single-thread access. All its preconditions hold.
+    let child_parent_data_owned: Vec<Option<Box<dyn ParentData>>> = unsafe {
+        build_intrinsic_child_parent_data(
+            arena,
+            &child_ids,
+            #[cfg(any(test, feature = "testing"))]
+            &arena.parent_data_seeds,
+            #[cfg(not(any(test, feature = "testing")))]
+            &(),
+        )
+    };
+    let child_parent_data_refs: Vec<Option<&dyn ParentData>> = child_parent_data_owned
+        .iter()
+        .map(|opt| opt.as_deref())
+        .collect();
+
     let mut child_err: Option<crate::error::RenderError> = None;
     let value = {
         let child_err = &mut child_err;
@@ -1168,8 +1224,9 @@ unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
                     ));
                     return 0.0;
                 };
-                // SAFETY: the child query uses the same pre-acquired subtree
-                // and targets a child slot distinct from the current box node.
+                // SAFETY: the child query targets a child slot distinct from the
+                // current box node; the pre-acquired subtree arena is still live;
+                // `LayoutCycleGuard` will reject re-entry into any ancestor slot.
                 match unsafe { box_intrinsic_query_borrowed(arena, child_id, dim, ext) } {
                     Ok(value) => value,
                     Err(err) => {
@@ -1178,22 +1235,12 @@ unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
                     }
                 }
             };
-        let mut child_flex = |index: usize| -> i32 {
-            child_flex_from_seeds(
-                #[cfg(any(test, feature = "testing"))]
-                &arena.parent_data_seeds,
-                #[cfg(not(any(test, feature = "testing")))]
-                &(),
-                &child_ids,
-                index,
-            )
-        };
         entry.render_object().intrinsic_raw(
             dimension,
             extent,
             child_ids.len(),
+            &child_parent_data_refs,
             &mut child_query,
-            &mut child_flex,
         )
     };
 
