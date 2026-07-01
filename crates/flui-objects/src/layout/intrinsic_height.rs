@@ -4,15 +4,24 @@
 //!
 //! Behavior-faithful port of Flutter's `RenderIntrinsicHeight`
 //! (`packages/flutter/lib/src/rendering/proxy_box.dart`, lines 783–850).
-//! The child is asked for its maximum intrinsic height for the incoming max
-//! width, then laid out tight to that height.  Width is left unconstrained so
-//! the child can take whatever width it needs within the parent's bounds.
+//! The child is asked for its maximum intrinsic height for the incoming raw
+//! `max_width`, then laid out tight to that height.  Width is left unconstrained
+//! so the child can take whatever width it needs within the parent's bounds.
 //!
 //! `RenderIntrinsicHeight` has no `step_width`/`step_height` knobs — those
 //! belong to `RenderIntrinsicWidth` only.
+//!
+//! # ADR-0011 fix
+//!
+//! The old `compute_dry_layout` / `compute_dry_baseline` approximated the
+//! intrinsic height via a `child_dry_layout` probe at unconstrained width, which
+//! diverges from `perform_layout` for width-filling children (e.g. a flex row
+//! with `MainAxisSize::Max`).  All three compute passes now share one
+//! `child_constraints` helper that issues the real child-intrinsic query through
+//! the appropriate context channel — dry ≡ committed.
 
 use flui_tree::Single;
-use flui_types::{Offset, Pixels, Size, geometry::px};
+use flui_types::{Offset, Size, geometry::px};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -20,6 +29,7 @@ use flui_rendering::{
         BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
     },
     parent_data::BoxParentData,
+    storage::IntrinsicDimension,
     traits::RenderBox,
 };
 
@@ -44,29 +54,43 @@ impl RenderIntrinsicHeight {
         Self { has_child: false }
     }
 
-    /// Computes the tight child constraints for layout.
+    /// Computes the tight child constraints using an `intrinsic` closure.
     ///
-    /// Mirrors Flutter's `RenderIntrinsicHeight._childConstraints`.
-    /// Width is passed through unchanged (the base unconstrained min=0..max=∞
-    /// enforced against `constraints` restores the original width range).
-    /// Height is tightened to `max_intrinsic_height` clamped to `[min_h, max_h]`,
-    /// unless the incoming height is already tight.
+    /// Mirrors Flutter's `RenderIntrinsicHeight._childConstraints`
+    /// (proxy_box.dart:816-819):
+    ///
+    /// - **Width axis**: unchanged (Flutter passes the incoming width range
+    ///   through unmodified; `tighten(None, Some(height))` preserves `min_width`
+    ///   and `max_width`).
+    ///
+    /// - **Height axis**: if the incoming height is already tight, keep it.
+    ///   Otherwise call `intrinsic(MaxHeight, constraints.max_width)` with the
+    ///   RAW `max_width`, and tighten (which clamps to `[min_height, max_height]`).
+    ///   IntrinsicHeight always forces height when not tight — unlike
+    ///   IntrinsicWidth's width axis, there is no step gate here.
+    ///
+    /// The `intrinsic` closure is called at most once and is consumed by this
+    /// method.  Callers pass `|dim, extent| ctx.child_intrinsic(0, dim, extent)`
+    /// for all three compute passes; only the ctx type differs.
     fn child_constraints(
         &self,
         constraints: BoxConstraints,
-        max_intrinsic_height: Pixels,
+        mut intrinsic: impl FnMut(IntrinsicDimension, f32) -> f32,
     ) -> BoxConstraints {
-        let tight_height = if constraints.has_tight_height() {
+        // Height axis — proxy_box.dart:816-819
+        let height = if constraints.has_tight_height() {
+            // Parent already determined height; skip the intrinsic query.
             constraints.min_height
         } else {
-            // Clamp to the incoming height range before tightening.
-            px(max_intrinsic_height
-                .get()
-                .clamp(constraints.min_height.get(), constraints.max_height.get()))
+            // Raw query arg: constraints.max_width, not computed/snapped.
+            // tighten will clamp to [min_height, max_height].
+            px(intrinsic(
+                IntrinsicDimension::MaxHeight,
+                constraints.max_width.get(),
+            ))
         };
-        // Start from the incoming constraints (preserves width range) and
-        // tighten only the height axis.
-        constraints.tighten(None, Some(tight_height))
+        // Width axis: None = keep incoming width range.
+        constraints.tighten(None, Some(height))
     }
 }
 
@@ -95,12 +119,11 @@ impl RenderBox for RenderIntrinsicHeight {
         }
         self.has_child = true;
 
-        // Query the child's max intrinsic height for the incoming max width.
-        // The live intrinsics callback (wired by the pipeline) routes this
-        // through `box_intrinsic_query_borrowed`.  On Direct-storage (test)
-        // contexts it returns 0.0 (conservative fallback).
-        let max_h = px(ctx.child_max_intrinsic_height(0, constraints.max_width.get()));
-        let child_constraints = self.child_constraints(constraints, max_h);
+        // `child_constraints` queries the child's max intrinsic height through
+        // the live `box_intrinsic_query_borrowed` callback, same as before.
+        let child_constraints = self.child_constraints(constraints, |dim, extent| {
+            ctx.child_intrinsic(0, dim, extent)
+        });
         let child_size = ctx.layout_child(0, child_constraints);
         ctx.position_child(0, Offset::ZERO);
         constraints.constrain(child_size)
@@ -165,15 +188,13 @@ impl RenderBox for RenderIntrinsicHeight {
         if ctx.child_count() == 0 {
             return constraints.smallest();
         }
-        // Probe the child's intrinsic height via a dry layout at unconstrained
-        // width + max incoming width (matching Flutter's `_computeSize` helper).
-        let max_h_raw = ctx
-            .child_dry_layout(
-                0,
-                BoxConstraints::UNCONSTRAINED.tighten(Some(constraints.max_width), None),
-            )
-            .height;
-        let child_constraints = self.child_constraints(constraints, max_h_raw);
+        // Structurally identical to perform_layout: child_constraints issues
+        // the real intrinsic sub-query through DryLayoutChildRequest::Intrinsic
+        // (ADR-0011 Slice 1), routed by the driver to the memoized intrinsic_query.
+        // The old `child_dry_layout`-based approximation is removed — dry ≡ committed.
+        let child_constraints = self.child_constraints(constraints, |dim, extent| {
+            ctx.child_intrinsic(0, dim, extent)
+        });
         let child_size = ctx.child_dry_layout(0, child_constraints);
         constraints.constrain(child_size)
     }
@@ -187,13 +208,11 @@ impl RenderBox for RenderIntrinsicHeight {
         if ctx.child_count() == 0 {
             return None;
         }
-        let max_h_raw = ctx
-            .child_dry_layout(
-                0,
-                BoxConstraints::UNCONSTRAINED.tighten(Some(constraints.max_width), None),
-            )
-            .height;
-        let child_constraints = self.child_constraints(constraints, max_h_raw);
+        // Same child_constraints helper; the intrinsic closure routes through
+        // BoxDryBaselineCtx's intrinsic channel.
+        let child_constraints = self.child_constraints(constraints, |dim, extent| {
+            ctx.child_intrinsic(0, dim, extent)
+        });
         ctx.child_dry_baseline(0, child_constraints, baseline)
     }
 }
@@ -212,10 +231,13 @@ mod tests {
     }
 
     #[test]
-    fn child_constraints_tight_height_propagated() {
+    fn child_constraints_tight_height_not_queried() {
         let node = RenderIntrinsicHeight::new();
+        // When incoming height is tight, the closure must NOT be called.
         let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
-        let child_c = node.child_constraints(constraints, px(999.0));
+        let child_c = node.child_constraints(constraints, |_, _| {
+            panic!("intrinsic queried on tight height")
+        });
         assert!(child_c.has_tight_height());
         assert_eq!(child_c.min_height, px(50.0));
     }
@@ -225,7 +247,7 @@ mod tests {
         let node = RenderIntrinsicHeight::new();
         // Incoming height range [20, 80]; child says max intrinsic = 150 → clamp to 80.
         let constraints = bc(0.0, 200.0, 20.0, 80.0);
-        let child_c = node.child_constraints(constraints, px(150.0));
+        let child_c = node.child_constraints(constraints, |_, _| 150.0);
         assert!(child_c.has_tight_height());
         assert_eq!(child_c.min_height, px(80.0));
     }
@@ -235,9 +257,26 @@ mod tests {
         let node = RenderIntrinsicHeight::new();
         // Child says 60, range [20, 80] → stays at 60.
         let constraints = bc(0.0, 200.0, 20.0, 80.0);
-        let child_c = node.child_constraints(constraints, px(60.0));
+        let child_c = node.child_constraints(constraints, |_, _| 60.0);
         assert!(child_c.has_tight_height());
         assert_eq!(child_c.min_height, px(60.0));
+    }
+
+    #[test]
+    fn child_constraints_height_raw_arg_is_max_width() {
+        // The height query arg must be constraints.max_width (raw).
+        let node = RenderIntrinsicHeight::new();
+        let constraints = bc(0.0, 120.0, 0.0, 200.0);
+        let mut saw_extent = f32::NAN;
+        node.child_constraints(constraints, |dim, extent| {
+            assert_eq!(dim, IntrinsicDimension::MaxHeight);
+            saw_extent = extent;
+            40.0
+        });
+        assert!(
+            (saw_extent - 120.0).abs() < 0.01,
+            "height query arg should be constraints.max_width (120), got {saw_extent}"
+        );
     }
 
     #[test]

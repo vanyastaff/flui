@@ -2846,6 +2846,222 @@ fn harness_intrinsic_width_self_describes_step_knobs() {
     );
 }
 
+// ---- Slice-2 milestone: dry == committed for filling child ----------------
+
+/// `RenderIntrinsicWidth::unconstrained()` over a `RenderFlex` row (`MainAxisSize::Max`)
+/// of two `50×30` children forces the child's width to its max intrinsic width (100)
+/// in both `perform_layout` (real pass) and `compute_dry_layout` (dry pass).
+///
+/// Oracle cross-check:
+/// - `RenderFlex::computeMaxIntrinsicWidth` (flex.dart) = sum of children = 100.
+/// - `RenderIntrinsicWidth._childConstraints` (proxy_box.dart:712-720): not tight →
+///   force to `_applyStep(child.getMaxIntrinsicWidth(maxHeight), null) = 100`; no
+///   step_height so height unchanged; tighten → tight(100, ...).
+/// - `_computeSize(dryLayoutChild, tight(100, [0..300]))` → flex at 100px →
+///   width=100, height=30.
+///
+/// RED before Slice 2 (`compute_dry_layout` used a `child_dry_layout` approximation
+/// that returned the loose max 500 instead of the intrinsic 100).
+/// GREEN after Slice 2 (channel routes through `intrinsic_query`).
+#[test]
+fn harness_intrinsic_width_forces_filling_child() {
+    let constraints = BoxConstraints::new(px(0.0), px(500.0), px(0.0), px(300.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained()).child(
+            box_node(RenderFlex::row())
+                .label("flex")
+                .child(box_node(RenderColoredBox::red(50.0, 30.0)))
+                .child(box_node(RenderColoredBox::red(50.0, 30.0))),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let committed = run.box_geometry(run.root());
+    let dry = run.dry_layout(run.root(), constraints);
+
+    assert_eq!(
+        committed,
+        Size::new(px(100.0), px(30.0)),
+        "perform_layout must force child to intrinsic width 100, not loose 500"
+    );
+    assert_eq!(
+        dry,
+        Size::new(px(100.0), px(30.0)),
+        "compute_dry_layout must equal perform_layout (dry==committed invariant)"
+    );
+    assert_eq!(
+        dry, committed,
+        "dry and committed must agree: dry={dry:?}, committed={committed:?}"
+    );
+}
+
+/// `RenderIntrinsicHeight::new()` over a `RenderFlex` row (`MainAxisSize::Max`)
+/// of two `50×30` children forces the child's height to its max intrinsic height (30)
+/// in both `perform_layout` and `compute_dry_layout`.
+///
+/// Oracle cross-check:
+/// - `RenderIntrinsicHeight._childConstraints` (proxy_box.dart:816-819): not tight →
+///   force to `child.getMaxIntrinsicHeight(constraints.maxWidth)` = 30;
+///   tighten → tight(h=30).
+/// - Flex at tight(h=30): cross=30, flex fills main up to 500 → `500×30`.
+/// - `constraints.constrain(500×30)` = `500×30`.
+/// - Dry path with intrinsic channel: same math, same result.
+///
+/// RED before Slice 2 (approximation via `child_dry_layout` at tight width,
+/// which for a flex row diverges from the intrinsic for width-filling children).
+/// GREEN after Slice 2.
+#[test]
+fn harness_intrinsic_height_forces_filling_child() {
+    let constraints = BoxConstraints::new(px(0.0), px(500.0), px(0.0), px(300.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicHeight::new()).child(
+            box_node(RenderFlex::row())
+                .label("flex")
+                .child(box_node(RenderColoredBox::red(50.0, 30.0)))
+                .child(box_node(RenderColoredBox::red(50.0, 30.0))),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let committed = run.box_geometry(run.root());
+    let dry = run.dry_layout(run.root(), constraints);
+
+    // The child (flex row) has max intrinsic height = 30 (the max child height).
+    // IntrinsicHeight tightens to 30, flex at tight(h=30) fills main → 500×30,
+    // constrain to [0..500, 0..300] → 500×30.
+    assert_eq!(
+        committed,
+        Size::new(px(500.0), px(30.0)),
+        "perform_layout must force child to intrinsic height 30"
+    );
+    assert_eq!(
+        dry,
+        Size::new(px(500.0), px(30.0)),
+        "compute_dry_layout must equal perform_layout (dry==committed invariant)"
+    );
+    assert_eq!(
+        dry, committed,
+        "dry and committed must agree: dry={dry:?}, committed={committed:?}"
+    );
+}
+
+// ---- Slice-1 channel proof ------------------------------------------------
+
+/// Verify that `BoxDryLayoutCtx::child_max_intrinsic_width` (the new intrinsic
+/// channel added by ADR-0011 Slice 1) routes through the real memoized
+/// `intrinsic_query` and returns the same value as a standalone
+/// `max_intrinsic_width` call on the child.
+///
+/// This test uses a thin proxy whose `compute_dry_layout` records the
+/// intrinsic it receives so the harness can assert equality.  It is
+/// GREEN after Slice 1 (channel wired) and would be RED before it
+/// (the accessor did not exist).
+#[test]
+fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
+    use std::sync::{Arc, Mutex};
+
+    use flui_rendering::{
+        constraints::BoxConstraints,
+        context::{BoxDryLayoutCtx, BoxIntrinsicsCtx},
+        parent_data::BoxParentData,
+        traits::RenderBox,
+    };
+    use flui_tree::Single;
+
+    // Shared cell: `compute_dry_layout` writes the child intrinsic it observed.
+    let captured: Arc<Mutex<f32>> = Arc::new(Mutex::new(f32::NAN));
+
+    // Inline proxy whose only job is to expose the child's max-intrinsic-width
+    // during a dry-layout pass.
+    #[derive(Debug)]
+    struct IntrinsicCapture {
+        captured: Arc<Mutex<f32>>,
+    }
+
+    impl flui_foundation::Diagnosticable for IntrinsicCapture {
+        fn debug_fill_properties(&self, _b: &mut flui_foundation::DiagnosticsBuilder) {}
+    }
+
+    impl RenderBox for IntrinsicCapture {
+        type Arity = Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Single, BoxParentData>,
+        ) -> Size {
+            // Pass constraints through to the child and forward the child size.
+            let child_size = ctx.layout_child(0, *ctx.constraints());
+            ctx.position_child(0, Offset::ZERO);
+            child_size
+        }
+
+        fn compute_max_intrinsic_width(
+            &self,
+            _height: f32,
+            _ctx: &mut BoxIntrinsicsCtx<'_>,
+        ) -> f32 {
+            0.0
+        }
+
+        fn compute_dry_layout(
+            &self,
+            constraints: BoxConstraints,
+            ctx: &mut BoxDryLayoutCtx<'_>,
+        ) -> Size {
+            // Read the child's max intrinsic width through the new channel.
+            let via_channel = ctx.child_max_intrinsic_width(0, f32::INFINITY);
+            *self.captured.lock().unwrap() = via_channel;
+            // Return the child dry size so the tree is structurally valid.
+            ctx.child_dry_layout(0, constraints)
+        }
+    }
+
+    // Build: IntrinsicCapture → RenderFlex row [ColoredBox(50x30), ColoredBox(50x30)]
+    // Flex row max-intrinsic-width = sum of children = 100.
+    let mut run = RenderTester::mount(
+        box_node(IntrinsicCapture {
+            captured: Arc::clone(&captured),
+        })
+        .child(
+            box_node(RenderFlex::row())
+                .label("flex")
+                .child(box_node(RenderColoredBox::red(50.0, 30.0)))
+                .child(box_node(RenderColoredBox::red(50.0, 30.0))),
+        ),
+    )
+    .with_constraints(loose(500.0))
+    .run_layout();
+
+    let flex_id = run.id("flex");
+
+    // Trigger dry-layout on the root (which will call compute_dry_layout on the
+    // capture proxy, which in turn calls child_max_intrinsic_width).
+    let constraints = BoxConstraints::new(px(0.0), px(500.0), px(0.0), px(300.0));
+    run.dry_layout(run.root(), constraints);
+
+    let via_channel = *captured.lock().unwrap();
+    assert!(
+        !via_channel.is_nan(),
+        "compute_dry_layout was not called — channel not exercised"
+    );
+
+    // The standalone query must agree with what the channel reported.
+    let standalone = run.max_intrinsic_width(flex_id, f32::INFINITY);
+    assert_eq!(
+        via_channel, standalone,
+        "dry-layout child_max_intrinsic_width ({via_channel}) != \
+         standalone max_intrinsic_width ({standalone})"
+    );
+    // Concretely: flex row of two 50-wide children → 100.
+    assert_eq!(
+        via_channel, 100.0,
+        "flex intrinsic width should be 100 (2 × 50)"
+    );
+}
+
 // ============================================================================
 // RenderIntrinsicHeight
 // ============================================================================
@@ -2862,21 +3078,14 @@ fn harness_intrinsic_height_leaf_sizes_to_zero() {
 
 #[test]
 fn harness_intrinsic_height_with_child_passes_size_through() {
-    // No intrinsic-height query possible in a Direct-storage context (returns 0),
-    // so child_constraints height will be tight at 0px = min_height, which the
-    // child ignores when it has a natural 40px height under the loosen'd
-    // unconstrained → child reports 40px height.
+    // `perform_layout` calls `ctx.child_max_intrinsic_height(0, max_width)` through
+    // the live `box_intrinsic_query_borrowed` pipeline callback.  The child
+    // (ColoredBox 60×40) reports max intrinsic height = 40px, so the child is
+    // laid out at height tight to 40 and the result is 60×40.
     //
-    // Concretely: max_intrinsic_height callback returns 0.0 (Direct context)
-    // → clamped to constraints.min_height=0 → tight(0) → child size 60×0?
-    // Actually: child is a ColoredBox with fixed size, which IGNORES tight(0)
-    // only if constrained differently — ColoredBox lays out at self.size clamped
-    // to constraints.  With tight(0) → height=0.
-    //
-    // Test the observable behavior honestly: the Direct test context yields
-    // tight(h=0) for the height, so the child is 60×0 and constrain gives 60×0.
-    // This is correct for this (test-context) code path; the live path uses
-    // box_intrinsic_query_borrowed.
+    // Oracle: proxy_box.dart:816-819 — `_childConstraints` forces height to the
+    // child's `getMaxIntrinsicHeight(constraints.maxWidth)`.  For a fixed-size
+    // child that is 40px tall, this gives tight(h=40).
     let run = RenderTester::mount(
         box_node(RenderIntrinsicHeight::new())
             .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
@@ -2884,9 +3093,7 @@ fn harness_intrinsic_height_with_child_passes_size_through() {
     .with_constraints(loose(200.0))
     .run_layout();
 
-    // Direct context: max_intrinsic_height → 0.0 → tight h=0 → child 60×0 → constrain → 60×0.
-    // Width flows through unchanged (no tight_width, no step).
-    assert_eq!(run.box_geometry(run.root()).width, px(60.0));
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(60.0), px(40.0)));
 }
 
 // ============================================================================
