@@ -53,6 +53,14 @@ harness = false
 name = "virtualizer"
 harness = false
 
+# ADR-0010 D3 — borrowed intrinsic path parent-data slice cost.
+# Measures build_intrinsic_child_parent_data (subtree_arena.rs) called when a
+# widget queries a child's intrinsic during perform_layout. Parameterized over
+# N = {1, 8, 64} flex children to show per-child allocation scaling.
+[[bench]]
+name = "intrinsic_parent_data"
+harness = false
+
 # Headless render-object inspection runner. Gated on `testing` so the
 # example only builds when the harness module is compiled in. Run with
 # `cargo run -p flui-rendering --example render_inspector --features testing`.
