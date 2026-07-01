@@ -670,3 +670,125 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
 }
 
 impl_downcast!(sync RenderObject<P> where P: Protocol);
+
+#[cfg(test)]
+mod tests {
+    use flui_types::Size;
+
+    use super::*;
+    use crate::protocol::BoxProtocol;
+
+    /// Minimal `RenderObject<BoxProtocol>` implementer with no overrides,
+    /// used to exercise this trait's default method bodies -- the contract
+    /// every concrete render object gets "for free" until it opts in to
+    /// something else.
+    #[derive(Debug)]
+    struct MinimalLeaf;
+
+    impl Diagnosticable for MinimalLeaf {}
+
+    impl RenderObject<BoxProtocol> for MinimalLeaf {
+        fn perform_layout_raw(
+            &mut self,
+            _ctx: &mut <BoxProtocol as Protocol>::LayoutCtxErased<'_>,
+        ) -> crate::error::RenderResult<Size> {
+            Ok(Size::ZERO)
+        }
+
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: Size,
+        ) {
+        }
+
+        fn hit_test_raw(
+            &self,
+            _position: flui_types::Offset,
+            _child_count: usize,
+            _size: Size,
+            _hit_child: &mut (dyn FnMut(usize, Option<flui_types::Offset>) -> bool + Send + Sync),
+        ) -> HitTestOutcome {
+            HitTestOutcome::miss()
+        }
+    }
+
+    #[test]
+    fn hit_test_outcome_constructors_set_the_expected_bits() {
+        assert_eq!(HitTestOutcome::miss(), HitTestOutcome::new(false, false));
+        assert_eq!(
+            HitTestOutcome::from_hit(true),
+            HitTestOutcome::new(true, true)
+        );
+        assert_eq!(
+            HitTestOutcome::from_hit(false),
+            HitTestOutcome::new(false, false)
+        );
+        assert_eq!(
+            HitTestOutcome::add_self_without_blocking(),
+            HitTestOutcome::new(true, false)
+        );
+    }
+
+    #[test]
+    fn default_optimization_boundary_flags_are_all_false() {
+        let leaf = MinimalLeaf;
+        assert!(!leaf.is_repaint_boundary());
+        assert!(!leaf.is_relayout_boundary());
+        assert!(!leaf.sized_by_parent());
+        assert!(!leaf.always_needs_compositing());
+    }
+
+    #[test]
+    fn default_effect_layer_hooks_are_inert() {
+        let leaf = MinimalLeaf;
+        assert_eq!(leaf.paint_alpha(), None);
+        assert_eq!(leaf.paint_layer_blend(), None);
+        assert!(!leaf.skip_paint());
+        assert_eq!(leaf.paint_transform(Size::ZERO), None);
+        assert_eq!(leaf.hit_test_transform(Size::ZERO), None);
+        assert!(leaf.pointer_event_handler().is_none());
+        assert_eq!(leaf.mouse_cursor(), CursorIcon::Default);
+        assert!(
+            leaf.mouse_tracker_annotation(flui_foundation::RenderId::new(1))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn default_semantics_hook_does_not_mutate_the_configuration() {
+        let leaf = MinimalLeaf;
+        let mut config = SemanticsConfiguration::new();
+
+        leaf.describe_semantics_configuration(&mut config);
+
+        assert!(!config.is_semantics_boundary());
+        assert!(!config.blocks_user_actions());
+        assert!(!leaf.excludes_semantics_subtree());
+    }
+
+    #[test]
+    fn default_reassemble_is_a_no_op() {
+        let mut leaf = MinimalLeaf;
+        leaf.reassemble();
+    }
+
+    #[test]
+    fn default_child_count_is_zero() {
+        let leaf = MinimalLeaf;
+        assert_eq!(leaf.child_count(), 0);
+    }
+
+    #[test]
+    fn default_debug_name_is_the_concrete_type_name() {
+        let leaf = MinimalLeaf;
+        assert!(leaf.debug_name().ends_with("MinimalLeaf"));
+    }
+
+    #[test]
+    fn render_object_trait_object_downcasts_to_the_concrete_type() {
+        let boxed: Box<dyn RenderObject<BoxProtocol>> = Box::new(MinimalLeaf);
+        assert!(boxed.downcast_ref::<MinimalLeaf>().is_some());
+    }
+}
