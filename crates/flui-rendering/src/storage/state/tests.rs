@@ -340,3 +340,104 @@ fn clone_preserves_geometry_constraints_offset_and_parent_data_but_resets_layout
             .is_none()
     );
 }
+
+// ========================================================================
+// Box- and Sliver-protocol geometry convenience methods
+// ========================================================================
+
+#[test]
+fn box_size_and_has_size_use_zero_fallback_before_layout() {
+    let mut state = BoxRenderState::new();
+
+    // Before the first layout, `size()` must fall back to ZERO rather than
+    // panicking, and `has_size` must not falsely match ZERO.
+    assert_eq!(state.size(), flui_types::Size::ZERO);
+    assert!(!state.has_size(flui_types::Size::ZERO));
+
+    let size = flui_types::Size::new(px(64.0), px(32.0));
+    state.set_size(size);
+    assert_eq!(state.size(), size);
+    assert!(state.has_size(size));
+    assert!(!state.has_size(flui_types::Size::new(px(1.0), px(1.0))));
+}
+
+#[test]
+fn sliver_extent_accessors_use_zero_fallback_before_layout() {
+    let state = SliverRenderState::new();
+
+    assert_eq!(state.scroll_extent(), 0.0);
+    assert_eq!(state.paint_extent(), 0.0);
+    assert_eq!(state.layout_extent(), 0.0);
+    assert_eq!(state.max_paint_extent(), 0.0);
+}
+
+#[test]
+fn set_sliver_geometry_populates_all_extent_accessors() {
+    use crate::constraints::SliverGeometry;
+
+    let mut state = SliverRenderState::new();
+    state.set_sliver_geometry(SliverGeometry {
+        scroll_extent: 1000.0,
+        paint_extent: 400.0,
+        layout_extent: 350.0,
+        max_paint_extent: 500.0,
+        ..SliverGeometry::ZERO
+    });
+
+    assert_eq!(state.scroll_extent(), 1000.0);
+    assert_eq!(state.paint_extent(), 400.0);
+    assert_eq!(state.layout_extent(), 350.0);
+    assert_eq!(state.max_paint_extent(), 500.0);
+}
+
+#[test]
+fn absolute_paint_size_is_zero_before_layout() {
+    let state = SliverRenderState::new();
+    assert_eq!(state.absolute_paint_size(), flui_types::Size::ZERO);
+}
+
+#[test]
+fn absolute_paint_size_maps_main_axis_to_height_for_vertical_scroll() {
+    use crate::constraints::{SliverConstraints, SliverGeometry};
+    use flui_types::prelude::AxisDirection;
+
+    let mut state = SliverRenderState::new();
+    state.set_sliver_geometry(SliverGeometry {
+        paint_extent: 80.0,
+        ..SliverGeometry::ZERO
+    });
+    state.set_constraints(SliverConstraints {
+        axis_direction: AxisDirection::TopToBottom,
+        cross_axis_extent: 120.0,
+        ..SliverConstraints::default()
+    });
+
+    // Vertical scroll: main axis (paint_extent) is height, cross axis is width.
+    assert_eq!(
+        state.absolute_paint_size(),
+        flui_types::Size::new(px(120.0), px(80.0))
+    );
+}
+
+#[test]
+fn absolute_paint_size_maps_main_axis_to_width_for_horizontal_scroll() {
+    use crate::constraints::{SliverConstraints, SliverGeometry};
+    use flui_types::prelude::AxisDirection;
+
+    let mut state = SliverRenderState::new();
+    state.set_sliver_geometry(SliverGeometry {
+        paint_extent: 80.0,
+        ..SliverGeometry::ZERO
+    });
+    state.set_constraints(SliverConstraints {
+        axis_direction: AxisDirection::LeftToRight,
+        cross_axis_extent: 120.0,
+        ..SliverConstraints::default()
+    });
+
+    // Horizontal scroll: main axis (paint_extent) is width, cross axis is height.
+    assert_eq!(
+        state.absolute_paint_size(),
+        flui_types::Size::new(px(80.0), px(120.0))
+    );
+}
