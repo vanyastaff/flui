@@ -66,6 +66,10 @@
 //! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | — |
 //! | `RenderAnimatedSize` | `harness_render_animated_size_*` | yes | — | yes | yes | state machine |
+//! | `RenderSliverScrollingPersistentHeader` | `harness_sliver_persistent_header_scrolling_*` | yes | — | — | — | — |
+//! | `RenderSliverPinnedPersistentHeader` | `harness_sliver_persistent_header_pinned_*` | yes | — | — | — | viewport wiring |
+//! | `RenderSliverFloatingPersistentHeader` | `harness_sliver_persistent_header_floating_*` | yes | — | — | — | state machine |
+//! | `RenderSliverFloatingPinnedPersistentHeader` | `harness_sliver_persistent_header_floating_pinned_*` | yes | — | — | — | state machine |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
@@ -106,7 +110,7 @@ use flui_rendering::{
         box_node, localize_hit_point, sliver_node,
     },
     traits::TextBaseline,
-    view::ScrollableViewportOffset,
+    view::{ScrollDirection, ScrollableViewportOffset},
 };
 use flui_types::{
     Alignment, EdgeInsets, Matrix4, Offset, Point, Rect, Size,
@@ -182,6 +186,10 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSizedOverflowBox",
     "RenderRotatedBox",
     "RenderAnimatedSize",
+    "RenderSliverScrollingPersistentHeader",
+    "RenderSliverPinnedPersistentHeader",
+    "RenderSliverFloatingPersistentHeader",
+    "RenderSliverFloatingPinnedPersistentHeader",
 ];
 
 fn loose(max: f32) -> BoxConstraints {
@@ -5600,6 +5608,520 @@ fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_off
         Offset::new(px(-40.0), px(-40.0)),
         "the fast path must NOT call align_child — the child's offset must \
          stay exactly what it was before the tight constraints landed",
+    );
+}
+
+// ============================================================================
+// RenderSliverPersistentHeader family
+// ============================================================================
+//
+// A note on `constraints.overlap`: while building these tests, driving a
+// *real* `RenderViewport` to a nonzero scroll offset and inspecting the first
+// sliver's `constraints.overlap` revealed that `RenderViewport::attempt_layout`
+// (`crates/flui-objects/src/sliver/viewport.rs`, the `overlap: center_offset
+// .min(0.0)` line) computes the wrong sign relative to both the oracle
+// (`rendering/viewport.dart:1834`: `overlap: ... math.min(0.0, -centerOffset)`)
+// and FLUI's own `RenderShrinkWrappingViewport::attempt_layout` sibling
+// (already correct: `overlap: corrected_offset.min(0.0)`) — confirmed
+// empirically (a Pinned header at scroll_offset=300 reported
+// `paint_origin == -300.0`, i.e. `overlap == -300.0`, where a correct
+// top-anchored forward viewport must report `overlap == 0.0` for its first
+// sliver). This is a **pre-existing, out-of-scope defect** in `RenderViewport`
+// itself, not something introduced by this pass — no existing sliver in the
+// catalog reads `constraints.overlap` in a way any prior test asserted on, so
+// it had zero coverage until these headers exercised it. Flagged for a
+// separate fix; not touched here (a `RenderViewport` core-geometry change is
+// its own reviewed task, and would also affect `RenderSliverFillRemainingAndOverscroll`/
+// `RenderSliverFillRemainingWithScrollable`, which already read
+// `constraints.overlap`). The tests below are written to avoid depending on
+// `overlap`-derived quantities through a real viewport (they assert
+// `paint_extent`/`effective_scroll_offset`/`max_scroll_obstruction_extent`,
+// none of which round-trip through the buggy value at scroll_offset > 0 in a
+// way that would be affected by it in these specific scenarios); the
+// stretch-configuration formulas that DO need a specific `overlap` are
+// covered by the pure unit test in `sliver_persistent_header.rs` using a
+// directly-constructed `SliverConstraints`, sidestepping the viewport bug
+// entirely.
+//
+// A second, separate finding: `RenderTester::mount` never calls
+// `RenderObject::attach` for a Sliver child. Tracing `crate::testing::tree::
+// mount_child` (`crates/flui-rendering/src/testing/tree.rs`) shows Box
+// children go through `PipelineOwner::insert_child_render_object`, which
+// calls `attach_inserted_node` — but Sliver children are inserted via the
+// low-level `render_tree_mut().insert_sliver_child(...)`
+// (`crates/flui-rendering/src/storage/tree.rs`), which does not.
+// `PipelineOwner` has no Sliver-protocol equivalent of
+// `insert_child_render_object` to call instead — `insert_child_render_object`
+// is hard-coded to `BoxProtocol`. The `apply_deferred_mutation` path
+// (`crates/flui-rendering/src/pipeline/owner/layout.rs`, used by lazy-sliver
+// child building) has the same gap for both protocols. Net effect: nothing in
+// the codebase today calls `attach()` on a freshly-inserted Sliver render
+// object — the exact mechanism ADR-0013 extended to `RenderSliver` and
+// `RenderSliverFloatingPersistentHeader`/`RenderSliverFloatingPinnedPersistentHeader`
+// rely on for their snap-animation controller subscription. This was
+// confirmed empirically while writing the snap-animation test below (a debug
+// print inside `attach()` never fired for the mounted header). It is a
+// pre-existing, out-of-scope infrastructure gap — not a defect in this pass's
+// render objects, whose `attach`/`detach` overrides are structurally
+// identical to `RenderAnimatedSize`'s already-shipped, working pattern — and
+// not touched here; whether `flui-view`'s real element-reconciliation path
+// has the same gap was not traced. The snap-animation test below forces the
+// dirty mark explicitly (see its own inline comment) rather than relying on
+// `attach`'s listener, so it still proves the animation formula is correct.
+
+fn viewport_multi_with_scroll(
+    offset: f32,
+    slivers: impl IntoIterator<Item = TreeNode>,
+) -> TreeNode {
+    let mut node = box_node(RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::new(offset),
+    ))
+    .label("viewport");
+    for sliver in slivers {
+        node = node.child(sliver);
+    }
+    node
+}
+
+/// A tall filler sliver giving the viewport enough total scroll extent that
+/// scrolling the header through its full shrink/reveal range never gets
+/// clamped back down by `apply_content_dimensions`.
+fn filler_sliver() -> TreeNode {
+    sliver_node(RenderSliverToBoxAdapter::new())
+        .label("filler")
+        .child(box_node(RenderColoredBox::red(300.0, 2000.0)).label("filler_child"))
+}
+
+#[test]
+fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
+    let header = RenderSliverScrollingPersistentHeader::new(40.0, 120.0);
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let header_id = run.id("header");
+    let vp_id = run.id("viewport");
+
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        120.0,
+        "scroll_offset=0: fully expanded at max_extent",
+    );
+    assert!(run.sliver_geometry(header_id).has_visual_overflow);
+    assert_eq!(
+        run.offset(run.id("child")).dy,
+        px(0.0),
+        "fully expanded: child sits at the sliver's own origin",
+    );
+
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(60.0);
+    });
+    run.relayout();
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        60.0,
+        "mid-shrink: paint_extent = max_extent - scroll_offset",
+    );
+
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(80.0);
+    });
+    run.relayout();
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        40.0,
+        "at scroll_offset = max_extent - min_extent: shrunk to exactly min_extent",
+    );
+
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(200.0);
+    });
+    run.relayout();
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        0.0,
+        "past max_extent: fully scrolled off, paint_extent clamps to 0",
+    );
+}
+
+#[test]
+fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent()
+{
+    let header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let header_id = run.id("header");
+    let vp_id = run.id("viewport");
+
+    assert_eq!(
+        run.sliver_geometry(header_id).max_scroll_obstruction_extent,
+        40.0,
+        "max_scroll_obstruction_extent must report min_extent",
+    );
+    assert_eq!(run.offset(run.id("child")).dy, px(0.0));
+
+    // Scroll well past full shrink — pinned headers never scroll off.
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(300.0);
+    });
+    run.relayout();
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        40.0,
+        "pinned at min_extent even scrolled far past max_extent",
+    );
+    assert_eq!(
+        run.offset(run.id("child")).dy,
+        px(0.0),
+        "the defining pinned behavior: child_main_axis_position stays 0.0",
+    );
+
+    // Trap #5 regression: the pinned header's `max_scroll_obstruction_extent`
+    // (min_extent) must be visible to the viewport's own accounting for the
+    // FOLLOWING sliver via `max_scroll_obstruction_extent_before` — this is
+    // the mechanism `max_scroll_obstruction_extent` actually feeds (see the
+    // module-level note above the correction to the source plan's citation).
+    let mut obstruction_before_filler = None;
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        obstruction_before_filler = vp.max_scroll_obstruction_extent_before(1);
+    });
+    assert_eq!(
+        obstruction_before_filler,
+        Some(40.0),
+        "the pinned header's max_scroll_obstruction_extent must accumulate into \
+         the viewport's max_scroll_obstruction_extent_before for slivers after it",
+    );
+}
+
+#[test]
+fn harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal()
+ {
+    let header: RenderSliverFloatingPersistentHeader =
+        RenderSliverFloatingPersistentHeader::new(40.0, 120.0, None);
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let header_id = run.id("header");
+    let vp_id = run.id("viewport");
+
+    // Step 1: scroll forward past max_extent — header fully shrunk/hidden.
+    // Shrinking (delta < 0) is unconditional regardless of user_scroll_direction,
+    // so the exact direction here doesn't matter for this step.
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(300.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Reverse);
+    });
+    run.relayout();
+    let mut effective = None;
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
+        effective = h.effective_scroll_offset();
+    });
+    assert_eq!(
+        effective,
+        Some(300.0),
+        "effective_scroll_offset == actual scroll_offset once fully shrunk"
+    );
+    assert_eq!(run.sliver_geometry(header_id).paint_extent, 0.0);
+
+    // Step 2 (trap #3 + basic trap #4): scroll BACKWARD to 280 with
+    // user_scroll_direction = Forward (FLUI's `ScrollDirection::Forward` is
+    // the *reveal* direction — scroll offset decreasing, per its own doc
+    // comment). The re-reveal branch engages (scroll_offset < last_actual)
+    // and `allow_floating_expansion` is satisfied via its first disjunct,
+    // clamping the stale effective_scroll_offset (300, past max_extent) down
+    // to max_extent BEFORE applying the real 20px delta.
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(280.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Forward);
+    });
+    run.relayout();
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
+        effective = h.effective_scroll_offset();
+    });
+    assert_eq!(
+        effective,
+        Some(100.0),
+        "effective clamps to max_extent (120) first, then the 20px delta \
+         applies: 120 - 20 = 100"
+    );
+    assert_eq!(run.sliver_geometry(header_id).paint_extent, 20.0);
+
+    // Step 3 (trap #4's SECOND disjunct): continue scrolling backward to 250
+    // with user_scroll_direction = Idle, but with `last_started_scroll_direction`
+    // pre-seeded to Forward via `update_scroll_start_direction` (no caller
+    // wires this in production yet — see the module docs — so a test drives
+    // it directly). Without this disjunct, `allow_floating_expansion` would
+    // be false, `delta` would be zeroed (only shrinking allowed), and
+    // effective/paint_extent would stay at 100/20 (unchanged) instead of
+    // continuing to reveal.
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
+        h.update_scroll_start_direction(ScrollDirection::Forward);
+    });
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(250.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Idle);
+    });
+    run.relayout();
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
+        effective = h.effective_scroll_offset();
+    });
+    assert_eq!(
+        effective,
+        Some(70.0),
+        "the second allow_floating_expansion disjunct (pointer/wheel scroll \
+         bookkeeping) must still permit the reveal to continue: 100 - 30 = 70"
+    );
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        50.0,
+        "trap #4 regression: dropping the second disjunct would leave this \
+         at 20.0 (unchanged from step 2) instead of continuing to 50.0"
+    );
+}
+
+#[test]
+fn harness_sliver_persistent_header_floating_allow_expansion_clamps_effective_to_max_extent_not_overshooting()
+ {
+    // Mount directly at scroll_offset=300: the FIRST-EVER layout takes the
+    // `else` branch (no history), so effective_scroll_offset == 300.0 —
+    // already past max_extent(120) — without needing a prior scroll step.
+    let header: RenderSliverFloatingPersistentHeader =
+        RenderSliverFloatingPersistentHeader::new(40.0, 120.0, None);
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        300.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let header_id = run.id("header");
+    let vp_id = run.id("viewport");
+    assert_eq!(run.sliver_geometry(header_id).paint_extent, 0.0);
+
+    // Scroll backward to 200 with user_scroll_direction = Forward (reveal
+    // direction): allow_floating_expansion is true, so the oracle's
+    // `if (_effectiveScrollOffset! > maxExtent) { _effectiveScrollOffset =
+    // maxExtent; }` (`sliver_persistent_header.dart:666-669`) must fire
+    // BEFORE the 100px delta is applied.
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(200.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Forward);
+    });
+    run.relayout();
+
+    let mut effective = None;
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
+        effective = h.effective_scroll_offset();
+    });
+    assert_eq!(
+        effective,
+        Some(20.0),
+        "clamp-to-max_extent-first must give 120 - 100 = 20; without it, the \
+         naive clamp(300 - 100, 0, 200) = 200 would leave the header fully \
+         hidden (paint_extent = 0) instead of 100px revealed",
+    );
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        100.0,
+        "not overshooting: paint_extent = max_extent - effective = 120 - 20 = 100",
+    );
+}
+
+#[test]
+fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_clamps_paint_extent_and_stays_pinned()
+ {
+    // Same re-reveal state machine as plain Floating (shared, not
+    // duplicated — see the module docs) — reusing steps 1+2 of the Floating
+    // reveal test, but asserting FloatingPinned's DISTINCT contract: paint
+    // extent never drops below min_extent, and child_main_axis_position is
+    // always 0.0 (unlike plain Floating, which can be negative).
+    let header: RenderSliverFloatingPinnedPersistentHeader =
+        RenderSliverFloatingPinnedPersistentHeader::new(40.0, 120.0, None);
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    let header_id = run.id("header");
+    let vp_id = run.id("viewport");
+
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(300.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Reverse);
+    });
+    run.relayout();
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        40.0,
+        "always at least min_extent visible, pinned — plain Floating would \
+         report 0.0 here (fully hidden)",
+    );
+    assert_eq!(
+        run.offset(run.id("child")).dy,
+        px(0.0),
+        "child_main_axis_position is always 0.0, even fully shrunk past max_extent",
+    );
+
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(280.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Forward);
+    });
+    run.relayout();
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        40.0,
+        "still clamped to min_extent while mid-reveal (raw formula gives 20, \
+         below the pinned floor of 40)",
+    );
+    assert_eq!(
+        run.offset(run.id("child")).dy,
+        px(0.0),
+        "child_main_axis_position stays 0.0 mid-reveal too, unlike plain Floating",
+    );
+}
+
+#[test]
+fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scroll_offset_across_ticks()
+ {
+    let ctl = AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+    let driver = ctl.clone();
+    let header: RenderSliverFloatingPersistentHeader =
+        RenderSliverFloatingPersistentHeader::new(40.0, 120.0, Some(ctl)).with_snap_configuration(
+            flui_objects::FloatingHeaderSnapConfiguration::new(
+                ArcCurve::new(Curves::Linear),
+                Duration::from_millis(100),
+            ),
+        );
+
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_frame();
+
+    let header_id = run.id("header");
+    let vp_id = run.id("viewport");
+
+    // Establish effective_scroll_offset = 100.0 via the same two real-scroll
+    // steps as the reveal test (0 -> 300 -> 280), landing partially revealed
+    // (paint_extent = 20) before kicking off the snap animation.
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(300.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Reverse);
+    });
+    run.pump();
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(280.0);
+        vp.offset_mut()
+            .set_user_scroll_direction(ScrollDirection::Forward);
+    });
+    run.pump();
+    assert_eq!(run.sliver_geometry(header_id).paint_extent, 20.0);
+
+    // Kick off a reveal snap toward 0.0 (fully expanded). No further real
+    // scrolling happens for the rest of this test (scroll_offset stays at
+    // 280), so the state machine's own delta stays 0 and passes the
+    // animated value through unchanged each tick.
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
+        h.maybe_start_snap_animation(ScrollDirection::Forward);
+    });
+
+    // NOTE on the `run.update::<RenderSliverFloatingPersistentHeader>(header_id, |_| {})`
+    // no-op calls below: this test cannot exercise the real `attach()`
+    // listener end-to-end. Tracing `RenderTester::mount` ->
+    // `crate::testing::tree::mount_child` (`crates/flui-rendering/src/testing/tree.rs`)
+    // shows Sliver children are inserted via the low-level
+    // `render_tree_mut().insert_sliver_child(...)` (`crates/flui-rendering/src/storage/tree.rs`),
+    // which never calls `attach_inserted_node`/`RenderObject::attach` —
+    // unlike the Box-child path, which goes through
+    // `PipelineOwner::insert_child_render_object` and does. `PipelineOwner`
+    // has no Sliver-protocol equivalent of `insert_child_render_object`
+    // either (confirmed: only `insert_child_render_object` exists, hard-coded
+    // to `BoxProtocol`), so a Sliver render object's `attach()` — the exact
+    // mechanism ADR-0013 extended to `RenderSliver` and this render object
+    // relies on for its snap-animation controller subscription — is
+    // currently **never invoked for a sliver child by any insertion path in
+    // the codebase** (test harness included; whether `flui-view`'s real
+    // element-reconciliation path has an equivalent gap was not traced here
+    // and needs its own follow-up). This is a pre-existing, out-of-scope
+    // infrastructure gap, not a defect in this render object — the formula
+    // this test actually verifies (the animation's interpolation and
+    // completion values) is exercised correctly regardless; only the
+    // "ticking the controller alone triggers relayout via `attach`" half is
+    // untestable today, so this test forces the dirty mark explicitly
+    // instead of relying on it.
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |_| {});
+    driver.tick_at(0.05); // t = 0.5 of the 100ms run (Linear curve)
+    run.pump();
+    let paint_extent_mid = run.sliver_geometry(header_id).paint_extent;
+    assert!(
+        (paint_extent_mid - 70.0).abs() < 1.0,
+        "at t=0.5, effective_scroll_offset should have interpolated from 100 \
+         toward 0 (currently ~50), giving paint_extent ~= 120 - 50 = 70; got {paint_extent_mid}",
+    );
+
+    run.update::<RenderSliverFloatingPersistentHeader>(header_id, |_| {});
+    driver.tick_at(0.1); // t = 1.0, run completes
+    run.pump();
+    assert_eq!(
+        run.sliver_geometry(header_id).paint_extent,
+        120.0,
+        "a completed snap must land exactly on the target (fully revealed)",
     );
 }
 

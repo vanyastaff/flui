@@ -15,7 +15,7 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **61**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **65**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
@@ -27,10 +27,10 @@
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **61**
-- **Render objects remaining to build (Core.2):** **~10** (verified list below)
+- **Render objects existing today:** **65**
+- **Render objects remaining to build (Core.2):** **~9** (verified list below)
 
-### Existing render objects — authoritative (61)
+### Existing render objects — authoritative (65)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
@@ -42,15 +42,14 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Leaf (3):** `RenderEditable` · `RenderParagraph` · `RenderImage`
 
-**Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
+**Slivers + viewport (20):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity` · `RenderSliverScrollingPersistentHeader` · `RenderSliverPinnedPersistentHeader` · `RenderSliverFloatingPersistentHeader` · `RenderSliverFloatingPinnedPersistentHeader`
 
-### Remaining to build — verified missing (≈10, see `RenderAnimatedOpacity` note)
+### Remaining to build — verified missing (≈9, see `RenderAnimatedOpacity` note)
 
-Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize` closed same day — see closure note below):
+Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize` and the `RenderSliverPersistentHeader` family closed same day — see closure notes below):
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
-| `RenderSliverPersistentHeader` family | `SliverAppBar`/pinned headers | Medium | `sliver_persistent_header.dart` |
 | `RenderBackdropFilter` | `BackdropFilter` | Low | `proxy_box.dart` |
 | `RenderShaderMask` | `ShaderMask` | Low | `proxy_box.dart` |
 | `RenderPhysicalModel` | `PhysicalModel` | Low (Material elevation) | `proxy_box.dart` |
@@ -107,6 +106,66 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 > persistent render object through targeted setters only, with a widget regression test proving an unrelated
 > (alignment-only) rebuild does not reset an in-flight resize animation. Deferred/documented: `reverseDuration`
 > is confirmed inert (this object never runs its controller in reverse).
+>
+> **`RenderSliverPersistentHeader` family closure note (verified 2026-07-01):** all four
+> concrete variants now ship in `crates/flui-objects/src/sliver/sliver_persistent_header.rs`
+> and are listed in the render-object harness catalog: `RenderSliverScrollingPersistentHeader`
+> and `RenderSliverPinnedPersistentHeader` (two small independent structs sharing a
+> `PersistentHeaderCore`) and `RenderSliverFloatingPersistentHeader`/
+> `RenderSliverFloatingPinnedPersistentHeader` (one generic struct over a sealed
+> `FloatingHeaderMode` trait, since the oracle itself documents their `perform_layout`
+> re-reveal state machine as verbatim-identical). No new ADR was needed — ADR-0013's
+> `attach`/`detach` lifecycle already exists on the `RenderSliver` trait; the floating
+> variants' snap-animation controller subscribes through it exactly like `RenderAnimatedSize`.
+> No new `flui-rendering` delegate trait was needed either — `min_extent`/`max_extent` are
+> plain constructor fields, not a delegate object (Flutter's `SliverPersistentHeaderDelegate`
+> is a widget-layer, build-producing concept; Flutter's own newer `PinnedHeaderSliver`/
+> `SliverFloatingHeader` widgets bypass it too). Harness coverage drives real multi-scroll-offset
+> sequences through an actual `RenderViewport`: shrink/scroll-off, the floating re-reveal
+> state machine's two-disjunct outer gate and two-disjunct `allow_floating_expansion`
+> condition, a two-sliver test proving the pinned variant's `max_scroll_obstruction_extent`
+> reaches a following sibling via `max_scroll_obstruction_extent_before`, and snap-animation
+> interpolation across real controller ticks. Out of scope, documented: `show_on_screen`
+> overrides (no `RenderObject::show_on_screen` exists anywhere in FLUI yet), and wiring a
+> caller for `update_scroll_start_direction`/`maybe_start_snap_animation`/`maybe_stop_snap_animation`
+> (needs `Scrollable`/`SliverAppBar`-layer integration, a separate future pass); the widget-layer
+> `SliverPersistentHeader`/`SliverAppBar` themselves are also not in this pass.
+>
+> **Two pre-existing infrastructure defects discovered while building this family (not
+> introduced by it, not yet fixed — tracked here as follow-up work):**
+> 1. **`RenderViewport::attempt_layout` reports the wrong sign for `constraints.overlap`**
+>    (`crates/flui-objects/src/sliver/viewport.rs`, the forward-sequence `overlap: center_offset.min(0.0)`
+>    line, where `center_offset = -corrected_offset`). Independently re-derived against the oracle
+>    (`rendering/viewport.dart:1834`: `overlap: leadingNegativeChild == null ? math.min(0.0, -centerOffset) : 0.0`,
+>    with `centerOffset = mainAxisExtent * anchor - correctedOffset`; for a top-anchored
+>    viewport with no leading reverse slivers this reduces to `overlap = min(0.0, correctedOffset)`)
+>    and confirmed by hand: at `scroll_offset = 300` a correct top-anchored forward viewport
+>    must report `overlap == 0.0`, but FLUI's current formula gives `overlap == -300.0`.
+>    `RenderShrinkWrappingViewport::attempt_layout` (same file) already has the correct formula
+>    (`overlap: corrected_offset.min(0.0)`) — this is a `RenderViewport`-only regression, not a
+>    systemic pattern. Zero prior test coverage caught it because no earlier sliver asserted on
+>    `constraints.overlap` through a real viewport; this family's harness tests route around it
+>    by asserting only quantities that don't round-trip through the buggy value in their specific
+>    scenarios. Likely also affects `RenderSliverFillRemainingAndOverscroll`/
+>    `RenderSliverFillRemainingWithScrollable`, which already read `constraints.overlap`.
+> 2. **No insertion path calls `RenderObject::attach` for a Sliver child.** `PipelineOwner::insert_child_render_object`
+>    (`crates/flui-rendering/src/pipeline/owner/accessors.rs`) is hard-coded to `BoxProtocol` and
+>    is the only caller of `attach_inserted_node` (the ADR-0013 wiring); Sliver children are
+>    inserted via the lower-level `render_tree_mut().insert_sliver_child(...)`
+>    (called from `crates/flui-rendering/src/pipeline/owner/layout.rs:279`), which never calls
+>    it. Confirmed empirically while writing the snap-animation harness test (an `attach()` debug
+>    print never fired for a mounted sliver header). Net effect: ADR-0013's self-dirty-handle
+>    mechanism — which `RenderSliverFloatingPersistentHeader`'s snap-animation controller
+>    subscription depends on, and which is structurally identical to `RenderAnimatedSize`'s
+>    already-working Box-protocol case — is currently unexercised for any sliver anywhere,
+>    including by the test harness. Whether `flui-view`'s real element-reconciliation path has
+>    the same gap was not traced. Needs a `PipelineOwner` Sliver-protocol equivalent of
+>    `insert_child_render_object` (or a protocol-generic `attach_inserted_node` call site).
+>
+> Both defects are independent of this render-object family's own correctness (verified by
+> reading the implementation directly: the re-reveal state machine and `attach`/`detach`
+> overrides are correct) but block real end-to-end floating-header snap behavior in production
+> until fixed. Scoped as separate follow-up tasks, not fixed in this pass.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
