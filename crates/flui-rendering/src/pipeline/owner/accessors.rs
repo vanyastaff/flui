@@ -234,11 +234,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// this method can. Order:
     ///
     /// 1. collect the subtree's ids;
-    /// 2. evict every id from ALL dirty queues (live + mid-phase) so
+    /// 2. call [`RenderObject::detach`](crate::traits::RenderObject::detach)
+    ///    on every id in the subtree (ADR-0013 D1) — the tree-lifecycle
+    ///    counterpart of `attach`, and the only place a render object can
+    ///    tear down an `attach`-time subscription;
+    /// 3. evict every id from ALL dirty queues (live + mid-phase) so
     ///    no phase walks a freed slot's stale entry;
-    /// 3. cascade-remove the nodes (each freed slot's generation bumps
+    /// 4. cascade-remove the nodes (each freed slot's generation bumps
     ///    — outstanding ids go stale, D2);
-    /// 4. clear `root_id` when the root itself was removed.
+    /// 5. clear `root_id` when the root itself was removed.
     ///
     /// `Drop` on render objects remains strictly node-local (decoded
     /// images, shaped text, GPU handles).
@@ -257,6 +261,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if subtree.is_empty() {
             return 0;
         }
+
+        // ADR-0013 D1: detach every node in the subtree before eviction —
+        // a render object that subscribed to a `Listenable` in `attach`
+        // gets a chance to unsubscribe here. Not a correctness
+        // prerequisite (the handle it holds is generational and already
+        // goes silent once the node is gone), but the clean stop.
+        for &subtree_id in &subtree {
+            if let Some(node) = self.render_tree.get_mut(subtree_id) {
+                node.detach();
+            }
+        }
+
         let removed: rustc_hash::FxHashSet<RenderId> = subtree.iter().copied().collect();
         self.scheduler.evict(&removed);
 
@@ -721,6 +737,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // run_compositing).
         self.bootstrap_repaint_boundary_flag(id);
 
+        // ADR-0013: hand the freshly-inserted node its self-dirty handle.
+        self.attach_inserted_node(id);
+
         // New nodes need layout and paint
         self.add_node_needing_layout(id, depth);
         self.add_node_needing_paint(id, depth);
@@ -766,6 +785,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // walk runs.
         self.bootstrap_repaint_boundary_flag(child_id);
 
+        // ADR-0013: hand the freshly-inserted child its self-dirty handle.
+        self.attach_inserted_node(child_id);
+
         // Mark child as needing layout and paint
         self.add_node_needing_layout(child_id, child_depth as usize);
         self.add_node_needing_paint(child_id, child_depth as usize);
@@ -796,6 +818,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // path that adds nodes leaves the compositing flag in sync
         // with the trait answer).
         self.bootstrap_repaint_boundary_flag(id);
+
+        // ADR-0013: hand the freshly-inserted node its self-dirty handle.
+        self.attach_inserted_node(id);
 
         self.add_node_needing_layout(id, depth);
         self.add_node_needing_paint(id, depth);
@@ -855,6 +880,25 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if let Some(node) = self.render_tree.get(id) {
             let is_boundary = node.is_repaint_boundary();
             node.set_repaint_boundary_flag(is_boundary);
+        }
+    }
+
+    /// ADR-0013: hands the freshly-inserted node at `id` its self-dirty
+    /// [`RepaintHandle`](crate::pipeline::RepaintHandle) via
+    /// [`RenderObject::attach`](crate::traits::RenderObject::attach).
+    ///
+    /// Called by every insertion path (`insert`, `insert_child_render_object`,
+    /// `insert_render_node`) right after the id is minted and its
+    /// `NodeLinks` are wired, alongside the initial dirty marks those
+    /// methods already issue. No-op if `id` is somehow not present
+    /// (defensive — every call site holds a freshly-inserted id).
+    #[inline]
+    fn attach_inserted_node(&mut self, id: RenderId) {
+        let Some(handle) = self.repaint_handle(id) else {
+            return;
+        };
+        if let Some(node) = self.render_tree.get_mut(id) {
+            node.attach(handle);
         }
     }
 

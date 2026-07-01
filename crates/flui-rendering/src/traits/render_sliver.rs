@@ -457,6 +457,27 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     fn reassemble(&mut self) {}
 
     // ========================================================================
+    // Tree Lifecycle (ADR-0013)
+    // ========================================================================
+
+    /// Hands this render object a generational, least-privilege self-dirty
+    /// handle when it enters the tree.
+    ///
+    /// Override to subscribe to a `dyn Listenable` this object owns or
+    /// holds and self-mark on notify via the handle. Default: no-op. See
+    /// [`RenderObject::attach`].
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        let _ = handle;
+    }
+
+    /// Tears down whatever [`Self::attach`] subscribed to, before this
+    /// render object leaves the tree.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::detach`].
+    fn detach(&mut self) {}
+
+    // ========================================================================
     // Parent Data
     // ========================================================================
 
@@ -584,6 +605,14 @@ where
 
     fn reassemble(&mut self) {
         <T as RenderSliver>::reassemble(self)
+    }
+
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        <T as RenderSliver>::attach(self, handle)
+    }
+
+    fn detach(&mut self) {
+        <T as RenderSliver>::detach(self)
     }
 
     // Compositing / layer-boundary forwards — mirror the RenderBox blanket

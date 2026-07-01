@@ -114,7 +114,7 @@ impl HitTestOutcome {
 ///
 /// # Effect-layer and Lifecycle Methods
 ///
-/// `RenderObject<P>` carries seven defaulted methods that are the former
+/// `RenderObject<P>` carries nine defaulted methods that are the former
 /// capability-supertrait surface, now inlined directly on this trait so
 /// concrete types need no boilerplate impl blocks:
 ///
@@ -122,6 +122,8 @@ impl HitTestOutcome {
 ///   `hit_test_transform` — paint-effect hooks (default `None`/`false`)
 /// - `describe_semantics_configuration` — accessibility hook (default no-op)
 /// - `reassemble` — hot-reload hook (default no-op; see note below)
+/// - `attach`/`detach` — tree-lifecycle hook (default no-op; see
+///   *Tree-lifecycle note* below)
 ///
 /// All default to no-op / `None`. Override on `RenderBox` or `RenderSliver`
 /// (the blanket impls forward every call from `RenderObject<P>` to the
@@ -139,6 +141,20 @@ impl HitTestOutcome {
 /// render objects do not hold a pipeline-owner handle; the real fix
 /// (`PipelineOwner::reassemble_subtree`) is tracked as the hot-reload
 /// epic and deferred deliberately.
+///
+/// # Tree-lifecycle note
+///
+/// `attach`/`detach` (ADR-0013) are the seam a render object that must mark
+/// **itself** dirty out-of-band — an owned animation controller driving its
+/// own layout, a delegate's repaint `Listenable` driving paint — subscribes
+/// through: `attach` hands over a generational, least-privilege
+/// [`RepaintHandle`](crate::pipeline::RepaintHandle) bound to this node;
+/// `detach` is where the subscription is torn down. Neither is a hot path:
+/// both fire only on structural insert/remove
+/// ([`PipelineOwner::insert`](crate::pipeline::PipelineOwner::insert) and
+/// its siblings,
+/// [`PipelineOwner::remove_render_object`](crate::pipeline::PipelineOwner::remove_render_object)),
+/// never mid-layout/paint/hit-test.
 ///
 /// # Storage Integration
 ///
@@ -527,6 +543,46 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// Default: no-op. See the *Hot-reload note* in the trait doc for the
     /// reason this is a documented FLUI divergence from Flutter semantics.
     fn reassemble(&mut self) {}
+
+    // ========================================================================
+    // Tree Lifecycle (ADR-0013)
+    // ========================================================================
+
+    /// Hands this render object a generational, least-privilege self-dirty
+    /// handle when it enters the tree.
+    ///
+    /// Called exactly once, immediately after the pipeline assigns this
+    /// node's [`RenderId`](flui_foundation::RenderId) and wires its tree
+    /// links — see
+    /// [`PipelineOwner::insert`](crate::pipeline::PipelineOwner::insert)
+    /// and its sibling insertion methods. A render object that must mark
+    /// **itself** dirty out-of-band subscribes to its source here and
+    /// self-marks on notify via
+    /// [`RepaintHandle::mark_needs_layout`](crate::pipeline::RepaintHandle::mark_needs_layout)
+    /// or
+    /// [`RepaintHandle::mark_needs_paint`](crate::pipeline::RepaintHandle::mark_needs_paint).
+    ///
+    /// Default: no-op — override on `RenderBox` or `RenderSliver`,
+    /// mirroring `reassemble`. See the *Tree-lifecycle note* in the trait
+    /// doc.
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        let _ = handle;
+    }
+
+    /// Tears down whatever [`Self::attach`] subscribed to, before this
+    /// render object leaves the tree.
+    ///
+    /// Called for every id in a removed subtree by
+    /// [`PipelineOwner::remove_render_object`](crate::pipeline::PipelineOwner::remove_render_object),
+    /// before the subtree's dirty-queue entries are evicted. Not a
+    /// correctness prerequisite — the handle captured in `attach` is
+    /// generational and already degrades to a silent no-op once this node
+    /// is removed — but it is the point to drop a still-live
+    /// `add_listener` subscription so a running notifier doesn't keep it
+    /// alive for nothing.
+    ///
+    /// Default: no-op.
+    fn detach(&mut self) {}
 
     // ========================================================================
     // Children Access (для pipeline/owner.rs)

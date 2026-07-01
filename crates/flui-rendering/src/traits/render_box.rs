@@ -454,6 +454,29 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// [`RenderObject::reassemble`].
     fn reassemble(&mut self) {}
 
+    // ========================================================================
+    // Tree Lifecycle (ADR-0013)
+    // ========================================================================
+
+    /// Hands this render object a generational, least-privilege self-dirty
+    /// handle when it enters the tree.
+    ///
+    /// Override to subscribe to a `dyn Listenable` this object owns or
+    /// holds (an animation controller driving its own layout, a
+    /// delegate's repaint notifier driving paint) and self-mark on notify
+    /// via the handle. Default: no-op. See
+    /// [`RenderObject::attach`].
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        let _ = handle;
+    }
+
+    /// Tears down whatever [`Self::attach`] subscribed to, before this
+    /// render object leaves the tree.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::detach`].
+    fn detach(&mut self) {}
+
     /// Short human-readable name for diagnostics and error messages.
     ///
     /// Default: [`core::any::type_name::<Self>()`] (the fully-qualified Rust
@@ -705,6 +728,14 @@ where
 
     fn reassemble(&mut self) {
         <T as RenderBox>::reassemble(self)
+    }
+
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        <T as RenderBox>::attach(self, handle)
+    }
+
+    fn detach(&mut self) {
+        <T as RenderBox>::detach(self)
     }
 
     fn debug_name(&self) -> &'static str {
