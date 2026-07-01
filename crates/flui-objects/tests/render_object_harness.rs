@@ -1366,6 +1366,96 @@ fn harness_stack_positioned_child_layout_and_hit_test() {
     assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("base")));
 }
 
+// ── RenderStack dry layout ────────────────────────────────────────────────────
+
+/// `compute_dry_layout` for a stack with a non-positioned and a positioned child.
+///
+/// Oracle (stack.dart:619-675): positioned children are EXCLUDED from the
+/// sizing pass, so the stack shrink-wraps to the non-positioned 40×40 child.
+/// This test would return `Size::ZERO` with the default trait implementation
+/// and passes only once `RenderStack::compute_dry_layout` delegates to
+/// `compute_size`.
+#[test]
+fn harness_stack_dry_layout_shrink_wraps_and_excludes_positioned() {
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderSizedBox::fixed(px(40.0), px(40.0))).label("nonpos"))
+            .child(
+                box_node(RenderSizedBox::fixed(px(80.0), px(80.0)))
+                    .with_stack_parent_data(StackParentData::new().with_top(0.0).with_left(0.0))
+                    .label("pos"),
+            ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let expected = Size::new(px(40.0), px(40.0));
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        expected,
+        "dry layout must shrink-wrap to the non-positioned child and ignore the positioned one",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        run.box_geometry(run.root()),
+        "dry layout must agree with committed layout geometry",
+    );
+}
+
+/// `compute_dry_layout` for `StackFit::Expand`: the non-positioned child is
+/// stretched to the biggest constraint, so the container reports (200, 200).
+#[test]
+fn harness_stack_dry_layout_expand_fit() {
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new().with_fit(StackFit::Expand))
+            .child(box_node(RenderSizedBox::fixed(px(10.0), px(10.0))).label("child")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let expected = Size::new(px(200.0), px(200.0));
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        expected,
+        "StackFit::Expand dry layout must fill the incoming constraints",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        run.box_geometry(run.root()),
+        "dry layout must agree with committed layout geometry",
+    );
+}
+
+/// `compute_dry_layout` when all children are positioned: no non-positioned
+/// children contribute to sizing, so the stack takes `constraints.biggest()`.
+#[test]
+fn harness_stack_dry_layout_all_positioned_takes_biggest() {
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new()).child(
+            box_node(RenderSizedBox::fixed(px(20.0), px(20.0)))
+                .with_stack_parent_data(StackParentData::new().with_top(0.0))
+                .label("pos"),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let expected = Size::new(px(200.0), px(200.0));
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        expected,
+        "all-positioned stack dry layout must take constraints.biggest()",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        run.box_geometry(run.root()),
+        "dry layout must agree with committed layout geometry",
+    );
+}
+
 // ============================================================================
 // Pointer semantics
 // ============================================================================
@@ -2554,6 +2644,71 @@ fn harness_render_wrap_spacing_and_run_spacing_add_gaps() {
     assert_eq!(run.offset(run.id("b")), Offset::new(px(40.0), px(0.0)));
     // c is on the second run: cross_offset = run 1 cross(20) + run_spacing(5).
     assert_eq!(run.offset(run.id("c")), Offset::new(px(0.0), px(25.0)));
+}
+
+// ── RenderWrap dry layout ─────────────────────────────────────────────────────
+
+/// `compute_dry_layout` for a three-child wrap that breaks into two runs.
+///
+/// Oracle sizes from `harness_render_wrap_wraps_to_second_run`: three 40×40
+/// children in a loose-100 container. Run 1: a(40)+b(40)=80. Run 2: c(40)
+/// wraps. Container: constrain(80 main, 80 cross) = (80, 80). This test
+/// returns `Size::ZERO` with the default trait implementation and passes only
+/// once `RenderWrap::compute_dry_layout` delegates to `compute_runs`.
+#[test]
+fn harness_render_wrap_dry_layout_multi_run() {
+    let constraints = loose(100.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderWrap::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(40.0, 40.0)).label("c")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let expected = Size::new(px(80.0), px(80.0));
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        expected,
+        "wrap dry layout must break into two runs and report the correct container size",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        run.box_geometry(run.root()),
+        "dry layout must agree with committed layout geometry",
+    );
+}
+
+/// `compute_dry_layout` for a wrap with `spacing` and `run_spacing`.
+///
+/// Oracle sizes from `harness_render_wrap_spacing_and_run_spacing_add_gaps`:
+/// three 30×20 children, spacing=10, run_spacing=5, loose(100).
+/// Run 1: a(30)+gap(10)+b(30)=70; next child (30+10+30=110 > 100) wraps.
+/// Run 2: c(30). max_run_main=70, total_cross=20+5+20=45. Container: (70, 45).
+#[test]
+fn harness_render_wrap_dry_layout_with_spacing_and_run_spacing() {
+    let constraints = loose(100.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderWrap::new().with_spacing(10.0).with_run_spacing(5.0))
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(30.0, 20.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(30.0, 20.0)).label("c")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let expected = Size::new(px(70.0), px(45.0));
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        expected,
+        "wrap dry layout with spacing/run_spacing must report the correct container size",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        run.box_geometry(run.root()),
+        "dry layout must agree with committed layout geometry",
+    );
 }
 
 #[test]

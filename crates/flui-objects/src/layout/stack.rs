@@ -45,7 +45,7 @@ use flui_types::{Alignment, Offset, Pixels, Point, Rect, Size, painting::Clip};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
     parent_data::StackParentData,
     traits::RenderBox,
 };
@@ -163,6 +163,24 @@ impl PositionedSpec {
 #[inline]
 fn alignment_along_axis(component: f32, free: Pixels) -> Pixels {
     Pixels::new(free.get() * (component + 1.0) * 0.5)
+}
+
+// =============================================================================
+// StackSizes — shared sizing result used by perform_layout and compute_dry_layout
+// =============================================================================
+
+/// Intermediate result from the stack sizing pass.
+///
+/// Shared between [`RenderStack::perform_layout`] (which continues to
+/// positioning) and [`RenderBox::compute_dry_layout`] (which only needs the
+/// container size). Mirrors the `FlexSizes` pattern in `flex.rs`.
+struct StackSizes {
+    /// Constrained container size.
+    size: Size,
+    /// Per-child sizes: the actual laid-out size for non-positioned children,
+    /// [`Size::ZERO`] as a placeholder for positioned children (which are not
+    /// measured in the sizing pass).
+    child_sizes: Vec<Size>,
 }
 
 // =============================================================================
@@ -307,6 +325,67 @@ impl RenderStack {
             || (offset.dy + child_size.height).get() > stack_size.height.get()
     }
 
+    /// Core of the stack sizing pass, shared between `perform_layout` and
+    /// `compute_dry_layout`.
+    ///
+    /// Mirrors Flutter's `_computeSize` (stack.dart:625-675): measures ONLY
+    /// non-positioned children (those with `specs[i].is_none()`), accumulates
+    /// the maximum child extents, and resolves the container size from
+    /// [`StackFit`] and the incoming constraints.
+    ///
+    /// `measure(i, constraints)` is either `ctx.layout_child` (real layout)
+    /// or `ctx.child_dry_layout` (dry layout). Positioned children are NOT
+    /// measured in this pass — they are measured in Pass 2 of `perform_layout`.
+    fn compute_size(
+        &self,
+        incoming: BoxConstraints,
+        specs: &[Option<PositionedSpec>],
+        mut measure: impl FnMut(usize, BoxConstraints) -> Size,
+    ) -> StackSizes {
+        let child_count = specs.len();
+
+        if child_count == 0 {
+            return StackSizes {
+                size: if incoming.biggest().is_finite() {
+                    incoming.biggest()
+                } else {
+                    incoming.smallest()
+                },
+                child_sizes: vec![],
+            };
+        }
+
+        let nonpos_constraints = self.non_positioned_constraints(incoming);
+        let mut has_non_positioned = false;
+        let mut content_w = incoming.min_width;
+        let mut content_h = incoming.min_height;
+        let mut child_sizes = vec![Size::ZERO; child_count];
+
+        for i in 0..child_count {
+            if specs[i].is_none() {
+                has_non_positioned = true;
+                let s = measure(i, nonpos_constraints);
+                child_sizes[i] = s;
+                if s.width > content_w {
+                    content_w = s.width;
+                }
+                if s.height > content_h {
+                    content_h = s.height;
+                }
+            }
+        }
+
+        let size = if has_non_positioned {
+            incoming.constrain(Size::new(content_w, content_h))
+        } else if incoming.biggest().is_finite() {
+            incoming.biggest()
+        } else {
+            incoming.smallest()
+        };
+
+        StackSizes { size, child_sizes }
+    }
+
     /// Flutter stack.dart: each intrinsic dimension is the max of the children.
     fn max_child_intrinsic(
         ctx: &mut BoxIntrinsicsCtx<'_>,
@@ -355,63 +434,26 @@ impl RenderBox for RenderStack {
         self.child_count = child_count;
         self.has_visual_overflow = false;
 
-        // No-child fast path — Flutter parity: take the biggest finite
-        // size, otherwise the smallest.
-        if child_count == 0 {
-            return if incoming.biggest().is_finite() {
-                incoming.biggest()
-            } else {
-                incoming.smallest()
-            };
-        }
-
-        // -----------------------------------------------------------------
-        // Pass 1 — lay out NON-positioned children and accumulate the
-        // stack's intrinsic content extent.
-        // -----------------------------------------------------------------
-        let nonpos_constraints = self.non_positioned_constraints(incoming);
-        let mut has_non_positioned = false;
-        let mut content_w = incoming.min_width;
-        let mut content_h = incoming.min_height;
-        // Cache the per-child PositionedSpec snapshot so Pass 2 doesn't
-        // have to re-read parent_data.
+        // Build the per-child PositionedSpec snapshot so both the sizing
+        // pass and Pass 2 can branch on positioned vs non-positioned without
+        // re-reading parent_data. PositionedSpec is Copy so no reference to
+        // ctx is retained after this loop.
         let mut specs: Vec<Option<PositionedSpec>> = Vec::with_capacity(child_count);
-        let mut sizes: Vec<Size> = vec![Size::ZERO; child_count];
-
-        #[allow(
-            clippy::needless_range_loop,
-            reason = "`ctx.child_parent_data(i)` / `ctx.layout_child(i, _)` \
-                      both consume the index; .enumerate() would not help."
-        )]
         for i in 0..child_count {
-            let spec = ctx
-                .child_parent_data(i)
-                .and_then(PositionedSpec::from_parent_data);
-            specs.push(spec);
-
-            if spec.is_none() {
-                has_non_positioned = true;
-                let s = ctx.layout_child(i, nonpos_constraints);
-                sizes[i] = s;
-                if s.width > content_w {
-                    content_w = s.width;
-                }
-                if s.height > content_h {
-                    content_h = s.height;
-                }
-            }
+            specs.push(
+                ctx.child_parent_data(i)
+                    .and_then(PositionedSpec::from_parent_data),
+            );
         }
 
         // -----------------------------------------------------------------
-        // Resolve the stack's own size.
+        // Sizing pass (= Flutter's _computeSize): measure NON-positioned
+        // children, resolve the stack's own size. Delegates to compute_size
+        // so dry layout can reuse identical logic.
         // -----------------------------------------------------------------
-        let size = if has_non_positioned {
-            incoming.constrain(Size::new(content_w, content_h))
-        } else if incoming.biggest().is_finite() {
-            incoming.biggest()
-        } else {
-            incoming.smallest()
-        };
+        let sized = self.compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c));
+        let size = sized.size;
+        let mut child_sizes = sized.child_sizes;
 
         // -----------------------------------------------------------------
         // Pass 2 — position non-positioned children (align inside size)
@@ -426,7 +468,7 @@ impl RenderBox for RenderStack {
         for i in 0..child_count {
             match specs[i] {
                 None => {
-                    let child_size = sizes[i];
+                    let child_size = child_sizes[i];
                     let offset = Offset::new(
                         alignment_along_axis(self.alignment.x, size.width - child_size.width),
                         alignment_along_axis(self.alignment.y, size.height - child_size.height),
@@ -436,7 +478,7 @@ impl RenderBox for RenderStack {
                 Some(spec) => {
                     let cc = spec.child_constraints(size);
                     let child_size = ctx.layout_child(i, cc);
-                    sizes[i] = child_size;
+                    child_sizes[i] = child_size;
                     let offset = spec.child_offset(size, child_size, self.alignment);
                     if Self::child_overflows(size, offset, child_size) {
                         self.has_visual_overflow = true;
@@ -447,6 +489,27 @@ impl RenderBox for RenderStack {
         }
 
         size
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        // Build specs via the erased parent-data accessor: same gate as
+        // perform_layout so positioned vs non-positioned classification
+        // is identical in both paths.
+        let child_count = ctx.child_count();
+        let mut specs: Vec<Option<PositionedSpec>> = Vec::with_capacity(child_count);
+        for i in 0..child_count {
+            specs.push(
+                ctx.child_parent_data_as::<StackParentData>(i)
+                    .and_then(PositionedSpec::from_parent_data),
+            );
+        }
+        // PositionedSpec is Copy — no reference to ctx survives into the closure.
+        self.compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))
+            .size
     }
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
