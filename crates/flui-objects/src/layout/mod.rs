@@ -20,6 +20,7 @@ mod rotated_box;
 pub(crate) mod shifted_box;
 mod sized_box;
 mod stack;
+mod table;
 mod transform;
 mod wrap;
 
@@ -48,5 +49,6 @@ pub use padding::*;
 pub use rotated_box::*;
 pub use sized_box::*;
 pub use stack::*;
+pub use table::*;
 pub use transform::*;
 pub use wrap::*;

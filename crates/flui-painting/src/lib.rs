@@ -170,6 +170,7 @@ pub mod decoration;
 pub mod display_list;
 pub mod error;
 
+pub mod table_border;
 pub mod text_layout;
 pub mod text_painter;
 
@@ -197,6 +198,7 @@ pub use display_list::{
     DisplayList, DisplayListCore, DisplayListExt, DisplayListStats, DrawCommand,
 };
 pub use error::{PaintingError, Result};
+pub use table_border::paint_table_border;
 pub use text_layout::{
     LineInfo, TextLayout, TextLayoutResult, detect_text_direction, measure_inline_span,
     measure_text,

@@ -38,6 +38,7 @@
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
 //! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order |
+//! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
@@ -70,6 +71,7 @@
 
 use std::{
     any::Any,
+    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -92,12 +94,12 @@ use flui_rendering::{
     },
     parent_data::{
         FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
-        StackParentData,
+        StackParentData, TableCellParentData,
     },
     testing::{
-        BoxQueryRun, ParentDataSeed, Probe, RenderTester, TreeNode, assert_descendant_properties,
-        assert_has_committed_geometry, assert_has_committed_size, box_node, localize_hit_point,
-        sliver_node,
+        BoxQueryRun, DrawKind, ParentDataSeed, Probe, RenderTester, TreeNode,
+        assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
+        box_node, localize_hit_point, sliver_node,
     },
     traits::TextBaseline,
     view::ScrollableViewportOffset,
@@ -105,9 +107,11 @@ use flui_rendering::{
 use flui_types::{
     Alignment, EdgeInsets, Matrix4, Offset, Point, Rect, Size,
     geometry::px,
-    layout::{AxisDirection, BoxFit, StackFit},
+    layout::{AxisDirection, BoxFit, StackFit, TableCellVerticalAlignment, TableColumnWidth},
     painting::Clip,
-    styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color},
+    styling::{
+        BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, TableBorder,
+    },
     typography::{TextDirection, TextSpan},
 };
 
@@ -146,6 +150,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderIndexedStack",
     "RenderListBody",
     "RenderFlow",
+    "RenderTable",
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
     "RenderListener",
@@ -4969,6 +4974,264 @@ fn harness_flow_set_delegate_reports_relayout_and_diagnostics() {
     .run_frame();
 
     assert_descendant_properties(&run.diagnostics(), "RenderFlow", &["clip_behavior"]);
+}
+
+// ============================================================================
+// RenderTable
+// ============================================================================
+
+/// Tight width (forces `_computeColumnWidths`' pass 2 to grow the Flex column
+/// to fill the remainder), loose height (so the table's own height comes from
+/// content, not the incoming constraints).
+fn table_tight_width_loose_height(width: f32, max_height: f32) -> BoxConstraints {
+    BoxConstraints::new(px(width), px(width), px(0.0), px(max_height))
+}
+
+#[test]
+fn harness_table_grid_lays_out_each_cell_at_its_exact_offset_and_size() {
+    // 2 columns: Fixed(50) + Flex(1.0, the default) under a tight 200px
+    // width -> column widths resolve to [50, 150] (pass 2 grows the flex
+    // column to fill the 150px remainder). Row heights are each row's
+    // tallest cell: row 0 = max(20, 30) = 30; row 1 = max(15, 10) = 15.
+    let run = RenderTester::mount(
+        box_node(
+            RenderTable::new(2)
+                .with_column_widths(HashMap::from([(0, TableColumnWidth::Fixed(50.0))])),
+        )
+        .child(box_node(RenderColoredBox::red(50.0, 20.0)).label("a"))
+        .child(box_node(RenderColoredBox::green(150.0, 30.0)).label("b"))
+        .child(box_node(RenderColoredBox::blue(50.0, 15.0)).label("c"))
+        .child(box_node(RenderColoredBox::red(150.0, 10.0)).label("d")),
+    )
+    .with_constraints(table_tight_width_loose_height(200.0, 800.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(200.0), px(45.0)),
+        "table size must be the sum of resolved column widths (200) and row heights (30+15)",
+    );
+
+    assert_eq!(run.offset(run.id("a")), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.box_geometry(run.id("a")), Size::new(px(50.0), px(20.0)));
+
+    assert_eq!(run.offset(run.id("b")), Offset::new(px(50.0), px(0.0)));
+    assert_eq!(
+        run.box_geometry(run.id("b")),
+        Size::new(px(150.0), px(30.0))
+    );
+
+    assert_eq!(run.offset(run.id("c")), Offset::new(px(0.0), px(30.0)));
+    assert_eq!(run.box_geometry(run.id("c")), Size::new(px(50.0), px(15.0)));
+
+    assert_eq!(run.offset(run.id("d")), Offset::new(px(50.0), px(30.0)));
+    assert_eq!(
+        run.box_geometry(run.id("d")),
+        Size::new(px(150.0), px(10.0))
+    );
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderTable",
+        &["column_count", "default_vertical_alignment"],
+    );
+}
+
+#[test]
+fn harness_table_paints_row_decoration_then_children_then_border_in_order() {
+    // 1 row x 2 columns, uniform border (so the outer edge is one DrawDRRect)
+    // plus a solid `vertical_inside` (so there's exactly one interior line —
+    // no `horizontal_inside` line since there's only 1 row).
+    let border = TableBorder::all(BorderSide::new(Color::BLUE, px(2.0), BorderStyle::Solid));
+    let run = RenderTester::mount(
+        box_node(
+            RenderTable::new(2)
+                .with_row_decorations(vec![Some(BoxDecoration::with_color(Color::RED))])
+                .with_border(Some(border)),
+        )
+        .child(box_node(RenderColoredBox::green(20.0, 10.0)).label("a"))
+        .child(box_node(RenderColoredBox::green(20.0, 10.0)).label("b")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let kinds: Vec<_> = commands.iter().map(|c| c.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            DrawKind::Rect,   // row decoration
+            DrawKind::Rect,   // cell "a"
+            DrawKind::Rect,   // cell "b"
+            DrawKind::Path,   // vertical_inside interior line
+            DrawKind::DRRect, // uniform outer border
+        ],
+        "paint order must be decoration -> children -> border; commands:\n{}",
+        commands
+            .iter()
+            .map(|c| c.line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    assert!(commands[0].line.contains("#FF0000FF"), "{:?}", commands[0]);
+    assert!(commands[1].line.contains("#00FF00FF"), "{:?}", commands[1]);
+    assert!(commands[2].line.contains("#00FF00FF"), "{:?}", commands[2]);
+    assert!(commands[4].line.contains("#0000FFFF"), "{:?}", commands[4]);
+}
+
+#[test]
+fn harness_table_border_interior_lines_sit_exactly_on_the_column_and_row_boundaries() {
+    // 2x2 grid of 20x10 cells (all Flex(1.0) columns share the 40px width
+    // equally -> column boundary at x=20; row boundary at y=10).
+    let border = TableBorder::all(BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid));
+    let run = RenderTester::mount(
+        box_node(RenderTable::new(2).with_border(Some(border)))
+            .child(box_node(RenderColoredBox::red(20.0, 10.0)))
+            .child(box_node(RenderColoredBox::red(20.0, 10.0)))
+            .child(box_node(RenderColoredBox::red(20.0, 10.0)))
+            .child(box_node(RenderColoredBox::red(20.0, 10.0))),
+    )
+    .with_constraints(table_tight_width_loose_height(40.0, 800.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let vertical_line = commands
+        .iter()
+        .find(|c| c.kind == DrawKind::Path)
+        .expect("the interior vertical line must be a DrawPath command");
+    assert!(
+        vertical_line
+            .line
+            .contains("bounds=(20.00,0.00 0.00x20.00)"),
+        "interior vertical line must run the full table height (20) at the \
+         column boundary x=20; got: {}",
+        vertical_line.line,
+    );
+
+    let horizontal_line = commands
+        .iter()
+        .filter(|c| c.kind == DrawKind::Path)
+        .nth(1)
+        .expect("the interior horizontal line must be a second DrawPath command");
+    assert!(
+        horizontal_line
+            .line
+            .contains("bounds=(0.00,10.00 40.00x0.00)"),
+        "interior horizontal line must run the full table width (40) at the \
+         row boundary y=10; got: {}",
+        horizontal_line.line,
+    );
+}
+
+#[test]
+fn harness_table_hit_test_per_cell_and_miss_outside_bounds() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderTable::new(2)
+                .with_column_widths(HashMap::from([(0, TableColumnWidth::Fixed(50.0))])),
+        )
+        .child(box_node(RenderColoredBox::red(50.0, 20.0)).label("a"))
+        .child(box_node(RenderColoredBox::green(150.0, 30.0)).label("b"))
+        .child(box_node(RenderColoredBox::blue(50.0, 15.0)).label("c"))
+        .child(box_node(RenderColoredBox::red(150.0, 10.0)).label("d")),
+    )
+    .with_constraints(table_tight_width_loose_height(200.0, 800.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(10.0, 10.0), Some(run.id("a")));
+    assert_eq!(run.hit_first(100.0, 10.0), Some(run.id("b")));
+    assert_eq!(run.hit_first(10.0, 35.0), Some(run.id("c")));
+    assert_eq!(run.hit_first(100.0, 35.0), Some(run.id("d")));
+    assert!(
+        run.hit(10.0, 999.0).is_empty(),
+        "a point below the table's own bounds must be a genuine miss",
+    );
+}
+
+#[test]
+fn harness_table_baseline_alignment_lines_up_cells_on_their_shared_baseline() {
+    // Both cells opt into `Baseline` alignment; the table-wide baseline
+    // (`before_baseline`) is the max reported baseline in the row (30, from
+    // "tall"). "short" (baseline 10) must be pushed down by 30 - 10 = 20 so
+    // its own baseline coincides with "tall"'s at y=30 from the row top.
+    let run = RenderTester::mount(
+        box_node(RenderTable::new(2).with_text_baseline(Some(TextBaseline::Alphabetic)))
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(30.0)))
+                    .child(box_node(RenderColoredBox::red(20.0, 10.0)))
+                    .with_table_parent_data(
+                        TableCellParentData::zero()
+                            .with_alignment(TableCellVerticalAlignment::Baseline),
+                    )
+                    .label("tall"),
+            )
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(10.0)))
+                    .child(box_node(RenderColoredBox::green(20.0, 5.0)))
+                    .with_table_parent_data(
+                        TableCellParentData::zero()
+                            .with_alignment(TableCellVerticalAlignment::Baseline),
+                    )
+                    .label("short"),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(run.offset(run.id("tall")).dy, px(0.0));
+    assert_eq!(run.offset(run.id("short")).dy, px(20.0));
+    assert_eq!(
+        run.box_geometry(run.root()).height,
+        px(30.0),
+        "row height must be the table-wide baseline distance (30) since \
+         after_baseline is 0 for both cells",
+    );
+}
+
+#[test]
+fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_explicit_cell_does_not()
+{
+    // 3 columns: "unset" has no parent-data override (defers to the table's
+    // default); "explicit_top" pins `Top` directly; "spacer" is tall (50px)
+    // so the row's height (50) leaves visible room for Top/Bottom to differ.
+    let mut run = RenderTester::mount(
+        box_node(RenderTable::new(3))
+            .child(box_node(RenderColoredBox::red(20.0, 10.0)).label("unset"))
+            .child(
+                box_node(RenderColoredBox::green(20.0, 10.0))
+                    .with_table_parent_data(
+                        TableCellParentData::zero().with_alignment(TableCellVerticalAlignment::Top),
+                    )
+                    .label("explicit_top"),
+            )
+            .child(box_node(RenderColoredBox::blue(20.0, 50.0)).label("spacer")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    // Before the default changes, both cells sit at the row top.
+    assert_eq!(run.offset(run.id("unset")).dy, px(0.0));
+    assert_eq!(run.offset(run.id("explicit_top")).dy, px(0.0));
+
+    run.update::<RenderTable>(run.root(), |table| {
+        table.set_default_vertical_alignment(TableCellVerticalAlignment::Bottom);
+    });
+    run.pump();
+
+    // Row height is 50 (the spacer); a Bottom-aligned 10px-tall cell sits at
+    // dy = 50 - 10 = 40.
+    assert_eq!(
+        run.offset(run.id("unset")).dy,
+        px(40.0),
+        "an unset cell must follow the table's default_vertical_alignment \
+         after it changes",
+    );
+    assert_eq!(
+        run.offset(run.id("explicit_top")).dy,
+        px(0.0),
+        "a cell with an explicit vertical_alignment must NOT follow a later \
+         default_vertical_alignment change",
+    );
 }
 
 // ============================================================================

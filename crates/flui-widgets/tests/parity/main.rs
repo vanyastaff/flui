@@ -45,3 +45,6 @@ mod sliver_offstage_test;
 
 // ── Core.2 — RenderFlow / Flow ───────────────────────────────────────────────
 mod flow_test;
+
+// ── Core.2 — RenderTable / Table ─────────────────────────────────────────────
+mod table_test;

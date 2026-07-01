@@ -37,10 +37,15 @@ impl Default for TableColumnWidth {
     }
 }
 
+/// Where a `Table`/`RenderTable` cell should be placed vertically within its
+/// row's resolved height.
+///
+/// The canonical home for this type — `flui_rendering::parent_data::table_text::TableCellParentData`
+/// re-points at this definition rather than keeping an independent copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TableCellVerticalAlignment {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    /// Align to the top of the row.
     #[default]
     Top,
 

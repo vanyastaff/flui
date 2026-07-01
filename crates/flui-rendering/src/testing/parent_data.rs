@@ -16,6 +16,7 @@
 use crate::parent_data::{
     BoxParentData, FlexParentData, MultiChildLayoutParentData, ParentData,
     SliverMultiBoxAdaptorParentData, SliverPhysicalParentData, StackParentData,
+    TableCellParentData,
 };
 
 /// A harness-side clone of the parent metadata a widget would normally
@@ -40,6 +41,9 @@ pub enum ParentDataSeed {
     ///
     /// [`RenderSliverList`]: crate::traits::RenderSliver
     SliverMultiBoxAdaptor(SliverMultiBoxAdaptorParentData),
+    /// [`TableCellParentData`] for `RenderTable` (see `flui_objects::RenderTable`)
+    /// children — cell vertical alignment.
+    Table(TableCellParentData),
 }
 
 impl ParentDataSeed {
@@ -53,6 +57,7 @@ impl ParentDataSeed {
             Self::Box(data) => Box::new(data.clone()),
             Self::SliverPhysical(data) => Box::new(data.clone()),
             Self::SliverMultiBoxAdaptor(data) => Box::new(data.clone()),
+            Self::Table(data) => Box::new(data.clone()),
         }
     }
 }

@@ -125,11 +125,16 @@ pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
     IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, OverflowBox, Padding,
-    RotatedBox, SizedBox, SizedOverflowBox, Transform,
+    RotatedBox, SizedBox, SizedOverflowBox, Table, TableCell, TableRow, Transform,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
+// `TableColumnWidth`/`TableCellVerticalAlignment` configure `Table`/`TableCell`;
+// `TableBorder` configures `Table::border`. Re-exported here so widget authors
+// need only import from `flui_widgets`.
+pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
+pub use flui_types::styling::TableBorder;
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
@@ -211,8 +216,9 @@ pub mod prelude {
         SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
         SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
         SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Text,
-        TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Table, TableCell,
+        TableRow, Text, TextEditingController, TextField, Theme, ThemeData, Transform, Viewport,
+        Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
@@ -220,7 +226,8 @@ pub mod prelude {
         AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
         SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
+        TableCellVerticalAlignment, TableColumnWidth,
     };
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
     pub use flui_interaction::{

@@ -226,6 +226,17 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > `MultiChildLayoutDelegate`; harness/widget coverage pins child-id lookup,
 > per-child delegated constraints/offsets, reverse-order hit testing, and
 > dry layout/intrinsics.
+> `RenderTable` now exists, backs the public `Table`/`TableRow`/`TableCell`
+> widgets, and fixed a pre-existing type-debt bug in the process
+> (`TableCellParentData.vertical_alignment` was non-optional, silently
+> breaking "unset cell follows the table's default"; now
+> `Option<TableCellVerticalAlignment>`, consolidated onto the single
+> `flui_types` enum). Harness coverage pins the 4-pass column-width
+> algorithm (including the oracle's own adversarial flex/shrink scenario),
+> per-cell geometry, row-decoration/children/border paint order, border
+> line placement, per-cell hit testing, and baseline row alignment.
+> `MaxColumnWidth`/`MinColumnWidth` combinators, RTL column order, and
+> `TableBorder.border_radius` remain documented deferred edges.
 > The genuine remaining work is: **(a)** the
 > *secondary-query* architectural gap — `compute_dry_layout` / baseline /
 > intrinsics for multi-child objects (`2026-06-30-secondary-query-layout-gap.md`,
@@ -236,7 +247,7 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 
 | Family | Status | Notes |
 |---|---|---|
-| Box layout (`RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFractionallySizedBox`, `RenderStack`, `RenderIndexedStack`, `RenderListBody`, `RenderPositioned`, `RenderFlow`, `RenderCustomSingleChildLayoutBox`, `RenderCustomMultiChildLayoutBox`, `RenderTable`) | ⚠ mostly exist + audited | ConstrainedBox/LimitedBox/AspectRatio/Baseline/Wrap/FractionallySizedBox/Stack/Flex **exist + oracle-verified faithful or fixed** 2026-06-30. `RenderIndexedStack`, `RenderListBody`, `RenderCustomSingleChildLayoutBox`, and `RenderCustomMultiChildLayoutBox` exist + oracle-verified 2026-07-01. `RenderFlow` exists with harness coverage; `RenderTable` not yet built. |
+| Box layout (`RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFractionallySizedBox`, `RenderStack`, `RenderIndexedStack`, `RenderListBody`, `RenderPositioned`, `RenderFlow`, `RenderCustomSingleChildLayoutBox`, `RenderCustomMultiChildLayoutBox`, `RenderTable`) | ⚠ mostly exist + audited | ConstrainedBox/LimitedBox/AspectRatio/Baseline/Wrap/FractionallySizedBox/Stack/Flex **exist + oracle-verified faithful or fixed** 2026-06-30. `RenderIndexedStack`, `RenderListBody`, `RenderCustomSingleChildLayoutBox`, `RenderCustomMultiChildLayoutBox`, and `RenderTable` exist + oracle-verified 2026-07-01. `RenderFlow` exists with harness coverage. |
 | Paint effects (`RenderClipRect/RRect/Path/Oval`, `RenderDecoratedBox`, `RenderOpacity` variants, `RenderTransform` family, `RenderFittedBox`, `RenderCustomPaint`, `RenderRepaintBoundary`) | ⚠ mostly exist | `RenderTransform`/`RenderFittedBox`/`RenderFractionalTranslation` audited+fixed 2026-06-30; clip/opacity/decorated_box exist (proxy-paint parity audit in progress). `RenderCustomPaint` exists with first harness slice 2026-07-01; repaint-listenable/semantics/cache hints remain deferred. |
 | Slivers (`RenderViewport`, `RenderShrinkWrappingViewport`, `RenderSliverList/Grid/Padding/FillViewport/FillRemaining/ToBoxAdapter/Offstage/Opacity`) | ⚠ mostly exist; grid + shrink-wrap viewport blockers closed | Contained slivers audited+fixed 2026-06-30 (offstage correction, overscroll positioning). `RenderSliverGrid` and `RenderSliverGridLazy` now back eager `SliverGrid`/`GridView.count`/`GridView.extent` and lazy `GridView.builder`; lazy grid has a 1000-item scroll-bounded test. `RenderShrinkWrappingViewport` now backs `ShrinkWrappingViewport` plus `CustomScrollView`/`ListView`/`GridView` `shrink_wrap`; persistent-header families remain open. |
 | Input / leaf (`RenderParagraph`, `RenderImage`, `RenderMouseRegion`, `RenderPointerListener`, `RenderEditable`) | ◐ partial | `RenderMouseRegion`, FLUI's `RenderListener`/Flutter `RenderPointerListener`, and the first `RenderEditable` visual-core slice exist + first oracle-verified harness/widget slices 2026-07-01. `RenderParagraph`/`RenderImage` exist; not yet parity-audited. Full text input still needs IME/composing/selection/platform work. |

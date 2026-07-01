@@ -22,6 +22,7 @@ mod padding;
 mod rotated_box;
 mod sized_box;
 mod sized_overflow_box;
+mod table;
 mod transform;
 
 pub use align::Align;
@@ -44,4 +45,5 @@ pub use padding::Padding;
 pub use rotated_box::RotatedBox;
 pub use sized_box::SizedBox;
 pub use sized_overflow_box::SizedOverflowBox;
+pub use table::{Table, TableCell, TableRow};
 pub use transform::Transform;

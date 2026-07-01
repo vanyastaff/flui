@@ -45,8 +45,8 @@ pub use layout::{
     RenderCustomMultiChildLayoutBox, RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex,
     RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLimitedBox, RenderListBody, RenderPadding,
-    RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox, RenderStack, RenderTransform,
-    RenderWrap,
+    RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox, RenderStack, RenderTable,
+    RenderTransform, RenderWrap,
 };
 pub use layout::{
     CrossAxisAlignment, DelegateChange, FlexDirection, MainAxisAlignment, MainAxisSize,

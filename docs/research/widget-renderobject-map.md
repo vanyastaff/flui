@@ -15,26 +15,26 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **59**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **60**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
 > and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
 > body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
-> that appears in the "Existing (59)" list, the list wins. The body is retained for its
+> that appears in the "Existing (60)" list, the list wins. The body is retained for its
 > accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
 > file), which the Core.2 implementers need.
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **59**
-- **Render objects remaining to build (Core.2):** **~13** (verified list below)
+- **Render objects existing today:** **60**
+- **Render objects remaining to build (Core.2):** **~12** (verified list below)
 
-### Existing render objects — authoritative (59)
+### Existing render objects — authoritative (60)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
-**Box layout (24):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderWrap`
+**Box layout (25):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderTable` · `RenderWrap`
 
 **Paint effects (10):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
 
@@ -44,13 +44,12 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈13)
+### Remaining to build — verified missing (≈12)
 
 Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
-| `RenderTable` | `Table`/`DataTable` | Medium | `table.dart` |
 | `RenderSliverPersistentHeader` family | `SliverAppBar`/pinned headers | Medium | `sliver_persistent_header.dart` |
 | `RenderAnimatedOpacity` | `FadeTransition`/`AnimatedOpacity` | Medium | `proxy_box.dart` |
 | `RenderAnimatedSize` | `AnimatedSize` | Medium | `animated_size.dart` |
@@ -83,6 +82,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 > **`RenderCustomSingleChildLayoutBox` closure note (verified 2026-07-01):** `RenderCustomSingleChildLayoutBox` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `CustomSingleChildLayout` widget. Harness/widget coverage pins delegated parent sizing, child constraints, child positioning, hit testing through the committed layout offset, dry layout/intrinsics, dry-baseline offsetting, and live actual-baseline forwarding. `SingleChildLayoutDelegate` is now un-gated in `flui-rendering`.
 >
 > **`RenderCustomMultiChildLayoutBox` closure note (verified 2026-07-01):** `RenderCustomMultiChildLayoutBox` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `CustomMultiChildLayout` widget plus `LayoutId` parent-data widget. Harness/widget coverage pins delegated parent sizing, child-id lookup, per-child constraints, layout offsets, reverse-order hit testing, dry layout/intrinsics, and `LayoutId` parent-data delivery. `MultiChildLayoutDelegate` is now un-gated in `flui-rendering`.
+>
+> **`RenderTable` closure note (verified 2026-07-01):** `RenderTable` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `Table`/`TableRow`/`TableCell` widgets. Building it surfaced and fixed a pre-existing type-debt bug: `TableCellParentData.vertical_alignment` was non-optional (defaulting every unset cell to `Top`), where Flutter's is nullable and defers to `RenderTable.defaultVerticalAlignment`; it is now `Option<TableCellVerticalAlignment>`, consolidated onto the single `flui_types::layout::table::TableCellVerticalAlignment` enum (retiring a duplicate `flui_rendering`-local copy). Harness coverage pins the oracle's 4-pass column-width algorithm (`Fixed`/`Flex`/`Fraction`/`Intrinsic`, including the oracle's own adversarial low-ideal/high-flex vs. high-ideal/low-flex shrink scenario), per-cell offset/size, row-decoration → children → border paint order, border interior-line placement, per-cell hit testing, and baseline row alignment. Deferred and documented: `MaxColumnWidth`/`MinColumnWidth` combinators, `TableCellVerticalAlignment::IntrinsicHeight`, RTL column ordering (matching `RenderWrap`'s/`RenderFlex`'s existing LTR-only precedent), and `TableBorder.border_radius`.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -117,7 +118,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `IndexedStack` | `RenderIndexedStack` | **Exists** | Variable | Extends `RenderStack`, shows only one child |
 | `Wrap` | `RenderWrap` | Needed | Variable | From `wrap.dart` |
 | `Flow` | `RenderFlow` | Needed | Variable | Paint-time transforms via `FlowDelegate` |
-| `Table` | `RenderTable` | Needed | Variable | From `table.dart` |
+| `Table` | `RenderTable` | **Exists** | Variable | From `table.dart` |
 | `TableRow` | *(composes)* | N/A | — | Grouping widget for Table rows |
 | `CustomSingleChildLayout` | `RenderCustomSingleChildLayoutBox` | **Exists** | Single | Delegate-driven layout |
 | `CustomMultiChildLayout` | `RenderCustomMultiChildLayoutBox` | **Exists** | Variable | Delegate-driven multi-child layout |
