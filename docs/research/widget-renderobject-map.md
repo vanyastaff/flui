@@ -226,8 +226,27 @@ are listed in the render-object harness catalog, and back the public
 > in the call graph (a separate, fully-working Canvas-level shader-mask pipeline exists but is
 > architecturally incompatible with `PaintCx`'s deferred-child/no-live-recursion model, so it can't
 > be reused as-is). The `LayerTree` structure is correct and harness-verifiable (a real
-> `Layer::ShaderMask` node with the right fields), but `ShaderMask` does not yet visually mask
-> anything on screen — a confirmed `flui-engine` follow-up, not closed by this pass.
+> `Layer::ShaderMask` node with the right fields).
+>
+> **`flui-engine` `ShaderMask` visual-rendering follow-up CLOSED (verified 2026-07-01, see
+> `docs/research/2026-07-01-shader-mask-engine-render-plan.md`).** `render_layer_recursive` gained
+> a `Layer::ShaderMask` special case mirroring the already-shipped `Layer::BackdropFilter` one —
+> but the underlying technique is the *opposite*: `BackdropFilter` blurs what's already on the
+> surface behind the layer, then paints children normally on top; `ShaderMask` instead captures its
+> children's own rendered content to a private offscreen texture first (reusing the exact
+> six-step capture-then-mask-then-composite pipeline `Backend::render_shader_mask` already proves
+> for the `Canvas::draw_shader_mask`/`DisplayList` path), applies the shader as a GPU mask against
+> that capture, then composites the masked result. The one real trap: naively copying
+> `render_shader_mask`'s DPR-only transform reset (correct there because its children are recorded
+> into a *fresh*, self-relative `Canvas`) would silently mis-position or clip away any `ShaderMask`
+> not sitting at the tree root, since `Layer::ShaderMask`'s children are expressed in the same
+> ambient-CTM-relative frame as its own `bounds()` — the fix seeds the offscreen painter's
+> transform with `translate(-bounds.origin) * ambient_ctm` instead. Proven with a GPU pixel-readback
+> test nesting the mask under a translating `Layer::Offset` ancestor; the builder verified this
+> test genuinely fails (masked content lands at the wrong screen position) when reverted to the
+> naive DPR-only reset, then confirmed it passes with the fix. **`ShaderMask` now visually masks on
+> screen exactly as its render-tree wiring always claimed.** `RenderBackdropFilter`'s GPU blur
+> remains real but `ImageFilter::Blur`-only (unchanged, not addressed by this follow-up).
 > `RenderBackdropFilter`'s GPU blur is real but covers only `ImageFilter::Blur`; other filter
 > variants degrade to "children only, no backdrop effect" with a `tracing::warn!`. Scoped down from
 > the oracle's current `ImageFilterConfig`/`BackdropKey` surface (bounded blur, shared-backdrop
@@ -366,7 +385,7 @@ are listed in the render-object harness catalog, and back the public
 | `DecoratedBox` | `RenderDecoratedBox` | Needed | Single | Paints `BoxDecoration` (borders, gradients, shadows, images) |
 | `CustomPaint` | `RenderCustomPaint` | **Exists** | Single | User-supplied foreground/background painters |
 | `BackdropFilter` | `RenderBackdropFilter` | **Exists** | Single | Applies image filter to backdrop; see closure note above |
-| `ShaderMask` | `RenderShaderMask` | **Exists** (render-tree only — see closure note) | Single | Applies shader as color mask; `flui-engine` does not yet visually apply it |
+| `ShaderMask` | `RenderShaderMask` | **Exists** | Single | Applies shader as color mask; `flui-engine` now visually applies it — see closure note |
 | `PhysicalModel` | `RenderPhysicalModel` | **Exists** | Single | Rounded-rect clip + elevation shadow; see closure note above |
 | `PhysicalShape` | `RenderPhysicalShape` | **Exists** | Single | Arbitrary path clip + elevation shadow; see closure note above |
 | `RepaintBoundary` | `RenderRepaintBoundary` | **Exists** | Single | Isolates repaint subtree |

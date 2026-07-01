@@ -227,7 +227,13 @@ impl<'frame> Backend<'frame> {
     ///
     /// On first call, creates a new `WgpuPainter` with shared device/queue.
     /// On subsequent calls, returns the cached painter, resizing if needed.
-    fn get_or_create_offscreen_painter(
+    ///
+    /// `pub(crate)` (not private): `Renderer::handle_shader_mask`
+    /// (`renderer.rs`) reuses this to render a `Layer::ShaderMask`
+    /// subtree's children into a device-sized offscreen texture, the
+    /// same cached-painter machinery `render_shader_mask` below already
+    /// uses for the `DisplayList` path.
+    pub(crate) fn get_or_create_offscreen_painter(
         &mut self,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,

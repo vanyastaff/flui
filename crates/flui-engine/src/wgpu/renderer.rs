@@ -1557,6 +1557,19 @@ impl Renderer {
             return;
         }
 
+        // Special handling for ShaderMask — captures children to an offscreen
+        // texture, applies the shader as a GPU mask, then composites the
+        // masked result. Requires an `OffscreenRenderer`; falls through to
+        // the inert clip/save-layer `LayerRender<ShaderMaskLayer>` impl
+        // (unmasked passthrough) when one isn't available, mirroring
+        // `BackdropFilter`'s own non-`Blur` degrade above.
+        if let flui_layer::Layer::ShaderMask(sm_layer) = layer
+            && backend.offscreen_mut().is_some()
+        {
+            Self::handle_shader_mask(sm_layer, node, tree, link_registry, backend, ctx);
+            return;
+        }
+
         // Special handling for Follower — resolve its render-time position
         // (leader pose, or the plain unlinked fallback) before descending
         // into children; hide the subtree entirely when unlinked with
@@ -1690,6 +1703,206 @@ impl Renderer {
                 surface_view,
             );
         }
+    }
+
+    /// Handle a `ShaderMaskLayer` subtree by capturing its children to a
+    /// private offscreen texture, applying the layer's shader as a GPU mask
+    /// against that capture, then compositing the masked result onto the
+    /// main render target.
+    ///
+    /// Data flow is the OPPOSITE of [`handle_backdrop_filter`](Self::handle_backdrop_filter):
+    /// that path blurs content ALREADY on the surface and renders children
+    /// on top unmodified; this path renders children into a private
+    /// offscreen texture FIRST, masks that capture, then composites the
+    /// masked result. Mirrors the six-step "capture subtree → mask →
+    /// composite" pipeline [`crate::traits::CommandRenderer::render_shader_mask`]
+    /// already runs for the `DisplayList` path (`Canvas::draw_shader_mask`),
+    /// adapted to recurse into a `LayerTree` subtree instead of dispatching a
+    /// flat command list.
+    ///
+    /// # Coordinate frame — do not copy `render_shader_mask`'s DPR-only reset
+    ///
+    /// [`ShaderMaskLayer::bounds`](flui_layer::ShaderMaskLayer::bounds) is
+    /// expressed in the same ambient-CTM-relative frame the layer walk has
+    /// already accumulated by the time
+    /// this node is reached — the same frame `handle_backdrop_filter` reads
+    /// `bounds()` against. The offscreen texture is sized to `bounds`'
+    /// device-space extent but its OWN local frame starts at `device_bounds`'
+    /// origin, so the offscreen painter's transform must be seeded with
+    /// `translate(-device_bounds.origin) * ambient_ctm` — NOT reset to
+    /// DPR-scale-only the way `render_shader_mask`'s `DisplayList` path
+    /// does. That reset is correct there only because its children are
+    /// recorded into a FRESH, self-relative `Canvas` (`Canvas::new()`), never
+    /// into the ambient-CTM-relative `LayerTree`. Reusing it here would
+    /// render children at their absolute device-space position instead of
+    /// shifted into the texture's own coordinate window — silently
+    /// mis-positioning (or entirely clipping away) any `ShaderMask` whose
+    /// `bounds()` origin isn't `(0, 0)`.
+    ///
+    /// # Scope
+    ///
+    /// Only reached when `backend.offscreen_mut().is_some()` (checked by the
+    /// caller); the no-offscreen-renderer degrade is the existing inert
+    /// clip/save-layer `LayerRender<ShaderMaskLayer>` impl in
+    /// `layer_render.rs` (unmasked passthrough). The temporary `Backend`
+    /// wrapping the offscreen painter is built via `Backend::new` (no
+    /// `OffscreenRenderer`), so a `ShaderMask`/`BackdropFilter` nested inside
+    /// this layer's own children gracefully degrades to unmasked/unblurred —
+    /// the same precedented limitation `render_shader_mask`'s `DisplayList`
+    /// path already has (`backend.rs`, "no OffscreenRenderer, rendering child
+    /// without mask").
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "device-pixel dimensions are `.max(1.0)`-clamped before the cast and bounded by GPU texture-size limits — matches the identical cast pattern already reviewed in `Backend::render_shader_mask`"
+    )]
+    fn handle_shader_mask(
+        sm_layer: &flui_layer::ShaderMaskLayer,
+        node: &flui_layer::tree::LayerNode,
+        tree: &flui_layer::LayerTree,
+        link_registry: &flui_layer::LinkRegistry,
+        backend: &mut super::backend::Backend<'_>,
+        ctx: &RenderContext,
+    ) {
+        use crate::traits::LayerStateStack;
+        use flui_types::geometry::{Pixels, Size};
+
+        let bounds = sm_layer.bounds();
+        let shader = sm_layer.shader();
+        let blend_mode = sm_layer.blend_mode();
+
+        // Live ambient CTM/DPR, read exactly as `handle_backdrop_filter` and
+        // `Backend::render_shader_mask` do — before anything below could
+        // mutate the real painter's transform state.
+        let ambient_ctm = backend.painter().current_transform_matrix();
+        let dpr_scale = backend.painter().current_max_scale().max(1.0);
+
+        // Device-resolution offscreen dimensions: logical extent x DPR.
+        let dev_width = (bounds.width().0 * dpr_scale).round().max(1.0) as u32;
+        let dev_height = (bounds.height().0 * dpr_scale).round().max(1.0) as u32;
+
+        // Composite rect in device space — the layer-tree equivalent of
+        // `Backend::render_shader_mask`'s `device_bounds`.
+        let device_bounds = ambient_ctm.transform_rect(&bounds);
+
+        // Step 1-3: acquire GPU handles and a device-sized pooled child
+        // texture from the offscreen renderer (caller already confirmed
+        // `Some`).
+        let (device, queue, format, child_tex) = {
+            let offscreen = backend
+                .offscreen_mut()
+                .expect("gated by caller: offscreen_mut().is_some()");
+            let device = Arc::clone(offscreen.device());
+            let queue = Arc::clone(offscreen.queue());
+            let format = offscreen.surface_format();
+            let child_tex = offscreen
+                .texture_pool()
+                .acquire(dev_width, dev_height, format);
+            (device, queue, format, child_tex)
+        };
+
+        // Step 4-8: render this layer's children into the offscreen texture
+        // through a temporary Backend, seeded with the coordinate-frame-
+        // correct transform (see doc comment above).
+        {
+            let offscreen_painter = backend.get_or_create_offscreen_painter(
+                &device,
+                &queue,
+                format,
+                (dev_width, dev_height),
+            );
+            offscreen_painter.reset_frame_state();
+
+            let mut temp_backend = super::backend::Backend::new(offscreen_painter);
+
+            let mut seed_transform = ambient_ctm;
+            seed_transform.translate(-device_bounds.left().0, -device_bounds.top().0, 0.0);
+            temp_backend.push_transform(&seed_transform);
+
+            for &child_id in node.children() {
+                Self::render_layer_recursive(
+                    tree,
+                    link_registry,
+                    child_id,
+                    &mut temp_backend,
+                    ctx,
+                    child_tex.texture(),
+                    child_tex.view(),
+                );
+            }
+            temp_backend.pop_transform();
+            // temp_backend drops here -> Drop calls flush_active_transform(),
+            // balancing the push_transform save before the re-borrow below.
+        }
+
+        // Step 9: flush the offscreen painter's batches into the pooled
+        // child texture (clear pass + render), exactly as
+        // `Backend::render_shader_mask` does for the `DisplayList` path.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ShaderMask Layer Child Render"),
+        });
+        {
+            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ShaderMask Layer Child Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: child_tex.view(),
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        let child_target =
+            super::render_target::RenderTarget::sampleable(child_tex.view(), child_tex.texture());
+        let offscreen_painter = backend.get_or_create_offscreen_painter(
+            &device,
+            &queue,
+            format,
+            (dev_width, dev_height),
+        );
+        if let Err(e) = offscreen_painter.render(child_target, &mut encoder) {
+            tracing::error!("Failed to render ShaderMask layer child content: {}", e);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Step 10-11: apply the shader as a GPU mask against the captured
+        // child content, then queue the masked result for compositing on
+        // the main target at the device-space rect.
+        let result_size = Size::new(Pixels(dev_width as f32), Pixels(dev_height as f32));
+        let masked_texture = {
+            let offscreen = backend
+                .offscreen_mut()
+                .expect("checked is_some at function entry");
+            let result = offscreen.render_masked(
+                bounds,
+                result_size,
+                shader,
+                blend_mode,
+                child_tex.texture(),
+            );
+            result.into_texture()
+        };
+
+        backend
+            .painter_mut()
+            .queue_offscreen_result(masked_texture, device_bounds);
+
+        tracing::debug!(
+            "ShaderMask layer GPU pipeline complete: bounds={:?}, device_bounds={:?}, \
+             dpr_scale={}, child_size={}x{}",
+            bounds,
+            device_bounds,
+            dpr_scale,
+            dev_width,
+            dev_height
+        );
     }
 }
 
@@ -3376,6 +3589,409 @@ mod tests {
             pixel[1] > 200,
             "an unlinked follower with show_when_unlinked=false must render \
              nothing at all; expected untouched white background, got {pixel:?}"
+        );
+    }
+
+    // =========================================================================
+    // `Layer::ShaderMask` engine visual-rendering fix — GPU-level, end-to-end
+    // pixel-readback proof (design research plan
+    // `2026-07-01-shader-mask-engine-render-plan.md`).
+    //
+    // `Layer::ShaderMask` previously fell through to the generic
+    // `LayerRender` dispatch (`layer_render.rs`), which pushes an inert
+    // `save_layer`/`push_clip_rect` pair that never reads the layer's
+    // `shader()`/`blend_mode()` — masking silently never applied. These
+    // tests exercise the REAL `render_layer_recursive` special case (not a
+    // hand-rolled stand-in) against a real GPU texture, reading back actual
+    // rendered pixels, the same style as the Follower Tier-2 tests above.
+    // =========================================================================
+
+    /// A `Layer::ShaderMask` mounted at the tree root, wrapping an opaque
+    /// solid-colored child, must have its shader mask actually applied — not
+    /// fall through to the pre-fix inert clip (which would show the child
+    /// fully unmasked).
+    ///
+    /// Child: opaque red rect filling the mask bounds. Shader: solid mask at
+    /// ~50% alpha (rgb is irrelevant to `solid.wgsl` — only alpha
+    /// modulates). Composited (`PREMULTIPLIED_ALPHA_BLENDING`) over a white
+    /// background, the masked pixel must land at a distinctly blended
+    /// value — neither pure opaque red (unmasked passthrough) nor pure
+    /// white (content missing).
+    ///
+    /// `bounds` is anchored at (0, 0) here deliberately — this sanity test
+    /// does NOT exercise the coordinate-frame trap (see
+    /// `shader_mask_nested_under_offset_ancestor_lands_at_correct_position`
+    /// below for that); it only proves the GPU mask pipeline is reached at
+    /// all.
+    #[test]
+    fn shader_mask_layer_root_gpu_pixel_readback_reflects_mask() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_layer::{CanvasLayer, Layer, LayerTree, LinkRegistry, ShaderMaskLayer};
+        use flui_painting::{Canvas, Paint, Shader};
+        use flui_types::{
+            Color,
+            geometry::{Rect, px},
+            painting::BlendMode,
+        };
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let width = 64u32;
+        let height = 64u32;
+
+        let mut tree = LayerTree::new();
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
+        let mask_id = tree.insert(Layer::ShaderMask(ShaderMaskLayer::new(
+            shader,
+            BlendMode::SrcOver,
+            bounds,
+        )));
+        tree.set_root(Some(mask_id));
+
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(bounds, &Paint::fill(Color::rgba(255, 0, 0, 255)));
+        let child_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))));
+        tree.add_child(mask_id, child_id);
+
+        let render_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ShaderMask Root GPU Test Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        clear_texture(&device, &queue, &render_view, wgpu::Color::WHITE);
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (width, height),
+        );
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        let ctx = RenderContext {
+            supports_copy_src: true,
+            intermediate_active: false,
+        };
+        Renderer::render_layer_recursive(
+            &tree,
+            &LinkRegistry::new(),
+            mask_id,
+            &mut backend,
+            &ctx,
+            &render_texture,
+            &render_view,
+        );
+        drop(backend);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ShaderMask Root GPU Test Render Encoder"),
+        });
+        let render_target = RenderTarget::sampleable(&render_view, &render_texture);
+        painter
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pixel = readback_rgba_pixel(&device, &queue, &render_texture, 32, 32)
+            .expect("center readback must succeed");
+        assert!(
+            pixel[0] > 200 && (60..=200).contains(&pixel[1]) && (60..=200).contains(&pixel[2]),
+            "ShaderMask must apply its shader as a mask, not fall through to the \
+             inert clip (pure opaque red, ~[255,0,0]) and not drop the content \
+             entirely (background white, ~[255,255,255]); expected a distinctly \
+             blended pixel from the ~50% mask, got {pixel:?}"
+        );
+    }
+
+    /// THE TRAP regression test (design research plan §4): a `ShaderMask`
+    /// whose `bounds()` origin is NOT `(0, 0)` and which sits under a
+    /// non-zero-offset `Layer::Offset` ancestor must still render its masked
+    /// content at the CORRECT on-screen position — not shifted/clipped by a
+    /// naive "reset offscreen painter to DPR-scale-only" seed (the approach
+    /// `Backend::render_shader_mask`'s `DisplayList` path uses, which is
+    /// correct there only because its children are recorded into a FRESH,
+    /// self-relative `Canvas`, never the ambient-CTM-relative `LayerTree`).
+    ///
+    /// Geometry (dpr = 1, ancestor offset = (60, 40), mask bounds =
+    /// (30, 20, 60, 60) so `bounds()`'s origin is nonzero):
+    ///   - `device_bounds` (always correct — the composite target is
+    ///     unaffected by the seed bug) = (90, 60, 60, 60), corners
+    ///     (90,60)→(150,120).
+    ///   - A naive DPR-only-reset seed is IDENTITY here (dpr=1 skips the
+    ///     scale branch entirely), so it paints the child at its RAW local
+    ///     coordinates (30..90, 20..80) directly into the 60×60 offscreen
+    ///     texture (valid pixel range 0..60), leaving only the sub-rectangle
+    ///     (30..60, 20..60) actually filled — device (120..150, 80..120) —
+    ///     while the rest of `device_bounds` (e.g. (100,70)) stays
+    ///     empty/background.
+    ///   - The correct seed (`translate(-device_bounds.origin) *
+    ///     ambient_ctm`) fills the ENTIRE `device_bounds` rectangle.
+    #[test]
+    fn shader_mask_nested_under_offset_ancestor_lands_at_correct_position() {
+        use super::super::backend::Backend;
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_layer::{
+            CanvasLayer, Layer, LayerTree, LinkRegistry, OffsetLayer, ShaderMaskLayer,
+        };
+        use flui_painting::{Canvas, Paint, Shader};
+        use flui_types::{
+            Color, Offset,
+            geometry::{Rect, px},
+            painting::BlendMode,
+        };
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let width = 200u32;
+        let height = 200u32;
+
+        let mut tree = LayerTree::new();
+
+        let offset_id = tree.insert(Layer::Offset(OffsetLayer::new(Offset::new(
+            px(60.0),
+            px(40.0),
+        ))));
+        tree.set_root(Some(offset_id));
+
+        let bounds = Rect::from_xywh(px(30.0), px(20.0), px(60.0), px(60.0));
+        let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
+        let mask_id = tree.insert(Layer::ShaderMask(ShaderMaskLayer::new(
+            shader,
+            BlendMode::SrcOver,
+            bounds,
+        )));
+        tree.add_child(offset_id, mask_id);
+
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(bounds, &Paint::fill(Color::rgba(255, 0, 0, 255)));
+        let child_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))));
+        tree.add_child(mask_id, child_id);
+
+        let render_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ShaderMask Nested-Offset GPU Test Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        clear_texture(&device, &queue, &render_view, wgpu::Color::WHITE);
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (width, height),
+        );
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        let ctx = RenderContext {
+            supports_copy_src: true,
+            intermediate_active: false,
+        };
+        Renderer::render_layer_recursive(
+            &tree,
+            &LinkRegistry::new(),
+            offset_id,
+            &mut backend,
+            &ctx,
+            &render_texture,
+            &render_view,
+        );
+        drop(backend);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ShaderMask Nested-Offset GPU Test Render Encoder"),
+        });
+        let render_target = RenderTarget::sampleable(&render_view, &render_texture);
+        painter
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let is_masked =
+            |p: [u8; 4]| p[0] > 200 && (60..=200).contains(&p[1]) && (60..=200).contains(&p[2]);
+        let is_white = |p: [u8; 4]| p[0] > 240 && p[1] > 240 && p[2] > 240;
+
+        // Sanity: deep in the bottom-right of device_bounds, filled under
+        // BOTH the naive and the correct seed — proves content reaches the
+        // screen at all (rules out a "nothing renders" false pass below).
+        let sanity_pixel = readback_rgba_pixel(&device, &queue, &render_texture, 140, 110)
+            .expect("sanity-position readback must succeed");
+        assert!(
+            is_masked(sanity_pixel),
+            "masked content must render somewhere inside device_bounds \
+             (90,60)-(150,120); got {sanity_pixel:?} at (140,110)"
+        );
+
+        // THE TRAP: near the top-left of device_bounds. The correct seed
+        // fills this; a naive DPR-only-reset seed leaves it empty
+        // (background), per the worked geometry in the doc comment above.
+        let trap_pixel = readback_rgba_pixel(&device, &queue, &render_texture, 100, 70)
+            .expect("trap-position readback must succeed");
+        assert!(
+            is_masked(trap_pixel),
+            "ShaderMask nested under a non-zero-offset ancestor must fill its \
+             ENTIRE device_bounds rect (90,60)-(150,120), not just the corner a \
+             naive DPR-scale-only offscreen seed happens to hit; got {trap_pixel:?} \
+             at (100,70) — background-colored means the offscreen painter's seed \
+             transform dropped the `bounds()` origin subtraction, the exact \
+             coordinate-frame trap this test guards."
+        );
+
+        // Outside device_bounds entirely: must stay untouched white background.
+        let outside_pixel = readback_rgba_pixel(&device, &queue, &render_texture, 10, 10)
+            .expect("outside-position readback must succeed");
+        assert!(
+            is_white(outside_pixel),
+            "content must not leak outside the mask's device_bounds; \
+             got {outside_pixel:?} at (10,10)"
+        );
+    }
+
+    /// When no `OffscreenRenderer` is available, `Layer::ShaderMask` must
+    /// fall through to the pre-fix inert clip/save-layer path
+    /// (`LayerRender<ShaderMaskLayer>` in `layer_render.rs`) without
+    /// panicking — mirroring `BackdropFilter`'s own non-`Blur`-filter
+    /// degrade. The inert path does not mask; child content renders
+    /// unmodified (still clipped to bounds).
+    #[test]
+    fn shader_mask_without_offscreen_renderer_falls_through_to_inert_clip() {
+        use super::super::backend::Backend;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_layer::{CanvasLayer, Layer, LayerTree, LinkRegistry, ShaderMaskLayer};
+        use flui_painting::{Canvas, Paint, Shader};
+        use flui_types::{
+            Color,
+            geometry::{Rect, px},
+            painting::BlendMode,
+        };
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let width = 64u32;
+        let height = 64u32;
+
+        let mut tree = LayerTree::new();
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
+        let mask_id = tree.insert(Layer::ShaderMask(ShaderMaskLayer::new(
+            shader,
+            BlendMode::SrcOver,
+            bounds,
+        )));
+        tree.set_root(Some(mask_id));
+
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(bounds, &Paint::fill(Color::rgba(255, 0, 0, 255)));
+        let child_id = tree.insert(Layer::Canvas(Box::new(CanvasLayer::from_canvas(canvas))));
+        tree.add_child(mask_id, child_id);
+
+        let render_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ShaderMask No-Offscreen GPU Test Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        clear_texture(&device, &queue, &render_view, wgpu::Color::WHITE);
+
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (width, height),
+        );
+        // No `OffscreenRenderer` bound — `Backend::new`, not `with_offscreen`.
+        let mut backend = Backend::new(&mut painter);
+
+        let ctx = RenderContext {
+            supports_copy_src: true,
+            intermediate_active: false,
+        };
+        // Must not panic.
+        Renderer::render_layer_recursive(
+            &tree,
+            &LinkRegistry::new(),
+            mask_id,
+            &mut backend,
+            &ctx,
+            &render_texture,
+            &render_view,
+        );
+        drop(backend);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ShaderMask No-Offscreen GPU Test Render Encoder"),
+        });
+        let render_target = RenderTarget::sampleable(&render_view, &render_texture);
+        painter
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Inert clip degrade: content renders UNMASKED (full opaque red),
+        // proving the fallback still paints children rather than silently
+        // dropping the whole subtree.
+        let pixel = readback_rgba_pixel(&device, &queue, &render_texture, 32, 32)
+            .expect("center readback must succeed");
+        assert!(
+            pixel[0] > 200 && pixel[1] < 50 && pixel[2] < 50,
+            "without an OffscreenRenderer, ShaderMask must fall through to the \
+             inert clip/save-layer path and still render its child UNMASKED \
+             (opaque red); got {pixel:?}"
         );
     }
 }
