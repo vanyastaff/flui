@@ -29,7 +29,7 @@
 //! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes | — |
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
 //! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
-//! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries |
+//! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
@@ -1287,6 +1287,136 @@ fn harness_flex_dry_layout_returns_real_size() {
         run.dry_layout(run.root(), constraints),
         Size::new(px(500.0), px(300.0)),
         "flex dry layout must return the real sized result, not Size::ZERO",
+    );
+}
+
+/// A horizontal flex reports its own Alphabetic baseline as the **highest** —
+/// meaning the minimum `child_baseline + child_offset.dy` across all children
+/// (oracle: `box.dart:3336-3348`, `flex.dart:806-812`).
+///
+/// Tree: `RenderBaseline(100px)` → `RenderFlex::row` → two `RenderBaseline`
+/// children with baseline offsets 10 and 30 over fixed-size boxes.
+/// After fix the outer baseline positions the flex so its baseline (10) sits at
+/// 100 → `flex.offset.dy == 90`.  Before the fix the flex returned `None`,
+/// so the outer fell back to the flex's height (30px) and placed it at 70.
+///
+/// Red before Slice A (flex has no `compute_distance_to_actual_baseline` override,
+/// returns `None`, outer baseline falls back to child height → offset 70 ≠ 90).
+/// Green after.
+#[test]
+fn harness_flex_row_reports_highest_baseline() {
+    let run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(100.0)))
+            .label("outer")
+            .child(
+                box_node(RenderFlex::row())
+                    .label("row")
+                    .child(
+                        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(10.0)))
+                            .child(box_node(RenderColoredBox::red(40.0, 20.0))),
+                    )
+                    .child(
+                        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(30.0)))
+                            .child(box_node(RenderColoredBox::green(40.0, 40.0))),
+                    ),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    // Oracle: highest(row) = min(10 + 0, 30 + 0) = 10.
+    // Outer RenderBaseline(100px): top = 100 - 10 = 90.
+    assert_eq!(
+        run.offset(run.id("row")).dy.get(),
+        90.0,
+        "flex row must report highest baseline (10) so outer baseline places it at dy=90; \
+         before the fix flex returned None → dy was 70",
+    );
+}
+
+/// A vertical flex reports its own Alphabetic baseline as the **first** child
+/// baseline in list order (oracle: `box.dart:3318-3330`, `flex.dart:806-812`).
+///
+/// Tree: `RenderBaseline(50px)` → `RenderFlex::column` → two `RenderBaseline`
+/// children with baseline offsets 5 and 25.
+/// After fix the outer baseline positions the flex so its baseline (5) sits at
+/// 50 → `flex.offset.dy == 45`.  Before the fix the flex returned `None` → 20.
+///
+/// Red before Slice A, green after.
+#[test]
+fn harness_flex_column_reports_first_baseline() {
+    let run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(50.0)))
+            .label("outer")
+            .child(
+                box_node(RenderFlex::column())
+                    .label("col")
+                    .child(
+                        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(5.0)))
+                            .child(box_node(RenderColoredBox::red(30.0, 10.0))),
+                    )
+                    .child(
+                        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(25.0)))
+                            .child(box_node(RenderColoredBox::green(30.0, 10.0))),
+                    ),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    // Oracle: first(col) = child_0_baseline + child_0_offset.dy = 5 + 0 = 5.
+    // Outer RenderBaseline(50px): top = 50 - 5 = 45.
+    assert_eq!(
+        run.offset(run.id("col")).dy.get(),
+        45.0,
+        "flex column must report first baseline (5) so outer baseline places it at dy=45; \
+         before the fix flex returned None → dy was 20",
+    );
+}
+
+/// The flex's dry Alphabetic baseline equals the committed baseline (dry==committed
+/// invariant, ADR-0012 D-B3).
+///
+/// Uses `RenderBaseline` over `RenderParagraph` children so both the live and dry
+/// paths have a real baseline to compute from: `RenderBaseline.compute_dry_baseline`
+/// returns `baseline_offset + requested - own = baseline_offset` when the requested
+/// kind matches the box's own kind and the child (paragraph) reports the same value
+/// for both reads.
+///
+/// Expected dry baseline: `min(10 + 0, 30 + 0) = 10.0`.
+///
+/// Red before Slice B (`compute_dry_baseline` not overridden → returns `None`).
+/// Green after.
+#[test]
+fn harness_flex_dry_baseline_equals_committed() {
+    let constraints = BoxConstraints::loose(Size::new(px(300.0), px(100.0)));
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .label("row")
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(10.0))).child(box_node(
+                    RenderParagraph::new(TextSpan::new("Ag"), TextDirection::Ltr),
+                )),
+            )
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(30.0))).child(box_node(
+                    RenderParagraph::new(TextSpan::new("Ag"), TextDirection::Ltr),
+                )),
+            ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    // RenderBaseline.compute_dry_baseline(Alphabetic) = baseline_offset + para - para = offset.
+    // Flex highest dry baseline = min(10, 30) ≈ 10.  A sub-pixel floating-point
+    // drift in the paragraph baseline cancellation is tolerated (< 0.1px).
+    let dry = run
+        .dry_baseline(run.id("row"), constraints, TextBaseline::Alphabetic)
+        .expect("flex row must report a dry Alphabetic baseline");
+    assert!(
+        (dry - 10.0).abs() < 0.1,
+        "flex dry baseline must equal committed baseline (~10.0); got {dry}; \
+         before Slice B compute_dry_baseline was not overridden and returned None",
     );
 }
 

@@ -5,7 +5,9 @@ use flui_types::{Offset, Pixels, Size, geometry::px};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{
+        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+    },
     parent_data::{FlexFit, FlexParentData},
     traits::{RenderBox, TextBaseline},
 };
@@ -65,7 +67,8 @@ pub enum CrossAxisAlignment {
 
 /// Intermediate result of the flex sizing pass, shared between
 /// `perform_layout` (which continues to positioning) and
-/// `compute_dry_layout` (which only needs the container size).
+/// `compute_dry_layout` / `compute_dry_baseline` (which only need size /
+/// child baselines respectively).
 struct FlexSizes {
     /// Constrained container size.
     size: Size,
@@ -76,6 +79,11 @@ struct FlexSizes {
     /// Sum of every child's main-axis size plus all inter-child spacing.
     /// Needed by `perform_layout` to compute free-space distribution.
     total_main: Pixels,
+    /// The `BoxConstraints` that was passed to `measure` for each child,
+    /// indexed `0..child_count`.  Required by `compute_dry_baseline` to
+    /// query `ctx.child_dry_baseline(i, child_constraints[i], …)` using the
+    /// same constraint that was used during the sizing pass.
+    child_constraints: Vec<BoxConstraints>,
 }
 
 /// A render object that lays out children in a flex layout (row or column).
@@ -110,6 +118,20 @@ pub struct RenderFlex {
     spacing: f32,
     /// Number of children (tracked for hit testing).
     child_count: usize,
+    /// Baseline eagerly recorded during `perform_layout` for both
+    /// [`TextBaseline`] kinds, served by `compute_distance_to_actual_baseline`.
+    ///
+    /// Index 0 = `Alphabetic`, index 1 = `Ideographic` (see [`baseline_kind_index`]).
+    ///
+    /// - Horizontal flex: minimum of `child_baseline + child_offset.dy` over
+    ///   all children (oracle: `box.dart:3336-3348` highest baseline).
+    /// - Vertical flex: first child in list order that has a baseline
+    ///   (oracle: `box.dart:3318-3330` first baseline).
+    ///
+    /// Mirrors the eager-record convention of `AligningShiftedBox::child_baselines`
+    /// (`shifted_box.rs:138-141`).  Reset to `[None; 2]` on layout when no
+    /// children are present or none report a baseline.
+    reported_baselines: [Option<f32>; 2],
 }
 
 impl Default for RenderFlex {
@@ -122,6 +144,7 @@ impl Default for RenderFlex {
             text_baseline: TextBaseline::Alphabetic,
             spacing: 0.0,
             child_count: 0,
+            reported_baselines: [None; 2],
         }
     }
 }
@@ -316,6 +339,7 @@ impl RenderFlex {
                 size: constraints.constrain(size),
                 child_sizes: Vec::new(),
                 total_main: Pixels::ZERO,
+                child_constraints: Vec::new(),
             };
         }
 
@@ -348,6 +372,12 @@ impl RenderFlex {
                 Pixels::INFINITY,
             ),
         };
+
+        // Per-child constraint tracking: defaults to non_flex_constraints; flex
+        // children under a bounded main axis get their allocated constraints below.
+        // Used by `compute_dry_baseline` to query dry child baselines with the
+        // exact constraints that were used during the sizing pass.
+        let mut child_constraints: Vec<BoxConstraints> = vec![non_flex_constraints; child_count];
 
         // ── Pass 1: size inflexible children ─────────────────────────────────
         let total_flex: i32 = flex_factors.iter().filter_map(|&f| f).sum();
@@ -400,7 +430,7 @@ impl RenderFlex {
                     && flex > 0
                 {
                     let allocated = remaining * (flex as f32 / total_flex as f32);
-                    let child_constraints = match (self.direction, flex_fits[i]) {
+                    let allocated_constraints = match (self.direction, flex_fits[i]) {
                         (FlexDirection::Horizontal, FlexFit::Tight) => BoxConstraints::new(
                             allocated,
                             allocated,
@@ -426,7 +456,8 @@ impl RenderFlex {
                             allocated,
                         ),
                     };
-                    let child_size = measure(i, child_constraints);
+                    child_constraints[i] = allocated_constraints;
+                    let child_size = measure(i, allocated_constraints);
                     child_sizes[i] = Some(child_size);
                     max_cross = max_cross.max(self.cross_size(child_size));
                 }
@@ -460,7 +491,110 @@ impl RenderFlex {
             size: self.size_from_main_cross(main_extent, cross_extent),
             child_sizes,
             total_main,
+            child_constraints,
         }
+    }
+
+    /// Compute each child's absolute `Offset` within the flex box.
+    ///
+    /// Takes `flex_sizes` from a prior sizing pass and per-child
+    /// `alignment_baselines` (the `self.text_baseline` distance for each child,
+    /// used only when [`CrossAxisAlignment::Baseline`] is active on a horizontal
+    /// flex; pass `&[None; n]` or an all-`None` slice otherwise).
+    ///
+    /// Extracted from `perform_layout`'s offset loop so that `perform_layout`
+    /// (live baselines) and `compute_dry_baseline` (dry baselines) share one
+    /// positioning home — one fact, one place per ADR-0010 D2 / ADR-0012 D-B3.
+    ///
+    /// Mirrors Flutter `RenderFlex.performLayout` offset loop (`flex.dart:1339+`).
+    /// The returned `Vec` is parallel to `flex_sizes.child_sizes`.
+    fn compute_child_offsets(
+        &self,
+        flex_sizes: &FlexSizes,
+        alignment_baselines: &[Option<f32>],
+    ) -> Vec<Offset> {
+        let child_count = flex_sizes.child_sizes.len();
+        if child_count == 0 {
+            return Vec::new();
+        }
+
+        let main_extent = self.main_size(flex_sizes.size);
+        let cross_extent = self.cross_size(flex_sizes.size);
+        // Flutter flex.dart:1339 — clamp free_space to zero so overflowing rows
+        // do not shift children by negative offsets under End/Center/Space*.
+        let free_space = (main_extent - flex_sizes.total_main).max(Pixels::ZERO);
+
+        let (mut main_offset, between_space) = match self.main_axis_alignment {
+            MainAxisAlignment::Start => (Pixels::ZERO, Pixels::ZERO),
+            MainAxisAlignment::End => (free_space, Pixels::ZERO),
+            MainAxisAlignment::Center => (free_space / 2.0, Pixels::ZERO),
+            MainAxisAlignment::SpaceBetween => {
+                if child_count > 1 {
+                    (Pixels::ZERO, free_space / (child_count - 1) as f32)
+                } else {
+                    (Pixels::ZERO, Pixels::ZERO)
+                }
+            }
+            MainAxisAlignment::SpaceAround => {
+                let space = free_space / child_count as f32;
+                (space / 2.0, space)
+            }
+            MainAxisAlignment::SpaceEvenly => {
+                let space = free_space / (child_count + 1) as f32;
+                (space, space)
+            }
+        };
+
+        // Flutter flex.dart: baseline cross-axis alignment applies to rows only.
+        // Find the maximum alignment-baseline distance — all children shift down
+        // so their baselines land on the same horizontal level.
+        let max_alignment_baseline = if self.direction == FlexDirection::Horizontal
+            && self.cross_axis_alignment == CrossAxisAlignment::Baseline
+        {
+            alignment_baselines
+                .iter()
+                .filter_map(|&b| b)
+                .reduce(f32::max)
+        } else {
+            None
+        };
+
+        let mut offsets = Vec::with_capacity(child_count);
+
+        for (i, slot) in flex_sizes.child_sizes.iter().enumerate() {
+            let child_size = slot.unwrap_or(Size::ZERO);
+
+            let cross_offset = match self.cross_axis_alignment {
+                CrossAxisAlignment::Start => Pixels::ZERO,
+                CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
+                CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
+                CrossAxisAlignment::Stretch => Pixels::ZERO,
+                CrossAxisAlignment::Baseline => {
+                    max_alignment_baseline.map_or(Pixels::ZERO, |max_dist| {
+                        alignment_baselines[i]
+                            .map(|child_dist| Pixels::new(max_dist - child_dist))
+                            .unwrap_or(Pixels::ZERO)
+                    })
+                }
+            };
+
+            offsets.push(self.offset(main_offset, cross_offset));
+            main_offset += self.main_size(child_size) + px(self.spacing) + between_space;
+        }
+
+        offsets
+    }
+}
+
+/// Maps a [`TextBaseline`] kind to an index into `[Option<f32>; 2]` arrays
+/// such as [`RenderFlex::reported_baselines`].
+///
+/// Mirrors the convention in `AligningShiftedBox::child_baselines`
+/// (`shifted_box.rs:155-158`): index 0 = Alphabetic, 1 = Ideographic.
+fn baseline_kind_index(baseline: TextBaseline) -> usize {
+    match baseline {
+        TextBaseline::Alphabetic => 0,
+        TextBaseline::Ideographic => 1,
     }
 }
 
@@ -503,78 +637,68 @@ impl RenderBox for RenderFlex {
 
         // Zero-child case: no positioning loop needed.
         if child_count == 0 {
+            self.reported_baselines = [None; 2];
             return flex_sizes.size;
         }
 
         // ── Positioning pass ─────────────────────────────────────────────────
-        // Flutter flex.dart:1339 — clamp free_space to zero so overflowing rows
-        // do not shift children by negative offsets under End/Center/Space*.
-        let main_extent = self.main_size(flex_sizes.size);
-        let cross_extent = self.cross_size(flex_sizes.size);
-        let free_space = (main_extent - flex_sizes.total_main).max(Pixels::ZERO);
-
-        let (mut main_offset, between_space) = match self.main_axis_alignment {
-            MainAxisAlignment::Start => (Pixels::ZERO, Pixels::ZERO),
-            MainAxisAlignment::End => (free_space, Pixels::ZERO),
-            MainAxisAlignment::Center => (free_space / 2.0, Pixels::ZERO),
-            MainAxisAlignment::SpaceBetween => {
-                if child_count > 1 {
-                    (Pixels::ZERO, free_space / (child_count - 1) as f32)
+        // Collect per-child alignment baselines (self.text_baseline kind).
+        // Only queried when CrossAxisAlignment::Baseline is active on a horizontal
+        // flex; all-None otherwise (ignored by compute_child_offsets).
+        let alignment_baselines: Vec<Option<f32>> = (0..child_count)
+            .map(|i| {
+                if self.direction == FlexDirection::Horizontal
+                    && self.cross_axis_alignment == CrossAxisAlignment::Baseline
+                {
+                    ctx.child_distance_to_actual_baseline(i, self.text_baseline)
                 } else {
-                    (Pixels::ZERO, Pixels::ZERO)
+                    None
                 }
-            }
-            MainAxisAlignment::SpaceAround => {
-                let space = free_space / child_count as f32;
-                (space / 2.0, space)
-            }
-            MainAxisAlignment::SpaceEvenly => {
-                let space = free_space / (child_count + 1) as f32;
-                (space, space)
-            }
-        };
+            })
+            .collect();
 
-        // Flutter flex.dart: baseline cross-axis alignment applies to rows only.
-        let max_baseline_distance = if self.direction == FlexDirection::Horizontal
-            && self.cross_axis_alignment == CrossAxisAlignment::Baseline
-        {
-            let mut max = None::<f32>;
-            for i in 0..child_count {
-                if let Some(d) = ctx.child_distance_to_actual_baseline(i, self.text_baseline) {
-                    max = Some(match max {
-                        Some(m) => m.max(d),
-                        None => d,
-                    });
-                }
-            }
-            max
-        } else {
-            None
-        };
+        let child_offsets = self.compute_child_offsets(&flex_sizes, &alignment_baselines);
 
-        for (i, slot) in flex_sizes.child_sizes.iter().enumerate().take(child_count) {
-            let child_size = slot.unwrap_or(Size::ZERO);
+        // Reset recorded baselines; they are populated in the loop below.
+        self.reported_baselines = [None; 2];
 
-            let cross_offset = match self.cross_axis_alignment {
-                CrossAxisAlignment::Start => Pixels::ZERO,
-                CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
-                CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
-                CrossAxisAlignment::Stretch => Pixels::ZERO,
-                CrossAxisAlignment::Baseline => {
-                    if let Some(max_dist) = max_baseline_distance {
-                        ctx.child_distance_to_actual_baseline(i, self.text_baseline)
-                            .map(|child_dist| Pixels::new(max_dist - child_dist))
-                            .unwrap_or(Pixels::ZERO)
-                    } else {
-                        Pixels::ZERO
+        for (i, &child_offset) in child_offsets.iter().enumerate() {
+            ctx.position_child(i, child_offset);
+
+            // Record the flex's own baseline for both kinds.
+            // Horizontal → highest = minimum (oracle box.dart:3336-3348).
+            // Vertical   → first child in list order (oracle box.dart:3318-3330).
+            // The queried kind differs from the alignment kind in the general case,
+            // so both are queried; when kind == self.text_baseline and the
+            // Baseline alignment was active, reuse the pre-queried value instead
+            // of issuing a redundant context call.
+            let offset_dy = child_offset.dy.get();
+            for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
+                let kind_index = baseline_kind_index(kind);
+                let child_baseline = if kind == self.text_baseline
+                    && self.cross_axis_alignment == CrossAxisAlignment::Baseline
+                    && self.direction == FlexDirection::Horizontal
+                {
+                    alignment_baselines[i]
+                } else {
+                    ctx.child_distance_to_actual_baseline(i, kind)
+                };
+
+                if let Some(baseline_distance) = child_baseline {
+                    let candidate = baseline_distance + offset_dy;
+                    let slot = &mut self.reported_baselines[kind_index];
+                    match self.direction {
+                        FlexDirection::Horizontal => {
+                            *slot = Some(slot.map_or(candidate, |current| current.min(candidate)));
+                        }
+                        FlexDirection::Vertical => {
+                            if slot.is_none() {
+                                *slot = Some(candidate);
+                            }
+                        }
                     }
                 }
-            };
-
-            let offset = self.offset(main_offset, cross_offset);
-            ctx.position_child(i, offset);
-
-            main_offset += self.main_size(child_size) + px(self.spacing) + between_space;
+            }
         }
 
         flex_sizes.size
@@ -605,6 +729,103 @@ impl RenderBox for RenderFlex {
             ctx.child_dry_layout(i, c)
         })
         .size
+    }
+
+    /// Returns the flex's own baseline recorded during `perform_layout`.
+    ///
+    /// - Horizontal: the **highest** baseline across children — the minimum of
+    ///   `child_baseline + child_offset.dy` (oracle: `box.dart:3336-3348`,
+    ///   `flex.dart:806-812`).
+    /// - Vertical: the **first** child baseline in list order —
+    ///   `child_baseline + child_offset.dy` (oracle: `box.dart:3318-3330`,
+    ///   `flex.dart:806-812`).
+    ///
+    /// Both kinds are recorded eagerly so the querying parent can choose;
+    /// this mirrors `AligningShiftedBox::actual_baseline` (`shifted_box.rs:154`).
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        self.reported_baselines[baseline_kind_index(baseline)]
+    }
+
+    /// Dry-baseline equivalent of `compute_distance_to_actual_baseline`.
+    ///
+    /// Uses `ctx.child_dry_layout` + `ctx.child_dry_baseline` through the shared
+    /// `compute_child_offsets` helper (ADR-0012 D-B3), so the offset/positioning
+    /// math is not duplicated.  Applies the same horizontal/highest vs
+    /// vertical/first formulas as the live path (oracle: `flex.dart:936-1025` /
+    /// `box.dart:3318-3348`).
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        let child_count = ctx.child_count();
+        if child_count == 0 {
+            return None;
+        }
+
+        let mut flex_factors: Vec<Option<i32>> = Vec::with_capacity(child_count);
+        let mut flex_fits: Vec<FlexFit> = Vec::with_capacity(child_count);
+        for i in 0..child_count {
+            let (flex, fit) = ctx
+                .child_parent_data_as::<FlexParentData>(i)
+                .map(|pd| (pd.flex, pd.fit))
+                .unwrap_or((None, FlexFit::Loose));
+            flex_factors.push(flex);
+            flex_fits.push(fit);
+        }
+
+        let flex_sizes = self.compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
+            ctx.child_dry_layout(i, c)
+        });
+
+        // Collect alignment baselines for Baseline cross-axis positioning.
+        let alignment_baselines: Vec<Option<f32>> = (0..child_count)
+            .map(|i| {
+                if self.direction == FlexDirection::Horizontal
+                    && self.cross_axis_alignment == CrossAxisAlignment::Baseline
+                {
+                    ctx.child_dry_baseline(i, flex_sizes.child_constraints[i], self.text_baseline)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let child_offsets = self.compute_child_offsets(&flex_sizes, &alignment_baselines);
+
+        // Apply highest (horizontal) / first (vertical) formula to dry baselines.
+        let mut reported = None::<f32>;
+
+        for (i, &child_offset) in child_offsets.iter().enumerate() {
+            let offset_dy = child_offset.dy.get();
+            // Reuse alignment baseline for the matching kind (avoids a second call).
+            let child_baseline = if baseline == self.text_baseline
+                && self.cross_axis_alignment == CrossAxisAlignment::Baseline
+                && self.direction == FlexDirection::Horizontal
+            {
+                alignment_baselines[i]
+            } else {
+                ctx.child_dry_baseline(i, flex_sizes.child_constraints[i], baseline)
+            };
+
+            if let Some(b) = child_baseline {
+                let candidate = b + offset_dy;
+                match self.direction {
+                    FlexDirection::Horizontal => {
+                        reported =
+                            Some(reported.map_or(candidate, |current| current.min(candidate)));
+                    }
+                    FlexDirection::Vertical => {
+                        if reported.is_none() {
+                            reported = Some(candidate);
+                        }
+                    }
+                }
+            }
+        }
+
+        reported
     }
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
