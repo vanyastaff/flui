@@ -38,14 +38,6 @@ use flui_rendering::{context::BoxDryBaselineCtx, context::BoxDryLayoutCtx};
 ///   siblings painted below.
 ///
 /// Layout and paint are pure pass-through.
-///
-/// # Translucent caveat
-///
-/// Flutter's `HitTestBehavior::Translucent` registers self WITHOUT blocking
-/// siblings below. FLUI's pipeline gates entry registration on the `hit_test`
-/// return value, so "register but do not block" is not yet expressible —
-/// `Translucent` therefore behaves as `Opaque` until the pipeline decouples
-/// add-self from the block-below decision.
 #[derive(Clone)]
 pub struct RenderListener {
     handler: PointerEventHandler,
@@ -140,15 +132,17 @@ impl RenderBox for RenderListener {
         // Hit-test the child first (so descendant handlers register, leaf-first).
         let child_hit = self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO);
 
-        // Whether this listener registers ITS OWN entry is gated on the return
-        // value (the pipeline adds the entry iff `hit_test` returns true):
-        // - DeferToChild: register only when a descendant was hit.
-        // - Opaque / Translucent: register for any pointer within bounds (and,
-        //   unavoidably in this pipeline, block siblings below).
-        match self.behavior {
+        let hit_target = match self.behavior {
             HitTestBehavior::DeferToChild => child_hit,
-            HitTestBehavior::Opaque | HitTestBehavior::Translucent => true,
+            HitTestBehavior::Opaque => true,
+            HitTestBehavior::Translucent => child_hit,
+        };
+
+        if !hit_target && self.behavior == HitTestBehavior::Translucent {
+            ctx.register_self_hit_entry();
         }
+
+        hit_target
     }
 
     fn pointer_event_handler(&self) -> Option<PointerEventHandler> {

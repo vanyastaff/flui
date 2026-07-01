@@ -106,11 +106,6 @@ impl RenderMouseRegion {
     }
 
     /// Updates the opacity flag.
-    ///
-    /// Current FLUI hit testing still couples "self entry is present" with
-    /// "sibling below is blocked", so `opaque = false` is recorded for
-    /// diagnostics and future tracker integration but cannot yet express
-    /// Flutter's transparent-region behavior.
     pub fn set_opaque(&mut self, opaque: bool) -> bool {
         if self.opaque == opaque {
             return false;
@@ -214,10 +209,17 @@ impl RenderBox for RenderMouseRegion {
         }
 
         let child_hit = self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO);
-        match self.behavior {
+        let hit_target = match self.behavior {
             HitTestBehavior::DeferToChild => child_hit,
-            HitTestBehavior::Opaque | HitTestBehavior::Translucent => true,
+            HitTestBehavior::Opaque => true,
+            HitTestBehavior::Translucent => child_hit,
+        };
+
+        if hit_target || self.behavior == HitTestBehavior::Translucent {
+            ctx.register_self_hit_entry();
         }
+
+        hit_target && self.opaque
     }
 
     fn pointer_event_handler(&self) -> Option<PointerEventHandler> {

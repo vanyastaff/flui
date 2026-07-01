@@ -8,7 +8,7 @@ use crate::{
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::ParentData,
     protocol::SliverProtocol,
-    traits::RenderObject,
+    traits::{HitTestOutcome, RenderObject},
 };
 
 // ============================================================================
@@ -536,7 +536,7 @@ where
                      + Send
                      + Sync
              ),
-    ) -> bool {
+    ) -> HitTestOutcome {
         // The sliver hit gate is driver-owned (geometry / cross-axis
         // range), so `size` is threaded for signature uniformity but the
         // sliver context does not read it.
@@ -545,7 +545,11 @@ where
                 position, hit_child,
             );
         let mut ctx = crate::context::SliverHitTestContext::new(inner, size);
-        T::hit_test(self, &mut ctx)
+        let blocks_below = T::hit_test(self, &mut ctx);
+        HitTestOutcome::new(
+            ctx.self_hit_entry_registered() || blocks_below,
+            blocks_below,
+        )
     }
 
     // Effect-layer and lifecycle forwards — same pattern as the BoxProtocol

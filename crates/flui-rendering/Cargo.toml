@@ -115,10 +115,10 @@ testing = ["flui-layer/testing"]
 # Cycle 4 R-16: gate the delegate trait modules behind an off-by-default
 # feature until their companion render object lands (ADR-0007). Each
 # gated trait has zero production impls; gating removes the surface from
-# default builds without deleting it. `sliver_grid_delegate.rs` and
-# `custom_painter.rs` were promoted to the default build once their
-# companions (`RenderSliverGrid`, `RenderCustomPaint`) landed; the
-# remaining gated modules are `flow_delegate.rs`, `multi_child_layout_delegate.rs`,
-# `single_child_layout_delegate.rs`, and `custom_clipper.rs`. Opt in via
-# `--features experimental-delegates`.
+# default builds without deleting it. `sliver_grid_delegate.rs`,
+# `custom_painter.rs`, and `flow_delegate.rs` were promoted to the default
+# build once their companions (`RenderSliverGrid`, `RenderCustomPaint`,
+# `RenderFlow`, `RenderCustomSingleChildLayoutBox`,
+# `RenderCustomMultiChildLayoutBox`) landed; the remaining gated module is
+# `custom_clipper.rs`. Opt in via `--features experimental-delegates`.
 experimental-delegates = []

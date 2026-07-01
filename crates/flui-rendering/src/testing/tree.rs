@@ -23,7 +23,10 @@ use std::collections::HashMap;
 use flui_foundation::RenderId;
 
 use crate::{
-    parent_data::{FlexParentData, SliverMultiBoxAdaptorParentData, StackParentData},
+    parent_data::{
+        FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
+        StackParentData,
+    },
     pipeline::{Idle, PipelineOwner},
     protocol::{BoxProtocol, SliverProtocol},
     testing::parent_data::ParentDataSeed,
@@ -136,6 +139,15 @@ impl TreeNode {
     #[must_use]
     pub fn with_flex_parent_data(self, data: FlexParentData) -> Self {
         self.with_parent_data_seed(ParentDataSeed::Flex(data))
+    }
+
+    /// Convenience wrapper for [`MultiChildLayoutParentData`] on
+    /// [`RenderCustomMultiChildLayoutBox`] children.
+    ///
+    /// [`RenderCustomMultiChildLayoutBox`]: crate::traits::RenderBox
+    #[must_use]
+    pub fn with_multi_child_layout_parent_data(self, data: MultiChildLayoutParentData) -> Self {
+        self.with_parent_data_seed(ParentDataSeed::MultiChildLayout(data))
     }
 
     /// Convenience wrapper for [`SliverMultiBoxAdaptorParentData`] on

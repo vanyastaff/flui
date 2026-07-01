@@ -26,7 +26,10 @@ use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},
     routing::{FocusManager, FocusNode, KeyEventCallback},
 };
-use flui_widgets::TextEditingController;
+use flui_types::{Size, geometry::px};
+use flui_widgets::{EditableText, TextEditingController};
+
+mod common;
 
 // ============================================================================
 // Helpers
@@ -442,5 +445,20 @@ fn unfocused_field_does_not_receive_key_events() {
         controller.text(),
         "",
         "an unfocused field must ignore key events dispatched through FocusManager"
+    );
+}
+
+#[test]
+fn editable_text_mounts_single_render_editable() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::with_text("hello");
+
+    let laid = common::lay_out(EditableText::new(controller), common::tight(120.0, 40.0));
+    let editable = laid.find_by_render_type("RenderEditable");
+
+    assert_eq!(laid.size(editable), Size::new(px(120.0), px(40.0)));
+    assert!(
+        laid.find_all_by_render_type("RenderParagraph").is_empty(),
+        "EditableText must not split text/caret into temporary paragraphs"
     );
 }

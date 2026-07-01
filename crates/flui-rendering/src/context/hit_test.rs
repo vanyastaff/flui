@@ -68,6 +68,9 @@ pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
     /// (its hit gate is driver-owned). 2B field dedup: render objects no
     /// longer cache their own size.
     own_size: Size,
+    /// Whether this render object should be appended to the global hit-test
+    /// path even when its `hit_test` return value keeps sibling traversal open.
+    self_hit_entry_registered: bool,
 }
 
 impl<'ctx, P: Protocol, A: Arity, PD: ParentData> HitTestContext<'ctx, P, A, PD>
@@ -84,7 +87,11 @@ where
         inner: <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>,
         own_size: Size,
     ) -> Self {
-        Self { inner, own_size }
+        Self {
+            inner,
+            own_size,
+            self_hit_entry_registered: false,
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -127,6 +134,19 @@ where
     /// Adds a hit entry to the result.
     pub fn add_hit(&mut self, entry: <P::HitTest as HitTestCapability>::Entry) {
         self.inner.add_hit(entry);
+    }
+
+    /// Requests that the pipeline append this render object to the global
+    /// hit-test path even if this object's `hit_test` returns `false`.
+    ///
+    /// This models Flutter's `HitTestBehavior::Translucent` side effect:
+    /// receive the event, but keep testing siblings visually behind this node.
+    pub fn register_self_hit_entry(&mut self) {
+        self.self_hit_entry_registered = true;
+    }
+
+    pub(crate) fn self_hit_entry_registered(&self) -> bool {
+        self.self_hit_entry_registered
     }
 
     // ════════════════════════════════════════════════════════════════════════

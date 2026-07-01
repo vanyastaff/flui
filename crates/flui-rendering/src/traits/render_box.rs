@@ -9,7 +9,7 @@ use crate::{
     hit_testing::{CursorIcon, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
-    traits::RenderObject,
+    traits::{HitTestOutcome, RenderObject},
 };
 
 // ============================================================================
@@ -563,7 +563,7 @@ where
                      + Send
                      + Sync
              ),
-    ) -> bool {
+    ) -> HitTestOutcome {
         // The hit-test bridge: wrap the driver's child recursion in
         // the typed, arity-gated BoxHitTestContext and call the user's
         // RenderBox::hit_test. Same shape as the paint bridge — no GAT
@@ -575,7 +575,11 @@ where
             position, hit_child,
         );
         let mut ctx = crate::context::BoxHitTestContext::new(inner, size);
-        T::hit_test(self, &mut ctx)
+        let blocks_below = T::hit_test(self, &mut ctx);
+        HitTestOutcome::new(
+            ctx.self_hit_entry_registered() || blocks_below,
+            blocks_below,
+        )
     }
 
     fn intrinsic_raw(

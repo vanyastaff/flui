@@ -43,6 +43,63 @@ use crate::{
     semantics::SemanticsConfiguration,
 };
 
+/// Result of a raw hit-test bridge call.
+///
+/// Flutter's hit testing has two related but separate effects: a render object
+/// may add itself to the hit-test path, and it may return `true` to stop
+/// sibling traversal behind it. `HitTestBehavior::Translucent` relies on that
+/// split: it contributes an entry but can still let lower siblings be tested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitTestOutcome {
+    /// Whether the pipeline should append this render object to the global
+    /// hit-test path.
+    pub add_self: bool,
+
+    /// Whether the parent should treat this subtree as having consumed the hit
+    /// and stop testing siblings visually behind it.
+    pub blocks_below: bool,
+}
+
+impl HitTestOutcome {
+    /// A complete miss: no entry and no sibling blocking.
+    #[must_use]
+    pub const fn miss() -> Self {
+        Self {
+            add_self: false,
+            blocks_below: false,
+        }
+    }
+
+    /// The legacy/default behavior where adding self and blocking siblings are
+    /// coupled to the same boolean.
+    #[must_use]
+    pub const fn from_hit(hit: bool) -> Self {
+        Self {
+            add_self: hit,
+            blocks_below: hit,
+        }
+    }
+
+    /// Add the current render object to the hit path without blocking lower
+    /// siblings. This is the Flutter translucent side effect.
+    #[must_use]
+    pub const fn add_self_without_blocking() -> Self {
+        Self {
+            add_self: true,
+            blocks_below: false,
+        }
+    }
+
+    /// Builds an outcome from explicit entry/blocking bits.
+    #[must_use]
+    pub const fn new(add_self: bool, blocks_below: bool) -> Self {
+        Self {
+            add_self,
+            blocks_below,
+        }
+    }
+}
+
 /// Base trait for all render objects in the render tree.
 ///
 /// This trait defines the minimal interface required by the storage layer
@@ -205,7 +262,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         child_count: usize,
         size: flui_types::Size,
         hit_child: &mut (dyn FnMut(usize, Option<ProtocolPosition<P>>) -> bool + Send + Sync),
-    ) -> bool;
+    ) -> HitTestOutcome;
 
     // ========================================================================
     // Intrinsic / Dry Queries

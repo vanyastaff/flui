@@ -514,17 +514,17 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
                      + Send
                      + Sync
              ),
-    ) -> bool {
+    ) -> crate::traits::HitTestOutcome {
         // Root pass-through: test children topmost-first (later
         // siblings paint on top). The view itself claims no hit — an
         // empty window region reports a miss instead of a phantom
         // root target.
         for index in (0..child_count).rev() {
             if hit_child(index, None) {
-                return true;
+                return crate::traits::HitTestOutcome::from_hit(true);
             }
         }
-        false
+        crate::traits::HitTestOutcome::miss()
     }
 
     fn is_repaint_boundary(&self) -> bool {

@@ -389,7 +389,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
-        if hit {
+        if hit.add_self {
             // Leaf-first path: children pushed their entries during
             // the callback above; the ancestor follows. The transform
             // is still on the stack, so this entry captures it.
@@ -415,7 +415,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             result.pop_transform();
         }
 
-        hit
+        hit.blocks_below
     }
 
     fn sliver_hit_position_from_offset(node: &RenderNode, position: Offset) -> MainAxisPosition {
@@ -655,7 +655,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
-        if hit {
+        if hit.add_self {
             let entry =
                 crate::hit_testing::HitTestEntry::new(id).cursor(render_object.mouse_cursor());
             let entry = match render_object.mouse_tracker_annotation(id) {
@@ -664,7 +664,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             };
             result.add(entry);
         }
-        hit
+        hit.blocks_below
     }
 
     /// Sets the device pixel ratio for subsequent paint passes.

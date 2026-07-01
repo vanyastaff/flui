@@ -11,7 +11,10 @@
 //! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
 //! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
+//! | `RenderEditable` | `harness_editable_*` | yes | yes | yes | yes | — |
 //! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
+//! | `RenderCustomSingleChildLayoutBox` | `harness_custom_single_child_layout_*` | yes | yes | yes | yes | queries, baseline |
+//! | `RenderCustomMultiChildLayoutBox` | `harness_custom_multi_child_layout_*` | yes | yes | yes | yes | queries |
 //! | `RenderCenter` | `harness_center_*` | yes | — | — | yes | — |
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
 //! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
@@ -34,6 +37,7 @@
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
+//! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
@@ -77,12 +81,19 @@ use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
     constraints::BoxConstraints,
-    delegates::{CustomPainter, SliverGridDelegateWithFixedCrossAxisCount},
+    delegates::{
+        CustomPainter, FlowDelegate, FlowPaintingContext, MultiChildLayoutContext,
+        MultiChildLayoutDelegate, SingleChildLayoutDelegate,
+        SliverGridDelegateWithFixedCrossAxisCount,
+    },
     hit_testing::{
         CursorIcon, EventPropagation, HitTestBehavior, HitTestResult, InputEvent,
         MouseEnterCallback, MouseExitCallback, MouseHoverCallback, PointerEventHandler,
     },
-    parent_data::{FlexParentData, SliverMultiBoxAdaptorParentData, StackParentData},
+    parent_data::{
+        FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
+        StackParentData,
+    },
     testing::{
         BoxQueryRun, ParentDataSeed, Probe, RenderTester, TreeNode, assert_descendant_properties,
         assert_has_committed_geometry, assert_has_committed_size, box_node, localize_hit_point,
@@ -92,7 +103,7 @@ use flui_rendering::{
     view::ScrollableViewportOffset,
 };
 use flui_types::{
-    Alignment, EdgeInsets, Offset, Point, Rect, Size,
+    Alignment, EdgeInsets, Matrix4, Offset, Point, Rect, Size,
     geometry::px,
     layout::{AxisDirection, BoxFit, StackFit},
     painting::Clip,
@@ -108,7 +119,10 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderCustomPaint",
     "RenderImage",
     "RenderParagraph",
+    "RenderEditable",
     "RenderPadding",
+    "RenderCustomSingleChildLayoutBox",
+    "RenderCustomMultiChildLayoutBox",
     "RenderCenter",
     "RenderAspectRatio",
     "RenderBaseline",
@@ -131,6 +145,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderStack",
     "RenderIndexedStack",
     "RenderListBody",
+    "RenderFlow",
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
     "RenderListener",
@@ -210,6 +225,114 @@ fn custom_painter(color: Color) -> Arc<dyn CustomPainter> {
 
 fn custom_hit_painter(color: Color, hit: Option<bool>) -> Arc<dyn CustomPainter> {
     Arc::new(HarnessPainter::new(color).with_hit(hit))
+}
+
+#[derive(Debug)]
+struct HarnessSingleChildLayoutDelegate {
+    size: Size,
+    child_constraints: BoxConstraints,
+    offset: Offset,
+}
+
+impl HarnessSingleChildLayoutDelegate {
+    fn new(size: Size, child_constraints: BoxConstraints, offset: Offset) -> Self {
+        Self {
+            size,
+            child_constraints,
+            offset,
+        }
+    }
+}
+
+impl SingleChildLayoutDelegate for HarnessSingleChildLayoutDelegate {
+    fn get_size(&self, _constraints: BoxConstraints) -> Size {
+        self.size
+    }
+
+    fn get_constraints_for_child(&self, _constraints: BoxConstraints) -> BoxConstraints {
+        self.child_constraints
+    }
+
+    fn get_position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
+        self.offset
+    }
+
+    fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
+        old_delegate
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_none_or(|old| {
+                self.size != old.size
+                    || self.child_constraints != old.child_constraints
+                    || self.offset != old.offset
+            })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn custom_single_child_delegate(
+    size: Size,
+    child_constraints: BoxConstraints,
+    offset: Offset,
+) -> Arc<dyn SingleChildLayoutDelegate> {
+    Arc::new(HarnessSingleChildLayoutDelegate::new(
+        size,
+        child_constraints,
+        offset,
+    ))
+}
+
+#[derive(Debug)]
+struct HarnessMultiChildLayoutDelegate {
+    size: Size,
+}
+
+impl HarnessMultiChildLayoutDelegate {
+    fn new(size: Size) -> Self {
+        Self { size }
+    }
+}
+
+impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
+    fn get_size(&self, _constraints: BoxConstraints) -> Size {
+        self.size
+    }
+
+    fn perform_layout(&self, context: &mut dyn MultiChildLayoutContext, size: Size) {
+        if context.has_child("header") {
+            context.layout_child(
+                "header",
+                BoxConstraints::tight(Size::new(size.width, px(20.0))),
+            );
+            context.position_child("header", Offset::ZERO);
+        }
+        if context.has_child("body") {
+            context.layout_child("body", BoxConstraints::tight(Size::new(px(70.0), px(30.0))));
+            context.position_child("body", Offset::new(px(10.0), px(25.0)));
+        }
+    }
+
+    fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
+        old_delegate
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_none_or(|old| self.size != old.size)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn custom_multi_child_delegate(size: Size) -> Arc<dyn MultiChildLayoutDelegate> {
+    Arc::new(HarnessMultiChildLayoutDelegate::new(size))
+}
+
+fn multi_child_layout_parent_data(id: &str) -> MultiChildLayoutParentData {
+    MultiChildLayoutParentData::zero().with_id(id.to_owned())
 }
 
 fn viewport(sliver: TreeNode) -> TreeNode {
@@ -463,6 +586,28 @@ fn harness_listener_childless_fills_parent() {
 }
 
 #[test]
+fn harness_listener_translucent_adds_entry_without_blocking_lower_sibling() {
+    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(
+                box_node(RenderListener::new(handler, HitTestBehavior::Translucent))
+                    .label("top_listener"),
+            ),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(
+        run.hit(20.0, 20.0),
+        vec![run.id("top_listener"), run.id("bottom"), run.root()],
+        "translucent RenderListener must contribute a hit entry without \
+         stopping siblings visually behind it",
+    );
+}
+
+#[test]
 fn harness_mouse_region_childless_fills_parent_and_self_describes() {
     let run = RenderTester::mount(box_node(RenderMouseRegion::new()))
         .with_constraints(BoxConstraints::tight(Size::new(px(80.0), px(40.0))))
@@ -516,6 +661,27 @@ fn harness_mouse_region_hit_entry_carries_cursor_and_annotation() {
         .expect("mouse region must contribute MouseTrackerAnnotation");
     assert_eq!(annotation.region_id, run.root());
     assert!(annotation.on_enter.is_some());
+}
+
+#[test]
+fn harness_mouse_region_opaque_false_adds_entry_without_blocking_lower_sibling() {
+    let mut region = RenderMouseRegion::new();
+    region.set_opaque(false);
+
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(box_node(region).label("top_region")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(
+        run.hit(20.0, 20.0),
+        vec![run.id("top_region"), run.id("bottom"), run.root()],
+        "MouseRegion opaque=false must contribute its hit entry without \
+         suppressing mouse regions or targets behind it",
+    );
 }
 
 #[test]
@@ -663,6 +829,54 @@ fn harness_paragraph_paints_text_frame() {
     assert!(run.painted());
 }
 
+#[test]
+fn harness_editable_lays_out_and_paints_collapsed_caret() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_caret_byte_offset(7)
+            .with_show_caret(true)
+            .with_caret_width(2.0)
+            .with_caret_height(18.0),
+    ))
+    .with_constraints(loose(160.0))
+    .run_frame();
+
+    let size = run.box_geometry(run.root());
+    assert_eq!(size.width, px(160.0));
+    assert!(size.height.get() >= 18.0);
+
+    let commands = run.display_commands();
+    assert!(
+        commands.iter().any(
+            |command| command.line.contains("DrawTextSpan") && command.line.contains("edit me")
+        ),
+        "RenderEditable must paint its text span; commands: {commands:#?}"
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.line.contains("DrawRect")),
+        "RenderEditable must paint the collapsed caret; commands: {commands:#?}"
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderEditable",
+        &["text", "caret_byte_offset", "force_line"],
+    );
+}
+
+#[test]
+fn harness_editable_hit_tests_self() {
+    let run = RenderTester::mount(box_node(RenderEditable::new(
+        TextSpan::new("hit me"),
+        TextDirection::Ltr,
+    )))
+    .with_size(Size::new(px(120.0), px(40.0)))
+    .run_layout();
+
+    assert_eq!(run.hit_first(10.0, 10.0), Some(run.root()));
+}
+
 // ============================================================================
 // Single-child box proxies
 // ============================================================================
@@ -698,6 +912,206 @@ fn harness_padding_forwards_intrinsics_with_insets() {
         60.0,
         "padding must add horizontal insets to the child's 40px min width"
     );
+}
+
+#[test]
+fn harness_custom_single_child_layout_positions_child_with_delegate() {
+    let delegate = custom_single_child_delegate(
+        Size::new(px(120.0), px(80.0)),
+        BoxConstraints::tight(Size::new(px(30.0), px(20.0))),
+        Offset::new(px(70.0), px(50.0)),
+    );
+    let run = RenderTester::mount(
+        box_node(RenderCustomSingleChildLayoutBox::new(delegate))
+            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(120.0), px(80.0)),
+        "parent size must come from delegate.get_size constrained by incoming constraints",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(30.0), px(20.0)),
+        "child must be laid out under delegate.get_constraints_for_child",
+    );
+    assert_eq!(run.offset(run.id("child")), Offset::new(px(70.0), px(50.0)));
+    assert_eq!(run.hit_first(75.0, 55.0), Some(run.id("child")));
+    assert!(run.hit(10.0, 10.0).is_empty());
+    assert!(
+        run.display_commands()
+            .iter()
+            .any(|cmd| cmd.line.contains("#FF0000FF")),
+        "delegated child must still paint through the parent",
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderCustomSingleChildLayoutBox",
+        &["delegate"],
+    );
+}
+
+#[test]
+fn harness_custom_single_child_layout_queries_use_delegate_size_formula() {
+    let constraints = loose(200.0);
+    let delegate = custom_single_child_delegate(
+        Size::new(px(120.0), px(80.0)),
+        BoxConstraints::loose(Size::new(px(50.0), px(40.0))),
+        Offset::new(px(0.0), px(0.0)),
+    );
+    let mut run = RenderTester::mount(box_node(RenderCustomSingleChildLayoutBox::new(delegate)))
+        .with_constraints(constraints)
+        .run_layout();
+
+    let root = run.root();
+    assert_eq!(
+        run.dry_layout(root, constraints),
+        Size::new(px(120.0), px(80.0)),
+        "compute_dry_layout must use the same constrained delegate size as perform_layout",
+    );
+    assert_eq!(run.min_intrinsic_width(root, 50.0), 120.0);
+    assert_eq!(run.max_intrinsic_width(root, 50.0), 120.0);
+    assert_eq!(run.min_intrinsic_height(root, 90.0), 80.0);
+    assert_eq!(run.max_intrinsic_height(root, 90.0), 80.0);
+}
+
+#[test]
+fn harness_custom_single_child_layout_dry_baseline_adds_delegate_offset() {
+    let constraints = loose(200.0);
+    let child_constraints = BoxConstraints::loose(Size::new(px(100.0), px(40.0)));
+    let delegate = custom_single_child_delegate(
+        Size::new(px(120.0), px(80.0)),
+        child_constraints,
+        Offset::new(px(5.0), px(30.0)),
+    );
+    let mut run = RenderTester::mount(
+        box_node(RenderCustomSingleChildLayoutBox::new(delegate)).child(
+            box_node(RenderParagraph::new(
+                TextSpan::new("Ag"),
+                TextDirection::Ltr,
+            ))
+            .label("text"),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let child_baseline = run
+        .dry_baseline(run.id("text"), child_constraints, TextBaseline::Alphabetic)
+        .expect("paragraph child reports a dry baseline");
+    let custom_baseline = run
+        .dry_baseline(run.root(), constraints, TextBaseline::Alphabetic)
+        .expect("paragraph child reports a dry baseline");
+    assert!(
+        custom_baseline > child_baseline,
+        "custom dry baseline must include delegate dy offset; child={child_baseline}, custom={custom_baseline}",
+    );
+    assert_eq!(
+        custom_baseline - child_baseline,
+        30.0,
+        "delegate offset dy must be added to the child's dry baseline",
+    );
+}
+
+#[test]
+fn harness_custom_single_child_layout_actual_baseline_adds_delegate_offset() {
+    let delegate = custom_single_child_delegate(
+        Size::new(px(120.0), px(80.0)),
+        BoxConstraints::loose(Size::new(px(100.0), px(40.0))),
+        Offset::new(px(5.0), px(30.0)),
+    );
+    let run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(100.0))).child(
+            box_node(RenderCustomSingleChildLayoutBox::new(delegate))
+                .label("custom")
+                .child(
+                    box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(10.0)))
+                        .child(box_node(RenderColoredBox::red(20.0, 20.0))),
+                ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("custom")).dy,
+        px(60.0),
+        "outer baseline should place custom at 100 - (child baseline 10 + delegate dy 30)",
+    );
+}
+
+#[test]
+fn harness_custom_multi_child_layout_positions_children_by_layout_id() {
+    let delegate = custom_multi_child_delegate(Size::new(px(120.0), px(90.0)));
+    let run = RenderTester::mount(
+        box_node(RenderCustomMultiChildLayoutBox::new(delegate))
+            .child(
+                box_node(RenderColoredBox::red(10.0, 10.0))
+                    .with_multi_child_layout_parent_data(multi_child_layout_parent_data("header"))
+                    .label("header"),
+            )
+            .child(
+                box_node(RenderColoredBox::green(10.0, 10.0))
+                    .with_multi_child_layout_parent_data(multi_child_layout_parent_data("body"))
+                    .label("body"),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(120.0), px(90.0)),
+        "parent size must come from delegate.get_size constrained by incoming constraints",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("header")),
+        Size::new(px(120.0), px(20.0)),
+        "header receives tight constraints from the delegate",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("body")),
+        Size::new(px(70.0), px(30.0)),
+        "body receives different tight constraints from the delegate",
+    );
+    assert_eq!(run.offset(run.id("header")), Offset::ZERO);
+    assert_eq!(run.offset(run.id("body")), Offset::new(px(10.0), px(25.0)));
+    assert_eq!(run.hit_first(15.0, 30.0), Some(run.id("body")));
+    assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("header")));
+    assert!(
+        run.display_commands()
+            .iter()
+            .any(|cmd| cmd.line.contains("#00FF00FF")),
+        "delegated body child must still paint through the parent",
+    );
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderCustomMultiChildLayoutBox",
+        &["delegate"],
+    );
+}
+
+#[test]
+fn harness_custom_multi_child_layout_queries_use_delegate_size_formula() {
+    let constraints = loose(200.0);
+    let delegate = custom_multi_child_delegate(Size::new(px(120.0), px(90.0)));
+    let mut run = RenderTester::mount(box_node(RenderCustomMultiChildLayoutBox::new(delegate)))
+        .with_constraints(constraints)
+        .run_layout();
+
+    let root = run.root();
+    assert_eq!(
+        run.dry_layout(root, constraints),
+        Size::new(px(120.0), px(90.0)),
+        "compute_dry_layout must use the same constrained delegate size as perform_layout",
+    );
+    assert_eq!(run.min_intrinsic_width(root, 50.0), 120.0);
+    assert_eq!(run.max_intrinsic_width(root, 50.0), 120.0);
+    assert_eq!(run.min_intrinsic_height(root, 50.0), 90.0);
+    assert_eq!(run.max_intrinsic_height(root, 50.0), 90.0);
 }
 
 // Hit-test localization for RenderPadding: the recorded transform for the
@@ -4267,6 +4681,294 @@ fn harness_render_wrap_diagnostics_reports_all_properties() {
             "cross_axis_alignment",
         ],
     );
+}
+
+// ============================================================================
+// RenderFlow — paint-time transform layout
+// ============================================================================
+
+/// Translates child `i` by `i * step` along x. Mirrors
+/// `flow_delegate.rs`'s `LinearFlowDelegate` test fixture.
+#[derive(Debug)]
+struct StepFlowDelegate {
+    step: f32,
+}
+
+impl FlowDelegate for StepFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        BoxConstraints::loose(constraints.biggest())
+    }
+
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        for i in 0..context.child_count() {
+            context.paint_child(i, Matrix4::translation(i as f32 * self.step, 0.0, 0.0));
+        }
+    }
+
+    fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+
+    fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        true
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Paints every child at the SAME transform (fully overlapping) — isolates
+/// paint-order effects from position effects for the reverse-hit-test case.
+#[derive(Debug)]
+struct OverlappingFlowDelegate;
+
+impl FlowDelegate for OverlappingFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        BoxConstraints::loose(constraints.biggest())
+    }
+
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        for i in 0..context.child_count() {
+            context.paint_child(i, Matrix4::IDENTITY);
+        }
+    }
+
+    fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+
+    fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        true
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Paints child 0 with a degenerate (zero-scale, non-invertible) transform;
+/// every other child gets an ordinary translation.
+#[derive(Debug)]
+struct DegenerateFlowDelegate;
+
+impl FlowDelegate for DegenerateFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        BoxConstraints::loose(constraints.biggest())
+    }
+
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        for i in 0..context.child_count() {
+            let transform = if i == 0 {
+                Matrix4::scaling(0.0, 0.0, 1.0)
+            } else {
+                Matrix4::translation(i as f32 * 50.0, 0.0, 0.0)
+            };
+            context.paint_child(i, transform);
+        }
+    }
+
+    fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+
+    fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        true
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[test]
+fn harness_flow_paints_children_in_delegate_order_under_per_child_transform_layers() {
+    let run = RenderTester::mount(
+        box_node(RenderFlow::new(Arc::new(StepFlowDelegate { step: 30.0 })))
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("c")),
+    )
+    .with_size(Size::new(px(200.0), px(50.0)))
+    .run_frame();
+
+    let painted = run
+        .display_commands()
+        .into_iter()
+        .map(|cmd| cmd.line)
+        .collect::<Vec<_>>();
+    let rects = painted
+        .iter()
+        .filter(|line| line.contains("DrawRect"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rects.len(),
+        3,
+        "expected exactly 3 child DrawRects; commands:\n{}",
+        painted.join("\n"),
+    );
+    assert!(
+        rects[0].contains("#FF0000FF")
+            && rects[1].contains("#00FF00FF")
+            && rects[2].contains("#0000FFFF"),
+        "paint order must follow the delegate's paint_child call order (red, green, blue); commands:\n{}",
+        painted.join("\n"),
+    );
+
+    // Each child must be wrapped in its OWN Transform layer — proof that
+    // paint emits a per-child transform, not one shared node-level
+    // transform (which `RenderObject::paint_transform` already supports
+    // and would show up as a single Transform layer regardless of child
+    // count).
+    let transform_layers = run
+        .structure()
+        .iter()
+        .filter(|kind| **kind == "Transform")
+        .count();
+    assert_eq!(
+        transform_layers,
+        3,
+        "expected one Transform layer per child (3), got structure: {:?}",
+        run.structure(),
+    );
+}
+
+#[test]
+fn harness_flow_hit_test_uses_the_real_per_child_transform_not_layout_offset() {
+    // Layout always positions every Flow child at Offset::ZERO (paint-time
+    // transform is the ONLY thing that moves them) — so a naive hit-test
+    // that used the layout offset instead of the delegate's real transform
+    // would see every child at the SAME [0,40)x[0,40) box. x=70 is outside
+    // that shared box entirely; it only resolves to child "b" by inverting
+    // b's real +50px translation.
+    let run = RenderTester::mount(
+        box_node(RenderFlow::new(Arc::new(StepFlowDelegate { step: 50.0 })))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(40.0, 40.0)).label("c")),
+    )
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("a")));
+    assert_eq!(
+        run.hit_first(70.0, 20.0),
+        Some(run.id("b")),
+        "x=70 lies outside every child's shared zero-offset box [0,40) — only \
+         inverting child b's real +50px transform correctly resolves the hit",
+    );
+    assert_eq!(run.hit_first(120.0, 20.0), Some(run.id("c")));
+    assert!(
+        run.hit(250.0, 20.0).is_empty(),
+        "outside every child's translated box must be a genuine miss",
+    );
+}
+
+#[test]
+fn harness_flow_hit_test_walks_paint_order_in_reverse_topmost_first() {
+    let run = RenderTester::mount(
+        box_node(RenderFlow::new(Arc::new(OverlappingFlowDelegate)))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("top")),
+    )
+    .with_size(Size::new(px(40.0), px(40.0)))
+    .run_frame();
+
+    assert_eq!(
+        run.hit_first(20.0, 20.0),
+        Some(run.id("top")),
+        "the child painted LAST (index 1, visually on top) must win an overlapping \
+         hit — RenderFlow.hitTestChildren walks paint order in reverse (oracle L430)",
+    );
+}
+
+#[test]
+fn harness_flow_degenerate_transform_is_never_hit_but_siblings_still_are() {
+    let run = RenderTester::mount(
+        box_node(RenderFlow::new(Arc::new(DegenerateFlowDelegate)))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("zeroed"))
+            .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("normal")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_frame();
+
+    // The zero-scale child collapses to a single point; no finite position
+    // can hit it, and its inverse doesn't exist so `RenderFlow::hit_test`
+    // must skip it outright rather than panicking or matching everything.
+    assert!(run.hit(0.0, 0.0).is_empty());
+    assert!(run.hit(10.0, 10.0).is_empty());
+    // The sibling at a real translation is unaffected by child 0's
+    // degenerate transform.
+    assert_eq!(run.hit_first(70.0, 20.0), Some(run.id("normal")));
+}
+
+#[test]
+fn harness_flow_clip_behavior_gates_the_clip_layer() {
+    let clipped = RenderTester::mount(
+        box_node(
+            RenderFlow::new(Arc::new(StepFlowDelegate { step: 10.0 }))
+                .with_clip_behavior(Clip::HardEdge),
+        )
+        .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+    assert!(
+        clipped.structure().contains(&"ClipRect"),
+        "Clip::HardEdge must emit a ClipRect layer; structure: {:?}",
+        clipped.structure(),
+    );
+
+    let unclipped = RenderTester::mount(
+        box_node(
+            RenderFlow::new(Arc::new(StepFlowDelegate { step: 10.0 }))
+                .with_clip_behavior(Clip::None),
+        )
+        .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+    assert!(
+        !unclipped.structure().contains(&"ClipRect"),
+        "Clip::None must NOT emit a ClipRect layer; structure: {:?}",
+        unclipped.structure(),
+    );
+}
+
+#[test]
+fn harness_flow_set_delegate_reports_relayout_and_diagnostics() {
+    let run = RenderTester::mount(
+        box_node(RenderFlow::new(Arc::new(StepFlowDelegate { step: 5.0 })))
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_descendant_properties(&run.diagnostics(), "RenderFlow", &["clip_behavior"]);
 }
 
 // ============================================================================

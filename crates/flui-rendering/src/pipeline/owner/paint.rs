@@ -253,20 +253,14 @@ impl PipelineOwner<PaintPhase> {
             // The node reports its transform in LOCAL coordinates, but
             // every run inside this layer space is recorded with the
             // accumulated `origin` baked into its canvas transform.
-            // Conjugate by the origin (Flutter object.dart
-            // `pushTransform`: T(offset)·M·T(−offset)) so the matrix
-            // pivots around the node's own origin instead of the layer
-            // origin — a raw local matrix would translate/rotate the
-            // whole accumulated space.
-            let effective = if origin == Offset::ZERO {
-                matrix
-            } else {
-                let (dx, dy) = (origin.dx.get(), origin.dy.get());
-                flui_types::Matrix4::translation(dx, dy, 0.0)
-                    * matrix
-                    * flui_types::Matrix4::translation(-dx, -dy, 0.0)
-            };
-            composer.push_layer(Layer::Transform(TransformLayer::new(effective)));
+            // Conjugate by the origin so the matrix pivots around the
+            // node's own origin instead of the layer origin — a raw
+            // local matrix would translate/rotate the whole accumulated
+            // space. Shared with the per-child `PushTransform` fragment
+            // op below (RenderFlow and friends): same math, same reason.
+            composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
+                matrix, origin,
+            ))));
             effect_layers += 1;
         }
 
@@ -274,6 +268,11 @@ impl PipelineOwner<PaintPhase> {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
                 FragmentOp::Push(clip) => composer.push_layer(clip_layer(*clip, origin)),
+                FragmentOp::PushTransform(matrix) => {
+                    composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
+                        *matrix, origin,
+                    ))));
+                }
                 FragmentOp::Pop => composer.pop_layer(),
                 FragmentOp::Child {
                     index,
@@ -425,6 +424,28 @@ impl FragmentComposer {
              push_layer in the replay loop must have a matching pop_layer",
         );
         self.tree
+    }
+}
+
+/// Conjugates `matrix` so it pivots around this layer's local `origin`
+/// rather than the layer tree's own (0, 0).
+///
+/// Both callers report a transform in LOCAL coordinates while every run
+/// they bracket carries the accumulated `origin` baked into its canvas
+/// transform: the per-node [`RenderObject::paint_transform`](crate::traits::RenderObject::paint_transform)
+/// hook (one transform for the whole node, applied here) and the
+/// per-child [`FragmentOp::PushTransform`] op (`RenderFlow` and any
+/// other Variable-arity node giving each child its own paint-time
+/// transform). Flutter `PaintingContext.pushTransform`:
+/// `T(offset)·M·T(−offset)`.
+fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4 {
+    if origin == Offset::ZERO {
+        matrix
+    } else {
+        let (dx, dy) = (origin.dx.get(), origin.dy.get());
+        flui_types::Matrix4::translation(dx, dy, 0.0)
+            * matrix
+            * flui_types::Matrix4::translation(-dx, -dy, 0.0)
     }
 }
 

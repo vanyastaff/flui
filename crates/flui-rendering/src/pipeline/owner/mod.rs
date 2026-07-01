@@ -706,8 +706,8 @@ mod tests {
                          + Send
                          + Sync
                  ),
-        ) -> bool {
-            false
+        ) -> crate::traits::HitTestOutcome {
+            crate::traits::HitTestOutcome::miss()
         }
     }
 
@@ -767,8 +767,8 @@ mod tests {
                          + Send
                          + Sync
                  ),
-        ) -> bool {
-            false
+        ) -> crate::traits::HitTestOutcome {
+            crate::traits::HitTestOutcome::miss()
         }
     }
 
@@ -1082,8 +1082,8 @@ mod tests {
                          + Send
                          + Sync
                  ),
-        ) -> bool {
-            false
+        ) -> crate::traits::HitTestOutcome {
+            crate::traits::HitTestOutcome::miss()
         }
     }
 

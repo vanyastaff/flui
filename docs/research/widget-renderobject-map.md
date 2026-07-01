@@ -15,46 +15,42 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **55**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **59**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
 > and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
 > body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
-> that appears in the "Existing (55)" list, the list wins. The body is retained for its
+> that appears in the "Existing (59)" list, the list wins. The body is retained for its
 > accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
 > file), which the Core.2 implementers need.
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **55**
-- **Render objects remaining to build (Core.2):** **~17** (verified list below)
+- **Render objects existing today:** **59**
+- **Render objects remaining to build (Core.2):** **~13** (verified list below)
 
-### Existing render objects — authoritative (55)
+### Existing render objects — authoritative (59)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
-**Box layout (21):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderFittedBox` · `RenderFlex` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderWrap`
+**Box layout (24):** `RenderAlign` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderWrap`
 
 **Paint effects (10):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
 
 **Interaction / pointer (6):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderMouseRegion` · `RenderOffstage`
 
-**Leaf (2):** `RenderParagraph` · `RenderImage`
+**Leaf (3):** `RenderEditable` · `RenderParagraph` · `RenderImage`
 
 **Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈17)
+### Remaining to build — verified missing (≈13)
 
 Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
-| `RenderEditable` | `EditableText`/`TextField` | High (App.1 IME) | `editable.dart` |
-| `RenderFlow` | `Flow` | Medium | `flow.dart` |
 | `RenderTable` | `Table`/`DataTable` | Medium | `table.dart` |
-| `RenderCustomSingleChildLayoutBox` | `CustomSingleChildLayout` | Medium | `custom_layout.dart` |
-| `RenderCustomMultiChildLayoutBox` | `CustomMultiChildLayout` | Medium | `custom_layout.dart` |
 | `RenderSliverPersistentHeader` family | `SliverAppBar`/pinned headers | Medium | `sliver_persistent_header.dart` |
 | `RenderAnimatedOpacity` | `FadeTransition`/`AnimatedOpacity` | Medium | `proxy_box.dart` |
 | `RenderAnimatedSize` | `AnimatedSize` | Medium | `animated_size.dart` |
@@ -78,9 +74,15 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 >
 > **`RenderListBody` closure note (verified 2026-07-01):** `RenderListBody` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `ListBody` widget. Harness coverage pins vertical and horizontal axis-direction layout, reverse positioning, cross-axis stretching, hit testing, dry layout, and dry-baseline ordering against Flutter's `rendering/list_body.dart` behavior.
 >
-> **`RenderMouseRegion` closure note (verified 2026-07-01):** `RenderMouseRegion` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `MouseRegion` widget. Harness coverage pins childless `constraints.biggest` sizing, hit-entry cursor propagation, mouse-tracker annotation propagation, pointer-move hover dispatch, and `MouseTracker` enter/hover/exit callbacks. Remaining edge: Flutter's `opaque = false` lets regions behind it remain active while this region still contributes an annotation; FLUI's current hit-test pipeline still couples "add self hit entry" with "blocks siblings below", so transparent behind-region behavior remains an explicit pipeline follow-up.
+> **`RenderMouseRegion` closure note (verified 2026-07-01):** `RenderMouseRegion` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `MouseRegion` widget. Harness coverage pins childless `constraints.biggest` sizing, hit-entry cursor propagation, mouse-tracker annotation propagation, pointer-move hover dispatch, `MouseTracker` enter/hover/exit callbacks, and Flutter's `opaque = false` behavior: the region still contributes its hit entry while siblings visually behind it remain testable.
 >
-> **`RenderPointerListener` catalog note (verified 2026-07-01):** Flutter's `RenderPointerListener` is implemented as FLUI's Rust-native `RenderListener` and backs the public `Listener` widget. Harness/widget coverage pins child pass-through layout, childless live/dry `constraints.biggest` sizing, hit-entry handler propagation, down/up routing, hover routing via buttonless `PointerEvent::Move`, pointer-signal routing through FLUI's concrete `PointerEvent::Scroll`, and trackpad pan/zoom update routing through `PointerEvent::Gesture` → `PointerPanZoomEvent::Update`. Remaining edges: Flutter's pan/zoom start/end callbacks are not yet exposed on `Listener`, and `HitTestBehavior.translucent` registers self without blocking siblings behind; FLUI's current hit-test pipeline still couples "add self hit entry" with "blocks siblings below", so translucent behind-target behavior remains an explicit pipeline follow-up.
+> **`RenderPointerListener` catalog note (verified 2026-07-01):** Flutter's `RenderPointerListener` is implemented as FLUI's Rust-native `RenderListener` and backs the public `Listener` widget. Harness/widget coverage pins child pass-through layout, childless live/dry `constraints.biggest` sizing, hit-entry handler propagation, `HitTestBehavior.translucent` self-entry without blocking lower siblings, down/up routing, hover routing via buttonless `PointerEvent::Move`, pointer-signal routing through FLUI's concrete `PointerEvent::Scroll`, and trackpad pan/zoom update routing through `PointerEvent::Gesture` → `PointerPanZoomEvent::Update`. Remaining edge: Flutter's pan/zoom start/end callbacks are not yet exposed on `Listener`.
+>
+> **`RenderEditable` first-slice note (verified 2026-07-01):** `RenderEditable` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `EditableText` widget as a single leaf render object. Harness/widget coverage pins single-line `force_line` sizing, text paint, collapsed-caret paint, self hit testing, and `EditableText` no longer splitting its text/caret into `Row` + multiple paragraphs. Deferred edges remain explicit: IME/composing, selection rendering, scrolling overflow, multiline viewport behavior, obscure text, and platform text input.
+>
+> **`RenderCustomSingleChildLayoutBox` closure note (verified 2026-07-01):** `RenderCustomSingleChildLayoutBox` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `CustomSingleChildLayout` widget. Harness/widget coverage pins delegated parent sizing, child constraints, child positioning, hit testing through the committed layout offset, dry layout/intrinsics, dry-baseline offsetting, and live actual-baseline forwarding. `SingleChildLayoutDelegate` is now un-gated in `flui-rendering`.
+>
+> **`RenderCustomMultiChildLayoutBox` closure note (verified 2026-07-01):** `RenderCustomMultiChildLayoutBox` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `CustomMultiChildLayout` widget plus `LayoutId` parent-data widget. Harness/widget coverage pins delegated parent sizing, child-id lookup, per-child constraints, layout offsets, reverse-order hit testing, dry layout/intrinsics, and `LayoutId` parent-data delivery. `MultiChildLayoutDelegate` is now un-gated in `flui-rendering`.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -117,8 +119,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `Flow` | `RenderFlow` | Needed | Variable | Paint-time transforms via `FlowDelegate` |
 | `Table` | `RenderTable` | Needed | Variable | From `table.dart` |
 | `TableRow` | *(composes)* | N/A | — | Grouping widget for Table rows |
-| `CustomSingleChildLayout` | `RenderCustomSingleChildLayoutBox` | Needed | Single | Delegate-driven layout |
-| `CustomMultiChildLayout` | `RenderCustomMultiChildLayoutBox` | Needed | Variable | Delegate-driven multi-child layout |
+| `CustomSingleChildLayout` | `RenderCustomSingleChildLayoutBox` | **Exists** | Single | Delegate-driven layout |
+| `CustomMultiChildLayout` | `RenderCustomMultiChildLayoutBox` | **Exists** | Variable | Delegate-driven multi-child layout |
 | `LayoutBuilder` | `RenderLayoutBuilder` (special) | Needed | Single | Uses `RenderObjectWithLayoutCallbackMixin` |
 | `ColoredBox` | `RenderColoredBox` | **Exists** | Single | Paints colored rectangle behind child |
 
@@ -196,7 +198,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `RichText` | `RenderParagraph` | **Exists** | Leaf | Core text rendering; drives cosmic-text in FLUI |
 | `Text` | *(composes)* | N/A | Leaf | Wraps `RichText` with `DefaultTextStyle` |
 | `DefaultTextStyle` | *(InheritedWidget)* | N/A | Single | Provides inherited text style; no own RO |
-| `EditableText` | `RenderEditable` | Needed | Leaf | Text editing with cursor, selection, IME |
+| `EditableText` | `RenderEditable` | **Exists first visual slice** | Leaf | Text + collapsed cursor; selection, IME, scrolling overflow, multiline deferred |
 
 ---
 
@@ -280,7 +282,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 Grouped by family for parallelizable construction (per ROADMAP Core.2 structure):
 
-### Wave 1 — Box Layout (6 objects)
+### Wave 1 — Box Layout (4 objects)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
@@ -288,8 +290,6 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 2 | `RenderIntrinsicHeight` | `proxy_box.dart` | `IntrinsicHeight` |
 | 3 | `RenderBaseline` | `shifted_box.dart` | `Baseline` |
 | 4 | `RenderConstrainedOverflowBox` | `shifted_box.dart` | `OverflowBox` |
-| 5 | `RenderCustomSingleChildLayoutBox` | `custom_layout.dart` | `CustomSingleChildLayout` |
-| 6 | `RenderCustomMultiChildLayoutBox` | `custom_layout.dart` | `CustomMultiChildLayout` |
 
 ### Wave 2 — Multi-Child Layout (3 objects)
 
@@ -310,11 +310,11 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 5 | `RenderPhysicalShape` | `proxy_box.dart` | `PhysicalShape` |
 | 6 | `RenderRotatedBox` | `rotated_box.dart` | `RotatedBox` |
 
-### Wave 4 — Input / Leaf (1 object remaining)
+### Wave 4 — Input / Leaf (0 objects remaining)
 
-| # | Render Object | Flutter File | Needed By Widgets |
-|---|---|---|---|
-| 1 | `RenderEditable` | `editable.dart` | `EditableText` |
+`RenderEditable` exists as the single-line visual core for `EditableText`. Full
+IME/selection/scrolling behavior is App.1/platform work, not a missing render
+object.
 
 ### Wave 5 — Slivers / Viewport (8 objects)
 

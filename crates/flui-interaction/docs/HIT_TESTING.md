@@ -315,21 +315,29 @@ fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
         }
     }
 
-    // 2. Add self based on behavior
-    match self.hit_test_behavior() {
+    // 2. Add self based on behavior, but keep "adds entry" separate
+    // from "blocks siblings below".
+    let blocks_below = match self.hit_test_behavior() {
         HitTestBehavior::DeferToChild => {
             // Only add self if child was hit
             if child_hit {
                 result.add(my_entry);
             }
+            child_hit
         }
-        HitTestBehavior::Opaque | HitTestBehavior::Translucent => {
+        HitTestBehavior::Opaque => {
             // Always add self
             result.add(my_entry);
+            true
         }
-    }
+        HitTestBehavior::Translucent => {
+            // Receive the event but keep lower siblings testable.
+            result.add(my_entry);
+            child_hit
+        }
+    };
 
-    true
+    blocks_below
 }
 ```
 

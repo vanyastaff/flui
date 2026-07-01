@@ -14,8 +14,8 @@
 //! (or the `with_stack_parent_data` / `with_flex_parent_data` helpers).
 
 use crate::parent_data::{
-    BoxParentData, FlexParentData, ParentData, SliverMultiBoxAdaptorParentData,
-    SliverPhysicalParentData, StackParentData,
+    BoxParentData, FlexParentData, MultiChildLayoutParentData, ParentData,
+    SliverMultiBoxAdaptorParentData, SliverPhysicalParentData, StackParentData,
 };
 
 /// A harness-side clone of the parent metadata a widget would normally
@@ -26,6 +26,9 @@ pub enum ParentDataSeed {
     Stack(StackParentData),
     /// [`FlexParentData`] for `RenderFlex` (see `flui_objects::RenderFlex`) children.
     Flex(FlexParentData),
+    /// [`MultiChildLayoutParentData`] for `RenderCustomMultiChildLayoutBox`
+    /// children.
+    MultiChildLayout(MultiChildLayoutParentData),
     /// Default box offset slot (rarely needed — most parents use
     /// [`StackParentData`] / [`FlexParentData`] instead).
     Box(BoxParentData),
@@ -46,6 +49,7 @@ impl ParentDataSeed {
         match self {
             Self::Stack(data) => Box::new(data.clone()),
             Self::Flex(data) => Box::new(data.clone()),
+            Self::MultiChildLayout(data) => Box::new(data.clone()),
             Self::Box(data) => Box::new(data.clone()),
             Self::SliverPhysical(data) => Box::new(data.clone()),
             Self::SliverMultiBoxAdaptor(data) => Box::new(data.clone()),

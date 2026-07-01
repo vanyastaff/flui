@@ -45,7 +45,7 @@ use std::marker::PhantomData;
 
 use flui_painting::{Canvas, DisplayList, DisplayListCore};
 use flui_tree::{Arity, Optional, Single, Variable};
-use flui_types::{Offset, Pixels, Rect, Size, painting::Clip};
+use flui_types::{Matrix4, Offset, Pixels, Rect, Size, painting::Clip};
 
 // ============================================================================
 // Fragment ops
@@ -80,6 +80,13 @@ pub enum FragmentOp {
     /// Boxed: clip shapes (especially paths) dwarf the other variants,
     /// and scope ops are rare relative to runs/markers.
     Push(Box<FragmentClip>),
+
+    /// Opens a transform-layer scope; balanced by a matching [`Self::Pop`].
+    /// Boxed: `Matrix4` is 64 bytes ([f32; 16]) vs. this enum's other
+    /// variants — an unboxed variant would bloat `FragmentOp` for every
+    /// render object's every paint, not just the (rare) per-child
+    /// transform case this exists for (`RenderFlow` and friends).
+    PushTransform(Box<Matrix4>),
 
     /// Closes the innermost open scope.
     Pop,
@@ -213,6 +220,13 @@ impl FragmentRecorder {
     fn push_scope(&mut self, clip: FragmentClip) {
         self.seal();
         self.ops.push(FragmentOp::Push(Box::new(clip)));
+        self.open_scopes += 1;
+    }
+
+    fn push_transform_scope(&mut self, transform: Matrix4) {
+        self.seal();
+        self.ops
+            .push(FragmentOp::PushTransform(Box::new(transform)));
         self.open_scopes += 1;
     }
 
@@ -375,6 +389,22 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         f(self);
         self.rec.pop_scope();
     }
+
+    /// Applies `transform` to everything recorded inside `f` — self draws
+    /// AND child subtrees — pivoting around this node's own origin
+    /// (matching the per-node [`paint_transform`](crate::traits::RenderObject::paint_transform)
+    /// hook's convention, conjugated the same way in the pipeline replay).
+    ///
+    /// Unlike `paint_transform` (one transform for the whole node, read
+    /// once by the pipeline), this lets a single Variable-arity node give
+    /// each child its own transform at paint time — the primitive
+    /// [`RenderFlow`](https://api.flutter.dev/flutter/rendering/RenderFlow-class.html)
+    /// needs and no other FLUI render object has required until now.
+    pub fn with_transform(&mut self, transform: Matrix4, f: impl FnOnce(&mut Self)) {
+        self.rec.push_transform_scope(transform);
+        f(self);
+        self.rec.pop_scope();
+    }
 }
 
 // ============================================================================
@@ -482,6 +512,7 @@ mod tests {
                 FragmentOp::Run(_) => "run",
                 FragmentOp::Child { .. } => "child",
                 FragmentOp::Push(_) => "push",
+                FragmentOp::PushTransform(_) => "push_transform",
                 FragmentOp::Pop => "pop",
             })
             .collect();
@@ -538,10 +569,32 @@ mod tests {
                 FragmentOp::Run(_) => "run",
                 FragmentOp::Child { .. } => "child",
                 FragmentOp::Push(_) => "push",
+                FragmentOp::PushTransform(_) => "push_transform",
                 FragmentOp::Pop => "pop",
             })
             .collect();
         assert_eq!(kinds, vec!["push", "run", "child", "child", "pop"]);
+    }
+
+    #[test]
+    fn with_transform_brackets_a_single_child_and_records_the_matrix() {
+        let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
+        let mut cx = PaintCx::<Variable>::new(&mut rec, 1, Size::ZERO);
+
+        let transform = Matrix4::translation(4.0, 6.0, 0.0);
+        cx.with_transform(transform, |cx| cx.paint_child(0));
+
+        let frag = rec.finish();
+        assert!(
+            matches!(
+                frag.ops.as_slice(),
+                [FragmentOp::PushTransform(m), FragmentOp::Child { index: 0, .. }, FragmentOp::Pop]
+                    if **m == transform,
+            ),
+            "with_transform must bracket its closure in PushTransform(matrix)/Pop, \
+             recording the exact matrix passed in; got {:?}",
+            frag.ops,
+        );
     }
 
     #[test]

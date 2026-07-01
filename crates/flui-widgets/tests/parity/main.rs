@@ -42,3 +42,6 @@ mod sliver_fill_remaining_test;
 mod sliver_fill_viewport_test;
 mod sliver_ignore_pointer_test;
 mod sliver_offstage_test;
+
+// ── Core.2 — RenderFlow / Flow ───────────────────────────────────────────────
+mod flow_test;

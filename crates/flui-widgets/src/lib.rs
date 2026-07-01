@@ -122,9 +122,10 @@ pub use interaction::{
     Listener, MouseRegion, Offstage, Visibility,
 };
 pub use layout::{
-    Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
-    FractionallySizedBox, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListBody, OverflowBox,
-    Padding, RotatedBox, SizedBox, SizedOverflowBox, Transform,
+    Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
+    CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
+    IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, OverflowBox, Padding,
+    RotatedBox, SizedBox, SizedOverflowBox, Transform,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
@@ -162,12 +163,14 @@ pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, Stac
 pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
 // `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
 pub use flui_rendering::parent_data::FlexFit;
-// Grid + custom-paint delegates — always available (un-gated since
-// `RenderSliverGrid`/`RenderCustomPaint` ship in the default build).
-// Re-exported here so widget authors need only import from `flui_widgets`,
-// matching Flutter's single-import surface.
+// Grid, custom-paint, flow, and custom layout delegates — always
+// available (un-gated since their companion render objects ship in the
+// default build). Re-exported here so widget authors need only import from
+// `flui_widgets`, matching Flutter's single-import surface.
 pub use flui_rendering::delegates::{
-    CustomPainter, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+    AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate, FlowPaintingContext,
+    MultiChildLayoutContext, MultiChildLayoutDelegate, SingleChildLayoutDelegate,
+    SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
     SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
 };
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
@@ -196,11 +199,12 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
-        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomPaint,
-        CustomScrollView, DecoratedBox, EditableText, EditableTextState, Expanded, FittedBox, Flex,
-        FlexFit, Flexible, FractionalTranslation, FractionallySizedBox, GestureArenaScope,
-        GestureDetector, GridView, IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider,
-        IndexedStack, IntrinsicHeight, IntrinsicWidth, LimitedBox, ListBody, ListView, Listener,
+        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomMultiChildLayout,
+        CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox, EditableText,
+        EditableTextState, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
+        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector, GridView,
+        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedStack,
+        IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, ListView, Listener,
         MediaQuery, MediaQueryData, MouseRegion, Offstage, Opacity, OverflowBox, OverflowBoxFit,
         Padding, Positioned, RepaintBoundary, RotatedBox, Row, SafeArea, ScrollController,
         Scrollable, Scrollbar, ShrinkWrappingViewport, SingleChildScrollView, SizedBox,
@@ -213,7 +217,9 @@ pub mod prelude {
 
     // Common configuration value types, so an app author needs only this import.
     pub use crate::{
-        CustomPainter, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
+        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
+        SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
     };
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
