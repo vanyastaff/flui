@@ -150,6 +150,11 @@ impl Diagnosticable for RenderParagraph {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "none".to_string()),
         );
+        // Emit the plain text so diagnostics dumps and test finders can match on
+        // content without inspecting the full `InlineSpan` tree.
+        if let Some(span) = self.painter.text() {
+            properties.add("text", span.to_plain_text());
+        }
     }
 }
 

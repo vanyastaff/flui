@@ -1,0 +1,27 @@
+//! Flutter parity tests — geometry assertions ported from the Flutter widget
+//! test suite, run against FLUI's headless layout harness.
+//!
+//! Each sub-module cites the Flutter source file and line number it mirrors,
+//! documents the widget → render-object type mapping, and records any
+//! intentional divergences from Flutter behaviour.
+//!
+//! Phase covered: C1.13 (Core.1 exit gate) — geometry assertions only.
+//! Paint, semantics, and the wider ~150-test corpus are Phase 3 (deferred).
+
+#[path = "../common/mod.rs"]
+mod common;
+
+mod harness;
+
+// ── Phase-2 ports (no new finders needed) ────────────────────────────────────
+mod column_no_overflow_fp_test;
+mod container_test;
+mod list_view_test;
+mod stateful_test;
+
+// ── Phase-2 ports (use find_by_render_type / pump_widget) ────────────────────
+mod center_test;
+mod flex_test;
+mod harness_self_test;
+mod sized_box_test;
+mod text_test;

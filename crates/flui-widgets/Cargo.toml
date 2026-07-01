@@ -60,6 +60,13 @@ parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.
 insta = { workspace = true }
 
+# The parity test suite lives in a subdirectory so `mod harness; mod *_test;`
+# work via Cargo's single-binary test model. Auto-discovery misses subdirectory
+# main files, so the target is declared explicitly.
+[[test]]
+name = "parity"
+path = "tests/parity/main.rs"
+
 [features]
 default = []
 # Activates the `image` crate for decoding PNG/JPEG/GIF/… from bytes or files.
