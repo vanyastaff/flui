@@ -2430,6 +2430,125 @@ fn harness_follower_layer_self_describes() {
     );
 }
 
+/// ★ MILESTONE (ADR-0015): a leader+follower pair under two DIFFERENT
+/// `Stack`-positioned `RenderRepaintBoundary` branches — the
+/// cross-repaint-boundary case that motivated the whole render-time
+/// resolution design — must hit-test the follower's child at the
+/// follower's RESOLVED on-screen position, NOT at its plain tree-relative
+/// position.
+///
+/// Tree (both branches are repaint boundaries, so paint.rs wraps each in
+/// its own `Layer::Offset`):
+///
+/// ```text
+/// RenderStack (300x300)
+///  ├─ "branch_a" @ Stack(top:60, left:50) = RenderRepaintBoundary
+///  │     └─ RenderLeaderLayer(link)         (no child — a pure anchor)
+///  └─ "branch_b" @ Stack(top:0, left:0, width:300, height:300) = RenderRepaintBoundary
+///        └─ RenderFollowerLayer(link)
+///              └─ RenderAlign(TOP_LEFT)       (mirrors Flutter's own
+///                    └─ "follower_child"       `Positioned.fill` + `Align`
+///                       = RenderColoredBox      idiom for a follower whose
+///                         (30x30)               resolved position can land
+///                                                anywhere in the overlay)
+/// ```
+///
+/// `branch_b` is given an explicit large size (rather than sizing tightly to
+/// its own small content) for the SAME reason a real `CompositedTransformFollower`
+/// is conventionally wrapped in `Positioned.fill`: the hit-test walk's
+/// ancestor chain gates on each node's OWN untransformed bounds before the
+/// follower's resolved-offset shift ever applies, so an ancestor sized only
+/// to the follower's natural content could never geometrically reach a
+/// resolved position that lands elsewhere. `RenderAlign` then hands the
+/// small child loose constraints again, so `follower_child` keeps its
+/// natural 30x30 size and precise position within the (now large) follower.
+///
+/// With default TOP_LEFT/TOP_LEFT anchors and zero target offset, the
+/// resolved offset is exactly `branch_a`'s own Stack offset (50,60) —
+/// `resolve_follower_offset` must sum BOTH ancestor chains to their common
+/// ancestor (summing `branch_a`'s (50,60) and subtracting `branch_b`'s
+/// (0,0)) rather than assuming a shared parent or a same-numbered offset.
+#[test]
+fn harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundaries() {
+    let link = LayerLink::new();
+
+    let branch_a = box_node(RenderRepaintBoundary::new())
+        .label("branch_a")
+        .with_stack_parent_data(StackParentData::new().with_top(60.0).with_left(50.0))
+        .child(box_node(RenderLeaderLayer::new(link)).label("leader"));
+
+    let branch_b = box_node(RenderRepaintBoundary::new())
+        .label("branch_b")
+        .with_stack_parent_data(
+            StackParentData::new()
+                .with_top(0.0)
+                .with_left(0.0)
+                .with_width(300.0)
+                .with_height(300.0),
+        )
+        .child(
+            box_node(RenderFollowerLayer::new(link))
+                .label("follower")
+                .child(
+                    box_node(RenderAlign::new(Alignment::TOP_LEFT))
+                        .child(box_node(RenderColoredBox::red(30.0, 30.0)).label("follower_child")),
+                ),
+        );
+
+    let run = RenderTester::mount(box_node(RenderStack::new()).child(branch_a).child(branch_b))
+        .with_size(Size::new(px(300.0), px(300.0)))
+        .run_frame();
+
+    // (a) A hit at the follower's RESOLVED on-screen position — the
+    // leader's absolute anchor at `branch_a`'s Stack offset (50,60), well
+    // inside the follower_child's resolved (50,60)-(80,90) rect — reaches
+    // the follower's child.
+    assert_eq!(
+        run.hit_first(60.0, 70.0),
+        Some(run.id("follower_child")),
+        "a hit at the follower's RESOLVED on-screen position must reach \
+         its child — this is the whole point of ADR-0015"
+    );
+
+    // (b) A hit at the follower's plain TREE-RELATIVE position (inside
+    // `follower_child`'s NATURAL (0,0)-(30,30) rect, where `branch_b` and
+    // the follower itself sit) does NOT reach the child — a naive
+    // structural-only forward (the pre-ADR-0015 behavior) would have hit
+    // it here instead, exactly backwards.
+    assert_eq!(
+        run.hit_first(10.0, 10.0),
+        None,
+        "a hit at the follower's plain TREE-RELATIVE position must NOT \
+         reach its child — this is the regression proof that the fix is \
+         real, not a no-op (a naive structural-only forward hits here)"
+    );
+}
+
+/// ★ MILESTONE (ADR-0015): an unlinked follower with
+/// `show_when_unlinked = false` has NO hittable subtree at all — the
+/// hit-test walk must skip it entirely, mirroring
+/// `resolve_follower_offset -> None -> don't descend` on the render path,
+/// rather than falling through to the structural forward.
+#[test]
+fn harness_follower_layer_hidden_when_unlinked_has_no_hittable_subtree() {
+    // A link with NO leader registered anywhere in this tree.
+    let link = LayerLink::new();
+
+    let run = RenderTester::mount(
+        box_node(RenderFollowerLayer::new(link).with_show_when_unlinked(false))
+            .child(box_node(RenderColoredBox::red(30.0, 30.0)).label("hidden_child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.hit_first(5.0, 5.0),
+        None,
+        "an unlinked follower with show_when_unlinked = false must have \
+         no hittable subtree at all"
+    );
+}
+
 // ============================================================================
 // RenderPhysicalModel / RenderPhysicalShape
 // ============================================================================

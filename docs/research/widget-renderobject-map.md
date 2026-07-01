@@ -292,14 +292,27 @@ are listed in the render-object harness catalog, and back the public
 > cross-repaint-boundary leader/follower pair resolves correctly, an unlinked
 > `show_when_unlinked = true` follower renders at its own `target_offset`, and an unlinked
 > `show_when_unlinked = false` follower renders nothing. `CompositedTransformFollower` (tooltips,
-> dropdown menus) now positions correctly on screen. **Resolved-transform-aware hit-testing
-> remains the one deferred piece**, correctly reclassified as needing a genuine chief-architect
-> ADR (mirroring ADR-0013's own precedent): `RenderObject::hit_test_transform` takes no external
-> context, `PipelineOwner::hit_test` has no coupling to any `LayerTree`, and no
-> `RenderId↔LayerId` correlation exists anywhere in FLUI today. `RenderFollowerLayer::hit_test`
-> still implements only the structural forward (has a child → hit-test it at its own
-> layout-relative offset) — a tap on a moved follower will hit-test at its pre-resolution tree
-> position until that ADR lands.
+> dropdown menus) now positions correctly on screen.
+>
+> **Resolved-transform-aware hit-testing CLOSED (verified 2026-07-01) per `ADR-0015`**
+> (`docs/adr/ADR-0015-render-follower-hit-test-channel.md`). The channel: `FragmentComposer`
+> captures a `(RenderId, LayerId)` correlation as a near-free byproduct of pushing each
+> `Layer::Follower` during paint; `run_paint` resolves each correlated follower post-paint via
+> the SAME `flui_layer::resolve_follower_offset` the GPU path already uses (one algorithm, two
+> consumers, not two copies), stashing results in two `PipelineOwner` side tables
+> (`last_follower_offsets` for visible/resolved, `last_hidden_follower_ids` for
+> unlinked-and-hidden); the hit-test walk reads them generically, riding the exact
+> `push_transform`/`pop_transform`/position-shift lifecycle it already uses for
+> `hit_test_transform` and ordinary child offsets. `hit_test_transform`'s signature and every
+> existing implementor (`RenderTransform`, `RenderRotatedBox`, sliver variants) are completely
+> untouched; `RenderFollowerLayer::hit_test` stays the plain structural forward, since the walk
+> — not the object — now applies the resolved shift. Proven by a milestone harness test asserting
+> BOTH that a hit at the follower's resolved on-screen position reaches its child AND that a hit
+> at its plain tree-relative position does not (the direct regression proof, verified red before
+> the fix and green after). This is Flutter's own `getLastTransform()` cache-from-last-composite
+> contract, ported faithfully — the one-frame staleness (consulting the last completed paint's
+> resolved position, never a live per-event recompute) is the intended oracle behavior, not a
+> limitation.
 >
 > **Semantics family closure note (verified 2026-07-01) — the last catalog gap is closed via
 > `ADR-0014`.** `RenderSemanticsAnnotations`/`RenderMergeSemantics`/`RenderExcludeSemantics` now

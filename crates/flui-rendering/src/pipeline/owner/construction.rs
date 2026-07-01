@@ -6,8 +6,7 @@ use std::{
 };
 
 use flui_layer::LayerTree;
-#[cfg(any(test, feature = "testing"))]
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(any(test, feature = "testing"))]
 use crate::testing::parent_data::ParentDataSeed;
@@ -50,6 +49,8 @@ impl PipelineOwner<Idle> {
             semantics_owner: None,
             last_layer_tree: None,
             last_link_registry: None,
+            last_follower_offsets: FxHashMap::default(),
+            last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: crate::pipeline::deferred::DeferredMutations::new(),
             handle,
@@ -109,6 +110,8 @@ impl PipelineOwner<Idle> {
             semantics_owner: None,
             last_layer_tree: None,
             last_link_registry: None,
+            last_follower_offsets: FxHashMap::default(),
+            last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
             deferred_mutations: crate::pipeline::deferred::DeferredMutations::new(),
             handle,

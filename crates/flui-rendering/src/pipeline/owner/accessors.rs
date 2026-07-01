@@ -7,7 +7,7 @@
 //! care which phase the owner is in.
 
 use flui_foundation::RenderId;
-use flui_types::Offset;
+use flui_types::{Matrix4, Offset};
 
 use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
@@ -358,6 +358,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
             return false;
         };
+
+        // ADR-0015 D4: composite-resolved follower offsets. Gated behind
+        // both side tables being empty — true for the overwhelming
+        // majority of trees (followers are rare: tooltips, dropdowns,
+        // overlays), so this whole branch is a single cheap `is_empty`
+        // check away from a no-op for every other tree.
+        let follower_offset =
+            if self.last_follower_offsets.is_empty() && self.last_hidden_follower_ids.is_empty() {
+                None
+            } else if self.last_hidden_follower_ids.contains(&id) {
+                // Correlated as a follower this frame but resolved to hidden
+                // (unlinked, `show_when_unlinked == false`) — mirrors the
+                // render path's `resolve_follower_offset -> None -> don't
+                // descend` (flui-engine's `render_layer_recursive`) and
+                // oracle's early return in `FollowerLayer.addToScene`
+                // (`layer.dart:2857-2865`). No HitTestEntry, no descent.
+                return false;
+            } else {
+                self.last_follower_offsets.get(&id).copied()
+            };
+
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
         // Box bounds gate size, resolved from RenderState (geometry's
@@ -376,6 +397,25 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if let Some(t) = hit_transform {
             result.push_transform(t);
         }
+        // A resolved follower offset rides the SAME transform-stack
+        // lifecycle as `hit_test_transform` (ADR-0015 D4) — the same
+        // translation the paint/GPU path applies via
+        // `backend.push_offset(resolved)` (renderer.rs:1586), lifted to a
+        // `Matrix4` (D5: exact and lossless — the composer only ever
+        // shifts coordinate space via translation).
+        if let Some(r) = follower_offset {
+            result.push_transform(Matrix4::translation(r.dx.get(), r.dy.get(), 0.0));
+        }
+
+        // Shift the position handed into this node's own subtree by the
+        // resolved offset — the SAME position-shift pattern `hit_child`
+        // below already applies for ordinary child offsets, applied here
+        // by the WALK rather than the object: `RenderFollowerLayer::hit_test`
+        // stays a plain structural forward (ADR-0015 D4).
+        let position = match follower_offset {
+            Some(r) => position - r,
+            None => position,
+        };
 
         let mut hit_child = |index: usize, override_pos: Option<Offset>| -> bool {
             let Some(&child_id) = children.get(index) else {
@@ -442,6 +482,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             result.add(entry);
         }
 
+        if follower_offset.is_some() {
+            result.pop_transform();
+        }
         if has_transform {
             result.pop_transform();
         }

@@ -9,8 +9,8 @@
 //! (`packages/flutter/lib/src/rendering/proxy_box.dart:4550-4753`), backing
 //! `CompositedTransformFollower`.
 //!
-//! # Scope — Tier 1 (structural) + Tier 2 (render-time position); hit-test
-//! resolution remains deferred
+//! # Scope — Tier 1 (structural) + Tier 2 (render-time position) + resolved
+//! hit-testing (ADR-0015)
 //!
 //! This type makes the `LayerTree` node structurally correct and
 //! harness-verifiable — a real `Layer::Follower` with the right `link`/
@@ -24,11 +24,22 @@
 //! already-fully-built `LayerTree` and a per-frame `LinkRegistry` — see
 //! `flui_layer::resolve_follower_offset` (Tier 2).
 //!
-//! **Hit-testing remains limited to the structural forward only** (see
-//! [`RenderBox::hit_test`] below) — resolved-transform-aware hit-testing is
-//! a genuine chief-architect ADR question, not a shortcut to invent in this
-//! pass. See `docs/research/2026-07-01-render-leader-follower-layer-plan.md`
-//! §4/§4.4/§8.
+//! **Hit-testing now consults that same resolved position** (ADR-0015):
+//! `PipelineOwner` retains a `RenderId`-keyed side table of
+//! composite-resolved follower offsets, populated post-paint by resolving
+//! each paint-phase-correlated follower with the identical
+//! `resolve_follower_offset` the GPU path uses. The hit-test walk
+//! (`PipelineOwner::hit_test_subtree_impl`) reads that side table
+//! generically — pushing the resolved translation onto the
+//! `HitTestResult` transform stack and shifting the position handed into
+//! this node's subtree, exactly the way it already does for
+//! `hit_test_transform` results and ordinary child offsets. This node's
+//! own [`RenderBox::hit_test`] body below stays a plain structural
+//! forward — the resolved-position shift is applied by the WALK, not the
+//! object — and an unlinked follower with `show_when_unlinked == false`
+//! has its subtree skipped entirely by that same walk, mirroring
+//! `resolve_follower_offset -> None -> don't descend` on the render path.
+//! See ADR-0015 for the full design.
 //!
 //! # Rust-native shape
 //!
@@ -269,14 +280,15 @@ impl RenderBox for RenderFollowerLayer {
         // Oracle `:4672-4694`: Follower never adds itself as a hit
         // target, only forwards, gated on `link.leader == null &&
         // !show_when_unlinked`, wrapped in the CURRENT resolved
-        // transform. This Tier-1 body implements ONLY the structural
-        // forward half — has a child, forward the hit at its own
-        // layout-relative offset; no child, miss — deliberately NOT the
-        // resolved-transform-aware half (module doc; a self-cached
-        // `Cell<Offset>` here would be silently wrong whenever this
-        // node's own paint ran before its leader's in the same pass, so
-        // it is not a shortcut taken in this pass — see the design
-        // research plan §4.4/§7.5/§8's ADR deferral).
+        // transform. This body stays the plain structural forward — has
+        // a child, forward the hit at its own layout-relative offset; no
+        // child, miss — because BOTH the resolved-transform shift and the
+        // unlinked-hidden skip are applied by the hit-test WALK
+        // (`PipelineOwner::hit_test_subtree_impl`), not by this object
+        // (ADR-0015). A self-cached `Cell<Offset>` here would be silently
+        // wrong whenever this node's own paint ran before its leader's in
+        // the same pass; the walk instead reads a side table resolved
+        // once, post-paint, against the fully-built `LayerTree`.
         if !self.has_child {
             return false;
         }

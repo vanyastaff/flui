@@ -26,8 +26,8 @@ use std::{
 use flui_foundation::RenderId;
 use flui_layer::LayerTree;
 use flui_semantics::SemanticsOwner;
-#[cfg(any(test, feature = "testing"))]
-use rustc_hash::FxHashMap;
+use flui_types::Offset;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(any(test, feature = "testing"))]
 use crate::testing::parent_data::ParentDataSeed;
@@ -162,6 +162,33 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// positions at render time against this same frame's `last_layer_tree`.
     last_link_registry: Option<flui_layer::LinkRegistry>,
 
+    /// Composite-resolved offsets for `Layer::Follower` render nodes,
+    /// keyed by `RenderId` (ADR-0015 D1) — a per-frame byproduct mirroring
+    /// `last_layer_tree`/`last_link_registry`. Populated post-paint
+    /// (`paint.rs::run_paint`) by resolving each `FragmentComposer`-recorded
+    /// follower correlation via the SAME `flui_layer::resolve_follower_offset`
+    /// the GPU path (flui-engine's `render_layer_recursive`) resolves
+    /// against. Present ⟹ the follower is visible this frame at the
+    /// translated offset; absent ⟹ either not a follower, or a hidden one
+    /// (see `last_hidden_follower_ids`). Consulted generically by the
+    /// hit-test walk (`accessors.rs`) so a visually-displaced
+    /// `RenderFollowerLayer` hit-tests at its RESOLVED on-screen position,
+    /// not its plain tree-relative position — Flutter's `getLastTransform()`
+    /// cache-from-last-composite contract, one frame stale by design.
+    last_follower_offsets: FxHashMap<RenderId, Offset>,
+
+    /// `RenderId`s of `Layer::Follower` nodes correlated during the last
+    /// paint phase that resolved to `None` (unlinked with
+    /// `show_when_unlinked == false`) — ADR-0015 D1/D4's companion to
+    /// `last_follower_offsets`. The hit-test walk must distinguish "not a
+    /// follower" (fall through to normal traversal) from "a follower that
+    /// is currently hidden" (skip the subtree entirely, mirroring
+    /// `resolve_follower_offset -> None -> don't descend` on the render
+    /// path); `last_follower_offsets`'s absence alone conflates both
+    /// cases, so this set carries follower identity independent of
+    /// resolution outcome.
+    last_hidden_follower_ids: FxHashSet<RenderId>,
+
     /// Device pixel ratio threaded into every paint pass (text shaping
     /// and hairline snapping are DPR-dependent). Set by the platform
     /// binding on surface creation / DPI change; defaults to 1.0 for
@@ -236,6 +263,11 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
             )
             .field("has_layer_tree", &self.last_layer_tree.is_some())
             .field("has_link_registry", &self.last_link_registry.is_some())
+            .field("follower_offset_count", &self.last_follower_offsets.len())
+            .field(
+                "hidden_follower_count",
+                &self.last_hidden_follower_ids.len(),
+            )
             .field("has_semantics_owner", &self.semantics_owner.is_some())
             .finish()
     }
@@ -266,6 +298,8 @@ where
         semantics_owner: from.semantics_owner,
         last_layer_tree: from.last_layer_tree,
         last_link_registry: from.last_link_registry,
+        last_follower_offsets: from.last_follower_offsets,
+        last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         deferred_mutations: from.deferred_mutations,
         handle: from.handle,
