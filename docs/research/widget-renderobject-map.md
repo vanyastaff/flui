@@ -44,14 +44,13 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈12)
+### Remaining to build — verified missing (≈11, see `RenderAnimatedOpacity` note)
 
 Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
 | `RenderSliverPersistentHeader` family | `SliverAppBar`/pinned headers | Medium | `sliver_persistent_header.dart` |
-| `RenderAnimatedOpacity` | `FadeTransition`/`AnimatedOpacity` | Medium | `proxy_box.dart` |
 | `RenderAnimatedSize` | `AnimatedSize` | Medium | `animated_size.dart` |
 | `RenderBackdropFilter` | `BackdropFilter` | Low | `proxy_box.dart` |
 | `RenderShaderMask` | `ShaderMask` | Low | `proxy_box.dart` |
@@ -84,6 +83,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 > **`RenderCustomMultiChildLayoutBox` closure note (verified 2026-07-01):** `RenderCustomMultiChildLayoutBox` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `CustomMultiChildLayout` widget plus `LayoutId` parent-data widget. Harness/widget coverage pins delegated parent sizing, child-id lookup, per-child constraints, layout offsets, reverse-order hit testing, dry layout/intrinsics, and `LayoutId` parent-data delivery. `MultiChildLayoutDelegate` is now un-gated in `flui-rendering`.
 >
 > **`RenderTable` closure note (verified 2026-07-01):** `RenderTable` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `Table`/`TableRow`/`TableCell` widgets. Building it surfaced and fixed a pre-existing type-debt bug: `TableCellParentData.vertical_alignment` was non-optional (defaulting every unset cell to `Top`), where Flutter's is nullable and defers to `RenderTable.defaultVerticalAlignment`; it is now `Option<TableCellVerticalAlignment>`, consolidated onto the single `flui_types::layout::table::TableCellVerticalAlignment` enum (retiring a duplicate `flui_rendering`-local copy). Harness coverage pins the oracle's 4-pass column-width algorithm (`Fixed`/`Flex`/`Fraction`/`Intrinsic`, including the oracle's own adversarial low-ideal/high-flex vs. high-ideal/low-flex shrink scenario), per-cell offset/size, row-decoration → children → border paint order, border interior-line placement, per-cell hit testing, and baseline row alignment. Deferred and documented: `MaxColumnWidth`/`MinColumnWidth` combinators, `TableCellVerticalAlignment::IntrinsicHeight`, RTL column ordering (matching `RenderWrap`'s/`RenderFlex`'s existing LTR-only precedent), and `TableBorder.border_radius`.
+>
+> **`RenderAnimatedOpacity` correction (investigated 2026-07-01):** removed from "remaining to build" — it is not a real gap. `FadeTransition` (`crates/flui-widgets/src/transitions/fade_transition.rs`) and `AnimatedOpacity` (`crates/flui-widgets/src/animated/animated_opacity.rs`) already compose the plain `Opacity` widget/`RenderOpacity`, rebuilding `Opacity::new(value)` on every animation tick — `RenderOpacity` (`crates/flui-objects/src/proxy/opacity.rs`) already implements the oracle's boundary fast paths (`paint_alpha()` → `None` and paint is skipped at alpha 0/255), so no behavior is missing. The oracle's `RenderAnimatedOpacity` differs only in *how* it stays current: it holds the `Animation<double>` itself and self-subscribes (`proxy_box.dart` `RenderAnimatedOpacityMixin`), bypassing a widget rebuild per tick — a pure performance shape, not a correctness one, and it depends on a `Listenable`/`Animation` attach-to-render-object mechanism FLUI's `RenderObject` trait does not have yet (the same gap already documented in `RenderFlow`'s and `RenderCustomPaint`'s module docs for their own painter/delegate `Listenable` wiring). Tracked as a cross-cutting FLUI-wide performance item, not a per-widget catalog gap.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -218,7 +219,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
-| `FadeTransition` | `RenderAnimatedOpacity` | Needed | Single | Animated opacity via `Animation<double>` |
+| `FadeTransition` | *(composes)* | N/A | Single | Composes `Opacity`/`RenderOpacity`, rebuilt per tick — see the `RenderAnimatedOpacity` correction note above |
 | `SlideTransition` | *(composes)* | N/A | Single | Composes `FractionalTranslation` driven by animation |
 | `ScaleTransition` | *(composes)* | N/A | Single | Composes `Transform.scale` driven by animation |
 | `RotationTransition` | *(composes)* | N/A | Single | Composes `Transform.rotate` driven by animation |
@@ -231,7 +232,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 |--------|---------------------|-------------|-------|-------|
 | `AnimatedContainer` | *(composes)* | N/A | Single | Implicitly animates Container properties |
 | `AnimatedPadding` | *(composes)* | N/A | Single | Implicitly animates Padding |
-| `AnimatedOpacity` | `RenderAnimatedOpacity` | Needed | Single | Implicit opacity animation |
+| `AnimatedOpacity` | *(composes)* | N/A | Single | Composes `Opacity`/`RenderOpacity`, rebuilt per tick — see the `RenderAnimatedOpacity` correction note above |
 | `AnimatedPositioned` | *(composes)* | N/A | Single | Implicitly animates Positioned in Stack |
 | `AnimatedAlign` | *(composes)* | N/A | Single | Implicitly animates Align |
 | `AnimatedDefaultTextStyle` | *(composes)* | N/A | Single | Implicitly animates DefaultTextStyle |
