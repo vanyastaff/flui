@@ -2,15 +2,15 @@
 
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    ClipPathLayer, ClipRRectLayer, ClipRectLayer, Layer, LayerTree, OffsetLayer, OpacityLayer,
-    PictureLayer, TransformLayer,
+    BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, Layer, LayerTree,
+    OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use flui_types::Offset;
 use rustc_hash::FxHashSet;
 
 use crate::{
-    context::{FragmentClip, FragmentOp, FragmentRecorder},
+    context::{FragmentOp, FragmentRecorder, FragmentScope},
     pipeline::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
@@ -267,7 +267,7 @@ impl PipelineOwner<PaintPhase> {
         for op in fragment.ops {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
-                FragmentOp::Push(clip) => composer.push_layer(clip_layer(*clip, origin)),
+                FragmentOp::Push(scope) => composer.push_layer(scope_layer(*scope, origin)),
                 FragmentOp::PushTransform(matrix) => {
                     composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
                         *matrix, origin,
@@ -449,30 +449,31 @@ fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4
     }
 }
 
-/// Maps a recorded clip scope onto its `flui-layer` clip layer.
+/// Maps a recorded effect-layer scope onto its `flui-layer` layer.
 ///
-/// Clip shapes are recorded in the node's LOCAL coordinates, while the
-/// runs they bracket carry the accumulated `origin` baked into their
-/// canvas transforms — so the shape is shifted by `origin` here
-/// (Flutter `pushClipRect`: `clipRect.shift(offset)`), or a clip away
-/// from the parent origin would cut at the layer's (0,0) instead of
-/// the node's position.
+/// Scope shapes/bounds are recorded in the node's LOCAL coordinates, while
+/// the runs they bracket carry the accumulated `origin` baked into their
+/// canvas transforms — so every variant is shifted by `origin` here
+/// (Flutter `pushClipRect`: `clipRect.shift(offset)`; `RenderShaderMask`'s
+/// `maskRect = offset & size`; `RenderBackdropFilter`'s backdrop bounds
+/// follow the same `offset & size` convention), or a scope away from the
+/// parent origin would apply at the layer's (0,0) instead of the node's
+/// position.
 ///
-/// Always a real clip layer today; lowering non-composited clips back
-/// into canvas clips inside the merged picture is a composer-side
-/// optimization gated on the `needs_compositing` bits — correctness is
-/// identical either way, so the recording API does not expose the
-/// choice.
-fn clip_layer(clip: FragmentClip, origin: Offset) -> Layer {
-    match clip {
-        FragmentClip::Rect { rect, behavior } => {
+/// Always a real layer today; lowering non-composited clips back into
+/// canvas clips inside the merged picture is a composer-side optimization
+/// gated on the `needs_compositing` bits — correctness is identical
+/// either way, so the recording API does not expose the choice.
+fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
+    match scope {
+        FragmentScope::Rect { rect, behavior } => {
             Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
         }
-        FragmentClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
+        FragmentScope::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
             rrect.translate_offset(origin),
             behavior,
         )),
-        FragmentClip::Path { path, behavior } => {
+        FragmentScope::Path { path, behavior } => {
             let path = if origin == Offset::ZERO {
                 *path
             } else {
@@ -480,5 +481,23 @@ fn clip_layer(clip: FragmentClip, origin: Offset) -> Layer {
             };
             Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
         }
+        FragmentScope::ShaderMask {
+            shader,
+            blend_mode,
+            bounds,
+        } => Layer::ShaderMask(ShaderMaskLayer::new(
+            shader,
+            blend_mode,
+            bounds.translate_offset(origin),
+        )),
+        FragmentScope::BackdropFilter {
+            filter,
+            blend_mode,
+            bounds,
+        } => Layer::BackdropFilter(BackdropFilterLayer::new(
+            filter,
+            blend_mode,
+            bounds.translate_offset(origin),
+        )),
     }
 }

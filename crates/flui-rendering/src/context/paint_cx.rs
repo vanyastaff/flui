@@ -35,17 +35,22 @@
 //!
 //! `canvas().save()/clip_*()` affect only the current run: a child
 //! marker seals the run, and the child's commands replay in a fresh
-//! one. A clip that must cover children goes through
-//! [`PaintCx::with_clip_rect`] / `with_clip_rrect` / `with_clip_path`,
-//! which produce real clip layers. (A composer-side fast path may later
-//! lower non-composited clip layers back into canvas clips —
-//! correctness is identical, so the API does not expose the choice.)
+//! one. An effect that must cover children — a clip, a shader mask, or
+//! a backdrop filter — goes through [`PaintCx::with_clip_rect`] /
+//! `with_clip_rrect` / `with_clip_path` / `with_shader_mask` /
+//! `with_backdrop_filter`, which all produce real layers. (A
+//! composer-side fast path may later lower non-composited clip layers
+//! back into canvas clips — correctness is identical, so the API does
+//! not expose the choice.)
 
 use std::marker::PhantomData;
 
 use flui_painting::{Canvas, DisplayList, DisplayListCore};
 use flui_tree::{Arity, Optional, Single, Variable};
-use flui_types::{Matrix4, Offset, Pixels, Rect, Size, painting::Clip};
+use flui_types::{
+    Matrix4, Offset, Pixels, Point, Rect, Size,
+    painting::{BlendMode, Clip, ImageFilter, Shader},
+};
 
 // ============================================================================
 // Fragment ops
@@ -76,10 +81,11 @@ pub enum FragmentOp {
         offset_override: Option<Offset>,
     },
 
-    /// Opens a clip-layer scope; balanced by a matching [`Self::Pop`].
+    /// Opens an effect-layer scope (clip, shader mask, backdrop filter);
+    /// balanced by a matching [`Self::Pop`].
     /// Boxed: clip shapes (especially paths) dwarf the other variants,
     /// and scope ops are rare relative to runs/markers.
-    Push(Box<FragmentClip>),
+    Push(Box<FragmentScope>),
 
     /// Opens a transform-layer scope; balanced by a matching [`Self::Pop`].
     /// Boxed: `Matrix4` is 64 bytes ([f32; 16]) vs. this enum's other
@@ -92,14 +98,21 @@ pub enum FragmentOp {
     Pop,
 }
 
-/// A clip layer operation recorded during paint.
+/// An effect-layer scope operation recorded during paint.
+///
+/// Despite the name's origin (it started as clip-only), this enum now
+/// covers every closure-scoped paint effect that must bracket a child
+/// subtree as a real layer: clips, shader masks, and backdrop filters all
+/// share the identical push-scope/paint-inside/pop-scope shape (`with_*`
+/// methods below), so they share one recorded IR rather than three
+/// near-identical enums.
 ///
 /// Pipeline-internal paint IR. Not part of the stable public API surface.
 /// Re-exported at `pub(crate)` scope only — consumers outside the crate
 /// have no reason to name or match on this type (the composer handles all
 /// `Push`/`Pop` ops; test introspection goes through `FragmentOp::Run`).
 #[derive(Debug, Clone)]
-pub enum FragmentClip {
+pub enum FragmentScope {
     /// Axis-aligned rectangular clip.
     Rect {
         /// The clip rectangle in node-local coordinates.
@@ -120,6 +133,33 @@ pub enum FragmentClip {
         path: Box<flui_types::painting::Path>,
         /// How to handle content outside the clip boundary.
         behavior: Clip,
+    },
+    /// GPU shader mask (`RenderShaderMask`) — the shader is resolved by
+    /// the render object from its LOCAL bounds (`Offset.zero & size` in
+    /// oracle terms) before being recorded here; the composer shifts
+    /// `bounds` by the accumulated origin the same way it already does
+    /// for `Rect`/`RRect`/`Path`, reproducing oracle's local-callback,
+    /// global-`maskRect` split "for free".
+    ShaderMask {
+        /// The shader to apply as a mask over everything painted inside
+        /// this scope.
+        shader: Shader,
+        /// How the masked result blends with what's already painted.
+        blend_mode: BlendMode,
+        /// The mask rect in node-local coordinates.
+        bounds: Rect<Pixels>,
+    },
+    /// Backdrop filter (`RenderBackdropFilter`) — samples and filters
+    /// whatever was already painted behind this scope before the scope's
+    /// own content (the child) is painted on top.
+    BackdropFilter {
+        /// The image filter applied to the backdrop.
+        filter: ImageFilter,
+        /// How the filtered backdrop blends with the child painted on
+        /// top of it.
+        blend_mode: BlendMode,
+        /// The backdrop-sampling rect in node-local coordinates.
+        bounds: Rect<Pixels>,
     },
 }
 
@@ -217,9 +257,9 @@ impl FragmentRecorder {
         }
     }
 
-    fn push_scope(&mut self, clip: FragmentClip) {
+    fn push_scope(&mut self, scope: FragmentScope) {
         self.seal();
-        self.ops.push(FragmentOp::Push(Box::new(clip)));
+        self.ops.push(FragmentOp::Push(Box::new(scope)));
         self.open_scopes += 1;
     }
 
@@ -356,7 +396,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
-        self.rec.push_scope(FragmentClip::Rect { rect, behavior });
+        self.rec.push_scope(FragmentScope::Rect { rect, behavior });
         f(self);
         self.rec.pop_scope();
     }
@@ -369,7 +409,8 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
-        self.rec.push_scope(FragmentClip::RRect { rrect, behavior });
+        self.rec
+            .push_scope(FragmentScope::RRect { rrect, behavior });
         f(self);
         self.rec.pop_scope();
     }
@@ -382,9 +423,55 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
-        self.rec.push_scope(FragmentClip::Path {
+        self.rec.push_scope(FragmentScope::Path {
             path: Box::new(path),
             behavior,
+        });
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Applies `shader` as a mask over everything recorded inside `f` —
+    /// self draws AND child subtrees (`RenderShaderMask`).
+    ///
+    /// `bounds` must be in node-LOCAL coordinates — the composer shifts it
+    /// by the accumulated origin when building the layer, exactly like
+    /// [`Self::with_clip_rect`]'s `rect`. Do not pre-offset it: the
+    /// oracle's own split (shader resolved against the LOCAL rect, stored
+    /// `maskRect` in GLOBAL space) falls out of this for free.
+    pub fn with_shader_mask(
+        &mut self,
+        shader: Shader,
+        blend_mode: BlendMode,
+        f: impl FnOnce(&mut Self),
+    ) {
+        let bounds = Rect::from_origin_size(Point::ZERO, self.size);
+        self.rec.push_scope(FragmentScope::ShaderMask {
+            shader,
+            blend_mode,
+            bounds,
+        });
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Samples and filters the backdrop behind everything recorded inside
+    /// `f`, then paints `f`'s content on top (`RenderBackdropFilter`).
+    ///
+    /// `bounds` is this node's own LOCAL rect (`Rect::from_origin_size(Point::ZERO, self.size())`)
+    /// — shifted to global space by the composer, matching every other
+    /// `with_*` scope method.
+    pub fn with_backdrop_filter(
+        &mut self,
+        filter: ImageFilter,
+        blend_mode: BlendMode,
+        f: impl FnOnce(&mut Self),
+    ) {
+        let bounds = Rect::from_origin_size(Point::ZERO, self.size);
+        self.rec.push_scope(FragmentScope::BackdropFilter {
+            filter,
+            blend_mode,
+            bounds,
         });
         f(self);
         self.rec.pop_scope();

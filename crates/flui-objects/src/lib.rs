@@ -56,10 +56,10 @@ pub use layout::{
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
-    ClipGeometry, CustomClipper, DecorationPosition, Oval, RenderClip, RenderClipOval,
-    RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint,
-    RenderDecoratedBox, RenderOpacity, RenderPhysicalModel, RenderPhysicalShape,
-    RenderRepaintBoundary,
+    ClipGeometry, CustomClipper, DecorationPosition, Oval, RenderBackdropFilter, RenderClip,
+    RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox,
+    RenderCustomPaint, RenderDecoratedBox, RenderOpacity, RenderPhysicalModel, RenderPhysicalShape,
+    RenderRepaintBoundary, RenderShaderMask, ShaderCallback,
 };
 
 // --- flat re-exports (interaction) ---

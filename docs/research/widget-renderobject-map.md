@@ -15,7 +15,7 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **67**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **69**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
@@ -27,16 +27,16 @@
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **67**
-- **Render objects remaining to build (Core.2):** **~7** (verified list below)
+- **Render objects existing today:** **69**
+- **Render objects remaining to build (Core.2):** **~5** (verified list below)
 
-### Existing render objects — authoritative (67)
+### Existing render objects — authoritative (69)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
 **Box layout (26):** `RenderAlign` · `RenderAnimatedSize` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderTable` · `RenderWrap`
 
-**Paint effects (12):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderPhysicalModel` · `RenderPhysicalShape` · `RenderRepaintBoundary` · `RenderTransform`
+**Paint effects (14):** `RenderBackdropFilter` · `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderPhysicalModel` · `RenderPhysicalShape` · `RenderRepaintBoundary` · `RenderShaderMask` · `RenderTransform`
 
 **Interaction / pointer (6):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderMouseRegion` · `RenderOffstage`
 
@@ -44,14 +44,12 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Slivers + viewport (20):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity` · `RenderSliverScrollingPersistentHeader` · `RenderSliverPinnedPersistentHeader` · `RenderSliverFloatingPersistentHeader` · `RenderSliverFloatingPinnedPersistentHeader`
 
-### Remaining to build — verified missing (≈7, see `RenderAnimatedOpacity` note)
+### Remaining to build — verified missing (≈5, see `RenderAnimatedOpacity` note)
 
-Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize`, the `RenderSliverPersistentHeader` family, and `RenderPhysicalModel`/`RenderPhysicalShape` closed same day — see closure notes below):
+Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize`, the `RenderSliverPersistentHeader` family, `RenderPhysicalModel`/`RenderPhysicalShape`, and `RenderBackdropFilter`/`RenderShaderMask` closed same day — see closure notes below):
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
-| `RenderBackdropFilter` | `BackdropFilter` | Low | `proxy_box.dart` |
-| `RenderShaderMask` | `ShaderMask` | Low | `proxy_box.dart` |
 | `RenderSemanticsAnnotations` | `Semantics` | Medium (a11y) | `proxy_box.dart` |
 | `RenderMergeSemantics` | `MergeSemantics` | Low | `proxy_box.dart` |
 | `RenderExcludeSemantics` | `ExcludeSemantics` | Low | `proxy_box.dart` |
@@ -210,6 +208,33 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 > (confirmed debug/inspector-only), and `transparentOccluder` (confirmed inapplicable — a
 > Skia-specific parameter with nothing to attach to in FLUI's from-scratch analytic shadow
 > algorithm).
+>
+> **`RenderBackdropFilter`/`RenderShaderMask` closure note (verified 2026-07-01) — render-tree
+> wiring complete, ⚠ ONE half is NOT visually working yet.** Both now ship in
+> `crates/flui-objects/src/proxy/backdrop_filter.rs`/`shader_mask.rs`, as two independent
+> non-generic structs (their config types, gating logic, default `blend_mode`, and diagnostics
+> diverge enough that a shared generic body wasn't worth it, unlike `RenderPhysicalModel`/`Shape`).
+> Building them required extending `flui-rendering`'s paint pipeline: `PaintCx` gained
+> `with_shader_mask`/`with_backdrop_filter`, extending the existing closure-scoped clip mechanism
+> (renamed `FragmentClip` → `FragmentScope` since it now covers non-clip effects too), and the
+> composer gained two new match arms producing real `Layer::ShaderMask`/`Layer::BackdropFilter`
+> nodes. `RenderBackdropFilter`'s two independent paint gates (`enabled` bypasses the filter
+> entirely and still paints the child unfiltered; enabled-with-no-child paints nothing at all) and
+> `RenderShaderMask`'s local-vs-global rect split (the shader callback sees the LOCAL bounds; the
+> composer's existing origin-shift produces the correct global `maskRect`) are both ported exactly
+> and harness-regression-tested. **Confirmed during this pass: the wgpu engine's
+> `LayerRender<ShaderMaskLayer>` never actually applies the shader** — it pushes an inert
+> clip-to-bounds save-layer and never reads the layer's `shader()`/`blend_mode()` fields anywhere
+> in the call graph (a separate, fully-working Canvas-level shader-mask pipeline exists but is
+> architecturally incompatible with `PaintCx`'s deferred-child/no-live-recursion model, so it can't
+> be reused as-is). The `LayerTree` structure is correct and harness-verifiable (a real
+> `Layer::ShaderMask` node with the right fields), but `ShaderMask` does not yet visually mask
+> anything on screen — a confirmed `flui-engine` follow-up, not closed by this pass.
+> `RenderBackdropFilter`'s GPU blur is real but covers only `ImageFilter::Blur`; other filter
+> variants degrade to "children only, no backdrop effect" with a `tracing::warn!`. Scoped down from
+> the oracle's current `ImageFilterConfig`/`BackdropKey` surface (bounded blur, shared-backdrop
+> sampling) to the classic `filter`/`blend_mode`/`enabled` fields — neither newer feature has any
+> FLUI-side backing, so building them now would be dead plumbing.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -267,8 +292,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 | `ClipPath` | `RenderClipPath` | **Exists** | Single | |
 | `DecoratedBox` | `RenderDecoratedBox` | Needed | Single | Paints `BoxDecoration` (borders, gradients, shadows, images) |
 | `CustomPaint` | `RenderCustomPaint` | **Exists** | Single | User-supplied foreground/background painters |
-| `BackdropFilter` | `RenderBackdropFilter` | Needed | Single | Applies image filter to backdrop |
-| `ShaderMask` | `RenderShaderMask` | Needed | Single | Applies shader as color mask |
+| `BackdropFilter` | `RenderBackdropFilter` | **Exists** | Single | Applies image filter to backdrop; see closure note above |
+| `ShaderMask` | `RenderShaderMask` | **Exists** (render-tree only — see closure note) | Single | Applies shader as color mask; `flui-engine` does not yet visually apply it |
 | `PhysicalModel` | `RenderPhysicalModel` | **Exists** | Single | Rounded-rect clip + elevation shadow; see closure note above |
 | `PhysicalShape` | `RenderPhysicalShape` | **Exists** | Single | Arbitrary path clip + elevation shadow; see closure note above |
 | `RepaintBoundary` | `RenderRepaintBoundary` | **Exists** | Single | Isolates repaint subtree |

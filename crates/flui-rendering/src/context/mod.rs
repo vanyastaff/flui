@@ -80,14 +80,16 @@ pub use layout::LayoutContext;
 // `.ops` field is crate-private; the testing-gated `PaintFragment::ops()`
 // accessor exposes it to cross-crate tests.
 //
-// FragmentClip has ZERO cross-crate consumers (used only crate-internally by
-// the paint encoder in paint_cx.rs and the composer in pipeline/owner). It is
-// not re-exported as `pub` — only as `pub(crate)` for the pipeline composer.
-pub(crate) use paint_cx::FragmentClip;
+// FragmentScope (née FragmentClip — it now also carries the ShaderMask and
+// BackdropFilter scope variants, not just clips) has ZERO cross-crate
+// consumers (used only crate-internally by the paint encoder in paint_cx.rs
+// and the composer in pipeline/owner). It is not re-exported as `pub` —
+// only as `pub(crate)` for the pipeline composer.
 #[cfg(any(test, feature = "testing"))]
 pub use paint_cx::FragmentOp;
 #[cfg(not(any(test, feature = "testing")))]
 pub(crate) use paint_cx::FragmentOp;
+pub(crate) use paint_cx::FragmentScope;
 pub use paint_cx::{FragmentRecorder, PaintCx, PaintFragment};
 
 // ============================================================================
