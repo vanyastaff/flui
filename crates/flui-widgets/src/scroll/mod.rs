@@ -54,4 +54,4 @@ pub use sliver_offstage::SliverOffstage;
 pub use sliver_opacity::SliverOpacity;
 pub use sliver_padding::SliverPadding;
 pub use sliver_to_box_adapter::SliverToBoxAdapter;
-pub use viewport::Viewport;
+pub use viewport::{ShrinkWrappingViewport, Viewport};

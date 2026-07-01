@@ -14,23 +14,23 @@
 
 ## Summary
 
-> **⚠ Reconciled 2026-06-30.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **48**
+> **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **51**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
 > and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
 > body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
-> that appears in the "Existing (48)" list, the list wins. The body is retained for its
+> that appears in the "Existing (51)" list, the list wins. The body is retained for its
 > accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
 > file), which the Core.2 implementers need.
 
 - **Total widgets planned:** ~87
-- **Distinct concrete render objects for full parity (Core.2 target):** ~71
-- **Render objects existing today:** **48**
-- **Render objects remaining to build (Core.2):** **~23** (verified list below)
+- **Distinct concrete render objects for full parity (Core.2 target):** ~72
+- **Render objects existing today:** **51**
+- **Render objects remaining to build (Core.2):** **~21** (verified list below)
 
-### Existing render objects — authoritative (48)
+### Existing render objects — authoritative (51)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
@@ -42,9 +42,9 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Leaf (2):** `RenderParagraph` · `RenderImage`
 
-**Slivers + viewport (15):** `RenderViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
+**Slivers + viewport (16):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity`
 
-### Remaining to build — verified missing (≈22)
+### Remaining to build — verified missing (≈21)
 
 Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 
@@ -58,7 +58,6 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `RenderTable` | `Table`/`DataTable` | Medium | `table.dart` |
 | `RenderCustomSingleChildLayoutBox` | `CustomSingleChildLayout` | Medium | `custom_layout.dart` |
 | `RenderCustomMultiChildLayoutBox` | `CustomMultiChildLayout` | Medium | `custom_layout.dart` |
-| `RenderShrinkWrappingViewport` | shrink-wrap scroll | Medium | `viewport.dart` |
 | `RenderSliverPersistentHeader` family | `SliverAppBar`/pinned headers | Medium | `sliver_persistent_header.dart` |
 | `RenderAnimatedOpacity` | `FadeTransition`/`AnimatedOpacity` | Medium | `proxy_box.dart` |
 | `RenderAnimatedSize` | `AnimatedSize` | Medium | `animated_size.dart` |
@@ -74,6 +73,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `RenderListBody` | `ListBody` | Low | `list_body.dart` |
 
 > **`RenderSliverGrid` closure note (verified 2026-07-01):** eager `RenderSliverGrid` and request-strategy `RenderSliverGridLazy` now ship in `flui-objects`, are listed in the render-object harness catalog, and back `SliverGrid` / `GridView.count` / `GridView.extent` / `GridView.builder`. `GridView.builder` uses the same next-frame lazy-child service model as `ListView.builder`, so first-frame blank settling remains an explicit FLUI divergence until a true mid-pass build backend exists.
+>
+> **`RenderShrinkWrappingViewport` closure note (verified 2026-07-01):** `RenderShrinkWrappingViewport` now ships in `flui-objects`, is listed in the harness catalog, and backs the low-level `ShrinkWrappingViewport` widget. It matches Flutter's bounded-cross-axis / shrink-wrapped-main-axis layout shape; higher-level `ListView(shrinkWrap)` and `GridView(shrinkWrap)` sugar is still future widget work.
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -151,7 +152,7 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01:
 | `GridView` | *(composes)* | N/A | Variable | `CustomScrollView` + `SliverGrid` |
 | `CustomScrollView` | *(composes Viewport)* | N/A | Variable | Creates `Viewport` with sliver children |
 | `Viewport` | `RenderViewport` | **Exists** | Variable(Sliver) | Bridge: box -> sliver protocol; from `viewport.dart` |
-| `ShrinkWrappingViewport` | `RenderShrinkWrappingViewport` | Needed | Variable(Sliver) | Viewport that sizes to content |
+| `ShrinkWrappingViewport` | `RenderShrinkWrappingViewport` | **Exists** | Variable(Sliver) | Viewport that sizes to content |
 | `SliverList` | `RenderSliverList` / `RenderSliverListLazy` | **Exists** | Variable(Box) | Eager and request-strategy lazy linear list paths |
 | `SliverGrid` | `RenderSliverGrid` / `RenderSliverGridLazy` | **Exists** | Variable(Box) | Eager and request-strategy lazy 2D grid paths |
 | `SliverFixedExtentList` | `RenderSliverFixedExtentList` | **Exists** | Variable(Box) | Eager attached-child fixed extent; lazy adaptor pending |

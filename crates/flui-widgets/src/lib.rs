@@ -133,10 +133,11 @@ pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
     RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollPhysics,
-    Scrollable, Scrollbar, SharedScrollPhysics, SingleChildScrollView, SliverChildBuilderDelegate,
-    SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-    SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-    SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
+    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
+    SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+    SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+    SliverToBoxAdapter, Viewport,
 };
 pub use stack::{Positioned, Stack};
 pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
@@ -196,11 +197,11 @@ pub mod prelude {
         GridView, IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IntrinsicHeight,
         IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
         Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
-        Row, SafeArea, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
-        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Text,
+        Row, SafeArea, ScrollController, Scrollable, Scrollbar, ShrinkWrappingViewport,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Text,
         TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 

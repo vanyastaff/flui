@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use flui_objects::RenderViewport;
+use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::layout::AxisDirection;
 use flui_view::BoxedView;
@@ -95,3 +95,84 @@ where
 }
 
 generic_render_view_element!(Viewport);
+
+/// A box render-object widget that shrink-wraps a sequence of **sliver**
+/// children in the scroll axis.
+///
+/// Flutter parity: `widgets/viewport.dart` `ShrinkWrappingViewport` over
+/// `RenderShrinkWrappingViewport`. It expands in the cross axis but takes its
+/// main-axis size from the accumulated sliver content, constrained by its
+/// parent.
+#[derive(Clone)]
+pub struct ShrinkWrappingViewport<C = Vec<BoxedView>> {
+    axis_direction: AxisDirection,
+    offset: f32,
+    children: C,
+}
+
+impl<C> ShrinkWrappingViewport<C> {
+    /// A vertical shrink-wrapping viewport over `children`.
+    pub fn new(children: C) -> Self {
+        Self {
+            axis_direction: AxisDirection::TopToBottom,
+            offset: 0.0,
+            children,
+        }
+    }
+
+    /// Set the scroll axis direction (default [`AxisDirection::TopToBottom`]).
+    #[must_use]
+    pub fn axis_direction(mut self, axis_direction: AxisDirection) -> Self {
+        self.axis_direction = axis_direction;
+        self
+    }
+
+    /// Set the programmatic scroll offset in logical pixels.
+    #[must_use]
+    pub fn offset(mut self, offset: f32) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    fn build_render_object(&self) -> RenderShrinkWrappingViewport {
+        let mut render_object = RenderShrinkWrappingViewport::new(self.axis_direction);
+        render_object.offset_mut().set_pixels(self.offset);
+        render_object
+    }
+}
+
+impl<C: ViewSeq> fmt::Debug for ShrinkWrappingViewport<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShrinkWrappingViewport")
+            .field("axis_direction", &self.axis_direction)
+            .field("offset", &self.offset)
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
+impl<C> flui_view::RenderView for ShrinkWrappingViewport<C>
+where
+    C: ViewSeq + Clone + Send + Sync + 'static,
+{
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderShrinkWrappingViewport;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        self.build_render_object()
+    }
+
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.offset_mut().set_pixels(self.offset);
+    }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+        self.children.for_each(|_index, child| visitor(child));
+    }
+}
+
+generic_render_view_element!(ShrinkWrappingViewport);

@@ -3,7 +3,7 @@
 //! This crate contains all ready-to-use render objects, organized into domain
 //! families. It sits directly above the [`flui_rendering`] engine crate (which
 //! owns traits, pipeline, arena, protocol, and contexts) and validates that the
-//! engine's custom-object-authoring API is complete — 38 real objects compiling
+//! engine's custom-object-authoring API is complete — 51 real objects compiling
 //! from outside the engine crate proves the authoring surface needs no additions.
 //!
 //! # Organization
@@ -19,7 +19,7 @@
 //!
 //! # Flat public surface
 //!
-//! All 44 types are re-exported flat from this crate root so the consumer
+//! All 51 render-object types are re-exported flat from this crate root so the consumer
 //! import path is simply `flui_objects::RenderPadding` — identical depth to the
 //! old `flui_rendering::objects::RenderPadding`.
 //!
@@ -72,9 +72,9 @@ pub use image::{ImageAlignment, ImageFit, RenderImage};
 
 // --- flat re-exports (sliver) ---
 pub use sliver::{
-    RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
-    RenderSliverFillRemainingWithScrollable, RenderSliverFillViewport, RenderSliverFixedExtentList,
-    RenderSliverGrid, RenderSliverGridLazy, RenderSliverIgnorePointer, RenderSliverList,
-    RenderSliverListLazy, RenderSliverOffstage, RenderSliverOpacity, RenderSliverPadding,
-    RenderSliverToBoxAdapter, RenderViewport,
+    RenderShrinkWrappingViewport, RenderSliverFillRemaining,
+    RenderSliverFillRemainingAndOverscroll, RenderSliverFillRemainingWithScrollable,
+    RenderSliverFillViewport, RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverGridLazy,
+    RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy, RenderSliverOffstage,
+    RenderSliverOpacity, RenderSliverPadding, RenderSliverToBoxAdapter, RenderViewport,
 };

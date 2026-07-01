@@ -49,6 +49,7 @@
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
+//! | `RenderShrinkWrappingViewport` | `harness_shrink_wrapping_viewport_*` | yes | — | — | yes | — |
 //! | `RenderWrap` | `harness_render_wrap_*` | yes | yes | — | yes | — |
 //! | `RenderIntrinsicWidth` | `harness_intrinsic_width_*` | yes | — | — | yes | — |
 //! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | — |
@@ -130,6 +131,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverOffstage",
     "RenderSliverOpacity",
     "RenderViewport",
+    "RenderShrinkWrappingViewport",
     "RenderWrap",
     "RenderIntrinsicWidth",
     "RenderIntrinsicHeight",
@@ -164,6 +166,14 @@ fn viewport_multi(slivers: impl IntoIterator<Item = TreeNode>) -> TreeNode {
         node = node.child(sliver);
     }
     node
+}
+
+fn shrink_wrapping_viewport(sliver: TreeNode) -> TreeNode {
+    box_node(RenderShrinkWrappingViewport::new(
+        AxisDirection::TopToBottom,
+    ))
+    .label("shrink_viewport")
+    .child(sliver)
 }
 
 // ============================================================================
@@ -2568,6 +2578,85 @@ fn harness_viewport_stacks_two_slivers() {
 
     assert_eq!(run.sliver_geometry(run.id("header")).scroll_extent, 20.0);
     assert_eq!(run.sliver_geometry(run.id("body")).scroll_extent, 80.0);
+}
+
+#[test]
+fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_axis() {
+    let run = RenderTester::mount(shrink_wrapping_viewport(
+        sliver_node(RenderSliverFixedExtentList::new(25.0))
+            .label("list")
+            .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("item0"))
+            .child(box_node(RenderColoredBox::green(300.0, 1000.0)).label("item1")),
+    ))
+    .with_constraints(BoxConstraints::new(
+        px(300.0),
+        px(300.0),
+        px(0.0),
+        flui_types::Pixels::INFINITY,
+    ))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(300.0), px(50.0)),
+        "shrink-wrapping viewport must take its main-axis size from child max_paint_extent"
+    );
+    assert_eq!(run.sliver_geometry(run.id("list")).scroll_extent, 50.0);
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderShrinkWrappingViewport",
+        &["axis_direction", "scroll_offset", "shrink_wrap_extent"],
+    );
+}
+
+#[test]
+fn harness_shrink_wrapping_viewport_empty_uses_cross_axis_max_and_main_axis_min() {
+    let run = RenderTester::mount(box_node(RenderShrinkWrappingViewport::new(
+        AxisDirection::TopToBottom,
+    )))
+    .with_constraints(BoxConstraints::new(
+        px(20.0),
+        px(300.0),
+        px(12.0),
+        flui_types::Pixels::INFINITY,
+    ))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(300.0), px(12.0)),
+        "empty shrink-wrapping viewport follows Flutter's empty-size branch"
+    );
+}
+
+#[test]
+fn harness_shrink_wrapping_viewport_clamps_to_bounded_max_extent() {
+    let run = RenderTester::mount(shrink_wrapping_viewport(
+        sliver_node(RenderSliverFixedExtentList::new(50.0))
+            .label("list")
+            .child(box_node(RenderColoredBox::red(300.0, 1000.0)))
+            .child(box_node(RenderColoredBox::green(300.0, 1000.0)))
+            .child(box_node(RenderColoredBox::blue(300.0, 1000.0)))
+            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+    ))
+    .with_constraints(BoxConstraints::new(
+        px(300.0),
+        px(300.0),
+        px(0.0),
+        px(120.0),
+    ))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(300.0), px(120.0)),
+        "parent max height must clamp the shrink-wrapped viewport"
+    );
+    assert_eq!(
+        run.sliver_geometry(run.id("list")).scroll_extent,
+        200.0,
+        "content scroll extent remains the full sliver extent after viewport clamp"
+    );
 }
 
 // ============================================================================

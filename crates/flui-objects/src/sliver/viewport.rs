@@ -15,7 +15,7 @@ use flui_types::{
 };
 
 use flui_rendering::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     traits::RenderBox,
@@ -552,6 +552,510 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 max_layout_cycles,
                 "RenderViewport exceeded its bounded layout correction loop; \
                  committed the clamped offset, children self-correct next frame"
+            );
+        }
+
+        size
+    }
+
+    fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
+        let paint_children = |ctx: &mut PaintCx<'_, Variable>| match self.paint_order {
+            SliverPaintOrder::FirstIsTop => ctx.paint_children_reverse(),
+            SliverPaintOrder::LastIsTop => ctx.paint_children(),
+        };
+
+        if self.has_visual_overflow {
+            let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+            ctx.with_clip_rect(clip_rect, Clip::HardEdge, paint_children);
+        } else {
+            paint_children(ctx);
+        }
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
+        if !ctx.is_within_own_size() {
+            return false;
+        }
+
+        match self.paint_order {
+            SliverPaintOrder::FirstIsTop => {
+                for index in 0..self.child_count {
+                    if ctx.hit_test_child_at_layout_offset(index) {
+                        return true;
+                    }
+                }
+            }
+            SliverPaintOrder::LastIsTop => {
+                for index in (0..self.child_count).rev() {
+                    if ctx.hit_test_child_at_layout_offset(index) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+}
+
+/// A Box-protocol viewport that shrink-wraps its sliver children in the main axis.
+///
+/// Unlike [`RenderViewport`], which expands to the incoming main-axis extent,
+/// this render object sizes itself to the sum of its slivers'
+/// `max_paint_extent` values, constrained by its parent. It still expands in
+/// the cross axis, matching Flutter's `RenderShrinkWrappingViewport`.
+#[derive(Debug)]
+pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
+    axis_direction: AxisDirection,
+    cross_axis_direction: AxisDirection,
+    offset: O,
+    cache_extent: f32,
+    cache_extent_style: CacheExtentStyle,
+    paint_order: SliverPaintOrder,
+    child_count: usize,
+    max_scroll_extent: f32,
+    shrink_wrap_extent: f32,
+    has_visual_overflow: bool,
+}
+
+impl RenderShrinkWrappingViewport<ScrollableViewportOffset> {
+    /// Creates a shrink-wrapping viewport with a zero scrollable offset.
+    #[inline]
+    #[must_use]
+    pub fn new(axis_direction: AxisDirection) -> Self {
+        Self::with_offset(
+            axis_direction,
+            default_cross_axis_direction(axis_direction),
+            ScrollableViewportOffset::zero(),
+        )
+    }
+}
+
+impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
+    /// Creates a shrink-wrapping viewport with explicit axis directions and offset storage.
+    #[inline]
+    #[must_use]
+    pub fn with_offset(
+        axis_direction: AxisDirection,
+        cross_axis_direction: AxisDirection,
+        offset: O,
+    ) -> Self {
+        Self {
+            axis_direction,
+            cross_axis_direction,
+            offset,
+            cache_extent: DEFAULT_CACHE_EXTENT,
+            cache_extent_style: CacheExtentStyle::Pixel,
+            paint_order: SliverPaintOrder::FirstIsTop,
+            child_count: 0,
+            max_scroll_extent: 0.0,
+            shrink_wrap_extent: 0.0,
+            has_visual_overflow: false,
+        }
+    }
+
+    /// Returns the viewport offset object.
+    #[inline]
+    #[must_use]
+    pub const fn offset(&self) -> &O {
+        &self.offset
+    }
+
+    /// Mutable access to the viewport offset object.
+    #[inline]
+    #[must_use]
+    pub const fn offset_mut(&mut self) -> &mut O {
+        &mut self.offset
+    }
+
+    /// Sets the sliver paint order. Hit testing uses the opposite order.
+    #[inline]
+    pub const fn set_paint_order(&mut self, paint_order: SliverPaintOrder) {
+        self.paint_order = paint_order;
+    }
+
+    /// Sets the cache extent and interpretation mode.
+    #[inline]
+    pub const fn set_cache_extent(&mut self, cache_extent: f32, style: CacheExtentStyle) {
+        self.cache_extent = cache_extent;
+        self.cache_extent_style = style;
+    }
+
+    /// Last total scroll extent reported by the sliver sequence.
+    #[inline]
+    #[must_use]
+    pub const fn max_scroll_extent(&self) -> f32 {
+        self.max_scroll_extent
+    }
+
+    /// Last unconstrained main-axis extent accumulated from child slivers.
+    #[inline]
+    #[must_use]
+    pub const fn shrink_wrap_extent(&self) -> f32 {
+        self.shrink_wrap_extent
+    }
+
+    /// Whether the last layout pass reported visual overflow.
+    #[inline]
+    #[must_use]
+    pub const fn has_visual_overflow(&self) -> bool {
+        self.has_visual_overflow
+    }
+
+    fn calculated_cache_extent(&self, main_axis_extent: f32) -> f32 {
+        if !main_axis_extent.is_finite() {
+            return 0.0;
+        }
+        match self.cache_extent_style {
+            CacheExtentStyle::Pixel => self.cache_extent.max(0.0),
+            CacheExtentStyle::Viewport => (self.cache_extent * main_axis_extent).max(0.0),
+        }
+    }
+
+    fn main_axis_extent_from_constraints(&self, constraints: &BoxConstraints) -> f32 {
+        match self.axis_direction.axis() {
+            Axis::Horizontal => constraints.max_width.get(),
+            Axis::Vertical => constraints.max_height.get(),
+        }
+    }
+
+    fn cross_axis_extent_from_constraints(&self, constraints: &BoxConstraints) -> f32 {
+        match self.axis_direction.axis() {
+            Axis::Horizontal => constraints.max_height.get(),
+            Axis::Vertical => constraints.max_width.get(),
+        }
+    }
+
+    fn constrain_main_axis_extent(&self, constraints: &BoxConstraints, extent: f32) -> f32 {
+        match self.axis_direction.axis() {
+            Axis::Horizontal => constraints.constrain_width(px(extent)).get(),
+            Axis::Vertical => constraints.constrain_height(px(extent)).get(),
+        }
+    }
+
+    fn size_from_extents(&self, cross_axis_extent: f32, main_axis_extent: f32) -> Size {
+        match self.axis_direction.axis() {
+            Axis::Horizontal => Size::new(px(main_axis_extent), px(cross_axis_extent)),
+            Axis::Vertical => Size::new(px(cross_axis_extent), px(main_axis_extent)),
+        }
+    }
+
+    fn empty_size(&self, constraints: &BoxConstraints) -> Size {
+        match self.axis_direction.axis() {
+            Axis::Horizontal => Size::new(constraints.min_width, constraints.max_height),
+            Axis::Vertical => Size::new(constraints.max_width, constraints.min_height),
+        }
+    }
+
+    fn debug_check_has_bounded_cross_axis(&self, constraints: &BoxConstraints) {
+        match self.axis_direction.axis() {
+            Axis::Horizontal => debug_assert!(
+                constraints.has_bounded_height(),
+                "horizontal RenderShrinkWrappingViewport requires bounded height"
+            ),
+            Axis::Vertical => debug_assert!(
+                constraints.has_bounded_width(),
+                "vertical RenderShrinkWrappingViewport requires bounded width"
+            ),
+        }
+    }
+
+    fn child_sliver_constraints(
+        &self,
+        main_axis_extent: f32,
+        cross_axis_extent: f32,
+        fields: ChildSliverLayoutFields,
+    ) -> SliverConstraints {
+        SliverConstraints::new(
+            self.axis_direction,
+            fields.growth_direction,
+            fields.user_scroll_direction,
+            fields.scroll_offset,
+            fields.preceding_scroll_extent,
+            fields.overlap,
+            fields.remaining_paint_extent,
+            cross_axis_extent,
+            self.cross_axis_direction,
+            main_axis_extent,
+            fields.remaining_cache_extent,
+            fields.cache_origin,
+        )
+    }
+
+    #[must_use = "scroll correction must be applied when non-zero"]
+    fn attempt_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+        main_axis_extent: f32,
+        cross_axis_extent: f32,
+        corrected_offset: f32,
+        size: Size,
+    ) -> f32 {
+        self.max_scroll_extent = 0.0;
+        self.shrink_wrap_extent = 0.0;
+        self.has_visual_overflow = corrected_offset < 0.0;
+
+        let cache_extent = self.calculated_cache_extent(main_axis_extent);
+        let remaining_paint_extent = (main_axis_extent + corrected_offset.min(0.0)).max(0.0);
+        self.layout_child_sequence(
+            ctx,
+            LayoutChildSequenceParams {
+                scroll_offset: corrected_offset.max(0.0),
+                overlap: corrected_offset.min(0.0),
+                layout_offset: (-corrected_offset).max(0.0),
+                remaining_paint_extent,
+                main_axis_extent,
+                cross_axis_extent,
+                size,
+                growth_direction: GrowthDirection::Forward,
+                remaining_cache_extent: main_axis_extent + 2.0 * cache_extent,
+                cache_origin: -cache_extent,
+                child_start: 0,
+                child_end: ctx.child_count(),
+            },
+        )
+    }
+
+    #[must_use = "correction value must be checked; 0.0 means layout accepted"]
+    fn layout_child_sequence(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+        params: LayoutChildSequenceParams,
+    ) -> f32 {
+        let LayoutChildSequenceParams {
+            mut scroll_offset,
+            overlap,
+            mut layout_offset,
+            remaining_paint_extent,
+            main_axis_extent,
+            cross_axis_extent,
+            size,
+            growth_direction,
+            mut remaining_cache_extent,
+            mut cache_origin,
+            child_start,
+            child_end,
+        } = params;
+        debug_assert_eq!(growth_direction, GrowthDirection::Forward);
+        let initial_layout_offset = layout_offset;
+        let adjusted_user_scroll_direction =
+            flui_rendering::constraints::apply_growth_direction_to_scroll_direction(
+                self.offset.user_scroll_direction(),
+                growth_direction,
+            );
+        let mut max_paint_offset = layout_offset + overlap;
+        let mut preceding_scroll_extent = 0.0;
+
+        for index in child_start..child_end {
+            let sliver_scroll_offset = if scroll_offset <= 0.0 {
+                0.0
+            } else {
+                scroll_offset
+            };
+            let corrected_cache_origin = cache_origin.max(-sliver_scroll_offset);
+            let cache_extent_correction = cache_origin - corrected_cache_origin;
+            let child_remaining_paint_extent =
+                (remaining_paint_extent - layout_offset + initial_layout_offset).max(0.0);
+            let child_remaining_cache_extent =
+                (remaining_cache_extent + cache_extent_correction).max(0.0);
+            let constraints = self.child_sliver_constraints(
+                main_axis_extent,
+                cross_axis_extent,
+                ChildSliverLayoutFields {
+                    growth_direction,
+                    user_scroll_direction: adjusted_user_scroll_direction,
+                    scroll_offset: sliver_scroll_offset,
+                    preceding_scroll_extent,
+                    overlap: max_paint_offset - layout_offset,
+                    remaining_paint_extent: child_remaining_paint_extent,
+                    remaining_cache_extent: child_remaining_cache_extent,
+                    cache_origin: corrected_cache_origin,
+                },
+            );
+
+            let geometry = try_cached_sliver_geometry(
+                ctx,
+                index,
+                constraints,
+                child_remaining_paint_extent,
+                child_remaining_cache_extent,
+                sliver_scroll_offset,
+            )
+            .unwrap_or_else(|| ctx.layout_sliver_child(index, constraints));
+
+            if let Some(correction) = geometry.scroll_offset_correction {
+                return correction;
+            }
+
+            let effective_layout_offset = layout_offset + geometry.paint_origin;
+            let child_layout_offset = if geometry.visible || scroll_offset > 0.0 {
+                effective_layout_offset
+            } else {
+                -scroll_offset + initial_layout_offset
+            };
+            ctx.position_child(
+                index,
+                self.compute_absolute_paint_offset(
+                    px(child_layout_offset),
+                    growth_direction,
+                    px(geometry.paint_extent),
+                    size,
+                ),
+            );
+
+            max_paint_offset =
+                max_paint_offset.max(effective_layout_offset + geometry.paint_extent);
+            scroll_offset -= geometry.scroll_extent;
+            preceding_scroll_extent += geometry.scroll_extent;
+            layout_offset += geometry.layout_extent;
+
+            if geometry.cache_extent != 0.0 {
+                remaining_cache_extent -= geometry.cache_extent - cache_extent_correction;
+                cache_origin = (corrected_cache_origin + geometry.cache_extent).min(0.0);
+            }
+
+            self.update_out_of_band_data(&geometry);
+        }
+
+        0.0
+    }
+
+    fn update_out_of_band_data(&mut self, geometry: &SliverGeometry) {
+        self.max_scroll_extent += geometry.scroll_extent;
+        self.shrink_wrap_extent += geometry.max_paint_extent;
+        if geometry.has_visual_overflow {
+            self.has_visual_overflow = true;
+        }
+    }
+
+    fn compute_absolute_paint_offset(
+        &self,
+        layout_offset: Pixels,
+        growth_direction: GrowthDirection,
+        paint_extent: Pixels,
+        size: Size,
+    ) -> Offset {
+        let layout_offset = layout_offset.get();
+        let paint_extent = paint_extent.get();
+        match growth_direction.apply_to_axis_direction(self.axis_direction) {
+            TopToBottom => Offset::new(px(0.0), px(layout_offset)),
+            BottomToTop => Offset::new(
+                px(0.0),
+                px(size.height.get() - layout_offset - paint_extent),
+            ),
+            LeftToRight => Offset::new(px(layout_offset), px(0.0)),
+            RightToLeft => {
+                Offset::new(px(size.width.get() - layout_offset - paint_extent), px(0.0))
+            }
+        }
+    }
+}
+
+impl Default for RenderShrinkWrappingViewport<ScrollableViewportOffset> {
+    fn default() -> Self {
+        Self::new(TopToBottom)
+    }
+}
+
+impl<O: ViewportOffset + 'static> Diagnosticable for RenderShrinkWrappingViewport<O> {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_enum("axis_direction", self.axis_direction);
+        properties.add_enum("cross_axis_direction", self.cross_axis_direction);
+        properties.add_double("scroll_offset", self.offset.pixels(), Some("px"));
+        properties.add_double("cache_extent", self.cache_extent, Some("px"));
+        properties.add_enum("cache_extent_style", self.cache_extent_style);
+        properties.add_enum("paint_order", self.paint_order);
+        properties.add_double("shrink_wrap_extent", self.shrink_wrap_extent, Some("px"));
+    }
+}
+
+impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
+    ) -> Size {
+        let constraints = *ctx.constraints();
+        self.debug_check_has_bounded_cross_axis(&constraints);
+        self.child_count = ctx.child_count();
+
+        if ctx.child_count() == 0 {
+            let size = self.empty_size(&constraints);
+            self.max_scroll_extent = 0.0;
+            self.shrink_wrap_extent = 0.0;
+            self.has_visual_overflow = false;
+            let _ = self.offset.apply_viewport_dimension(0.0);
+            let _ = self.offset.apply_content_dimensions(0.0, 0.0);
+            return size;
+        }
+
+        let main_axis_extent = self.main_axis_extent_from_constraints(&constraints);
+        let cross_axis_extent = self.cross_axis_extent_from_constraints(&constraints);
+        let provisional_main_axis_extent = if main_axis_extent.is_finite() {
+            main_axis_extent
+        } else {
+            0.0
+        };
+        let provisional_size =
+            self.size_from_extents(cross_axis_extent, provisional_main_axis_extent);
+
+        let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
+        let mut accepted = false;
+        let mut effective_extent = 0.0;
+        for _ in 0..max_layout_cycles {
+            let correction = self.attempt_layout(
+                ctx,
+                main_axis_extent,
+                cross_axis_extent,
+                self.offset.pixels(),
+                provisional_size,
+            );
+            if correction != 0.0 {
+                self.offset.correct_by(correction);
+                continue;
+            }
+
+            effective_extent =
+                self.constrain_main_axis_extent(&constraints, self.shrink_wrap_extent);
+            let did_accept_viewport_dimension =
+                self.offset.apply_viewport_dimension(effective_extent);
+            let did_accept_content_dimension = self.offset.apply_content_dimensions(
+                0.0,
+                (self.max_scroll_extent - effective_extent).max(0.0),
+            );
+            if did_accept_viewport_dimension && did_accept_content_dimension {
+                accepted = true;
+                break;
+            }
+        }
+        if !accepted {
+            tracing::warn!(
+                child_count = ctx.child_count(),
+                max_layout_cycles,
+                "RenderShrinkWrappingViewport exceeded its bounded layout correction loop; \
+                 committed the last computed extent"
+            );
+        }
+
+        let size = self.size_from_extents(cross_axis_extent, effective_extent);
+        // Re-run once with the final shrink-wrapped size so reverse physical
+        // axes (BottomToTop/RightToLeft) compute child paint offsets from the
+        // committed viewport extent. Flutter stores logical offsets in parent
+        // data and resolves them later; FLUI commits physical offsets during
+        // layout, so this final pass keeps the observable offset contract loyal.
+        let correction = self.attempt_layout(
+            ctx,
+            main_axis_extent,
+            cross_axis_extent,
+            self.offset.pixels(),
+            size,
+        );
+        if correction != 0.0 {
+            tracing::warn!(
+                correction,
+                "RenderShrinkWrappingViewport requested a correction during final positioning pass"
             );
         }
 
