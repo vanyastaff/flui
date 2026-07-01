@@ -31,6 +31,8 @@
 //! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
 //! | `RenderClipOval` | `harness_clip_oval_*` | yes | — | — | yes | — |
 //! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes | — |
+//! | `RenderPhysicalModel` | `harness_physical_model_*` | yes | yes | yes | yes | — |
+//! | `RenderPhysicalShape` | `harness_physical_shape_*` | yes | yes | yes | yes | — |
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
 //! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
 //! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
@@ -115,8 +117,10 @@ use flui_rendering::{
 use flui_types::{
     Alignment, EdgeInsets, Matrix4, Offset, Point, Rect, Size,
     geometry::px,
-    layout::{AxisDirection, BoxFit, StackFit, TableCellVerticalAlignment, TableColumnWidth},
-    painting::Clip,
+    layout::{
+        AxisDirection, BoxFit, BoxShape, StackFit, TableCellVerticalAlignment, TableColumnWidth,
+    },
+    painting::{Clip, Path},
     styling::{
         BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, TableBorder,
     },
@@ -151,6 +155,8 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderClipRRect",
     "RenderClipOval",
     "RenderClipPath",
+    "RenderPhysicalModel",
+    "RenderPhysicalShape",
     "RenderRepaintBoundary",
     "RenderMetaData",
     "RenderFlex",
@@ -1811,6 +1817,347 @@ fn harness_clip_path_wraps_child() {
 
     assert_descendant_properties(&run.diagnostics(), "RenderClipPath", &["clip_behavior"]);
     assert_eq!(run.box_geometry(run.root()), Size::new(px(40.0), px(40.0)));
+}
+
+// ============================================================================
+// RenderPhysicalModel / RenderPhysicalShape
+// ============================================================================
+
+#[test]
+fn harness_physical_model_layout_passes_through_to_child() {
+    let run = RenderTester::mount(
+        box_node(RenderPhysicalModel::new(Color::WHITE))
+            .child(box_node(RenderColoredBox::red(40.0, 30.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(40.0), px(30.0)));
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(40.0), px(30.0))
+    );
+}
+
+#[test]
+fn harness_physical_model_no_child_paints_nothing() {
+    let run = RenderTester::mount(box_node(RenderPhysicalModel::new(Color::WHITE)))
+        .with_size(Size::new(px(50.0), px(50.0)))
+        .run_frame();
+
+    assert!(
+        run.display_commands().is_empty(),
+        "no child means nothing is drawn at all, not even a background \
+         fill (oracle proxy_box.dart:2206-2209)",
+    );
+}
+
+#[test]
+fn harness_physical_model_zero_elevation_paints_no_shadow() {
+    let run = RenderTester::mount(
+        box_node(RenderPhysicalModel::new(Color::WHITE))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        !run.display_commands()
+            .iter()
+            .any(|cmd| cmd.kind == DrawKind::Shadow),
+        "elevation == 0.0 must not cast a shadow",
+    );
+}
+
+#[test]
+fn harness_physical_model_elevation_casts_shadow_before_fill_and_child() {
+    let run = RenderTester::mount(
+        box_node(RenderPhysicalModel::new(Color::WHITE).with_elevation(4.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|c| c.kind == DrawKind::Shadow)
+            .count(),
+        1,
+        "elevation != 0.0 must cast exactly one shadow; commands:\n{commands:#?}",
+    );
+    let shadow_idx = commands
+        .iter()
+        .position(|c| c.kind == DrawKind::Shadow)
+        .expect("shadow must be present");
+    let fill_idx = commands
+        .iter()
+        .position(|c| c.kind == DrawKind::RRect)
+        .expect("fill must be present");
+    let child_idx = commands
+        .iter()
+        .position(|c| c.kind == DrawKind::Rect)
+        .expect("child paint must be present");
+    assert!(
+        shadow_idx < fill_idx,
+        "shadow must paint before the fill; commands:\n{commands:#?}",
+    );
+    assert!(
+        fill_idx < child_idx,
+        "fill must paint before the child; commands:\n{commands:#?}",
+    );
+}
+
+// The `usesSaveLayer` fork (research plan trap §4.3) — controls WHERE the
+// fill is drawn, not just whether. These two tests are the direct check
+// that a naive port didn't collapse the fork into "always fill outside"
+// or "always fill inside" (either would double-paint or bleed an edge).
+//
+// `PaintCx::with_clip_rrect`/`with_clip_path` push a genuine `Layer::ClipRRect`/
+// `ClipPath` tree node (`flui-rendering/src/pipeline/owner/paint.rs::clip_layer`),
+// not a `DrawCommand::ClipRRect` embedded in a `Picture`'s display list — so
+// `display_commands()` (which only extracts commands from `Picture` layers)
+// never surfaces a `DrawKind::Clip` entry for this path. The fork is instead
+// verified by (a) `run.structure()` proving a real clip layer was pushed
+// regardless of `clip_behavior`, and (b) exactly one fill of the *expected*
+// kind — the shape-specific `RRect`/`Path` draw outside, or the `draw_paint`
+// (`Other`) fill inside — with the other kind entirely absent.
+#[test]
+fn harness_physical_model_fills_before_clip_when_not_save_layer() {
+    let run = RenderTester::mount(
+        box_node(RenderPhysicalModel::new(Color::WHITE).with_clip_behavior(Clip::AntiAlias))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        run.structure().contains(&"ClipRRect"),
+        "AntiAlias must still push a real clip layer; structure: {:?}",
+        run.structure(),
+    );
+
+    let commands = run.display_commands();
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|c| c.kind == DrawKind::RRect)
+            .count(),
+        1,
+        "!uses_save_layer must fill via the shape-specific RRect draw call \
+         exactly once (outside the clip, on the parent canvas); commands:\n{commands:#?}",
+    );
+    assert!(
+        !commands.iter().any(|c| c.kind == DrawKind::Other),
+        "!uses_save_layer must not also draw_paint inside the clip — that \
+         is the save-layer-only branch; commands:\n{commands:#?}",
+    );
+}
+
+#[test]
+fn harness_physical_model_fills_inside_clip_when_save_layer() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderPhysicalModel::new(Color::WHITE).with_clip_behavior(Clip::AntiAliasWithSaveLayer),
+        )
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        run.structure().contains(&"ClipRRect"),
+        "AntiAliasWithSaveLayer must still push a real clip layer; structure: {:?}",
+        run.structure(),
+    );
+
+    let commands = run.display_commands();
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|c| c.kind == DrawKind::Other)
+            .count(),
+        1,
+        "uses_save_layer must fill via draw_paint exactly once (inside the \
+         clip scope); commands:\n{commands:#?}",
+    );
+    assert!(
+        !commands.iter().any(|c| c.kind == DrawKind::RRect),
+        "uses_save_layer must not also draw the shape-specific RRect fill \
+         outside the clip — that is the non-save-layer-only branch; \
+         commands:\n{commands:#?}",
+    );
+}
+
+// Trap §4.4 regression at the render-object level (see the unit-level
+// regression in `proxy::physical_model::tests` for the formula check) plus
+// the hit-test divergence trap §4.2: `RenderPhysicalModel` ALWAYS tests the
+// clip shape, even though it never exposes a public clipper — a deliberate,
+// precedent-backed divergence from the oracle's `_clipper != null` gate,
+// which for `RenderPhysicalModel` specifically never engages (see the
+// module doc on `RenderPhysicalModelBase::hit_test`). A circular/rounded
+// `RenderPhysicalModel` hits its full bounding box in real Flutter; this
+// port hit-tests the visible shape instead.
+#[test]
+fn harness_physical_model_hit_test_always_tests_circle_shape_excludes_bbox_corner() {
+    let run = RenderTester::mount(
+        box_node(RenderPhysicalModel::new(Color::WHITE).with_shape(BoxShape::Circle))
+            .child(box_node(RenderColoredBox::red(100.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(40.0)))
+    .run_layout();
+
+    // (1, 1) is inside the 100x40 bounding box but outside the inscribed
+    // ellipse (rx=50, ry=20 centered at (50, 20)) — the ellipse-not-circle
+    // formula from trap §4.4 makes this exclusion asymmetric per axis.
+    assert_eq!(run.hit_first(1.0, 1.0), None);
+    // The ellipse center is always inside.
+    assert_eq!(run.hit_first(50.0, 20.0), Some(run.id("child")));
+}
+
+#[test]
+fn harness_physical_shape_hit_test_triangular_clipper() {
+    let run = RenderTester::mount(
+        box_node(RenderPhysicalShape::new(
+            |size: Size| {
+                let mut p = Path::new();
+                p.move_to(Point::new(size.width * 0.5, px(0.0)));
+                p.line_to(Point::new(size.width, size.height));
+                p.line_to(Point::new(px(0.0), size.height));
+                p.close();
+                p
+            },
+            Color::WHITE,
+        ))
+        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout();
+
+    // The oracle and the "always test shape" convention already agree for
+    // `RenderPhysicalShape` (it always has a clipper), so this is a plain
+    // shape hit-test, not a divergence test.
+    assert_eq!(
+        run.hit_first(1.0, 1.0),
+        None,
+        "top-left bounding-box corner is outside the triangle"
+    );
+    assert_eq!(
+        run.hit_first(50.0, 90.0),
+        Some(run.id("child")),
+        "near the base midpoint must be inside the triangle"
+    );
+}
+
+#[test]
+fn harness_physical_shape_falls_back_to_whole_rect_when_clipper_cleared() {
+    let mut run = RenderTester::mount(
+        box_node(RenderPhysicalShape::new(
+            |size: Size| {
+                // A clipper covering only the top-left quadrant.
+                let mut p = Path::new();
+                p.add_rect(Rect::from_origin_size(
+                    Point::ZERO,
+                    Size::new(size.width * 0.5, size.height * 0.5),
+                ));
+                p
+            },
+            Color::WHITE,
+        ))
+        .label("shape")
+        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout();
+
+    // Before clearing: outside the top-left-quadrant clip, no hit.
+    assert_eq!(run.hit_first(90.0, 90.0), None);
+    assert!(
+        run.descendant_property("RenderPhysicalShape", "custom_clipper")
+            .is_some()
+    );
+
+    run.update::<RenderPhysicalShape>(run.id("shape"), |node| {
+        assert!(node.set_clipper::<fn(Size) -> Path>(None));
+    });
+    run.relayout();
+
+    // After clearing: falls back to the whole-box rectangle (oracle `:2296`).
+    assert_eq!(run.hit_first(90.0, 90.0), Some(run.id("child")));
+    assert!(
+        run.descendant_property("RenderPhysicalShape", "custom_clipper")
+            .is_none(),
+        "custom_clipper flag must be omitted once cleared",
+    );
+}
+
+#[test]
+fn harness_physical_model_self_describes_shape_border_radius_and_colors() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderPhysicalModel::new(Color::WHITE)
+                .with_elevation(2.0)
+                .with_shadow_color(Color::BLUE)
+                .with_border_radius(BorderRadius::circular(px(8.0))),
+        )
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderPhysicalModel",
+        &[
+            "elevation",
+            "color",
+            "shadow_color",
+            "clip_behavior",
+            "shape",
+            "border_radius",
+        ],
+    );
+    // Trap §4.1 regression: the oracle's own `debugFillProperties` bug
+    // passes `color` a second time instead of `shadowColor` — this must
+    // read back the real shadow color, not the fill color.
+    assert_eq!(
+        run.descendant_property("RenderPhysicalModel", "shadow_color"),
+        Some(format!("{:?}", Color::BLUE)),
+    );
+    assert_eq!(
+        run.descendant_property("RenderPhysicalModel", "color"),
+        Some(format!("{:?}", Color::WHITE)),
+    );
+}
+
+#[test]
+fn harness_physical_shape_self_describes_custom_clipper_and_colors() {
+    let run = RenderTester::mount(
+        box_node(RenderPhysicalShape::new(
+            |size: Size| {
+                let mut p = Path::new();
+                p.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                p
+            },
+            Color::WHITE,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderPhysicalShape",
+        &[
+            "elevation",
+            "color",
+            "shadow_color",
+            "clip_behavior",
+            "custom_clipper",
+        ],
+    );
 }
 
 #[test]

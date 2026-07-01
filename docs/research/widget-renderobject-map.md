@@ -15,7 +15,7 @@
 ## Summary
 
 > **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
-> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **65**
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **67**
 > concrete objects. The counts and the two lists immediately below are the **authoritative**
 > status, verified against `RENDER_OBJECT_TYPES` in
 > [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
@@ -27,16 +27,16 @@
 
 - **Total widgets planned:** ~87
 - **Distinct concrete render objects for full parity (Core.2 target):** ~72
-- **Render objects existing today:** **65**
-- **Render objects remaining to build (Core.2):** **~9** (verified list below)
+- **Render objects existing today:** **67**
+- **Render objects remaining to build (Core.2):** **~7** (verified list below)
 
-### Existing render objects — authoritative (65)
+### Existing render objects — authoritative (67)
 
 Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
 
 **Box layout (26):** `RenderAlign` · `RenderAnimatedSize` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderTable` · `RenderWrap`
 
-**Paint effects (10):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderRepaintBoundary` · `RenderTransform`
+**Paint effects (12):** `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderOpacity` · `RenderPhysicalModel` · `RenderPhysicalShape` · `RenderRepaintBoundary` · `RenderTransform`
 
 **Interaction / pointer (6):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderMouseRegion` · `RenderOffstage`
 
@@ -44,16 +44,14 @@ Concrete, harness-tested render objects (excludes base/infra types `RenderObject
 
 **Slivers + viewport (20):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity` · `RenderSliverScrollingPersistentHeader` · `RenderSliverPinnedPersistentHeader` · `RenderSliverFloatingPersistentHeader` · `RenderSliverFloatingPinnedPersistentHeader`
 
-### Remaining to build — verified missing (≈9, see `RenderAnimatedOpacity` note)
+### Remaining to build — verified missing (≈7, see `RenderAnimatedOpacity` note)
 
-Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize` and the `RenderSliverPersistentHeader` family closed same day — see closure notes below):
+Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSize`, the `RenderSliverPersistentHeader` family, and `RenderPhysicalModel`/`RenderPhysicalShape` closed same day — see closure notes below):
 
 | Render object | Unblocks | Priority | Flutter source |
 |---|---|---|---|
 | `RenderBackdropFilter` | `BackdropFilter` | Low | `proxy_box.dart` |
 | `RenderShaderMask` | `ShaderMask` | Low | `proxy_box.dart` |
-| `RenderPhysicalModel` | `PhysicalModel` | Low (Material elevation) | `proxy_box.dart` |
-| `RenderPhysicalShape` | `PhysicalShape` | Low | `proxy_box.dart` |
 | `RenderSemanticsAnnotations` | `Semantics` | Medium (a11y) | `proxy_box.dart` |
 | `RenderMergeSemantics` | `MergeSemantics` | Low | `proxy_box.dart` |
 | `RenderExcludeSemantics` | `ExcludeSemantics` | Low | `proxy_box.dart` |
@@ -181,6 +179,37 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 > reading the implementation directly: the re-reveal state machine and `attach`/`detach`
 > overrides are correct) but block real end-to-end floating-header snap behavior in production
 > until fixed. Scoped as separate follow-up tasks, not fixed in this pass.
+>
+> **`RenderPhysicalModel`/`RenderPhysicalShape` closure note (verified 2026-07-01):** both now
+> ship in `crates/flui-objects/src/proxy/physical_model.rs` and are listed in the render-object
+> harness catalog — the render-tree primitives underneath Material elevation (Card, Dialog,
+> AppBar, FAB, elevated buttons). Zero new infrastructure was needed: `Canvas::draw_shadow`
+> (backed by a real analytic shadow shader, not a stub), the `RenderClip<S>` generic-collapse
+> pattern, and `RRect`/`Path` fill primitives were all already shipped — this is a straight port,
+> like `RenderTable`/`RenderAnimatedOpacity` before it. Uses a new, small `PhysicalClipSource`
+> trait (deliberately not a reuse of `proxy::clip::ClipGeometry`, which has no room for the extra
+> `shape`/`border_radius` config and no shadow/fill vocabulary) generic over one shared
+> `RenderPhysicalModelBase<C>` body, monomorphized to `RenderPhysicalModel` (`BoxShape` +
+> `BorderRadius`) and `RenderPhysicalShape` (arbitrary path clipper). Three confirmed divergences
+> from a literal transcription, each backed by an oracle citation and a regression test: (1) the
+> oracle's own `debugFillProperties` has a bug (passes `color` twice instead of `shadowColor`) —
+> not reproduced, FLUI surfaces the real `shadow_color`; (2) hit-test always tests the clip shape
+> for both variants (the oracle gates this on a clipper being present, which for
+> `RenderPhysicalModel` specifically never happens, so a circular/rounded `RenderPhysicalModel`
+> hit-tests as its full bounding box in real Flutter — FLUI applies the already-shipped
+> `RenderClip<S>` "always test shape" convention instead, for FLUI-wide consistency); (3)
+> `clip_behavior` defaults to `Clip::None`, not `Clip::AntiAlias` like every other class in the
+> same oracle file. The highest-risk formula — the `usesSaveLayer` fork, which controls WHERE the
+> fill is drawn (outside the clip on the parent canvas vs. inside via `draw_paint`), not just
+> whether — is ported exactly and proven by two harness tests asserting the fill kind and count in
+> each branch. `BoxShape::Circle`'s oracle formula (an ellipse — `width/2, height/2` as
+> independent radii, not a true circle) is preserved even though it contradicts FLUI's own
+> currently-unimplemented `BoxShape::Circle` doc comment; flagged, not silently reconciled.
+> Deferred, documented: the `PhysicalModel`/`PhysicalShape` widgets and `Material`'s
+> `AnimatedPhysicalModel` wrapper (a separate widget-layer pass), `debugDisableShadows`
+> (confirmed debug/inspector-only), and `transparentOccluder` (confirmed inapplicable — a
+> Skia-specific parameter with nothing to attach to in FLUI's from-scratch analytic shadow
+> algorithm).
 
 **Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
@@ -240,8 +269,8 @@ Each `grep "struct Render…"`-confirmed absent on 2026-07-01 (`RenderAnimatedSi
 | `CustomPaint` | `RenderCustomPaint` | **Exists** | Single | User-supplied foreground/background painters |
 | `BackdropFilter` | `RenderBackdropFilter` | Needed | Single | Applies image filter to backdrop |
 | `ShaderMask` | `RenderShaderMask` | Needed | Single | Applies shader as color mask |
-| `PhysicalModel` | `RenderPhysicalModel` | Needed | Single | Rounded-rect clip + elevation shadow |
-| `PhysicalShape` | `RenderPhysicalShape` | Needed | Single | Arbitrary path clip + elevation shadow |
+| `PhysicalModel` | `RenderPhysicalModel` | **Exists** | Single | Rounded-rect clip + elevation shadow; see closure note above |
+| `PhysicalShape` | `RenderPhysicalShape` | **Exists** | Single | Arbitrary path clip + elevation shadow; see closure note above |
 | `RepaintBoundary` | `RenderRepaintBoundary` | **Exists** | Single | Isolates repaint subtree |
 | `Offstage` | `RenderOffstage` | **Exists** | Single | Hides subtree (zero-size, skip paint/hit-test) |
 | `ColorFiltered` | *(composes)* | N/A | Single | Uses layer-level `ColorFilterLayer` |
