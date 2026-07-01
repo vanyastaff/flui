@@ -11,8 +11,8 @@
 //!   (Flutter `hasScrollBody = false, fillOverscroll = false`)
 //! - `SliverFillRemainingWithScrollable` → `RenderSliverFillRemainingWithScrollable`
 //!   (Flutter `hasScrollBody = true`, the default)
-//! - `RenderSliverFillRemainingAndOverscroll` exists in `flui-objects` and is
-//!   deferred to a future slice (`fillOverscroll = true` path).
+//! - `SliverFillRemainingAndOverscroll`   → `RenderSliverFillRemainingAndOverscroll`
+//!   (Flutter `hasScrollBody = false, fillOverscroll = true`)
 //!
 //! Divergence:
 //! - Flutter's `SliverFillRemaining` is a single widget with `hasScrollBody`
@@ -28,7 +28,8 @@
 //!   1 `RenderViewport` + 1 `RenderSliverFillRemaining` + 1 child box = 3.
 
 use flui_widgets::{
-    CustomScrollView, SizedBox, SliverFillRemaining, SliverFillRemainingWithScrollable,
+    CustomScrollView, SizedBox, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable,
 };
 
 use crate::harness;
@@ -90,4 +91,24 @@ fn sliver_fill_remaining_with_scrollable_child_builds_three_render_nodes() {
          (1 RenderViewport + 1 RenderSliverFillRemainingWithScrollable + 1 child box)"
     );
     let _sliver = laid.find_by_render_type("RenderSliverFillRemainingWithScrollable");
+}
+
+/// `SliverFillRemainingAndOverscroll` with a box child mounts 3 render nodes.
+///
+/// Flutter parity: `SliverFillRemaining(hasScrollBody: false, fillOverscroll: true)`.
+/// Non-scrollable child like `SliverFillRemaining`, but also grows into the
+/// viewport's overscroll region; render-node structure is identical.
+#[test]
+fn sliver_fill_remaining_and_overscroll_child_builds_three_render_nodes() {
+    let root =
+        CustomScrollView::new((SliverFillRemainingAndOverscroll::new().child(SizedBox::shrink()),));
+    let laid = harness::pump_widget(root, harness::screen());
+
+    assert_eq!(
+        laid.render_node_count(),
+        3,
+        "SliverFillRemainingAndOverscroll(child): expected 3 render nodes \
+         (1 RenderViewport + 1 RenderSliverFillRemainingAndOverscroll + 1 child box)"
+    );
+    let _sliver = laid.find_by_render_type("RenderSliverFillRemainingAndOverscroll");
 }

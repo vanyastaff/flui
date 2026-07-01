@@ -42,7 +42,9 @@ pub use scroll_physics::{
 pub use scrollable::Scrollable;
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;
-pub use sliver_fill_remaining::{SliverFillRemaining, SliverFillRemainingWithScrollable};
+pub use sliver_fill_remaining::{
+    SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+};
 pub use sliver_fill_viewport::SliverFillViewport;
 pub use sliver_fixed_extent_list::SliverFixedExtentList;
 pub use sliver_grid::SliverGrid;

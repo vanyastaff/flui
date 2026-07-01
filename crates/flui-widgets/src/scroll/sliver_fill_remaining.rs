@@ -1,18 +1,22 @@
-//! [`SliverFillRemaining`] and [`SliverFillRemainingWithScrollable`] — slivers
-//! that fill the remaining viewport space after preceding slivers.
+//! [`SliverFillRemaining`], [`SliverFillRemainingWithScrollable`], and
+//! [`SliverFillRemainingAndOverscroll`] — slivers that fill the remaining
+//! viewport space after preceding slivers.
 //!
-//! These map to two of the three `RenderSliverFillRemaining*` render objects:
+//! These map to the three `RenderSliverFillRemaining*` render objects — Flutter's
+//! `SliverFillRemaining` collapses the `hasScrollBody`/`fillOverscroll` bool
+//! combinations, but FLUI exposes each as a distinct type (illegal states
+//! unrepresentable):
 //!
-//! | Widget                           | Render object                          | Flutter `hasScrollBody` |
-//! |----------------------------------|----------------------------------------|-------------------------|
-//! | [`SliverFillRemaining`]          | `RenderSliverFillRemaining`            | `false`                 |
-//! | [`SliverFillRemainingWithScrollable`] | `RenderSliverFillRemainingWithScrollable` | `true` (default) |
-//!
-//! `RenderSliverFillRemainingAndOverscroll` (`fillOverscroll = true`) is
-//! present in `flui-objects` and is deferred to a future slice — it would
-//! follow the identical pattern here.
+//! | Widget                                | Render object                             | Flutter flags |
+//! |---------------------------------------|-------------------------------------------|---------------|
+//! | [`SliverFillRemaining`]               | `RenderSliverFillRemaining`               | `hasScrollBody=false` |
+//! | [`SliverFillRemainingWithScrollable`] | `RenderSliverFillRemainingWithScrollable` | `hasScrollBody=true` (default) |
+//! | [`SliverFillRemainingAndOverscroll`]  | `RenderSliverFillRemainingAndOverscroll`  | `hasScrollBody=false, fillOverscroll=true` |
 
-use flui_objects::{RenderSliverFillRemaining, RenderSliverFillRemainingWithScrollable};
+use flui_objects::{
+    RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
+    RenderSliverFillRemainingWithScrollable,
+};
 use flui_rendering::protocol::SliverProtocol;
 use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 
@@ -142,3 +146,61 @@ impl RenderView for SliverFillRemainingWithScrollable {
 }
 
 impl_render_view!(SliverFillRemainingWithScrollable);
+
+// ============================================================================
+// SliverFillRemainingAndOverscroll
+// ============================================================================
+
+/// A non-scrollable fill-remaining sliver that additionally grows into the
+/// viewport's **overscroll** area (beyond the remaining paint extent), so the
+/// child paints across the bounce/stretch region on platforms that overscroll.
+///
+/// Like [`SliverFillRemaining`] the child is a non-scrollable box; the
+/// difference is the extra overscroll extent (`fillOverscroll = true`).
+///
+/// Flutter parity: `widgets/sliver.dart` `SliverFillRemaining` with
+/// `hasScrollBody = false, fillOverscroll = true` over
+/// `RenderSliverFillRemainingAndOverscroll`.
+#[derive(Clone, Debug, Default)]
+pub struct SliverFillRemainingAndOverscroll {
+    child: Child,
+}
+
+impl SliverFillRemainingAndOverscroll {
+    /// Create an overscroll-aware fill-remaining sliver with no child yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the box child to fill the remaining viewport space (plus overscroll).
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
+    }
+}
+
+impl RenderView for SliverFillRemainingAndOverscroll {
+    type Protocol = SliverProtocol;
+    type RenderObject = RenderSliverFillRemainingAndOverscroll;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderSliverFillRemainingAndOverscroll::new()
+    }
+
+    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+        // No configurable fields on RenderSliverFillRemainingAndOverscroll.
+    }
+
+    fn has_children(&self) -> bool {
+        self.child.is_some()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        if let Some(child) = self.child.as_ref() {
+            visitor(child);
+        }
+    }
+}
+
+impl_render_view!(SliverFillRemainingAndOverscroll);

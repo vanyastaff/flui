@@ -134,9 +134,9 @@ pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
     RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollPhysics,
     Scrollable, Scrollbar, SharedScrollPhysics, SingleChildScrollView, SliverChildBuilderDelegate,
-    SliverFillRemaining, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-    SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
+    SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+    SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+    SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
 };
 pub use stack::{Positioned, Stack};
 pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
@@ -198,10 +198,10 @@ pub mod prelude {
         Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
         Row, SafeArea, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
         SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, Text, TextEditingController, TextField, Theme,
-        ThemeData, Transform, Viewport, Visibility, Wrap,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Text,
+        TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
