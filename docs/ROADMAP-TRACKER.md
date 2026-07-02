@@ -204,7 +204,11 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > `PipelineOwner` insert and asserts the notify lands on the paint-dirty list.
 > Still deferred: `semanticsBuilder` (needs the semantics subsystem) and the
 > `isComplex`/`willChange` fields (carried but inert until `PaintCx` grows a
-> raster-cache-hint API the engine honors). `RenderListBody` is now in the object catalog,
+> raster-cache-hint API the engine honors). **`RenderFlow`'s sibling
+> `FlowDelegate` repaint-`Listenable` deferral (the other edge ADR-0013 names)
+> is closed the same way** (2026-07-02): `FlowDelegate::repaint()` +
+> `RenderFlow::attach`/`detach` subscribe/tear-down + delegate-swap migration,
+> with the same red→green `PipelineOwner` test. `RenderListBody` is now in the object catalog,
 > backs the public `ListBody` widget, and has harness coverage for axis-direction
 > layout, reverse positioning, hit testing, dry layout, and dry-baseline behavior.
 > `RenderMouseRegion` now backs the public `MouseRegion` widget with harness

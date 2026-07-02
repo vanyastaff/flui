@@ -3,8 +3,9 @@
 //! [`FlowDelegate`] allows users to implement custom flow layout behavior
 //! with custom constraints and painting transforms.
 
-use std::{any::Any, fmt::Debug};
+use std::{any::Any, fmt::Debug, sync::Arc};
 
+use flui_foundation::Listenable;
 use flui_tree::Variable;
 use flui_types::{Matrix4, Size};
 
@@ -133,6 +134,20 @@ pub trait FlowDelegate: Send + Sync + Debug {
     ///
     /// `true` if painting should be redone, `false` otherwise.
     fn should_repaint(&self, old_delegate: &dyn FlowDelegate) -> bool;
+
+    /// An optional repaint [`Listenable`]: when it notifies, the hosting
+    /// `RenderFlow` marks itself needing paint — the FLUI equivalent of
+    /// Flutter's `Flow(delegate:)` `repaint:` listenable, letting a flow
+    /// driven by an [`Animation`] repaint without a widget rebuild.
+    ///
+    /// Implementations that return `Some` MUST return the *same* instance
+    /// across calls, so the host can unsubscribe on detach / delegate swap.
+    /// Defaults to `None`.
+    ///
+    /// [`Animation`]: https://api.flutter.dev/flutter/animation/Animation-class.html
+    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
+        None
+    }
 
     /// Returns self as `Any` for downcasting.
     fn as_any(&self) -> &dyn Any;

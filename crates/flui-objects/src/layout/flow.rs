@@ -33,10 +33,12 @@
 //!
 //! # Deferred (documented, not silently dropped)
 //!
-//! - `FlowDelegate`'s `Listenable? repaint` constructor argument and the
-//!   `attach`/`detach` listener wiring (oracle L64-68, L230-233, L249-259)
-//!   — no FLUI-side `Listenable`/`Animation` plumbing exists for render
-//!   objects yet (the same gap `RenderCustomPaint` already documents).
+//! - `FlowDelegate`'s `Listenable? repaint` + `attach`/`detach` listener
+//!   wiring (oracle L64-68, L230-233, L249-259) is **implemented** via
+//!   ADR-0013: [`FlowDelegate::repaint`] returns an optional `Listenable`
+//!   that [`RenderBox::attach`] subscribes to (marking this node needing paint
+//!   on notify) and [`RenderBox::detach`] tears down; a delegate swap migrates
+//!   the subscription (mirrors `RenderCustomPaint`).
 //! - `FlowPaintingContext.paintChild`'s `opacity` parameter (oracle L352,
 //!   `pushOpacity` wrapping) — FLUI's `FlowDelegate::paint_children`/
 //!   `paint_child(index, transform)` signature has no opacity parameter
@@ -51,6 +53,7 @@
 
 use std::sync::Arc;
 
+use flui_foundation::ListenerId;
 use flui_tree::Variable;
 use flui_types::{Offset, Pixels, Point, Rect, Size, painting::Clip};
 
@@ -59,6 +62,7 @@ use flui_rendering::{
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     delegates::{FlowDelegate, FlowPaintingContext},
     parent_data::BoxParentData,
+    pipeline::RepaintHandle,
     traits::RenderBox,
 };
 
@@ -86,7 +90,11 @@ pub enum DelegateChange {
 ///
 /// See the module docs for why this needs no custom parent data and how
 /// hit-testing works without mutable paint state.
-#[derive(Debug, Clone)]
+// NOT `Clone`: holds live per-node lifecycle state (a `RepaintHandle` bound to
+// its `RenderId` + a repaint-`Listenable` subscription id). Cloning would
+// duplicate an id the clone does not own — move-only, like `RenderCustomPaint`
+// / `RenderAnimatedSize` (the ADR-0013 siblings).
+#[derive(Debug)]
 pub struct RenderFlow {
     delegate: Arc<dyn FlowDelegate>,
     clip_behavior: Clip,
@@ -95,6 +103,13 @@ pub struct RenderFlow {
     /// [`FlowPaintingContext`] the child sizes without touching the
     /// (layout-only) child-layout context again.
     child_sizes: Vec<Size>,
+    /// Self-dirty handle, held between [`RenderBox::attach`] and
+    /// [`RenderBox::detach`] so the delegate's repaint `Listenable` can mark
+    /// this node needing paint (ADR-0013). `None` while detached.
+    repaint_handle: Option<RepaintHandle>,
+    /// Active `add_listener` id on the delegate's repaint listenable, torn
+    /// down in `detach` and migrated on a delegate swap.
+    delegate_listener: Option<ListenerId>,
 }
 
 impl RenderFlow {
@@ -105,6 +120,32 @@ impl RenderFlow {
             delegate,
             clip_behavior: Clip::HardEdge,
             child_sizes: Vec::new(),
+            repaint_handle: None,
+            delegate_listener: None,
+        }
+    }
+
+    /// Subscribes the delegate's repaint [`Listenable`](flui_foundation::Listenable)
+    /// (if any) to this node's self-dirty handle, so a notify marks the node
+    /// needing paint. Returns the subscription id, or `None` when detached or
+    /// the delegate has no repaint listenable.
+    fn subscribe(&self) -> Option<ListenerId> {
+        let handle = self.repaint_handle.as_ref()?;
+        let listenable = self.delegate.repaint()?;
+        let mark = handle.clone();
+        Some(listenable.add_listener(Arc::new(move || {
+            // A stale handle (node removed) is a silent no-op by design.
+            let _ = mark.mark_needs_paint();
+        })))
+    }
+
+    /// Tears down a subscription created by [`Self::subscribe`], removing it
+    /// from the *same* delegate's repaint listenable it was added to.
+    fn unsubscribe(delegate: &Arc<dyn FlowDelegate>, id: Option<ListenerId>) {
+        if let Some(id) = id
+            && let Some(listenable) = delegate.repaint()
+        {
+            listenable.remove_listener(id);
         }
     }
 
@@ -168,7 +209,12 @@ impl RenderFlow {
         let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
         let relayout = type_changed || delegate.should_relayout(&*self.delegate);
         let repaint = !relayout && delegate.should_repaint(&*self.delegate);
+        // Migrate the repaint subscription to the new delegate (no-op while
+        // detached: `unsubscribe` skips a `None` id and `subscribe` returns
+        // `None` without a handle).
+        Self::unsubscribe(&self.delegate, self.delegate_listener.take());
         self.delegate = delegate;
+        self.delegate_listener = self.subscribe();
         if relayout {
             DelegateChange::Relayout
         } else if repaint {
@@ -317,6 +363,20 @@ impl RenderBox for RenderFlow {
         }
         false
     }
+
+    /// Subscribes the delegate's repaint listenable (ADR-0013): a notify from
+    /// the delegate's `repaint()` listenable now marks this node needing paint,
+    /// so an animation-driven flow repaints without a widget rebuild.
+    fn attach(&mut self, handle: RepaintHandle) {
+        self.repaint_handle = Some(handle);
+        self.delegate_listener = self.subscribe();
+    }
+
+    /// Tears down the repaint subscription and drops the self-dirty handle.
+    fn detach(&mut self) {
+        Self::unsubscribe(&self.delegate, self.delegate_listener.take());
+        self.repaint_handle = None;
+    }
 }
 
 #[cfg(test)]
@@ -371,6 +431,82 @@ mod tests {
         fn as_any(&self) -> &dyn Any {
             self
         }
+    }
+
+    /// A delegate whose `repaint()` returns a caller-controlled
+    /// [`ChangeNotifier`](flui_foundation::ChangeNotifier), for testing that a
+    /// notify marks the host `RenderFlow` needing paint.
+    #[derive(Debug)]
+    struct RepaintingFlowDelegate {
+        repaint: Arc<flui_foundation::ChangeNotifier>,
+    }
+
+    impl FlowDelegate for RepaintingFlowDelegate {
+        fn get_size(&self, constraints: BoxConstraints) -> Size {
+            constraints.biggest()
+        }
+
+        fn get_constraints_for_child(
+            &self,
+            _index: usize,
+            constraints: BoxConstraints,
+        ) -> BoxConstraints {
+            constraints
+        }
+
+        fn paint_children(&self, _context: &mut FlowPaintingContext<'_, '_>) {}
+
+        fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+            false
+        }
+
+        fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+            false
+        }
+
+        fn repaint(&self) -> Option<Arc<dyn flui_foundation::Listenable>> {
+            Some(self.repaint.clone() as Arc<dyn flui_foundation::Listenable>)
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn repaint_listenable_marks_needs_paint_on_notify() {
+        use flui_foundation::ChangeNotifier;
+        use flui_rendering::pipeline::PipelineOwner;
+        use flui_rendering::protocol::BoxProtocol;
+        use flui_rendering::traits::RenderObject;
+
+        let notifier = Arc::new(ChangeNotifier::new());
+        let delegate = Arc::new(RepaintingFlowDelegate {
+            repaint: notifier.clone(),
+        });
+        let node = RenderFlow::new(delegate);
+
+        let mut owner = PipelineOwner::new();
+        // `insert` fires the real `attach(handle)`, subscribing the delegate's
+        // repaint listenable to a live handle from the pipeline.
+        let id = owner.insert(Box::new(node) as Box<dyn RenderObject<BoxProtocol>>);
+
+        // A fresh node is paint-dirty by default; clear so the notify's mark is
+        // isolated (the red→green discriminator — without attach-subscribe the
+        // node stays clean below).
+        owner.clear_all_dirty_nodes();
+        assert!(
+            !owner.nodes_needing_paint().iter().any(|d| d.id == id),
+            "precondition: node must be clean after clear_all_dirty_nodes",
+        );
+
+        notifier.notify_listeners();
+        owner.drain_pending_dirty();
+        assert!(
+            owner.nodes_needing_paint().iter().any(|d| d.id == id),
+            "a notify on the delegate's repaint listenable must mark the node \
+             needing paint (ADR-0013 attach-subscribe wiring)",
+        );
     }
 
     #[derive(Debug)]
