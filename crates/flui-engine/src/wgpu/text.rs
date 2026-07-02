@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 
+use flui_foundation::HasInstance;
+use flui_painting::{PaintingBinding, SharedFontSystem};
 use flui_types::{
     geometry::{Pixels, Point},
     styling::Color,
@@ -356,8 +358,13 @@ enum BatchEntry {
 /// text_renderer.render(&device, &queue, &view, &mut encoder, (800, 600))?;
 /// ```
 pub struct TextRenderer {
-    /// Font system (manages font loading and shaping)
-    font_system: FontSystem,
+    /// The framework's single shared font system (ADR-0016).
+    ///
+    /// This is a clone of the handle owned by `flui-painting`, so glyphs are
+    /// shaped here against the exact same faces that text *measurement* uses:
+    /// a font registered via `PaintingBinding::register_font` is visible to
+    /// both paths, with no second database to keep in sync.
+    font_system: SharedFontSystem,
 
     /// Swash cache (rasterizes glyphs)
     swash_cache: SwashCache,
@@ -392,54 +399,48 @@ pub struct TextRenderer {
 }
 
 impl TextRenderer {
-    /// Initializes the font system with a smart fallback strategy.
+    /// Guarantees the shared font system has at least one usable face.
     ///
-    /// Strategy (in order):
-    /// 1. Try to load system fonts (works on desktop platforms).
-    /// 2. If no system fonts are found, fall back to the embedded Roboto-Regular.
-    fn initialize_font_system() -> FontSystem {
-        let mut fs = FontSystem::new();
+    /// `FontSystem::new()` (in `flui-painting`) already loads system fonts on
+    /// desktop platforms. When none are present (CI, headless, minimal
+    /// containers) the shared database would be empty and all text would
+    /// render blank, so we fall back to the embedded Roboto-Regular. The
+    /// face-count guard makes this idempotent: if the shared system already
+    /// has faces — because the OS provided them or a prior `TextRenderer`
+    /// (or an explicit `register_font`) already populated it — this is a
+    /// no-op, so multiple renderers never double-load the fallback.
+    fn ensure_fonts_available(font_system: &mut FontSystem) {
+        const ROBOTO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
 
-        let system_font_count = fs.db().faces().count();
-        if system_font_count > 0 {
-            tracing::trace!(count = system_font_count, "loaded system fonts");
-        } else {
-            tracing::warn!("no system fonts available; loading embedded fonts");
-            Self::load_embedded_fonts(&mut fs);
-
-            let embedded_count = fs.db().faces().count();
-            if embedded_count == 0 {
-                tracing::error!("failed to load any fonts; text rendering may be blank");
-            } else {
-                tracing::info!(count = embedded_count, "loaded embedded fonts");
-            }
+        let existing_faces = font_system.db().faces().count();
+        if existing_faces > 0 {
+            tracing::trace!(
+                count = existing_faces,
+                "shared FontSystem already has faces"
+            );
+            return;
         }
 
-        fs
-    }
+        tracing::warn!("shared FontSystem has no faces; loading embedded Roboto-Regular");
+        font_system.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
 
-    /// Loads the embedded Roboto-Regular font into `fs`.
-    ///
-    /// Embedded fonts act as the final fallback when no system fonts are
-    /// present (e.g. CI, headless, minimal containers).
-    fn load_embedded_fonts(fs: &mut FontSystem) {
-        const ROBOTO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-        fs.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
-        tracing::trace!("loaded embedded Roboto-Regular font");
-
-        // TODO(REMOVE_BY=2026-09-22, cycle-4 E-15): add more embedded
-        // fonts if needed (Bold, Italic, etc.) OR delete this TODO if
-        // the embedded-font set is intentionally minimal (Roboto-Regular
-        // covers default Material text rendering). The cadence comment
-        // forces a decision rather than letting the placeholder rot
-        // (same discipline as cycle 3 PR #106 REMOVE_BY pattern).
+        let loaded_faces = font_system.db().faces().count();
+        if loaded_faces == 0 {
+            tracing::error!("failed to load any fonts; text rendering may be blank");
+        } else {
+            tracing::info!(
+                count = loaded_faces,
+                "loaded embedded Roboto-Regular into shared FontSystem"
+            );
+        }
     }
 
     /// Creates a new `TextRenderer` bound to the given wgpu `device`/`queue`.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         tracing::trace!(format = ?format, "TextRenderer::new");
 
-        let font_system = Self::initialize_font_system();
+        let font_system = PaintingBinding::instance().font_system();
+        font_system.with_mut(Self::ensure_fonts_available);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let mut text_atlas = TextAtlas::new(device, queue, &cache, format);
@@ -484,19 +485,18 @@ impl TextRenderer {
             Entry::Vacant(e) => {
                 let font_size = f32::from_bits(key.font_size_bits);
                 let line_height = font_size * 1.2;
-                let mut buffer =
-                    Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
-                // Unbounded width — wrap-width matching is a follow-up (paint seam).
-                buffer.set_size(&mut self.font_system, Some(f32::MAX), None);
-                let attrs = Attrs::new().family(Family::SansSerif);
-                buffer.set_text(
-                    &mut self.font_system,
-                    &key.text,
-                    &attrs,
-                    Shaping::Advanced,
-                    None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, false);
+                // Shape against the shared FontSystem; the closure holds the
+                // lock only for the shaping calls and captures no `self`
+                // field, so the vacant `plain_cache` entry `e` stays valid.
+                let buffer = self.font_system.with_mut(|font_system| {
+                    let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
+                    // Unbounded width — wrap-width matching is a follow-up (paint seam).
+                    buffer.set_size(font_system, Some(f32::MAX), None);
+                    let attrs = Attrs::new().family(Family::SansSerif);
+                    buffer.set_text(font_system, &key.text, &attrs, Shaping::Advanced, None);
+                    buffer.shape_until_scroll(font_system, false);
+                    buffer
+                });
                 e.insert(CachedBuffer {
                     buffer,
                     last_used_frame: self.current_frame,
@@ -567,15 +567,10 @@ impl TextRenderer {
             self.cache_hits += 1;
         } else {
             let line_height = base_font_size * 1.2;
-            let mut buffer = Buffer::new(
-                &mut self.font_system,
-                Metrics::new(base_font_size, line_height),
-            );
             // Use wrap_width from the layout constraint so glyphon
             // respects the same line-breaking as cosmic-text.
             // None = unbounded (no wrapping); Some(w) = wrap at w pixels.
             let buffer_width = wrap_width.unwrap_or(f32::MAX);
-            buffer.set_size(&mut self.font_system, Some(buffer_width), None);
 
             // Build per-run AttrsOwned; the iterator borrows from the vec
             // of owned values, satisfying set_rich_text's lifetime.
@@ -584,16 +579,24 @@ impl TextRenderer {
                 .map(|(_, style)| style_to_attrs_owned(style.as_ref(), base_color))
                 .collect();
 
-            buffer.set_rich_text(
-                &mut self.font_system,
-                runs.iter()
-                    .zip(owned_attrs.iter())
-                    .map(|((text, _), attrs)| (text.as_str(), attrs.as_attrs())),
-                &Attrs::new(),
-                Shaping::Advanced,
-                None,
-            );
-            buffer.shape_until_scroll(&mut self.font_system, false);
+            // Shape against the shared FontSystem; the closure holds the lock
+            // only for the shaping calls and captures no `self` field.
+            let buffer = self.font_system.with_mut(|font_system| {
+                let mut buffer =
+                    Buffer::new(font_system, Metrics::new(base_font_size, line_height));
+                buffer.set_size(font_system, Some(buffer_width), None);
+                buffer.set_rich_text(
+                    font_system,
+                    runs.iter()
+                        .zip(owned_attrs.iter())
+                        .map(|((text, _), attrs)| (text.as_str(), attrs.as_attrs())),
+                    &Attrs::new(),
+                    Shaping::Advanced,
+                    None,
+                );
+                buffer.shape_until_scroll(font_system, false);
+                buffer
+            });
 
             self.rich_cache.insert(
                 key.clone(),
@@ -737,16 +740,23 @@ impl TextRenderer {
             full_bounds,
         );
 
-        self.renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.text_atlas,
-                &self.viewport,
-                text_areas,
-                &mut self.swash_cache,
-            )
+        // Clone the shared handle first so the `with_mut` lock guard is the
+        // only borrow of `font_system` in play; the closure then freely takes
+        // disjoint `&mut` borrows of the renderer / atlas / swash cache
+        // (edition-2024 closures capture individual fields, not all of `self`).
+        let font_system = self.font_system.clone();
+        font_system
+            .with_mut(|font_system| {
+                self.renderer.prepare(
+                    device,
+                    queue,
+                    font_system,
+                    &mut self.text_atlas,
+                    &self.viewport,
+                    text_areas,
+                    &mut self.swash_cache,
+                )
+            })
             .map_err(crate::error::EngineError::text_prepare)?;
 
         let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
