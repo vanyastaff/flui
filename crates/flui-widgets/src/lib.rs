@@ -149,7 +149,7 @@ pub use scroll::{
 };
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
-pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
+pub use text::{EditableText, EditableTextState, RichText, Text, TextEditingController, TextField};
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
     RotationTransitionState, ScaleTransition, ScaleTransitionState,
@@ -218,7 +218,7 @@ pub mod prelude {
         IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedStack,
         IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, ListView, Listener,
         MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Offstage, Opacity, OverflowBox,
-        OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox, Row, SafeArea,
+        OverflowBoxFit, Padding, Positioned, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
         ScrollController, Scrollable, Scrollbar, Semantics, ShrinkWrappingViewport,
         SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
         SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,

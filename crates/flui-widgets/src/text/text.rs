@@ -9,8 +9,7 @@ use flui_view::{RenderView, impl_render_view};
 ///
 /// Flutter parity: `widgets/text.dart` `Text` over `RenderParagraph`. This is a
 /// leaf widget — it measures and paints the text but has no child. For
-/// multi-style runs, build a [`TextSpan`] tree directly (a richer `RichText`
-/// widget lands with the inline-span catalog).
+/// multi-style runs, use [`RichText`](crate::RichText) with a [`TextSpan`] tree.
 ///
 /// # Examples
 ///
