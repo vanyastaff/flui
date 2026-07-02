@@ -287,6 +287,17 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > 74/74 complete per `docs/research/widget-renderobject-map.md`); **(b)** maintainer decisions
 > on the documented *intentional* divergences. Per-RO promotion still requires the Core.2 exit
 > gate (per-RO tests + 1000-item sliver scroll + coverage).
+>
+> **Exit-gate status (verified 2026-07-02, re-run green):** two of the three components
+> are already satisfied — **(1) per-RO tests**: the catalog guard
+> `flui-objects --test render_object_harness` passes **250/250** (every exported
+> `RenderBox`/`RenderSliver` appears in `RENDER_OBJECT_TYPES` with matching `harness_*`
+> tests); **(2) 1000-item sliver scroll**: `flui-rendering --test u3c_lazy_sliver_contract`
+> passes **9/9**, including `u3c_9c_full_range_scroll_reaches_tail_with_bounded_children`
+> (drives a 1000-item lazy list across its *entire* 49,700px range, asserting bounded
+> child count throughout **and** that the visible band reaches the tail). The remaining
+> component is **(3) coverage** (a `just coverage` sweep + threshold sign-off) — the only
+> outstanding exit-gate work, and it is a measurement/sign-off step, not new behavior.
 
 | Family | Status | Notes |
 |---|---|---|
