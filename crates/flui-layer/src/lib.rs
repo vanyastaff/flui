@@ -168,7 +168,7 @@ pub use layer::{
 // ============================================================================
 // RE-EXPORTS - Link Registry
 // ============================================================================
-pub use link_registry::{LeaderInfo, LinkRegistry};
+pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};
 pub use scene::{CompositionCallback, Scene};
 // ============================================================================
 // RE-EXPORTS - Tree
@@ -210,7 +210,7 @@ pub mod prelude {
     // Core types
     pub use crate::{Layer, LayerBounds, LayerId, LayerNode, LayerTree};
     // Compositor
-    pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor};
+    pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor, resolve_follower_offset};
     // Transform layers
     pub use crate::{OffsetLayer, TransformLayer};
     // Platform types
@@ -231,7 +231,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use flui_types::{
-        geometry::{px, Rect},
+        geometry::{Rect, px},
         painting::Clip,
     };
 

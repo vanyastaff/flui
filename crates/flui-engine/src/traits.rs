@@ -328,7 +328,7 @@ pub trait CommandRenderer {
     /// so identical superellipses across frames reuse the cached
     /// tessellation (cache hit = `Arc::clone`, no deep copy).
     fn superellipse_path(&mut self, rse: RSuperellipse) -> Arc<Path> {
-        Arc::new(crate::wgpu::layer_render::generate_superellipse_path(&rse))
+        Arc::new(crate::superellipse::generate_superellipse_path(&rse))
     }
 
     // ===== Viewport Information =====

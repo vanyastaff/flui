@@ -22,7 +22,7 @@ use flui_interaction::events::{
     make_move_event_for_id, make_up_event_for_id,
 };
 use flui_objects::{RenderOpacity, RenderTransform};
-use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
@@ -183,6 +183,12 @@ impl LaidOut {
             .expect("render node should have box geometry after layout")
     }
 
+    /// The committed sliver geometry of a render node.
+    pub fn sliver_geometry(&self, id: RenderId) -> SliverGeometry {
+        inspect::sliver_geometry(&self.pipeline_owner.read(), id)
+            .expect("render node should have sliver geometry after layout")
+    }
+
     /// The paint offset of a render node relative to its parent.
     pub fn offset(&self, id: RenderId) -> Offset {
         inspect::render_offset(&self.pipeline_owner.read(), id)
@@ -271,6 +277,90 @@ impl LaidOut {
                 matrix.get(1, 0).atan2(matrix.get(0, 0))
             })
             .expect("render node should be a RenderTransform")
+    }
+
+    /// Replace the root widget with `new_root` and drive a frame — Flutter's
+    /// `tester.pumpWidget(w2)` called a second time (root-swap).
+    ///
+    /// Delegates to [`HeadlessBinding::swap_root_view`] which updates the stored
+    /// view config on the root element via a split borrow, schedules a rebuild,
+    /// then [`pump_frame(ZERO)`](HeadlessBinding::pump_frame) settles the tree.
+    pub fn pump_widget(&mut self, new_root: impl View) {
+        self.binding.swap_root_view(self.root_element_id, &new_root);
+        self.binding.pump_frame(std::time::Duration::ZERO);
+    }
+
+    /// All render nodes whose short type name equals `render_type_name`.
+    ///
+    /// Walks the live render tree and matches each node's
+    /// [`DiagnosticsNode`](flui_foundation::DiagnosticsNode) name against
+    /// `render_type_name` (the short, crate-unqualified type name such as
+    /// `"RenderConstrainedBox"` or `"RenderCenter"`). Returns all matching ids
+    /// in slab-iteration order (not geometry order).
+    pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
+        let owner = self.pipeline_owner.read();
+        owner
+            .render_tree()
+            .iter()
+            .filter_map(|(id, _node)| {
+                let diagnostics = owner.debug_node_diagnostics(id)?;
+                (diagnostics.name() == Some(render_type_name)).then_some(id)
+            })
+            .collect()
+    }
+
+    /// The unique render node whose short type name equals `render_type_name`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no node matches (likely a wrong type name or the widget is
+    /// not yet mounted) or when more than one node matches (use
+    /// [`find_all_by_render_type`](Self::find_all_by_render_type) when
+    /// duplicates are expected).
+    pub fn find_by_render_type(&self, render_type_name: &str) -> RenderId {
+        let matches = self.find_all_by_render_type(render_type_name);
+        match matches.as_slice() {
+            [id] => *id,
+            [] => {
+                panic!("find_by_render_type: no render node named {render_type_name:?} in the tree")
+            }
+            _ => panic!(
+                "find_by_render_type: {} render nodes named {render_type_name:?}; \
+                 use find_all_by_render_type when duplicates are expected",
+                matches.len()
+            ),
+        }
+    }
+
+    /// Find the unique `RenderParagraph` node that contains `text` as its
+    /// plain-text content.
+    ///
+    /// Requires the `RenderParagraph` diagnostics to emit a `"text"` property
+    /// (added to [`flui_objects::RenderParagraph::debug_fill_properties`] for
+    /// this purpose). Returns `None` when no paragraph matches.
+    ///
+    /// # Panics
+    ///
+    /// Panics when more than one `RenderParagraph` emits the same `text`.
+    pub fn find_text(&self, text: &str) -> Option<RenderId> {
+        let owner = self.pipeline_owner.read();
+        let mut found: Option<RenderId> = None;
+        for (id, _node) in owner.render_tree().iter() {
+            let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
+                continue;
+            };
+            if diagnostics.name() != Some("RenderParagraph") {
+                continue;
+            }
+            if diagnostics.get_property("text") == Some(text) {
+                assert!(
+                    found.is_none(),
+                    "find_text: multiple RenderParagraph nodes contain {text:?}"
+                );
+                found = Some(id);
+            }
+        }
+        found
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch `event` to the entries hit

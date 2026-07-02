@@ -3,10 +3,10 @@
 //! Tests dirty element tracking, build scheduling, and the GlobalKey
 //! registry.
 
-use std::any::TypeId;
-
 use flui_foundation::ElementId;
-use flui_view::{BuildOwner, ElementBase, ElementOwner, ElementTree, Lifecycle, View};
+use flui_objects::RenderSizedBox;
+use flui_rendering::protocol::BoxProtocol;
+use flui_view::{BuildOwner, ElementTree, RenderView, View};
 
 // ============================================================================
 // Test View
@@ -19,68 +19,20 @@ struct TestView {
 }
 
 impl View for TestView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(TestLeafElement::new())
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
-/// A leaf element that creates no children, so `build_scope` terminates.
-///
-/// `TestView` was previously a `StatelessView` whose `build` returned
-/// `self` — an infinitely deep element tree that overflowed the stack
-/// when built. A leaf element is the correct fixture for exercising
-/// `BuildOwner` dirty-tracking and `build_scope` mechanics.
-struct TestLeafElement {
-    depth: usize,
-    lifecycle: Lifecycle,
-}
+impl RenderView for TestView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
 
-impl TestLeafElement {
-    fn new() -> Self {
-        Self {
-            depth: 0,
-            lifecycle: Lifecycle::Initial,
-        }
-    }
-}
-
-impl ElementBase for TestLeafElement {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<TestView>()
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderSizedBox::shrink()
     }
 
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
-        self.depth = slot;
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = Lifecycle::Inactive;
-    }
-
-    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
-
-    fn mark_needs_build(&mut self) {}
-
-    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
-        Vec::new()
-    }
+    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
 }
 
 // ============================================================================

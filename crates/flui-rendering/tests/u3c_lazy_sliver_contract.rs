@@ -517,6 +517,135 @@ fn u3c_9b_bounded_child_count_after_scroll() {
 }
 
 // ============================================================================
+// 9c — Full-range scroll reaches the tail (Core.2 exit-gate: end-to-end
+// 1000-item scroll)
+// ============================================================================
+
+/// Core.2 exit-gate acceptance test: scroll a 1000-item sliver across its
+/// ENTIRE range (top to bottom), not just a partial window.
+///
+/// 9b (above) only exercises the first ~20% of the list (200 steps × 50px =
+/// 10,000px of a 49,700px scrollable range) — every position it visits keeps
+/// logical indices in the 0..~200 band, which would not catch a regression
+/// that corrupts indices only once the walk reaches deep into the list (e.g.
+/// an index-arithmetic overflow, or a cache-eviction bug that only manifests
+/// once thousands of children have cycled through). This test drives the
+/// scroll position through the FULL range and asserts both:
+///   - the attached child count stays bounded throughout (D2, generalized),
+///   - the visible band's logical indices genuinely progress from the head
+///     to the tail of the list (not stuck near 0), reaching within the last
+///     visible band of item N-1.
+#[test]
+fn u3c_9c_full_range_scroll_reaches_tail_with_bounded_children() {
+    let n_items = 1_000usize;
+    let item_height = 50.0_f32;
+    let viewport_height = 300.0_f32;
+    let expected_band_size = ((viewport_height + 200.0) / item_height).ceil() as usize + 4;
+
+    let max_scroll = n_items as f32 * item_height - viewport_height;
+    let scroll_steps = 200usize;
+    let step_size = max_scroll / (scroll_steps - 1) as f32;
+
+    let source: ItemSource = Arc::new(move |_idx| {
+        Some(Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
+    });
+
+    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source), None);
+
+    let initial_constraints = vertical(0.0, viewport_height);
+    let mut owner = PipelineOwner::new();
+    let root_id =
+        owner
+            .insert(Box::new(SliverHost::new(initial_constraints))
+                as Box<dyn RenderObject<BoxProtocol>>);
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(lazy) as Box<dyn RenderObject<SliverProtocol>>,
+        )
+        .expect("lazy sliver must insert under root host");
+
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
+        px(300.0),
+        px(viewport_height),
+    ))));
+
+    let mut owner = owner.into_layout();
+
+    let mut peak = 0usize;
+    let mut last_min_idx = 0usize;
+
+    for step in 0..scroll_steps {
+        let scroll_pos = (step as f32 * step_size).min(max_scroll);
+        let new_constraints = vertical(scroll_pos, viewport_height);
+
+        if let Some(node) = owner.render_tree_mut().get_mut(root_id)
+            && let Some(entry) = node.as_box_mut()
+            && let Some(host) = entry.render_object_mut().downcast_mut::<SliverHost>()
+        {
+            host.constraints = new_constraints;
+        }
+        owner.mark_needs_layout(root_id);
+
+        for _ in 0..3 {
+            owner
+                .run_layout()
+                .expect("layout must succeed across the full-range scroll");
+        }
+
+        let n_children = owner.render_tree().children(sliver_id).len();
+        if n_children > peak {
+            peak = n_children;
+        }
+
+        // Track the visible band's minimum logical index at the last step so
+        // the tail-reached assertion below has real data from the deepest
+        // scroll position actually visited.
+        if step == scroll_steps - 1 {
+            let pairs = collect_child_indices(&owner, sliver_id);
+            last_min_idx = pairs.first().map(|(idx, _)| *idx).unwrap_or(0);
+        }
+    }
+
+    eprintln!(
+        "9c full-range scroll: peak={peak} children attached, \
+         expected band ≈ {expected_band_size} (n={n_items}), \
+         final min logical index={last_min_idx} (max_scroll={max_scroll}px)",
+    );
+
+    // Bounded child count across the ENTIRE range (D2, generalized beyond 9b's
+    // partial-range coverage).
+    let upper_bound = expected_band_size * 3;
+    assert!(
+        peak <= upper_bound,
+        "U3c D2 regression (full range): peak attached child count {peak} exceeded \
+         {upper_bound} (= 3 × expected band size {expected_band_size}) while scrolling \
+         the ENTIRE 1000-item range, not just a partial window.",
+    );
+    let n_limit = n_items / 5;
+    assert!(
+        peak < n_limit,
+        "peak child count {peak} is too close to N={n_items} across the full-range \
+         scroll (limit: {n_limit} = N/5). Dispose is not working near the tail.",
+    );
+
+    // The walk must genuinely reach the tail: the final scroll position sits
+    // at max_scroll, so the visible band's minimum logical index must be near
+    // the LAST item, not still near the head of the list. Allow slack for the
+    // cache band (which pre-fetches items before the visible window).
+    let tail_threshold = n_items - expected_band_size * 2;
+    assert!(
+        last_min_idx >= tail_threshold,
+        "full-range scroll did not reach the tail: final min logical index \
+         {last_min_idx} is below the expected tail threshold {tail_threshold} \
+         (n={n_items}). Either the scroll math is wrong, or logical indices \
+         desync deep into the list.",
+    );
+}
+
+// ============================================================================
 // P1 regression guard: dispose targets the sliver, not the walk root
 // ============================================================================
 

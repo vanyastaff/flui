@@ -160,3 +160,158 @@ where
 }
 
 generic_render_view_element!(Wrap);
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
+
+    use flui_view::RenderView;
+    use flui_view::ViewExt;
+
+    use super::*;
+    use crate::SizedBox;
+
+    // ── Builder defaults ──────────────────────────────────────────────────────
+
+    #[test]
+    fn wrap_new_defaults_to_horizontal_start_zero_spacing() {
+        let wrap: Wrap = Wrap::new(Vec::new());
+        assert_eq!(wrap.direction, Axis::Horizontal);
+        assert_eq!(wrap.alignment, WrapAlignment::Start);
+        assert_eq!(wrap.spacing, 0.0);
+        assert_eq!(wrap.run_alignment, WrapAlignment::Start);
+        assert_eq!(wrap.run_spacing, 0.0);
+        assert_eq!(wrap.cross_axis_alignment, WrapCrossAlignment::Start);
+    }
+
+    #[test]
+    fn wrap_builders_override_every_field() {
+        let wrap: Wrap = Wrap::new(Vec::new())
+            .direction(Axis::Vertical)
+            .alignment(WrapAlignment::SpaceEvenly)
+            .spacing(6.0)
+            .run_alignment(WrapAlignment::SpaceAround)
+            .run_spacing(3.0)
+            .cross_axis_alignment(WrapCrossAlignment::End);
+
+        assert_eq!(wrap.direction, Axis::Vertical);
+        assert_eq!(wrap.alignment, WrapAlignment::SpaceEvenly);
+        assert_eq!(wrap.spacing, 6.0);
+        assert_eq!(wrap.run_alignment, WrapAlignment::SpaceAround);
+        assert_eq!(wrap.run_spacing, 3.0);
+        assert_eq!(wrap.cross_axis_alignment, WrapCrossAlignment::End);
+    }
+
+    // ── create_render_object / update_render_object wiring ───────────────────
+    //
+    // RenderWrap exposes no public getters, so wiring is verified through its
+    // derived `Debug` output (per its `#[derive(Debug, Clone)]`).
+
+    #[test]
+    fn wrap_create_render_object_wires_defaults_into_render_wrap() {
+        let wrap: Wrap = Wrap::new(Vec::new());
+        let render_object = wrap.create_render_object();
+        let debug = format!("{render_object:?}");
+        assert!(
+            debug.contains("direction: Horizontal")
+                && debug.contains("alignment: Start")
+                && debug.contains("spacing: 0.0")
+                && debug.contains("run_alignment: Start")
+                && debug.contains("run_spacing: 0.0")
+                && debug.contains("cross_axis_alignment: Start"),
+            "default RenderWrap must carry Wrap's default fields, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn wrap_create_render_object_wires_overridden_fields_into_render_wrap() {
+        let wrap: Wrap = Wrap::new(Vec::new())
+            .direction(Axis::Vertical)
+            .alignment(WrapAlignment::Center)
+            .spacing(8.0)
+            .run_alignment(WrapAlignment::End)
+            .run_spacing(4.0)
+            .cross_axis_alignment(WrapCrossAlignment::Center);
+        let render_object = wrap.create_render_object();
+        let debug = format!("{render_object:?}");
+        assert!(
+            debug.contains("direction: Vertical")
+                && debug.contains("alignment: Center")
+                && debug.contains("spacing: 8.0")
+                && debug.contains("run_alignment: End")
+                && debug.contains("run_spacing: 4.0")
+                && debug.contains("cross_axis_alignment: Center"),
+            "overridden RenderWrap must carry Wrap's overridden fields, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn wrap_update_render_object_replaces_stale_configuration() {
+        let initial: Wrap = Wrap::new(Vec::new()).spacing(1.0);
+        let mut render_object = initial.create_render_object();
+        assert!(format!("{render_object:?}").contains("spacing: 1.0"));
+
+        let updated: Wrap = Wrap::new(Vec::new())
+            .direction(Axis::Vertical)
+            .alignment(WrapAlignment::SpaceBetween)
+            .spacing(9.0)
+            .run_alignment(WrapAlignment::Center)
+            .run_spacing(5.0)
+            .cross_axis_alignment(WrapCrossAlignment::End);
+        updated.update_render_object(&mut render_object);
+
+        let debug = format!("{render_object:?}");
+        assert!(
+            debug.contains("direction: Vertical")
+                && debug.contains("alignment: SpaceBetween")
+                && debug.contains("spacing: 9.0")
+                && debug.contains("run_alignment: Center")
+                && debug.contains("run_spacing: 5.0")
+                && debug.contains("cross_axis_alignment: End"),
+            "update_render_object must overwrite the stale config, got: {debug}",
+        );
+        assert!(
+            !debug.contains("spacing: 1.0"),
+            "update_render_object must not retain the pre-update spacing, got: {debug}",
+        );
+    }
+
+    // ── has_children ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn wrap_has_children_is_false_for_an_empty_child_list() {
+        let wrap: Wrap = Wrap::new(Vec::new());
+        assert!(!wrap.has_children());
+    }
+
+    #[test]
+    fn wrap_has_children_is_true_when_children_are_present() {
+        let wrap = Wrap::new(vec![SizedBox::shrink().boxed()]);
+        assert!(wrap.has_children());
+    }
+
+    // ── Debug ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn wrap_debug_reports_all_fields_and_child_count() {
+        let wrap = Wrap::new(vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()])
+            .direction(Axis::Vertical)
+            .alignment(WrapAlignment::Center)
+            .spacing(2.0)
+            .run_alignment(WrapAlignment::End)
+            .run_spacing(1.0)
+            .cross_axis_alignment(WrapCrossAlignment::Center);
+
+        let debug = format!("{wrap:?}");
+        assert!(
+            debug.contains("direction: Vertical")
+                && debug.contains("alignment: Center")
+                && debug.contains("spacing: 2.0")
+                && debug.contains("run_alignment: End")
+                && debug.contains("run_spacing: 1.0")
+                && debug.contains("cross_axis_alignment: Center")
+                && debug.contains("children: 2"),
+            "Wrap Debug must include every field and the child count, got: {debug}",
+        );
+    }
+}

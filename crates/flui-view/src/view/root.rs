@@ -69,8 +69,8 @@ impl<V: View + Clone> RootRenderView<V> {
 }
 
 impl<V: View + Clone + Send + Sync + 'static> View for RootRenderView<V> {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(RootRenderElement::new(self))
+    fn create_element(&self) -> crate::element::ElementKind {
+        crate::element::ElementKind::Root(Box::new(RootRenderElement::new(self)))
     }
 }
 
@@ -492,48 +492,30 @@ impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRend
 
 #[cfg(test)]
 mod tests {
+    use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
 
     use super::*;
+    use crate::RenderView;
 
     #[derive(Clone)]
     struct TestView;
 
-    impl View for TestView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(TestElement)
+    impl RenderView for TestView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
         }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
     }
 
-    struct TestElement;
-
-    impl ElementBase for TestElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<TestView>()
-        }
-
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Active
-        }
-
-        fn depth(&self) -> usize {
-            1
-        }
-
-        fn mount(
-            &mut self,
-            _parent: Option<ElementId>,
-            _slot: usize,
-            _owner: &mut crate::ElementOwner<'_>,
-        ) {
-        }
-        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
-        fn activate(&mut self) {}
-        fn deactivate(&mut self) {}
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
+    impl View for TestView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 

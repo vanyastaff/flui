@@ -48,8 +48,8 @@ pub use behavior::{
 pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
 pub use kind::{
-    AnimationListener, ElementKind, InheritedElementBase, ProxyElementBase, RenderElementBase,
-    StatefulElementBase, StatelessElementBase,
+    AnimationListener, ElementKind, InheritedElementBase, NotificationElementBase,
+    ProxyElementBase, RenderElementBase, StatefulElementBase, StatelessElementBase,
 };
 pub use lifecycle::Lifecycle;
 pub use notification::{
@@ -59,7 +59,7 @@ pub use notification::{
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
-pub use sliver_adaptor::SliverList;
+pub use sliver_adaptor::{SliverGridLazy, SliverList};
 pub use unified::Element;
 
 /// Slot describing a child element's position in its parent's children list.

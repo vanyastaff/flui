@@ -2,6 +2,7 @@
 name = "flui-types"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Core types for Flui framework - geometry, layout, styling"
@@ -11,7 +12,7 @@ repository.workspace = true
 # Geometry primitives — split out into its own Layer-0 crate in D-block
 # PR-C-2 (U7 bridge). flui-types re-exports `pub use flui_geometry as geometry`
 # so existing `flui_types::geometry::*` consumers continue to compile.
-flui-geometry = { path = "../flui-geometry" }
+flui-geometry = { path = "../flui-geometry", version = "0.2.0" }
 
 # Serialization support (optional).
 # `rc` enables `Serialize`/`Deserialize` for `Arc<T>` — needed by

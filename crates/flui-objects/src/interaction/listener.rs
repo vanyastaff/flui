@@ -8,7 +8,8 @@
 //! advertises a [`PointerEventHandler`] that the pipeline attaches to its
 //! [`HitTestEntry`](flui_rendering::hit_testing::HitTestEntry), so
 //! `HitTestResult::dispatch` invokes it. Layout and paint pass through
-//! transparently — only `hit_test` (registering self) and
+//! transparently. When childless it grows to the incoming maximum constraints,
+//! matching Flutter's `computeSizeForNoChild`; only `hit_test` (registering self) and
 //! `pointer_event_handler` (advertising the callback) differ from a transparent
 //! proxy.
 
@@ -16,11 +17,13 @@ use flui_tree::Single;
 use flui_types::{Offset, Size};
 
 use flui_rendering::{
+    constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     hit_testing::{HitTestBehavior, PointerEventHandler},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{RenderBox, TextBaseline},
 };
+use flui_rendering::{context::BoxDryBaselineCtx, context::BoxDryLayoutCtx};
 
 /// A render object that registers itself in the hit-test path and contributes a
 /// [`PointerEventHandler`], so pointer events reach the handler during dispatch.
@@ -35,14 +38,6 @@ use flui_rendering::{
 ///   siblings painted below.
 ///
 /// Layout and paint are pure pass-through.
-///
-/// # Translucent caveat
-///
-/// Flutter's `HitTestBehavior::Translucent` registers self WITHOUT blocking
-/// siblings below. FLUI's pipeline gates entry registration on the `hit_test`
-/// return value, so "register but do not block" is not yet expressible —
-/// `Translucent` therefore behaves as `Opaque` until the pipeline decouples
-/// add-self from the block-below decision.
 #[derive(Clone)]
 pub struct RenderListener {
     handler: PointerEventHandler,
@@ -101,11 +96,32 @@ impl RenderBox for RenderListener {
             child_size
         } else {
             self.has_child = false;
-            constraints.smallest()
+            constraints.biggest()
         }
     }
 
-    flui_rendering::forward_single_child_box_queries!();
+    flui_rendering::forward_single_child_intrinsics!();
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        if ctx.child_count() == 0 {
+            constraints.biggest()
+        } else {
+            ctx.child_dry_layout(0, constraints)
+        }
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        flui_rendering::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
+    }
 
     // paint: default pass-through (splices the child in order).
 
@@ -116,15 +132,17 @@ impl RenderBox for RenderListener {
         // Hit-test the child first (so descendant handlers register, leaf-first).
         let child_hit = self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO);
 
-        // Whether this listener registers ITS OWN entry is gated on the return
-        // value (the pipeline adds the entry iff `hit_test` returns true):
-        // - DeferToChild: register only when a descendant was hit.
-        // - Opaque / Translucent: register for any pointer within bounds (and,
-        //   unavoidably in this pipeline, block siblings below).
-        match self.behavior {
+        let hit_target = match self.behavior {
             HitTestBehavior::DeferToChild => child_hit,
-            HitTestBehavior::Opaque | HitTestBehavior::Translucent => true,
+            HitTestBehavior::Opaque => true,
+            HitTestBehavior::Translucent => child_hit,
+        };
+
+        if !hit_target && self.behavior == HitTestBehavior::Translucent {
+            ctx.register_self_hit_entry();
         }
+
+        hit_target
     }
 
     fn pointer_event_handler(&self) -> Option<PointerEventHandler> {

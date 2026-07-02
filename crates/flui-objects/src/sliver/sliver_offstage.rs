@@ -1,17 +1,18 @@
 //! `RenderSliverOffstage` — single-child sliver that can hide its
 //! subtree entirely (zero geometry, skipped paint, no hit-testing).
-//! The child is still laid out (Flutter parity — so that any
-//! `scroll_offset_correction` surfaces), but its geometry is discarded
-//! and `SliverGeometry::ZERO` is reported to the viewport instead.
+//! The child is still laid out (Flutter parity), but when offstage its
+//! geometry — including any `scroll_offset_correction` it produced — is
+//! discarded: `SliverGeometry::ZERO` is reported to the viewport
+//! unconditionally.
 //!
 //! # Flutter equivalence
 //!
 //! Behavior-faithful port of Flutter's
 //! [`RenderSliverOffstage`](https://api.flutter.dev/flutter/rendering/RenderSliverOffstage-class.html)
-//! (`packages/flutter/lib/src/rendering/sliver.dart`). The
-//! always-lay-out-the-child rule matches Flutter — important because
-//! offscreen slivers may need to request scroll corrections (e.g. a
-//! pinned header that just unpinned and needs to re-anchor).
+//! (`packages/flutter/lib/src/rendering/proxy_sliver.dart`). The child is
+//! always laid out, then — when offstage — `geometry` is set to
+//! `SliverGeometry.zero` unconditionally, so an offstage sliver reports zero
+//! and never forwards a child scroll correction to the viewport.
 //!
 //! # Rust-native improvements
 //!
@@ -110,14 +111,12 @@ impl RenderSliver for RenderSliverOffstage {
         let constraints = *ctx.constraints();
 
         if self.offstage {
-            // Flutter parity: the child must still be laid out so any
-            // scroll_offset_correction surfaces, but the geometry we
-            // *report* upward is zero.
+            // Flutter parity (proxy_sliver.dart RenderSliverOffstage.performLayout):
+            // the child is still laid out, but when offstage `geometry` is set to
+            // zero *unconditionally* — a hidden sliver must not forward the
+            // child's scroll_offset_correction to the viewport.
             if ctx.child_count() > 0 {
-                let child_geometry = ctx.layout_child(0, constraints);
-                if let Some(correction) = child_geometry.scroll_offset_correction {
-                    return SliverGeometry::scroll_offset_correction(correction);
-                }
+                let _ = ctx.layout_child(0, constraints);
             }
             return SliverGeometry::ZERO;
         }

@@ -20,13 +20,15 @@ Before opening a PR or even a planning issue, read:
 
 ## Quality Gates
 
-Every change must pass:
+Every change must pass the local CI recipe:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
-cargo test --workspace
+just ci
 ```
+
+This expands to formatting, workspace-inventory drift, port-methodology checks,
+Clippy, and the workspace test suite. CI also runs `taplo fmt --check`,
+`typos`, docs, benchmark compilation, and the configured nextest/GPU jobs.
 
 See [Testing](testing.md) for per-crate commands, coverage targets, and benchmark setup.
 
@@ -86,7 +88,7 @@ Allowed prefixes: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`. The option
 ## Code Style
 
 - **Formatter:** `rustfmt.toml` is authoritative (edition 2024, `max_width = 100`, Tall fn params). Run `cargo fmt --all` before commit.
-- **Linter:** `cargo clippy --workspace -- -D warnings` must pass with `clippy::all` and `clippy::pedantic`.
+- **Linter:** `cargo clippy --workspace --all-targets -- -D warnings` must pass with `clippy::all` and `clippy::pedantic`.
 - **Naming:** snake_case for modules and functions, UpperCamelCase for types and traits, SCREAMING_SNAKE_CASE for constants. Crate names use the `flui-` prefix.
 - **Errors:** library crates use `thiserror`-derived enums; application / CLI / build glue may use `anyhow::Error`. `anyhow` MUST NOT cross a library crate boundary.
 - **Logging:** `tracing` only. No `println!`, `eprintln!`, or `dbg!` in committed code.
@@ -108,7 +110,7 @@ For the full anti-pattern list see [`.ai-factory/ARCHITECTURE.md`](../.ai-factor
 
 A change is ready for review when:
 
-- ✅ All three quality gates pass (`fmt`, `clippy`, `test`).
+- ✅ `just ci` passes (`fmt`, inventory drift, port-check, Clippy, tests).
 - ✅ The dependency DAG is intact (no upward edges, no cycles).
 - ✅ Public API additions / changes are documented (`///` on items, `//!` on crate roots).
 - ✅ New `unsafe` blocks (if any) carry `// SAFETY:` comments and are inside the permitted crates.
@@ -127,6 +129,11 @@ Open a GitHub issue with:
 - Affected crate(s) and commit hash.
 
 For confirmed regressions, the speckit workflow (`/speckit.specify` → `/speckit.plan` → ...) provides a structured path from report to fix.
+
+## Security and Conduct
+
+- Report vulnerabilities privately through the process in [`SECURITY.md`](../SECURITY.md).
+- Project conduct rules live in [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md).
 
 ## See Also
 

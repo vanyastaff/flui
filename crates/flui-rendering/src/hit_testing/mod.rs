@@ -82,7 +82,10 @@ pub use flui_interaction::routing::HitTestBehavior;
 // `PointerEventHandler` (see `RenderObject::pointer_event_handler`) that the
 // pipeline attaches to its hit entry; `HitTestResult::dispatch` then invokes it
 // with a `PointerEvent`, honoring the returned `EventPropagation`.
-pub use flui_interaction::events::PointerEvent;
-pub use flui_interaction::routing::{EventPropagation, PointerEventHandler};
+pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
+pub use flui_interaction::routing::{
+    DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
+    MouseTrackerAnnotation, PointerEventHandler,
+};
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;

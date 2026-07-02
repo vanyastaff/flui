@@ -22,7 +22,10 @@ use std::sync::Arc;
 pub use flui_foundation::RenderId;
 use flui_types::geometry::{Matrix4, Offset, Pixels};
 
-use crate::events::{CursorIcon, PointerEvent, ScrollEventData};
+use crate::{
+    events::{CursorIcon, PointerEvent, ScrollEventData},
+    routing::MouseTrackerAnnotation,
+};
 
 // ============================================================================
 // EVENT PROPAGATION
@@ -107,6 +110,10 @@ pub struct HitTestEntry {
 
     /// Mouse cursor for this target.
     pub cursor: CursorIcon,
+
+    /// Mouse-tracker annotation contributed by this target, if it wants
+    /// enter/exit/hover tracking.
+    pub mouse_annotation: Option<MouseTrackerAnnotation>,
 }
 
 impl std::fmt::Debug for HitTestEntry {
@@ -116,6 +123,7 @@ impl std::fmt::Debug for HitTestEntry {
             .field("has_transform", &self.transform.is_some())
             .field("has_handler", &self.handler.is_some())
             .field("cursor", &self.cursor)
+            .field("has_mouse_annotation", &self.mouse_annotation.is_some())
             .finish()
     }
 }
@@ -129,6 +137,7 @@ impl HitTestEntry {
             handler: None,
             scroll_handler: None,
             cursor: CursorIcon::Default,
+            mouse_annotation: None,
         }
     }
 
@@ -140,12 +149,19 @@ impl HitTestEntry {
             handler: Some(handler),
             scroll_handler: None,
             cursor: CursorIcon::Default,
+            mouse_annotation: None,
         }
     }
 
     /// Builder: set cursor.
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
         self.cursor = cursor;
+        self
+    }
+
+    /// Builder: set mouse-tracker annotation.
+    pub fn mouse_annotation(mut self, annotation: MouseTrackerAnnotation) -> Self {
+        self.mouse_annotation = Some(annotation);
         self
     }
 

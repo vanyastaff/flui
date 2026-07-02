@@ -3,7 +3,7 @@
 //! This crate contains all ready-to-use render objects, organized into domain
 //! families. It sits directly above the [`flui_rendering`] engine crate (which
 //! owns traits, pipeline, arena, protocol, and contexts) and validates that the
-//! engine's custom-object-authoring API is complete — 38 real objects compiling
+//! engine's custom-object-authoring API is complete — 74 real objects compiling
 //! from outside the engine crate proves the authoring surface needs no additions.
 //!
 //! # Organization
@@ -13,13 +13,13 @@
 //! - `layout` — sizing, alignment, flex, stack, transform, fitted-box, intrinsic, overflow, rotation
 //! - `proxy` — paint-effect proxies (opacity, clip, decoration, color, repaint boundary)
 //! - `interaction` — hit-test and visibility proxies (absorb/ignore pointer, offstage, metadata)
-//! - `text` — [`RenderParagraph`]
+//! - `text` — [`RenderEditable`], [`RenderParagraph`]
 //! - `image` — [`RenderImage`]
 //! - `sliver` — all `RenderSliver*` objects and [`RenderViewport`] (the Box viewport that drives them)
 //!
 //! # Flat public surface
 //!
-//! All 43 types are re-exported flat from this crate root so the consumer
+//! All 74 render-object types are re-exported flat from this crate root so the consumer
 //! import path is simply `flui_objects::RenderPadding` — identical depth to the
 //! old `flui_rendering::objects::RenderPadding`.
 //!
@@ -40,40 +40,50 @@ mod text;
 
 // --- flat re-exports (layout) ---
 pub use layout::{
-    AspectRatioFactor, FractionFactor, RenderAlign, RenderAspectRatio, RenderBaseline,
-    RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox, RenderFittedBox, RenderFlex,
-    RenderFractionalTranslation, RenderFractionallySizedBox, RenderIntrinsicHeight,
-    RenderIntrinsicWidth, RenderLimitedBox, RenderPadding, RenderRotatedBox, RenderSizedBox,
-    RenderSizedOverflowBox, RenderStack, RenderTransform, RenderWrap,
+    AnimatedSizeState, CrossAxisAlignment, DelegateChange, FlexDirection, MainAxisAlignment,
+    MainAxisSize, OverflowBoxFit, PositionedSpec, StackFit, TranslationFraction, WrapAlignment,
+    WrapCrossAlignment,
 };
 pub use layout::{
-    CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, OverflowBoxFit,
-    PositionedSpec, StackFit, TranslationFraction, WrapAlignment, WrapCrossAlignment,
+    AspectRatioFactor, FractionFactor, RenderAlign, RenderAnimatedSize, RenderAspectRatio,
+    RenderBaseline, RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox,
+    RenderCustomMultiChildLayoutBox, RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex,
+    RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
+    RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLimitedBox, RenderListBody, RenderPadding,
+    RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox, RenderStack, RenderTable,
+    RenderTransform, RenderWrap,
 };
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
-    ClipGeometry, CustomClipper, DecorationPosition, Oval, RenderClip, RenderClipOval,
-    RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox, RenderDecoratedBox,
-    RenderOpacity, RenderRepaintBoundary,
+    ClipGeometry, CustomClipper, DecorationPosition, Oval, RenderBackdropFilter, RenderClip,
+    RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox,
+    RenderCustomPaint, RenderDecoratedBox, RenderFollowerLayer, RenderLeaderLayer, RenderOpacity,
+    RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations,
+    RenderShaderMask, ShaderCallback,
 };
+pub use proxy::{RenderExcludeSemantics, RenderMergeSemantics};
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{
-    MetaDataPayload, RenderAbsorbPointer, RenderIgnorePointer, RenderListener, RenderMetaData,
-    RenderOffstage,
+    MetaDataPayload, MouseRegionCallback, RenderAbsorbPointer, RenderIgnorePointer, RenderListener,
+    RenderMetaData, RenderMouseRegion, RenderOffstage,
 };
 
 // --- flat re-exports (text) ---
-pub use text::RenderParagraph;
+pub use text::{RenderEditable, RenderParagraph};
 
 // --- flat re-exports (image) ---
 pub use image::{ImageAlignment, ImageFit, RenderImage};
 
 // --- flat re-exports (sliver) ---
 pub use sliver::{
-    RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
-    RenderSliverFillRemainingWithScrollable, RenderSliverFillViewport, RenderSliverFixedExtentList,
+    FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration,
+    RenderShrinkWrappingViewport, RenderSliverFillRemaining,
+    RenderSliverFillRemainingAndOverscroll, RenderSliverFillRemainingWithScrollable,
+    RenderSliverFillViewport, RenderSliverFixedExtentList, RenderSliverFloatingPersistentHeader,
+    RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverGridLazy,
     RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy, RenderSliverOffstage,
-    RenderSliverOpacity, RenderSliverPadding, RenderSliverToBoxAdapter, RenderViewport,
+    RenderSliverOpacity, RenderSliverPadding, RenderSliverPinnedPersistentHeader,
+    RenderSliverScrollingPersistentHeader, RenderSliverToBoxAdapter, RenderViewport,
 };

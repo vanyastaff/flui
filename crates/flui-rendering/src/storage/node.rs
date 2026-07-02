@@ -127,6 +127,28 @@ impl RenderNode {
             Self::Sliver(entry) => entry.render_object_mut().reassemble(),
         }
     }
+
+    /// Tree-lifecycle hook (ADR-0013): hands the freshly-inserted render
+    /// object a self-dirty handle bound to its own node.
+    ///
+    /// Dispatches to [`RenderObject::attach`] on the underlying object.
+    pub fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().attach(handle),
+            Self::Sliver(entry) => entry.render_object_mut().attach(handle),
+        }
+    }
+
+    /// Tree-lifecycle hook (ADR-0013): tears down whatever `attach`
+    /// subscribed to, called before this node is removed from the tree.
+    ///
+    /// Dispatches to [`RenderObject::detach`] on the underlying object.
+    pub fn detach(&mut self) {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().detach(),
+            Self::Sliver(entry) => entry.render_object_mut().detach(),
+        }
+    }
 }
 
 // ============================================================================

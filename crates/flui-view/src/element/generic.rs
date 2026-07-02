@@ -29,14 +29,10 @@
 //!     fn lifecycle(&self) -> Lifecycle { self.core.lifecycle() }
 //!     fn mount(&mut self, p: Option<ElementId>, s: usize) { self.core.mount(p, s) }
 //!
-//!     // Only view-specific logic remains
+//!     // Only view-specific logic remains. Real component builds run through
+//!     // BuildOwner::build_scope, which supplies a live tree-backed BuildCtx.
 //!     fn perform_build(&mut self) {
 //!         if !self.core.should_build() { return; }
-//!
-//!         let ctx = ElementBuildContext::new_minimal(self.core.depth());
-//!         let child_view = self.core.view().build(&ctx);
-//!
-//!         self.core.update_or_create_child(child_view);
 //!         self.core.clear_dirty();
 //!     }
 //! }
@@ -229,9 +225,9 @@ where
         }
     }
 
-    // NOTE: `update_or_create_children` reads `self.self_id` directly;
-    // external consumers (the build-time `BuildCtx` anchor) go through
-    // [`Self::self_id`].
+    // NOTE: the production build/reconcile path reads `self_id` through
+    // the element surface stamped by `set_self_id`; external consumers
+    // (the build-time `BuildCtx` anchor) go through [`Self::self_id`].
 
     // ========================================================================
     // Lifecycle Methods (eliminates ~40 lines of boilerplate per element)
@@ -251,13 +247,10 @@ where
     ///
     /// * `parent` - The parent ElementId (if any)
     /// * `slot` - The element's sibling slot index (NOT its tree depth)
-    /// * `_owner` - Split-borrow handle into the BuildOwner. Currently
-    ///   unused at this layer because `update_or_create_child` /
-    ///   `update_or_create_children` (called during `perform_build`)
-    ///   handle child mounting outside this method's scope; threading
-    ///   the parameter through keeps the trait surface consistent and
-    ///   gives downstream units (U9-U14) a hook for GlobalKey
-    ///   registration during mount.
+    /// * `_owner` - Split-borrow handle into the BuildOwner. Kept on the
+    ///   signature so behavior `on_mount` hooks can register global keys,
+    ///   child managers, listeners, or other owner-backed resources while
+    ///   child reconciliation remains centralized in `BuildOwner::build_scope`.
     pub fn mount(
         &mut self,
         _parent: Option<ElementId>,

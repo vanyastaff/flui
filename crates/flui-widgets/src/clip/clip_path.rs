@@ -91,3 +91,64 @@ impl RenderView for ClipPath {
 }
 
 impl_render_view!(ClipPath);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    fn clip_path() -> ClipPath {
+        ClipPath::new(|_size: Size| Path::new())
+    }
+
+    #[test]
+    fn create_render_object_defaults_to_anti_alias_and_installs_the_clipper() {
+        let render_object = clip_path().create_render_object();
+        assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
+        assert!(
+            render_object.has_custom_clipper(),
+            "the clipper closure must always be installed on create",
+        );
+    }
+
+    #[test]
+    fn create_render_object_applies_an_overridden_clip_behavior() {
+        let render_object = clip_path()
+            .clip_behavior(Clip::HardEdge)
+            .create_render_object();
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+    }
+
+    #[test]
+    fn update_render_object_applies_a_changed_clip_behavior_and_reinstalls_the_clipper() {
+        let mut render_object = clip_path().create_render_object();
+        assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
+
+        clip_path()
+            .clip_behavior(Clip::HardEdge)
+            .update_render_object(&mut render_object);
+
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+        assert!(
+            render_object.has_custom_clipper(),
+            "update must reinstall the (identity-less) clipper closure",
+        );
+    }
+
+    #[test]
+    fn debug_reports_clip_behavior() {
+        let debug = format!("{:?}", clip_path().clip_behavior(Clip::None));
+        assert!(
+            debug.contains("clip_behavior: None"),
+            "Debug output must include clip_behavior, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        assert!(!clip_path().has_children());
+        assert!(clip_path().child(SizedBox::shrink()).has_children());
+    }
+}

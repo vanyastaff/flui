@@ -344,8 +344,8 @@ impl SemanticsOwner {
         // fields (`self.tree` and `self.updates_buffer`) — but to
         // satisfy the borrow checker we destructure `self` once.
         let Self {
-            ref tree,
-            ref mut updates_buffer,
+            tree,
+            updates_buffer,
             ..
         } = self;
         for (id, node) in tree.iter_dirty() {

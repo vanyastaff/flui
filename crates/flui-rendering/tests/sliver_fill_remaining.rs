@@ -454,7 +454,10 @@ fn sliver_fill_remaining_overscroll_expands_max_paint_extent() {
 }
 
 #[test]
-fn sliver_fill_remaining_overscroll_reverse_axis_positions_actual_child_extent() {
+fn sliver_fill_remaining_overscroll_reverse_axis_positions_by_scroll_extent() {
+    // Reverse axis: the child is positioned by geometry.scroll_extent, NOT its
+    // overscrolled measured extent (fixed 3d0699af; matches the sibling fill
+    // slivers and Flutter RenderSliverSingleBoxAdapter.setChildParentData).
     let mut constraints = vertical_constraints(0.0, 20.0, 90.0, -30.0);
     constraints.axis_direction = AxisDirection::BottomToTop;
 
@@ -482,8 +485,10 @@ fn sliver_fill_remaining_overscroll_reverse_axis_positions_actual_child_extent()
     assert_eq!(geometry.scroll_extent, 80.0);
     assert_eq!(geometry.paint_extent, 90.0);
     assert_eq!(geometry.max_paint_extent, 120.0);
+    // paint_extent + scroll_offset - scroll_extent = 90 + 0 - 80 = 10
+    // (was -30, i.e. paint_extent minus the measured child extent 120).
     assert_eq!(
         render_offset(&owner, child_id),
-        Offset::new(px(0.0), px(-30.0))
+        Offset::new(px(0.0), px(10.0))
     );
 }

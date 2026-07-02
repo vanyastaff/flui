@@ -166,7 +166,7 @@ impl ClipPathLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{px, Point};
+    use flui_types::geometry::{Point, px};
 
     use super::*;
 

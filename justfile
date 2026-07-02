@@ -14,7 +14,7 @@ version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 
 # Active workspace members (must match crates/* in Cargo.toml [workspace.members])
-active_crates := "flui-types flui-foundation flui-tree flui-platform flui-painting flui-semantics flui-scheduler flui-layer flui-interaction flui-engine flui-log flui-hot-reload flui-rendering flui-view flui-app"
+active_crates := "flui-animation flui-app flui-assets flui-binding flui-build flui-cli flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-macros flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
 
 # Default recipe — show help
 [doc("Show available recipes grouped by category")]
@@ -48,21 +48,30 @@ build-crate crate:
 [group("build")]
 [doc("Build foundation layer first, then up the DAG (manual incremental build)")]
 build-layered:
+    cargo build -p flui-geometry
     cargo build -p flui-types
     cargo build -p flui-foundation
+    cargo build -p flui-macros
     cargo build -p flui-tree
     cargo build -p flui-platform
+    cargo build -p flui-assets
     cargo build -p flui-painting
     cargo build -p flui-semantics
     cargo build -p flui-scheduler
     cargo build -p flui-layer
     cargo build -p flui-interaction
+    cargo build -p flui-animation
     cargo build -p flui-engine
-    cargo build -p flui-log
     cargo build -p flui-hot-reload
     cargo build -p flui-rendering
+    cargo build -p flui-objects
     cargo build -p flui-view
+    cargo build -p flui-widgets
+    cargo build -p flui-binding
     cargo build -p flui-app
+    cargo build -p flui-devtools
+    cargo build -p flui-build
+    cargo build -p flui-cli
 
 # =============================================================================
 # Testing
@@ -143,12 +152,17 @@ doc-open:
 doc-strict:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+[group("quality")]
+[doc("Check docs/justfile crate inventories against Cargo metadata")]
+inventory-check:
+    bash scripts/check-workspace-inventory.sh
+
 # =============================================================================
 # Port methodology
 # =============================================================================
 
 [group("port")]
-[doc("Run refusal-trigger grep regressions (six triggers from docs/PORT.md)")]
+[doc("Run refusal-trigger grep regressions (21 triggers + FR-033 from docs/PORT.md)")]
 port-check:
     bash scripts/port-check.sh
 
@@ -281,8 +295,8 @@ watch-test crate="":
 # =============================================================================
 
 [group("ci")]
-[doc("Run the three quality gates (fmt-check + clippy + test)")]
-ci: fmt-check clippy test
+[doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test)")]
+ci: fmt-check inventory-check port-check clippy test
 
 # =============================================================================
 # Maintenance

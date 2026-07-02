@@ -248,7 +248,11 @@ fn paint_decoration_image(
 /// non-uniform border falls back to four filled edge rects; combining
 /// per-side widths with a border radius is unsupported in Flutter as
 /// well (it asserts), so the radius is ignored on that path.
-fn paint_border(
+///
+/// `pub(crate)`: also reused by `crate::table_border::paint_table_border`
+/// for `TableBorder`'s outer edge, so the uniform/non-uniform split is
+/// written once.
+pub(crate) fn paint_border(
     canvas: &mut Canvas,
     rect: Rect<Pixels>,
     rrect: Option<RRect>,

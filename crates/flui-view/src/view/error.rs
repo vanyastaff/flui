@@ -203,8 +203,8 @@ impl std::fmt::Debug for ErrorView {
 }
 
 impl View for ErrorView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(ErrorElement::new(self))
+    fn create_element(&self) -> crate::element::ElementKind {
+        crate::element::ElementKind::Error(Box::new(ErrorElement::new(self)))
     }
 }
 

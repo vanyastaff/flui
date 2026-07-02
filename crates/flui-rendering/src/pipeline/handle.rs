@@ -244,6 +244,24 @@ impl RepaintHandle {
         self.handle
             .request_mark_dirty(self.id, self.depth, DirtyKind::Paint)
     }
+
+    /// Requests a re-layout of the bound node on the next frame and wakes
+    /// the platform. Callable from any thread.
+    ///
+    /// This is the verb an object that drives its own layout out-of-band
+    /// (e.g. an owned `AnimationController` ticking a size animation)
+    /// calls from a `Listenable` notification received during
+    /// [`RenderObject::attach`](crate::traits::RenderObject::attach).
+    ///
+    /// # Errors
+    ///
+    /// [`SendError::ChannelFull`] under backpressure (back off and
+    /// retry), [`SendError::OwnerGone`] once the pipeline owner is
+    /// dropped.
+    pub fn mark_needs_layout(&self) -> Result<(), SendError> {
+        self.handle
+            .request_mark_dirty(self.id, self.depth, DirtyKind::Layout)
+    }
 }
 
 #[cfg(test)]
@@ -268,6 +286,21 @@ mod tests {
         let req = rx.try_recv().expect("receiver should observe the request");
         assert_eq!(req.id, id(1));
         assert_eq!(req.depth, 2);
+        assert_eq!(req.kind, DirtyKind::Layout);
+    }
+
+    #[test]
+    fn repaint_handle_mark_needs_layout_round_trips_as_layout_kind() {
+        let (pipeline_handle, rx) = pair(4);
+        let repaint_handle = RepaintHandle::new(pipeline_handle, id(7), 3);
+
+        repaint_handle
+            .mark_needs_layout()
+            .expect("first send must succeed");
+
+        let req = rx.try_recv().expect("receiver should observe the request");
+        assert_eq!(req.id, id(7));
+        assert_eq!(req.depth, 3);
         assert_eq!(req.kind, DirtyKind::Layout);
     }
 

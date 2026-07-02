@@ -47,7 +47,7 @@ tracing-oslog = "0.3"
 tracing-wasm = "0.2"
 
 [dev-dependencies]
-flui-types = { path = "../flui-types" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
 serde_json = { workspace = true }
 
 [features]
@@ -55,7 +55,7 @@ default = []
 serde = ["dep:serde", "dep:serde_json"]
 # Enable pretty hierarchical desktop logging via `tracing-forest`.
 # Mobile/WASM backends ignore this flag.
-pretty = ["tracing-forest"]
+pretty = ["dep:tracing-forest"]
 
 [package.metadata.docs.rs]
 all-features = true

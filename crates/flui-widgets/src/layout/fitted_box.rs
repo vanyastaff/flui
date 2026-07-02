@@ -91,3 +91,87 @@ impl RenderView for FittedBox {
 }
 
 impl_render_view!(FittedBox);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn create_render_object_defaults_match_flutter() {
+        let render_object = FittedBox::new().create_render_object();
+        assert_eq!(render_object.fit(), BoxFit::Contain);
+        assert_eq!(render_object.alignment(), Alignment::CENTER);
+        assert_eq!(render_object.clip_behavior(), Clip::None);
+    }
+
+    #[test]
+    fn create_render_object_uses_the_given_fit_alignment_and_clip() {
+        let fitted_box = FittedBox::new()
+            .fit(BoxFit::Cover)
+            .alignment(Alignment::TOP_LEFT)
+            .clip(Clip::AntiAlias);
+        let render_object = fitted_box.create_render_object();
+        assert_eq!(render_object.fit(), BoxFit::Cover);
+        assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
+        assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
+    }
+
+    #[test]
+    fn update_render_object_applies_a_changed_fit_alignment_and_clip() {
+        let mut render_object = FittedBox::new().create_render_object();
+        assert_eq!(render_object.fit(), BoxFit::Contain);
+        assert_eq!(render_object.alignment(), Alignment::CENTER);
+        assert_eq!(render_object.clip_behavior(), Clip::None);
+
+        let updated = FittedBox::new()
+            .fit(BoxFit::Fill)
+            .alignment(Alignment::BOTTOM_RIGHT)
+            .clip(Clip::HardEdge);
+        updated.update_render_object(&mut render_object);
+
+        assert_eq!(render_object.fit(), BoxFit::Fill);
+        assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        let empty = FittedBox::new();
+        assert!(!empty.has_children());
+
+        let with_child = FittedBox::new().child(SizedBox::shrink());
+        assert!(with_child.has_children());
+    }
+
+    #[test]
+    fn debug_reports_fit_and_child_presence() {
+        let fitted_box = FittedBox::new().fit(BoxFit::Cover);
+        let debug = format!("{fitted_box:?}");
+        assert!(
+            debug.contains("fit: Cover") && debug.contains("has_child: false"),
+            "Debug output must report fit and child presence, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn visit_child_views_invokes_the_visitor_once_with_a_child_set() {
+        let fitted_box = FittedBox::new().child(SizedBox::shrink());
+        let mut visited = 0;
+        fitted_box.visit_child_views(&mut |_| visited += 1);
+        assert_eq!(
+            visited, 1,
+            "visitor must run exactly once for a single child"
+        );
+    }
+
+    #[test]
+    fn visit_child_views_does_not_invoke_the_visitor_without_a_child() {
+        let fitted_box = FittedBox::new();
+        let mut visited = 0;
+        fitted_box.visit_child_views(&mut |_| visited += 1);
+        assert_eq!(visited, 0, "no child -> visitor must not run");
+    }
+}

@@ -5,8 +5,8 @@
 //! UI body changes across reload.
 
 use std::sync::{
-    atomic::{AtomicI32, Ordering},
     Arc,
+    atomic::{AtomicI32, Ordering},
 };
 
 use flui_hot_reload::WorkerBuildEnv;

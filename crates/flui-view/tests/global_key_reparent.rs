@@ -9,9 +9,9 @@
 //! `ReconcileEventCollector` and asserts the disposition
 //! distribution matches the contract.
 //!
-//! Cross-parent same-frame ACTIVE reparent (ADV-1 case 2) requires
-//! KTD-9's ID-based Variable child storage; deferred to Phase 2.5 /
-//! Phase 3 per §U17 commit message.
+//! Cross-parent same-frame ACTIVE reparent (ADV-1 case 2) is locked here too:
+//! the tree forgets the active element from its old parent, moves it under the
+//! new parent, and emits `from_parent: Some(old_parent)`.
 
 #![cfg(feature = "test-utils")]
 
@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use flui_foundation::ViewKey;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulView, View,
-    ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatefulView, View, ViewExt,
+    ViewState,
     tree::{
         ReconcileEventKind,
         test_utils::{CollectedEvent, ReconcileEventCollector},
@@ -57,10 +57,8 @@ impl ViewState<Spacer> for SpacerState {
 }
 
 impl View for Spacer {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::StatefulElement;
-        use flui_view::element::StatefulBehavior;
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -101,10 +99,8 @@ impl ViewState<KeyedCounter> for CounterState {
 }
 
 impl View for KeyedCounter {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::StatefulElement;
-        use flui_view::element::StatefulBehavior;
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn ViewKey> {
         Some(&self.key)
@@ -127,6 +123,19 @@ fn capture<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
     let subscriber = Registry::default().with(collector.layer());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
     collector.events()
+}
+
+fn direct_children_in_slot_order(
+    tree: &ElementTree,
+    parent: flui_foundation::ElementId,
+) -> Vec<flui_foundation::ElementId> {
+    let mut children: Vec<_> = tree
+        .iter_nodes()
+        .filter(|(_, node)| node.parent() == Some(parent))
+        .map(|(id, node)| (node.slot(), id))
+        .collect();
+    children.sort_by_key(|(slot, _)| *slot);
+    children.into_iter().map(|(_, id)| id).collect()
 }
 
 // ============================================================================
@@ -203,7 +212,7 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
     );
 
     // Re-insert with the same GlobalKey under parent B — pulls from
-    // inactive queue via `try_retake_inactive` AND emits the
+    // inactive queue via `try_retake_global_key` AND emits the
     // `Reparent` event.
     let migrated_id_holder = std::cell::Cell::new(None);
     let reinsert_events = capture(|| {
@@ -236,8 +245,8 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
     let reparent = reparent_events[0];
 
     // Contract: from_parent is None for the inactive-queue path
-    // (ADV-1 case 1). Cross-parent ACTIVE reparent (case 2) lands
-    // with from_parent: Some(...) once KTD-9 ships.
+    // (ADV-1 case 1). Cross-parent ACTIVE reparent (case 2) is tested
+    // separately below and emits from_parent: Some(...).
     assert!(
         reparent.from_parent.is_none(),
         "inactive-queue path emits from_parent=None; got {:?}",
@@ -361,6 +370,107 @@ fn covers_sc003_state_preserved_across_reparent() {
         migrated_count,
         Some(5),
         "counter value must survive inactive-queue reparent migration",
+    );
+
+    flui_view::test_only_clear_global_key_registry();
+}
+
+/// Covers SC-003 / ADV-1 case 2: a new parent can claim a GlobalKey element
+/// that is still ACTIVE under another parent in the same frame. The old parent
+/// forgets the child, the element id/state survive, and the trace event records
+/// `from_parent: Some(old_parent)`.
+#[test]
+#[serial_test::serial(global_key_registry)]
+fn covers_sc003_active_to_active_reparent_emits_from_parent_and_preserves_state() {
+    let (tree, owner) = fresh_tree();
+
+    let parent_a = tree
+        .write()
+        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
+    let parent_b =
+        tree.write()
+            .insert(&Spacer, parent_a, 0, &mut owner.write().element_owner_mut());
+
+    let key = GlobalKey::<CounterState>::new();
+    let counter = KeyedCounter {
+        key: key.clone(),
+        initial: 17,
+    };
+    let key_hash = key.key_hash();
+
+    let original_id = tree.write().insert(
+        &counter,
+        parent_a,
+        1,
+        &mut owner.write().element_owner_mut(),
+    );
+    assert_eq!(
+        key.with_current_state::<i32>(CounterState::count),
+        Some(17),
+        "precondition: keyed state is registered before the active move",
+    );
+
+    let migrated_id = std::cell::Cell::new(None);
+    let events = capture(|| {
+        let id = tree.write().insert(
+            &counter,
+            parent_b,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
+        migrated_id.set(Some(id));
+    });
+    let migrated_id = migrated_id.get().expect("active insert returned an id");
+
+    assert_eq!(
+        migrated_id, original_id,
+        "active GlobalKey move must reuse the original ElementId",
+    );
+    assert_eq!(
+        key.with_current_state::<i32>(CounterState::count),
+        Some(17),
+        "state must survive active-to-active GlobalKey reparent",
+    );
+
+    {
+        let tree = tree.read();
+        assert!(
+            !direct_children_in_slot_order(&tree, parent_a).contains(&original_id),
+            "old active parent must forget the moved GlobalKey child",
+        );
+        assert_eq!(
+            direct_children_in_slot_order(&tree, parent_b),
+            vec![original_id],
+            "new parent must list the moved child at the claimed slot",
+        );
+    }
+
+    let reparent_events: Vec<&CollectedEvent> = events
+        .iter()
+        .filter(|event| event.kind == ReconcileEventKind::Reparent)
+        .collect();
+    assert_eq!(
+        reparent_events.len(),
+        1,
+        "exactly one active Reparent event expected; got {events:?}",
+    );
+    let reparent = reparent_events[0];
+    assert_eq!(reparent.parent, parent_b.as_u64());
+    assert_eq!(reparent.from_parent, Some(parent_a.as_u64()));
+    assert_eq!(reparent.child_key, Some(key_hash));
+
+    let mount_or_unmount = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind,
+                ReconcileEventKind::Mount | ReconcileEventKind::Unmount
+            )
+        })
+        .count();
+    assert_eq!(
+        mount_or_unmount, 0,
+        "active reparent must not mount or unmount the migrated subtree",
     );
 
     flui_view::test_only_clear_global_key_registry();

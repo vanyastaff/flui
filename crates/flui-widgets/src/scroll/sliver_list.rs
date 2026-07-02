@@ -70,3 +70,39 @@ impl fmt::Debug for SliverChildBuilderDelegate {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use flui_view::ViewExt;
+
+    use super::*;
+
+    #[test]
+    fn new_stores_the_item_count_and_invokes_the_builder_by_index() {
+        let delegate = SliverChildBuilderDelegate::new(3, |i| {
+            if i < 3 {
+                Some(crate::SizedBox::new(10.0, 10.0).boxed())
+            } else {
+                None
+            }
+        });
+
+        assert_eq!(delegate.item_count, 3);
+        assert!((delegate.builder)(0).is_some());
+        assert!((delegate.builder)(2).is_some());
+        assert!(
+            (delegate.builder)(3).is_none(),
+            "the builder must return None past the declared item_count",
+        );
+    }
+
+    #[test]
+    fn debug_reports_the_item_count() {
+        let delegate = SliverChildBuilderDelegate::new(7, |_| None);
+        let debug = format!("{delegate:?}");
+        assert!(
+            debug.contains("item_count: 7"),
+            "Debug output must include the item_count, got: {debug}",
+        );
+    }
+}

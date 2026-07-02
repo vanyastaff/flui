@@ -108,8 +108,7 @@ impl WgpuPainter {
         // Cache miss: generate the path, wrap it in Arc, and store a clone
         // of the Arc (reference-count bump, no deep copy). Return the Arc
         // so the caller holds shared ownership.
-        let arc_path =
-            std::sync::Arc::new(super::super::layer_render::generate_superellipse_path(rse));
+        let arc_path = std::sync::Arc::new(crate::superellipse::generate_superellipse_path(rse));
         self.batcher
             .superellipse_cache
             .insert(key, std::sync::Arc::clone(&arc_path));

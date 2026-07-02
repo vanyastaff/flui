@@ -6,10 +6,10 @@ use flui_types::{Point, Size};
 use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::HitTestBehavior,
+    hit_testing::{CursorIcon, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
-    traits::RenderObject,
+    traits::{HitTestOutcome, RenderObject},
 };
 
 // ============================================================================
@@ -420,6 +420,20 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The mouse cursor this box contributes to its hit entry.
+    fn mouse_cursor(&self) -> CursorIcon {
+        CursorIcon::Default
+    }
+
+    /// Mouse-tracker annotation contributed to this box's hit entry.
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        let _ = id;
+        None
+    }
+
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
@@ -434,11 +448,42 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ) {
     }
 
+    /// Whether the semantics assembly walk should skip this box's entire
+    /// child subtree.
+    ///
+    /// Default: `false`. See [`RenderObject::excludes_semantics_subtree`].
+    fn excludes_semantics_subtree(&self) -> bool {
+        false
+    }
+
     /// Marks this render object for reprocessing after hot reload.
     ///
     /// Default: no-op. See
     /// [`RenderObject::reassemble`].
     fn reassemble(&mut self) {}
+
+    // ========================================================================
+    // Tree Lifecycle (ADR-0013)
+    // ========================================================================
+
+    /// Hands this render object a generational, least-privilege self-dirty
+    /// handle when it enters the tree.
+    ///
+    /// Override to subscribe to a `dyn Listenable` this object owns or
+    /// holds (an animation controller driving its own layout, a
+    /// delegate's repaint notifier driving paint) and self-mark on notify
+    /// via the handle. Default: no-op. See
+    /// [`RenderObject::attach`].
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        let _ = handle;
+    }
+
+    /// Tears down whatever [`Self::attach`] subscribed to, before this
+    /// render object leaves the tree.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::detach`].
+    fn detach(&mut self) {}
 
     /// Short human-readable name for diagnostics and error messages.
     ///
@@ -549,7 +594,7 @@ where
                      + Send
                      + Sync
              ),
-    ) -> bool {
+    ) -> HitTestOutcome {
         // The hit-test bridge: wrap the driver's child recursion in
         // the typed, arity-gated BoxHitTestContext and call the user's
         // RenderBox::hit_test. Same shape as the paint bridge — no GAT
@@ -561,7 +606,11 @@ where
             position, hit_child,
         );
         let mut ctx = crate::context::BoxHitTestContext::new(inner, size);
-        T::hit_test(self, &mut ctx)
+        let blocks_below = T::hit_test(self, &mut ctx);
+        HitTestOutcome::new(
+            ctx.self_hit_entry_registered() || blocks_below,
+            blocks_below,
+        )
     }
 
     fn intrinsic_raw(
@@ -569,17 +618,18 @@ where
         dimension: crate::storage::IntrinsicDimension,
         extent: f32,
         child_count: usize,
+        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
         child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
-        child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
         // matching typed compute_* — same shape as the paint/hit
         // bridges, no GAT erasure needed.
         use crate::storage::IntrinsicDimension as Dim;
-        let mut ctx = crate::context::BoxIntrinsicsCtx::new(child_count, child_query, child_flex);
+        let mut ctx =
+            crate::context::BoxIntrinsicsCtx::new(child_count, child_parent_data, child_query);
         match dimension {
             Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, &mut ctx),
             Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, &mut ctx),
@@ -592,16 +642,18 @@ where
         &self,
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         child_count: usize,
-        child_dry: &mut (
+        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
+        child_query: &mut (
                  dyn FnMut(
             usize,
-            crate::protocol::ProtocolConstraints<BoxProtocol>,
-        ) -> crate::protocol::ProtocolGeometry<BoxProtocol>
+            crate::context::DryLayoutChildRequest,
+        ) -> crate::context::DryLayoutChildResponse
                      + Send
                      + Sync
              ),
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
-        let mut ctx = crate::context::BoxDryLayoutCtx::new(child_count, child_dry);
+        let mut ctx =
+            crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query);
         T::compute_dry_layout(self, constraints, &mut ctx)
     }
 
@@ -610,6 +662,7 @@ where
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         baseline: crate::traits::TextBaseline,
         child_count: usize,
+        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
         child_query: &mut (
                  dyn FnMut(
             usize,
@@ -619,7 +672,8 @@ where
                      + Sync
              ),
     ) -> Option<f32> {
-        let mut ctx = crate::context::BoxDryBaselineCtx::new(child_count, child_query);
+        let mut ctx =
+            crate::context::BoxDryBaselineCtx::new(child_count, child_parent_data, child_query);
         T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
     }
 
@@ -662,6 +716,17 @@ where
         <T as RenderBox>::pointer_event_handler(self)
     }
 
+    fn mouse_cursor(&self) -> CursorIcon {
+        <T as RenderBox>::mouse_cursor(self)
+    }
+
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        <T as RenderBox>::mouse_tracker_annotation(self, id)
+    }
+
     fn describe_semantics_configuration(
         &self,
         config: &mut crate::semantics::SemanticsConfiguration,
@@ -669,8 +734,20 @@ where
         <T as RenderBox>::describe_semantics_configuration(self, config)
     }
 
+    fn excludes_semantics_subtree(&self) -> bool {
+        <T as RenderBox>::excludes_semantics_subtree(self)
+    }
+
     fn reassemble(&mut self) {
         <T as RenderBox>::reassemble(self)
+    }
+
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        <T as RenderBox>::attach(self, handle)
+    }
+
+    fn detach(&mut self) {
+        <T as RenderBox>::detach(self)
     }
 
     fn debug_name(&self) -> &'static str {

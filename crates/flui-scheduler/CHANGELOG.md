@@ -23,20 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Ticker::start`, `Ticker::start_default`, and `Ticker::start_typed`**
+  now return a `TickerFuture` for the active run. `Ticker::stop()` completes
+  that future normally; `Ticker::dispose()`, `Drop`, and `reset()` cancel it.
+  A second `start` while active no longer mutates the active run in release
+  builds (debug builds already assert).
 - **`TickerFuture::when_complete_or_cancel`** now uses `event-listener` crate instead of busy-wait thread spawn, eliminating potential resource leaks
 - **`SchedulerBindingState`** is now per-`Scheduler` instance instead of global static, enabling proper test isolation and multiple scheduler support
-- **`TickerProvider::schedule_tick`** now passes `0.0` as elapsed time, matching Flutter semantics where individual tickers track their own start times
 
 ### Fixed
 
+- `TickerFuture` is now wired to the `Ticker` lifecycle instead of existing as
+  an unconnected async helper.
 - Thread spawn leak in `TickerFuture::when_complete_or_cancel` - threads no longer spin in a busy loop
 - Test interference caused by global `BINDING_STATE` - each `Scheduler` now has isolated binding state
-- Confusing elapsed time semantics in `TickerProvider::schedule_tick`
 
 ### Documentation
 
-- Added "Why ScheduledTicker doesn't implement Clone" section explaining design rationale
-- Updated `TickerProvider::schedule_tick` documentation to clarify elapsed time semantics
+- Updated ticker documentation to describe the single canonical `Ticker`
+  lifecycle and removed stale typestate/prelude examples from the public README.
 - Added cross-references to `try_from_u8` in `from_u8` panic documentation
 
 ### Dependencies
@@ -49,11 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Advanced type system features**:
-  - Typestate pattern for tickers (`TypestateTicker<Idle>`, `TypestateTicker<Active>`, etc.)
+- **Type-system features**:
   - Type-safe duration wrappers (`Milliseconds`, `Seconds`, `Microseconds`, `Percentage`)
   - Type-safe IDs with marker traits (`TypedId<M>`, `FrameId`, `TaskId`, `TickerId`)
-  - Typed tasks with compile-time priority checking (`TypedTask<P>`)
   - `FrameDuration` for frame budget calculations
 
 - **Collection traits for `TickerGroup`**:
@@ -72,12 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `From<Seconds>` for `std::time::Duration`
   - `From<f64>` for `Seconds`
   - `From<i64>` for `Microseconds`
-
-- **Extension traits**:
-  - `ToMilliseconds` and `ToSeconds` for duration conversions
-  - `FrameBudgetExt` for additional frame budget operations
-  - `FrameTimingExt` for frame timing utilities
-  - `PriorityExt` for priority operations
 
 - **Optional `serde` feature**:
   - Serialization support for `Milliseconds`, `Seconds`, `Microseconds`, `Percentage`

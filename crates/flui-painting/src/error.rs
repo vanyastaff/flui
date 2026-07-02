@@ -51,6 +51,15 @@ pub enum PaintingError {
         /// Failure reason
         reason: Cow<'static, str>,
     },
+
+    /// Font registration failed (see [`PaintingBinding::register_font`]).
+    ///
+    /// [`PaintingBinding::register_font`]: crate::PaintingBinding::register_font
+    #[error("Font registration failed: {reason}")]
+    RegisterFontFailed {
+        /// Failure reason
+        reason: Cow<'static, str>,
+    },
 }
 
 /// Result type for painting operations
@@ -103,6 +112,16 @@ impl PaintingError {
     #[must_use]
     pub fn paint_image_failed(reason: impl Into<Cow<'static, str>>) -> Self {
         Self::PaintImageFailed {
+            reason: reason.into(),
+        }
+    }
+
+    /// Create a font registration failed error
+    ///
+    /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
+    #[must_use]
+    pub fn register_font_failed(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self::RegisterFontFailed {
             reason: reason.into(),
         }
     }

@@ -2,15 +2,16 @@
 
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    ClipPathLayer, ClipRRectLayer, ClipRectLayer, Layer, LayerTree, OffsetLayer, OpacityLayer,
-    PictureLayer, TransformLayer,
+    BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
+    LayerTree, LeaderLayer, LinkRegistry, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer,
+    TransformLayer,
 };
 use flui_painting::DisplayList;
 use flui_types::Offset;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    context::{FragmentClip, FragmentOp, FragmentRecorder},
+    context::{FragmentOp, FragmentRecorder, FragmentScope},
     pipeline::{
         phase::{Idle, PaintPhase, Semantics},
         scheduler::PhaseKind,
@@ -82,9 +83,47 @@ impl PipelineOwner<PaintPhase> {
             let mut composer = FragmentComposer::new(self.device_pixel_ratio);
             match self.paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids) {
                 Ok(()) => {
-                    let layer_tree = composer.finish();
+                    let (layer_tree, link_registry, follower_correlations) = composer.finish();
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
+
+                    // ADR-0015 D3: resolve each paint-phase-correlated
+                    // follower's composite-resolved offset against the SAME
+                    // fully-built layer_tree/link_registry the GPU path
+                    // (flui-engine's `render_layer_recursive`) resolves
+                    // against, reusing the identical `resolve_follower_offset`
+                    // — one algorithm, two consumers (pixels + hit-test), not
+                    // two copies of the logic. Runs before these values are
+                    // handed to `last_layer_tree`/`last_link_registry` (and
+                    // eventually taken by the binding via
+                    // `take_link_registry()`).
+                    let mut follower_offsets = FxHashMap::default();
+                    let mut hidden_follower_ids = FxHashSet::default();
+                    for (render_id, follower_layer_id) in follower_correlations {
+                        let Some(follower) = layer_tree
+                            .get_layer(follower_layer_id)
+                            .and_then(Layer::as_follower)
+                        else {
+                            continue;
+                        };
+                        match flui_layer::resolve_follower_offset(
+                            &layer_tree,
+                            &link_registry,
+                            follower_layer_id,
+                            follower,
+                        ) {
+                            Some(offset) => {
+                                follower_offsets.insert(render_id, offset);
+                            }
+                            None => {
+                                hidden_follower_ids.insert(render_id);
+                            }
+                        }
+                    }
+                    self.last_follower_offsets = follower_offsets;
+                    self.last_hidden_follower_ids = hidden_follower_ids;
+
                     self.last_layer_tree = Some(layer_tree);
+                    self.last_link_registry = Some(link_registry);
                 }
                 Err(e) => {
                     // Restore the debug invariant before propagating so
@@ -253,27 +292,37 @@ impl PipelineOwner<PaintPhase> {
             // The node reports its transform in LOCAL coordinates, but
             // every run inside this layer space is recorded with the
             // accumulated `origin` baked into its canvas transform.
-            // Conjugate by the origin (Flutter object.dart
-            // `pushTransform`: T(offset)·M·T(−offset)) so the matrix
-            // pivots around the node's own origin instead of the layer
-            // origin — a raw local matrix would translate/rotate the
-            // whole accumulated space.
-            let effective = if origin == Offset::ZERO {
-                matrix
-            } else {
-                let (dx, dy) = (origin.dx.get(), origin.dy.get());
-                flui_types::Matrix4::translation(dx, dy, 0.0)
-                    * matrix
-                    * flui_types::Matrix4::translation(-dx, -dy, 0.0)
-            };
-            composer.push_layer(Layer::Transform(TransformLayer::new(effective)));
+            // Conjugate by the origin so the matrix pivots around the
+            // node's own origin instead of the layer origin — a raw
+            // local matrix would translate/rotate the whole accumulated
+            // space. Shared with the per-child `PushTransform` fragment
+            // op below (RenderFlow and friends): same math, same reason.
+            composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
+                matrix, origin,
+            ))));
             effect_layers += 1;
         }
 
         for op in fragment.ops {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
-                FragmentOp::Push(clip) => composer.push_layer(clip_layer(*clip, origin)),
+                FragmentOp::Push(scope) => {
+                    // ADR-0015 D2: capture the RenderId -> LayerId
+                    // correlation as a near-free byproduct of pushing a
+                    // Layer::Follower — `node_id` is already in scope from
+                    // this fragment-op replay loop, and `push_layer` hands
+                    // back the freshly-minted LayerId.
+                    let is_follower = matches!(*scope, FragmentScope::Follower { .. });
+                    let layer_id = composer.push_layer(scope_layer(*scope, origin));
+                    if is_follower {
+                        composer.record_follower_correlation(node_id, layer_id);
+                    }
+                }
+                FragmentOp::PushTransform(matrix) => {
+                    composer.push_layer(Layer::Transform(TransformLayer::new(conjugate(
+                        *matrix, origin,
+                    ))));
+                }
                 FragmentOp::Pop => composer.pop_layer(),
                 FragmentOp::Child {
                     index,
@@ -345,6 +394,20 @@ struct FragmentComposer {
     tree: LayerTree,
     stack: Vec<LayerId>,
     open: DisplayList,
+    /// Leader/follower link relationships, populated as a byproduct of
+    /// [`Self::push_layer`] pushing a `Layer::Leader`/`Layer::Follower`.
+    /// Handed to `Scene::with_links` by the binding layer so `flui-engine`
+    /// can resolve follower positions at render time against this same
+    /// frame's fully-built `tree` (design research plan §4.3).
+    link_registry: LinkRegistry,
+    /// `(RenderId, LayerId)` correlation for each `Layer::Follower` pushed
+    /// this paint pass (ADR-0015 D2) — the general `RenderId -> LayerId`
+    /// primitive independently wanted by the snapshot/harness subtree-scoping
+    /// TODOs (`testing/snapshot.rs`, `testing/harness.rs`), shipped narrowed
+    /// to followers for now. `run_paint` resolves each entry post-paint via
+    /// `flui_layer::resolve_follower_offset` into `PipelineOwner
+    /// ::last_follower_offsets` / `::last_hidden_follower_ids`.
+    follower_correlations: Vec<(RenderId, LayerId)>,
 }
 
 impl FragmentComposer {
@@ -369,6 +432,8 @@ impl FragmentComposer {
             tree,
             stack: vec![root],
             open: DisplayList::new(),
+            link_registry: LinkRegistry::new(),
+            follower_correlations: Vec::new(),
         }
     }
 
@@ -392,15 +457,42 @@ impl FragmentComposer {
         self.tree.add_child(parent, layer_id);
     }
 
-    fn push_layer(&mut self, layer: Layer) {
+    /// Inserts `layer` under the current stack top, returning its freshly
+    /// minted `LayerId` — the caller (`paint_subtree_impl`'s fragment-op
+    /// replay loop) uses this to record the `RenderId -> LayerId`
+    /// correlation for `Layer::Follower` pushes (ADR-0015 D2).
+    fn push_layer(&mut self, layer: Layer) -> LayerId {
         self.seal_picture();
+        // Extract the link-registry-relevant fields BEFORE `layer` moves
+        // into the tree — `Leader`/`Follower` are `Copy`-field-bearing, so
+        // this is a cheap read, not a clone of the layer itself.
+        let leader_registration = layer
+            .as_leader()
+            .map(|leader| (leader.link(), leader.get_offset(), leader.size()));
+        let follower_link = layer.as_follower().map(FollowerLayer::link);
+
         let id = self.tree.insert(layer);
+        if let Some((link, offset, size)) = leader_registration {
+            self.link_registry.register_leader(link, id, offset, size);
+        }
+        if let Some(link) = follower_link {
+            self.link_registry.register_follower(id, link);
+        }
+
         let parent = *self
             .stack
             .last()
             .expect("composer stack always holds the root layer (popping it is rejected)");
         self.tree.add_child(parent, id);
         self.stack.push(id);
+        id
+    }
+
+    /// Records a `(RenderId, LayerId)` correlation for a pushed
+    /// `Layer::Follower` node (ADR-0015 D2).
+    fn record_follower_correlation(&mut self, render_id: RenderId, follower_layer_id: LayerId) {
+        self.follower_correlations
+            .push((render_id, follower_layer_id));
     }
 
     fn pop_layer(&mut self) {
@@ -416,7 +508,7 @@ impl FragmentComposer {
         }
     }
 
-    fn finish(mut self) -> LayerTree {
+    fn finish(mut self) -> (LayerTree, LinkRegistry, Vec<(RenderId, LayerId)>) {
         self.seal_picture();
         debug_assert_eq!(
             self.stack.len(),
@@ -424,34 +516,57 @@ impl FragmentComposer {
             "composer finished with unbalanced layer stack — every \
              push_layer in the replay loop must have a matching pop_layer",
         );
-        self.tree
+        (self.tree, self.link_registry, self.follower_correlations)
     }
 }
 
-/// Maps a recorded clip scope onto its `flui-layer` clip layer.
+/// Conjugates `matrix` so it pivots around this layer's local `origin`
+/// rather than the layer tree's own (0, 0).
 ///
-/// Clip shapes are recorded in the node's LOCAL coordinates, while the
-/// runs they bracket carry the accumulated `origin` baked into their
-/// canvas transforms — so the shape is shifted by `origin` here
-/// (Flutter `pushClipRect`: `clipRect.shift(offset)`), or a clip away
-/// from the parent origin would cut at the layer's (0,0) instead of
-/// the node's position.
+/// Both callers report a transform in LOCAL coordinates while every run
+/// they bracket carries the accumulated `origin` baked into its canvas
+/// transform: the per-node [`RenderObject::paint_transform`](crate::traits::RenderObject::paint_transform)
+/// hook (one transform for the whole node, applied here) and the
+/// per-child [`FragmentOp::PushTransform`] op (`RenderFlow` and any
+/// other Variable-arity node giving each child its own paint-time
+/// transform). Flutter `PaintingContext.pushTransform`:
+/// `T(offset)·M·T(−offset)`.
+fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4 {
+    if origin == Offset::ZERO {
+        matrix
+    } else {
+        let (dx, dy) = (origin.dx.get(), origin.dy.get());
+        flui_types::Matrix4::translation(dx, dy, 0.0)
+            * matrix
+            * flui_types::Matrix4::translation(-dx, -dy, 0.0)
+    }
+}
+
+/// Maps a recorded effect-layer scope onto its `flui-layer` layer.
 ///
-/// Always a real clip layer today; lowering non-composited clips back
-/// into canvas clips inside the merged picture is a composer-side
-/// optimization gated on the `needs_compositing` bits — correctness is
-/// identical either way, so the recording API does not expose the
-/// choice.
-fn clip_layer(clip: FragmentClip, origin: Offset) -> Layer {
-    match clip {
-        FragmentClip::Rect { rect, behavior } => {
+/// Scope shapes/bounds are recorded in the node's LOCAL coordinates, while
+/// the runs they bracket carry the accumulated `origin` baked into their
+/// canvas transforms — so every variant is shifted by `origin` here
+/// (Flutter `pushClipRect`: `clipRect.shift(offset)`; `RenderShaderMask`'s
+/// `maskRect = offset & size`; `RenderBackdropFilter`'s backdrop bounds
+/// follow the same `offset & size` convention), or a scope away from the
+/// parent origin would apply at the layer's (0,0) instead of the node's
+/// position.
+///
+/// Always a real layer today; lowering non-composited clips back into
+/// canvas clips inside the merged picture is a composer-side optimization
+/// gated on the `needs_compositing` bits — correctness is identical
+/// either way, so the recording API does not expose the choice.
+fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
+    match scope {
+        FragmentScope::Rect { rect, behavior } => {
             Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
         }
-        FragmentClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
+        FragmentScope::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
             rrect.translate_offset(origin),
             behavior,
         )),
-        FragmentClip::Path { path, behavior } => {
+        FragmentScope::Path { path, behavior } => {
             let path = if origin == Offset::ZERO {
                 *path
             } else {
@@ -459,5 +574,328 @@ fn clip_layer(clip: FragmentClip, origin: Offset) -> Layer {
             };
             Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
         }
+        FragmentScope::ShaderMask {
+            shader,
+            blend_mode,
+            bounds,
+        } => Layer::ShaderMask(ShaderMaskLayer::new(
+            shader,
+            blend_mode,
+            bounds.translate_offset(origin),
+        )),
+        FragmentScope::BackdropFilter {
+            filter,
+            blend_mode,
+            bounds,
+        } => Layer::BackdropFilter(BackdropFilterLayer::new(
+            filter,
+            blend_mode,
+            bounds.translate_offset(origin),
+        )),
+        // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
+        // this node's own accumulated position, exactly what `origin`
+        // already is at this call site (`:270`). Unlike the clip/mask
+        // variants above, `size` is NOT shifted by `origin` — it is a
+        // pure dimension, not a position.
+        FragmentScope::Leader { link, size } => {
+            Layer::Leader(LeaderLayer::with_offset(link, size, origin))
+        }
+        // `Layer::Follower` carries no resolved position at all —
+        // matching oracle, where a `FollowerLayer`'s `linkedOffset`/
+        // `unlinkedOffset` are inputs to a LATER resolution pass, never
+        // stored as the final on-screen transform. `target_offset` is
+        // recorded as-authored (not origin-shifted): resolving it against
+        // the leader's position is deliberately deferred past this pass
+        // (design research plan §4/§8 — a `flui-engine`/`flui-layer`
+        // follow-up, not performed here).
+        FragmentScope::Follower {
+            link,
+            size,
+            target_offset,
+            show_when_unlinked,
+            leader_anchor,
+            follower_anchor,
+        } => Layer::Follower(
+            FollowerLayer::new(link)
+                .with_size(size)
+                .with_target_offset(target_offset)
+                .with_show_when_unlinked(show_when_unlinked)
+                .with_leader_anchor(leader_anchor)
+                .with_follower_anchor(follower_anchor),
+        ),
+    }
+}
+
+// ============================================================================
+// Tests (ADR-0015 Slices A/B — the correlation byproduct + the resolution)
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use flui_layer::LayerLink;
+    use flui_tree::{Exact, Leaf};
+    use flui_types::{Size, geometry::px, painting::Alignment};
+
+    use super::*;
+    use crate::{
+        constraints::BoxConstraints,
+        context::{BoxLayoutContext, PaintCx},
+        parent_data::BoxParentData,
+        protocol::BoxProtocol,
+        traits::{RenderBox, RenderObject},
+    };
+
+    /// Minimal leaf that publishes a `Layer::Leader` — a local stand-in
+    /// for `flui_objects::RenderLeaderLayer` (this crate's own tests must
+    /// not depend on flui_objects). Always a repaint boundary so
+    /// `paint.rs` wraps it in its own `Layer::Offset`, letting tests place
+    /// two of these under DIFFERENT ancestor offsets — the
+    /// cross-repaint-boundary case ADR-0015 targets.
+    #[derive(Debug)]
+    struct LeaderStub {
+        link: LayerLink,
+        size: Size,
+    }
+
+    impl flui_foundation::Diagnosticable for LeaderStub {}
+
+    impl RenderBox for LeaderStub {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(self.size)
+        }
+
+        fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+            let size = ctx.size();
+            ctx.with_leader(self.link, size, |_ctx| {});
+        }
+
+        fn is_repaint_boundary(&self) -> bool {
+            true
+        }
+    }
+
+    /// Minimal leaf that publishes a `Layer::Follower` — the
+    /// `RenderFollowerLayer` analogue of [`LeaderStub`].
+    #[derive(Debug)]
+    struct FollowerStub {
+        link: LayerLink,
+        size: Size,
+        show_when_unlinked: bool,
+    }
+
+    impl flui_foundation::Diagnosticable for FollowerStub {}
+
+    impl RenderBox for FollowerStub {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(self.size)
+        }
+
+        fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+            let size = ctx.size();
+            ctx.with_follower(
+                self.link,
+                size,
+                Offset::ZERO,
+                self.show_when_unlinked,
+                Alignment::TOP_LEFT,
+                Alignment::TOP_LEFT,
+                |_ctx| {},
+            );
+        }
+
+        fn is_repaint_boundary(&self) -> bool {
+            true
+        }
+    }
+
+    /// Two-slot container that positions each child at an explicit
+    /// offset — the minimal stand-in for a `Stack`/`Flex` parent needed
+    /// to place a leader and a follower under two DIFFERENT
+    /// `Layer::Offset` ancestors without depending on flui_objects.
+    #[derive(Debug, Default)]
+    struct TwoSlotStub {
+        offsets: [Offset; 2],
+    }
+
+    impl flui_foundation::Diagnosticable for TwoSlotStub {}
+
+    impl RenderBox for TwoSlotStub {
+        type Arity = Exact<2>;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Exact<2>, BoxParentData>,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            for i in 0..2 {
+                ctx.layout_child(i, constraints);
+                ctx.position_child(i, self.offsets[i]);
+            }
+            constraints.smallest()
+        }
+
+        fn paint(&self, ctx: &mut PaintCx<'_, Exact<2>>) {
+            ctx.paint_children_in_order();
+        }
+    }
+
+    /// Slice A: painting a tree containing a single follower node yields
+    /// exactly one `(RenderId, LayerId)` correlation, whose `LayerId`
+    /// names the pushed `Layer::Follower` node.
+    #[test]
+    fn fragment_composer_records_one_follower_correlation_for_a_follower_node() {
+        let mut owner = PipelineOwner::new();
+        let link = LayerLink::new();
+        let root_id = owner.insert(Box::new(FollowerStub {
+            link,
+            size: Size::new(px(20.0), px(20.0)),
+            show_when_unlinked: true,
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(20.0), px(20.0)))));
+
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("layout should succeed");
+        let owner = owner.into_compositing();
+        let owner = owner.into_paint();
+
+        let mut composer = FragmentComposer::new(1.0);
+        let dirty_ids = FxHashSet::default();
+        owner
+            .paint_subtree(&mut composer, root_id, Offset::ZERO, &dirty_ids)
+            .expect("paint_subtree should succeed");
+        let (layer_tree, _link_registry, follower_correlations) = composer.finish();
+
+        assert_eq!(
+            follower_correlations.len(),
+            1,
+            "exactly one Layer::Follower push must yield exactly one \
+             correlation entry, got {follower_correlations:?}"
+        );
+        let (correlated_render_id, correlated_layer_id) = follower_correlations[0];
+        assert_eq!(
+            correlated_render_id, root_id,
+            "the correlation must name the follower's own RenderId"
+        );
+        assert!(
+            layer_tree
+                .get_layer(correlated_layer_id)
+                .is_some_and(Layer::is_follower),
+            "the correlated LayerId must point at the pushed Layer::Follower node"
+        );
+    }
+
+    /// Slice B: a leader+follower pair under two DIFFERENT `Layer::Offset`
+    /// ancestors (the cross-repaint-boundary case) populates
+    /// `last_follower_offsets` with the correctly-resolved displaced
+    /// offset — the same value `flui_layer::resolve_follower_offset`
+    /// itself returns for this shape (see
+    /// `resolve_follower_offset_linked_across_offset_boundaries` in
+    /// `flui-layer`).
+    #[test]
+    fn run_paint_resolves_follower_offset_across_different_offset_ancestors() {
+        let mut owner = PipelineOwner::new();
+        let link = LayerLink::new();
+
+        let root_id = owner.insert(Box::new(TwoSlotStub {
+            offsets: [Offset::ZERO, Offset::new(px(0.0), px(90.0))],
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(root_id));
+        owner.set_root_constraints(Some(BoxConstraints::new(
+            px(0.0),
+            px(300.0),
+            px(0.0),
+            px(300.0),
+        )));
+
+        owner
+            .insert_child_render_object(
+                root_id,
+                Box::new(LeaderStub {
+                    link,
+                    size: Size::new(px(20.0), px(20.0)),
+                }),
+            )
+            .expect("leader child insert");
+        let follower_id = owner
+            .insert_child_render_object(
+                root_id,
+                Box::new(FollowerStub {
+                    link,
+                    size: Size::new(px(10.0), px(10.0)),
+                    show_when_unlinked: true,
+                }),
+            )
+            .expect("follower child insert");
+
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("layout should succeed");
+        let owner = owner.into_compositing();
+        let mut owner = owner.into_paint();
+        owner.run_paint().expect("paint should succeed");
+
+        let resolved = owner
+            .last_follower_offsets
+            .get(&follower_id)
+            .copied()
+            .expect("a linked, visible follower must resolve to an entry");
+
+        // Leader chain offset (slot 0 = ZERO) + leader's own local offset
+        // (ZERO — it registers at the origin its OWN boundary rebases to)
+        // minus the follower chain offset (slot 1 = (0, 90)); default
+        // TOP_LEFT/TOP_LEFT anchors and zero target_offset contribute
+        // nothing further.
+        assert_eq!(
+            resolved,
+            Offset::new(px(0.0), px(-90.0)),
+            "resolved offset must sum the ancestor chains across the two \
+             DIFFERENT Layer::Offset boundaries, not assume a shared parent"
+        );
+        assert!(
+            owner.last_hidden_follower_ids.is_empty(),
+            "a visible, resolved follower must not also be marked hidden"
+        );
+    }
+
+    /// Slice B: an unlinked follower with `show_when_unlinked == false`
+    /// produces no `last_follower_offsets` entry, and is recorded in
+    /// `last_hidden_follower_ids` so the hit-test walk (Slice C) can skip
+    /// its subtree instead of silently falling through to normal
+    /// traversal.
+    #[test]
+    fn run_paint_marks_unlinked_follower_hidden_when_show_when_unlinked_is_false() {
+        let mut owner = PipelineOwner::new();
+        let link = LayerLink::new(); // No leader is ever registered under this link.
+        let follower_id = owner.insert(Box::new(FollowerStub {
+            link,
+            size: Size::new(px(10.0), px(10.0)),
+            show_when_unlinked: false,
+        }) as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(follower_id));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(10.0), px(10.0)))));
+
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("layout should succeed");
+        let owner = owner.into_compositing();
+        let mut owner = owner.into_paint();
+        owner.run_paint().expect("paint should succeed");
+
+        assert!(
+            !owner.last_follower_offsets.contains_key(&follower_id),
+            "a hidden follower must not get a resolved-offset entry"
+        );
+        assert!(
+            owner.last_hidden_follower_ids.contains(&follower_id),
+            "a hidden follower must be recorded so the hit-test walk can \
+             skip its subtree rather than falling through to normal \
+             traversal"
+        );
     }
 }

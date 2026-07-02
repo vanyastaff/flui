@@ -13,9 +13,9 @@ use crate::{
     action::{SemanticsAction, SemanticsActionHandler},
     flags::{SemanticsFlag, SemanticsFlags},
     properties::{
-        concat_attributed_string, AttributedString, CustomSemanticsAction, SemanticsHintOverrides,
-        SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
-        UNBLOCKED_USER_ACTIONS_MASK,
+        AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
+        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
+        concat_attributed_string,
     },
     role::SemanticsRole,
 };
@@ -23,6 +23,13 @@ use crate::{
 // ============================================================================
 // SemanticsConfiguration
 // ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum DescendantSemanticsMerge {
+    #[default]
+    SeparateNodes,
+    MergeIntoThisNode,
+}
 
 /// Configuration describing the semantic properties of a render object.
 ///
@@ -56,6 +63,17 @@ pub struct SemanticsConfiguration {
 
     /// Whether this is explicitly tagged as a semantic boundary.
     explicit_children_are_traversal_groups: bool,
+
+    /// How descendant semantics boundary nodes are handled under this
+    /// configuration.
+    ///
+    /// Set alongside `is_semantics_boundary = true` by `RenderMergeSemantics`
+    /// (`MergeSemantics` widget) — Flutter's
+    /// `isMergingSemanticsOfDescendants`. The assembly walk
+    /// (`flui-rendering`'s `run_semantics`, ADR-0014) honors this by
+    /// suppressing every descendant's own boundary decision for the rest of
+    /// that subtree, absorbing all descendant configs into this one node.
+    descendant_semantics_merge: DescendantSemanticsMerge,
 
     /// Flags describing boolean properties.
     flags: SemanticsFlags,
@@ -185,6 +203,23 @@ impl SemanticsConfiguration {
         self.explicit_children_are_traversal_groups = value;
     }
 
+    /// Returns whether the entire descendant subtree merges into this
+    /// node's semantics node.
+    #[inline]
+    pub fn is_merging_semantics_of_descendants(&self) -> bool {
+        self.descendant_semantics_merge == DescendantSemanticsMerge::MergeIntoThisNode
+    }
+
+    /// Sets whether the entire descendant subtree merges into this node's
+    /// semantics node (`RenderMergeSemantics` parity — see the field doc).
+    pub fn set_merging_semantics_of_descendants(&mut self, value: bool) {
+        self.descendant_semantics_merge = if value {
+            DescendantSemanticsMerge::MergeIntoThisNode
+        } else {
+            DescendantSemanticsMerge::SeparateNodes
+        };
+    }
+
     // ========================================================================
     // Flags
     // ========================================================================
@@ -289,6 +324,17 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn is_read_only(&self) -> bool {
         self.has_flag(SemanticsFlag::IsReadOnly)
+    }
+
+    /// Sets whether this node belongs to a mutually-exclusive group.
+    pub fn set_in_mutually_exclusive_group(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::IsInMutuallyExclusiveGroup, value);
+    }
+
+    /// Returns whether this node belongs to a mutually-exclusive group.
+    #[inline]
+    pub fn is_in_mutually_exclusive_group(&self) -> bool {
+        self.has_flag(SemanticsFlag::IsInMutuallyExclusiveGroup)
     }
 
     /// Sets whether this is focusable.
@@ -455,6 +501,7 @@ impl SemanticsConfiguration {
 
     /// Sets whether this is expanded.
     pub fn set_expanded(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::HasExpandedState, true);
         self.set_flag(SemanticsFlag::IsExpanded, value);
     }
 
@@ -970,8 +1017,17 @@ impl SemanticsConfiguration {
         if let Some(checked) = properties.checked {
             config.set_checked(Some(checked));
         }
+        if let Some(mixed) = properties.mixed {
+            config.set_mixed(mixed);
+        }
+        if let Some(toggled) = properties.toggled {
+            config.set_toggled(Some(toggled));
+        }
         if let Some(selected) = properties.selected {
             config.set_selected(selected);
+        }
+        if let Some(expanded) = properties.expanded {
+            config.set_expanded(expanded);
         }
         if let Some(button) = properties.button {
             config.set_button(button);
@@ -991,11 +1047,17 @@ impl SemanticsConfiguration {
         if let Some(slider) = properties.slider {
             config.set_slider(slider);
         }
+        if let Some(read_only) = properties.read_only {
+            config.set_read_only(read_only);
+        }
         if let Some(focusable) = properties.focusable {
             config.set_focusable(focusable);
         }
         if let Some(focused) = properties.focused {
             config.set_focused(focused);
+        }
+        if let Some(in_group) = properties.in_mutually_exclusive_group {
+            config.set_in_mutually_exclusive_group(in_group);
         }
         if let Some(hidden) = properties.hidden {
             config.set_hidden(hidden);
@@ -1006,6 +1068,12 @@ impl SemanticsConfiguration {
         if let Some(multiline) = properties.multiline {
             config.set_multiline(multiline);
         }
+        if let Some(scopes_route) = properties.scopes_route {
+            config.set_scopes_route(scopes_route);
+        }
+        if let Some(names_route) = properties.names_route {
+            config.set_names_route(names_route);
+        }
         if let Some(live_region) = properties.live_region {
             config.set_live_region(live_region);
         }
@@ -1015,6 +1083,12 @@ impl SemanticsConfiguration {
         }
         if let Some(ref value) = properties.value {
             config.set_value(value.clone());
+        }
+        if let Some(ref increased_value) = properties.increased_value {
+            config.set_increased_value(increased_value.clone());
+        }
+        if let Some(ref decreased_value) = properties.decreased_value {
+            config.set_decreased_value(decreased_value.clone());
         }
         if let Some(ref hint) = properties.hint {
             config.set_hint(hint.clone());
@@ -1045,6 +1119,10 @@ impl std::fmt::Debug for SemanticsConfiguration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsConfiguration")
             .field("is_semantics_boundary", &self.is_semantics_boundary)
+            .field(
+                "is_merging_semantics_of_descendants",
+                &self.is_merging_semantics_of_descendants(),
+            )
             .field("flags", &self.flags)
             .field("label", &self.label)
             .field("value", &self.value)
@@ -1063,6 +1141,26 @@ mod tests {
         let config = SemanticsConfiguration::new();
         assert!(!config.is_semantics_boundary());
         assert!(!config.has_content());
+        assert!(!config.is_merging_semantics_of_descendants());
+    }
+
+    /// ADR-0014 Slice B: `is_merging_semantics_of_descendants` is an
+    /// independent additive flag, mirroring the existing
+    /// `is_semantics_boundary` boolean-config convention (plain getter/setter
+    /// pair, not routed through the `SemanticsFlags` bitset).
+    #[test]
+    fn merging_semantics_of_descendants_getter_setter() {
+        let mut config = SemanticsConfiguration::new();
+        assert!(!config.is_merging_semantics_of_descendants());
+
+        config.set_merging_semantics_of_descendants(true);
+        assert!(config.is_merging_semantics_of_descendants());
+        // Independent of the boundary flag — `RenderMergeSemantics` sets
+        // both explicitly; this config field alone does not imply it.
+        assert!(!config.is_semantics_boundary());
+
+        config.set_merging_semantics_of_descendants(false);
+        assert!(!config.is_merging_semantics_of_descendants());
     }
 
     #[test]

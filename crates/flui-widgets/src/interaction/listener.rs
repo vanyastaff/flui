@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use flui_interaction::{PointerPanZoomEvent, from_w3c_event};
 use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{
     EventPropagation, HitTestBehavior, PointerEvent, PointerEventHandler,
@@ -13,6 +14,9 @@ use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 /// A pointer-event callback: receives the (locally-transformed) [`PointerEvent`]
 /// that landed on the [`Listener`].
 type PointerCallback = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
+
+/// A trackpad pan/zoom callback routed from a [`PointerEvent::Gesture`] update.
+type PointerPanZoomCallback = Arc<dyn Fn(&PointerPanZoomEvent) + Send + Sync>;
 
 /// Calls callbacks in response to raw pointer events on its child.
 ///
@@ -27,7 +31,10 @@ pub struct Listener {
     on_pointer_down: Option<PointerCallback>,
     on_pointer_up: Option<PointerCallback>,
     on_pointer_move: Option<PointerCallback>,
+    on_pointer_hover: Option<PointerCallback>,
     on_pointer_cancel: Option<PointerCallback>,
+    on_pointer_signal: Option<PointerCallback>,
+    on_pointer_pan_zoom_update: Option<PointerPanZoomCallback>,
     behavior: HitTestBehavior,
     child: Child,
 }
@@ -38,7 +45,10 @@ impl Default for Listener {
             on_pointer_down: None,
             on_pointer_up: None,
             on_pointer_move: None,
+            on_pointer_hover: None,
             on_pointer_cancel: None,
+            on_pointer_signal: None,
+            on_pointer_pan_zoom_update: None,
             // Flutter's `Listener` default.
             behavior: HitTestBehavior::DeferToChild,
             child: Child::empty(),
@@ -52,7 +62,13 @@ impl std::fmt::Debug for Listener {
             .field("on_pointer_down", &self.on_pointer_down.is_some())
             .field("on_pointer_up", &self.on_pointer_up.is_some())
             .field("on_pointer_move", &self.on_pointer_move.is_some())
+            .field("on_pointer_hover", &self.on_pointer_hover.is_some())
             .field("on_pointer_cancel", &self.on_pointer_cancel.is_some())
+            .field("on_pointer_signal", &self.on_pointer_signal.is_some())
+            .field(
+                "on_pointer_pan_zoom_update",
+                &self.on_pointer_pan_zoom_update.is_some(),
+            )
             .field("behavior", &self.behavior)
             .finish_non_exhaustive()
     }
@@ -103,6 +119,19 @@ impl Listener {
         self
     }
 
+    /// Called when a pointer moves without active buttons over the listener.
+    ///
+    /// FLUI models Flutter's distinct `PointerHoverEvent` as
+    /// [`PointerEvent::Move`] whose current button mask is empty.
+    #[must_use]
+    pub fn on_pointer_hover(
+        mut self,
+        callback: impl Fn(&PointerEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_pointer_hover = Some(Arc::new(callback));
+        self
+    }
+
     /// Called when contact is interrupted (the platform cancels the pointer, or
     /// it leaves the surface) — a gesture must abandon any in-flight tracking.
     #[must_use]
@@ -111,6 +140,33 @@ impl Listener {
         callback: impl Fn(&PointerEvent) + Send + Sync + 'static,
     ) -> Self {
         self.on_pointer_cancel = Some(Arc::new(callback));
+        self
+    }
+
+    /// Called when a pointer signal occurs over the listener.
+    ///
+    /// FLUI currently models pointer signals as [`PointerEvent::Scroll`].
+    #[must_use]
+    pub fn on_pointer_signal(
+        mut self,
+        callback: impl Fn(&PointerEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_pointer_signal = Some(Arc::new(callback));
+        self
+    }
+
+    /// Called when a trackpad pan/zoom update reaches the listener.
+    ///
+    /// Current FLUI routing converts upstream [`PointerEvent::Gesture`] into a
+    /// Flutter-shaped [`PointerPanZoomEvent::Update`]. Start/end callbacks are
+    /// intentionally not exposed until the platform layer can provide reliable
+    /// gesture-boundary events.
+    #[must_use]
+    pub fn on_pointer_pan_zoom_update(
+        mut self,
+        callback: impl Fn(&PointerPanZoomEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_pointer_pan_zoom_update = Some(Arc::new(callback));
         self
     }
 
@@ -128,7 +184,10 @@ impl Listener {
         let on_down = self.on_pointer_down.clone();
         let on_up = self.on_pointer_up.clone();
         let on_move = self.on_pointer_move.clone();
+        let on_hover = self.on_pointer_hover.clone();
         let on_cancel = self.on_pointer_cancel.clone();
+        let on_signal = self.on_pointer_signal.clone();
+        let on_pan_zoom_update = self.on_pointer_pan_zoom_update.clone();
         Arc::new(move |event: &PointerEvent| {
             match event {
                 PointerEvent::Down(_) => {
@@ -141,14 +200,31 @@ impl Listener {
                         callback(event);
                     }
                 }
-                PointerEvent::Move(_) => {
-                    if let Some(callback) = &on_move {
+                PointerEvent::Move(update) => {
+                    if update.current.buttons.is_empty() {
+                        if let Some(callback) = &on_hover {
+                            callback(event);
+                        }
+                    } else if let Some(callback) = &on_move {
                         callback(event);
                     }
                 }
                 PointerEvent::Cancel(_) => {
                     if let Some(callback) = &on_cancel {
                         callback(event);
+                    }
+                }
+                PointerEvent::Scroll(_) => {
+                    if let Some(callback) = &on_signal {
+                        callback(event);
+                    }
+                }
+                PointerEvent::Gesture(_) => {
+                    if let Some(callback) = &on_pan_zoom_update
+                        && let Some(pan_zoom) = from_w3c_event(event)
+                        && pan_zoom.is_update()
+                    {
+                        callback(&pan_zoom);
                     }
                 }
                 _ => {}

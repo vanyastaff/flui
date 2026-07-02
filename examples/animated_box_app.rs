@@ -32,7 +32,7 @@ use flui_foundation::{HasInstance, Listenable, RenderId};
 use flui_objects::RenderColoredBox;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Color;
-use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Leaf render view producing the box the animation will drive.
 #[derive(Clone)]
@@ -65,11 +65,8 @@ impl StatelessView for App {
 }
 
 impl View for App {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

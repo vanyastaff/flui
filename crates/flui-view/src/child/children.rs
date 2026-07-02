@@ -151,9 +151,9 @@ impl<V: View> Extend<V> for Children {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StatelessView;
     use crate::view::IntoView;
     use crate::view::ViewExt;
-    use crate::{ElementBase, StatelessElement, StatelessView};
 
     #[derive(Clone)]
     struct TestView(u32);
@@ -165,9 +165,8 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 

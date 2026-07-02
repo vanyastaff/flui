@@ -90,7 +90,7 @@ use flui_interaction::PointerEvent;
 use flui_interaction::arena::{GestureArena, run_pointer_lifecycle};
 use flui_interaction::{ManualClock, MonotonicClock};
 use flui_rendering::pipeline::PipelineOwner;
-use flui_view::{BuildOwner, ElementTree};
+use flui_view::{BuildOwner, ElementId, ElementTree, View};
 use parking_lot::RwLock;
 
 /// The mounted tree triple a tree-bound [`HeadlessBinding`] drives each frame.
@@ -290,6 +290,39 @@ impl HeadlessBinding {
     pub fn dispatch_pointer(&self, event: &PointerEvent, route: impl FnOnce(&PointerEvent)) {
         route(event);
         run_pointer_lifecycle(&self.arena, event);
+    }
+
+    /// Replace the element rooted at `root_id` with `new_root` and schedule it
+    /// for rebuild.
+    ///
+    /// Calls [`ElementTree::update`] using a split borrow over the owned
+    /// internal tree-binding struct — `build_owner` and `tree` are separate
+    /// fields so the compiler accepts both borrows simultaneously — then pushes
+    /// `root_id` onto the dirty heap via `ElementOwner::schedule_build_for` so
+    /// the next [`pump_frame`](Self::pump_frame) picks it up.
+    ///
+    /// This is the headless equivalent of Flutter's `WidgetTester.pumpWidget`
+    /// (second call / root swap): replace the mounted root widget's configuration
+    /// without tearing down and re-mounting the full tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the binding is not tree-bound (built via
+    /// [`with_tree`](Self::with_tree)).
+    pub fn swap_root_view(&mut self, root_id: ElementId, new_root: &dyn View) {
+        let Some(tree_binding) = self.tree.as_mut() else {
+            panic!(
+                "swap_root_view requires a tree-bound binding (built via HeadlessBinding::with_tree)"
+            );
+        };
+        // Split borrow: `build_owner` and `tree` are distinct fields of
+        // `TreeBinding`, so the borrow checker accepts simultaneous borrows of
+        // each through the single `&mut TreeBinding`.
+        let mut owner = tree_binding.build_owner.element_owner_mut();
+        tree_binding.tree.update(root_id, new_root, &mut owner);
+        // Guarantee the element is in the dirty heap even if `dispatch_view_update`
+        // only set the internal atomic flag (not the owner's dirty heap).
+        owner.schedule_build_for(root_id, 0);
     }
 
     /// Advance one deterministic frame by `dt`.

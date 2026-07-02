@@ -11,9 +11,10 @@ use rustc_hash::FxHashMap;
 #[cfg(any(test, feature = "testing"))]
 use crate::testing::parent_data::ParentDataSeed;
 
+use crate::parent_data::ParentData;
 use crate::pipeline::phase::PipelinePhase;
 
-use super::{PipelineOwner, subtree_arena::child_flex_from_seeds, subtree_arena::ensure_stack};
+use super::{PipelineOwner, subtree_arena::ensure_stack};
 
 // ============================================================================
 // Phase-generic query methods on PipelineOwner
@@ -72,8 +73,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         constraints: crate::constraints::BoxConstraints,
     ) -> crate::error::RenderResult<flui_types::Size> {
+        #[cfg(any(test, feature = "testing"))]
+        let parent_data_seeds = self.parent_data_seeds.clone();
         let mut slots = self.acquire_query_slots(id)?;
-        dry_layout_query(&mut slots, id, constraints)
+        dry_layout_query(
+            &mut slots,
+            id,
+            constraints,
+            #[cfg(any(test, feature = "testing"))]
+            &parent_data_seeds,
+            #[cfg(not(any(test, feature = "testing")))]
+            &(),
+        )
     }
 
     /// The dry baseline of a box node for `constraints`, memoized per
@@ -90,8 +101,19 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         constraints: crate::constraints::BoxConstraints,
         baseline: crate::traits::TextBaseline,
     ) -> crate::error::RenderResult<Option<f32>> {
+        #[cfg(any(test, feature = "testing"))]
+        let parent_data_seeds = self.parent_data_seeds.clone();
         let mut slots = self.acquire_query_slots(id)?;
-        dry_baseline_query(&mut slots, id, constraints, baseline)
+        dry_baseline_query(
+            &mut slots,
+            id,
+            constraints,
+            baseline,
+            #[cfg(any(test, feature = "testing"))]
+            &parent_data_seeds,
+            #[cfg(not(any(test, feature = "testing")))]
+            &(),
+        )
     }
 
     /// Acquires the take-out borrow map for a memoizing query walk:
@@ -138,6 +160,42 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 pub(super) struct QuerySlot<'a> {
     pub(super) node: Option<&'a mut crate::storage::RenderNode>,
     pub(super) children: Vec<RenderId>,
+}
+
+/// Builds the per-child parent-data slice for the current node's children,
+/// reading from the slot map (production) with harness seed overlay (test/testing).
+///
+/// The slice is built from owned `Box<dyn ParentData>` values so it can
+/// coexist with the `&mut slots` that the recursion closure needs.
+fn build_child_parent_data<'slot>(
+    slots: &rustc_hash::FxHashMap<RenderId, QuerySlot<'slot>>,
+    children: &[RenderId],
+    #[cfg(any(test, feature = "testing"))] seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] _seeds: &(),
+) -> Vec<Option<Box<dyn ParentData>>> {
+    children
+        .iter()
+        .map(|child_id| {
+            // Harness seeds overlay production parent data so headless tests
+            // can provide widget-level configuration without an element tree.
+            #[cfg(any(test, feature = "testing"))]
+            if let Some(seed) = seeds.get(child_id) {
+                return Some(seed.to_box());
+            }
+            // Production: clone from the child node's committed parent data.
+            slots
+                .get(child_id)
+                .and_then(|s| s.node.as_ref())
+                .and_then(|n| n.parent_data())
+                .map(dyn_clone::clone_box)
+        })
+        .collect()
+}
+
+/// Borrows the owned parent-data boxes as a `&[Option<&dyn ParentData>]`
+/// suitable for passing to `*_raw` methods.
+fn parent_data_refs(owned: &[Option<Box<dyn ParentData>>]) -> Vec<Option<&dyn ParentData>> {
+    owned.iter().map(|opt| opt.as_deref()).collect()
 }
 
 /// Recursive memoized intrinsic query over the take-out slot map.
@@ -199,6 +257,12 @@ fn intrinsic_query_impl(
         {
             return Ok(hit);
         }
+
+        // Build the per-child parent-data slice before creating the recursion
+        // closure. The owned boxes coexist with the &mut slots the closure needs.
+        let child_parent_data_owned = build_child_parent_data(slots, &children, parent_data_seeds);
+        let child_parent_data_refs = parent_data_refs(&child_parent_data_owned);
+
         let mut child_err: Option<crate::error::RenderError> = None;
         let value = {
             let child_err = &mut child_err;
@@ -219,15 +283,12 @@ fn intrinsic_query_impl(
                         }
                     }
                 };
-            let mut child_flex = |index: usize| -> i32 {
-                child_flex_from_seeds(parent_data_seeds, &children, index)
-            };
             entry.render_object().intrinsic_raw(
                 dimension,
                 extent,
                 children.len(),
+                &child_parent_data_refs,
                 &mut child_query,
-                &mut child_flex,
             )
         };
         if let Some(err) = child_err {
@@ -254,8 +315,10 @@ pub(super) fn dry_layout_query(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<flui_types::Size> {
-    ensure_stack(|| dry_layout_query_impl(slots, id, constraints))
+    ensure_stack(|| dry_layout_query_impl(slots, id, constraints, parent_data_seeds))
 }
 
 /// Body of [`dry_layout_query`]; split out so every recursion level
@@ -264,6 +327,8 @@ fn dry_layout_query_impl(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<flui_types::Size> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
@@ -287,29 +352,60 @@ fn dry_layout_query_impl(
         if let Some(hit) = entry.state().layout_cache().peek_dry_layout(constraints) {
             return Ok(hit);
         }
+
+        // Build the per-child parent-data slice strictly before the recursion
+        // closure — no new re-entrancy surface, no aliasing with &mut slots.
+        let child_parent_data_owned = build_child_parent_data(slots, &children, parent_data_seeds);
+        let child_parent_data_refs = parent_data_refs(&child_parent_data_owned);
+
         let mut child_err: Option<crate::error::RenderError> = None;
         let value = {
             let child_err = &mut child_err;
-            let mut child_dry =
-                |index: usize, c: crate::constraints::BoxConstraints| -> flui_types::Size {
-                    let Some(&child_id) = children.get(index) else {
-                        child_err.get_or_insert(crate::error::RenderError::contract_violation(
-                            "dry-layout child query",
-                            "child index out of range for this node's children",
-                        ));
-                        return flui_types::Size::ZERO;
+            let mut child_query = |index: usize,
+                                   request: crate::context::DryLayoutChildRequest|
+             -> crate::context::DryLayoutChildResponse {
+                use crate::context::{DryLayoutChildRequest, DryLayoutChildResponse};
+                let Some(&child_id) = children.get(index) else {
+                    child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                        "dry-layout child query",
+                        "child index out of range for this node's children",
+                    ));
+                    return match request {
+                        DryLayoutChildRequest::DryLayout(_) => {
+                            DryLayoutChildResponse::DryLayout(flui_types::Size::ZERO)
+                        }
+                        DryLayoutChildRequest::Intrinsic(_, _) => {
+                            DryLayoutChildResponse::Intrinsic(0.0)
+                        }
                     };
-                    match dry_layout_query(slots, child_id, c) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            child_err.get_or_insert(err);
-                            flui_types::Size::ZERO
+                };
+                match request {
+                    DryLayoutChildRequest::DryLayout(c) => {
+                        match dry_layout_query(slots, child_id, c, parent_data_seeds) {
+                            Ok(v) => DryLayoutChildResponse::DryLayout(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryLayoutChildResponse::DryLayout(flui_types::Size::ZERO)
+                            }
                         }
                     }
-                };
-            entry
-                .render_object()
-                .dry_layout_raw(constraints, children.len(), &mut child_dry)
+                    DryLayoutChildRequest::Intrinsic(dim, e) => {
+                        match intrinsic_query(slots, child_id, dim, e, parent_data_seeds) {
+                            Ok(v) => DryLayoutChildResponse::Intrinsic(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryLayoutChildResponse::Intrinsic(0.0)
+                            }
+                        }
+                    }
+                }
+            };
+            entry.render_object().dry_layout_raw(
+                constraints,
+                children.len(),
+                &child_parent_data_refs,
+                &mut child_query,
+            )
         };
         if let Some(err) = child_err {
             return Err(err);
@@ -335,8 +431,10 @@ pub(super) fn dry_baseline_query(
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     baseline: crate::traits::TextBaseline,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<Option<f32>> {
-    ensure_stack(|| dry_baseline_query_impl(slots, id, constraints, baseline))
+    ensure_stack(|| dry_baseline_query_impl(slots, id, constraints, baseline, parent_data_seeds))
 }
 
 /// Body of [`dry_baseline_query`]; split out so every recursion level
@@ -346,6 +444,8 @@ fn dry_baseline_query_impl(
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     baseline: crate::traits::TextBaseline,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<Option<f32>> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
@@ -373,6 +473,12 @@ fn dry_baseline_query_impl(
         {
             return Ok(hit);
         }
+
+        // Build the per-child parent-data slice strictly before the recursion
+        // closure — no new re-entrancy surface, no aliasing with &mut slots.
+        let child_parent_data_owned = build_child_parent_data(slots, &children, parent_data_seeds);
+        let child_parent_data_refs = parent_data_refs(&child_parent_data_owned);
+
         let mut child_err: Option<crate::error::RenderError> = None;
         let value = {
             let child_err = &mut child_err;
@@ -392,11 +498,14 @@ fn dry_baseline_query_impl(
                         DryBaselineChildRequest::DryLayout(_) => {
                             DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
                         }
+                        DryBaselineChildRequest::Intrinsic(_, _) => {
+                            DryBaselineChildResponse::Intrinsic(0.0)
+                        }
                     };
                 };
                 match request {
                     DryBaselineChildRequest::Baseline(c, b) => {
-                        match dry_baseline_query(slots, child_id, c, b) {
+                        match dry_baseline_query(slots, child_id, c, b, parent_data_seeds) {
                             Ok(v) => DryBaselineChildResponse::Baseline(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
@@ -405,11 +514,20 @@ fn dry_baseline_query_impl(
                         }
                     }
                     DryBaselineChildRequest::DryLayout(c) => {
-                        match dry_layout_query(slots, child_id, c) {
+                        match dry_layout_query(slots, child_id, c, parent_data_seeds) {
                             Ok(v) => DryBaselineChildResponse::DryLayout(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
                                 DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
+                            }
+                        }
+                    }
+                    DryBaselineChildRequest::Intrinsic(dim, e) => {
+                        match intrinsic_query(slots, child_id, dim, e, parent_data_seeds) {
+                            Ok(v) => DryBaselineChildResponse::Intrinsic(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryBaselineChildResponse::Intrinsic(0.0)
                             }
                         }
                     }
@@ -419,6 +537,7 @@ fn dry_baseline_query_impl(
                 constraints,
                 baseline,
                 children.len(),
+                &child_parent_data_refs,
                 &mut child_query,
             )
         };

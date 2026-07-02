@@ -69,3 +69,56 @@ where
 }
 
 generic_render_view_element!(SliverFixedExtentList);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+    use flui_view::ViewExt;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn debug_reports_item_extent_and_child_count() {
+        let list = SliverFixedExtentList::new(
+            30.0,
+            vec![
+                SizedBox::shrink().boxed(),
+                SizedBox::shrink().boxed(),
+                SizedBox::shrink().boxed(),
+            ],
+        );
+
+        let debug = format!("{list:?}");
+        assert!(
+            debug.contains("item_extent: 30.0") && debug.contains("children: 3"),
+            "Debug output must include item_extent and children count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn has_children_reflects_an_empty_child_list() {
+        let empty: SliverFixedExtentList = SliverFixedExtentList::new(30.0, Vec::new());
+        assert!(!empty.has_children());
+
+        let non_empty = SliverFixedExtentList::new(30.0, vec![SizedBox::shrink().boxed()]);
+        assert!(non_empty.has_children());
+    }
+
+    #[test]
+    fn update_render_object_applies_a_changed_item_extent() {
+        let list = SliverFixedExtentList::new(30.0, Vec::<flui_view::BoxedView>::new());
+        let mut render_object = list.create_render_object();
+
+        let updated = SliverFixedExtentList::new(75.0, Vec::<flui_view::BoxedView>::new());
+        updated.update_render_object(&mut render_object);
+
+        // No public getter on RenderSliverFixedExtentList; confirm via Debug
+        // that the field actually changed rather than merely not panicking.
+        let debug = format!("{render_object:?}");
+        assert!(
+            debug.contains("75"),
+            "update_render_object must apply the new item_extent, got: {debug}",
+        );
+    }
+}

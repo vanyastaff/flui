@@ -4,16 +4,17 @@
 //! without creating a new render object. It provides methods for painting,
 //! hit testing, and accessibility.
 
-use std::{any::Any, fmt::Debug, sync::Once};
+use std::{any::Any, fmt::Debug, sync::Arc, sync::Once};
 
+use flui_foundation::Listenable;
 use flui_painting::Canvas;
 use flui_types::{Offset, Size};
 
 /// Builder for semantics information.
 ///
-/// **INCOMPLETE**: This is a placeholder type. Semantics support is not
-/// yet wired; the builder accepts no operations and is consumed by
-/// platform integrations as an empty shell.
+/// **INCOMPLETE**: This is a placeholder type. Custom-painter semantics
+/// callbacks are not yet modeled; the builder accepts no operations and is
+/// consumed by platform integrations as an empty shell.
 ///
 /// Cycle 4 R-3: pre-cycle `SemanticsBuilder::new` panicked via
 /// `unimplemented!()` on construction — a Constitution Principle 6
@@ -38,8 +39,8 @@ static WARN_ONCE: Once = Once::new();
 impl SemanticsBuilder {
     /// Creates a new empty semantics builder.
     ///
-    /// Currently a no-op shell — semantics build operations land when
-    /// the `SemanticsConfiguration` integration plumbing is complete.
+    /// Currently a no-op shell — custom-painter semantics build operations
+    /// land when `CustomPainter` exposes a real semantics-builder contract.
     /// See audit R-3 in
     /// `docs/research/2026-05-22-flui-rendering-engine-audit.md`.
     ///
@@ -50,8 +51,8 @@ impl SemanticsBuilder {
     pub fn new() -> Self {
         WARN_ONCE.call_once(|| {
             tracing::warn!(
-                "SemanticsBuilder: semantics build operations are a no-op \
-                 until RenderObject → SemanticsConfiguration plumbing lands; \
+                "SemanticsBuilder: custom-painter semantics build operations are a no-op \
+                 until CustomPainter exposes a real semantics-builder contract; \
                  the returned builder accepts no operations (this warn fires \
                  once per process)"
             );
@@ -126,15 +127,35 @@ pub trait CustomPainter: Send + Sync + Debug {
     /// `true` if the painter should repaint, `false` otherwise.
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool;
 
+    /// An optional repaint [`Listenable`]: when it notifies, the hosting
+    /// `RenderCustomPaint` marks itself needing paint — the FLUI equivalent of
+    /// Flutter's `CustomPainter(repaint:)` / `addListener`/`removeListener`
+    /// wiring, which lets a painter driven by an [`Animation`] (or any
+    /// `ChangeNotifier`) repaint without a widget rebuild.
+    ///
+    /// Implementations that return `Some` MUST return the *same* instance
+    /// across calls, so the host can unsubscribe on detach / painter swap.
+    /// Defaults to `None` (a static painter that never self-invalidates).
+    ///
+    /// [`Animation`]: https://api.flutter.dev/flutter/animation/Animation-class.html
+    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
+        None
+    }
+
     /// Hit test at the given position.
     ///
-    /// Returns `true` if the painter considers the given position to be "hit".
-    /// This is used for event handling.
+    /// The given position is relative to the same coordinate space as the
+    /// last [`Self::paint`] call. Return `true` if the position is a "hit",
+    /// `false` if it is a miss, and `None` to use the caller's default
+    /// behavior.
     ///
-    /// The default implementation returns `false`, meaning the painter doesn't
-    /// handle hit testing and events pass through to children.
-    fn hit_test(&self, _position: Offset) -> bool {
-        false
+    /// The default implementation returns `None`. `RenderCustomPaint`
+    /// resolves the tri-state per Flutter parity: a *background* painter
+    /// defaults to hit (`None` → `true`) and a *foreground* painter defaults
+    /// to miss (`None` → `false`) — the trait itself is direction-agnostic,
+    /// so it cannot pick a single default for both roles.
+    fn hit_test(&self, _position: Offset) -> Option<bool> {
+        None
     }
 
     /// Build semantics information for accessibility.
@@ -200,7 +221,7 @@ mod tests {
     #[test]
     fn test_default_hit_test() {
         let painter = TestPainter { color: 0xFF0000 };
-        assert!(!painter.hit_test(Offset::ZERO));
+        assert_eq!(painter.hit_test(Offset::ZERO), None);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! care which phase the owner is in.
 
 use flui_foundation::RenderId;
-use flui_types::Offset;
+use flui_types::{Matrix4, Offset};
 
 use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
@@ -221,6 +221,21 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.last_layer_tree.take()
     }
 
+    /// Returns a reference to the leader/follower link registry produced as
+    /// a byproduct of the last paint phase (see `FragmentComposer::link_registry`).
+    pub fn link_registry(&self) -> Option<&flui_layer::LinkRegistry> {
+        self.last_link_registry.as_ref()
+    }
+
+    /// Takes the link registry from the last paint phase.
+    ///
+    /// Pairs with [`Self::take_layer_tree`] — the caller hands both to
+    /// `Scene::with_links` so `flui-engine` can resolve `Layer::Follower`
+    /// positions at render time against the SAME frame's layer tree.
+    pub fn take_link_registry(&mut self) -> Option<flui_layer::LinkRegistry> {
+        self.last_link_registry.take()
+    }
+
     /// Device pixel ratio threaded into every paint pass.
     pub fn device_pixel_ratio(&self) -> f32 {
         self.device_pixel_ratio
@@ -234,11 +249,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// this method can. Order:
     ///
     /// 1. collect the subtree's ids;
-    /// 2. evict every id from ALL dirty queues (live + mid-phase) so
+    /// 2. call [`RenderObject::detach`](crate::traits::RenderObject::detach)
+    ///    on every id in the subtree (ADR-0013 D1) — the tree-lifecycle
+    ///    counterpart of `attach`, and the only place a render object can
+    ///    tear down an `attach`-time subscription;
+    /// 3. evict every id from ALL dirty queues (live + mid-phase) so
     ///    no phase walks a freed slot's stale entry;
-    /// 3. cascade-remove the nodes (each freed slot's generation bumps
+    /// 4. cascade-remove the nodes (each freed slot's generation bumps
     ///    — outstanding ids go stale, D2);
-    /// 4. clear `root_id` when the root itself was removed.
+    /// 5. clear `root_id` when the root itself was removed.
     ///
     /// `Drop` on render objects remains strictly node-local (decoded
     /// images, shaped text, GPU handles).
@@ -257,6 +276,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if subtree.is_empty() {
             return 0;
         }
+
+        // ADR-0013 D1: detach every node in the subtree before eviction —
+        // a render object that subscribed to a `Listenable` in `attach`
+        // gets a chance to unsubscribe here. Not a correctness
+        // prerequisite (the handle it holds is generational and already
+        // goes silent once the node is gone), but the clean stop.
+        for &subtree_id in &subtree {
+            if let Some(node) = self.render_tree.get_mut(subtree_id) {
+                node.detach();
+            }
+        }
+
         let removed: rustc_hash::FxHashSet<RenderId> = subtree.iter().copied().collect();
         self.scheduler.evict(&removed);
 
@@ -327,6 +358,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
             return false;
         };
+
+        // ADR-0015 D4: composite-resolved follower offsets. Gated behind
+        // both side tables being empty — true for the overwhelming
+        // majority of trees (followers are rare: tooltips, dropdowns,
+        // overlays), so this whole branch is a single cheap `is_empty`
+        // check away from a no-op for every other tree.
+        let follower_offset =
+            if self.last_follower_offsets.is_empty() && self.last_hidden_follower_ids.is_empty() {
+                None
+            } else if self.last_hidden_follower_ids.contains(&id) {
+                // Correlated as a follower this frame but resolved to hidden
+                // (unlinked, `show_when_unlinked == false`) — mirrors the
+                // render path's `resolve_follower_offset -> None -> don't
+                // descend` (flui-engine's `render_layer_recursive`) and
+                // oracle's early return in `FollowerLayer.addToScene`
+                // (`layer.dart:2857-2865`). No HitTestEntry, no descent.
+                return false;
+            } else {
+                self.last_follower_offsets.get(&id).copied()
+            };
+
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
         // Box bounds gate size, resolved from RenderState (geometry's
@@ -345,6 +397,25 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if let Some(t) = hit_transform {
             result.push_transform(t);
         }
+        // A resolved follower offset rides the SAME transform-stack
+        // lifecycle as `hit_test_transform` (ADR-0015 D4) — the same
+        // translation the paint/GPU path applies via
+        // `backend.push_offset(resolved)` (renderer.rs:1586), lifted to a
+        // `Matrix4` (D5: exact and lossless — the composer only ever
+        // shifts coordinate space via translation).
+        if let Some(r) = follower_offset {
+            result.push_transform(Matrix4::translation(r.dx.get(), r.dy.get(), 0.0));
+        }
+
+        // Shift the position handed into this node's own subtree by the
+        // resolved offset — the SAME position-shift pattern `hit_child`
+        // below already applies for ordinary child offsets, applied here
+        // by the WALK rather than the object: `RenderFollowerLayer::hit_test`
+        // stays a plain structural forward (ADR-0015 D4).
+        let position = match follower_offset {
+            Some(r) => position - r,
+            None => position,
+        };
 
         let mut hit_child = |index: usize, override_pos: Option<Offset>| -> bool {
             let Some(&child_id) = children.get(index) else {
@@ -389,7 +460,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
-        if hit {
+        if hit.add_self {
             // Leaf-first path: children pushed their entries during
             // the callback above; the ancestor follows. The transform
             // is still on the stack, so this entry captures it.
@@ -403,14 +474,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 Some(handler) => entry.handler(handler),
                 None => entry,
             };
+            let entry = entry.cursor(render_object.mouse_cursor());
+            let entry = match render_object.mouse_tracker_annotation(id) {
+                Some(annotation) => entry.mouse_annotation(annotation),
+                None => entry,
+            };
             result.add(entry);
         }
 
+        if follower_offset.is_some() {
+            result.pop_transform();
+        }
         if has_transform {
             result.pop_transform();
         }
 
-        hit
+        hit.blocks_below
     }
 
     fn sliver_hit_position_from_offset(node: &RenderNode, position: Offset) -> MainAxisPosition {
@@ -650,10 +729,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
-        if hit {
-            result.add(crate::hit_testing::HitTestEntry::new(id));
+        if hit.add_self {
+            let entry =
+                crate::hit_testing::HitTestEntry::new(id).cursor(render_object.mouse_cursor());
+            let entry = match render_object.mouse_tracker_annotation(id) {
+                Some(annotation) => entry.mouse_annotation(annotation),
+                None => entry,
+            };
+            result.add(entry);
         }
-        hit
+        hit.blocks_below
     }
 
     /// Sets the device pixel ratio for subsequent paint passes.
@@ -710,6 +795,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // run_compositing).
         self.bootstrap_repaint_boundary_flag(id);
 
+        // ADR-0013: hand the freshly-inserted node its self-dirty handle.
+        self.attach_inserted_node(id);
+
         // New nodes need layout and paint
         self.add_node_needing_layout(id, depth);
         self.add_node_needing_paint(id, depth);
@@ -755,6 +843,69 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // walk runs.
         self.bootstrap_repaint_boundary_flag(child_id);
 
+        // ADR-0013: hand the freshly-inserted child its self-dirty handle.
+        self.attach_inserted_node(child_id);
+
+        // Mark child as needing layout and paint
+        self.add_node_needing_layout(child_id, child_depth as usize);
+        self.add_node_needing_paint(child_id, child_depth as usize);
+
+        // Mark parent as needing layout (child structure changed)
+        self.add_node_needing_layout(parent_id, parent_depth as usize);
+
+        Some(child_id)
+    }
+
+    /// Inserts a Sliver-protocol render object as a child and marks it as
+    /// needing layout.
+    ///
+    /// The Sliver-protocol counterpart of [`Self::insert_child_render_object`]
+    /// — same dirty tracking and ADR-0013 attach wiring, backed by
+    /// [`crate::storage::RenderTree::insert_sliver_child`] instead of
+    /// `insert_box_child`. Prefer this over calling
+    /// `render_tree_mut().insert_sliver_child(..)` directly: the raw tree
+    /// method inserts the node but skips dirty tracking AND the
+    /// ADR-0013 `attach` handshake, silently starving any Sliver render
+    /// object that subscribes to a `Listenable` in `attach` (e.g. a
+    /// snap-animation controller) of its self-dirty handle.
+    ///
+    /// This method:
+    /// 1. Inserts the render object as a Sliver child in the RenderTree
+    /// 2. Hands it its ADR-0013 self-dirty handle via `attach`
+    /// 3. Adds the node to the dirty layout list
+    /// 4. Adds the node to the dirty paint list
+    /// 5. Marks the parent as needing layout (since child structure changed)
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - The parent node ID
+    /// * `render_object` - The Sliver render object to insert as child
+    ///
+    /// # Returns
+    ///
+    /// The `RenderId` of the inserted child, or `None` if parent doesn't exist.
+    pub fn insert_sliver_child_render_object(
+        &mut self,
+        parent_id: RenderId,
+        render_object: Box<dyn crate::traits::RenderObject<SliverProtocol>>,
+    ) -> Option<RenderId> {
+        // Get parent depth before insertion
+        let parent_depth = self.render_tree.depth(parent_id)?;
+
+        // Insert child (using Sliver protocol)
+        let child_id = self
+            .render_tree
+            .insert_sliver_child(parent_id, render_object)?;
+        let child_depth = parent_depth + 1;
+
+        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag from the
+        // child render_object's static answer before any compositing
+        // walk runs.
+        self.bootstrap_repaint_boundary_flag(child_id);
+
+        // ADR-0013: hand the freshly-inserted child its self-dirty handle.
+        self.attach_inserted_node(child_id);
+
         // Mark child as needing layout and paint
         self.add_node_needing_layout(child_id, child_depth as usize);
         self.add_node_needing_paint(child_id, child_depth as usize);
@@ -785,6 +936,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // path that adds nodes leaves the compositing flag in sync
         // with the trait answer).
         self.bootstrap_repaint_boundary_flag(id);
+
+        // ADR-0013: hand the freshly-inserted node its self-dirty handle.
+        self.attach_inserted_node(id);
 
         self.add_node_needing_layout(id, depth);
         self.add_node_needing_paint(id, depth);
@@ -844,6 +998,30 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if let Some(node) = self.render_tree.get(id) {
             let is_boundary = node.is_repaint_boundary();
             node.set_repaint_boundary_flag(is_boundary);
+        }
+    }
+
+    /// ADR-0013: hands the freshly-inserted node at `id` its self-dirty
+    /// [`RepaintHandle`](crate::pipeline::RepaintHandle) via
+    /// [`RenderObject::attach`](crate::traits::RenderObject::attach).
+    ///
+    /// Called by every insertion path (`insert`, `insert_child_render_object`,
+    /// `insert_sliver_child_render_object`, `insert_render_node`) right after
+    /// the id is minted and its `NodeLinks` are wired, alongside the initial
+    /// dirty marks those methods already issue. Also called by
+    /// `apply_deferred_mutation`'s `Insert` arm (`pipeline/owner/layout.rs`)
+    /// for both `DeferredRenderObject::Box` and `::Sliver` — the lazy
+    /// list/grid child-building path bypasses the methods above and used to
+    /// skip `attach` entirely for every protocol. `pub(super)` (rather than
+    /// private) so that call site can reach it. No-op if `id` is somehow not
+    /// present (defensive — every call site holds a freshly-inserted id).
+    #[inline]
+    pub(super) fn attach_inserted_node(&mut self, id: RenderId) {
+        let Some(handle) = self.repaint_handle(id) else {
+            return;
+        };
+        if let Some(node) = self.render_tree.get_mut(id) {
+            node.attach(handle);
         }
     }
 
@@ -1034,15 +1212,73 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     /// Sets whether semantics are enabled.
-    pub fn set_semantics_enabled(&self, enabled: bool) {
+    ///
+    /// **ADR-0014 D1.** Lazily creates a [`SemanticsOwner`](flui_semantics::SemanticsOwner) on the
+    /// `false` → `true` transition (unless one was already installed via
+    /// [`Self::set_semantics_owner`] — e.g. a platform binding that needs
+    /// its own update callback — in which case that owner is kept as-is),
+    /// firing the already-scaffolded
+    /// [`fire_semantics_owner_created`](crate::pipeline::notifier::VisualUpdateNotifier::fire_semantics_owner_created).
+    /// Disposes the owner on the `true` → `false` transition, firing
+    /// `fire_semantics_owner_disposed` — Flutter's `PipelineOwner
+    /// .ensureSemantics()` / handle-drop parity, collapsed onto the single
+    /// boolean flag this crate already used to gate `run_semantics`.
+    ///
+    /// A freshly-created owner has an empty tree even though the render
+    /// tree may already hold content built while semantics was off, so this
+    /// also seeds the root as needing a semantics rebuild (mirrors
+    /// `insert()`'s "new nodes need layout and paint" seeding) — without
+    /// it, nothing would ever push the first `run_semantics` assembly pass.
+    ///
+    /// No OS accessibility bridge exists yet (ADR-0014 D6): a lazily-created
+    /// owner is constructed with a no-op platform callback. The assembled
+    /// tree is inspected via [`Self::semantics_owner`], the render harness,
+    /// or `debug_dump_semantics_tree` until a real bridge lands.
+    pub fn set_semantics_enabled(&mut self, enabled: bool) {
         let was_enabled = self
             .semantics_enabled
             .swap(enabled, std::sync::atomic::Ordering::Relaxed);
         if enabled && !was_enabled {
+            if self.semantics_owner.is_none() {
+                self.semantics_owner = Some(flui_semantics::SemanticsOwner::new(
+                    no_op_semantics_update_callback(),
+                ));
+            }
             self.notifier.read().fire_semantics_owner_created();
+            if let Some(root_id) = self.root_id {
+                let depth = self.render_tree.depth(root_id).unwrap_or(0) as usize;
+                self.add_node_needing_semantics(root_id, depth);
+            }
         } else if !enabled && was_enabled {
+            if let Some(mut owner) = self.semantics_owner.take() {
+                owner.dispose();
+            }
             self.notifier.read().fire_semantics_owner_disposed();
         }
+    }
+
+    /// Returns the semantics owner, if semantics is currently enabled.
+    ///
+    /// `None` until [`Self::set_semantics_enabled`]`(true)` lazily creates
+    /// one; `None` again once the matching `false` transition disposes it.
+    /// Read-only by design (SP-6 / port-check: no lock, no `&mut` escape —
+    /// the owner's tree is written only by `Semantics::run_semantics`).
+    #[inline]
+    pub fn semantics_owner(&self) -> Option<&flui_semantics::SemanticsOwner> {
+        self.semantics_owner.as_ref()
+    }
+
+    /// Installs (or removes) the semantics owner directly, bypassing the
+    /// lazy-creation path in [`Self::set_semantics_enabled`].
+    ///
+    /// The escape hatch for a platform binding that needs its own update
+    /// callback (forwarding [`flui_semantics::SemanticsNodeUpdate`] batches
+    /// to a real OS accessibility bridge once one exists), or a test that
+    /// wants to observe `flush()`'s callback invocations directly. Call
+    /// this *before* `set_semantics_enabled(true)` — the enable path only
+    /// lazily creates a no-op-callback owner when none is installed yet.
+    pub fn set_semantics_owner(&mut self, owner: Option<flui_semantics::SemanticsOwner>) {
+        self.semantics_owner = owner;
     }
 
     // ========================================================================
@@ -1127,4 +1363,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) {
         self.pending_child_requests.push((sliver_id, index));
     }
+}
+
+/// A no-op semantics-update callback for a freshly lazily-created
+/// [`SemanticsOwner`](flui_semantics::SemanticsOwner).
+///
+/// FLUI has no OS accessibility bridge yet (ADR-0014 D6) — there is
+/// nowhere for a real platform callback to forward
+/// [`flui_semantics::SemanticsNodeUpdate`] batches to. Swallowing updates
+/// here is an explicit, documented placeholder (not a silent gap): the
+/// assembled tree is inspected via [`PipelineOwner::semantics_owner`], the
+/// render harness, or `debug_dump_semantics_tree` until a real bridge
+/// lands.
+fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
+    std::sync::Arc::new(|_updates: &[flui_semantics::SemanticsNodeUpdate]| {})
 }

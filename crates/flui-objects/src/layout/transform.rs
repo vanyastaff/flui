@@ -133,17 +133,20 @@ impl RenderTransform {
         self.origin
     }
 
-    /// Computes the effective origin offset based on alignment and the
-    /// laid-out `size` (supplied by the driver from `RenderState`).
+    /// Computes the effective pivot offset for the transform from the laid-out
+    /// `size` (supplied by the driver from `RenderState`).
+    ///
+    /// Flutter's `RenderTransform._effectiveTransform` applies the origin AND the
+    /// alignment **additively** — `T(origin)·T(alignment.alongSize)·transform·…`
+    /// — so the pivot is `alignment.alongSize(size) + origin`, not one or the
+    /// other (proxy_box.dart). `alignment` is always present (default `CENTER`);
+    /// `origin` is optional. The prior code returned `origin` alone whenever it
+    /// was set, silently dropping the alignment contribution.
     fn compute_origin(&self, size: Size) -> Offset {
-        if let Some(origin) = self.origin {
-            origin
-        } else {
-            // Compute from alignment
-            let x = size.width * ((self.alignment.x + 1.0) / 2.0);
-            let y = size.height * ((self.alignment.y + 1.0) / 2.0);
-            Offset::new(x, y)
-        }
+        let align_x = size.width * ((self.alignment.x + 1.0) / 2.0);
+        let align_y = size.height * ((self.alignment.y + 1.0) / 2.0);
+        let origin = self.origin.unwrap_or(Offset::ZERO);
+        Offset::new(align_x + origin.dx, align_y + origin.dy)
     }
 
     /// Computes the effective transform matrix with origin applied, using
@@ -267,6 +270,22 @@ mod tests {
         );
         assert!((tx.get() - 40.0).abs() < 1e-4, "tx = {tx:?}");
         assert!((ty.get() - 30.0).abs() < 1e-4, "ty = {ty:?}");
+    }
+
+    #[test]
+    fn compute_origin_combines_alignment_and_origin() {
+        // Flutter applies BOTH origin and alignment additively: the pivot is
+        // `alignment.alongSize(size) + origin`. 100×100 with CENTER alignment
+        // (alongSize = (50,50)) plus origin (10,0) → (60,50). Before the fix the
+        // explicit origin won outright and the alignment contribution was
+        // dropped → (10,0).
+        let node = RenderTransform::scale(2.0, 2.0)
+            .with_alignment(Alignment::CENTER)
+            .with_origin(Offset::new(px(10.0), px(0.0)));
+        assert_eq!(
+            node.compute_origin(Size::new(px(100.0), px(100.0))),
+            Offset::new(px(60.0), px(50.0)),
+        );
     }
 
     use std::f32::consts::PI;

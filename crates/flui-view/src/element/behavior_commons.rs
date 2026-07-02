@@ -298,21 +298,14 @@ mod tests {
     //! regression in extraction quality is caught locally before the
     //! integration suite runs.
 
-    use dyn_clone::clone_box;
-    use flui_foundation::ElementId;
-
     use super::*;
     use crate::view::ViewExt;
     use crate::{
-        BuildOwner,
-        element::{
-            Lifecycle, Single,
-            arity::Leaf,
-            behavior::{ElementBehavior, StatelessBehavior},
-            generic::ElementCore,
-        },
-        view::{ElementBase, StatelessView, View},
+        BuildOwner, ElementTree,
+        element::{Lifecycle, Single, arity::Leaf, generic::ElementCore},
+        view::{StatelessView, View},
     };
+    use dyn_clone::clone_box;
 
     // ------------------------------------------------------------------
     // Synthetic fixtures
@@ -324,11 +317,15 @@ mod tests {
     #[derive(Clone, Debug)]
     struct TestView;
 
+    impl StatelessView for TestView {
+        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> impl IntoView {
+            crate::view::ErrorView::new("test fixture leaf")
+        }
+    }
+
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            // Helpers under test never call `create_element`, but we
-            // need a real impl so the trait bound is satisfied.
-            Box::new(NopElement)
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -346,42 +343,16 @@ mod tests {
         }
     }
 
-    impl View for WrapperView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(NopElement)
+    impl StatelessView for WrapperView {
+        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> impl IntoView {
+            self.child.clone()
         }
     }
 
-    /// Stub element that satisfies `ElementBase` without doing any work;
-    /// used only as the `Box<dyn ElementBase>` payload for the
-    /// `create_element` return value above.
-    struct NopElement;
-
-    impl ElementBase for NopElement {
-        fn view_type_id(&self) -> std::any::TypeId {
-            std::any::TypeId::of::<TestView>()
+    impl View for WrapperView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Initial
-        }
-        fn depth(&self) -> usize {
-            0
-        }
-        fn mark_needs_build(&mut self) {}
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
-        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-        fn mount(
-            &mut self,
-            _parent: Option<ElementId>,
-            _slot: usize,
-            _owner: &mut crate::ElementOwner<'_>,
-        ) {
-        }
-        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
-        fn activate(&mut self) {}
-        fn deactivate(&mut self) {}
     }
 
     // ------------------------------------------------------------------
@@ -444,32 +415,32 @@ mod tests {
     }
 
     impl View for CountingView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(NopElement)
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
     #[test]
-    fn build_into_views_clears_dirty_via_stateless_path() {
-        let mut core = ElementCore::<CountingView, Single>::new(CountingView);
+    fn build_scope_clears_dirty_via_stateless_path() {
+        let mut tree = ElementTree::new();
         let mut build_owner = BuildOwner::new();
-        core.mount(None, 0, &mut build_owner.element_owner_mut());
-        assert!(core.is_dirty());
+        let root_id = tree.mount_root(&CountingView, &mut build_owner.element_owner_mut());
 
-        let mut behavior = StatelessBehavior;
-        let mut owner = build_owner.element_owner_mut();
-        let views = <StatelessBehavior as ElementBehavior<CountingView, Single>>::build_into_views(
-            &mut behavior,
-            &mut core,
-            &mut owner,
+        assert!(
+            tree.get(root_id).unwrap().element().is_dirty(),
+            "freshly-mounted stateless element starts dirty"
         );
 
-        assert!(!core.is_dirty(), "build_into_views must clear dirty");
-        assert_eq!(core.lifecycle(), Lifecycle::Active);
+        build_owner.schedule_build_for(root_id, 0);
+        build_owner.build_scope(&mut tree);
+
+        let root = tree.get(root_id).unwrap().element();
+        assert!(!root.is_dirty(), "build_scope must clear dirty");
+        assert_eq!(root.lifecycle(), Lifecycle::Active);
         assert_eq!(
-            views.len(),
+            tree.get(root_id).unwrap().child_ids().len(),
             1,
-            "stateless build yields exactly one child view"
+            "stateless build yields exactly one child element"
         );
     }
 

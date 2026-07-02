@@ -108,7 +108,8 @@ This project uses **`justfile`** for build automation. Install [`just`](https://
 | `just clippy` | Lint gate: `cargo clippy --workspace --all-targets -- -D warnings` |
 | `just fmt` | Format with rustfmt |
 | `just fmt-check` | Format check (CI gate) |
-| `just ci` | Full local CI: `fmt-check` → `clippy` → `test` |
+| `just inventory-check` | Docs / justfile crate inventory drift guard |
+| `just ci` | Full local CI: `fmt-check` → `inventory-check` → `port-check` → `clippy` → `test` |
 | `just example-hello` | Platform smoke test |
 | `just port-check` | Port-methodology refusal triggers |
 | `just port-check-verbose` | Per-trigger pass/fail + marker totals |
@@ -125,6 +126,8 @@ cargo test -p flui-rendering --test render_object_harness  # Run a specific inte
 
 ```bash
 just fmt-check    # rustfmt
+just inventory-check
+just port-check
 just clippy       # clippy with -D warnings
 ```
 
@@ -134,7 +137,7 @@ Additionally, CI gates on:
 
 ## Architecture Constraints (port methodology)
 
-These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 18 refusal triggers.
+These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 21 refusal triggers plus FR-033.
 
 | Rule | Why |
 |------|-----|
@@ -193,7 +196,7 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 
 CI runs on PR + push to main. Jobs (in dependency order):
 
-1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `port-check.sh`
+1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh`, `port-check.sh`
 2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings` (needs: checks)
 3. **test** — `cargo nextest run --workspace --exclude flui-platform --lib --test-threads 1` (needs: checks, Linux only)
 4. **bench-compile** — `cargo bench -p flui-rendering --no-run` (needs: checks)

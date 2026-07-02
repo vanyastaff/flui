@@ -29,8 +29,8 @@ use std::{
 use flui_foundation::{ElementId, RenderId};
 use flui_view::{
     BuildContext, BuildOwner, ElementBase, ElementBuildContext, ElementTree, IntoView,
-    Notification, StatelessBehavior, StatelessElement, StatelessView, View, ViewExt,
-    element::Lifecycle,
+    Notification, StatelessView, View, ViewExt,
+    element::{Lifecycle, NotificationElementBase},
 };
 use parking_lot::RwLock;
 
@@ -65,8 +65,8 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -102,13 +102,13 @@ impl<N: Notification> Clone for NotificationListener<N> {
 }
 
 impl<N: Notification> View for NotificationListener<N> {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(NotificationListenerElement {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::Notification(Box::new(NotificationListenerElement {
             on_notification: Arc::clone(&self.on_notification),
             depth: 0,
             lifecycle: Lifecycle::Initial,
             _marker: PhantomData,
-        })
+        }))
     }
 }
 
@@ -194,6 +194,8 @@ impl<N: Notification> ElementBase for NotificationListenerElement<N> {
         (self.on_notification)(typed)
     }
 }
+
+impl<N: Notification> NotificationElementBase for NotificationListenerElement<N> {}
 
 // ============================================================================
 // Helpers

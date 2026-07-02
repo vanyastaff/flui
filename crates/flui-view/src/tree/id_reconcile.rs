@@ -266,8 +266,8 @@ pub(crate) fn reconcile_children_by_id(
             result.push(old_id);
         } else {
             // `ElementTree::insert` emits the disposition itself — `Mount`
-            // for a fresh element, or `Reparent` when it retakes an inactive
-            // GlobalKey element (`try_retake_inactive`). Emitting `Mount`
+            // for a fresh element, or `Reparent` when it retakes a GlobalKey
+            // element (`try_retake_global_key`). Emitting `Mount`
             // here too would double-fire on the retake path.
             let new_id = tree.insert(new_view, parent_id, new_slot, owner);
             result.push(new_id);
@@ -510,9 +510,10 @@ fn update_child(
 ///   is freed before its children.
 ///
 /// A keyed *descendant* of an unkeyed top is freed (not soft-removed) — it
-/// loses its retake window because its ancestor is already gone. That
-/// cross-parent reparent is the GlobalKey-reparent case deferred to E3.x;
-/// E3's contract is only that every descendant unmounts exactly once.
+/// loses its retake window because its ancestor is already gone. The active
+/// GlobalKey move path only applies while the keyed element itself remains
+/// active and registered; E3's contract here is that every descendant unmounts
+/// exactly once.
 ///
 /// Stale / absent ids are a no-op inside `remove` / `remove_finalized`.
 fn remove_child(tree: &mut ElementTree, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
@@ -587,7 +588,7 @@ fn set_child_slot(tree: &mut ElementTree, id: ElementId, slot: usize) {
 mod tests {
     use super::*;
     use crate::view::{IntoView, View, ViewExt};
-    use crate::{BuildContext, BuildOwner, StatelessElement, StatelessView};
+    use crate::{BuildContext, BuildOwner, StatelessView};
     use flui_foundation::{ValueKey, ViewKey};
 
     /// A keyless leaf-ish stateless test view. `tag` distinguishes
@@ -616,9 +617,8 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -645,9 +645,8 @@ mod tests {
     }
 
     impl View for KeyedView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
 
         fn key(&self) -> Option<&dyn ViewKey> {
@@ -708,9 +707,8 @@ mod tests {
     }
 
     impl View for ColliderView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
 
         fn key(&self) -> Option<&dyn ViewKey> {

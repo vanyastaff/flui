@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use flui_foundation::{Key, ObserverId, UniqueKey, ValueKey, ViewKey};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, ObjectKey,
-    StatelessElement, StatelessView, View, ViewExt,
+    BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, ObjectKey, StatelessView, View,
+    ViewExt,
 };
 
 // ----------------------------------------------------------------------------
@@ -72,9 +72,8 @@ impl StatelessView for TestView {
 }
 
 impl View for TestView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {

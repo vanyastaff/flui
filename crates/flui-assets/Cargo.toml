@@ -2,6 +2,7 @@
 name = "flui-assets"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "High-performance asset management with smart caching, type safety, and async I/O"
@@ -13,7 +14,7 @@ documentation = "https://docs.rs/flui-assets"
 
 [dependencies]
 # Internal dependencies
-flui-types = { path = "../flui-types" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
 
 # Async runtime
 tokio = { workspace = true, features = ["fs", "io-util"] }

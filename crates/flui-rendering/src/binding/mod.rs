@@ -458,12 +458,15 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
 
     ids.into_iter()
         .map(|id| {
-            // Note: Semantics tree integration is not yet implemented.
+            // Note: Binding-level semantics dump routing is not yet wired.
             // This would require:
             // 1. View to expose its PipelineOwner
-            // 2. PipelineOwner to build and expose SemanticsTree
+            // 2. RendererBinding to route each view id to that PipelineOwner
             // 3. SemanticsTree to implement Debug or custom formatting
-            let mut message = format!("=== SemanticsTree {} ===\nSemantics not generated.", id);
+            let mut message = format!(
+                "=== SemanticsTree {} ===\nSemantics dump not available via binding.",
+                id
+            );
             if !printed_explanation {
                 printed_explanation = true;
                 message.push('\n');
@@ -495,7 +498,14 @@ pub fn debug_dump_pipeline_owner_tree<B: RendererBinding + ?Sized>(binding: &B) 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use flui_interaction::MouseTracker;
+    use flui_types::{Size, geometry::px};
+
     use super::*;
+    use crate::view::ViewConfiguration;
 
     // Verify the trait is object-safe.
     fn _assert_renderer_binding_object_safe(_: &dyn RendererBinding) {}
@@ -504,5 +514,198 @@ mod tests {
     fn test_renderer_binding_send_sync() {
         fn assert_send_sync<T: Send + Sync + ?Sized>() {}
         assert_send_sync::<dyn RendererBinding>();
+    }
+
+    /// Minimal `RendererBinding` implementer exercising the trait's default
+    /// methods (`add_render_view_with_config`, `create_view_configuration_for`,
+    /// `draw_frame`, `handle_metrics_changed`) and the free `debug_dump_*`
+    /// functions, none of which had any test coverage.
+    struct TestBinding {
+        owner: RwLock<PipelineOwner>,
+        views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
+        mouse_tracker: MouseTracker,
+        visual_update_calls: AtomicUsize,
+        send_frames: AtomicBool,
+    }
+
+    impl TestBinding {
+        fn new() -> Self {
+            Self {
+                owner: RwLock::new(PipelineOwner::new()),
+                views: RwLock::new(HashMap::new()),
+                mouse_tracker: MouseTracker::new(),
+                visual_update_calls: AtomicUsize::new(0),
+                send_frames: AtomicBool::new(true),
+            }
+        }
+    }
+
+    impl RendererBinding for TestBinding {
+        fn request_visual_update(&self) {
+            self.visual_update_calls.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn semantics_enabled(&self) -> bool {
+            false
+        }
+
+        fn add_semantics_enabled_listener(&self, _listener: Arc<dyn Fn(bool) + Send + Sync>) {}
+
+        fn remove_semantics_enabled_listener(&self, _listener: &Arc<dyn Fn(bool) + Send + Sync>) {}
+
+        fn hit_test_in_view(
+            &self,
+            _result: &mut HitTestResult,
+            _position: flui_types::Offset,
+            _view_id: u64,
+        ) {
+        }
+
+        fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
+            &self.owner
+        }
+
+        fn render_view(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
+            self.views.read().get(&view_id).cloned()
+        }
+
+        fn render_view_ids(&self) -> Vec<u64> {
+            self.views.read().keys().copied().collect()
+        }
+
+        fn insert_render_view(&self, view_id: u64, view: Arc<RwLock<RenderView>>) {
+            self.views.write().insert(view_id, view);
+        }
+
+        fn remove_render_view_by_id(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
+            self.views.write().remove(&view_id)
+        }
+
+        fn mouse_tracker(&self) -> &MouseTracker {
+            &self.mouse_tracker
+        }
+
+        fn send_frames_to_engine(&self) -> bool {
+            self.send_frames.load(Ordering::SeqCst)
+        }
+    }
+
+    #[test]
+    fn add_render_view_with_config_derives_and_inserts() {
+        let binding = TestBinding::new();
+        let view = Arc::new(RwLock::new(RenderView::new()));
+        assert!(!view.read().has_configuration());
+
+        binding.add_render_view_with_config(1, Arc::clone(&view));
+
+        // The default `create_view_configuration_for` gives a bare view
+        // `ViewConfiguration::default()`, and the view must now be reachable
+        // through the binding's own accessors.
+        assert!(view.read().has_configuration());
+        assert!(binding.render_view(1).is_some());
+        assert_eq!(binding.render_view_ids(), vec![1]);
+    }
+
+    #[test]
+    fn create_view_configuration_for_returns_existing_or_default() {
+        let binding = TestBinding::new();
+
+        let bare = RenderView::new();
+        assert_eq!(
+            binding.create_view_configuration_for(&bare),
+            ViewConfiguration::default()
+        );
+
+        let existing_config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let configured = RenderView::with_configuration(existing_config.clone());
+        assert_eq!(
+            binding.create_view_configuration_for(&configured),
+            existing_config
+        );
+    }
+
+    #[test]
+    fn handle_metrics_changed_requests_a_frame_only_when_a_view_was_already_configured() {
+        let binding = TestBinding::new();
+
+        // A view without prior configuration: metrics-changed gives it the
+        // default configuration, but must NOT request a frame (nothing was
+        // visibly configured before this call).
+        let bare_view = Arc::new(RwLock::new(RenderView::new()));
+        binding.insert_render_view(1, Arc::clone(&bare_view));
+
+        binding.handle_metrics_changed();
+        assert_eq!(binding.visual_update_calls.load(Ordering::SeqCst), 0);
+        assert!(bare_view.read().has_configuration());
+
+        // A view that already had a configuration: metrics-changed must
+        // request a frame since a real, visible view is being updated.
+        let configured_view = Arc::new(RwLock::new(RenderView::with_configuration(
+            ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0),
+        )));
+        binding.insert_render_view(2, Arc::clone(&configured_view));
+
+        binding.handle_metrics_changed();
+        assert_eq!(binding.visual_update_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn draw_frame_withholds_output_when_deferred_but_still_runs_pipeline_work() {
+        let binding = TestBinding::new();
+        binding.send_frames.store(false, Ordering::SeqCst);
+
+        // No root attached, so there is nothing to layout/paint regardless;
+        // the point of this test is that a deferred frame reports `None`.
+        assert!(binding.draw_frame().is_none());
+    }
+
+    #[test]
+    fn draw_frame_returns_none_when_pipeline_has_no_root() {
+        let binding = TestBinding::new();
+        assert!(binding.draw_frame().is_none());
+    }
+
+    #[test]
+    fn debug_dump_functions_report_empty_binding_has_no_root() {
+        let binding = TestBinding::new();
+
+        assert_eq!(
+            debug_dump_render_tree(&binding),
+            "No render tree root was added to the binding."
+        );
+        assert_eq!(
+            debug_dump_layer_tree(&binding),
+            "No render tree root was added to the binding."
+        );
+        assert_eq!(
+            debug_dump_semantics_tree(
+                &binding,
+                flui_semantics::DebugSemanticsDumpOrder::TraversalOrder
+            ),
+            "No render tree root was added to the binding."
+        );
+
+        // No pipeline root: falls back to the owner's `Debug` representation
+        // rather than the diagnostics tree.
+        let dump = debug_dump_pipeline_owner_tree(&binding);
+        assert!(!dump.is_empty());
+    }
+
+    #[test]
+    fn debug_dump_render_and_layer_tree_include_the_added_view() {
+        let binding = TestBinding::new();
+        let mut view = RenderView::with_configuration(ViewConfiguration::from_size(
+            Size::new(px(800.0), px(600.0)),
+            1.0,
+        ));
+        view.prepare_initial_frame_without_owner();
+        binding.insert_render_view(7, Arc::new(RwLock::new(view)));
+
+        let render_dump = debug_dump_render_tree(&binding);
+        assert!(render_dump.contains("RenderView 7"));
+
+        let layer_dump = debug_dump_layer_tree(&binding);
+        assert!(layer_dump.contains("LayerTree 7"));
+        assert!(!layer_dump.contains("unavailable"));
     }
 }

@@ -340,6 +340,15 @@ impl PipelineOwner<Layout> {
                 }
 
                 self.bootstrap_repaint_boundary_flag(child_id);
+                // ADR-0013: hand the freshly-inserted child its self-dirty
+                // handle. `attach_inserted_node` is protocol-generic (keys
+                // off `RenderId`, not the protocol tag), so this one call
+                // covers both `DeferredRenderObject::Box` and `::Sliver` —
+                // before this, a lazily-built list/grid child (of either
+                // protocol) never received `attach`, silently starving any
+                // render object that subscribes to a `Listenable` there
+                // (e.g. a snap-animation controller) of its handle.
+                self.attach_inserted_node(child_id);
                 self.add_node_needing_layout(child_id, child_depth);
                 self.add_node_needing_paint(child_id, child_depth);
                 // `mark_needs_layout` (not `add_node_needing_layout`) so the

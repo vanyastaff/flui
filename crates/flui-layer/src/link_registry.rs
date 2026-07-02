@@ -49,12 +49,13 @@
 //! let followers = registry.followers_for_link(link);
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use flui_foundation::LayerId;
 use flui_types::geometry::{Offset, Pixels, Size};
 
-use crate::layer::LayerLink;
+use crate::layer::{FollowerLayer, Layer, LayerLink};
+use crate::tree::LayerTree;
 
 // ============================================================================
 // LEADER INFO
@@ -298,6 +299,134 @@ impl LinkRegistry {
 }
 
 // ============================================================================
+// FOLLOWER POSITION RESOLUTION
+// ============================================================================
+
+/// Resolves the render-time pixel offset a `Layer::Follower` should be
+/// translated by, relative to its OWN current position in the tree walk —
+/// i.e. the value `render_layer_recursive` should feed straight into
+/// `push_offset`/`pop_transform` at the point it visits `follower_layer_id`
+/// (see `crates/flui-engine/src/wgpu/renderer.rs`).
+///
+/// A translation-only analogue of Flutter's
+/// `FollowerLayer._pathsToCommonAncestor`/`_collectTransformForLayerChain`
+/// (`layer.dart:2722-2765`): walks the leader's and the follower's ancestor
+/// chains in the already-fully-built `tree` to their nearest common
+/// ancestor, sums the `Layer::Offset` deltas encountered along each side
+/// (the only layer kind FLUI's paint composer ever uses to shift the
+/// accumulated coordinate space, `pipeline/owner/paint.rs`'s `scope_layer`
+/// doc), and feeds the leader's resulting position — as seen from the
+/// follower's own local frame — into [`FollowerLayer::calculate_offset`].
+///
+/// Returns `None` when the follower must not render its subtree at all:
+/// unlinked (no leader currently registered under `follower.link()`) AND
+/// `follower.show_when_unlinked() == false` — mirroring oracle's early
+/// return in `FollowerLayer.addToScene` (`layer.dart:2857-2865`) before
+/// `addChildrenToScene` is ever called. When linked-but-disjoint (leader
+/// and follower share no common ancestor — should not happen for a single
+/// well-formed frame's tree, but is not a panic-worthy invariant), the same
+/// unlinked contract is used defensively rather than fabricating a bogus
+/// position.
+pub fn resolve_follower_offset(
+    tree: &LayerTree,
+    registry: &LinkRegistry,
+    follower_layer_id: LayerId,
+    follower: &FollowerLayer,
+) -> Option<Offset<Pixels>> {
+    let unlinked_fallback = || {
+        follower
+            .show_when_unlinked()
+            .then_some(follower.target_offset())
+    };
+
+    let Some(leader_info) = registry.get_leader(follower.link()) else {
+        // No leader currently registered — oracle's dual-purpose `offset`
+        // field becomes the plain paint-origin-relative fallback position,
+        // NOT routed through `calculate_offset` (which requires a resolved
+        // leader pose and has no unlinked code path at all).
+        return unlinked_fallback();
+    };
+
+    let Some(common_ancestor) = find_common_ancestor(tree, leader_info.layer_id, follower_layer_id)
+    else {
+        tracing::warn!(
+            leader_layer_id = ?leader_info.layer_id,
+            ?follower_layer_id,
+            "resolve_follower_offset: leader and follower share no common \
+             ancestor in the layer tree; falling back to the unlinked contract",
+        );
+        return unlinked_fallback();
+    };
+
+    let leader_chain_offset = translation_to_ancestor(tree, leader_info.layer_id, common_ancestor);
+    let follower_chain_offset = translation_to_ancestor(tree, follower_layer_id, common_ancestor);
+    // The leader's position as seen from the follower's own local frame:
+    // both chains are summed only up to the shared ancestor, so the
+    // (identical, cancelling) ancestor-to-root portion is never computed.
+    let leader_offset_from_follower =
+        leader_info.offset + leader_chain_offset - follower_chain_offset;
+
+    Some(follower.calculate_offset(
+        leader_offset_from_follower,
+        leader_info.size,
+        follower.size(),
+    ))
+}
+
+/// Returns the nearest common ancestor of `a` and `b` (inclusive of `a`/`b`
+/// themselves), or `None` if they do not share one.
+fn find_common_ancestor(tree: &LayerTree, a: LayerId, b: LayerId) -> Option<LayerId> {
+    let mut ancestors_of_a: HashSet<LayerId> = HashSet::new();
+    let mut current = Some(a);
+    while let Some(id) = current {
+        ancestors_of_a.insert(id);
+        current = tree.parent(id);
+    }
+
+    let mut current = Some(b);
+    while let Some(id) = current {
+        if ancestors_of_a.contains(&id) {
+            return Some(id);
+        }
+        current = tree.parent(id);
+    }
+    None
+}
+
+/// Accumulates the translation from `start` up to (and excluding) `ancestor`:
+/// every `Layer::Offset`'s offset **plus the translation component of every
+/// `Layer::Transform`** on the path. The paint composer does push
+/// `Layer::Transform` nodes (e.g. for `paint_transform` / `PushTransform`
+/// scopes), so a leader or follower inside a `RenderTransform`/`FittedBox`/flow
+/// transform would otherwise be resolved as if that transform did not exist.
+///
+/// FLUI's follower system is offset-only (`FollowerLayer::calculate_offset`
+/// takes an `Offset`), so a transform layer contributes only its translation
+/// here — a scale or rotation between leader and follower is not representable
+/// and is a documented limitation of the offset-only follower, not a silent
+/// drop.
+fn translation_to_ancestor(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> Offset<Pixels> {
+    let mut total = Offset::ZERO;
+    let mut current = Some(start);
+    while let Some(id) = current {
+        if id == ancestor {
+            break;
+        }
+        let Some(node) = tree.get(id) else { break };
+        match node.layer() {
+            Layer::Offset(offset_layer) => total += offset_layer.offset(),
+            Layer::Transform(transform_layer) => {
+                let (tx, ty, _tz) = transform_layer.transform().translation_component();
+                total += Offset::new(Pixels::new(tx), Pixels::new(ty));
+            }
+            _ => {}
+        }
+        current = node.parent();
+    }
+    total
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -533,5 +662,205 @@ mod tests {
         assert_eq!(registry.follower_count(), 3);
         assert_eq!(registry.followers_for_link(link1).len(), 2);
         assert_eq!(registry.followers_for_link(link2).len(), 1);
+    }
+
+    // ========================================================================
+    // resolve_follower_offset
+    // ========================================================================
+
+    use crate::layer::{FollowerLayer, LeaderLayer, OffsetLayer, TransformLayer};
+
+    #[test]
+    fn resolve_follower_offset_linked_same_parent_top_left() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        tree.set_root(Some(root));
+
+        let link = make_link();
+        let leader_id = tree.insert(Layer::Leader(LeaderLayer::new(
+            link,
+            Size::new(px(20.0), px(20.0)),
+        )));
+        tree.add_child(root, leader_id);
+
+        let follower = FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.add_child(root, follower_id);
+
+        let mut registry = LinkRegistry::new();
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::new(px(30.0), px(40.0)),
+            Size::new(px(20.0), px(20.0)),
+        );
+
+        let resolved = resolve_follower_offset(&tree, &registry, follower_id, &follower);
+        assert_eq!(resolved, Some(Offset::new(px(30.0), px(40.0))));
+    }
+
+    /// The cross-repaint-boundary case that motivated the render-time
+    /// resolution design (plan §4): leader and follower sit under two
+    /// DIFFERENT `Layer::Offset` ancestors. Resolution must sum both
+    /// ancestor chains to their common ancestor (the root), not assume a
+    /// shared immediate parent.
+    #[test]
+    fn resolve_follower_offset_linked_across_offset_boundaries() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        tree.set_root(Some(root));
+
+        let link = make_link();
+
+        let branch_a = tree.insert(Layer::Offset(OffsetLayer::new(Offset::new(
+            px(100.0),
+            px(0.0),
+        ))));
+        tree.add_child(root, branch_a);
+        let leader_id = tree.insert(Layer::Leader(LeaderLayer::new(
+            link,
+            Size::new(px(20.0), px(20.0)),
+        )));
+        tree.add_child(branch_a, leader_id);
+
+        let branch_b = tree.insert(Layer::Offset(OffsetLayer::new(Offset::new(
+            px(0.0),
+            px(200.0),
+        ))));
+        tree.add_child(root, branch_b);
+        let follower = FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.add_child(branch_b, follower_id);
+
+        let mut registry = LinkRegistry::new();
+        // Leader's own registered offset — its accumulated position relative
+        // to `branch_a` (its nearest `Layer::Offset` ancestor), NOT root-absolute.
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::new(px(5.0), px(5.0)),
+            Size::new(px(20.0), px(20.0)),
+        );
+
+        let resolved = resolve_follower_offset(&tree, &registry, follower_id, &follower);
+        // Leader absolute: branch_a (100,0) + leader local (5,5) = (105,5).
+        // Follower's accumulated position at its own tree slot: branch_b (0,200).
+        // Push-offset to apply at the follower's walk point: (105,5) - (0,200)
+        // = (105,-195) — feeding the child back to (0,200)+(105,-195) = (105,5),
+        // matching the leader's absolute position (default TOP_LEFT anchors,
+        // zero target offset).
+        assert_eq!(resolved, Some(Offset::new(px(105.0), px(-195.0))));
+    }
+
+    /// Regression for the Codex PR-review finding: a leader inside a
+    /// `Layer::Transform` (which the paint composer pushes for
+    /// `RenderTransform`/`FittedBox`/flow scopes) must have that transform's
+    /// translation included in follower resolution. Identical geometry to
+    /// `resolve_follower_offset_linked_across_offset_boundaries`, but the
+    /// leader's `(100, 0)` ancestor is a translation `Layer::Transform` instead
+    /// of a `Layer::Offset` — the resolved offset must be the same. Before the
+    /// fix, `translation_to_ancestor` skipped transform layers and this
+    /// resolved to `(5, -195)` (the 100px translation dropped).
+    #[test]
+    fn resolve_follower_offset_includes_transform_layer_translation() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        tree.set_root(Some(root));
+
+        let link = make_link();
+
+        // Leader's ancestor is a translation TRANSFORM layer, not an offset.
+        let branch_a = tree.insert(Layer::Transform(TransformLayer::translation(100.0, 0.0)));
+        tree.add_child(root, branch_a);
+        let leader_id = tree.insert(Layer::Leader(LeaderLayer::new(
+            link,
+            Size::new(px(20.0), px(20.0)),
+        )));
+        tree.add_child(branch_a, leader_id);
+
+        let branch_b = tree.insert(Layer::Offset(OffsetLayer::new(Offset::new(
+            px(0.0),
+            px(200.0),
+        ))));
+        tree.add_child(root, branch_b);
+        let follower = FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.add_child(branch_b, follower_id);
+
+        let mut registry = LinkRegistry::new();
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::new(px(5.0), px(5.0)),
+            Size::new(px(20.0), px(20.0)),
+        );
+
+        let resolved = resolve_follower_offset(&tree, &registry, follower_id, &follower);
+        // Leader absolute: transform translation (100,0) + leader local (5,5) =
+        // (105,5); follower slot: (0,200); push-offset (105,5) - (0,200) =
+        // (105,-195). Dropping the transform's translation would give (5,-195).
+        assert_eq!(resolved, Some(Offset::new(px(105.0), px(-195.0))));
+    }
+
+    #[test]
+    fn resolve_follower_offset_unlinked_show_when_unlinked_true_uses_target_offset() {
+        let mut tree = LayerTree::new();
+        let link = make_link();
+        let follower = FollowerLayer::new(link)
+            .with_show_when_unlinked(true)
+            .with_target_offset(Offset::new(px(7.0), px(9.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.set_root(Some(follower_id));
+
+        // No leader registered under `link` at all.
+        let registry = LinkRegistry::new();
+
+        let resolved = resolve_follower_offset(&tree, &registry, follower_id, &follower);
+        assert_eq!(resolved, Some(Offset::new(px(7.0), px(9.0))));
+    }
+
+    #[test]
+    fn resolve_follower_offset_unlinked_show_when_unlinked_false_hides_subtree() {
+        let mut tree = LayerTree::new();
+        let link = make_link();
+        let follower = FollowerLayer::new(link).with_show_when_unlinked(false);
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.set_root(Some(follower_id));
+
+        let registry = LinkRegistry::new();
+
+        let resolved = resolve_follower_offset(&tree, &registry, follower_id, &follower);
+        assert_eq!(
+            resolved, None,
+            "show_when_unlinked = false must hide the subtree entirely when unlinked"
+        );
+    }
+
+    #[test]
+    fn resolve_follower_offset_no_common_ancestor_falls_back_to_unlinked_contract() {
+        let mut tree = LayerTree::new();
+        let link = make_link();
+
+        // Leader and follower both inserted but never attached to any
+        // parent — no shared ancestor exists in the tree.
+        let leader_id = tree.insert(Layer::Leader(LeaderLayer::new(
+            link,
+            Size::new(px(20.0), px(20.0)),
+        )));
+        let follower = FollowerLayer::new(link)
+            .with_show_when_unlinked(true)
+            .with_target_offset(Offset::new(px(3.0), px(4.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+
+        let mut registry = LinkRegistry::new();
+        registry.register_leader(link, leader_id, Offset::ZERO, Size::new(px(20.0), px(20.0)));
+
+        let resolved = resolve_follower_offset(&tree, &registry, follower_id, &follower);
+        assert_eq!(
+            resolved,
+            Some(Offset::new(px(3.0), px(4.0))),
+            "a disjoint leader/follower pair must fall back to the unlinked contract, \
+             not fabricate a bogus resolved position",
+        );
     }
 }

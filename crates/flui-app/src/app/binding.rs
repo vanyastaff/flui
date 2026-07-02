@@ -31,7 +31,7 @@ use std::sync::{
 };
 
 use flui_animation::Vsync;
-use flui_engine::{EngineError, wgpu::Renderer};
+use flui_engine::{EngineError, RasterBackend};
 use flui_foundation::HasInstance;
 use flui_interaction::{binding::GestureBinding, routing::FocusManager};
 use flui_layer::Scene;
@@ -682,7 +682,7 @@ impl AppBinding {
         // the frame errored (e.g. a render object panicked and was
         // caught by `catch_unwind`), we log via tracing and drop the
         // frame -- the owner is still usable for the next call.
-        let layer_tree = {
+        let (layer_tree, link_registry) = {
             let mut guard = self.shared_pipeline_owner.write();
             // The window's constraints ARE the root constraints — without
             // this, frame 1 has neither cached state nor root_constraints
@@ -691,13 +691,18 @@ impl AppBinding {
             // so the per-frame call is idempotent and resize-correct.
             guard.set_root_constraints(Some(constraints));
             let owner = std::mem::take(&mut *guard);
-            let (owner, result) = owner.run_frame();
+            let (mut owner, result) = owner.run_frame();
+            // Taken alongside the layer tree so `Scene::with_links` (below)
+            // gets the SAME frame's leader/follower registry — resolving a
+            // `Layer::Follower` position against a stale or empty registry
+            // would silently misposition tooltips/dropdowns.
+            let link_registry = owner.take_link_registry();
             *guard = owner;
             match result {
-                Ok(layer_tree) => layer_tree,
+                Ok(layer_tree) => (layer_tree, link_registry),
                 Err(e) => {
                     tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                    None
+                    (None, link_registry)
                 }
             }
         };
@@ -735,7 +740,17 @@ impl AppBinding {
             // the binding thread is the sole reader of this `Arc<Scene>`,
             // so the lint is suppressed with an honest justification.
             let root = layer_tree.root();
-            let scene = Scene::new(size, layer_tree, root, frame_number);
+            // `with_links` (not `Scene::new`, which always builds an empty
+            // registry) — `link_registry` is this SAME frame's paint-phase
+            // byproduct, letting the engine resolve `Layer::Follower`
+            // positions against the leaders that were just composed.
+            let scene = Scene::with_links(
+                size,
+                layer_tree,
+                root,
+                link_registry.unwrap_or_default(),
+                frame_number,
+            );
             #[expect(
                 clippy::arc_with_non_send_sync,
                 reason = "Scene: Send but !Sync due to CompositionCallback (FnOnce + Send + 'static, no Sync). Sole reader is the binding thread; relaxing the callback bound is tracked under the engine composition redesign."
@@ -752,7 +767,7 @@ impl AppBinding {
     ///
     /// Orchestrates: flush_coalesced_moves → draw → render → mark_rendered
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn render_frame(&self, renderer: &mut Renderer) -> Option<Arc<Scene>> {
+    pub fn render_frame<R: RasterBackend>(&self, renderer: &mut R) -> Option<Arc<Scene>> {
         // 1. Flush coalesced pointer moves (GestureBinding handles coalescing)
         self.gestures.flush_pending_moves();
 
@@ -963,52 +978,22 @@ mod tests {
     #[derive(Clone)]
     struct LeafView;
 
+    impl flui_view::RenderView for LeafView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+            *render_object = flui_objects::RenderSizedBox::shrink();
+        }
+    }
+
     impl View for LeafView {
-        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-            Box::new(LeafElement {
-                lifecycle: flui_view::element::Lifecycle::Initial,
-            })
-        }
-    }
-
-    struct LeafElement {
-        lifecycle: flui_view::element::Lifecycle,
-    }
-
-    impl flui_view::ElementBase for LeafElement {
-        fn view_type_id(&self) -> std::any::TypeId {
-            std::any::TypeId::of::<LeafView>()
-        }
-        fn depth(&self) -> usize {
-            0
-        }
-        fn lifecycle(&self) -> flui_view::element::Lifecycle {
-            self.lifecycle
-        }
-        fn mount(
-            &mut self,
-            _parent: Option<flui_foundation::ElementId>,
-            _slot: usize,
-            _owner: &mut flui_view::ElementOwner<'_>,
-        ) {
-            self.lifecycle = flui_view::element::Lifecycle::Active;
-        }
-        fn unmount(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {
-            self.lifecycle = flui_view::element::Lifecycle::Defunct;
-        }
-        fn activate(&mut self) {
-            self.lifecycle = flui_view::element::Lifecycle::Active;
-        }
-        fn deactivate(&mut self) {
-            self.lifecycle = flui_view::element::Lifecycle::Inactive;
-        }
-        fn update(&mut self, _new: &dyn View, _owner: &mut flui_view::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(
-            &mut self,
-            _owner: &mut flui_view::ElementOwner<'_>,
-        ) -> Vec<Box<dyn View>> {
-            Vec::new()
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
         }
     }
 
@@ -1574,7 +1559,7 @@ mod tests {
     //
     // Placed here (module scope, inside `mod tests`) so all A-series tests share it.
     // -----------------------------------------------------------------------
-    use flui_view::{IntoView, StatefulBehavior, StatefulElement, StatefulView, ViewState};
+    use flui_view::{IntoView, StatefulView, ViewState};
 
     /// Test-local view that captures the auto-injected `VsyncScope` in
     /// `init_state`, registers a caller-supplied controller, and starts it
@@ -1632,8 +1617,8 @@ mod tests {
     }
 
     impl View for VsyncProbeView {
-        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
         }
     }
 

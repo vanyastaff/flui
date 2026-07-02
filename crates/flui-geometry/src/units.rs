@@ -82,6 +82,12 @@ use super::traits::{NumericUnit, Unit};
 /// // px * px is area, not length, so it has no `Pixels` result (U4).
 /// let _: Pixels = px(10.0) * px(2.0);
 /// ```
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// // No lossy implicit Pixels -> integer conversion (U11).
+/// let _: i32 = px(10.0).into();
+/// ```
 #[derive(Copy, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
@@ -1926,6 +1932,24 @@ mod tests {
         assert_eq!(p.ceil().get(), 11.0);
         assert_eq!(p.round().get(), 11.0);
         assert_eq!(p.trunc().get(), 10.0);
+    }
+
+    #[test]
+    fn test_pixels_explicit_integer_rounding() {
+        assert_eq!(px(10.4).to_i32_round(), 10);
+        assert_eq!(px(10.5).to_i32_round(), 11);
+        assert_eq!(px(-1.6).to_i32_round(), -2);
+        assert_eq!(Pixels::INFINITY.to_i32_round(), i32::MAX);
+        assert_eq!(Pixels::NEG_INFINITY.to_i32_round(), i32::MIN);
+
+        assert_eq!(px(10.4).to_u32_round_clamped(), 10);
+        assert_eq!(px(10.5).to_u32_round_clamped(), 11);
+        assert_eq!(px(-1.0).to_u32_round_clamped(), 0);
+        assert_eq!(Pixels::INFINITY.to_u32_round_clamped(), u32::MAX);
+
+        assert_eq!(px(10.4).to_usize_round_clamped(), 10);
+        assert_eq!(px(10.5).to_usize_round_clamped(), 11);
+        assert_eq!(px(-1.0).to_usize_round_clamped(), 0);
     }
 
     #[test]

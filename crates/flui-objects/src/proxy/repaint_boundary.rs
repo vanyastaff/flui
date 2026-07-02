@@ -9,10 +9,10 @@
 //! [`is_repaint_boundary`]: flui_rendering::traits::RenderObject::is_repaint_boundary
 
 use flui_tree::Single;
-use flui_types::Size;
+use flui_types::{Offset, Size};
 
 use flui_rendering::{
-    context::{BoxLayoutContext, PaintCx},
+    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -40,6 +40,9 @@ use flui_rendering::{
 pub struct RenderRepaintBoundary {
     /// Debug metric: number of times this subtree was repainted.
     paint_count: u32,
+    /// Whether a child was attached at the last layout — gates hit-testing
+    /// (a childless boundary must not absorb hits).
+    has_child: bool,
 }
 
 impl RenderRepaintBoundary {
@@ -72,9 +75,11 @@ impl RenderBox for RenderRepaintBoundary {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
+            self.has_child = true;
             // Pass-through: layout child with same constraints, adopt child size.
             ctx.layout_child(0, constraints)
         } else {
+            self.has_child = false;
             // No child — take minimum size.
             constraints.smallest()
         }
@@ -85,6 +90,18 @@ impl RenderBox for RenderRepaintBoundary {
         // boundary split (OffsetLayer + rebase to ZERO) is the paint
         // walk's job, keyed off `is_repaint_boundary()`.
         ctx.paint_child();
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
+        // Pure pass-through (Flutter RenderProxyBox: `hitTestSelf` is false, so
+        // the boundary is hit iff its child is hit). Without this override the
+        // trait default `is_within_own_size()` would absorb the hit on the
+        // boundary itself and never recurse — blocking the entire subtree from
+        // receiving pointer events.
+        if !ctx.is_within_own_size() {
+            return false;
+        }
+        self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO)
     }
 
     // === Optimization boundaries (the KEY overrides) ========================

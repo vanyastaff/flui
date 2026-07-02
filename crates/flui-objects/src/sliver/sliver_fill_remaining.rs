@@ -9,7 +9,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Single;
-use flui_types::{Offset, Size, geometry::px, layout::AxisDirection::*};
+use flui_types::{Offset, geometry::px, layout::AxisDirection::*};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -140,15 +140,15 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
             (constraints.viewport_main_axis_extent - constraints.preceding_scroll_extent).max(0.0);
         let mut max_extent =
             (constraints.remaining_paint_extent - constraints.overlap.min(0.0)).max(0.0);
-        let mut child_main_extent = extent;
-
         if ctx.child_count() > 0 {
             let child_extent = child_max_intrinsic_main_extent(ctx, &constraints);
             extent = extent.max(child_extent);
             max_extent = max_extent.max(extent);
-            let child_size =
+            // Lay the child out; its measured main-axis size is not used for
+            // positioning — the offset is derived from geometry.scroll_extent
+            // (see below), matching the sibling fill slivers and the oracle.
+            let _ =
                 ctx.layout_box_child(0, constraints.as_box_constraints(extent, max_extent, None));
-            child_main_extent = size_main_axis_extent(child_size, &constraints);
         }
 
         let painted_child_size = max_extent.min(constraints.remaining_paint_extent);
@@ -166,10 +166,12 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
             ..SliverGeometry::ZERO
         };
         if ctx.child_count() > 0 {
-            ctx.position_child(
-                0,
-                child_paint_offset_for_extent(&constraints, &geometry, child_main_extent),
-            );
+            // Position via geometry.scroll_extent, NOT the measured child extent.
+            // Flutter's RenderSliverSingleBoxAdapter.setChildParentData (sliver.dart)
+            // uses paintExtent + scrollOffset - scrollExtent on the reverse axis;
+            // using the (overscrolled) measured size mispositioned the child. This
+            // is the same helper the sibling fill slivers use.
+            ctx.position_child(0, child_paint_offset(&constraints, &geometry));
         }
         geometry
     }
@@ -283,14 +285,6 @@ fn child_max_intrinsic_main_extent(
         flui_types::layout::Axis::Vertical => {
             ctx.box_child_max_intrinsic_height(0, constraints.cross_axis_extent)
         }
-    }
-}
-
-#[inline]
-fn size_main_axis_extent(size: Size, constraints: &SliverConstraints) -> f32 {
-    match constraints.axis_direction.axis() {
-        flui_types::layout::Axis::Horizontal => size.width.get(),
-        flui_types::layout::Axis::Vertical => size.height.get(),
     }
 }
 

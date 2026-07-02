@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose a new capability or API.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or framework problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the intended API, behavior, or user workflow.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - rendering/layout/paint
+        - view/element/reconciliation
+        - widgets
+        - engine/GPU
+        - platform
+        - assets/networking
+        - tooling
+        - documentation
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Flutter, GPUI, Xilem, browser, native toolkit, or research references.
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration
+      description: Breaking changes, alternatives considered, and migration path.
+

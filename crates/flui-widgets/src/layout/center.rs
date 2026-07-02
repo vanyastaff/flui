@@ -79,3 +79,95 @@ impl RenderView for Center {
 }
 
 impl_render_view!(Center);
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
+
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn create_render_object_defaults_match_flutter() {
+        let render_object = Center::new().create_render_object();
+        assert_eq!(render_object.width_factor(), None);
+        assert_eq!(render_object.height_factor(), None);
+    }
+
+    #[test]
+    fn create_render_object_uses_the_given_width_and_height_factor() {
+        let center = Center::new().width_factor(0.5).height_factor(2.0);
+        let render_object = center.create_render_object();
+        assert_eq!(render_object.width_factor(), Some(0.5));
+        assert_eq!(render_object.height_factor(), Some(2.0));
+    }
+
+    #[test]
+    fn update_render_object_applies_a_changed_width_and_height_factor() {
+        let mut render_object = Center::new().create_render_object();
+        assert_eq!(render_object.width_factor(), None);
+        assert_eq!(render_object.height_factor(), None);
+
+        let updated = Center::new().width_factor(1.5).height_factor(3.0);
+        updated.update_render_object(&mut render_object);
+
+        assert_eq!(render_object.width_factor(), Some(1.5));
+        assert_eq!(render_object.height_factor(), Some(3.0));
+    }
+
+    #[test]
+    fn update_render_object_clears_a_previously_set_factor() {
+        let mut render_object = Center::new()
+            .width_factor(0.5)
+            .height_factor(0.5)
+            .create_render_object();
+        assert_eq!(render_object.width_factor(), Some(0.5));
+        assert_eq!(render_object.height_factor(), Some(0.5));
+
+        let updated = Center::new();
+        updated.update_render_object(&mut render_object);
+
+        assert_eq!(render_object.width_factor(), None);
+        assert_eq!(render_object.height_factor(), None);
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        let empty = Center::new();
+        assert!(!empty.has_children());
+
+        let with_child = Center::new().child(SizedBox::shrink());
+        assert!(with_child.has_children());
+    }
+
+    #[test]
+    fn debug_reports_factors_and_child_presence() {
+        let center = Center::new().width_factor(0.5);
+        let debug = format!("{center:?}");
+        assert!(
+            debug.contains("width_factor: Some(0.5)") && debug.contains("has_child: false"),
+            "Debug output must report factors and child presence, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn visit_child_views_invokes_the_visitor_once_with_a_child_set() {
+        let center = Center::new().child(SizedBox::shrink());
+        let mut visited = 0;
+        center.visit_child_views(&mut |_| visited += 1);
+        assert_eq!(
+            visited, 1,
+            "visitor must run exactly once for a single child"
+        );
+    }
+
+    #[test]
+    fn visit_child_views_does_not_invoke_the_visitor_without_a_child() {
+        let center = Center::new();
+        let mut visited = 0;
+        center.visit_child_views(&mut |_| visited += 1);
+        assert_eq!(visited, 0, "no child -> visitor must not run");
+    }
+}

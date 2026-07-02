@@ -9,10 +9,7 @@
 //! contract so a regression surfaces here.
 
 use flui_foundation::{ValueKey, ViewKey};
-use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatelessElement, StatelessView,
-    View, ViewExt,
-};
+use flui_view::{BuildContext, BuildOwner, ElementTree, IntoView, StatelessView, View, ViewExt};
 
 struct ShimView {
     payload: u32,
@@ -35,9 +32,8 @@ impl StatelessView for ShimView {
 }
 
 impl View for ShimView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {

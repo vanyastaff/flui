@@ -115,6 +115,15 @@ impl RenderConstrainedOverflowBox {
 
     // --- setters that return a change flag -----------------------------------
 
+    /// Replaces the child alignment.
+    ///
+    /// Delegates to the inner shared alignment component's own setter, which
+    /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
+    /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+        self.inner.set_alignment(alignment)
+    }
+
     /// Replaces the optional minimum-width override.
     pub fn set_min_width(&mut self, min_width: Option<Pixels>) -> bool {
         if self.min_width == min_width {
@@ -264,6 +273,16 @@ impl RenderBox for RenderConstrainedOverflowBox {
         ctx.child_max_intrinsic_height(0, width)
     }
 
+    /// Dry layout uses the SAME inner (override) constraints as `perform_layout`,
+    /// so FLUI's dry size always equals its laid-out size (the dry==committed
+    /// invariant). This is an INTENTIONAL divergence from Flutter, whose
+    /// `RenderConstrainedOverflowBox` dry path passes the OUTER constraints
+    /// (`shifted_box.dart:737`) and therefore disagrees with its own
+    /// `performLayout` (which uses inner constraints) — a Flutter dry/layout
+    /// inconsistency FLUI deliberately does not replicate (Prime Directive
+    /// rule #2). Concretely, with override `maxW=50` under incoming `(0,200)`
+    /// and a child intrinsic of 100, FLUI dry = 50 (== its committed layout),
+    /// whereas Flutter dry = 100 (≠ its own committed layout).
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
@@ -339,6 +358,15 @@ impl RenderSizedOverflowBox {
         self.requested_size
     }
 
+    /// Replaces the child alignment.
+    ///
+    /// Delegates to the inner shared alignment component's own setter, which
+    /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
+    /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+        self.inner.set_alignment(alignment)
+    }
+
     /// Replaces the requested size; returns `true` if the value changed.
     pub fn set_requested_size(&mut self, requested_size: Size) -> bool {
         if self.requested_size == requested_size {
@@ -383,34 +411,26 @@ impl RenderBox for RenderSizedOverflowBox {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: RenderShiftedBox delegates all four intrinsics to child.
+    // Flutter parity: RenderSizedOverflowBox OVERRIDES all four intrinsics to
+    // report its `requested_size` (the size it claims for itself), regardless of
+    // the child — `shifted_box.dart` RenderSizedOverflowBox.computeMin/MaxIntrinsic*.
+    // (The child is laid out under the incoming constraints and may overflow, so
+    // the child's intrinsics do not describe this box's size.)
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_min_intrinsic_width(0, height)
+    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.width.get()
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_max_intrinsic_width(0, height)
+    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.width.get()
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_min_intrinsic_height(0, width)
+    fn compute_min_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.height.get()
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        ctx.child_max_intrinsic_height(0, width)
+    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.requested_size.height.get()
     }
 
     fn compute_dry_layout(

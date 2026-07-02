@@ -315,15 +315,17 @@ fn u19_with_leaf_erased_ctx_matches_direct_bridge_call() {
 // Edge case (review fix #16): zero-child Variable bridge.
 // ============================================================================
 
-/// `RenderFlex::row()` with zero children completes layout with
-/// `constraints.smallest()` per the early-return path in
-/// `RenderFlex::perform_layout` (`if child_count == 0`). The bridge must
-/// propagate this small size — it must not assume children are present
+/// `RenderFlex::row()` with zero children completes layout via the
+/// `if child_count == 0` early-return in `RenderFlex::perform_layout`. With the
+/// default `MainAxisSize::Max` and a bounded main axis it fills that axis
+/// (Flutter `idealMainSize = maxMainSize`), so the size is `(300, 0)` here, not
+/// `smallest()` (behavior fixed 34c7c24c). The bridge must propagate whatever
+/// size the zero-child path returns — it must not assume children are present
 /// just because the typed wrapper has `Variable` arity.
 #[test]
 fn u19_variable_bridge_handles_zero_children() {
     let mut obj = RenderFlex::row();
-    // min=0 / max=300 etc — `smallest()` is (0, 0).
+    // min=0 / max=300; the default MainAxisSize::Max fills the bounded main axis.
     let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(100.0));
     let mut children: Vec<ChildState<FlexParentData>> = vec![];
     let child_ids: [RenderId; 0] = [];
@@ -340,8 +342,8 @@ fn u19_variable_bridge_handles_zero_children() {
 
     assert_eq!(
         size,
-        Size::new(px(0.0), px(0.0)),
-        "Zero-child RenderFlex must complete with constraints.smallest() = (0, 0)",
+        Size::new(px(300.0), px(0.0)),
+        "empty MainAxisSize::Max Row fills the bounded main axis (Flutter idealMainSize)",
     );
 }
 

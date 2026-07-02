@@ -524,6 +524,10 @@ mod tests {
         let manager = FocusManager::new_for_test();
         // Root scope is always present and attached.
         assert!(manager.root_scope().as_focus_node().is_attached());
+        assert!(
+            manager.root_scope().as_focus_node().is_scope(),
+            "root backing node must identify as a FocusScopeNode"
+        );
         // Active scope falls back to root scope.
         assert_eq!(
             manager.active_scope().id(),
@@ -620,6 +624,135 @@ mod tests {
         manager.request_focus(node);
 
         assert!(called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn focus_next_and_previous_walk_active_scope_and_record_history() {
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+
+        let first = FocusNode::with_debug_label("first");
+        first.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+        let second = FocusNode::with_debug_label("second");
+        second.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(20.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+        let third = FocusNode::with_debug_label("third");
+        third.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(40.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+
+        root.attach_node(&first);
+        root.attach_node(&second);
+        root.attach_node(&third);
+
+        manager.request_focus(first.id());
+        assert_eq!(manager.focused(), Some(first.id()));
+        assert_eq!(root.focused_child(), Some(first.id()));
+
+        assert!(manager.focus_next());
+        assert_eq!(manager.focused(), Some(second.id()));
+        assert_eq!(root.focused_child(), Some(second.id()));
+        assert!(!manager.has_focus(first.id()));
+        assert!(manager.has_focus(second.id()));
+
+        assert!(manager.focus_previous());
+        assert_eq!(manager.focused(), Some(first.id()));
+        assert_eq!(root.focused_child(), Some(first.id()));
+
+        manager.request_focus(third.id());
+        assert!(manager.focus_next(), "reading-order traversal wraps");
+        assert_eq!(manager.focused(), Some(first.id()));
+    }
+
+    #[test]
+    fn focus_traversal_respects_active_scope_and_skips_unfocusable_nodes() {
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let outside = FocusNode::with_debug_label("outside");
+        outside.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+        root.attach_node(&outside);
+
+        let dialog = FocusScopeNode::with_debug_label("dialog");
+        dialog
+            .as_focus_node()
+            .set_rect(flui_types::geometry::Rect::from_xywh(
+                flui_types::geometry::Pixels(10.0),
+                flui_types::geometry::Pixels(0.0),
+                flui_types::geometry::Pixels(10.0),
+                flui_types::geometry::Pixels(10.0),
+            ));
+        root.attach_node(dialog.as_focus_node());
+
+        let first = FocusNode::with_debug_label("first");
+        first.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+        let skipped = FocusNode::with_debug_label("skipped");
+        skipped.set_skip_traversal(true);
+        skipped.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+        let disabled = FocusNode::with_debug_label("disabled");
+        disabled.set_can_request_focus(false);
+        disabled.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(20.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+        let second = FocusNode::with_debug_label("second");
+        second.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(30.0),
+            flui_types::geometry::Pixels(0.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+
+        dialog.attach_node(&first);
+        dialog.attach_node(&skipped);
+        dialog.attach_node(&disabled);
+        dialog.attach_node(&second);
+
+        manager.set_active_scope(Some(dialog.clone()));
+        manager.request_focus(first.id());
+
+        assert!(manager.focus_next());
+        assert_eq!(
+            manager.focused(),
+            Some(second.id()),
+            "active-scope traversal skips skipTraversal/canRequestFocus=false nodes"
+        );
+
+        assert!(manager.focus_next(), "active-scope traversal wraps");
+        assert_eq!(
+            manager.focused(),
+            Some(first.id()),
+            "outside root sibling must not participate while dialog is active"
+        );
+        assert_eq!(dialog.focused_child(), Some(first.id()));
     }
 
     #[test]

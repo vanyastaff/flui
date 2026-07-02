@@ -9,11 +9,11 @@
 //! ```
 
 use std::sync::{
-    atomic::{AtomicI32, Ordering},
     Arc,
+    atomic::{AtomicI32, Ordering},
 };
 
-use flui_hot_reload::{hot_reload_worker, request_rebuild, WorkerBuildEnv};
+use flui_hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
 use flui_types::Color;
 use flui_view::prelude::*;
 use flui_widgets::{ColoredBox, Column, GestureDetector, Padding, Text};

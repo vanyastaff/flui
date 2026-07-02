@@ -47,10 +47,10 @@ use syn::{DeriveInput, parse_macro_input};
 
 /// Emit `impl View` for a `StatelessView` type.
 ///
-/// Generates the `create_element` boilerplate (`Box::new(
-/// StatelessElement::new(self, StatelessBehavior))`) so the author
-/// only writes the struct + its `impl StatelessView for X { fn
-/// build(...) -> impl IntoView }` block.
+/// Generates the `create_element` boilerplate
+/// (`ElementKind::stateless(self)`) so the author only writes the struct
+/// + its `impl StatelessView for X { fn build(...) -> impl IntoView }`
+///   block.
 ///
 /// # Example
 ///
@@ -84,8 +84,8 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// ```rust,ignore
 /// impl View for Greeting {
-///     fn create_element(&self) -> Box<dyn ElementBase> {
-///         Box::new(StatelessElement::<Self>::new(self, StatelessBehavior))
+///     fn create_element(&self) -> crate::element::ElementKind {
+///         crate::element::ElementKind::stateless(self)
 ///     }
 ///     fn key(&self) -> Option<&dyn ViewKey> {
 ///         Some(&self.key)
@@ -108,11 +108,11 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 
 /// Emit `impl View` for a `StatefulView` type.
 ///
-/// Generates the `create_element` boilerplate (`Box::new(
-/// StatefulElement::new(self, StatefulBehavior::new(self)))`). The
-/// author still writes the `impl StatefulView for X` and the
-/// corresponding `impl ViewState<X> for XState` blocks — the derive
-/// covers only the `impl View` boilerplate.
+/// Generates the `create_element` boilerplate
+/// (`ElementKind::stateful(self)`). The author still writes the
+/// `impl StatefulView for X` and the corresponding
+/// `impl ViewState<X> for XState` blocks — the derive covers only the
+/// `impl View` boilerplate.
 ///
 /// # Example
 ///

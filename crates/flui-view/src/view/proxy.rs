@@ -53,9 +53,8 @@ pub trait ProxyView: Clone + Send + Sync + 'static + Sized {
 macro_rules! impl_proxy_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::ProxyBehavior;
-                Box::new($crate::ProxyElement::new(self, ProxyBehavior))
+            fn create_element(&self) -> $crate::element::ElementKind {
+                $crate::element::ElementKind::proxy(self)
             }
         }
     };
@@ -68,9 +67,8 @@ macro_rules! impl_proxy_view {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
-
-    use flui_foundation::ElementId;
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
 
     use super::*;
     use crate::{
@@ -83,32 +81,20 @@ mod tests {
     #[derive(Clone)]
     struct DummyChild;
 
-    impl View for DummyChild {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(DummyChildElement)
+    impl crate::RenderView for DummyChild {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
         }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
     }
 
-    struct DummyChildElement;
-
-    impl ElementBase for DummyChildElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<DummyChild>()
-        }
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Active
-        }
-        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(&mut self, _: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
-        fn deactivate(&mut self) {}
-        fn activate(&mut self) {}
-        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
-        fn depth(&self) -> usize {
-            0
+    impl View for DummyChild {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -127,8 +113,8 @@ mod tests {
     }
 
     impl View for TestProxyView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(ProxyElement::new(self, ProxyBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::proxy(self)
         }
     }
 

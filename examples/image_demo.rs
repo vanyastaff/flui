@@ -12,7 +12,7 @@
 use flui_app::run_app;
 use flui_objects::{ImageAlignment, ImageFit, RenderImage};
 use flui_types::painting::Image as FluiImage;
-use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Decoded image data shared across UI rebuilds.
 #[derive(Clone)]
@@ -61,11 +61,8 @@ impl StatelessView for App {
 }
 
 impl View for App {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

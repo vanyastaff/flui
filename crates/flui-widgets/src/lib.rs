@@ -80,11 +80,13 @@ pub mod app;
 pub mod clip;
 mod container;
 pub mod flex;
+pub mod icon;
 pub mod image;
 pub mod interaction;
 pub mod layout;
 pub mod paint;
 pub mod scroll;
+pub mod semantics;
 pub mod stack;
 pub mod text;
 pub mod transitions;
@@ -96,47 +98,60 @@ pub mod wrap;
 // ============================================================================
 
 // Application-scoped inherited widgets: ambient screen data and theming.
-pub use app::{MediaQuery, MediaQueryData, Theme, ThemeData};
+pub use app::{MediaQuery, MediaQueryData, SafeArea, Theme, ThemeData};
 // `Brightness` is the value type shared by `MediaQueryData` and `ThemeData`;
 // re-exported here so callers need only `use flui_widgets::Brightness`.
 pub use flui_types::platform::Brightness;
 
 pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
-    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, VsyncScope,
+    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedSize, AnimatedSizeState,
+    VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 // `Image` widget over `RenderImage`; provider types live in the same module.
 // `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
 // need only import from `flui-widgets`, not from lower-level crates.
 pub use container::Container;
-pub use flex::{Column, Expanded, Flex, Flexible, Row};
+pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
+pub use icon::{Icon, IconData, IconTheme, IconThemeData};
+#[cfg(feature = "network-images")]
+pub use image::NetworkImage;
 pub use image::{
     DirectImageProvider, FileImage, Image, ImageProvider, ImageProviderError, MemoryImage,
-    NetworkImage,
 };
 pub use interaction::{
     AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,
-    Listener, Offstage,
+    Listener, MouseRegion, Offstage, Visibility,
 };
 pub use layout::{
-    Align, AspectRatio, Baseline, Center, ConstrainedBox, FittedBox, FractionalTranslation,
-    FractionallySizedBox, IntrinsicHeight, IntrinsicWidth, LimitedBox, OverflowBox, Padding,
-    RotatedBox, SizedBox, SizedOverflowBox, Transform,
+    Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
+    CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
+    IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, OverflowBox, Padding,
+    RotatedBox, SizedBox, SizedOverflowBox, Table, TableCell, TableRow, Transform,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
-pub use paint::{ColoredBox, DecoratedBox, Opacity, RepaintBoundary};
+// `TableColumnWidth`/`TableCellVerticalAlignment` configure `Table`/`TableCell`;
+// `TableBorder` configures `Table::border`. Re-exported here so widget authors
+// need only import from `flui_widgets`.
+pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
+pub use flui_types::styling::TableBorder;
+pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ListView, RefreshController, RefreshIndicator,
-    RefreshIndicatorState, ScrollController, ScrollPhysics, Scrollable, Scrollbar,
-    SharedScrollPhysics, SingleChildScrollView, SliverChildBuilderDelegate, SliverFixedExtentList,
-    SliverList, SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
+    BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
+    RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollPhysics,
+    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
+    SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+    SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+    SliverToBoxAdapter, Viewport,
 };
-pub use stack::{Positioned, Stack};
-pub use text::{EditableText, EditableTextState, Text, TextEditingController, TextField};
+pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
+pub use stack::{IndexedStack, Positioned, Stack};
+pub use text::{EditableText, EditableTextState, RichText, Text, TextEditingController, TextField};
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
     RotationTransitionState, ScaleTransition, ScaleTransitionState,
@@ -158,11 +173,29 @@ pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, Stac
 pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
 // `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
 pub use flui_rendering::parent_data::FlexFit;
+// Grid, custom-paint, flow, and custom layout delegates — always
+// available (un-gated since their companion render objects ship in the
+// default build). Re-exported here so widget authors need only import from
+// `flui_widgets`, matching Flutter's single-import surface.
+pub use flui_rendering::delegates::{
+    AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate, FlowPaintingContext,
+    MultiChildLayoutContext, MultiChildLayoutDelegate, SingleChildLayoutDelegate,
+    SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+    SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+};
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
-// `PointerEvent`/`EventPropagation` its callbacks receive/return.
-pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
+// pointer event types its callbacks receive.
+pub use flui_rendering::hit_testing::{
+    CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
+};
 // Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
-pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+pub use flui_interaction::{
+    DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
+};
+pub use flui_rendering::semantics::{
+    SemanticsConfiguration, SemanticsProperties, SemanticsRole,
+    TextDirection as SemanticsTextDirection,
+};
 
 // ============================================================================
 // Prelude
@@ -180,25 +213,42 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
-        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, DecoratedBox,
-        EditableText, EditableTextState, Expanded, FittedBox, Flex, FlexFit, Flexible,
-        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector,
-        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IntrinsicHeight,
-        IntrinsicWidth, LimitedBox, ListView, Listener, MediaQuery, MediaQueryData, Offstage,
-        Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RotatedBox,
-        Row, ScrollController, Scrollable, Scrollbar, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Stack, Text, TextEditingController,
-        TextField, Theme, ThemeData, Transform, Viewport, Wrap,
+        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomMultiChildLayout,
+        CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox, EditableText,
+        EditableTextState, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
+        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector, GridView,
+        Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image, ImageAlignment, ImageFit,
+        ImageProvider, IndexedStack, IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox,
+        ListBody, ListView, Listener, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion,
+        Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary,
+        RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics,
+        ShrinkWrappingViewport, SingleChildScrollView, SizedBox, SizedOverflowBox,
+        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+        SliverToBoxAdapter, Spacer, Stack, Table, TableCell, TableRow, Text, TextEditingController,
+        TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
+    pub use crate::{
+        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
+        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
+        SemanticsConfiguration, SemanticsProperties, SemanticsRole, SemanticsTextDirection,
+        SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
+        TableCellVerticalAlignment, TableColumnWidth,
+    };
     pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
-    pub use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+    pub use flui_interaction::{
+        DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
+    };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
     pub use flui_rendering::constraints::BoxConstraints;
-    pub use flui_rendering::hit_testing::{EventPropagation, HitTestBehavior, PointerEvent};
+    pub use flui_rendering::hit_testing::{
+        CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
+    };
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
     pub use flui_types::painting::Clip;
     pub use flui_types::typography::TextBaseline;

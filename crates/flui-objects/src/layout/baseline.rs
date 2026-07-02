@@ -77,7 +77,11 @@ impl RenderBox for RenderBaseline {
         }
 
         self.has_child = true;
-        let child_size = ctx.layout_child(0, constraints);
+        // Flutter parity (`RenderBaseline.performLayout`, shifted_box.dart):
+        // the child is laid out under *loosened* constraints
+        // (`childConstraints = constraints.loosen()`), so a tight incoming axis
+        // does not force the child to fill it.
+        let child_size = ctx.layout_child(0, constraints.loosen());
 
         // Flutter parity (`RenderBaseline.performLayout`): the effective baseline
         // is the child's real baseline distance, or — when the child reports none
@@ -110,11 +114,20 @@ impl RenderBox for RenderBaseline {
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
     ) -> Option<f32> {
-        if baseline != self.baseline || ctx.child_count() == 0 {
+        if ctx.child_count() == 0 {
             return None;
         }
-        ctx.child_dry_baseline(0, constraints, baseline)
-            .map(|_| self.baseline_offset.get())
+        // Flutter RenderBaseline.computeDryBaseline (shifted_box.dart): probe the
+        // child under *loosened* constraints for BOTH the requested baseline kind
+        // and the box's own baseline type, returning
+        // `baseline_offset + requested - own`. For a same-kind query the two
+        // terms cancel to `baseline_offset`. The prior code returned `None` for
+        // any cross-kind query, ignored the child's actual baseline value, and
+        // used un-loosened constraints (inconsistent with the live path).
+        let loosened = constraints.loosen();
+        let requested = ctx.child_dry_baseline(0, loosened, baseline)?;
+        let own = ctx.child_dry_baseline(0, loosened, self.baseline)?;
+        Some(self.baseline_offset.get() + requested - own)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

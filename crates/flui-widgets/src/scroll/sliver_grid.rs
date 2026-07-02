@@ -1,0 +1,137 @@
+//! [`SliverGrid`] — eager 2-D grid sliver.
+//! [`SliverGridLazy`] — lazy (element-owned) 2-D grid sliver, re-exported from
+//! `flui-view` where its element lifecycle lives.
+
+use std::fmt;
+use std::sync::Arc;
+
+// The lazy-grid view type lives in `flui-view` (co-located with its element
+// implementation).  Re-exporting it here keeps the widgets-crate API surface
+// consistent with how `SliverList` re-exports from `sliver_list.rs`.
+pub use flui_view::element::SliverGridLazy;
+
+use flui_objects::RenderSliverGrid;
+use flui_rendering::delegates::SliverGridDelegate;
+use flui_rendering::protocol::SliverProtocol;
+use flui_view::BoxedView;
+use flui_view::seq::ViewSeq;
+
+use crate::support::generic_render_view_element;
+
+/// An eager sliver that arranges its box children in a 2-D grid.
+///
+/// Layout geometry (tile size, row count, cross-axis column positions) is
+/// delegated to a [`SliverGridDelegate`]. All children are attached up-front
+/// (eager); use `GridView` for the common composed form.
+///
+/// Mirrors Flutter's `SliverGrid` (`widgets/sliver.dart`, line 739) over
+/// `RenderSliverGrid`. Lives inside a [`Viewport`](crate::Viewport).
+///
+/// Flutter parity: `packages/flutter/lib/src/widgets/sliver.dart` `SliverGrid`.
+///
+/// Generic over `C: ViewSeq` of box child views.
+#[derive(Clone)]
+pub struct SliverGrid<C = Vec<BoxedView>> {
+    grid_delegate: Arc<dyn SliverGridDelegate>,
+    children: C,
+}
+
+impl<C> SliverGrid<C> {
+    /// An eager grid sliver driven by `grid_delegate` over `children`.
+    pub fn new(grid_delegate: Arc<dyn SliverGridDelegate>, children: C) -> Self {
+        Self {
+            grid_delegate,
+            children,
+        }
+    }
+}
+
+impl<C: ViewSeq> fmt::Debug for SliverGrid<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SliverGrid")
+            .field("grid_delegate", &self.grid_delegate)
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
+impl<C> flui_view::RenderView for SliverGrid<C>
+where
+    C: ViewSeq + Clone + Send + Sync + 'static,
+{
+    type Protocol = SliverProtocol;
+    type RenderObject = RenderSliverGrid;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderSliverGrid::new(Arc::clone(&self.grid_delegate))
+    }
+
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_grid_delegate(Arc::clone(&self.grid_delegate));
+    }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+        self.children.for_each(|_index, child| visitor(child));
+    }
+}
+
+generic_render_view_element!(SliverGrid);
+
+#[cfg(test)]
+mod tests {
+    use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
+    use flui_view::RenderView;
+    use flui_view::ViewExt;
+
+    use super::*;
+    use crate::SizedBox;
+
+    fn delegate(cross_axis_count: usize) -> Arc<dyn SliverGridDelegate> {
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(
+            cross_axis_count,
+        ))
+    }
+
+    #[test]
+    fn debug_reports_the_delegate_and_child_count() {
+        let grid = SliverGrid::new(
+            delegate(3),
+            vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()],
+        );
+
+        let debug = format!("{grid:?}");
+        assert!(
+            debug.contains("children: 2"),
+            "Debug output must include the children count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn has_children_reflects_an_empty_child_list() {
+        let empty: SliverGrid = SliverGrid::new(delegate(2), Vec::new());
+        assert!(!empty.has_children());
+
+        let non_empty = SliverGrid::new(delegate(2), vec![SizedBox::shrink().boxed()]);
+        assert!(non_empty.has_children());
+    }
+
+    #[test]
+    fn update_render_object_replaces_the_grid_delegate() {
+        let grid: SliverGrid = SliverGrid::new(delegate(2), Vec::new());
+        let mut render_object = grid.create_render_object();
+        assert!(format!("{:?}", render_object.grid_delegate()).contains("cross_axis_count: 2"));
+
+        let updated: SliverGrid = SliverGrid::new(delegate(5), Vec::new());
+        updated.update_render_object(&mut render_object);
+
+        assert!(
+            format!("{:?}", render_object.grid_delegate()).contains("cross_axis_count: 5"),
+            "update_render_object must replace the grid delegate, got: {:?}",
+            render_object.grid_delegate(),
+        );
+    }
+}

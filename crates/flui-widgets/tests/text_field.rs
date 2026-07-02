@@ -12,26 +12,39 @@
 //!    controller when the node is focused, and are silently ignored when it is
 //!    not.
 //!
-//! CI runs these with `--test-threads 1` so the global `FocusManager` singleton
-//! is safe to use: tests run sequentially and clean up their registered nodes
-//! before returning.
+//! Key-routing tests serialize themselves around the global `FocusManager`
+//! singleton and clean up their registered nodes before returning.
 
 use std::sync::{
-    Arc,
+    Arc, Mutex, MutexGuard,
     atomic::{AtomicUsize, Ordering},
 };
 
 use flui_foundation::Listenable;
+use flui_geometry::EdgeInsets;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},
     routing::{FocusManager, FocusNode, KeyEventCallback},
 };
-use flui_widgets::TextEditingController;
+use flui_types::{Size, geometry::px};
+use flui_widgets::{EditableText, TextEditingController, TextField};
+
+mod common;
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn focus_test_guard() -> MutexGuard<'static, ()> {
+    let guard = FOCUS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    FocusManager::global().unfocus();
+    guard
+}
 
 /// A guard that unregisters the key handler and detaches the focus node from
 /// the root scope when dropped, ensuring the global `FocusManager` singleton
@@ -302,6 +315,7 @@ fn remove_listener_stops_notifications() {
 
 #[test]
 fn focused_character_key_inserts_into_controller() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
@@ -325,6 +339,7 @@ fn focused_character_key_inserts_into_controller() {
 
 #[test]
 fn focused_backspace_key_deletes_char_before_caret() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     controller.insert_str("hi");
 
@@ -350,6 +365,7 @@ fn focused_backspace_key_deletes_char_before_caret() {
 
 #[test]
 fn focused_arrow_keys_move_the_caret() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     controller.insert_str("abc"); // caret at 3
 
@@ -385,6 +401,7 @@ fn focused_arrow_keys_move_the_caret() {
 
 #[test]
 fn key_up_events_are_not_consumed_by_the_handler() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
@@ -409,6 +426,7 @@ fn key_up_events_are_not_consumed_by_the_handler() {
 
 #[test]
 fn unfocused_field_does_not_receive_key_events() {
+    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     // Register the handler but DO NOT request focus.
@@ -429,4 +447,60 @@ fn unfocused_field_does_not_receive_key_events() {
         "",
         "an unfocused field must ignore key events dispatched through FocusManager"
     );
+}
+
+#[test]
+fn editable_text_mounts_single_render_editable() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::with_text("hello");
+
+    let laid = common::lay_out(EditableText::new(controller), common::tight(120.0, 40.0));
+    let editable = laid.find_by_render_type("RenderEditable");
+
+    assert_eq!(laid.size(editable), Size::new(px(120.0), px(40.0)));
+    assert!(
+        laid.find_all_by_render_type("RenderParagraph").is_empty(),
+        "EditableText must not split text/caret into temporary paragraphs"
+    );
+}
+
+// ============================================================================
+// TextField — composition (mounts the full GestureDetector/DecoratedBox/
+// Padding/EditableText tree `TextField` builds, never previously exercised:
+// every test above hand-simulates EditableTextState's key handler rather than
+// mounting a real TextField/EditableText widget).
+// ============================================================================
+
+#[test]
+fn text_field_deflates_editable_text_by_its_content_padding() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::with_text("hello");
+
+    let laid = common::lay_out(
+        TextField::new(controller).content_padding(EdgeInsets::all(px(10.0))),
+        common::tight(200.0, 100.0),
+    );
+
+    // The overall field fills the tight constraint given to it...
+    assert_eq!(laid.size(laid.root()), Size::new(px(200.0), px(100.0)));
+
+    // ...but the EditableText inside must be deflated by the content padding
+    // on every side (10px), proving `content_padding` is actually threaded
+    // through `Padding::new(...)` rather than silently dropped.
+    let editable = laid.find_by_render_type("RenderEditable");
+    assert_eq!(laid.size(editable), Size::new(px(180.0), px(80.0)));
+}
+
+#[test]
+fn text_field_default_content_padding_matches_its_documented_default() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::new();
+
+    // Default content_padding is symmetric(8 vertical, 12 horizontal) per
+    // `TextField::new`'s doc comment -- deflates width by 24 (12+12) and
+    // height by 16 (8+8).
+    let laid = common::lay_out(TextField::new(controller), common::tight(300.0, 60.0));
+
+    let editable = laid.find_by_render_type("RenderEditable");
+    assert_eq!(laid.size(editable), Size::new(px(276.0), px(44.0)));
 }

@@ -14,11 +14,8 @@ macro_rules! generic_render_view_element {
         where
             C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + Send + Sync + 'static,
         {
-            fn create_element(&self) -> ::std::boxed::Box<dyn ::flui_view::ElementBase> {
-                ::std::boxed::Box::new(::flui_view::RenderElement::new(
-                    self,
-                    ::flui_view::element::RenderBehavior::new(),
-                ))
+            fn create_element(&self) -> ::flui_view::element::ElementKind {
+                ::flui_view::element::ElementKind::render_variable(self)
             }
         }
     };

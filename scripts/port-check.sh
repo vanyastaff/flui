@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 20 refusal triggers (1-20, with #9 numbered for FR-036)
+# Verifies the 21 refusal triggers (1-21, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
-# sanctioned-dyn-boundary check. Exits non-zero on the first violation
-# outside the whitelist; prints the offending file:line and the trigger
-# ID. Triggers #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
+# sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
+# guard, Cross.H2 canonical-type-home guards, the Cross.H3
+# live-BuildContext guard, and the Cross.H7 speculative scheduler surface
+# guard. Exits non-zero on the first violation outside the whitelist; prints
+# the offending file:line and the trigger ID.
+# Triggers
+# #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
 # (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
 # added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
 # Triggers #15/#16/#17/#18 added in core-0a adversarial-reaudit PR-4 §U5
@@ -14,7 +18,9 @@
 # added in engine overhaul T9f (C4: Matrix4 must not appear on the
 # record/pipeline side; convert at the Backend trait boundary). Trigger #20
 # added in advanced-blend PR-5 (gradient/image producers must not regress
-# to SrcOver warn-fallback; deleted strings must not reappear).
+# to SrcOver warn-fallback; deleted strings must not reappear). Trigger #21
+# added in Core.0 N10 (RasterBackend seam): lyon CODE must stay confined to
+# wgpu/tessellator.rs so the rendering backend stays swappable.
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -25,7 +31,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 20 triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 21 triggers + extra guards; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -633,6 +639,36 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Cross.H2: historical parallel-type collapse must stay collapsed.
+#
+# Trigger 10 catches arbitrary duplicate pub struct/enum/trait names across
+# crates. These three were the concrete D-8 collisions that blocked the
+# framework spine: ViewKey, IndexedSlot, and TargetPlatform. Guard their
+# canonical homes explicitly so a future rename/reintroduction cannot drift
+# unnoticed behind a same-name duplicate scan.
+# -----------------------------------------------------------------------------
+check "Cross.H2/ViewKey" \
+  "ViewKey trait outside flui-foundation (canonical home is flui-foundation::ViewKey)" \
+  'pub\s+trait\s+ViewKey\b' \
+  --type rust \
+  --glob '!**/flui-foundation/src/key.rs' \
+  crates
+
+check "Cross.H2/IndexedSlot" \
+  "IndexedSlot struct outside flui-tree (canonical home is flui_tree::IndexedSlot)" \
+  'pub\s+struct\s+IndexedSlot\b' \
+  --type rust \
+  --glob '!**/flui-tree/src/iter/slot.rs' \
+  crates
+
+check "Cross.H2/TargetPlatform" \
+  "TargetPlatform enum outside flui-types (canonical home is flui_types::platform::TargetPlatform)" \
+  'pub\s+enum\s+TargetPlatform\b' \
+  --type rust \
+  --glob '!**/flui-types/src/platform/target_platform.rs' \
+  crates
+
+# -----------------------------------------------------------------------------
 # Trigger 11 (D-block PR-C-3 §U43, architecture-correction-plan SP-4) —
 # speculative scaffolding: `pub mod` family with zero production
 # consumers and not behind `cfg(feature = "unstable-*")`.
@@ -742,6 +778,28 @@ if [[ -n "${trigger11_violations}" ]]; then
 else
   if [[ "${verbose}" -eq 1 ]]; then
     echo "ok    11: SP-4 speculative scaffolding (pub mod surfaces)"
+  fi
+fi
+
+# Cross.H7 — scheduler speculative-surface names must not leak back into the
+# canonical ticker/task docs or source. These identifiers belonged to deleted
+# parallel API experiments and are intentionally not feature-gated stable
+# surfaces. This raw check intentionally does NOT use `check()`, because H7
+# must also catch public Rust doc comments (`//!` / `///`).
+cross_h7_pattern='\b(TypestateTicker|prelude_advanced|ScheduledTicker|TypedTask|VsyncDrivenScheduler|FrameHandle|TaskHandle|UserInputPriority|AnimationPriority|BuildPriority|IdlePriority|PriorityExt|FrameBudgetExt|FrameTimingExt|ToMilliseconds|ToSeconds)\b'
+cross_h7_hits=$(rg --line-number --column --no-heading "${cross_h7_pattern}" \
+  crates/flui-scheduler/src \
+  crates/flui-scheduler/README.md \
+  crates/flui-scheduler/CHANGELOG.md 2>/dev/null || true)
+if [[ -n "${cross_h7_hits}" ]]; then
+  echo "VIOLATION Cross.H7/flui-scheduler speculative surfaces: removed flui-scheduler speculative API names in scheduler source/docs"
+  echo "see ${trigger_doc} (trigger Cross.H7)"
+  echo "${cross_h7_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    Cross.H7/flui-scheduler speculative surfaces: removed flui-scheduler speculative API names in scheduler source/docs"
   fi
 fi
 
@@ -1005,7 +1063,9 @@ fi
 # Categories (FR-029 sanctioning):
 #   #1 element-storage sub-traits: ElementBase, ElementBehavior,
 #      StatelessElementBase, StatefulElementBase, ProxyElementBase,
-#      InheritedElementBase, RenderElementBase
+#      InheritedElementBase, RenderElementBase, RootElementBase,
+#      ErrorElementBase (the last two: dedicated ElementKind::Root/Error
+#      variants for the render-tree root + error-boundary leaf — N5 Phase 1)
 #   #2 BoxedView dynamic-children: View, BoxedView, ViewObject
 #   #4 pipeline-owner type-erasure: Any
 #   #5 error chains + observer/animation + owned callback storage:
@@ -1040,7 +1100,7 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(
@@ -1287,6 +1347,37 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# N-geom.U16: direct glam use in flui-engine is confined to the wgpu backend.
+#
+# Option D deliberately uses glam for GPU/painter hot-path math, but that policy
+# is an engine-edge policy, not a blanket license for higher engine modules to
+# reach around FLUI's typed geometry boundary. Keep direct `glam::...` and
+# `use glam...` code under `crates/flui-engine/src/wgpu/`; other engine modules
+# should speak FLUI geometry types or add a documented bridge.
+# -----------------------------------------------------------------------------
+check "N-geom.U16" \
+  "direct glam use outside flui-engine/src/wgpu (GPU math backend must stay at the engine edge)" \
+  '(^\s*use\s+glam\b|glam::)' \
+  --type rust \
+  --glob '!**/wgpu/**' \
+  crates/flui-engine/src
+
+# -----------------------------------------------------------------------------
+# Cross.H3: no `ElementBuildContext::new_minimal` resurrection in flui-view.
+#
+# Catalog theming depends on `build()` receiving a live tree-backed context:
+# inherited lookups, ancestor walks, and notification dispatch must see the
+# real ElementTree. The old `new_minimal` dummy context made those operations
+# silently return None/false during production builds. Tests should use
+# `ElementBuildContext::for_element` or drive `BuildOwner::build_scope`.
+# -----------------------------------------------------------------------------
+check "Cross.H3" \
+  "new_minimal BuildContext factory in flui-view source (builds must use live BuildCtx)" \
+  '\bnew_minimal\s*\(' \
+  --type rust \
+  crates/flui-view/src
+
+# -----------------------------------------------------------------------------
 # Trigger 20: no warn-fallback strings for gradient/image producers (PR-5)
 #
 # PR-5 deleted three warn-fallback blocks that previously made gradient and
@@ -1324,6 +1415,31 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 21 (Core.0 N10 RasterBackend seam) — lyon confined to the wgpu
+# tessellator.
+#
+# The rendering-backend swap seam (CommandRenderer + the RasterBackend driver
+# trait) only stays non-breaking if the lyon tessellation library is an
+# *internal detail* of the wgpu backend, not a dependency the rest of the
+# engine reaches into. All lyon CODE use (`lyon::…`, `use lyon …`) must live in
+# `crates/flui-engine/src/wgpu/tessellator.rs`. A future Vello/software backend
+# does not tessellate to triangles at all; any `lyon::` outside the tessellator
+# couples the codebase to one rasterization strategy and breaks the seam.
+#
+# Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by
+# the shared doc-comment filter in `check`; only real code constructs match.
+# Allowlist: none — if a second site ever legitimately needs lyon, widen this
+# trigger's glob in the same PR with a documented reason. See
+# docs/designs/2026-06-30-rasterbackend-seam.md.
+# -----------------------------------------------------------------------------
+check "21" \
+  "lyon used outside wgpu/tessellator.rs (raster backend must stay swappable)" \
+  'lyon::|use\s+lyon\b' \
+  --type rust \
+  --glob '!**/tessellator.rs' \
+  crates/flui-engine/src
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1332,7 +1448,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 20 refusal triggers + FR-033 grep clean"
+echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

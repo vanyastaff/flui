@@ -6,10 +6,11 @@ FLUI brings the proven three-tree architecture (View → Element → Render) to 
 
 ## Status
 
-- ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform`
-- ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-log`, `flui-hot-reload`
-- ✅ Framework: `flui-view`, `flui-widgets`, `flui-app` (migration), `flui-animation`
-- ⏸️ Disabled until integration completes: `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`, `flui-assets`
+- ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-tree`, `flui-platform`
+- ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-hot-reload`
+- ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-binding`, `flui-animation`, `flui-assets`, `flui-app` (migration)
+- ✅ DX/tooling: `flui-devtools` (partial), `flui-cli`, `flui-build`
+- ⏸️ Disabled until integration completes: `flui-reactivity`
 
 See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
 
@@ -86,10 +87,16 @@ Run with `cargo run --example hello_world`. More examples live under `examples/`
 For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
 For Claude Code-specific guidance (build commands, troubleshooting) see [`CLAUDE.md`](CLAUDE.md).
 
+## Community
+
+- [Contributing](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+
 ## License
 
 Licensed under either the [MIT License](LICENSE) or the [Apache License, Version 2.0](LICENSE-APACHE) at your option. The workspace `Cargo.toml` declares `MIT OR Apache-2.0`.
 
 ## Acknowledgments
 
-Patterns adapted from the [Flutter](https://flutter.dev) framework (vendored as `.flutter/` for reference) and the [GPUI](https://www.gpui.rs/) Rust UI library (vendored as `.gpui/` for reference). Both are studied, never copied — patterns are translated to FLUI idioms.
+Patterns are adapted from the [Flutter](https://flutter.dev) framework and the [GPUI](https://www.gpui.rs/) Rust UI library. Maintainer checkouts may include local `.flutter/` and `.gpui/` reference mirrors for parity work; they are studied, never copied, and patterns are translated to FLUI idioms.

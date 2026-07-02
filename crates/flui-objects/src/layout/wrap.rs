@@ -23,7 +23,7 @@ use flui_types::{Axis, Offset, Pixels, Size, geometry::px};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
     parent_data::WrapParentData,
     traits::RenderBox,
 };
@@ -103,6 +103,19 @@ struct RunMetrics {
     main_axis_extent: f32,
     /// Maximum cross-axis extent among all children in this run.
     cross_axis_extent: f32,
+}
+
+/// Intermediate result of the wrap sizing pass (Phases 1-2), shared between
+/// `perform_layout` (which continues to Phase 3 positioning) and
+/// `compute_dry_layout` (which only needs the container size).
+struct WrapSizes {
+    /// Constrained container size.
+    container: Size,
+    /// Run descriptors built in Phase 1; used by Phase 3 for positioning.
+    runs: Vec<RunMetrics>,
+    /// Per-child sizes in child order, parallel to the child index; used by
+    /// Phase 3 to compute each child's main/cross extent and offset.
+    child_sizes: Vec<Size>,
 }
 
 // ── RenderWrap ────────────────────────────────────────────────────────────────
@@ -267,6 +280,112 @@ impl RenderWrap {
         }
     }
 
+    // ── Shared sizing core ────────────────────────────────────────────────────
+
+    /// Phases 1-2 of wrap layout, shared between `perform_layout` and
+    /// `compute_dry_layout`.
+    ///
+    /// **Phase 1 — run building**: iterates children, calling `measure` for
+    /// each, and accumulates [`RunMetrics`] descriptors. A new run starts
+    /// when the current run's main extent plus `spacing` plus the next
+    /// child's main extent exceeds the main-axis limit by more than
+    /// [`PRECISION_TOLERANCE`].
+    ///
+    /// **Phase 2 — container sizing**: constrains the union of run extents
+    /// against `constraints` to produce the final [`Size`].
+    ///
+    /// `measure(i, constraints)` is either `ctx.layout_child` (real layout)
+    /// or `ctx.child_dry_layout` (dry layout).
+    fn compute_runs(
+        &self,
+        constraints: BoxConstraints,
+        child_count: usize,
+        mut measure: impl FnMut(usize, BoxConstraints) -> Size,
+    ) -> WrapSizes {
+        if child_count == 0 {
+            return WrapSizes {
+                container: constraints.smallest(),
+                runs: vec![],
+                child_sizes: vec![],
+            };
+        }
+
+        let child_constraints = self.child_constraints(&constraints);
+        let main_limit = self.main_limit(&constraints);
+
+        // Phase 1 — lay out children + build run descriptors.
+        let mut child_sizes: Vec<Size> = Vec::with_capacity(child_count);
+        let mut runs: Vec<RunMetrics> = Vec::new();
+
+        let mut run_first_child = 0_usize;
+        let mut run_child_count = 0_usize;
+        let mut run_main = 0.0_f32;
+        let mut run_cross = 0.0_f32;
+
+        for i in 0..child_count {
+            let child_size = measure(i, child_constraints);
+            child_sizes.push(child_size);
+
+            let child_main = self.main_extent(child_size);
+            let child_cross = self.cross_extent(child_size);
+
+            // PORT: FLUI's shared core applies PRECISION_TOLERANCE in both
+            // the real and dry layout paths. Flutter's _computeDryLayout
+            // (wrap.dart:656-698) re-runs the run-break loop without
+            // PRECISION_TOLERANCE, so a sub-PRECISION_TOLERANCE overflow
+            // could diverge between Flutter's dry and real sizing. Using
+            // PRECISION_TOLERANCE here makes FLUI's dry == real, which is
+            // more correct for a floating-point layout engine.
+            let needs_new_run = run_child_count > 0
+                && run_main + child_main + self.spacing - main_limit > PRECISION_TOLERANCE;
+
+            if needs_new_run {
+                runs.push(RunMetrics {
+                    first_child_index: run_first_child,
+                    child_count: run_child_count,
+                    main_axis_extent: run_main,
+                    cross_axis_extent: run_cross,
+                });
+                run_first_child = i;
+                run_child_count = 1;
+                run_main = child_main;
+                run_cross = child_cross;
+            } else {
+                if run_child_count > 0 {
+                    run_main += self.spacing;
+                }
+                run_main += child_main;
+                run_cross = run_cross.max(child_cross);
+                run_child_count += 1;
+            }
+        }
+        // Flush the last run (always non-empty because child_count > 0).
+        runs.push(RunMetrics {
+            first_child_index: run_first_child,
+            child_count: run_child_count,
+            main_axis_extent: run_main,
+            cross_axis_extent: run_cross,
+        });
+
+        // Phase 2 — compute container size.
+        let num_runs = runs.len();
+        let total_run_cross_gap = self.run_spacing * num_runs.saturating_sub(1) as f32;
+        let total_cross: f32 =
+            runs.iter().map(|r| r.cross_axis_extent).sum::<f32>() + total_run_cross_gap;
+        let max_run_main: f32 = runs
+            .iter()
+            .map(|r| r.main_axis_extent)
+            .fold(0.0_f32, |a, b| a.max(b));
+
+        let container = self.constrain_size(&constraints, max_run_main, total_cross);
+
+        WrapSizes {
+            container,
+            runs,
+            child_sizes,
+        }
+    }
+
     // ── Intrinsics simulation helper ──────────────────────────────────────────
 
     /// Simulate the run-building loop at `max_main` using each child's
@@ -357,14 +476,8 @@ impl RenderBox for RenderWrap {
 
     /// Three-phase layout matching Flutter's `RenderWrap.performLayout`.
     ///
-    /// **Phase 1 — run building** (`_computeRuns`): lay out each child under
-    /// `child_constraints` and accumulate `RunMetrics`. A new run starts
-    /// when the current run's main extent plus `spacing` plus the next child's
-    /// main extent exceeds the main-axis limit by more than
-    /// `PRECISION_TOLERANCE`.
-    ///
-    /// **Phase 2 — container sizing**: constrain the union of run extents
-    /// against the incoming constraints to produce the final `Size`.
+    /// **Phases 1-2** are delegated to the private `compute_runs` so that
+    /// `compute_dry_layout` can reuse identical sizing logic.
     ///
     /// **Phase 3 — child positioning** (`_positionChildren`): distribute
     /// free cross-axis space among runs via `run_alignment`, then distribute
@@ -375,78 +488,25 @@ impl RenderBox for RenderWrap {
         let child_count = ctx.child_count();
         self.child_count = child_count;
 
+        let sized = self.compute_runs(constraints, child_count, |i, c| ctx.layout_child(i, c));
+
+        // Zero-child fast path: compute_runs already returns constraints.smallest().
         if child_count == 0 {
-            return constraints.smallest();
+            return sized.container;
         }
 
-        let child_constraints = self.child_constraints(&constraints);
-        let main_limit = self.main_limit(&constraints);
-
-        // ── Phase 1: lay out children + build run descriptors ─────────────────
-
-        let mut child_sizes: Vec<Size> = Vec::with_capacity(child_count);
-        let mut runs: Vec<RunMetrics> = Vec::new();
-
-        let mut run_first_child = 0_usize;
-        let mut run_child_count = 0_usize;
-        let mut run_main = 0.0_f32;
-        let mut run_cross = 0.0_f32;
-
-        for i in 0..child_count {
-            let child_size = ctx.layout_child(i, child_constraints);
-            child_sizes.push(child_size);
-
-            let child_main = self.main_extent(child_size);
-            let child_cross = self.cross_extent(child_size);
-
-            // The first child in any run is never pushed to a new run by itself.
-            let needs_new_run = run_child_count > 0
-                && run_main + child_main + self.spacing - main_limit > PRECISION_TOLERANCE;
-
-            if needs_new_run {
-                runs.push(RunMetrics {
-                    first_child_index: run_first_child,
-                    child_count: run_child_count,
-                    main_axis_extent: run_main,
-                    cross_axis_extent: run_cross,
-                });
-                run_first_child = i;
-                run_child_count = 1;
-                run_main = child_main;
-                run_cross = child_cross;
-            } else {
-                if run_child_count > 0 {
-                    run_main += self.spacing;
-                }
-                run_main += child_main;
-                run_cross = run_cross.max(child_cross);
-                run_child_count += 1;
-            }
-        }
-        // Flush the last run (always non-empty because child_count > 0).
-        runs.push(RunMetrics {
-            first_child_index: run_first_child,
-            child_count: run_child_count,
-            main_axis_extent: run_main,
-            cross_axis_extent: run_cross,
-        });
-
-        // ── Phase 2: compute container size ───────────────────────────────────
-
-        let num_runs = runs.len();
-        let total_run_cross_gap = self.run_spacing * num_runs.saturating_sub(1) as f32;
-        let total_cross: f32 =
-            runs.iter().map(|r| r.cross_axis_extent).sum::<f32>() + total_run_cross_gap;
-        let max_run_main: f32 = runs
-            .iter()
-            .map(|r| r.main_axis_extent)
-            .fold(0.0_f32, |a, b| a.max(b));
-
-        let container = self.constrain_size(&constraints, max_run_main, total_cross);
+        let container = sized.container;
         let container_main = self.main_extent(container);
         let container_cross = self.cross_extent(container);
+        let runs = sized.runs;
+        let child_sizes = sized.child_sizes;
 
         // ── Phase 3: position children ────────────────────────────────────────
+
+        let num_runs = runs.len();
+        // Recompute total_cross from runs to drive free-cross distribution.
+        let total_cross: f32 = runs.iter().map(|r| r.cross_axis_extent).sum::<f32>()
+            + self.run_spacing * num_runs.saturating_sub(1) as f32;
 
         let free_cross = (container_cross - total_cross).max(0.0);
         let (mut cross_cursor, run_gap) =
@@ -486,6 +546,20 @@ impl RenderBox for RenderWrap {
         container
     }
 
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        // Delegates entirely to compute_runs: sizing (Phases 1-2) is
+        // identical to perform_layout; Phase 3 positioning is irrelevant
+        // for a dry query.
+        self.compute_runs(constraints, ctx.child_count(), |i, c| {
+            ctx.child_dry_layout(i, c)
+        })
+        .container
+    }
+
     // ── Intrinsic dimensions ──────────────────────────────────────────────────
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
@@ -504,15 +578,12 @@ impl RenderBox for RenderWrap {
 
     fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
-            // Best case: all children on one row → sum of child max widths.
-            Axis::Horizontal => {
-                let n = ctx.child_count();
-                let spacing_total = self.spacing * n.saturating_sub(1) as f32;
-                let sum: f32 = (0..n)
-                    .map(|i| ctx.child_max_intrinsic_width(i, f32::INFINITY))
-                    .sum();
-                sum + spacing_total
-            }
+            // Best case: all children on one row → SUM of child max widths.
+            // Flutter wrap.dart computeMaxIntrinsicWidth sums the children with
+            // NO inter-child `spacing` term; adding it diverged from the oracle.
+            Axis::Horizontal => (0..ctx.child_count())
+                .map(|i| ctx.child_max_intrinsic_width(i, f32::INFINITY))
+                .sum(),
             // Vertical: simulate column wrapping at the given height.
             Axis::Vertical => self.simulate_wrap_cross(height, ctx),
         }
@@ -536,15 +607,12 @@ impl RenderBox for RenderWrap {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),
-            // Best case: all children in one column → sum of child max heights.
-            Axis::Vertical => {
-                let n = ctx.child_count();
-                let spacing_total = self.spacing * n.saturating_sub(1) as f32;
-                let sum: f32 = (0..n)
-                    .map(|i| ctx.child_max_intrinsic_height(i, f32::INFINITY))
-                    .sum();
-                sum + spacing_total
-            }
+            // Best case: all children in one column → SUM of child max heights.
+            // Flutter wrap.dart computeMaxIntrinsicHeight sums with NO `spacing`
+            // term (matches the horizontal max-width path above).
+            Axis::Vertical => (0..ctx.child_count())
+                .map(|i| ctx.child_max_intrinsic_height(i, f32::INFINITY))
+                .sum(),
         }
     }
 

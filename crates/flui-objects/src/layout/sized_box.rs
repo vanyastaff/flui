@@ -1,4 +1,21 @@
-//! RenderSizedBox - forces specific size constraints.
+//! RenderSizedBox — a **leaf** sized primitive.
+//!
+//! # Not a port of Flutter's `SizedBox`
+//!
+//! Flutter's `SizedBox` widget is `RenderConstrainedBox(additionalConstraints:
+//! tightFor(width, height))` — a single-child proxy where an unset axis is
+//! *pass-through* (`0..=∞`). In FLUI that role is filled by the widget-layer
+//! `SizedBox` (`flui-widgets/src/layout/sized_box.rs`), which maps to
+//! [`RenderConstrainedBox`](crate::RenderConstrainedBox) with `tightFor`
+//! constraints — the Flutter-faithful path.
+//!
+//! `RenderSizedBox` here is a **distinct childless (leaf) primitive**: an unset
+//! axis (`None`) means **expand to the incoming `max`**, which is what makes
+//! [`RenderSizedBox::expand`] (`new(None, None)`) fill its parent. This
+//! `None → max` (fill) rule is intentional and load-bearing for `expand()`; it
+//! is deliberately NOT Flutter's `SizedBox` `null → collapse` semantics (box
+//! render-object audit #4 — an intentional, documented divergence, not a bug).
+//! [`RenderSizedBox::shrink`] is the explicit `(0, 0)` counterpart.
 
 use flui_tree::Leaf;
 use flui_types::{Pixels, Size};

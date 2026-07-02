@@ -113,6 +113,7 @@ impl RenderView for OverflowBox {
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_alignment(self.alignment);
         render_object.set_min_width(self.min_width);
         render_object.set_max_width(self.max_width);
         render_object.set_min_height(self.min_height);

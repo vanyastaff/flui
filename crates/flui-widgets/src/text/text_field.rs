@@ -161,3 +161,105 @@ fn focus_first_text_node_in_root_scope(_controller: &TextEditingController) {
         manager.request_focus(node_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
+
+    use std::sync::Arc;
+
+    use flui_interaction::routing::{FocusManager, FocusNode};
+
+    use super::*;
+
+    /// Attaches a node with a registered key handler to the root scope on
+    /// construction (mimicking `EditableTextState::init_state`), and detaches
+    /// and unregisters it on drop -- so a test panic still leaves the global
+    /// `FocusManager` singleton clean for the next test.
+    struct AttachedNode {
+        node: Arc<FocusNode>,
+    }
+
+    impl AttachedNode {
+        fn new(label: &'static str) -> Self {
+            let manager = FocusManager::global();
+            let node = FocusNode::with_debug_label(label);
+            manager.root_scope().attach_node(&node);
+            manager.register_key_handler(node.id(), Arc::new(|_event| false));
+            Self { node }
+        }
+    }
+
+    impl Drop for AttachedNode {
+        fn drop(&mut self) {
+            let manager = FocusManager::global();
+            if self.node.has_primary_focus() {
+                manager.unfocus();
+            }
+            manager.unregister_key_handler(self.node.id());
+            manager.root_scope().detach_node(self.node.id());
+        }
+    }
+
+    #[test]
+    fn focus_first_text_node_in_root_scope_focuses_the_attached_node() {
+        let attached = AttachedNode::new("text-field-under-test");
+        assert!(!attached.node.has_primary_focus(), "not focused yet");
+
+        focus_first_text_node_in_root_scope(&TextEditingController::new());
+
+        assert!(
+            attached.node.has_primary_focus(),
+            "the only attached node with a key handler must be focused",
+        );
+    }
+
+    #[test]
+    fn focus_first_text_node_in_root_scope_is_a_no_op_with_no_attached_nodes() {
+        // No AttachedNode constructed -- the root scope has no key-handler
+        // children. Must not panic and must not focus anything.
+        focus_first_text_node_in_root_scope(&TextEditingController::new());
+        assert!(
+            !FocusManager::global()
+                .root_scope()
+                .as_focus_node()
+                .has_primary_focus()
+        );
+    }
+
+    #[test]
+    fn field_border_decoration_is_a_white_fill_with_a_gray_solid_border() {
+        let decoration = field_border_decoration();
+        assert_eq!(decoration.color, Some(Color::WHITE));
+
+        let border = decoration.border.expect("border must be set");
+        let top = border.top.expect("top side must be set");
+        assert_eq!(top.color, Color::rgb(180, 180, 180));
+        assert_eq!(top.width, px(1.0));
+        assert_eq!(top.style, BorderStyle::Solid);
+    }
+
+    #[test]
+    fn builder_methods_override_caret_height_caret_color_and_content_padding() {
+        let controller = TextEditingController::new();
+        let field = TextField::new(controller)
+            .caret_height(24.0)
+            .caret_color(Color::rgb(1, 2, 3))
+            .content_padding(EdgeInsets::all(px(5.0)));
+
+        assert_eq!(field.caret_height, 24.0);
+        assert_eq!(field.caret_color, Color::rgb(1, 2, 3));
+        assert_eq!(field.content_padding, EdgeInsets::all(px(5.0)));
+    }
+
+    #[test]
+    fn new_defaults_to_documented_caret_height_color_and_padding() {
+        let field = TextField::new(TextEditingController::new());
+        assert_eq!(field.caret_height, 18.0);
+        assert_eq!(field.caret_color, Color::BLACK);
+        assert_eq!(
+            field.content_padding,
+            EdgeInsets::symmetric(px(8.0), px(12.0))
+        );
+    }
+}

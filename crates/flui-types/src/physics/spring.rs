@@ -74,18 +74,39 @@ impl SpringDescription {
         Self::new(1.0, 100.0, 30.0)
     }
 
+    /// Returns the type of spring based on the discriminant `c²−4mk`.
+    ///
+    /// Mirrors Flutter's `_SpringSolution` factory
+    /// (`packages/flutter/lib/src/physics/spring_simulation.dart`, line 291):
+    ///
+    /// ```text
+    /// return switch (spring.damping * spring.damping - 4 * spring.mass * spring.stiffness) {
+    ///   > 0.0 => _OverdampedSolution(...),
+    ///   < 0.0 => _UnderdampedSolution(...),
+    ///   _     => _CriticalSolution(...),   // exact zero only
+    /// };
+    /// ```
+    ///
+    /// The discriminant equals `4mk(ζ²−1)` where `ζ = c/(2√(mk))`, so the
+    /// three regions correspond exactly to `ζ > 1` (overdamped), `ζ < 1`
+    /// (underdamped), and `ζ = 1` (critically damped).
+    ///
+    /// A previous implementation used a ±0.001 tolerance band around ζ = 1,
+    /// which misclassified springs with damping ratios in [0.999, 1.001] as
+    /// [`SpringType::Critical`] while Flutter would classify them as
+    /// under/overdamped. All three solution families are mathematically
+    /// continuous at the boundary, so the classification matters for correctness
+    /// of the formula used, not for observable discontinuities in position.
     #[must_use]
     #[inline]
     pub fn spring_type(&self) -> SpringType {
-        let critical_damping = 2.0 * (self.mass * self.stiffness).sqrt();
-        let damping_ratio = self.damping / critical_damping;
-
-        if (damping_ratio - 1.0).abs() < 0.001 {
-            SpringType::Critical
-        } else if damping_ratio < 1.0 {
+        let discriminant = self.damping * self.damping - 4.0 * self.mass * self.stiffness;
+        if discriminant > 0.0 {
+            SpringType::Overdamped
+        } else if discriminant < 0.0 {
             SpringType::Underdamped
         } else {
-            SpringType::Overdamped
+            SpringType::Critical
         }
     }
 
@@ -352,5 +373,175 @@ impl Simulation for SpringSimulation {
     #[inline]
     fn tolerance(&self) -> Tolerance {
         self.tolerance
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Assert two f32 values are within `epsilon` of each other.
+    #[track_caller]
+    fn assert_approx(actual: f32, expected: f32, epsilon: f32) {
+        assert!(
+            (actual - expected).abs() <= epsilon,
+            "expected {expected} ± {epsilon}, got {actual}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SpringDescription::spring_type — discriminant classification
+    //
+    // Regression guard for the fix: the previous tolerance-band check would
+    // classify ζ = 1 ± 0.0005 as Critical; the discriminant check does not.
+    //
+    // Reference: Flutter spring_simulation.dart line 291, and the Flutter
+    // regression test "SpringSimulation results are continuous near critical
+    // damping" (spring_simulation_test.dart line 36).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spring_type_underdamped() {
+        // ζ = 0.4 → discriminant = 4mk(ζ²−1) < 0 → Underdamped
+        let spring = SpringDescription::new(1.0, 300.0, 10.0);
+        assert!(matches!(spring.spring_type(), SpringType::Underdamped));
+    }
+
+    #[test]
+    fn spring_type_overdamped() {
+        // ζ = 1.5 → discriminant > 0 → Overdamped
+        let spring = SpringDescription::new(1.0, 100.0, 30.0);
+        assert!(matches!(spring.spring_type(), SpringType::Overdamped));
+    }
+
+    #[test]
+    fn spring_type_critical_exact() {
+        // with_critical_damping produces damping = 2√(mk), so discriminant = 0.
+        let spring = SpringDescription::with_critical_damping(1.0, 100.0);
+        assert!(matches!(spring.spring_type(), SpringType::Critical));
+    }
+
+    #[test]
+    fn spring_type_slightly_underdamped_is_not_critical() {
+        // ζ = 0.9995 (offset 5e-4 inside the old ±0.001 band).
+        //
+        // OLD tolerance-band code: |0.9995 − 1| = 0.0005 < 0.001 → Critical (BUG).
+        // NEW discriminant code:   Δ = 4mk(ζ²−1) < 0            → Underdamped (correct).
+        //
+        // This test FAILS on the old tolerance-band code.
+        let mass = 0.4_f32;
+        let stiffness = 0.4_f32;
+        let ratio = 1.0_f32 - 5e-4;
+        let damping = ratio * 2.0 * (mass * stiffness).sqrt();
+        let spring = SpringDescription::new(mass, stiffness, damping);
+        assert!(
+            matches!(spring.spring_type(), SpringType::Underdamped),
+            "damping ratio {ratio} < 1 must be Underdamped, not Critical"
+        );
+    }
+
+    #[test]
+    fn spring_type_slightly_overdamped_is_not_critical() {
+        // ζ = 1.0005 (offset 5e-4 inside the old ±0.001 band).
+        //
+        // OLD tolerance-band code: |1.0005 − 1| = 0.0005 < 0.001 → Critical (BUG).
+        // NEW discriminant code:   Δ = 4mk(ζ²−1) > 0            → Overdamped (correct).
+        //
+        // This test FAILS on the old tolerance-band code.
+        let mass = 0.4_f32;
+        let stiffness = 0.4_f32;
+        let ratio = 1.0_f32 + 5e-4;
+        let damping = ratio * 2.0 * (mass * stiffness).sqrt();
+        let spring = SpringDescription::new(mass, stiffness, damping);
+        assert!(
+            matches!(spring.spring_type(), SpringType::Overdamped),
+            "damping ratio {ratio} > 1 must be Overdamped, not Critical"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SpringSimulation — parity tests
+    //
+    // Values derived from Flutter's spring test (`spring_simulation_test.dart`
+    // line 36): `SpringDescription.withDampingRatio(stiffness: 0.4, mass: 0.4)`
+    // with start=0, end=1, velocity=0 at t=0.4.
+    //
+    // Manual verification (mass=0.4, stiffness=0.4, ratio=1.0, so damping=0.8):
+    //   w₀ = √(k/m) = 1.0,  a = 0 − 1 = −1,  b = 0 + 1·(−1) = −1
+    //   x(t) = 1 + e^(−t)·(−1 − t)
+    //   x(0.4) = 1 − 1.4·e^(−0.4) ≈ 0.0616
+    //   v(t)   = e^(−t)·t
+    //   v(0.4) = e^(−0.4)·0.4 ≈ 0.2681
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spring_critical_position_at_t0_4() {
+        let spring = SpringDescription::with_critical_damping(0.4, 0.4);
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        // Flutter reference: x(0.4) ≈ 0.0616 (epsilon: 0.01)
+        assert_approx(sim.position(0.4), 0.0616, 0.01);
+    }
+
+    #[test]
+    fn spring_critical_velocity_at_t0_4() {
+        let spring = SpringDescription::with_critical_damping(0.4, 0.4);
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        // Flutter reference: dx(0.4) ≈ 0.2681 (epsilon: 0.01)
+        assert_approx(sim.velocity(0.4), 0.2681, 0.01);
+    }
+
+    #[test]
+    fn spring_slightly_underdamped_continuous_with_critical() {
+        // ζ = 1 − 1e−3: Underdamped after fix, but x(0.4) must still ≈ 0.0616.
+        // Verifies the formulas are continuous at the critical-damping boundary.
+        // Reference: Flutter's regression test (spring_simulation_test.dart:59).
+        let mass = 0.4_f32;
+        let stiffness = 0.4_f32;
+        let damping = (1.0 - 1e-3) * 2.0 * (mass * stiffness).sqrt();
+        let spring = SpringDescription::new(mass, stiffness, damping);
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        assert_approx(sim.position(0.4), 0.0616, 0.01);
+        assert_approx(sim.velocity(0.4), 0.2681, 0.01);
+    }
+
+    #[test]
+    fn spring_slightly_overdamped_continuous_with_critical() {
+        // ζ = 1 + 1e−3: Overdamped after fix, x(0.4) must still ≈ 0.0616.
+        // Reference: Flutter's regression test (spring_simulation_test.dart:50).
+        let mass = 0.4_f32;
+        let stiffness = 0.4_f32;
+        let damping = (1.0 + 1e-3) * 2.0 * (mass * stiffness).sqrt();
+        let spring = SpringDescription::new(mass, stiffness, damping);
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        assert_approx(sim.position(0.4), 0.0616, 0.01);
+        assert_approx(sim.velocity(0.4), 0.2681, 0.01);
+    }
+
+    #[test]
+    fn spring_underdamped_oscillates() {
+        // An underdamped spring (ζ ≈ 0.4) must overshoot its target.
+        let spring = SpringDescription::new(1.0, 300.0, 10.0); // bouncy preset
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        // Position must exceed 1.0 at some point (overshoot) to confirm oscillation.
+        let overshoot = (0..200).any(|i| sim.position(i as f32 * 0.01) > 1.001);
+        assert!(overshoot, "underdamped spring must overshoot its target");
+    }
+
+    #[test]
+    fn spring_overdamped_does_not_oscillate() {
+        // An overdamped spring (ζ ≈ 1.5) must not overshoot.
+        let spring = SpringDescription::new(1.0, 100.0, 30.0); // soft preset
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        let overshoot = (0..500).any(|i| sim.position(i as f32 * 0.01) > 1.0 + 1e-3);
+        assert!(!overshoot, "overdamped spring must not overshoot");
+    }
+
+    #[test]
+    fn spring_is_done_when_position_and_velocity_within_tolerance() {
+        let spring = SpringDescription::with_critical_damping(1.0, 100.0);
+        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+        // A critically-damped spring converges; is_done must eventually hold.
+        assert!(!sim.is_done(0.0), "not done at start");
+        assert!(sim.is_done(100.0), "done after sufficient time");
     }
 }

@@ -1,10 +1,12 @@
 [package]
 name = "flui-semantics"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Semantics tree for FLUI accessibility - part of 5-tree architecture"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/anthropics/flui"
 keywords = ["ui", "accessibility", "semantics", "a11y", "screen-reader"]
 categories = ["gui", "accessibility"]
 
@@ -17,13 +19,13 @@ testing = []
 
 [dependencies]
 # Foundation - canonical ID types (SemanticsId)
-flui-foundation = { path = "../flui-foundation" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # Tree abstractions - TreeRead, TreeNav, etc.
-flui-tree = { path = "../flui-tree" }
+flui-tree = { path = "../flui-tree", version = "0.2.0" }
 
 # Types - geometry, semantics types
-flui-types = { path = "../flui-types" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
 
 # Slab storage for O(1) access
 slab = "0.4"

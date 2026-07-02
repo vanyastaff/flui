@@ -4,11 +4,13 @@
 //! proxy.
 
 mod colored_box;
+mod custom_paint;
 mod decorated_box;
 mod opacity;
 mod repaint_boundary;
 
 pub use colored_box::ColoredBox;
+pub use custom_paint::CustomPaint;
 pub use decorated_box::DecoratedBox;
 pub use opacity::Opacity;
 pub use repaint_boundary::RepaintBoundary;

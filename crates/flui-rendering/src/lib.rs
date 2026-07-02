@@ -55,20 +55,15 @@
 pub mod binding;
 pub mod constraints;
 pub mod context;
-// Cycle 4 R-16: delegates gated behind `experimental-delegates`
-// (default off). The 6 delegate trait modules (~1,800 LOC at
-// `delegates/{custom_painter, flow_delegate, multi_child_layout_delegate,
-// single_child_layout_delegate, sliver_grid_delegate,
-// custom_clipper}.rs`) had zero production impls -- only test mocks.
-// The 2026-05-20 audit flagged at MEDIUM with the verdict "wait for
-// companion render-objects"; 18 months later those render-objects
-// still don't exist. Gating removes the dead surface from default
-// builds + prelude while preserving the design work behind a feature
-// flag. Opt in via `--features experimental-delegates` when the
-// companion render-objects (RenderCustomPaint, RenderFlow,
-// RenderCustomMultiChildLayoutBox, RenderSliverGrid, RenderCustomClip,
-// RenderSingleChildLayoutBox) land.
-#[cfg(feature = "experimental-delegates")]
+// Cycle 4 R-16 partial un-gate: `sliver_grid_delegate` is promoted to
+// the default build because `RenderSliverGrid` now ships unconditionally
+// in `flui-objects`. `custom_painter`, `flow_delegate`, and
+// `single_child_layout_delegate` and `multi_child_layout_delegate` are promoted
+// the same way now that `RenderCustomPaint`, `RenderFlow`,
+// `RenderCustomSingleChildLayoutBox`, and `RenderCustomMultiChildLayoutBox`
+// ship unconditionally too (ADR-0007 amendments). The remaining companion-less
+// delegate (`custom_clipper`) stays gated inside `delegates/mod.rs` until its
+// render object lands — opt in via `--features experimental-delegates`.
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
@@ -182,16 +177,19 @@ pub mod prelude {
             SliverPaintOrder, ViewConfiguration, ViewportOffset,
         },
     };
-    // Cycle 4 R-16: delegates surface only when
-    // `experimental-delegates` is enabled (default off).
-    #[cfg(feature = "experimental-delegates")]
+    // Grid, custom-paint, flow, and custom-layout delegates — always available
+    // because their companion render objects ship in the default build (Cycle 4
+    // R-16 partial un-gate; ADR-0007 amendments).
     pub use crate::delegates::{
-        AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, RectClipper,
-        SemanticsBuilder, SingleChildLayoutDelegate, SliverGridDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
-        SliverGridLayout,
+        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
+        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, SemanticsBuilder,
+        SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
     };
+    // Remaining companion-less delegates still gated until their render
+    // objects land (Cycle 4 R-16).
+    #[cfg(feature = "experimental-delegates")]
+    pub use crate::delegates::{CustomClipper, RectClipper};
 }
 
 // Re-export key types at crate root

@@ -2,6 +2,7 @@
 name = "flui-rendering"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Rendering layer for Flui framework"
@@ -11,13 +12,13 @@ repository.workspace = true
 autobenches = false
 
 [dependencies]
-flui-types = { path = "../flui-types" }
-flui-painting = { path = "../flui-painting" }
-flui-interaction = { path = "../flui-interaction" }
-flui-foundation = { path = "../flui-foundation" }
-flui-tree = { path = "../flui-tree" }
-flui-layer = { path = "../flui-layer" }
-flui-semantics = { path = "../flui-semantics" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-tree = { path = "../flui-tree", version = "0.2.0" }
+flui-layer = { path = "../flui-layer", version = "0.2.0" }
+flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -52,6 +53,14 @@ harness = false
 name = "virtualizer"
 harness = false
 
+# ADR-0010 D3 — borrowed intrinsic path parent-data slice cost.
+# Measures build_intrinsic_child_parent_data (subtree_arena.rs) called when a
+# widget queries a child's intrinsic during perform_layout. Parameterized over
+# N = {1, 8, 64} flex children to show per-child allocation scaling.
+[[bench]]
+name = "intrinsic_parent_data"
+harness = false
+
 # Headless render-object inspection runner. Gated on `testing` so the
 # example only builds when the harness module is compiled in. Run with
 # `cargo run -p flui-rendering --example render_inspector --features testing`.
@@ -70,8 +79,8 @@ proptest = "1.5"
 insta.workspace = true
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers).
-flui-animation = { path = "../flui-animation" }
-flui-scheduler = { path = "../flui-scheduler" }
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Self dev-dependency that turns the off-by-default `testing` feature on
 # for this crate's own integration tests (`tests/*.rs`), benches, and
 # examples. Unit tests reach the harness via `cfg(test)`; the separate
@@ -79,13 +88,13 @@ flui-scheduler = { path = "../flui-scheduler" }
 # so the feature must be flipped on for the dev build graph. This is the
 # standard Cargo pattern for shipping a feature-gated test-support module
 # without making it part of normal/release builds.
-flui-rendering = { path = ".", features = ["testing"] }
+flui-rendering = { path = ".", version = "0.2.0", features = ["testing"] }
 # Concrete render-object catalog. The integration tests in `tests/*.rs`
 # previously imported objects from `flui_rendering::objects`; after the
 # flui-objects extraction (ADR-0008) they import from `flui_objects` instead.
 # This is a dev-only dependency — flui-rendering does not depend on
 # flui-objects in production (that would invert the layer order).
-flui-objects = { path = "../flui-objects", features = ["testing"] }
+flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 
 [features]
 default = []
@@ -103,10 +112,13 @@ serde = ["flui-types/serde"]
 # `first_picture_bounds`, diagnostics dump) are reused rather than duplicated.
 testing = ["flui-layer/testing"]
 
-# Cycle 4 R-16: gate the delegate trait modules (~1,800 LOC across
-# `delegates/custom_painter.rs`, `flow.rs`, `multi_child_layout.rs`,
-# `single_child_layout.rs`, `sliver_grid.rs`, `custom_clipper.rs`)
-# behind an off-by-default feature. Each delegate trait has zero
-# production impls; gating removes the surface from default builds
-# without deleting it. Opt in via `--features experimental-delegates`.
+# Cycle 4 R-16: gate the delegate trait modules behind an off-by-default
+# feature until their companion render object lands (ADR-0007). Each
+# gated trait has zero production impls; gating removes the surface from
+# default builds without deleting it. `sliver_grid_delegate.rs`,
+# `custom_painter.rs`, and `flow_delegate.rs` were promoted to the default
+# build once their companions (`RenderSliverGrid`, `RenderCustomPaint`,
+# `RenderFlow`, `RenderCustomSingleChildLayoutBox`,
+# `RenderCustomMultiChildLayoutBox`) landed; the remaining gated module is
+# `custom_clipper.rs`. Opt in via `--features experimental-delegates`.
 experimental-delegates = []

@@ -170,6 +170,7 @@ pub mod decoration;
 pub mod display_list;
 pub mod error;
 
+pub mod table_border;
 pub mod text_layout;
 pub mod text_painter;
 
@@ -197,9 +198,15 @@ pub use display_list::{
     DisplayList, DisplayListCore, DisplayListExt, DisplayListStats, DrawCommand,
 };
 pub use error::{PaintingError, Result};
+// Re-exported so consumers can name the font system type that appears in
+// [`SharedFontSystem::with_mut`]'s callback without depending on cosmic-text
+// directly. Deliberate boundary decision per ADR-0016 (pins this crate's
+// semver to cosmic-text, intentionally).
+pub use cosmic_text::FontSystem;
+pub use table_border::paint_table_border;
 pub use text_layout::{
-    LineInfo, TextLayout, TextLayoutResult, detect_text_direction, measure_inline_span,
-    measure_text,
+    LineInfo, SharedFontSystem, TextLayout, TextLayoutResult, detect_text_direction,
+    measure_inline_span, measure_text,
 };
 pub use text_painter::{DEFAULT_FONT_SIZE, Invalidation, TextBaseline, TextPainter};
 

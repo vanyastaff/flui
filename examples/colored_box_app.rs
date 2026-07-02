@@ -17,7 +17,7 @@
 
 use flui_app::run_app;
 use flui_objects::RenderColoredBox;
-use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Leaf render view producing a red 200×200 [`RenderColoredBox`].
 #[derive(Clone)]
@@ -49,11 +49,8 @@ impl StatelessView for App {
 }
 
 impl View for App {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

@@ -10,15 +10,17 @@ use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
 use flui_interaction::events::{Key, KeyState, NamedKey};
 use flui_interaction::routing::{FocusManager, FocusNode, KeyEventCallback};
-use flui_types::Color;
-use flui_view::BoxedView;
+use flui_objects::RenderEditable;
+use flui_rendering::protocol::BoxProtocol;
+use flui_types::{
+    Color,
+    typography::{TextDirection, TextSpan},
+};
 use flui_view::prelude::*;
+use flui_view::{BoxedView, RenderView, impl_render_view};
 
 use crate::AnimatedBuilder;
-use crate::layout::SizedBox;
-use crate::paint::ColoredBox;
 use crate::text::controller::TextEditingController;
-use crate::text::text::Text;
 
 // ============================================================================
 // EditableText
@@ -265,50 +267,54 @@ fn build_key_handler(controller: TextEditingController) -> KeyEventCallback {
     })
 }
 
-/// Assemble the visual tree for the text field interior.
-///
-/// Splits the text at `caret_byte_offset` and inserts a thin colored bar
-/// between the two halves when the field is focused.  An unfocused field
-/// renders only the complete text (no caret bar).
+#[derive(Clone, Debug)]
+struct EditableTextRenderView {
+    text: String,
+    caret_byte_offset: usize,
+    show_caret: bool,
+    caret_height: f32,
+    caret_color: Color,
+}
+
+impl EditableTextRenderView {
+    fn build_render_object(&self) -> RenderEditable {
+        RenderEditable::new(TextSpan::new(self.text.clone()), TextDirection::Ltr)
+            .with_caret_byte_offset(self.caret_byte_offset)
+            .with_show_caret(self.show_caret)
+            .with_caret_width(2.0)
+            .with_caret_height(self.caret_height)
+            .with_caret_color(self.caret_color)
+    }
+}
+
+impl RenderView for EditableTextRenderView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderEditable;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        self.build_render_object()
+    }
+
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        *render_object = self.build_render_object();
+    }
+}
+
+impl_render_view!(EditableTextRenderView);
+
+/// Assemble the visual render view for the text field interior.
 fn build_field_view(
     controller: &TextEditingController,
     focus_node: &Arc<FocusNode>,
     caret_height: f32,
     caret_color: Color,
 ) -> BoxedView {
-    use crate::flex::Row;
-    use flui_view::row as row_seq;
-
-    let text = controller.text();
-    let caret_offset = controller.caret_byte_offset();
-    let is_focused = focus_node.has_primary_focus();
-
-    if is_focused {
-        // Guard: clamp to a valid UTF-8 boundary (defensive — the controller
-        // should always maintain this invariant, but be safe under any
-        // future code path).
-        let safe_offset = text
-            .char_indices()
-            .map(|(i, _)| i)
-            .chain(std::iter::once(text.len()))
-            .find(|&i| i >= caret_offset)
-            .unwrap_or(text.len());
-
-        let text_before = text[..safe_offset].to_owned();
-        let text_after = text[safe_offset..].to_owned();
-
-        // Caret: a 2 × caret_height colored box.
-        let caret = SizedBox::new(2.0, caret_height)
-            .child(ColoredBox::new(caret_color))
-            .boxed();
-
-        Row::new(row_seq![
-            Text::new(text_before),
-            caret,
-            Text::new(text_after),
-        ])
-        .boxed()
-    } else {
-        Text::new(text).boxed()
+    EditableTextRenderView {
+        text: controller.text(),
+        caret_byte_offset: controller.caret_byte_offset(),
+        show_caret: focus_node.has_primary_focus(),
+        caret_height,
+        caret_color,
     }
+    .boxed()
 }

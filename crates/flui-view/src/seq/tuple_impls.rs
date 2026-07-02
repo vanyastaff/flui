@@ -112,12 +112,10 @@ mod tests {
     struct Leaf(u32);
 
     impl View for Leaf {
-        fn create_element(&self) -> Box<dyn crate::view::ElementBase> {
+        fn create_element(&self) -> crate::element::ElementKind {
             // The fixture never participates in a real mount; we
             // return a stub element so the trait bound is satisfied.
-            use crate::element::StatelessBehavior;
-            use crate::view::StatelessElement;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+            crate::element::ElementKind::stateless(self)
         }
     }
 

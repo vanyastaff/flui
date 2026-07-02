@@ -55,6 +55,7 @@ impl RenderView for SizedOverflowBox {
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_alignment(self.alignment);
         render_object.set_requested_size(self.requested_size);
     }
 

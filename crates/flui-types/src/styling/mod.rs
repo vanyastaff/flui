@@ -14,6 +14,7 @@ pub mod hsl_hsv;
 pub mod material_colors;
 pub mod physical_model;
 pub mod shadow;
+pub mod table_border;
 
 // Re-exports for convenience
 pub use border::{BorderPosition, BorderSide, BorderStyle};
@@ -32,6 +33,7 @@ pub use hsl_hsv::{HSLColor, HSVColor};
 pub use material_colors::MaterialColors;
 pub use physical_model::{Elevation, MaterialType, PhysicalShape};
 pub use shadow::{BoxShadow, Shadow, ShadowQuality};
+pub use table_border::TableBorder;
 
 // Re-export Radius and Corners from geometry module for styling convenience
 pub use crate::geometry::{Corners, Radius};

@@ -1466,78 +1466,30 @@ mod tests {
     use std::any::TypeId;
 
     use flui_foundation::HasInstance;
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
 
     use super::*;
     use crate::RootRenderElement;
 
-    /// A leaf element that doesn't create children (prevents infinite
-    /// recursion)
-    struct LeafElement {
-        depth: usize,
-        lifecycle: crate::Lifecycle,
-    }
-
-    impl LeafElement {
-        fn new() -> Self {
-            Self {
-                depth: 0,
-                lifecycle: crate::Lifecycle::Initial,
-            }
-        }
-    }
-
-    impl crate::ElementBase for LeafElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<LeafView>()
-        }
-
-        fn depth(&self) -> usize {
-            self.depth
-        }
-
-        fn lifecycle(&self) -> crate::Lifecycle {
-            self.lifecycle
-        }
-
-        fn mount(
-            &mut self,
-            _parent: Option<flui_foundation::ElementId>,
-            slot: usize,
-            _owner: &mut crate::ElementOwner<'_>,
-        ) {
-            self.depth = slot;
-            self.lifecycle = crate::Lifecycle::Active;
-        }
-
-        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-            self.lifecycle = crate::Lifecycle::Defunct;
-        }
-
-        fn activate(&mut self) {
-            self.lifecycle = crate::Lifecycle::Active;
-        }
-
-        fn deactivate(&mut self) {
-            self.lifecycle = crate::Lifecycle::Inactive;
-        }
-
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
-
-        fn mark_needs_build(&mut self) {}
-
-        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            // Leaf - no child views.
-            Vec::new()
-        }
-    }
-
-    /// A leaf view that creates a LeafElement (no children)
+    /// A render-family leaf view with no child views.
     #[derive(Clone)]
     struct LeafView;
 
+    impl crate::RenderView for LeafView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    }
+
     impl View for LeafView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            Box::new(LeafElement::new())
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -1555,8 +1507,8 @@ mod tests {
     }
 
     impl View for ParentView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            Box::new(crate::StatelessElement::new(self, crate::StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -1629,17 +1581,14 @@ mod tests {
             );
 
             // It is concretely a `RootRenderElement<LeafView>` — the
-            // direct-mount path would have produced a `LeafElement`.
+            // direct-mount path would have reported `LeafView` as the
+            // element's view type.
             assert!(
                 element
                     .as_any()
                     .downcast_ref::<RootRenderElement<LeafView>>()
                     .is_some(),
                 "root element downcasts to RootRenderElement<LeafView>"
-            );
-            assert!(
-                element.as_any().downcast_ref::<LeafElement>().is_none(),
-                "root element is NOT the user view's element mounted directly"
             );
         });
     }
@@ -1716,7 +1665,7 @@ mod tests {
     fn test_attach_root_widget_zero_child_subtree() {
         let binding = WidgetsBinding::new();
 
-        // `LeafView` creates a `LeafElement` with no children.
+        // `LeafView` is a render-family leaf with no child views.
         binding
             .attach_root_widget(&LeafView)
             .expect("attach succeeds");
@@ -1869,78 +1818,23 @@ mod tests {
     // 4. Deep linear chains do not exhaust the stack (the walk is
     //    iterative).
 
-    /// Test fixture element with no view-children of its own. Tests wire
-    /// arbitrary tree shapes by writing the slab node's `child_ids`
-    /// directly via `set_children_for` after insertion, without relying on
-    /// a full `View::build` round-trip.
-    #[derive(Default)]
-    struct MultiNodeElement {
-        depth: usize,
-        lifecycle: crate::Lifecycle,
-    }
-
-    impl MultiNodeElement {
-        fn new() -> Self {
-            Self {
-                depth: 0,
-                lifecycle: crate::Lifecycle::Initial,
-            }
-        }
-    }
-
-    impl crate::ElementBase for MultiNodeElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<MultiNodeView>()
-        }
-
-        fn depth(&self) -> usize {
-            self.depth
-        }
-
-        fn lifecycle(&self) -> crate::Lifecycle {
-            self.lifecycle
-        }
-
-        fn mount(
-            &mut self,
-            _parent: Option<flui_foundation::ElementId>,
-            slot: usize,
-            _owner: &mut crate::ElementOwner<'_>,
-        ) {
-            self.depth = slot;
-            self.lifecycle = crate::Lifecycle::Active;
-        }
-
-        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-            self.lifecycle = crate::Lifecycle::Defunct;
-        }
-
-        fn activate(&mut self) {
-            self.lifecycle = crate::Lifecycle::Active;
-        }
-
-        fn deactivate(&mut self) {
-            self.lifecycle = crate::Lifecycle::Inactive;
-        }
-
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
-
-        fn mark_needs_build(&mut self) {}
-
-        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            // Fixture: children are wired directly onto the slab node's
-            // `child_ids` (see `set_children_for`), so this leaf-style
-            // build contributes no view children.
-            Vec::new()
-        }
-    }
-
     #[derive(Clone)]
     struct MultiNodeView;
 
+    impl crate::RenderView for MultiNodeView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(&self) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    }
+
     impl View for MultiNodeView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            Box::new(MultiNodeElement::new())
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 

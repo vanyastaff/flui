@@ -3,9 +3,11 @@
 //! Each test exercises a distinct layout mode and asserts a computed size that
 //! would be wrong if the widget mis-wired its render object, swapped
 //! width/height, dropped the forced dimension, or failed to resolve the
-//! provider correctly. The `image_failed_provider_renders_zero_size` test is
-//! the only one that asserts 0×0 — if the provider is accidentally made to
-//! succeed the assertion flips red, which is the desired sentinel.
+//! provider correctly. With `network-images` enabled, the
+//! `image_failed_provider_renders_zero_size` test is the only one that asserts
+//! 0×0 — if the placeholder provider is accidentally made to succeed before
+//! async loading is wired, the assertion flips red, which is the desired
+//! sentinel.
 
 mod common;
 
@@ -82,6 +84,7 @@ fn image_large_intrinsic_shrinks_to_fit_loose_box() {
 }
 
 #[test]
+#[cfg(feature = "network-images")]
 fn image_failed_provider_renders_zero_size() {
     // `NetworkImage` always returns `ImageProviderError::AsyncNotWired`.
     // `create_render_object` falls back to `RenderImage::new(Size::ZERO, …)`,

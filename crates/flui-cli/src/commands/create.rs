@@ -86,8 +86,15 @@ pub fn execute(
     // Step 4: Run cargo check
     let spinner = cliclack::spinner();
     spinner.start("Running cargo check (this may take a while)...");
-    run_cargo_check(project_dir)?;
-    spinner.stop(format!("{} Cargo check completed", style("✓").green()));
+    let check_passed = run_cargo_check(project_dir)?;
+    if check_passed {
+        spinner.stop(format!("{} Cargo check completed", style("✓").green()));
+    } else {
+        spinner.stop(format!(
+            "{} Cargo check found problems — project created but does not yet compile",
+            style("⚠").yellow()
+        ));
+    }
 
     // Print next steps
     let next_steps = format!(
@@ -118,7 +125,12 @@ fn init_git_repo(dir: &Path) -> CliResult<()> {
 }
 
 /// Run cargo check to validate the generated project.
-fn run_cargo_check(dir: &Path) -> CliResult<()> {
+///
+/// Returns `true` when the generated project compiles, `false` when `cargo
+/// check` reported problems (in which case the diagnostics are surfaced to the
+/// user). A `false` result is not an error — the scaffold itself succeeded — so
+/// the caller decides how to report it rather than claiming success blindly.
+fn run_cargo_check(dir: &Path) -> CliResult<bool> {
     use std::process::Command;
 
     let output = Command::new("cargo")
@@ -127,14 +139,16 @@ fn run_cargo_check(dir: &Path) -> CliResult<()> {
         .output()
         .context("Failed to run cargo check")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let _ = cliclack::log::warning("cargo check reported issues:");
-        let _ = cliclack::log::warning(stderr);
-        let _ = cliclack::log::remark("The project was created but may need fixes.");
+    if output.status.success() {
+        return Ok(true);
     }
 
-    Ok(())
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = cliclack::log::warning("cargo check reported issues:");
+    let _ = cliclack::log::warning(stderr);
+    let _ = cliclack::log::remark("The project was created but needs fixes before it compiles.");
+
+    Ok(false)
 }
 
 /// Template for .gitignore file.
