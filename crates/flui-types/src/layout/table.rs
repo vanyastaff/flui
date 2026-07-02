@@ -3,7 +3,14 @@
 //! Types for configuring table column widths and cell alignment.
 //! Based on Flutter's Table widget API.
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// How one table column's width is decided.
+///
+/// Mirrors Flutter's `TableColumnWidth` hierarchy (`rendering/table.dart`).
+/// The leaf variants (`Fixed`/`Flex`/`Intrinsic`/`Fraction`) are cheap value
+/// specs; [`Max`](Self::Max)/[`Min`](Self::Min) are *combinators* that wrap
+/// two other specs — which is why this enum owns them behind [`Box`] and is
+/// therefore [`Clone`] but not `Copy` (a recursive type cannot be `Copy`).
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TableColumnWidth {
     /// Fixed width in logical pixels.
@@ -28,6 +35,36 @@ pub enum TableColumnWidth {
     /// For example, `Fraction(0.25)` means 25% of the table's available width.
     /// Values are clamped to the 0.0-1.0 range.
     Fraction(f32),
+
+    /// The larger of two column-width specs, evaluated independently.
+    ///
+    /// For "10% of the container width or 100px, whichever is bigger", use
+    /// `TableColumnWidth::max(Fixed(100.0), Fraction(0.1))`. Both `a` and `b`
+    /// are evaluated (so if either is expensive, so is this). Flutter parity:
+    /// `MaxColumnWidth` (`rendering/table.dart:235`).
+    Max(Box<TableColumnWidth>, Box<TableColumnWidth>),
+
+    /// The smaller of two column-width specs, evaluated independently.
+    ///
+    /// For "10% of the container width but never bigger than 100px", use
+    /// `TableColumnWidth::min(Fixed(100.0), Fraction(0.1))`. Both `a` and `b`
+    /// are evaluated. Flutter parity: `MinColumnWidth`
+    /// (`rendering/table.dart:287`).
+    Min(Box<TableColumnWidth>, Box<TableColumnWidth>),
+}
+
+impl TableColumnWidth {
+    /// The larger of `a` and `b` (see [`TableColumnWidth::Max`]).
+    #[must_use]
+    pub fn max(a: TableColumnWidth, b: TableColumnWidth) -> Self {
+        TableColumnWidth::Max(Box::new(a), Box::new(b))
+    }
+
+    /// The smaller of `a` and `b` (see [`TableColumnWidth::Min`]).
+    #[must_use]
+    pub fn min(a: TableColumnWidth, b: TableColumnWidth) -> Self {
+        TableColumnWidth::Min(Box::new(a), Box::new(b))
+    }
 }
 
 impl Default for TableColumnWidth {

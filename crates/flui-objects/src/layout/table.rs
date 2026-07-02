@@ -25,8 +25,12 @@
 //!   `TableColumnWidth::Fraction`'s own FLUI doc contract ("Values are
 //!   clamped to the 0.0-1.0 range"), a deliberate, flagged divergence from
 //!   the oracle rather than a bug.
-//! - **Deferred**: `IntrinsicColumnWidth`'s optional flex, the
-//!   `MaxColumnWidth`/`MinColumnWidth` combinators, and
+//! - **`MaxColumnWidth`/`MinColumnWidth`** are supported via
+//!   [`TableColumnWidth::Max`]/[`TableColumnWidth::Min`]
+//!   (`flui_types::layout::table`): each folds both operands' widths (by
+//!   max/min) and flex factors, faithfully to the oracle
+//!   (`table.dart:235-340`), and nests recursively.
+//! - **Deferred**: `IntrinsicColumnWidth`'s optional flex and
 //!   `TableCellVerticalAlignment::IntrinsicHeight` — `TableColumnWidth`/
 //!   `TableCellVerticalAlignment` keep their existing FLUI shape (see
 //!   `flui_types::layout::table`). `compute_dry_baseline` also keeps the
@@ -59,6 +63,19 @@ enum WidthQuery {
     Min,
     /// Probe each cell's maximum intrinsic width.
     Max,
+}
+
+/// Folds two operands' flex factors for a `Max`/`Min` column-width combinator.
+///
+/// A `None` operand contributes no flex, so the other operand's flex passes
+/// through unchanged; when both carry flex, `fold` (`f32::max` for `Max`,
+/// `f32::min` for `Min`) picks between them. Mirrors the oracle's
+/// `MaxColumnWidth.flex`/`MinColumnWidth.flex` (`table.dart:266-276`/`:318-328`).
+fn combine_flex(a: Option<f32>, b: Option<f32>, fold: impl Fn(f32, f32) -> f32) -> Option<f32> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(fold(a, b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// Local convergence epsilon for the two-round shrink in
@@ -126,8 +143,10 @@ impl RenderTable {
     }
 
     /// Builder: set the width used by columns with no explicit override.
+    // Not `const`: `TableColumnWidth` now owns `Box`ed combinator variants, so
+    // reassigning the field runs a destructor a const context cannot evaluate.
     #[must_use]
-    pub const fn with_default_column_width(mut self, width: TableColumnWidth) -> Self {
+    pub fn with_default_column_width(mut self, width: TableColumnWidth) -> Self {
         self.default_column_width = width;
         self
     }
@@ -266,8 +285,8 @@ impl RenderTable {
     fn column_width_for(&self, x: usize) -> TableColumnWidth {
         self.column_widths
             .get(&x)
-            .copied()
-            .unwrap_or(self.default_column_width)
+            .cloned()
+            .unwrap_or_else(|| self.default_column_width.clone())
     }
 
     /// Resolves ONE column's ideal-or-min width (per `query_kind`) and — only
@@ -286,9 +305,32 @@ impl RenderTable {
         query_kind: WidthQuery,
         query: &mut impl FnMut(usize, f32, WidthQuery) -> f32,
     ) -> (Pixels, Option<f32>) {
-        match self.column_width_for(x) {
-            TableColumnWidth::Fixed(value) => (Pixels::new(value), None),
-            TableColumnWidth::Flex(flex) => (Pixels::ZERO, Some(flex)),
+        let spec = self.column_width_for(x);
+        self.extent_for_spec(&spec, x, row_count, container_width, query_kind, query)
+    }
+
+    /// Resolves one column-width `spec` (which may be a nested
+    /// [`Max`](TableColumnWidth::Max)/[`Min`](TableColumnWidth::Min)
+    /// combinator) to a width for `query_kind` and its flex factor.
+    ///
+    /// The combinators evaluate BOTH operands against the same cells and
+    /// `container_width` and fold the results — width by `max`/`min`, flex by
+    /// [`combine_flex`] — exactly like the oracle's `MaxColumnWidth`/
+    /// `MinColumnWidth` (`table.dart:235-340`). Recursion depth equals the
+    /// nesting depth of the spec (typically 1); each leaf is O(rows) only for
+    /// `Intrinsic`, O(1) otherwise.
+    fn extent_for_spec(
+        &self,
+        spec: &TableColumnWidth,
+        x: usize,
+        row_count: usize,
+        container_width: Pixels,
+        query_kind: WidthQuery,
+        query: &mut impl FnMut(usize, f32, WidthQuery) -> f32,
+    ) -> (Pixels, Option<f32>) {
+        match spec {
+            TableColumnWidth::Fixed(value) => (Pixels::new(*value), None),
+            TableColumnWidth::Flex(flex) => (Pixels::ZERO, Some(*flex)),
             TableColumnWidth::Fraction(fraction) => {
                 // Divergence from the oracle: see the module doc's
                 // "Fraction clamps" note.
@@ -307,6 +349,20 @@ impl RenderTable {
                     extent = extent.max(Pixels::new(query(idx, f32::INFINITY, query_kind)));
                 }
                 (extent, None)
+            }
+            TableColumnWidth::Max(a, b) => {
+                let (wa, fa) =
+                    self.extent_for_spec(a, x, row_count, container_width, query_kind, query);
+                let (wb, fb) =
+                    self.extent_for_spec(b, x, row_count, container_width, query_kind, query);
+                (wa.max(wb), combine_flex(fa, fb, f32::max))
+            }
+            TableColumnWidth::Min(a, b) => {
+                let (wa, fa) =
+                    self.extent_for_spec(a, x, row_count, container_width, query_kind, query);
+                let (wb, fb) =
+                    self.extent_for_spec(b, x, row_count, container_width, query_kind, query);
+                (wa.min(wb), combine_flex(fa, fb, f32::min))
             }
         }
     }
@@ -507,7 +563,7 @@ impl flui_foundation::Diagnosticable for RenderTable {
             "default_vertical_alignment",
             self.default_vertical_alignment,
         );
-        builder.add_enum("default_column_width", self.default_column_width);
+        builder.add_enum("default_column_width", self.default_column_width.clone());
         builder.add(
             "border",
             match &self.border {
@@ -897,7 +953,7 @@ mod tests {
         let column_widths = widths
             .iter()
             .enumerate()
-            .map(|(x, w)| (x, *w))
+            .map(|(x, w)| (x, w.clone()))
             .collect::<HashMap<_, _>>();
         RenderTable::new(widths.len()).with_column_widths(column_widths)
     }
@@ -969,6 +1025,96 @@ mod tests {
         let table = table_with(&[TableColumnWidth::Fraction(1.5)]);
         let widths = table.compute_column_widths(1, Pixels::ZERO, px(100.0), deny_query());
         assert_eq!(widths, vec![px(100.0)]);
+    }
+
+    // ---- Max/Min combinators (oracle table.dart:235-340) -------------------
+
+    #[test]
+    fn max_combinator_takes_the_larger_of_its_two_specs() {
+        // Fixed(100) vs Fraction(0.1): at container 400 the fraction is 40 < 100
+        // (Fixed wins); at container 2000 the fraction is 200 > 100 (it wins).
+        let table = table_with(&[TableColumnWidth::max(
+            TableColumnWidth::Fixed(100.0),
+            TableColumnWidth::Fraction(0.1),
+        )]);
+        let narrow = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
+        assert_eq!(
+            narrow,
+            vec![px(100.0)],
+            "fixed floor wins when the fraction is smaller"
+        );
+        let wide = table.compute_column_widths(1, Pixels::ZERO, px(2000.0), deny_query());
+        assert_eq!(
+            wide,
+            vec![px(200.0)],
+            "fraction wins when it exceeds the fixed floor"
+        );
+    }
+
+    #[test]
+    fn min_combinator_takes_the_smaller_of_its_two_specs() {
+        // Fixed(100) vs Fraction(0.1): at container 400 the fraction is 40 (it
+        // wins); at container 2000 the fraction is 200 > 100 (the fixed ceiling
+        // wins).
+        let table = table_with(&[TableColumnWidth::min(
+            TableColumnWidth::Fixed(100.0),
+            TableColumnWidth::Fraction(0.1),
+        )]);
+        let narrow = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
+        assert_eq!(
+            narrow,
+            vec![px(40.0)],
+            "fraction wins when below the fixed ceiling"
+        );
+        let wide = table.compute_column_widths(1, Pixels::ZERO, px(2000.0), deny_query());
+        assert_eq!(wide, vec![px(100.0)], "fixed ceiling caps the column");
+    }
+
+    #[test]
+    fn combinators_nest_recursively() {
+        // Max(Min(Fixed(100), Fraction(0.5)), Fixed(30)) @ container 100:
+        // inner Min(100, 50) = 50; outer Max(50, 30) = 50.
+        let table = table_with(&[TableColumnWidth::max(
+            TableColumnWidth::min(
+                TableColumnWidth::Fixed(100.0),
+                TableColumnWidth::Fraction(0.5),
+            ),
+            TableColumnWidth::Fixed(30.0),
+        )]);
+        let widths = table.compute_column_widths(1, Pixels::ZERO, px(100.0), deny_query());
+        assert_eq!(widths, vec![px(50.0)]);
+    }
+
+    #[test]
+    fn max_combinator_flex_is_the_larger_flex_and_drives_distribution() {
+        // Max(Flex(3), Flex(1)) -> width 0, flex max(3,1)=3. Beside a Flex(1),
+        // total flex 4 splits 400 as 300 / 100.
+        let table = table_with(&[
+            TableColumnWidth::max(TableColumnWidth::Flex(3.0), TableColumnWidth::Flex(1.0)),
+            TableColumnWidth::Flex(1.0),
+        ]);
+        let widths = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
+        assert_eq!(widths, vec![px(300.0), px(100.0)]);
+    }
+
+    #[test]
+    fn min_combinator_flex_is_the_smaller_flex() {
+        // Min(Flex(3), Flex(1)) -> flex min(3,1)=1. Beside a Flex(1), even split.
+        let table = table_with(&[
+            TableColumnWidth::min(TableColumnWidth::Flex(3.0), TableColumnWidth::Flex(1.0)),
+            TableColumnWidth::Flex(1.0),
+        ]);
+        let widths = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
+        assert_eq!(widths, vec![px(200.0), px(200.0)]);
+    }
+
+    #[test]
+    fn combine_flex_passes_through_the_set_operand_and_folds_two() {
+        assert_eq!(combine_flex(Some(1.0), None, f32::max), Some(1.0));
+        assert_eq!(combine_flex(None, Some(2.0), f32::max), Some(2.0));
+        assert_eq!(combine_flex(Some(1.0), Some(2.0), f32::max), Some(2.0));
+        assert_eq!(combine_flex(Some(1.0), Some(2.0), f32::min), Some(1.0));
+        assert_eq!(combine_flex(None, None, f32::max), None);
     }
 
     // ---- Pass 1: Intrinsic queries real cells -------------------------------

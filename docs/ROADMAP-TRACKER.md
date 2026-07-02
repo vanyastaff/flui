@@ -235,8 +235,10 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > algorithm (including the oracle's own adversarial flex/shrink scenario),
 > per-cell geometry, row-decoration/children/border paint order, border
 > line placement, per-cell hit testing, and baseline row alignment.
-> `MaxColumnWidth`/`MinColumnWidth` combinators, RTL column order, and
-> `TableBorder.border_radius` remain documented deferred edges.
+> `MaxColumnWidth`/`MinColumnWidth` are now supported via
+> `TableColumnWidth::Max`/`Min` (recursive combinators folding both operands'
+> widths and flex, faithful to `table.dart:235-340`, harness-covered); RTL
+> column order and `TableBorder.border_radius` remain documented deferred edges.
 > `RenderAnimatedSize` now exists, backs the public `AnimatedSize` widget, and closes the
 > render-object-ticker architectural gap via `ADR-0013`
 > (`docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`): a defaulted `attach`/`detach`

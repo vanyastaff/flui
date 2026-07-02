@@ -140,7 +140,7 @@ impl RenderView for Table {
         );
         RenderTable::new(self.column_count())
             .with_column_widths(self.column_widths.clone())
-            .with_default_column_width(self.default_column_width)
+            .with_default_column_width(self.default_column_width.clone())
             .with_default_vertical_alignment(self.default_vertical_alignment)
             .with_text_baseline(self.text_baseline)
             .with_border(self.border)
@@ -156,7 +156,7 @@ impl RenderView for Table {
         );
         render_object.set_column_count(self.column_count());
         render_object.set_column_widths(self.column_widths.clone());
-        render_object.set_default_column_width(self.default_column_width);
+        render_object.set_default_column_width(self.default_column_width.clone());
         render_object.set_default_vertical_alignment(self.default_vertical_alignment);
         render_object.set_text_baseline(self.text_baseline);
         render_object.set_border(self.border);
