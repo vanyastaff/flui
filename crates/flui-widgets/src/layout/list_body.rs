@@ -87,3 +87,108 @@ where
 }
 
 generic_render_view_element!(ListBody);
+
+#[cfg(test)]
+mod tests {
+    use flui_types::layout::AxisDirection;
+    use flui_view::RenderView;
+    use flui_view::ViewExt;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn create_render_object_defaults_to_top_to_bottom() {
+        let list_body: ListBody = ListBody::new(Vec::new());
+        let render_object = list_body.create_render_object();
+        assert_eq!(render_object.axis_direction(), AxisDirection::TopToBottom);
+    }
+
+    #[test]
+    fn create_render_object_reverse_vertical_is_bottom_to_top() {
+        let list_body: ListBody = ListBody::new(Vec::new()).reverse(true);
+        let render_object = list_body.create_render_object();
+        assert_eq!(render_object.axis_direction(), AxisDirection::BottomToTop);
+    }
+
+    #[test]
+    fn create_render_object_horizontal_is_left_to_right() {
+        let list_body: ListBody = ListBody::new(Vec::new()).main_axis(Axis::Horizontal);
+        let render_object = list_body.create_render_object();
+        assert_eq!(render_object.axis_direction(), AxisDirection::LeftToRight);
+    }
+
+    #[test]
+    fn create_render_object_horizontal_reverse_is_right_to_left() {
+        let list_body: ListBody = ListBody::new(Vec::new())
+            .main_axis(Axis::Horizontal)
+            .reverse(true);
+        let render_object = list_body.create_render_object();
+        assert_eq!(render_object.axis_direction(), AxisDirection::RightToLeft);
+    }
+
+    #[test]
+    fn update_render_object_applies_a_changed_axis_direction() {
+        let list_body: ListBody = ListBody::new(Vec::new());
+        let mut render_object = list_body.create_render_object();
+        assert_eq!(render_object.axis_direction(), AxisDirection::TopToBottom);
+
+        let updated: ListBody = ListBody::new(Vec::new())
+            .main_axis(Axis::Horizontal)
+            .reverse(true);
+        updated.update_render_object(&mut render_object);
+
+        assert_eq!(render_object.axis_direction(), AxisDirection::RightToLeft);
+    }
+
+    #[test]
+    fn has_children_reflects_an_empty_child_list() {
+        let empty: ListBody = ListBody::new(Vec::new());
+        assert!(!empty.has_children());
+
+        let non_empty = ListBody::new(vec![SizedBox::shrink().boxed()]);
+        assert!(non_empty.has_children());
+    }
+
+    #[test]
+    fn debug_reports_defaults_and_child_count() {
+        let list_body = ListBody::new(vec![SizedBox::shrink().boxed()]);
+        let debug = format!("{list_body:?}");
+        assert!(
+            debug.contains("main_axis: Vertical")
+                && debug.contains("reverse: false")
+                && debug.contains("children: 1"),
+            "Debug output must report main_axis, reverse and children count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn debug_reports_overridden_main_axis_and_reverse() {
+        let list_body: ListBody = ListBody::new(Vec::new())
+            .main_axis(Axis::Horizontal)
+            .reverse(true);
+        let debug = format!("{list_body:?}");
+        assert!(
+            debug.contains("main_axis: Horizontal")
+                && debug.contains("reverse: true")
+                && debug.contains("children: 0"),
+            "Debug output must report the overridden main_axis and reverse, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn visit_child_views_invokes_the_visitor_once_per_child() {
+        let list_body = ListBody::new(vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()]);
+        let mut visited = 0;
+        list_body.visit_child_views(&mut |_| visited += 1);
+        assert_eq!(visited, 2, "visitor must run once per child");
+    }
+
+    #[test]
+    fn visit_child_views_does_not_invoke_the_visitor_without_children() {
+        let empty: ListBody = ListBody::new(Vec::new());
+        let mut visited = 0;
+        empty.visit_child_views(&mut |_| visited += 1);
+        assert_eq!(visited, 0, "no children -> visitor must not run");
+    }
+}
