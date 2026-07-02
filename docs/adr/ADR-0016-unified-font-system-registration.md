@@ -133,6 +133,26 @@ Concretely:
 
 ---
 
+## Implementation progress
+
+- **Slice 1 — shared `FontSystem` + registration API (`flui-painting`)** ✅ `ebc134cc`.
+  Landed additively. Refinement vs the original blast-radius sketch: the single
+  `Arc<Mutex<FontSystem>>` stays owned by the `text_layout` module (its existing home)
+  rather than moving to a `PaintingBinding` field, and access is mediated by a new
+  `SharedFontSystem` newtype exposing a scoped `with_mut(|&mut FontSystem| …)` callback
+  instead of a raw `Arc<Mutex<…>>` getter — keeping the lock type off the public surface
+  (port-check SP-6 clean **by design**, no suppression marker). Public API:
+  `PaintingBinding::{font_system() -> SharedFontSystem, register_font(&[u8]) -> Result<()>}`,
+  `PaintingError::RegisterFontFailed`, re-exports `flui_painting::{FontSystem, SharedFontSystem}`.
+  Test-plan items 2 and 4 (register→measure visibility, single-source-of-truth) are
+  covered at the painting layer. The baseline system/Roboto load did **not** move here
+  yet (still lazy `FontSystem::new()`); folded into the engine slice.
+- **Slice 2 — engine glyph pipeline onto the shared handle (`flui-engine`)** ⏳ next.
+- **Slice 3 — bundled Material icon font + app-bootstrap registration** ⏳.
+- **Slice 4 — flip the `Icon` glyph assertion live (`flui-widgets`)** ⏳.
+
+---
+
 ## References
 
 - Icon plan (the deferral this unblocks): `docs/research/2026-07-02-icon-widget-plan.md` §"THE GAP".
