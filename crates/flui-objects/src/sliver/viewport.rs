@@ -143,6 +143,21 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         self.cache_extent_style = style;
     }
 
+    /// Sets the scroll axis direction, re-deriving the cross-axis direction.
+    ///
+    /// Returns `true` when the axis actually changed — layout-affecting, so a
+    /// widget's `update_render_object` that reused this render object across a
+    /// vertical↔horizontal rebuild must invalidate layout on a `true`.
+    #[inline]
+    pub fn set_axis_direction(&mut self, axis_direction: AxisDirection) -> bool {
+        if self.axis_direction == axis_direction {
+            return false;
+        }
+        self.axis_direction = axis_direction;
+        self.cross_axis_direction = default_cross_axis_direction(axis_direction);
+        true
+    }
+
     /// Sets the index of the center sliver for forward/reverse growth partitioning.
     ///
     /// `None` (default) lays out all children with forward growth. When set to
@@ -702,6 +717,21 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     pub const fn set_cache_extent(&mut self, cache_extent: f32, style: CacheExtentStyle) {
         self.cache_extent = cache_extent;
         self.cache_extent_style = style;
+    }
+
+    /// Sets the scroll axis direction, re-deriving the cross-axis direction.
+    ///
+    /// Returns `true` when the axis actually changed — layout-affecting, so a
+    /// widget's `update_render_object` that reused this render object across a
+    /// vertical↔horizontal rebuild must invalidate layout on a `true`.
+    #[inline]
+    pub fn set_axis_direction(&mut self, axis_direction: AxisDirection) -> bool {
+        if self.axis_direction == axis_direction {
+            return false;
+        }
+        self.axis_direction = axis_direction;
+        self.cross_axis_direction = default_cross_axis_direction(axis_direction);
+        true
     }
 
     /// Last total scroll extent reported by the sliver sequence.

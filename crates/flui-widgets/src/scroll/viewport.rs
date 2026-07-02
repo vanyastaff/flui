@@ -82,6 +82,10 @@ where
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        // Push the axis through on rebuild (reconciliation reuses the render
+        // object), not just the scroll offset — otherwise a vertical↔horizontal
+        // change keeps the stale axis from construction.
+        render_object.set_axis_direction(self.axis_direction);
         render_object.offset_mut().set_pixels(self.offset);
     }
 
@@ -163,6 +167,11 @@ where
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        // Reconciliation reuses the render object across rebuilds, so a
+        // vertical↔horizontal axis change on the widget must be pushed through
+        // (not just the scroll offset) — otherwise layout keeps the stale axis
+        // from construction.
+        render_object.set_axis_direction(self.axis_direction);
         render_object.offset_mut().set_pixels(self.offset);
     }
 

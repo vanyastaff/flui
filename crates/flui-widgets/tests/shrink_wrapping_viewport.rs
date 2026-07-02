@@ -50,3 +50,43 @@ fn shrink_wrapping_viewport_clamps_to_parent_max_height() {
         "parent max height must clamp the shrink-wrapped content height"
     );
 }
+
+#[test]
+fn shrink_wrapping_viewport_adopts_the_new_axis_on_rebuild() {
+    // A shrink-wrap sizes to content on its MAIN axis and fills the cross axis.
+    // Loose on both axes (0..300) so the content (2×25 = 50px) shrinks whichever
+    // axis is main. Reconciliation reuses the render object across a rebuild, so
+    // a vertical→horizontal axis change must flip the layout — the axis must not
+    // stay stale from construction (Codex P2 / stale-on-rebuild).
+    let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(300.0));
+    let content = || {
+        vec![
+            SliverFixedExtentList::new(25.0, vec![SizedBox::square(10.0), SizedBox::square(10.0)])
+                .boxed(),
+        ]
+    };
+
+    let mut laid = lay_out(
+        ShrinkWrappingViewport::new(content()).axis_direction(AxisDirection::TopToBottom),
+        constraints,
+    );
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport),
+        Size::new(px(300.0), px(50.0)),
+        "vertical: height shrinks to the 50px content, width fills the 300 cross axis",
+    );
+
+    // Root-swap to a horizontal axis — the same render object is reused.
+    laid.pump_widget(
+        ShrinkWrappingViewport::new(content()).axis_direction(AxisDirection::LeftToRight),
+    );
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport),
+        Size::new(px(50.0), px(300.0)),
+        "after rebuild to horizontal the reused render object must adopt the new \
+         axis: width shrinks to the 50px content, height fills the 300 cross axis \
+         (stays (300, 50) if the axis was left stale)",
+    );
+}
