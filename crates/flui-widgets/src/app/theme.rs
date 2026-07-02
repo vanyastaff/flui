@@ -197,3 +197,123 @@ impl InheritedView for Theme {
 }
 
 impl_inherited_view!(Theme);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SizedBox;
+
+    // ------------------------------------------------------------------
+    // ThemeData presets
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn theme_data_light_matches_documented_preset() {
+        let light = ThemeData::light();
+        assert_eq!(light.brightness, Brightness::Light);
+        assert_eq!(light.primary_color, Color::rgb(98, 0, 238));
+        assert_eq!(light.background_color, Color::rgb(255, 255, 255));
+        assert_eq!(light.body_text_style, TextStyle::default());
+        assert_eq!(
+            light.body_text_style.color, None,
+            "light body text should inherit the platform color, not set one"
+        );
+    }
+
+    #[test]
+    fn theme_data_dark_matches_documented_preset() {
+        let dark = ThemeData::dark();
+        assert_eq!(dark.brightness, Brightness::Dark);
+        assert_eq!(dark.primary_color, Color::rgb(187, 134, 252));
+        assert_eq!(dark.background_color, Color::rgb(18, 18, 18));
+        assert_eq!(
+            dark.body_text_style.color,
+            Some(Color::rgb(255, 255, 255)),
+            "dark body text must be white for legibility on dark surfaces"
+        );
+    }
+
+    #[test]
+    fn theme_data_clone_and_partial_eq() {
+        let light = ThemeData::light();
+        let cloned = light.clone();
+        assert_eq!(light, cloned);
+
+        let mut changed = light.clone();
+        changed.primary_color = Color::rgb(1, 2, 3);
+        assert_ne!(
+            light, changed,
+            "PartialEq must be field-sensitive, not just brightness"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Theme wiring
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn theme_new_wires_data() {
+        let data = ThemeData::dark();
+        let theme = Theme::new(data.clone(), SizedBox::shrink());
+        assert_eq!(theme.data(), &data);
+    }
+
+    #[test]
+    fn theme_new_wires_child() {
+        // `Theme::child()` returns `&dyn View` over the `BoxedView` wrapper,
+        // whose `view_type_id()` is overridden to delegate to the boxed
+        // inner view — the public, non-downcasting way to prove the exact
+        // child passed to `new` is the one stored (a bare `downcast_ref` on
+        // the returned reference would target `BoxedView` itself, not the
+        // inner `SizedBox`, and always report `None`).
+        let theme = Theme::new(ThemeData::light(), SizedBox::new(10.0, 20.0));
+        assert_eq!(
+            theme.child().view_type_id(),
+            std::any::TypeId::of::<SizedBox>()
+        );
+    }
+
+    #[test]
+    fn theme_create_element_is_inherited_kind() {
+        let theme = Theme::new(ThemeData::light(), SizedBox::shrink());
+        let kind = theme.create_element();
+        assert!(
+            matches!(kind, flui_view::element::ElementKind::Inherited(_)),
+            "Theme::create_element should produce an Inherited element kind"
+        );
+    }
+
+    #[test]
+    fn theme_debug_shows_data_and_omits_child() {
+        let data = ThemeData::light();
+        let theme = Theme::new(data.clone(), SizedBox::new(1.0, 2.0));
+
+        // `finish_non_exhaustive` on a single-field `debug_struct` always
+        // renders as `TypeName { field: value, .. }` — build the expected
+        // string from `ThemeData`'s own `Debug` output rather than hand-
+        // transcribing it, so this doesn't rot if `ThemeData`'s fields change.
+        let expected = format!("Theme {{ data: {data:?}, .. }}");
+        assert_eq!(format!("{theme:?}"), expected);
+    }
+
+    #[test]
+    fn theme_update_should_notify_same_data_is_false() {
+        let a = Theme::new(ThemeData::light(), SizedBox::shrink());
+        let b = Theme::new(ThemeData::light(), SizedBox::shrink());
+        assert!(!a.update_should_notify(&b));
+    }
+
+    #[test]
+    fn theme_update_should_notify_different_data_is_true() {
+        let a = Theme::new(ThemeData::dark(), SizedBox::shrink());
+        let b = Theme::new(ThemeData::light(), SizedBox::shrink());
+        assert!(a.update_should_notify(&b));
+    }
+
+    #[test]
+    fn theme_clone_preserves_data() {
+        let theme = Theme::new(ThemeData::dark(), SizedBox::shrink());
+        let cloned = theme.clone();
+        assert_eq!(cloned.data(), theme.data());
+    }
+}
