@@ -228,3 +228,105 @@ impl RenderView for Image {
 }
 
 impl_render_view!(Image);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_rendering::constraints::BoxConstraints;
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::image::provider::ImageProviderError;
+
+    #[derive(Debug)]
+    struct AlwaysFails;
+
+    impl ImageProvider for AlwaysFails {
+        fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
+            Err(ImageProviderError::DecodeFailed {
+                reason: "always fails".to_string(),
+            })
+        }
+    }
+
+    /// Succeeds with a 40x30 image on the FIRST `resolve()` call, then fails
+    /// on every subsequent call -- models a provider whose backing source
+    /// (a file, a network response) becomes unavailable between rebuilds.
+    #[derive(Debug)]
+    struct FailsAfterFirstCall {
+        calls: AtomicUsize,
+    }
+
+    impl FailsAfterFirstCall {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl ImageProvider for FailsAfterFirstCall {
+        fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(PixelImage::from_rgba8(40, 30, vec![0u8; 40 * 30 * 4]))
+            } else {
+                Err(ImageProviderError::DecodeFailed {
+                    reason: "source became unavailable".to_string(),
+                })
+            }
+        }
+    }
+
+    fn loose() -> BoxConstraints {
+        BoxConstraints::loose(Size::new(px(1000.0), px(1000.0)))
+    }
+
+    #[test]
+    fn create_render_object_uses_a_zero_size_placeholder_on_decode_failure() {
+        let widget = Image::new(AlwaysFails);
+        let render = widget.create_render_object();
+
+        assert!(render.image().is_none());
+        assert_eq!(render.compute_size(&loose()), Size::ZERO);
+    }
+
+    #[test]
+    fn update_render_object_clears_the_image_but_keeps_the_intrinsic_size_on_resolve_failure() {
+        let widget = Image::new(FailsAfterFirstCall::new());
+        let mut render = widget.create_render_object();
+
+        assert!(render.image().is_some(), "first resolve must succeed");
+        let size_before = render.compute_size(&loose());
+        assert_eq!(size_before, Size::new(px(40.0), px(30.0)));
+
+        // Second resolve (inside update_render_object) fails.
+        widget.update_render_object(&mut render);
+
+        assert!(
+            render.image().is_none(),
+            "a failed re-resolve must clear the displayed image",
+        );
+        assert_eq!(
+            render.compute_size(&loose()),
+            size_before,
+            "a failed re-resolve must NOT reset the intrinsic size -- the box \
+             keeps its prior layout size, only the painted content clears",
+        );
+    }
+
+    #[test]
+    fn width_and_height_overrides_reach_the_render_object() {
+        let widget = Image::new(AlwaysFails).width(100.0).height(80.0);
+        let render = widget.create_render_object();
+
+        assert_eq!(render.width(), Some(px(100.0)));
+        assert_eq!(render.height(), Some(px(80.0)));
+    }
+
+    #[test]
+    fn has_children_is_always_false() {
+        let widget = Image::new(AlwaysFails);
+        assert!(!widget.has_children());
+    }
+}
