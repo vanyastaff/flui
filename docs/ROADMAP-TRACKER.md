@@ -281,15 +281,28 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 
 ---
 
-## Business.1 — Widget catalog  *(entry: Core.2 exit)*
+## Business.1 — Widget catalog  *(entry: Core.2 exit — SATISFIED 2026-07-01, see Core.2 exit note above)*
 
-| # | Deliverable | Status |
-|---|---|---|
-| B1.1 | Full `flui-widgets` catalog beyond slice (layout, `RichText`, `Icon`, scrolling, input, `Navigator`/routing, implicit animations, `Hero`, `MediaQuery`, `LayoutBuilder`, `FutureBuilder`/`StreamBuilder`) | 🛇 blocked |
-| B1.2 | Re-enable `flui-assets` (A2) | 🛇 blocked |
-| B1.3 | Non-trivial sample app built entirely from `flui-widgets` | 🛇 blocked |
-| B1.4 | `Hero` + `GlobalKey` reparenting end-to-end | 🛇 blocked |
-| B1.5 | `flui-widgets` coverage ≥ 85% | 🛇 blocked |
+> **Status correction (2026-07-01):** this phase's rows below were stale at
+> "🛇 blocked" against the *entry* condition alone, but ~15-20 commits of
+> real Business.1-scoped work already landed before Core.2's exit gate was
+> even formally closed (GridView incl. `.builder`/lazy `RenderSliverGridLazy`,
+> SliverGrid, CustomScrollView, ShrinkWrappingViewport, Spacer/SafeArea/
+> Visibility, the SliverFillRemaining family, IndexedStack, ListBody, Table,
+> MouseRegion, single-line `RenderEditable`, the implicit-animation family,
+> Semantics widgets). The blanket "blocked" status did not reflect this.
+> Corrected below to partial/in-progress with a concrete done-vs-missing
+> breakdown per `crates/flui-widgets/src/` inventory and `docs/research/
+> widget-renderobject-map.md` (updated 2026-07-01, the authoritative 74/74
+> render-object catalog).
+
+| # | Deliverable | Status | Notes |
+|---|---|---|---|
+| B1.1 | Full `flui-widgets` catalog beyond slice (layout, `RichText`, `Icon`, scrolling, input, `Navigator`/routing, implicit animations, `Hero`, `MediaQuery`, `LayoutBuilder`, `FutureBuilder`/`StreamBuilder`) | ◐ partial | **Done:** layout family (Align, Stack/Positioned/IndexedStack, Flex, Table, Wrap, Flow, sized/constrained/overflow boxes); scrolling (ListView, GridView incl. `.builder`/lazy, CustomScrollView, ScrollController/Physics/Scrollbar, RefreshIndicator, slivers); input (GestureDetector, Listener, MouseRegion, AbsorbPointer/IgnorePointer, single-line TextField/EditableText); implicit animations (AnimatedAlign/Container/Opacity/Padding/Size + Fade/Rotation/Scale transitions); `MediaQuery` (+ bonus `Theme`). **Missing:** `RichText` (only plain `Text` exists), `Icon` (zero widget — only an unrelated `CursorIcon` enum), `Navigator`/routing (zero implementation), `Hero` (zero occurrences), `LayoutBuilder` (existed pre-rewrite, commit `bb58a8fa`, wiped in the `flui-widgets`/`flui-objects` purge, never rebuilt), `FutureBuilder`/`StreamBuilder` (zero occurrences). |
+| B1.2 | Re-enable `flui-assets` (A2) | 🛇 blocked | `flui-assets` crate directory exists but is excluded from `[workspace.members]`; re-enablement itself not yet investigated in this pass — A2's own row (line ~119) is the tracking point. |
+| B1.3 | Non-trivial sample app built entirely from `flui-widgets` | 🛇 blocked | Genuinely gated on the B1.1 gaps above (at minimum `Navigator`, likely `Icon`/`RichText` for a realistic app), not on Core.2 anymore. |
+| B1.4 | `Hero` + `GlobalKey` reparenting end-to-end | 🛇 blocked | `Hero` has zero occurrences in the codebase; this is unstarted, not blocked by an external precondition. |
+| B1.5 | `flui-widgets` coverage ≥ 85% | ⚠ verify | Measured 2026-07-01 (`cargo llvm-cov -p flui-widgets --summary-only`, `--no-fail-fast` due to one order-dependent flaky test — see below): **69.35% regions / 70.16% functions / 72.64% lines** — below the ≥85% target. Not yet closed. |
 
 ---
 
