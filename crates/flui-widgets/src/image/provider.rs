@@ -304,6 +304,88 @@ fn decode_bytes(bytes: &[u8]) -> Result<PixelImage, ImageProviderError> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_image() -> PixelImage {
+        // 1x1 RGBA pixel -- content is irrelevant, only identity/equality matter.
+        PixelImage::from_rgba8(1, 1, vec![10, 20, 30, 255])
+    }
+
+    #[test]
+    fn direct_image_provider_resolves_to_a_clone_of_the_given_image() {
+        let image = test_image();
+        let provider = DirectImageProvider::new(image.clone());
+
+        let resolved = provider.resolve().expect("DirectImageProvider never fails");
+        assert_eq!(resolved, image);
+    }
+
+    #[test]
+    fn memory_image_bytes_returns_the_original_encoded_bytes() {
+        let provider = MemoryImage::new(vec![1, 2, 3, 4]);
+        assert_eq!(provider.bytes(), &[1, 2, 3, 4]);
+    }
+
+    #[cfg(not(feature = "images"))]
+    #[test]
+    fn memory_image_reports_decoder_unavailable_without_the_images_feature() {
+        // Without the `images` feature, decode_bytes short-circuits to
+        // DecoderUnavailable regardless of the input bytes -- this is the
+        // graceful-degradation contract the Image widget relies on to render
+        // an empty box instead of panicking.
+        let result = MemoryImage::new(vec![0xFFu8; 16]).resolve();
+        assert!(
+            matches!(result, Err(ImageProviderError::DecoderUnavailable)),
+            "expected DecoderUnavailable without the images feature, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn file_image_path_returns_the_configured_path() {
+        let provider = FileImage::new("/some/configured/path.png");
+        assert_eq!(
+            provider.path(),
+            std::path::Path::new("/some/configured/path.png")
+        );
+    }
+
+    #[test]
+    fn file_image_reports_file_not_found_for_a_missing_path() {
+        let missing = std::env::temp_dir().join("flui-provider-test-does-not-exist.png");
+        // Guard against a stale leftover from a previous interrupted run.
+        let _ = std::fs::remove_file(&missing);
+
+        let result = FileImage::new(&missing).resolve();
+        match result {
+            Err(ImageProviderError::FileNotFound { path }) => assert_eq!(path, missing),
+            other => panic!("expected FileNotFound for a missing path, got {other:?}"),
+        }
+    }
+
+    #[cfg(not(feature = "images"))]
+    #[test]
+    fn file_image_reports_decoder_unavailable_once_the_read_succeeds() {
+        // The I/O read is real regardless of the `images` feature; only the
+        // subsequent decode_bytes call is feature-gated. A file that exists
+        // but isn't a real image must still surface DecoderUnavailable (not
+        // silently succeed, and not report a spurious FileNotFound/ReadFailed).
+        let path =
+            std::env::temp_dir().join(format!("flui-provider-test-{}.bin", std::process::id()));
+        std::fs::write(&path, [1u8, 2, 3, 4]).expect("writing the scratch file must succeed");
+
+        let result = FileImage::new(&path).resolve();
+
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            matches!(result, Err(ImageProviderError::DecoderUnavailable)),
+            "expected DecoderUnavailable once the read succeeds, got {result:?}",
+        );
+    }
+}
+
 #[cfg(all(test, feature = "images"))]
 mod decode_tests {
     use super::*;
