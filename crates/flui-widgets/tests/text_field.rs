@@ -21,13 +21,14 @@ use std::sync::{
 };
 
 use flui_foundation::Listenable;
+use flui_geometry::EdgeInsets;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},
     routing::{FocusManager, FocusNode, KeyEventCallback},
 };
 use flui_types::{Size, geometry::px};
-use flui_widgets::{EditableText, TextEditingController};
+use flui_widgets::{EditableText, TextEditingController, TextField};
 
 mod common;
 
@@ -461,4 +462,45 @@ fn editable_text_mounts_single_render_editable() {
         laid.find_all_by_render_type("RenderParagraph").is_empty(),
         "EditableText must not split text/caret into temporary paragraphs"
     );
+}
+
+// ============================================================================
+// TextField — composition (mounts the full GestureDetector/DecoratedBox/
+// Padding/EditableText tree `TextField` builds, never previously exercised:
+// every test above hand-simulates EditableTextState's key handler rather than
+// mounting a real TextField/EditableText widget).
+// ============================================================================
+
+#[test]
+fn text_field_deflates_editable_text_by_its_content_padding() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::with_text("hello");
+
+    let laid = common::lay_out(
+        TextField::new(controller).content_padding(EdgeInsets::all(px(10.0))),
+        common::tight(200.0, 100.0),
+    );
+
+    // The overall field fills the tight constraint given to it...
+    assert_eq!(laid.size(laid.root()), Size::new(px(200.0), px(100.0)));
+
+    // ...but the EditableText inside must be deflated by the content padding
+    // on every side (10px), proving `content_padding` is actually threaded
+    // through `Padding::new(...)` rather than silently dropped.
+    let editable = laid.find_by_render_type("RenderEditable");
+    assert_eq!(laid.size(editable), Size::new(px(180.0), px(80.0)));
+}
+
+#[test]
+fn text_field_default_content_padding_matches_its_documented_default() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::new();
+
+    // Default content_padding is symmetric(8 vertical, 12 horizontal) per
+    // `TextField::new`'s doc comment -- deflates width by 24 (12+12) and
+    // height by 16 (8+8).
+    let laid = common::lay_out(TextField::new(controller), common::tight(300.0, 60.0));
+
+    let editable = laid.find_by_render_type("RenderEditable");
+    assert_eq!(laid.size(editable), Size::new(px(276.0), px(44.0)));
 }
