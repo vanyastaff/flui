@@ -195,12 +195,16 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > `IndexedStack` widget and has harness coverage for selected-child paint,
 > hit-test, `None`, and baseline behavior. `RenderCustomPaint` is now in the
 > object catalog with harness coverage for preferred sizing, painter paint order,
-> and foreground hit-test precedence; repaint-listenable/semantics/cache hints
-> remain documented deferred edges — **all infra-gated** (2026-07-02): the
-> `Listenable` repaint wiring needs a listener + attach/detach mechanism (cf.
-> `ADR-0013`), `semanticsBuilder` needs the semantics subsystem, and the
-> `isComplex`/`willChange` fields are carried but inert until `PaintCx` grows a
-> raster-cache-hint API the engine honors. `RenderListBody` is now in the object catalog,
+> and foreground hit-test precedence. The **repaint-`Listenable` wiring is now
+> implemented** (2026-07-02) via ADR-0013's attach/detach + self-dirty handle:
+> `CustomPainter::repaint()` returns an optional `Listenable` that
+> `RenderCustomPaint::attach` subscribes to (marking the node needing paint on
+> notify) and `detach` tears down; a painter swap migrates the subscription.
+> Red→green test drives a `ChangeNotifier`-backed painter through a real
+> `PipelineOwner` insert and asserts the notify lands on the paint-dirty list.
+> Still deferred: `semanticsBuilder` (needs the semantics subsystem) and the
+> `isComplex`/`willChange` fields (carried but inert until `PaintCx` grows a
+> raster-cache-hint API the engine honors). `RenderListBody` is now in the object catalog,
 > backs the public `ListBody` widget, and has harness coverage for axis-direction
 > layout, reverse positioning, hit testing, dry layout, and dry-baseline behavior.
 > `RenderMouseRegion` now backs the public `MouseRegion` widget with harness

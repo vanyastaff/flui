@@ -4,8 +4,9 @@
 //! without creating a new render object. It provides methods for painting,
 //! hit testing, and accessibility.
 
-use std::{any::Any, fmt::Debug, sync::Once};
+use std::{any::Any, fmt::Debug, sync::Arc, sync::Once};
 
+use flui_foundation::Listenable;
 use flui_painting::Canvas;
 use flui_types::{Offset, Size};
 
@@ -125,6 +126,21 @@ pub trait CustomPainter: Send + Sync + Debug {
     ///
     /// `true` if the painter should repaint, `false` otherwise.
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool;
+
+    /// An optional repaint [`Listenable`]: when it notifies, the hosting
+    /// `RenderCustomPaint` marks itself needing paint — the FLUI equivalent of
+    /// Flutter's `CustomPainter(repaint:)` / `addListener`/`removeListener`
+    /// wiring, which lets a painter driven by an [`Animation`] (or any
+    /// `ChangeNotifier`) repaint without a widget rebuild.
+    ///
+    /// Implementations that return `Some` MUST return the *same* instance
+    /// across calls, so the host can unsubscribe on detach / painter swap.
+    /// Defaults to `None` (a static painter that never self-invalidates).
+    ///
+    /// [`Animation`]: https://api.flutter.dev/flutter/animation/Animation-class.html
+    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
+        None
+    }
 
     /// Hit test at the given position.
     ///
