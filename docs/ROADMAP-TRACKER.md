@@ -196,7 +196,11 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > hit-test, `None`, and baseline behavior. `RenderCustomPaint` is now in the
 > object catalog with harness coverage for preferred sizing, painter paint order,
 > and foreground hit-test precedence; repaint-listenable/semantics/cache hints
-> remain documented deferred edges. `RenderListBody` is now in the object catalog,
+> remain documented deferred edges — **all infra-gated** (2026-07-02): the
+> `Listenable` repaint wiring needs a listener + attach/detach mechanism (cf.
+> `ADR-0013`), `semanticsBuilder` needs the semantics subsystem, and the
+> `isComplex`/`willChange` fields are carried but inert until `PaintCx` grows a
+> raster-cache-hint API the engine honors. `RenderListBody` is now in the object catalog,
 > backs the public `ListBody` widget, and has harness coverage for axis-direction
 > layout, reverse positioning, hit testing, dry layout, and dry-baseline behavior.
 > `RenderMouseRegion` now backs the public `MouseRegion` widget with harness
@@ -209,9 +213,14 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > `Listener` routes buttonless `PointerEvent::Move` through hover callbacks,
 > FLUI's concrete `PointerEvent::Scroll` through its pointer-signal callback,
 > and `PointerEvent::Gesture` through `PointerPanZoomEvent::Update`.
-> Its remaining edge is the still-missing pan/zoom start/end callback surface;
-> `HitTestBehavior::Translucent` now contributes a self-entry without blocking
-> siblings visually behind it.
+> Its remaining edge — pan/zoom start/end callbacks — is **platform-blocked, not
+> merely deferred** (confirmed 2026-07-02 by reading `flui_interaction::convert_gesture`):
+> the upstream `ui_events` transport carries only Pinch/Rotate gesture *ticks* with no
+> reliable boundary signal, so `from_w3c_event` always emits `PointerPanZoomEvent::Update`.
+> Exposing `on_pointer_pan_zoom_start`/`_end` on the widget would create callbacks that
+> never fire (a dead surface); they stay unexposed until a higher-level binding tracks
+> trackpad finger land/lift. `HitTestBehavior::Translucent` now contributes a self-entry
+> without blocking siblings visually behind it.
 > `RenderEditable` now exists as the single-line visual core for `EditableText`:
 > it owns text layout, collapsed-caret paint, self hit testing, and replaces the
 > previous widget-side `Row`/`Text`/`ColoredBox` caret composition. IME,
