@@ -69,3 +69,68 @@ impl RenderView for CustomSingleChildLayout {
 }
 
 impl_render_view!(CustomSingleChildLayout);
+
+#[cfg(test)]
+mod tests {
+    use flui_rendering::delegates::{AspectRatioDelegate, CenterLayoutDelegate};
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn create_render_object_installs_the_given_delegate() {
+        let render_object =
+            CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate)).create_render_object();
+        assert!(
+            render_object
+                .delegate()
+                .as_any()
+                .is::<CenterLayoutDelegate>(),
+            "create_render_object must install the exact delegate passed to new()",
+        );
+    }
+
+    #[test]
+    fn update_render_object_replaces_the_delegate() {
+        let mut render_object =
+            CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate)).create_render_object();
+        assert!(
+            render_object
+                .delegate()
+                .as_any()
+                .is::<CenterLayoutDelegate>()
+        );
+
+        CustomSingleChildLayout::new(Arc::new(AspectRatioDelegate::new(2.0)))
+            .update_render_object(&mut render_object);
+
+        assert!(
+            render_object
+                .delegate()
+                .as_any()
+                .is::<AspectRatioDelegate>(),
+            "update_render_object must replace the delegate with the new instance",
+        );
+    }
+
+    #[test]
+    fn debug_reports_the_delegate_and_child_presence() {
+        let widget = CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate));
+        let debug = format!("{widget:?}");
+        assert!(
+            debug.contains("has_child: false"),
+            "Debug output must report has_child, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        let empty = CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate));
+        assert!(!empty.has_children());
+
+        let with_child =
+            CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate)).child(SizedBox::shrink());
+        assert!(with_child.has_children());
+    }
+}
