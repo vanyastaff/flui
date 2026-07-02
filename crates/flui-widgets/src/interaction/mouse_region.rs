@@ -145,3 +145,63 @@ impl RenderView for MouseRegion {
 }
 
 impl_render_view!(MouseRegion);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn create_render_object_defaults_match_flutter_opaque_defaults() {
+        let render_object = MouseRegion::new().create_render_object();
+        assert_eq!(render_object.cursor(), CursorIcon::Default);
+        assert!(render_object.opaque());
+        assert_eq!(render_object.behavior(), HitTestBehavior::Opaque);
+    }
+
+    #[test]
+    fn create_render_object_applies_overridden_cursor_opaque_and_behavior() {
+        let render_object = MouseRegion::new()
+            .cursor(CursorIcon::Pointer)
+            .opaque(false)
+            .behavior(HitTestBehavior::Translucent)
+            .create_render_object();
+
+        assert_eq!(render_object.cursor(), CursorIcon::Pointer);
+        assert!(!render_object.opaque());
+        assert_eq!(render_object.behavior(), HitTestBehavior::Translucent);
+    }
+
+    #[test]
+    fn update_render_object_reconfigures_cursor_opaque_and_behavior() {
+        let mut render_object = MouseRegion::new().create_render_object();
+
+        MouseRegion::new()
+            .cursor(CursorIcon::Text)
+            .opaque(false)
+            .behavior(HitTestBehavior::DeferToChild)
+            .update_render_object(&mut render_object);
+
+        assert_eq!(render_object.cursor(), CursorIcon::Text);
+        assert!(!render_object.opaque());
+        assert_eq!(render_object.behavior(), HitTestBehavior::DeferToChild);
+    }
+
+    #[test]
+    fn debug_reports_callback_presence_and_configuration_without_child() {
+        let widget = MouseRegion::new().on_hover(|_device, _offset| {});
+        let debug = format!("{widget:?}");
+        assert!(
+            debug.contains("on_hover: true") && debug.contains("on_enter: false"),
+            "Debug output must reflect which callbacks are set, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        assert!(!MouseRegion::new().has_children());
+        assert!(MouseRegion::new().child(SizedBox::shrink()).has_children());
+    }
+}
