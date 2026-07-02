@@ -8,12 +8,14 @@
 //! the outer border (`top`/`right`/`bottom`/`left`) — painted last so it sits
 //! on top of the interior grid lines.
 //!
-//! `border_radius` is out of scope for this first slice — the outer border
-//! always uses the zero-radius uniform/non-uniform paths already implemented
-//! by [`crate::decoration`]'s border painter.
+//! [`TableBorder::border_radius`] rounds the outer border when it is uniform:
+//! the corners are handed to [`crate::decoration`]'s border painter as an
+//! [`RRect`], which already rounds the uniform outer path and ignores the
+//! radius on the non-uniform (four-edge) path — matching the oracle, which
+//! only rounds a uniform outer edge (`table_border.dart:143-156`).
 
 use flui_types::{
-    Pixels, Point, Rect,
+    Pixels, Point, RRect, Rect,
     painting::{Paint, Path},
     styling::{BorderStyle, TableBorder},
 };
@@ -61,10 +63,19 @@ pub fn paint_table_border(
         canvas.draw_path(&path, &paint);
     }
 
-    // Outer border painted last (on top of the interior grid) — reuses the
-    // same uniform/non-uniform split `paint_box_decoration`'s border already
-    // implements, with no border radius (out of scope for this slice).
-    paint_border(canvas, rect, None, &border.outer_border());
+    // Outer border painted last (on top of the interior grid). Its corners
+    // come from `border.border_radius` (square when zero): a uniform outer
+    // edge rounds to this `RRect`, while `paint_border` ignores the radius on
+    // the non-uniform four-edge path — matching the oracle, which rounds a
+    // uniform outer edge only (`table_border.dart:143-156`).
+    let outer_rrect = RRect::from_rect_and_corners(
+        rect,
+        border.border_radius.top_left,
+        border.border_radius.top_right,
+        border.border_radius.bottom_right,
+        border.border_radius.bottom_left,
+    );
+    paint_border(canvas, rect, Some(outer_rrect), &border.outer_border());
 }
 
 #[cfg(test)]
@@ -136,6 +147,50 @@ mod tests {
             matches!(cmds[2], DrawCommand::DrawDRRect { .. }),
             "expected the outer border to paint last as a uniform DrawDRRect; got {:?}",
             cmds[2]
+        );
+    }
+
+    #[test]
+    fn uniform_outer_border_rounds_to_the_border_radius() {
+        use flui_types::geometry::Radius;
+        use flui_types::styling::{BorderRadius, BorderRadiusExt};
+
+        let mut canvas = Canvas::new();
+        let border = TableBorder::all(solid(2.0, Color::BLACK))
+            .with_border_radius(BorderRadius::circular(px(8.0)));
+        paint_table_border(&mut canvas, rect(), &[], &[], &border);
+        let list = canvas.finish();
+        let cmds: Vec<_> = list.iter().collect();
+
+        // The single (uniform) outer border rounds its OUTER rrect to the
+        // requested 8px corners — the deferred-edge feature working end to end.
+        #[allow(clippy::panic)] // Test assertion
+        let DrawCommand::DrawDRRect { outer, .. } = &cmds[0] else {
+            panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
+        };
+        assert_eq!(outer.top_left, Radius::circular(px(8.0)));
+        assert_eq!(outer.bottom_right, Radius::circular(px(8.0)));
+    }
+
+    #[test]
+    fn zero_border_radius_leaves_the_outer_corners_square() {
+        use flui_types::geometry::Radius;
+
+        let mut canvas = Canvas::new();
+        // No `with_border_radius` -> default `BorderRadius::ZERO`.
+        let border = TableBorder::all(solid(2.0, Color::BLACK));
+        paint_table_border(&mut canvas, rect(), &[], &[], &border);
+        let list = canvas.finish();
+        let cmds: Vec<_> = list.iter().collect();
+
+        #[allow(clippy::panic)] // Test assertion
+        let DrawCommand::DrawDRRect { outer, .. } = &cmds[0] else {
+            panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
+        };
+        assert_eq!(
+            outer.top_left,
+            Radius::circular(px(0.0)),
+            "square by default"
         );
     }
 

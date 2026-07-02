@@ -237,8 +237,12 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > line placement, per-cell hit testing, and baseline row alignment.
 > `MaxColumnWidth`/`MinColumnWidth` are now supported via
 > `TableColumnWidth::Max`/`Min` (recursive combinators folding both operands'
-> widths and flex, faithful to `table.dart:235-340`, harness-covered); RTL
-> column order and `TableBorder.border_radius` remain documented deferred edges.
+> widths and flex, faithful to `table.dart:235-340`, harness-covered).
+> `TableBorder::border_radius` now rounds a uniform outer border (via the
+> existing `paint_border` RRect path, faithful to `table_border.dart:143-156`,
+> command-tested). RTL column order remains a documented deferred edge (gated
+> on FLUI's project-wide "no `TextDirection` in layout" stance, shared with
+> `RenderFlex`/`RenderWrap`).
 > `RenderAnimatedSize` now exists, backs the public `AnimatedSize` widget, and closes the
 > render-object-ticker architectural gap via `ADR-0013`
 > (`docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`): a defaulted `attach`/`detach`

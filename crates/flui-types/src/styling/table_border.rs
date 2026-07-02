@@ -6,11 +6,14 @@
 //!
 //! Flutter parity: `rendering/table_border.dart` `TableBorder`.
 //!
-//! `border_radius` is intentionally **not** part of this first slice — only
-//! the zero-radius uniform and non-uniform outer-border paths are supported
-//! (see `flui_painting::paint_table_border`).
+//! [`TableBorder::border_radius`] rounds the outer border when it is uniform
+//! (matching the oracle, which only rounds a uniform outer edge); see
+//! `flui_painting::paint_table_border`.
 
-use crate::{geometry::Pixels, styling::BorderSide};
+use crate::{
+    geometry::Pixels,
+    styling::{BorderRadius, BorderRadiusExt, BorderSide},
+};
 
 /// Border specification for a `Table`/`RenderTable`: four outer sides plus
 /// two interior sides (between rows, between columns).
@@ -34,6 +37,13 @@ pub struct TableBorder {
 
     /// The interior side drawn between columns.
     pub vertical_inside: BorderSide<Pixels>,
+
+    /// Corner rounding for the outer border.
+    ///
+    /// Only takes effect when the outer border is uniform (Flutter rounds a
+    /// uniform outer edge only); a non-uniform outer border paints square
+    /// regardless. Defaults to [`BorderRadius::ZERO`] (square corners).
+    pub border_radius: BorderRadius,
 }
 
 impl TableBorder {
@@ -45,6 +55,7 @@ impl TableBorder {
         left: BorderSide::NONE,
         horizontal_inside: BorderSide::NONE,
         vertical_inside: BorderSide::NONE,
+        border_radius: BorderRadius::ZERO,
     };
 
     /// Creates a border with explicit per-side styling.
@@ -64,6 +75,7 @@ impl TableBorder {
             left,
             horizontal_inside,
             vertical_inside,
+            border_radius: BorderRadius::ZERO,
         }
     }
 
@@ -77,6 +89,7 @@ impl TableBorder {
             left: side,
             horizontal_inside: side,
             vertical_inside: side,
+            border_radius: BorderRadius::ZERO,
         }
     }
 
@@ -91,7 +104,16 @@ impl TableBorder {
             left: outside,
             horizontal_inside: inside,
             vertical_inside: inside,
+            border_radius: BorderRadius::ZERO,
         }
+    }
+
+    /// Builder: round the outer border by `border_radius` (takes effect only
+    /// when the outer border is uniform — see [`Self::border_radius`]).
+    #[must_use]
+    pub const fn with_border_radius(mut self, border_radius: BorderRadius) -> Self {
+        self.border_radius = border_radius;
+        self
     }
 
     /// Whether every side (outer and interior) has an identical color, width,
