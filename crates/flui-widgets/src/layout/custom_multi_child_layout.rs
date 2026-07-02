@@ -104,3 +104,165 @@ where
 }
 
 generic_render_view_element!(CustomMultiChildLayout);
+
+#[cfg(test)]
+mod tests {
+    use std::any::{Any, TypeId};
+
+    use flui_rendering::delegates::MultiChildLayoutContext;
+    use flui_types::{Offset, Size};
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    /// A minimal delegate -- only needed to satisfy `MultiChildLayoutDelegate`'s
+    /// object safety; these tests exercise the widget's own wiring (which
+    /// delegate instance gets installed), not delegate layout behavior
+    /// (covered by `tests/custom_multi_child_layout.rs`).
+    #[derive(Debug)]
+    struct NoopDelegate;
+
+    impl MultiChildLayoutDelegate for NoopDelegate {
+        fn perform_layout(&self, _context: &mut dyn MultiChildLayoutContext, _size: Size) {}
+
+        fn should_relayout(&self, _old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
+            false
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    struct OtherDelegate;
+
+    impl MultiChildLayoutDelegate for OtherDelegate {
+        fn perform_layout(&self, _context: &mut dyn MultiChildLayoutContext, _size: Size) {}
+
+        fn should_relayout(&self, _old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
+            true
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    fn noop_delegate() -> Arc<dyn MultiChildLayoutDelegate> {
+        Arc::new(NoopDelegate)
+    }
+
+    #[test]
+    fn layout_id_returns_the_configured_identifier() {
+        let widget = LayoutId::new("header", SizedBox::shrink());
+        assert_eq!(widget.id(), "header");
+    }
+
+    #[test]
+    fn layout_id_create_parent_data_carries_the_id_and_zero_offset() {
+        let widget = LayoutId::new("body", SizedBox::shrink());
+        let parent_data = widget.create_parent_data();
+
+        assert_eq!(parent_data.id.as_deref(), Some("body"));
+        assert_eq!(parent_data.offset, Offset::ZERO);
+        assert!(parent_data.has_id());
+    }
+
+    #[test]
+    fn layout_id_child_returns_the_wrapped_view() {
+        let widget = LayoutId::new("header", SizedBox::new(10.0, 20.0));
+        assert_eq!(
+            widget.child().view_type_id(),
+            TypeId::of::<SizedBox>(),
+            "child() must return the wrapped SizedBox view",
+        );
+    }
+
+    #[test]
+    fn layout_id_debug_reports_the_id() {
+        let widget = LayoutId::new("header", SizedBox::shrink());
+        let debug = format!("{widget:?}");
+        assert!(
+            debug.contains(r#"id: "header""#),
+            "Debug output must report the id, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn create_render_object_installs_the_given_delegate() {
+        let render_object = CustomMultiChildLayout::new(noop_delegate(), Vec::<BoxedView>::new())
+            .create_render_object();
+        assert!(
+            render_object.delegate().as_any().is::<NoopDelegate>(),
+            "create_render_object must install the exact delegate passed to new()",
+        );
+    }
+
+    #[test]
+    fn update_render_object_replaces_the_delegate() {
+        let mut render_object =
+            CustomMultiChildLayout::new(noop_delegate(), Vec::<BoxedView>::new())
+                .create_render_object();
+        assert!(render_object.delegate().as_any().is::<NoopDelegate>());
+
+        let other: Arc<dyn MultiChildLayoutDelegate> = Arc::new(OtherDelegate);
+        CustomMultiChildLayout::new(other, Vec::<BoxedView>::new())
+            .update_render_object(&mut render_object);
+
+        assert!(
+            render_object.delegate().as_any().is::<OtherDelegate>(),
+            "update_render_object must replace the delegate with the new instance",
+        );
+    }
+
+    #[test]
+    fn has_children_reflects_whether_children_were_set() {
+        let empty = CustomMultiChildLayout::new(noop_delegate(), Vec::<BoxedView>::new());
+        assert!(!empty.has_children());
+
+        let with_children = CustomMultiChildLayout::new(
+            noop_delegate(),
+            vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()],
+        );
+        assert!(with_children.has_children());
+    }
+
+    #[test]
+    fn debug_reports_the_delegate_and_child_count() {
+        let empty = CustomMultiChildLayout::new(noop_delegate(), Vec::<BoxedView>::new());
+        let debug = format!("{empty:?}");
+        assert!(
+            debug.contains("children: 0"),
+            "Debug output must report zero children, got: {debug}",
+        );
+
+        let with_children = CustomMultiChildLayout::new(
+            noop_delegate(),
+            vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()],
+        );
+        let debug = format!("{with_children:?}");
+        assert!(
+            debug.contains("children: 2"),
+            "Debug output must report the child count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn visit_child_views_visits_each_child_exactly_once() {
+        let widget = CustomMultiChildLayout::new(
+            noop_delegate(),
+            vec![
+                SizedBox::shrink().boxed(),
+                SizedBox::shrink().boxed(),
+                SizedBox::shrink().boxed(),
+            ],
+        );
+
+        let mut visit_count = 0usize;
+        widget.visit_child_views(&mut |_child| visit_count += 1);
+
+        assert_eq!(visit_count, 3);
+    }
+}
