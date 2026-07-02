@@ -80,6 +80,7 @@ pub mod app;
 pub mod clip;
 mod container;
 pub mod flex;
+pub mod icon;
 pub mod image;
 pub mod interaction;
 pub mod layout;
@@ -114,6 +115,7 @@ pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
+pub use icon::{Icon, IconData, IconTheme, IconThemeData};
 #[cfg(feature = "network-images")]
 pub use image::NetworkImage;
 pub use image::{
@@ -215,17 +217,17 @@ pub mod prelude {
         CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox, EditableText,
         EditableTextState, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
         FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector, GridView,
-        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedStack,
-        IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, ListView, Listener,
-        MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Offstage, Opacity, OverflowBox,
-        OverflowBoxFit, Padding, Positioned, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
-        ScrollController, Scrollable, Scrollbar, Semantics, ShrinkWrappingViewport,
-        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
-        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, Table,
-        TableCell, TableRow, Text, TextEditingController, TextField, Theme, ThemeData, Transform,
-        Viewport, Visibility, Wrap,
+        Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image, ImageAlignment, ImageFit,
+        ImageProvider, IndexedStack, IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox,
+        ListBody, ListView, Listener, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion,
+        Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary,
+        RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics,
+        ShrinkWrappingViewport, SingleChildScrollView, SizedBox, SizedOverflowBox,
+        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+        SliverToBoxAdapter, Spacer, Stack, Table, TableCell, TableRow, Text, TextEditingController,
+        TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
