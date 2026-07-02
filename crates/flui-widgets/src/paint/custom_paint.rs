@@ -90,3 +90,82 @@ impl RenderView for CustomPaint {
 }
 
 impl_render_view!(CustomPaint);
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+
+    use flui_rendering::pipeline::Canvas;
+    use flui_types::geometry::px;
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    /// A minimal painter -- only needed to satisfy `CustomPainter`'s object
+    /// safety; these tests exercise the widget's own wiring, not painter
+    /// behavior.
+    #[derive(Debug)]
+    struct NoopPainter;
+
+    impl CustomPainter for NoopPainter {
+        fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+
+        fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
+            false
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    fn painter() -> Arc<dyn CustomPainter> {
+        Arc::new(NoopPainter)
+    }
+
+    #[test]
+    fn create_render_object_defaults_to_no_painters_and_zero_size() {
+        let render_object = CustomPaint::new().create_render_object();
+        assert!(render_object.painter().is_none());
+        assert!(render_object.foreground_painter().is_none());
+        assert_eq!(render_object.preferred_size(), Size::ZERO);
+    }
+
+    #[test]
+    fn create_render_object_installs_the_configured_painters_and_size() {
+        let render_object = CustomPaint::new()
+            .painter(painter())
+            .foreground_painter(painter())
+            .size(Size::new(px(30.0), px(20.0)))
+            .create_render_object();
+
+        assert!(render_object.painter().is_some());
+        assert!(render_object.foreground_painter().is_some());
+        assert_eq!(
+            render_object.preferred_size(),
+            Size::new(px(30.0), px(20.0))
+        );
+    }
+
+    #[test]
+    fn update_render_object_reinstalls_painters_and_size() {
+        let mut render_object = CustomPaint::new().create_render_object();
+        assert!(render_object.painter().is_none());
+
+        CustomPaint::new()
+            .painter(painter())
+            .size(Size::new(px(5.0), px(5.0)))
+            .update_render_object(&mut render_object);
+
+        assert!(render_object.painter().is_some());
+        assert!(render_object.foreground_painter().is_none());
+        assert_eq!(render_object.preferred_size(), Size::new(px(5.0), px(5.0)));
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        assert!(!CustomPaint::new().has_children());
+        assert!(CustomPaint::new().child(SizedBox::shrink()).has_children());
+    }
+}
