@@ -358,8 +358,8 @@ pub fn resolve_follower_offset(
         return unlinked_fallback();
     };
 
-    let leader_chain_offset = offset_sum_to_ancestor(tree, leader_info.layer_id, common_ancestor);
-    let follower_chain_offset = offset_sum_to_ancestor(tree, follower_layer_id, common_ancestor);
+    let leader_chain_offset = translation_to_ancestor(tree, leader_info.layer_id, common_ancestor);
+    let follower_chain_offset = translation_to_ancestor(tree, follower_layer_id, common_ancestor);
     // The leader's position as seen from the follower's own local frame:
     // both chains are summed only up to the shared ancestor, so the
     // (identical, cancelling) ancestor-to-root portion is never computed.
@@ -393,12 +393,19 @@ fn find_common_ancestor(tree: &LayerTree, a: LayerId, b: LayerId) -> Option<Laye
     None
 }
 
-/// Sums every `Layer::Offset` node's own offset walking from `start` up
-/// through its ancestors, stopping at (and excluding) `ancestor`. Every
-/// other layer kind along the path contributes zero translation — FLUI's
-/// paint composer only ever shifts the accumulated coordinate space via a
-/// `Layer::Offset` push at a repaint-boundary crossing.
-fn offset_sum_to_ancestor(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> Offset<Pixels> {
+/// Accumulates the translation from `start` up to (and excluding) `ancestor`:
+/// every `Layer::Offset`'s offset **plus the translation component of every
+/// `Layer::Transform`** on the path. The paint composer does push
+/// `Layer::Transform` nodes (e.g. for `paint_transform` / `PushTransform`
+/// scopes), so a leader or follower inside a `RenderTransform`/`FittedBox`/flow
+/// transform would otherwise be resolved as if that transform did not exist.
+///
+/// FLUI's follower system is offset-only (`FollowerLayer::calculate_offset`
+/// takes an `Offset`), so a transform layer contributes only its translation
+/// here — a scale or rotation between leader and follower is not representable
+/// and is a documented limitation of the offset-only follower, not a silent
+/// drop.
+fn translation_to_ancestor(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> Offset<Pixels> {
     let mut total = Offset::ZERO;
     let mut current = Some(start);
     while let Some(id) = current {
@@ -406,8 +413,13 @@ fn offset_sum_to_ancestor(tree: &LayerTree, start: LayerId, ancestor: LayerId) -
             break;
         }
         let Some(node) = tree.get(id) else { break };
-        if let Layer::Offset(offset_layer) = node.layer() {
-            total += offset_layer.offset();
+        match node.layer() {
+            Layer::Offset(offset_layer) => total += offset_layer.offset(),
+            Layer::Transform(transform_layer) => {
+                let (tx, ty, _tz) = transform_layer.transform().translation_component();
+                total += Offset::new(Pixels::new(tx), Pixels::new(ty));
+            }
+            _ => {}
         }
         current = node.parent();
     }
@@ -656,7 +668,7 @@ mod tests {
     // resolve_follower_offset
     // ========================================================================
 
-    use crate::layer::{FollowerLayer, LeaderLayer, OffsetLayer};
+    use crate::layer::{FollowerLayer, LeaderLayer, OffsetLayer, TransformLayer};
 
     #[test]
     fn resolve_follower_offset_linked_same_parent_top_left() {
@@ -737,6 +749,56 @@ mod tests {
         // = (105,-195) — feeding the child back to (0,200)+(105,-195) = (105,5),
         // matching the leader's absolute position (default TOP_LEFT anchors,
         // zero target offset).
+        assert_eq!(resolved, Some(Offset::new(px(105.0), px(-195.0))));
+    }
+
+    /// Regression for the Codex PR-review finding: a leader inside a
+    /// `Layer::Transform` (which the paint composer pushes for
+    /// `RenderTransform`/`FittedBox`/flow scopes) must have that transform's
+    /// translation included in follower resolution. Identical geometry to
+    /// `resolve_follower_offset_linked_across_offset_boundaries`, but the
+    /// leader's `(100, 0)` ancestor is a translation `Layer::Transform` instead
+    /// of a `Layer::Offset` — the resolved offset must be the same. Before the
+    /// fix, `translation_to_ancestor` skipped transform layers and this
+    /// resolved to `(5, -195)` (the 100px translation dropped).
+    #[test]
+    fn resolve_follower_offset_includes_transform_layer_translation() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        tree.set_root(Some(root));
+
+        let link = make_link();
+
+        // Leader's ancestor is a translation TRANSFORM layer, not an offset.
+        let branch_a = tree.insert(Layer::Transform(TransformLayer::translation(100.0, 0.0)));
+        tree.add_child(root, branch_a);
+        let leader_id = tree.insert(Layer::Leader(LeaderLayer::new(
+            link,
+            Size::new(px(20.0), px(20.0)),
+        )));
+        tree.add_child(branch_a, leader_id);
+
+        let branch_b = tree.insert(Layer::Offset(OffsetLayer::new(Offset::new(
+            px(0.0),
+            px(200.0),
+        ))));
+        tree.add_child(root, branch_b);
+        let follower = FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0)));
+        let follower_id = tree.insert(Layer::Follower(follower));
+        tree.add_child(branch_b, follower_id);
+
+        let mut registry = LinkRegistry::new();
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::new(px(5.0), px(5.0)),
+            Size::new(px(20.0), px(20.0)),
+        );
+
+        let resolved = resolve_follower_offset(&tree, &registry, follower_id, &follower);
+        // Leader absolute: transform translation (100,0) + leader local (5,5) =
+        // (105,5); follower slot: (0,200); push-offset (105,5) - (0,200) =
+        // (105,-195). Dropping the transform's translation would give (5,-195).
         assert_eq!(resolved, Some(Offset::new(px(105.0), px(-195.0))));
     }
 
