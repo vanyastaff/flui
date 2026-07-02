@@ -89,3 +89,58 @@ where
 }
 
 generic_render_view_element!(SliverFillViewport);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+    use flui_view::ViewExt;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn debug_reports_viewport_fraction_and_child_count() {
+        let sliver = SliverFillViewport::new(
+            0.9,
+            vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()],
+        );
+
+        let debug = format!("{sliver:?}");
+        assert!(
+            debug.contains("viewport_fraction: 0.9") && debug.contains("children: 2"),
+            "Debug output must include viewport_fraction and children count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn has_children_reflects_an_empty_child_list() {
+        let empty: SliverFillViewport = SliverFillViewport::new(1.0, Vec::new());
+        assert!(!empty.has_children());
+
+        let non_empty = SliverFillViewport::new(1.0, vec![SizedBox::shrink().boxed()]);
+        assert!(non_empty.has_children());
+    }
+
+    #[test]
+    #[should_panic(expected = "viewport_fraction must be greater than zero")]
+    fn new_panics_on_a_non_positive_viewport_fraction() {
+        let _ = SliverFillViewport::new(0.0, Vec::<flui_view::BoxedView>::new());
+    }
+
+    #[test]
+    fn update_render_object_applies_a_changed_viewport_fraction() {
+        let sliver = SliverFillViewport::new(1.0, Vec::<flui_view::BoxedView>::new());
+        let mut render_object = sliver.create_render_object();
+
+        let updated = SliverFillViewport::new(0.5, Vec::<flui_view::BoxedView>::new());
+        updated.update_render_object(&mut render_object);
+
+        // No public getter on RenderSliverFillViewport; confirm via Debug
+        // that the field actually changed rather than merely not panicking.
+        let debug = format!("{render_object:?}");
+        assert!(
+            debug.contains("0.5"),
+            "update_render_object must apply the new viewport_fraction, got: {debug}",
+        );
+    }
+}
