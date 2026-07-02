@@ -6352,6 +6352,52 @@ fn harness_table_baseline_alignment_lines_up_cells_on_their_shared_baseline() {
 }
 
 #[test]
+fn harness_table_dry_baseline_matches_the_committed_first_row_baseline() {
+    // Two row-0 `Baseline` cells whose baselines are 30 and 10, so the table's
+    // first-row baseline (`before_baseline`) is max(30, 10) = 30 — the value
+    // the committed layout stores in `baseline_distance` (cf. the sibling test).
+    // Each cell wraps a `RenderParagraph` (not a baseline-less `ColoredBox`) so
+    // `RenderBaseline`'s dry path — which probes its child's dry baseline — has
+    // a real child baseline and returns its configured offset.
+    let constraints = loose(200.0);
+    let paragraph = || {
+        box_node(RenderParagraph::new(
+            TextSpan::new("Ag"),
+            TextDirection::Ltr,
+        ))
+    };
+    let mut run = RenderTester::mount(
+        box_node(RenderTable::new(2).with_text_baseline(Some(TextBaseline::Alphabetic)))
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(30.0)))
+                    .child(paragraph())
+                    .with_table_parent_data(
+                        TableCellParentData::zero()
+                            .with_alignment(TableCellVerticalAlignment::Baseline),
+                    ),
+            )
+            .child(
+                box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(10.0)))
+                    .child(paragraph())
+                    .with_table_parent_data(
+                        TableCellParentData::zero()
+                            .with_alignment(TableCellVerticalAlignment::Baseline),
+                    ),
+            ),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let dry = run.dry_baseline(run.root(), constraints, TextBaseline::Alphabetic);
+    assert_eq!(
+        dry,
+        Some(30.0),
+        "table dry baseline must equal the committed first-row baseline \
+         (max of the row's cell baselines 30 and 10)",
+    );
+}
+
+#[test]
 fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_explicit_cell_does_not()
 {
     // 3 columns: "unset" has no parent-data override (defers to the table's

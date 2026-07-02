@@ -34,10 +34,14 @@
 //!   [`TableColumnWidth::Intrinsic`]`{ flex }`: the intrinsic width is the
 //!   column's floor and a `Some(flex)` also claims leftover space in the grow
 //!   pass, faithfully to the oracle (`table.dart:94`).
+//! - **`compute_dry_baseline`** reports the first row's baseline without
+//!   committing layout — the dry mirror of
+//!   [`compute_distance_to_actual_baseline`](RenderTable::compute_distance_to_actual_baseline):
+//!   dry column widths, then the max child dry-baseline over row 0's
+//!   `Baseline`-aligned cells (driven by the table's `text_baseline`).
 //! - **Deferred**: `TableCellVerticalAlignment::IntrinsicHeight` —
 //!   `TableCellVerticalAlignment` keeps its existing FLUI shape (see
-//!   `flui_types::layout::table`). `compute_dry_baseline` also keeps the
-//!   `RenderBox` trait default (`None`) rather than the oracle's real answer.
+//!   `flui_types::layout::table`).
 
 use std::collections::HashMap;
 
@@ -51,7 +55,9 @@ use flui_types::{
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{
+        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+    },
     parent_data::TableCellParentData,
     traits::{RenderBox, TextBaseline},
 };
@@ -889,6 +895,71 @@ impl RenderBox for RenderTable {
 
     fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
         self.baseline_distance.map(Pixels::get)
+    }
+
+    /// Dry equivalent of [`Self::compute_distance_to_actual_baseline`]: the
+    /// first row's baseline, computed without committing layout.
+    ///
+    /// Mirrors the live measure pass (`perform_layout`, the `y == 0` branch
+    /// that stores `baseline_distance`): resolve dry column widths, then take
+    /// the max child dry-baseline among row 0's `Baseline`-aligned cells. Like
+    /// [`Self::compute_distance_to_actual_baseline`], the table's baseline is
+    /// driven by its own [`text_baseline`](Self::with_text_baseline) (not the
+    /// requested `_baseline`); without one, every baseline cell degrades to a
+    /// height contribution and the table reports no baseline. Returns the same
+    /// value the committed layout stores, so dry and live agree.
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        _baseline: TextBaseline,
+        ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        let column_count = self.column_count;
+        let child_count = ctx.child_count();
+        if column_count == 0 || child_count == 0 {
+            return None;
+        }
+        let row_count = child_count / column_count;
+        if row_count == 0 {
+            return None;
+        }
+        // No table text baseline → every `Baseline` cell degrades (the live
+        // `childBaseline == null` branch), so the table reports no baseline.
+        let text_baseline = self.text_baseline?;
+
+        // Same dry column-width resolution the live path uses — the dry ctx
+        // exposes the identical intrinsic-width probes.
+        let widths = self.compute_column_widths(
+            row_count,
+            constraints.min_width,
+            constraints.max_width,
+            |i, h, kind| match kind {
+                WidthQuery::Min => ctx.child_min_intrinsic_width(i, h),
+                WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
+            },
+        );
+
+        // First row (indices `0..column_count`): the table baseline is the max
+        // dry-baseline over its `Baseline`-aligned cells (the live path's
+        // `before_baseline`), or `None` if none report a baseline.
+        // Row 0's cells are the flat children `0..column_count`, so the
+        // column index doubles as the row-0 child index.
+        let mut before_baseline: Option<f32> = None;
+        for (cell, &width) in widths.iter().enumerate() {
+            let alignment = ctx
+                .child_parent_data_as::<TableCellParentData>(cell)
+                .and_then(|pd| pd.vertical_alignment)
+                .unwrap_or(self.default_vertical_alignment);
+            if alignment == TableCellVerticalAlignment::Baseline {
+                let cell_constraints = BoxConstraints::tight_for(Some(width), None);
+                if let Some(distance) =
+                    ctx.child_dry_baseline(cell, cell_constraints, text_baseline)
+                {
+                    before_baseline = Some(before_baseline.map_or(distance, |b| b.max(distance)));
+                }
+            }
+        }
+        before_baseline
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
