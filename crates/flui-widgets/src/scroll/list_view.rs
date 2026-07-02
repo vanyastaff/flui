@@ -185,3 +185,69 @@ impl StatelessView for ListView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn new_defaults_to_vertical_zero_offset_not_shrink_wrapped() {
+        let debug = format!("{:?}", ListView::new(50.0, Vec::<BoxedView>::new()));
+        assert!(
+            debug.contains("scroll_direction: Vertical")
+                && debug.contains("offset: 0.0")
+                && debug.contains("shrink_wrap: false")
+                && debug.contains("item_extent: 50.0"),
+            "Debug output must reflect the static constructor's defaults, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn debug_reports_children_count_for_the_static_variant() {
+        let debug = format!(
+            "{:?}",
+            ListView::new(50.0, vec![SizedBox::shrink().boxed()])
+        );
+        assert!(
+            debug.contains("children: 1"),
+            "static ListView's Debug output must report the child count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn debug_reports_item_extent_estimate_and_builder_source_for_the_lazy_variant() {
+        let debug = format!(
+            "{:?}",
+            ListView::builder(3, 60.0, |index| (index < 3)
+                .then(|| SizedBox::shrink().boxed()))
+        );
+        assert!(
+            debug.contains("item_extent_estimate: 60.0") && debug.contains("builder_source:"),
+            "lazy ListView's Debug output must report the estimate and builder \
+             source instead of a static child count, got: {debug}",
+        );
+        assert!(
+            !debug.contains("children:"),
+            "lazy ListView's Debug output must not report a static children \
+             count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn builder_methods_override_scroll_direction_offset_and_shrink_wrap() {
+        let debug = format!(
+            "{:?}",
+            ListView::new(50.0, Vec::<BoxedView>::new())
+                .scroll_direction(Axis::Horizontal)
+                .offset(12.5)
+                .shrink_wrap(true)
+        );
+        assert!(
+            debug.contains("scroll_direction: Horizontal")
+                && debug.contains("offset: 12.5")
+                && debug.contains("shrink_wrap: true"),
+            "Debug output must reflect the overridden builder values, got: {debug}",
+        );
+    }
+}

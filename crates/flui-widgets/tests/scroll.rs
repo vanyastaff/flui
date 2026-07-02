@@ -102,6 +102,52 @@ fn list_view_shrink_wrap_sizes_to_static_fixed_extent_content() {
 }
 
 #[test]
+fn list_view_builder_shrink_wrap_sizes_to_settled_lazy_content() {
+    // The shrink_wrap + lazy-builder combination is otherwise never exercised
+    // together: `list_view_builder_builds_all_visible_items` covers lazy
+    // without shrink_wrap, `list_view_shrink_wrap_sizes_to_static_fixed_extent_content`
+    // covers shrink_wrap without lazy.
+    let mut laid = lay_out(
+        ListView::builder(3, 50.0, |index| {
+            (index < 3).then(|| SizedBox::new(200.0, 50.0).boxed())
+        })
+        .shrink_wrap(true),
+        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+    );
+
+    laid.tick();
+    laid.tick();
+
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert!(laid.find_all_by_render_type("RenderViewport").is_empty());
+    assert_eq!(
+        laid.size(viewport),
+        size(200.0, 150.0),
+        "3 settled lazy items at a 50px estimate must shrink-wrap to 150px high"
+    );
+}
+
+#[test]
+fn list_view_horizontal_lays_rows_out_along_the_width() {
+    use flui_widgets::prelude::Axis;
+
+    let rows: Vec<_> = (0..2).map(|_| SizedBox::shrink().boxed()).collect();
+    let laid = lay_out(
+        ListView::new(50.0, rows).scroll_direction(Axis::Horizontal),
+        tight(200.0, 120.0),
+    );
+
+    let viewport = laid.root();
+    assert_eq!(laid.size(viewport), size(200.0, 120.0));
+
+    // Horizontal axis_direction: each row is forced to item_extent (50) on
+    // the horizontal main axis, viewport-tall on the cross axis.
+    let list = laid.only_child(viewport);
+    let first_row = laid.child(list, 0);
+    assert_eq!(laid.size(first_row), size(50.0, 120.0));
+}
+
+#[test]
 fn custom_scroll_view_shrink_wrap_sizes_to_sliver_content() {
     let laid = lay_out(
         CustomScrollView::new((SliverFixedExtentList::new(
