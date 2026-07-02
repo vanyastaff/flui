@@ -218,3 +218,91 @@ impl ParentDataView for TableCell {
 }
 
 impl_parent_data_view!(TableCell);
+
+#[cfg(test)]
+mod tests {
+    use flui_types::Color;
+    use flui_types::typography::TextBaseline;
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    fn row(cells: usize) -> TableRow {
+        TableRow::new((0..cells).map(|_| SizedBox::shrink().boxed()).collect())
+    }
+
+    #[test]
+    fn column_count_is_the_first_rows_cell_count() {
+        assert_eq!(Table::new(vec![row(3), row(3)]).column_count(), 3);
+    }
+
+    #[test]
+    fn column_count_is_zero_with_no_rows() {
+        assert_eq!(Table::new(Vec::new()).column_count(), 0);
+    }
+
+    #[test]
+    fn row_decorations_collects_each_rows_decoration_in_order() {
+        let decorated =
+            row(1).decoration(BoxDecoration::new().set_color(Some(Color::rgb(1, 2, 3))));
+        let table = Table::new(vec![row(1), decorated]);
+
+        let decorations = table.row_decorations();
+        assert_eq!(decorations.len(), 2);
+        assert!(decorations[0].is_none(), "first row has no decoration");
+        assert_eq!(
+            decorations[1].as_ref().and_then(|d| d.color),
+            Some(Color::rgb(1, 2, 3)),
+        );
+    }
+
+    #[test]
+    fn create_render_object_installs_the_configured_border() {
+        let border = TableBorder::all(flui_types::styling::BorderSide::new(
+            Color::BLACK,
+            flui_types::geometry::px(1.0),
+            flui_types::styling::BorderStyle::Solid,
+        ));
+        let render_object = Table::new(vec![row(1)])
+            .border(border)
+            .create_render_object();
+        assert_eq!(render_object.border(), Some(&border));
+    }
+
+    #[test]
+    fn update_render_object_replaces_the_border() {
+        let mut render_object = Table::new(vec![row(1)]).create_render_object();
+        assert_eq!(render_object.border(), None);
+
+        let border = TableBorder::all(flui_types::styling::BorderSide::new(
+            Color::BLACK,
+            flui_types::geometry::px(2.0),
+            flui_types::styling::BorderStyle::Solid,
+        ));
+        Table::new(vec![row(1)])
+            .border(border)
+            .update_render_object(&mut render_object);
+        assert_eq!(render_object.border(), Some(&border));
+    }
+
+    #[test]
+    fn debug_reports_builder_overrides() {
+        let table = Table::new(vec![row(1)])
+            .default_column_width(TableColumnWidth::Fixed(40.0))
+            .default_vertical_alignment(TableCellVerticalAlignment::Bottom)
+            .text_baseline(TextBaseline::Alphabetic);
+        let debug = format!("{table:?}");
+        assert!(
+            debug.contains("Fixed") && debug.contains("Bottom") && debug.contains("Alphabetic"),
+            "Debug output must reflect the overridden builder values, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn has_children_is_false_when_every_row_is_empty() {
+        assert!(!Table::new(vec![TableRow::new(Vec::new())]).has_children());
+        assert!(!Table::new(Vec::new()).has_children());
+        assert!(Table::new(vec![row(1)]).has_children());
+    }
+}
