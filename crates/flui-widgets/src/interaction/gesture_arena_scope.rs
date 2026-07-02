@@ -92,3 +92,74 @@ impl InheritedView for GestureArenaScope {
 }
 
 impl_inherited_view!(GestureArenaScope);
+
+#[cfg(test)]
+mod tests {
+    use flui_interaction::arena::GestureArena;
+    use flui_interaction::ids::PointerId;
+    use flui_interaction::recognizers::tap::TapGestureRecognizer;
+
+    use super::*;
+    use crate::SizedBox;
+
+    /// Registers a real arena member on `pointer` via a `TapGestureRecognizer`
+    /// (the arena member trait is sealed, so a concrete recognizer is the only
+    /// way to prove two `GestureArena` handles observe the same underlying
+    /// state from outside `flui-interaction`).
+    fn register_member(arena: &GestureArena, pointer: PointerId) {
+        let recognizer = TapGestureRecognizer::new(arena.clone());
+        arena.add(pointer, recognizer);
+    }
+
+    #[test]
+    fn arena_returns_the_provided_handle() {
+        let arena = GestureArena::new();
+        let scope = GestureArenaScope::new(arena.clone(), SizedBox::shrink());
+
+        register_member(&arena, PointerId::PRIMARY);
+
+        assert!(
+            scope.arena().contains(PointerId::PRIMARY),
+            "arena() must return the exact shared handle passed to new(), not \
+             an independent clone -- a member added via the original handle \
+             must be visible through arena()'s handle",
+        );
+    }
+
+    #[test]
+    fn data_and_child_expose_the_arena_and_wrapped_subtree() {
+        let arena = GestureArena::new();
+        let scope = GestureArenaScope::new(arena.clone(), SizedBox::shrink());
+
+        register_member(&arena, PointerId::PRIMARY);
+
+        assert!(
+            InheritedView::data(&scope).contains(PointerId::PRIMARY),
+            "InheritedView::data() must expose the same shared arena as arena()",
+        );
+        // `child()` returns a `&dyn View` over the wrapped subtree; reaching
+        // it without panicking proves the child was stored, not dropped.
+        let _child: &dyn View = InheritedView::child(&scope);
+    }
+
+    #[test]
+    fn update_should_notify_is_always_false() {
+        let scope_a = GestureArenaScope::new(GestureArena::new(), SizedBox::shrink());
+        let scope_b = GestureArenaScope::new(GestureArena::new(), SizedBox::shrink());
+        assert!(
+            !scope_a.update_should_notify(&scope_b),
+            "the arena handle is fixed for a scope's lifetime; descendants must \
+             never be told to rebuild off of it",
+        );
+    }
+
+    #[test]
+    fn debug_reports_the_arena() {
+        let scope = GestureArenaScope::new(GestureArena::new(), SizedBox::shrink());
+        let debug = format!("{scope:?}");
+        assert!(
+            debug.starts_with("GestureArenaScope"),
+            "Debug output must name the type, got: {debug}",
+        );
+    }
+}
