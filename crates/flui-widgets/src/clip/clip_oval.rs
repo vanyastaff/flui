@@ -71,3 +71,89 @@ impl RenderView for ClipOval {
 }
 
 impl_render_view!(ClipOval);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn create_render_object_defaults_to_anti_alias() {
+        let render_object = ClipOval::new().create_render_object();
+        assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
+    }
+
+    #[test]
+    fn create_render_object_applies_an_overridden_clip_behavior() {
+        let render_object = ClipOval::new()
+            .clip_behavior(Clip::HardEdge)
+            .create_render_object();
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+    }
+
+    #[test]
+    fn update_render_object_applies_a_changed_clip_behavior() {
+        let mut render_object = ClipOval::new().create_render_object();
+        assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
+
+        ClipOval::new()
+            .clip_behavior(Clip::HardEdge)
+            .update_render_object(&mut render_object);
+
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+    }
+
+    #[test]
+    fn update_render_object_is_idempotent_for_an_unchanged_clip_behavior() {
+        let mut render_object = ClipOval::new()
+            .clip_behavior(Clip::HardEdge)
+            .create_render_object();
+
+        ClipOval::new()
+            .clip_behavior(Clip::HardEdge)
+            .update_render_object(&mut render_object);
+
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        assert!(!ClipOval::new().has_children());
+        assert!(ClipOval::new().child(SizedBox::shrink()).has_children());
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let defaulted = ClipOval::default();
+        let constructed = ClipOval::new();
+        assert_eq!(defaulted.clip_behavior, constructed.clip_behavior);
+        assert!(!defaulted.has_children());
+        assert!(!constructed.has_children());
+    }
+
+    #[test]
+    fn debug_reports_clip_behavior_and_type_name() {
+        let debug = format!("{:?}", ClipOval::new().clip_behavior(Clip::None));
+        assert!(
+            debug.contains("ClipOval"),
+            "Debug output must name the type, got: {debug}",
+        );
+        assert!(
+            debug.contains("clip_behavior: None"),
+            "Debug output must include clip_behavior, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn debug_reports_has_child_flag() {
+        let without_child = format!("{:?}", ClipOval::new());
+        let with_child = format!("{:?}", ClipOval::new().child(SizedBox::shrink()));
+        assert!(
+            without_child.contains("has_child: false"),
+            "got: {without_child}",
+        );
+        assert!(with_child.contains("has_child: true"), "got: {with_child}");
+    }
+}
