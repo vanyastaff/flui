@@ -147,9 +147,21 @@ Concretely:
   Test-plan items 2 and 4 (register→measure visibility, single-source-of-truth) are
   covered at the painting layer. The baseline system/Roboto load did **not** move here
   yet (still lazy `FontSystem::new()`); folded into the engine slice.
-- **Slice 2 — engine glyph pipeline onto the shared handle (`flui-engine`)** ⏳ next.
-- **Slice 3 — bundled Material icon font + app-bootstrap registration** ⏳.
-- **Slice 4 — flip the `Icon` glyph assertion live (`flui-widgets`)** ⏳.
+- **Slice 2 — engine glyph pipeline onto the shared handle (`flui-engine`)** ✅ `a87d96f7`.
+  `TextRenderer.font_system` → `SharedFontSystem` (clone of `PaintingBinding::instance().font_system()`);
+  the 5 hot-path glyphon calls run inside `with_mut`; `initialize_font_system`/`load_embedded_fonts`
+  collapse into an idempotent `ensure_fonts_available` (embedded Roboto loads into the shared db only
+  when it has zero faces). The two disjoint FontSystems are now **one** — measure and paint share it.
+  Test-plan items 1 (type-identity failsafe — the `with_mut` closure compiles iff cosmic-text versions
+  match) and 3 (register→paint — the `enable-wgpu-tests` readback `atlas_trim_each_frame_keeps_text_rendering`
+  still rasterises text, 124/124 GPU tests green) covered.
+- **Slice 3 — bundled Material icon font + app-bootstrap registration** 🛇 BLOCKED on an asset/strategy
+  decision: bundling a specific OFL/Apache icon font is an outward, licensing-bearing change (new binary
+  asset + `deny.toml` / licence-inventory entries + choosing *which* icon set) that also cannot be
+  procured in this offline session. Infrastructure is ready — `register_font` + the shared system work
+  end-to-end today; only the font bytes + a one-line bootstrap `register_font` call remain.
+- **Slice 4 — flip the `Icon` glyph assertion live (`flui-widgets`)** 🛇 BLOCKED on Slice 3 (needs the
+  bundled icon font before an `Icon` glyph can shape to a non-tofu advance).
 
 ---
 
