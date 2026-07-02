@@ -139,7 +139,7 @@ fn flow_reverse_paint_order_hit_test_picks_the_last_painted_overlapping_child() 
 /// Flutter parity: `flow_test.dart` L109-114 `startOffset.value = 50.0; ...
 /// await tester.tapAt(const Offset(20.0, 90.0)); expect(log, equals(<int>[0]));`.
 #[test]
-fn flow_hit_test_inverts_each_childs_real_transform_after_offset_changes() {
+fn flow_hit_test_inverts_each_child_real_transform_after_offset_changes() {
     assert_eq!(
         hit_indices(50.0, 20.0, 90.0),
         vec![0],

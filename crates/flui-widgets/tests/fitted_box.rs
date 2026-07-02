@@ -55,7 +55,7 @@ fn fitted_box_with_tight_constraints_fills_them_regardless_of_fit() {
 }
 
 #[test]
-fn fitted_box_takes_the_childs_natural_size_when_it_already_fits_the_loose_bound() {
+fn fitted_box_takes_the_child_natural_size_when_it_already_fits_the_loose_bound() {
     // child (100, 50) already fits within the loose 0..200 x 0..200 bound on
     // both axes, so none of the four clamp-and-rescale branches in
     // `constrain_size_and_attempt_to_preserve_aspect_ratio` fire -- the

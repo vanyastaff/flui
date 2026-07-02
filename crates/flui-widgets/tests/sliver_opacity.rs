@@ -9,7 +9,7 @@ use common::{lay_out, tight};
 use flui_widgets::{SizedBox, SliverOpacity, SliverToBoxAdapter, Viewport};
 
 #[test]
-fn sliver_opacity_passes_the_childs_sliver_geometry_through_unchanged() {
+fn sliver_opacity_passes_the_child_sliver_geometry_through_unchanged() {
     let laid = lay_out(
         Viewport::new((SliverOpacity::new(0.5)
             .child(SliverToBoxAdapter::new().child(SizedBox::new(200.0, 120.0))),)),
