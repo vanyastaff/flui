@@ -20,6 +20,7 @@
 //! the render-node count mirrors what `Viewport::new(slivers)` would produce
 //! directly. There is no extra render node from the stateless widget layer.
 
+use flui_types::layout::Axis;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{CustomScrollView, SizedBox, SliverFixedExtentList, SliverToBoxAdapter};
 
@@ -72,5 +73,42 @@ fn custom_scroll_view_no_slivers_builds_one_render_node() {
         laid.render_node_count(),
         1,
         "empty CustomScrollView: expected exactly 1 render node (RenderViewport)"
+    );
+}
+
+/// `shrink_wrap(true)` must build a `ShrinkWrappingViewport`, not a
+/// `Viewport` -- the two compose to different render objects
+/// (`RenderShrinkWrappingViewport` vs `RenderViewport`).
+///
+/// Flutter parity: `CustomScrollView.shrinkWrap` selects
+/// `ShrinkWrappingViewport` over `Viewport` in `scroll_view.dart`'s `build`.
+#[test]
+fn custom_scroll_view_shrink_wrap_builds_a_shrink_wrapping_viewport() {
+    let root = CustomScrollView::new(vec![SliverToBoxAdapter::new().child(SizedBox::shrink())])
+        .shrink_wrap(true);
+    let laid = harness::pump_widget(root, harness::screen());
+
+    assert!(
+        laid.find_all_by_render_type("RenderViewport").is_empty(),
+        "shrink_wrap = true must not build a plain RenderViewport",
+    );
+    let _shrink_wrapping_viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+}
+
+/// `scroll_direction(Axis::Horizontal)` must reach the composed viewport as
+/// `AxisDirection::LeftToRight` (the horizontal-axis branch of `build`'s
+/// `axis_direction` mapping is otherwise never exercised).
+#[test]
+fn custom_scroll_view_horizontal_scroll_direction_builds_successfully() {
+    let root = CustomScrollView::new(vec![SliverToBoxAdapter::new().child(SizedBox::shrink())])
+        .scroll_direction(Axis::Horizontal);
+    let laid = harness::pump_widget(root, harness::screen());
+
+    let _viewport = laid.find_by_render_type("RenderViewport");
+    assert_eq!(
+        laid.render_node_count(),
+        3,
+        "horizontal CustomScrollView(SliverToBoxAdapter + child): expected 3 render nodes \
+         (1 viewport + 1 STBA + 1 STBA-child)"
     );
 }

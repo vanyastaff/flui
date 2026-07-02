@@ -110,3 +110,55 @@ impl StatelessView for CustomScrollView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use flui_view::BoxedView;
+
+    use super::*;
+
+    fn empty_scroll_view() -> CustomScrollView {
+        CustomScrollView::new(Vec::<BoxedView>::new())
+    }
+
+    #[test]
+    fn new_defaults_to_vertical_zero_offset_not_shrink_wrapped() {
+        let debug = format!("{:?}", empty_scroll_view());
+        assert!(
+            debug.contains("scroll_direction: Vertical")
+                && debug.contains("offset: 0.0")
+                && debug.contains("shrink_wrap: false"),
+            "Debug output must reflect Flutter's CustomScrollView defaults, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn builder_methods_override_scroll_direction_offset_and_shrink_wrap() {
+        let debug = format!(
+            "{:?}",
+            empty_scroll_view()
+                .scroll_direction(Axis::Horizontal)
+                .offset(42.5)
+                .shrink_wrap(true)
+        );
+        assert!(
+            debug.contains("scroll_direction: Horizontal")
+                && debug.contains("offset: 42.5")
+                && debug.contains("shrink_wrap: true"),
+            "Debug output must reflect the overridden builder values, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn debug_reports_the_sliver_count() {
+        let root = CustomScrollView::new(vec![
+            crate::SliverToBoxAdapter::new().boxed(),
+            crate::SliverToBoxAdapter::new().boxed(),
+        ]);
+        let debug = format!("{root:?}");
+        assert!(
+            debug.contains("sliver_count: 2"),
+            "Debug output must report the sliver child count, got: {debug}",
+        );
+    }
+}
