@@ -265,3 +265,78 @@ impl RenderView for AnimatedSizeRenderView {
 }
 
 impl_render_view!(AnimatedSizeRenderView);
+
+#[cfg(test)]
+mod tests {
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    fn render_view(alignment: Alignment, clip_behavior: Clip) -> AnimatedSizeRenderView {
+        let controller =
+            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        AnimatedSizeRenderView {
+            controller,
+            curve: ArcCurve::new(Curves::Linear),
+            alignment,
+            clip_behavior,
+            on_end: None,
+            child: Child::empty(),
+        }
+    }
+
+    #[test]
+    fn create_render_object_installs_the_given_alignment_and_clip_behavior() {
+        let render_object = render_view(Alignment::BOTTOM_RIGHT, Clip::None).create_render_object();
+        assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
+        assert_eq!(render_object.clip_behavior(), Clip::None);
+    }
+
+    #[test]
+    fn update_render_object_reconfigures_alignment_and_clip_behavior_via_targeted_setters() {
+        let mut render_object =
+            render_view(Alignment::CENTER, Clip::HardEdge).create_render_object();
+        assert_eq!(render_object.alignment(), Alignment::CENTER);
+
+        render_view(Alignment::TOP_LEFT, Clip::AntiAlias).update_render_object(&mut render_object);
+
+        assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
+        assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
+    }
+
+    #[test]
+    fn has_children_reflects_whether_a_child_was_set() {
+        let mut without_child = render_view(Alignment::CENTER, Clip::HardEdge);
+        assert!(!without_child.has_children());
+
+        without_child.child = Child::some(SizedBox::shrink().into_view());
+        assert!(without_child.has_children());
+    }
+
+    #[test]
+    fn render_view_debug_reports_alignment_and_clip_behavior() {
+        let debug = format!("{:?}", render_view(Alignment::CENTER, Clip::HardEdge));
+        assert!(
+            debug.contains("alignment:") && debug.contains("clip_behavior:"),
+            "Debug output must include alignment and clip_behavior, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn new_defaults_to_center_alignment_hard_edge_clip_no_child() {
+        let widget = AnimatedSize::new(Duration::from_millis(50));
+        assert_eq!(widget.alignment, Alignment::CENTER);
+        assert_eq!(widget.clip_behavior, Clip::HardEdge);
+        assert!(!widget.child.is_some());
+    }
+
+    #[test]
+    fn builder_methods_override_alignment_and_clip_behavior() {
+        let widget = AnimatedSize::new(Duration::from_millis(50))
+            .alignment(Alignment::TOP_LEFT)
+            .clip_behavior(Clip::None);
+        assert_eq!(widget.alignment, Alignment::TOP_LEFT);
+        assert_eq!(widget.clip_behavior, Clip::None);
+    }
+}
