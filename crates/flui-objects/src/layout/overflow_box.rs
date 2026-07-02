@@ -115,6 +115,15 @@ impl RenderConstrainedOverflowBox {
 
     // --- setters that return a change flag -----------------------------------
 
+    /// Replaces the child alignment.
+    ///
+    /// Delegates to the inner shared alignment component's own setter, which
+    /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
+    /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+        self.inner.set_alignment(alignment)
+    }
+
     /// Replaces the optional minimum-width override.
     pub fn set_min_width(&mut self, min_width: Option<Pixels>) -> bool {
         if self.min_width == min_width {
@@ -347,6 +356,15 @@ impl RenderSizedOverflowBox {
     #[inline]
     pub fn requested_size(&self) -> Size {
         self.requested_size
+    }
+
+    /// Replaces the child alignment.
+    ///
+    /// Delegates to the inner shared alignment component's own setter, which
+    /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
+    /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
+    pub fn set_alignment(&mut self, alignment: Alignment) -> bool {
+        self.inner.set_alignment(alignment)
     }
 
     /// Replaces the requested size; returns `true` if the value changed.
