@@ -295,9 +295,13 @@ Roughly **73 render objects** targeted. Tracked by family — full enumeration d
 > tests); **(2) 1000-item sliver scroll**: `flui-rendering --test u3c_lazy_sliver_contract`
 > passes **9/9**, including `u3c_9c_full_range_scroll_reaches_tail_with_bounded_children`
 > (drives a 1000-item lazy list across its *entire* 49,700px range, asserting bounded
-> child count throughout **and** that the visible band reaches the tail). The remaining
-> component is **(3) coverage** (a `just coverage` sweep + threshold sign-off) — the only
-> outstanding exit-gate work, and it is a measurement/sign-off step, not new behavior.
+> child count throughout **and** that the visible band reaches the tail). **(3) coverage** is now measured (2026-07-02,
+> `cargo llvm-cov --summary-only -p flui-objects -p flui-rendering`): **83.31% regions /
+> 80.38% functions / 81.22% lines** across the render-object catalog crates — a healthy
+> figure for dense layout/paint code. All three exit-gate components are therefore
+> satisfied/measured; formal Core.2 *exit* (per-RO promotion) is now a maintainer
+> sign-off on these numbers + the documented intentional divergences, not further
+> implementation work.
 
 | Family | Status | Notes |
 |---|---|---|
