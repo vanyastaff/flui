@@ -444,3 +444,229 @@ impl RenderView for ExcludeSemantics {
 }
 
 impl_render_view!(ExcludeSemantics);
+
+#[cfg(test)]
+mod tests {
+    use flui_rendering::RenderObject;
+    use flui_rendering::semantics::{AttributedString, SemanticsRole};
+
+    use super::*;
+
+    // ------------------------------------------------------------------
+    // Semantics -- builder methods reach the built SemanticsConfiguration.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn semantics_builder_methods_reach_the_configuration() {
+        let widget = Semantics::new()
+            .label("a label")
+            .value("a value")
+            .hint("a hint")
+            .enabled(true)
+            .checked(true)
+            .mixed(true)
+            .toggled(true)
+            .selected(true)
+            .expanded(true)
+            .button(true)
+            .link(true)
+            .slider(true)
+            .header(true)
+            .image(true)
+            .text_field(true)
+            .read_only(true)
+            .focusable(true)
+            .focused(true)
+            .hidden(true)
+            .obscured(true)
+            .multiline(true)
+            .scopes_route(true)
+            .names_route(true)
+            .live_region(true)
+            .text_direction(TextDirection::Rtl)
+            .role(SemanticsRole::Dialog);
+
+        let render_object = widget.create_render_object();
+        let config = render_object.configuration();
+
+        assert_eq!(
+            config.label().map(AttributedString::as_str),
+            Some("a label")
+        );
+        assert_eq!(
+            config.value().map(AttributedString::as_str),
+            Some("a value")
+        );
+        assert_eq!(config.hint().map(AttributedString::as_str), Some("a hint"));
+        assert_eq!(config.is_enabled(), Some(true));
+        assert_eq!(config.is_checked(), Some(true));
+        assert!(config.is_mixed());
+        assert_eq!(config.is_toggled(), Some(true));
+        assert!(config.is_selected());
+        assert!(config.is_expanded());
+        assert!(config.is_button());
+        assert!(config.is_link());
+        assert!(config.is_slider());
+        assert!(config.is_header());
+        assert!(config.is_image());
+        assert!(config.is_text_field());
+        assert!(config.is_read_only());
+        assert!(config.is_focusable());
+        assert!(config.is_focused());
+        assert!(config.is_hidden());
+        assert!(config.is_obscured());
+        assert!(config.is_multiline());
+        assert!(config.scopes_route());
+        assert!(config.names_route());
+        assert!(config.is_live_region());
+        assert_eq!(config.text_direction(), Some(TextDirection::Rtl));
+        assert_eq!(config.role(), SemanticsRole::Dialog);
+    }
+
+    #[test]
+    fn semantics_options_reach_the_render_object() {
+        let widget = Semantics::new()
+            .container(true)
+            .explicit_child_nodes(true)
+            .exclude_semantics(true)
+            .block_user_actions(true);
+
+        let render_object = widget.create_render_object();
+
+        assert!(render_object.container());
+        assert!(render_object.explicit_child_nodes());
+        assert!(render_object.exclude_semantics());
+        assert!(render_object.block_user_actions());
+    }
+
+    #[test]
+    fn semantics_defaults_are_all_off() {
+        let render_object = Semantics::new().create_render_object();
+
+        assert!(!render_object.container());
+        assert!(!render_object.explicit_child_nodes());
+        assert!(!render_object.exclude_semantics());
+        assert!(!render_object.block_user_actions());
+        assert_eq!(render_object.configuration().is_enabled(), None);
+    }
+
+    #[test]
+    fn semantics_update_render_object_reapplies_configuration_and_options() {
+        let mut render_object = Semantics::new().create_render_object();
+        assert!(!render_object.container());
+
+        let updated = Semantics::new()
+            .label("updated")
+            .container(true)
+            .button(true);
+        updated.update_render_object(&mut render_object);
+
+        assert!(render_object.container());
+        assert!(render_object.configuration().is_button());
+        assert_eq!(
+            render_object
+                .configuration()
+                .label()
+                .map(AttributedString::as_str),
+            Some("updated")
+        );
+    }
+
+    #[test]
+    fn semantics_from_properties_maps_the_shared_properties_bag() {
+        use flui_rendering::semantics::SemanticsProperties;
+
+        let properties = SemanticsProperties::new()
+            .with_label("from properties")
+            .with_button(true);
+        let render_object = Semantics::from_properties(&properties).create_render_object();
+
+        assert_eq!(
+            render_object
+                .configuration()
+                .label()
+                .map(AttributedString::as_str),
+            Some("from properties")
+        );
+        assert!(render_object.configuration().is_button());
+    }
+
+    #[test]
+    fn semantics_from_configuration_uses_the_given_configuration_directly() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_selected(true);
+
+        let render_object = Semantics::from_configuration(config).create_render_object();
+        assert!(render_object.configuration().is_selected());
+    }
+
+    #[test]
+    fn semantics_has_children_reflects_whether_a_child_was_set() {
+        assert!(!Semantics::new().has_children());
+        assert!(
+            Semantics::new()
+                .child(crate::SizedBox::new(10.0, 10.0))
+                .has_children()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // MergeSemantics
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn merge_semantics_declares_a_boundary_that_merges_descendants() {
+        let render_object = MergeSemantics::new().create_render_object();
+        let mut config = SemanticsConfiguration::new();
+        render_object.describe_semantics_configuration(&mut config);
+
+        assert!(config.is_semantics_boundary());
+        assert!(config.is_merging_semantics_of_descendants());
+    }
+
+    #[test]
+    fn merge_semantics_has_children_reflects_whether_a_child_was_set() {
+        assert!(!MergeSemantics::new().has_children());
+        assert!(
+            MergeSemantics::new()
+                .child(crate::SizedBox::new(10.0, 10.0))
+                .has_children()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // ExcludeSemantics
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn exclude_semantics_defaults_to_excluding_and_toggles_off() {
+        let default_render_object = ExcludeSemantics::new().create_render_object();
+        assert!(default_render_object.excludes_semantics_subtree());
+
+        let disabled = ExcludeSemantics::new()
+            .excluding(false)
+            .create_render_object();
+        assert!(!disabled.excludes_semantics_subtree());
+    }
+
+    #[test]
+    fn exclude_semantics_update_render_object_reapplies_excluding() {
+        let mut render_object = ExcludeSemantics::new().create_render_object();
+        assert!(render_object.excludes_semantics_subtree());
+
+        ExcludeSemantics::new()
+            .excluding(false)
+            .update_render_object(&mut render_object);
+        assert!(!render_object.excludes_semantics_subtree());
+    }
+
+    #[test]
+    fn exclude_semantics_has_children_reflects_whether_a_child_was_set() {
+        assert!(!ExcludeSemantics::new().has_children());
+        assert!(
+            ExcludeSemantics::new()
+                .child(crate::SizedBox::new(10.0, 10.0))
+                .has_children()
+        );
+    }
+}
