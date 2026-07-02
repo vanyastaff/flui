@@ -30,9 +30,12 @@
 //!   (`flui_types::layout::table`): each folds both operands' widths (by
 //!   max/min) and flex factors, faithfully to the oracle
 //!   (`table.dart:235-340`), and nests recursively.
-//! - **Deferred**: `IntrinsicColumnWidth`'s optional flex and
-//!   `TableCellVerticalAlignment::IntrinsicHeight` — `TableColumnWidth`/
-//!   `TableCellVerticalAlignment` keep their existing FLUI shape (see
+//! - **`IntrinsicColumnWidth`'s optional flex** is supported via
+//!   [`TableColumnWidth::Intrinsic`]`{ flex }`: the intrinsic width is the
+//!   column's floor and a `Some(flex)` also claims leftover space in the grow
+//!   pass, faithfully to the oracle (`table.dart:94`).
+//! - **Deferred**: `TableCellVerticalAlignment::IntrinsicHeight` —
+//!   `TableCellVerticalAlignment` keeps its existing FLUI shape (see
 //!   `flui_types::layout::table`). `compute_dry_baseline` also keeps the
 //!   `RenderBox` trait default (`None`) rather than the oracle's real answer.
 
@@ -342,13 +345,16 @@ impl RenderTable {
                 };
                 (width, None)
             }
-            TableColumnWidth::Intrinsic => {
+            TableColumnWidth::Intrinsic { flex } => {
                 let mut extent = Pixels::ZERO;
                 for y in 0..row_count {
                     let idx = x + y * self.column_count;
                     extent = extent.max(Pixels::new(query(idx, f32::INFINITY, query_kind)));
                 }
-                (extent, None)
+                // The intrinsic width is the column's floor; `flex` (if any)
+                // lets it also claim leftover space in the grow pass, exactly
+                // like the oracle's `IntrinsicColumnWidth.flex`.
+                (extent, *flex)
             }
             TableColumnWidth::Max(a, b) => {
                 let (wa, fa) =
@@ -1121,7 +1127,7 @@ mod tests {
 
     #[test]
     fn intrinsic_column_takes_the_max_over_every_cell_in_the_column() {
-        let table = table_with(&[TableColumnWidth::Intrinsic]);
+        let table = table_with(&[TableColumnWidth::Intrinsic { flex: None }]);
         // Column 0, 2 rows -> cells at flat index 0 and 1. Cell 0 reports
         // (min=10, max=30); cell 1 reports (min=25, max=15) — deliberately
         // anti-correlated so "max across cells, per query kind independently"
@@ -1157,6 +1163,38 @@ mod tests {
         );
         // Ideal (max-query) wins the table's resolved width: 30, not 25.
         assert_eq!(widths, vec![px(30.0)]);
+    }
+
+    #[test]
+    fn intrinsic_column_with_flex_grows_into_leftover_space() {
+        // Column 0 is Intrinsic { flex: 1 } reporting a 30px content width;
+        // column 1 is Fixed(50). Target 200 leaves 150 after the fixed column,
+        // and the single flexed column claims all of it — its 30px intrinsic
+        // width is only a floor (oracle `IntrinsicColumnWidth.flex`).
+        let table = table_with(&[
+            TableColumnWidth::Intrinsic { flex: Some(1.0) },
+            TableColumnWidth::Fixed(50.0),
+        ]);
+        let widths =
+            table.compute_column_widths(1, Pixels::ZERO, px(200.0), |index, _extent, _kind| {
+                if index == 0 { 30.0 } else { 0.0 }
+            });
+        assert_eq!(widths, vec![px(150.0), px(50.0)]);
+    }
+
+    #[test]
+    fn intrinsic_column_without_flex_keeps_its_content_width() {
+        // Same layout but no flex — the intrinsic column stays at its 30px
+        // content width and the table is left smaller than the container.
+        let table = table_with(&[
+            TableColumnWidth::Intrinsic { flex: None },
+            TableColumnWidth::Fixed(50.0),
+        ]);
+        let widths =
+            table.compute_column_widths(1, Pixels::ZERO, px(200.0), |index, _extent, _kind| {
+                if index == 0 { 30.0 } else { 0.0 }
+            });
+        assert_eq!(widths, vec![px(30.0), px(50.0)]);
     }
 
     // ---- Pass 3: the oracle's own adversarial shrink scenario ---------------

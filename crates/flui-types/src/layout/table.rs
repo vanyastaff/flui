@@ -24,11 +24,17 @@ pub enum TableColumnWidth {
     /// A column with `Flex(2.0)` will be twice as wide as one with `Flex(1.0)`.
     Flex(f32),
 
-    /// Intrinsic width based on cell contents.
+    /// Intrinsic width based on cell contents, with an optional flex factor.
     ///
-    /// The column will be sized to fit the widest cell content.
-    /// This requires an additional layout pass to measure content.
-    Intrinsic,
+    /// The column is sized to fit the widest cell content (this requires an
+    /// additional layout pass to measure content). When `flex` is `Some`, the
+    /// column ALSO participates in leftover-space distribution once the
+    /// non-flexible columns are sized — its intrinsic width acts as a floor.
+    /// `None` means it never takes extra space.
+    ///
+    /// Flutter parity: `IntrinsicColumnWidth({double? flex})`
+    /// (`rendering/table.dart:94`).
+    Intrinsic { flex: Option<f32> },
 
     /// Fraction of available width (0.0-1.0).
     ///
