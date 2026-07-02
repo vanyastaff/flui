@@ -181,3 +181,118 @@ where
 }
 
 generic_render_view_element!(IndexedStack);
+
+#[cfg(test)]
+mod tests {
+    use flui_types::Alignment;
+    use flui_view::RenderView;
+
+    use super::*;
+    use crate::SizedBox;
+
+    #[test]
+    fn stack_create_render_object_defaults_to_top_left_and_loose_fit() {
+        let stack: Stack = Stack::new(Vec::new());
+        let render_object = stack.create_render_object();
+        assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
+        assert_eq!(render_object.fit(), StackFit::Loose);
+    }
+
+    #[test]
+    fn stack_create_render_object_applies_overridden_alignment_and_fit() {
+        let stack: Stack = Stack::new(Vec::new())
+            .alignment(Alignment::CENTER)
+            .fit(StackFit::Expand);
+        let render_object = stack.create_render_object();
+        assert_eq!(render_object.alignment(), Alignment::CENTER);
+        assert_eq!(render_object.fit(), StackFit::Expand);
+    }
+
+    #[test]
+    fn stack_update_render_object_reconfigures_alignment_and_fit() {
+        let mut render_object = Stack::<Vec<BoxedView>>::new(Vec::new()).create_render_object();
+        assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
+
+        let updated: Stack = Stack::new(Vec::new())
+            .alignment(Alignment::BOTTOM_RIGHT)
+            .fit(StackFit::Expand);
+        updated.update_render_object(&mut render_object);
+
+        assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
+        assert_eq!(render_object.fit(), StackFit::Expand);
+    }
+
+    #[test]
+    fn stack_debug_reports_alignment_fit_and_child_count() {
+        use flui_view::ViewExt;
+
+        let stack = Stack::new(vec![SizedBox::shrink().boxed()]);
+        let debug = format!("{stack:?}");
+        assert!(
+            debug.contains("alignment:") && debug.contains("children: 1"),
+            "Debug output must include alignment and children count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn stack_has_children_reflects_an_empty_child_list() {
+        let empty: Stack = Stack::new(Vec::new());
+        assert!(!empty.has_children());
+    }
+
+    #[test]
+    fn indexed_stack_create_render_object_defaults_to_index_zero() {
+        let stack: IndexedStack = IndexedStack::new(Vec::new());
+        let render_object = stack.create_render_object();
+        assert_eq!(render_object.index(), Some(0));
+        assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
+        assert_eq!(render_object.fit(), StackFit::Loose);
+    }
+
+    #[test]
+    fn indexed_stack_create_render_object_applies_overridden_index_alignment_and_fit() {
+        let stack: IndexedStack = IndexedStack::new(Vec::new())
+            .index(None)
+            .alignment(Alignment::CENTER)
+            .fit(StackFit::Expand);
+        let render_object = stack.create_render_object();
+        assert_eq!(render_object.index(), None);
+        assert_eq!(render_object.alignment(), Alignment::CENTER);
+        assert_eq!(render_object.fit(), StackFit::Expand);
+    }
+
+    #[test]
+    fn indexed_stack_update_render_object_reconfigures_index_alignment_and_fit() {
+        let mut render_object =
+            IndexedStack::<Vec<BoxedView>>::new(Vec::new()).create_render_object();
+        assert_eq!(render_object.index(), Some(0));
+
+        let updated: IndexedStack = IndexedStack::new(Vec::new())
+            .index(Some(3))
+            .alignment(Alignment::BOTTOM_RIGHT)
+            .fit(StackFit::Expand);
+        updated.update_render_object(&mut render_object);
+
+        assert_eq!(render_object.index(), Some(3));
+        assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
+        assert_eq!(render_object.fit(), StackFit::Expand);
+    }
+
+    #[test]
+    fn indexed_stack_debug_reports_index_and_child_count() {
+        use flui_view::ViewExt;
+
+        let stack = IndexedStack::new(vec![SizedBox::shrink().boxed()]).index(None);
+        let debug = format!("{stack:?}");
+        assert!(
+            debug.contains("index: None") && debug.contains("children: 1"),
+            "Debug output must include index and children count, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn indexed_stack_has_children_reflects_an_empty_child_list() {
+        let empty: IndexedStack = IndexedStack::new(Vec::new());
+        assert!(!empty.has_children());
+    }
+}
