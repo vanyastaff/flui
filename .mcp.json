@@ -1,18 +1,14 @@
 {
-  "_comment": "2026-06-30: serena + cratesio + rust-analyzer-mcp ENABLED per owner. NOTE these load at NEXT session start. serena and rust-analyzer-mcp index this 35-crate wgpu workspace, so the FIRST use each session may stall while they index — if a sub-agent blocks for minutes, that's the warmup; let it finish once. rust-docs is left DISABLED on purpose: it shells out to `cargo doc`/`cargo test --doc`, which caused a 52-minute runaway agent. rust-mcp-server: failed to compile on Rust 1.96 and is redundant with rust-analyzer-mcp; re-attempt with --locked in progress. Move a server between 'mcpServers' and '_disabledMcpServers' to toggle. If indexing stalls keep biting, set checkOnSave off / limit scope via a rust-analyzer.toml, or split the workspace.",
+  "_comment": "2026-07-02: heavy code MCPs are disabled here; keeping rust-analyzer-mcp disabled avoids duplicate rust-analyzer.",
   "mcpServers": {
-    "serena": {
-      "command": "serena",
-      "args": ["start-mcp-server", "--context", "claude-code", "--project", "."]
-    },
-    "rust-analyzer-mcp": {
-      "command": "rust-analyzer-mcp"
-    },
     "cratesio": {
       "command": "cratesio-mcp"
     }
   },
   "_disabledMcpServers": {
+    "rust-analyzer-mcp": {
+      "command": "rust-analyzer-mcp"
+    },
     "rust-docs": {
       "command": "rust-docs-mcp"
     },
