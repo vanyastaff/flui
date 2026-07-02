@@ -8,7 +8,7 @@
 //! wraps cosmic-text's `Buffer` with cursor / hit-test / line-metric
 //! operations.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use cosmic_text::{Buffer, Cursor, FontSystem, Metrics, Shaping};
 use flui_types::{
@@ -45,14 +45,69 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 // `shape_until_scroll` is the principled fix; if `cosmic-text` panics
 // are still not a today-problem, push the date out, but do not let the
 // "accept the corruption" footnote drift unverified.
-static FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
+static FONT_SYSTEM: OnceLock<Arc<Mutex<FontSystem>>> = OnceLock::new();
 
-/// Gets or initializes the global font system.
-pub(super) fn font_system() -> &'static Mutex<FontSystem> {
+/// Gets or initializes the process-wide font system as a shared handle.
+///
+/// Held in an `Arc` (per ADR-0016) so the render engine's glyph pipeline
+/// can shape against the *same* `FontSystem` this module measures with:
+/// a font registered through
+/// [`PaintingBinding::register_font`](crate::PaintingBinding::register_font)
+/// becomes visible to both measurement and rendering, closing the historic
+/// two-`FontSystem` gap where a registered face could measure but not paint.
+fn font_system_arc() -> &'static Arc<Mutex<FontSystem>> {
     FONT_SYSTEM.get_or_init(|| {
         tracing::debug!("Initializing global FontSystem");
-        Mutex::new(FontSystem::new())
+        Arc::new(Mutex::new(FontSystem::new()))
     })
+}
+
+/// Gets or initializes the global font system for in-crate shaping.
+pub(super) fn font_system() -> &'static Mutex<FontSystem> {
+    // Deref-coerces `&Arc<Mutex<_>>` → `&Mutex<_>` at the return site.
+    font_system_arc()
+}
+
+/// Returns the shared font-system handle so another subsystem (e.g. the
+/// render engine's glyph pipeline) can shape against the exact same faces
+/// this module measures with. See ADR-0016.
+pub(crate) fn shared_font_system() -> SharedFontSystem {
+    SharedFontSystem(Arc::clone(font_system_arc()))
+}
+
+/// A cheaply-cloneable handle to the process-wide [`FontSystem`] the
+/// framework shapes and measures text with.
+///
+/// cosmic-text's `FontSystem` needs `&mut` access to shape and owns a large
+/// font database plus shaping caches, so it cannot be snapshotted or handed
+/// out by value. This handle shares one instance behind a lock (per
+/// ADR-0016) and mediates access through a scoped callback, so the lock type
+/// never appears in a public signature (SP-6). `Clone` is an `Arc` bump —
+/// clone it to give another subsystem access to the *same* faces, so a font
+/// registered through
+/// [`PaintingBinding::register_font`](crate::PaintingBinding::register_font)
+/// is visible to both measurement and rendering.
+#[derive(Clone)]
+pub struct SharedFontSystem(Arc<Mutex<FontSystem>>);
+
+impl SharedFontSystem {
+    /// Runs `f` with exclusive access to the font system, holding the lock
+    /// only for the duration of the call.
+    ///
+    /// Keep the closure short — it runs on the per-shape path (measurement,
+    /// glyph rendering), not the per-command hot path.
+    pub fn with_mut<R>(&self, f: impl FnOnce(&mut FontSystem) -> R) -> R {
+        let mut font_system = self.0.lock();
+        f(&mut font_system)
+    }
+}
+
+impl std::fmt::Debug for SharedFontSystem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The `FontSystem` itself is a large, non-Debug font database; the
+        // handle's identity is all that is meaningful to print.
+        f.debug_struct("SharedFontSystem").finish_non_exhaustive()
+    }
 }
 
 /// A laid out text buffer with cursor and hit testing support.
