@@ -7,6 +7,8 @@
 //! paths (`include_str!("fixtures/greeting.rs")`) and manifest-relative
 //! paths (trybuild's `tests/ui/`) keep working unchanged.
 
+mod serial_guard;
+
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
 #[path = "build_context_tests.rs"]

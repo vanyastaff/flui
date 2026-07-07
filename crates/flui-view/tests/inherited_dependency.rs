@@ -890,6 +890,10 @@ mod did_change_dependencies_on_inherited_update {
 
     #[test]
     fn did_change_dependencies_panic_leaves_the_slot_intact_not_a_hole() {
+        // These induced panics can reach the process-global error-view
+        // builder; serialize against error_view_recovery's counting builder
+        // (shared binary since the test consolidation).
+        let _guard = crate::serial_guard::acquire_builder_guard();
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
         let mut tree = ElementTree::new();
@@ -1209,6 +1213,10 @@ mod live_inherited_during_build {
 
     #[test]
     fn panic_in_depend_callback_still_records_dependent_for_recovery() {
+        // These induced panics can reach the process-global error-view
+        // builder; serialize against error_view_recovery's counting builder
+        // (shared binary since the test consolidation).
+        let _guard = crate::serial_guard::acquire_builder_guard();
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
 
@@ -1296,6 +1304,10 @@ mod build_window_panic_restores_slot {
 
     #[test]
     fn init_state_panic_leaves_the_slot_intact_not_a_hole() {
+        // These induced panics can reach the process-global error-view
+        // builder; serialize against error_view_recovery's counting builder
+        // (shared binary since the test consolidation).
+        let _guard = crate::serial_guard::acquire_builder_guard();
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
 
