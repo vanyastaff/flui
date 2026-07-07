@@ -375,13 +375,15 @@ serde = [
 [profile.dev]
 opt-level = 1      # Some optimization for faster runtime
 incremental = true # Faster rebuilds
-# `debug = 1` ("limited") keeps file:line in panic backtraces AND variable/scope
-# info for a step-debugger, but drops the DWARF/CodeView *type* info that full
-# `debug = 2` (cargo's dev default) emits. On this wgpu/cosmic-text/lyon/naga
-# workspace that embedded type info is the bulk of the per-crate artifact size
-# in `target/debug/deps`. Same trade-off Zed/gpui ships as its default dev
-# profile. When you need complete type info in the debugger, build `--profile dbg`.
-debug = 1
+# `line-tables-only` keeps file:line in panic backtraces and profiler stacks
+# but drops ALL variable/scope/type DWARF — on this 28-crate wgpu/cosmic-text/
+# lyon/naga workspace that debuginfo was the bulk of `target/debug/deps`
+# (measured: a full debug tree ran to ~20 GB and repeatedly filled agent
+# containers; CI hit the same ceiling in PRs #236/#242 and has built with
+# line-tables-only ever since). This makes the local default match CI. For a
+# step-debugger session with variables and types, opt into `--profile dbg`
+# (below); it inherits dev and restores `debug = "full"`.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2 # Optimize dependencies (they don't change often)

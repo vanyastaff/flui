@@ -42,6 +42,11 @@ file records the repo-consumer-visible summary.
 - Lockfile: `wgpu` 29.0.3 → 29.0.4, `anyhow` → 1.0.103, `crossbeam-epoch`
   → 0.9.20, `swash` → 0.2.9 (off a yanked version). `clippy.toml` gains
   `msrv = "1.96"` so MSRV-aware lints track the declared floor.
+- **Dev profile `debug = 1` → `"line-tables-only"`**: panic backtraces keep
+  file:line, the variable/scope DWARF that ballooned `target/debug/deps`
+  toward ~20 GB is gone, and the local default now matches what CI has built
+  with since PRs #236/#242. `--profile dbg` remains the full-debuginfo
+  opt-in. New `just sweep` recipe (cargo-sweep) prunes stale artifacts.
 
 - **Lint normalization**: every workspace crate now inherits
   `[workspace.lints]` via `[lints] workspace = true` (12 crates previously

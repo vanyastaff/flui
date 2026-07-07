@@ -317,6 +317,12 @@ ci: fmt-check inventory-check port-check clippy test test-doc
 # Maintenance
 # =============================================================================
 
+[group("maintenance")]
+[doc("Prune stale build artifacts: current-toolchain sweep + anything older than 7 days (requires cargo-sweep)")]
+sweep:
+    cargo sweep --installed
+    cargo sweep --time 7
+
 [confirm("Remove target/ and all build artifacts?")]
 [group("maintenance")]
 [doc("Wipe target/ directory and Cargo build artifacts")]
