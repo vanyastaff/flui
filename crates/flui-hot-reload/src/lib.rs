@@ -78,7 +78,6 @@
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
-
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
 #![allow(
     clippy::module_name_repetitions,
