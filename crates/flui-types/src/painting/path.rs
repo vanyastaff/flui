@@ -10,6 +10,7 @@ use crate::{
     painting::PathFillType,
 };
 
+/// A single drawing command within a [`Path`].
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathCommand {
@@ -52,6 +53,11 @@ pub enum PathCommand {
     AddArc(Rect<Pixels>, f32, f32),
 }
 
+/// A sequence of drawing commands describing a vector shape.
+///
+/// A path is an ordered list of [`PathCommand`]s (lines, Bézier curves, and
+/// whole shapes) plus a [`PathFillType`] that determines which regions count
+/// as inside when filling or hit-testing.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
@@ -67,6 +73,7 @@ pub struct Path {
 }
 
 impl Path {
+    /// Creates an empty path with the default fill type (non-zero).
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -77,6 +84,7 @@ impl Path {
         }
     }
 
+    /// Creates an empty path with the given fill type.
     #[must_use]
     #[inline]
     pub fn with_fill_type(fill_type: PathFillType) -> Self {
@@ -87,6 +95,7 @@ impl Path {
         }
     }
 
+    /// Creates a path consisting of a single rectangle.
     #[must_use]
     #[inline]
     pub fn rectangle(rect: Rect<Pixels>) -> Self {
@@ -95,6 +104,7 @@ impl Path {
         path
     }
 
+    /// Creates a path consisting of a single oval inscribed in `rect`.
     #[must_use]
     #[inline]
     pub fn oval(rect: Rect<Pixels>) -> Self {
@@ -141,6 +151,10 @@ impl Path {
         path
     }
 
+    /// Creates a path consisting of a single arc.
+    ///
+    /// The arc lies on the oval inscribed in `rect`, starting at
+    /// `start_angle` and sweeping by `sweep_angle` (both in radians).
     #[must_use]
     #[inline]
     pub fn arc(rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) -> Self {
@@ -149,6 +163,10 @@ impl Path {
         path
     }
 
+    /// Creates a path outlining a rounded rectangle.
+    ///
+    /// Corners are approximated with quarter-circle arcs; a rounded rectangle
+    /// with no rounding degenerates to a plain rectangle.
     #[must_use]
     #[inline]
     pub fn from_rrect(rrect: crate::geometry::RRect) -> Self {
@@ -240,11 +258,13 @@ impl Path {
         path
     }
 
+    /// Sets the fill type used for filling and containment tests.
     #[inline]
     pub fn set_fill_type(&mut self, fill_type: PathFillType) {
         self.fill_type = fill_type;
     }
 
+    /// Returns the path's current fill type.
     #[must_use]
     #[inline]
     pub const fn fill_type(&self) -> PathFillType {
@@ -269,35 +289,42 @@ impl Path {
         }
     }
 
+    /// Starts a new subpath at `point` without drawing.
     #[inline]
     pub fn move_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::MoveTo(point));
         self.bounds = None;
     }
 
+    /// Adds a straight line from the current position to `point`.
     #[inline]
     pub fn line_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::LineTo(point));
         self.bounds = None;
     }
 
+    /// Closes the current subpath with a line back to its starting point.
     #[inline]
     pub fn close(&mut self) {
         self.commands.push(PathCommand::Close);
     }
 
+    /// Adds a rectangle as a separate subpath.
     #[inline]
     pub fn add_rect(&mut self, rect: Rect<Pixels>) {
         self.commands.push(PathCommand::AddRect(rect));
         self.bounds = None;
     }
 
+    /// Adds an oval inscribed in `rect` as a separate subpath.
     #[inline]
     pub fn add_oval(&mut self, rect: Rect<Pixels>) {
         self.commands.push(PathCommand::AddOval(rect));
         self.bounds = None;
     }
 
+    /// Adds an arc on the oval inscribed in `rect`, starting at `start_angle`
+    /// and sweeping by `sweep_angle` (both in radians).
     #[inline]
     pub fn add_arc(&mut self, rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) {
         self.commands
@@ -305,30 +332,41 @@ impl Path {
         self.bounds = None;
     }
 
+    /// Returns the path's commands in insertion order.
     #[must_use]
     #[inline]
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
     }
 
+    /// Returns `true` if the path contains no commands.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
 
+    /// Removes all commands, leaving the path empty.
+    ///
+    /// The fill type is preserved; the cached bounds are invalidated.
     #[inline]
     pub fn reset(&mut self) {
         self.commands.clear();
         self.bounds = None;
     }
 
+    /// Returns the cached bounding box, if one has been computed via
+    /// `bounds` and not invalidated by a later mutation.
     #[must_use]
     #[inline]
     pub fn cached_bounds(&self) -> Option<Rect<Pixels>> {
         self.bounds
     }
 
+    /// Computes the bounding box of the path without caching the result.
+    ///
+    /// Uses the cached value when available. Curve bounds are conservative
+    /// (control points are included). Returns `Rect::ZERO` for an empty path.
     #[must_use]
     #[inline]
     pub fn compute_bounds(&self) -> Rect<Pixels> {
@@ -395,6 +433,11 @@ impl Path {
         }
     }
 
+    /// Returns the bounding box of the path, computing and caching it if
+    /// necessary.
+    ///
+    /// Same semantics as `compute_bounds`, but stores the result so later
+    /// calls are free until the path is mutated.
     #[must_use]
     #[inline]
     pub fn bounds(&mut self) -> Rect<Pixels> {
@@ -407,6 +450,7 @@ impl Path {
         bounds
     }
 
+    /// Returns a copy of this path with every command translated by `offset`.
     #[must_use]
     #[inline]
     pub fn translate(&self, offset: Offset<Pixels>) -> Self {
