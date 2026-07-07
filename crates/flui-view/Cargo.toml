@@ -69,6 +69,13 @@ trybuild = "1.0"
 name = "view_it"
 path = "tests/main.rs"
 
+# Deliberately its own process: these tests install a counting error-view
+# builder into flui-view's process-global cell; isolation (not opt-in locks)
+# is what keeps the rest of the suite's induced panics from polluting it.
+[[test]]
+name = "error_view_recovery"
+path = "tests/error_view_recovery.rs"
+
 [features]
 default = []
 # Enable test utilities like MockBuildContext + the

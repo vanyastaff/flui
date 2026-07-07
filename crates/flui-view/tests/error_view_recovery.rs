@@ -24,7 +24,10 @@
 
 use std::{
     any::TypeId,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use flui_view::{
@@ -35,10 +38,20 @@ use flui_view::{
 
 /// Serializes the tests in this file.
 ///
-/// Serialization moved to `crate::serial_guard` (shared with the
-/// panic-recovery tests in `inherited_dependency` since the single-binary
-/// consolidation put them in one process).
-use crate::serial_guard::acquire_builder_guard;
+/// `set_error_view_builder` / `clear_error_view_builder` mutate a
+/// process-global `RwLock<Option<ErrorViewBuilder>>` in `flui-view`, so this
+/// file's tests serialize among themselves behind one mutex — and the whole
+/// file deliberately stays its OWN [[test]] binary (excluded from view_it):
+/// process isolation is what keeps other tests' induced panics from ever
+/// seeing an installed counting builder. Poison-tolerant via into_inner.
+static GLOBAL_BUILDER_GUARD: Mutex<()> = Mutex::new(());
+
+fn acquire_builder_guard() -> std::sync::MutexGuard<'static, ()> {
+    match GLOBAL_BUILDER_GUARD.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 // ============================================================================
 // Test fixtures

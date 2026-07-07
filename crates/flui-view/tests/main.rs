@@ -6,8 +6,10 @@
 //! `autotests = false` + `[[test]]` in `Cargo.toml`), so file-relative
 //! paths (`include_str!("fixtures/greeting.rs")`) and manifest-relative
 //! paths (trybuild's `tests/ui/`) keep working unchanged.
-
-mod serial_guard;
+//!
+//! Convention: tests that WRITE process-global state (e.g. the
+//! error-view builder) live in their own [[test]] target instead —
+//! process isolation beats opt-in locking. See error_view_recovery.
 
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
@@ -25,8 +27,6 @@ mod dispatch_shim;
 mod element_slot_integration;
 #[path = "element_tree_tests.rs"]
 mod element_tree_tests;
-#[path = "error_view_recovery.rs"]
-mod error_view_recovery;
 #[path = "flutter_parity_key_equality.rs"]
 mod flutter_parity_key_equality;
 #[path = "global_key.rs"]
