@@ -79,7 +79,7 @@ impl RenderDecoratedBox {
         self.position = position;
     }
 
-    fn paint_rect(&self, size: Size) -> Rect {
+    fn paint_rect(size: Size) -> Rect {
         Rect::from_origin_size(Point::ZERO, size)
     }
 }
@@ -111,7 +111,7 @@ impl RenderBox for RenderDecoratedBox {
     flui_rendering::forward_single_child_box_queries!();
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        let rect = self.paint_rect(ctx.size());
+        let rect = Self::paint_rect(ctx.size());
         if self.position == DecorationPosition::Background {
             paint_box_decoration(ctx.canvas(), rect, &self.decoration);
         }
@@ -139,7 +139,7 @@ impl RenderBox for RenderDecoratedBox {
         // hitTestSelf: the decorated area is hit-opaque within the decoration
         // shape (a Container with a color absorbs taps), excluding cut corners.
         box_decoration_hit_test(
-            self.paint_rect(ctx.own_size()),
+            Self::paint_rect(ctx.own_size()),
             &self.decoration,
             *ctx.position(),
         )

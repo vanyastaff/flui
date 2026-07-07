@@ -83,9 +83,8 @@
 //! [`Listenable`]: flui_foundation::Listenable
 //! [`Arc`]: std::sync::Arc
 
-#![warn(missing_docs)]
-// Tracked ship-quality debt:
-#![allow(clippy::unwrap_used)] // TODO(ship-wave-3): convert to Result / `expect("BUG: …")` per docs/PANIC-POLICY.md
+// Ship bar (wave 3): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // Core animation modules
 pub mod animation;

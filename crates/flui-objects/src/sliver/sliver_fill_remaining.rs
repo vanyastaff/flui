@@ -9,7 +9,11 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Single;
-use flui_types::{Offset, geometry::px, layout::AxisDirection::*};
+use flui_types::{
+    Offset,
+    geometry::px,
+    layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
+};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry},

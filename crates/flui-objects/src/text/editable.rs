@@ -236,8 +236,7 @@ impl Diagnosticable for RenderEditable {
             "text_direction",
             self.painter
                 .text_direction()
-                .map(|d| format!("{d:?}"))
-                .unwrap_or_else(|| "unset".to_string()),
+                .map_or_else(|| "unset".to_string(), |d| format!("{d:?}")),
         );
         properties.add("caret_byte_offset", self.caret_byte_offset);
         properties.add_flag("show_caret", self.show_caret, "show caret");

@@ -698,9 +698,8 @@ unsafe fn layout_subtree_borrowed_impl(
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
     // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
-    let NodePtr(node_ptr) = match arena.get(id) {
-        Some(np) => np,
-        None => return Err(crate::error::RenderError::NodeNotFound(id)),
+    let Some(NodePtr(node_ptr)) = arena.get(id) else {
+        return Err(crate::error::RenderError::NodeNotFound(id));
     };
 
     // -----------------------------------------------------------------------
@@ -1169,9 +1168,8 @@ unsafe fn box_intrinsic_query_borrowed_impl(
 ) -> crate::error::RenderResult<f32> {
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
-    let NodePtr(node_ptr) = match arena.get(id) {
-        Some(np) => np,
-        None => return Err(crate::error::RenderError::NodeNotFound(id)),
+    let Some(NodePtr(node_ptr)) = arena.get(id) else {
+        return Err(crate::error::RenderError::NodeNotFound(id));
     };
 
     // SAFETY: this is the only live reborrow of `id` in this intrinsic
@@ -1329,9 +1327,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
     // Resolve id → NodePtr.  Cross-thread access panics inside `get`.
-    let NodePtr(node_ptr) = match arena.get(id) {
-        Some(np) => np,
-        None => return Err(crate::error::RenderError::NodeNotFound(id)),
+    let Some(NodePtr(node_ptr)) = arena.get(id) else {
+        return Err(crate::error::RenderError::NodeNotFound(id));
     };
 
     // -----------------------------------------------------------------------

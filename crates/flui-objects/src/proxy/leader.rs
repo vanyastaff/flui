@@ -130,7 +130,7 @@ impl RenderBox for RenderLeaderLayer {
         // child presence; `super.paint` (paints nothing when childless)
         // runs inside the scope either way.
         let size = ctx.size();
-        ctx.with_leader(self.link, size, |ctx| ctx.paint_children_in_order());
+        ctx.with_leader(self.link, size, PaintCx::paint_children_in_order);
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

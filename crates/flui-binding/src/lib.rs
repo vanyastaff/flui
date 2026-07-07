@@ -82,6 +82,9 @@
 //! assert!(fired.load(Ordering::SeqCst));
 //! ```
 
+// Ship bar (wave 3): every public item is documented; keep it that way.
+#![deny(missing_docs)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

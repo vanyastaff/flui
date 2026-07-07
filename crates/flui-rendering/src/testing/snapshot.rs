@@ -11,6 +11,8 @@
 //! Task 4 will expose `serialize_layer_tree` on `FrameRun::snapshot()`.
 //! Keep this file focused: summary helpers + the tree walk.
 
+use std::fmt::Write as _;
+
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::LayerTree;
 use flui_painting::PaintStyle;
@@ -659,14 +661,8 @@ fn write_display_list(out: &mut String, dl: &DisplayList, depth: usize) {
         // Recurse into effect-command children before printing the line so that
         // the child content appears nested under the effect header.
         match cmd {
-            DrawCommand::ShaderMask { child, .. } => {
-                let summary = summarize_command(cmd);
-                out.push_str(&indent);
-                out.push_str(&summary.line);
-                out.push('\n');
-                write_display_list(out, child, depth + 1);
-            }
-            DrawCommand::BackdropFilter {
+            DrawCommand::ShaderMask { child, .. }
+            | DrawCommand::BackdropFilter {
                 child: Some(child), ..
             } => {
                 let summary = summarize_command(cmd);
@@ -690,11 +686,8 @@ fn write_display_list(out: &mut String, dl: &DisplayList, depth: usize) {
 fn collect_from_display_list(dl: &DisplayList, out: &mut Vec<DrawCommandSummary>) {
     for cmd in dl {
         match cmd {
-            DrawCommand::ShaderMask { child, .. } => {
-                out.push(summarize_command(cmd));
-                collect_from_display_list(child, out);
-            }
-            DrawCommand::BackdropFilter {
+            DrawCommand::ShaderMask { child, .. }
+            | DrawCommand::BackdropFilter {
                 child: Some(child), ..
             } => {
                 out.push(summarize_command(cmd));
@@ -730,13 +723,14 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
         Layer::Picture(p) => {
             let b = p.bounds();
             out.push_str(&indent);
-            out.push_str(&format!(
-                "Picture bounds=({},{} {}x{})\n",
+            let _ = writeln!(
+                out,
+                "Picture bounds=({},{} {}x{})",
                 f(b.left().get()),
                 f(b.top().get()),
                 f(b.width().get()),
                 f(b.height().get()),
-            ));
+            );
             // Emit commands one level deeper.
             write_display_list(out, p.picture(), depth + 1);
         }
@@ -755,25 +749,27 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
         Layer::ClipRect(c) => {
             let r = c.clip_rect();
             out.push_str(&indent);
-            out.push_str(&format!(
-                "ClipRect rect=({},{} {}x{}) clip={}\n",
+            let _ = writeln!(
+                out,
+                "ClipRect rect=({},{} {}x{}) clip={}",
                 f(r.left().get()),
                 f(r.top().get()),
                 f(r.width().get()),
                 f(r.height().get()),
                 fmt_clip(c.clip_behavior()),
-            ));
+            );
         }
         Layer::ClipRRect(c) => {
             // Serialize the full rounded rect (outer bounds + corner radii) so a
             // regression that drops or changes the radii diffs the snapshot
             // instead of passing under an identical outer-rect line.
             out.push_str(&indent);
-            out.push_str(&format!(
-                "ClipRRect rrect={} clip={}\n",
+            let _ = writeln!(
+                out,
+                "ClipRRect rrect={} clip={}",
                 fmt_rrect(c.clip_rrect()),
                 fmt_clip(c.clip_behavior()),
-            ));
+            );
         }
         Layer::ClipPath(c) => {
             // Mirror the command-path summary: clipping geometry shape (bounds +
@@ -781,28 +777,30 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             // "ClipPath" marker that hides every shape/quality change.
             let path = c.clip_path();
             out.push_str(&indent);
-            out.push_str(&format!(
-                "ClipPath bounds={} pts={} clip={}\n",
+            let _ = writeln!(
+                out,
+                "ClipPath bounds={} pts={} clip={}",
                 fmt_rect(path.compute_bounds()),
                 path.commands().len(),
                 fmt_clip(c.clip_behavior()),
-            ));
+            );
         }
         Layer::ClipSuperellipse(c) => {
             let r = c.clip_superellipse().outer_rect();
             out.push_str(&indent);
-            out.push_str(&format!(
-                "ClipSuperellipse rect=({},{} {}x{}) clip={}\n",
+            let _ = writeln!(
+                out,
+                "ClipSuperellipse rect=({},{} {}x{}) clip={}",
                 f(r.left().get()),
                 f(r.top().get()),
                 f(r.width().get()),
                 f(r.height().get()),
                 fmt_clip(c.clip_behavior()),
-            ));
+            );
         }
         Layer::Offset(o) => {
             out.push_str(&indent);
-            out.push_str(&format!("Offset dx={} dy={}\n", f(o.dx()), f(o.dy())));
+            let _ = writeln!(out, "Offset dx={} dy={}", f(o.dx()), f(o.dy()));
         }
         Layer::Transform(_) => {
             // Known blind spot: `TransformLayer` exposes no public matrix getter
@@ -815,7 +813,7 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
         }
         Layer::Opacity(o) => {
             out.push_str(&indent);
-            out.push_str(&format!("Opacity alpha={}\n", f(o.alpha())));
+            let _ = writeln!(out, "Opacity alpha={}", f(o.alpha()));
         }
         Layer::ColorFilter(_) => {
             out.push_str(&indent);
@@ -828,24 +826,26 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
         Layer::ShaderMask(s) => {
             let r = s.bounds();
             out.push_str(&indent);
-            out.push_str(&format!(
-                "ShaderMask bounds=({},{} {}x{})\n",
+            let _ = writeln!(
+                out,
+                "ShaderMask bounds=({},{} {}x{})",
                 f(r.left().get()),
                 f(r.top().get()),
                 f(r.width().get()),
                 f(r.height().get()),
-            ));
+            );
         }
         Layer::BackdropFilter(b) => {
             let r = b.bounds();
             out.push_str(&indent);
-            out.push_str(&format!(
-                "BackdropFilter bounds=({},{} {}x{})\n",
+            let _ = writeln!(
+                out,
+                "BackdropFilter bounds=({},{} {}x{})",
                 f(r.left().get()),
                 f(r.top().get()),
                 f(r.width().get()),
                 f(r.height().get()),
-            ));
+            );
         }
         Layer::Leader(_) => {
             out.push_str(&indent);

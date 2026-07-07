@@ -7,6 +7,7 @@ authors.workspace = true
 license.workspace = true
 description = "Concrete RenderBox/RenderSliver catalog for Flui (the object catalog atop flui-rendering's engine)"
 repository.workspace = true
+readme = "README.md"
 
 [dependencies]
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }

@@ -432,8 +432,14 @@ impl<T, A: Animatable<T>> Animatable<T> for TweenSequence<T, A> {
             accumulated_weight += item.weight;
         }
 
-        // Should never reach here, but return last item's end value just in case
-        self.items.last().unwrap().tween.transform(1.0)
+        // Unreachable: `new()` (the only constructor) asserts `items` is
+        // non-empty, and the loop's `i == len - 1` arm returns on the final
+        // iteration. Kept as a typed fallthrough for the compiler.
+        self.items
+            .last()
+            .expect("BUG: TweenSequence items are non-empty (asserted in new), so the loop above returns on its final iteration")
+            .tween
+            .transform(1.0)
     }
 }
 

@@ -161,7 +161,7 @@ impl RenderNode {
     pub fn as_box(&self) -> Option<&RenderEntry<BoxProtocol>> {
         match self {
             Self::Box(entry) => Some(entry),
-            _ => None,
+            Self::Sliver(_) => None,
         }
     }
 
@@ -170,7 +170,7 @@ impl RenderNode {
     pub fn as_box_mut(&mut self) -> Option<&mut RenderEntry<BoxProtocol>> {
         match self {
             Self::Box(entry) => Some(entry),
-            _ => None,
+            Self::Sliver(_) => None,
         }
     }
 
@@ -195,7 +195,7 @@ impl RenderNode {
     pub fn as_sliver(&self) -> Option<&RenderEntry<SliverProtocol>> {
         match self {
             Self::Sliver(entry) => Some(entry),
-            _ => None,
+            Self::Box(_) => None,
         }
     }
 
@@ -205,7 +205,7 @@ impl RenderNode {
     pub fn as_sliver_mut(&mut self) -> Option<&mut RenderEntry<SliverProtocol>> {
         match self {
             Self::Sliver(entry) => Some(entry),
-            _ => None,
+            Self::Box(_) => None,
         }
     }
 }

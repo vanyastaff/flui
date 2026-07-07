@@ -57,6 +57,22 @@ pub struct TreeNode {
     children: Vec<TreeNode>,
 }
 
+impl std::fmt::Debug for TreeNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `payload` boxes a type-erased render object with no Debug bound;
+        // report the protocol tag plus the spec metadata.
+        let protocol = match self.payload {
+            NodePayload::Box(_) => "Box",
+            NodePayload::Sliver(_) => "Sliver",
+        };
+        f.debug_struct("TreeNode")
+            .field("protocol", &protocol)
+            .field("label", &self.label)
+            .field("children", &self.children)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Creates a Box-protocol node from any concrete `RenderBox`-derived render
 /// object.
 pub fn box_node<R>(render_object: R) -> TreeNode

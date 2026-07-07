@@ -575,9 +575,7 @@ impl RenderTree {
     /// Returns the children IDs of a node.
     #[inline]
     pub fn children(&self, id: RenderId) -> &[RenderId] {
-        self.get(id)
-            .map(super::node::RenderNode::children)
-            .unwrap_or(&[])
+        self.get(id).map_or(&[], super::node::RenderNode::children)
     }
 
     /// Returns the depth of a node in the tree.

@@ -51,23 +51,12 @@
 //! [`StatelessView`]: flui_view::prelude::StatelessView
 //! [`ParentDataView`]: flui_view::prelude::ParentDataView
 
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    rust_2018_idioms,
-    clippy::all,
-    clippy::pedantic
-)]
-#![allow(
-    clippy::module_name_repetitions,
-    clippy::must_use_candidate,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::doc_markdown,
-    // `flex/flex.rs`, `text/text.rs`: a one-type family module named after its
-    // type is the catalog's house style (matches `flui-view`/`flui-objects`).
-    clippy::module_inception
-)]
+// Lint levels come from `[workspace.lints]`. Ship bar (wave 3): every public
+// item is documented; keep it that way.
+#![deny(missing_docs)]
+// `flex/flex.rs`, `text/text.rs`: a one-type family module named after its
+// type is the catalog's house style (matches `flui-view`/`flui-objects`).
+#![allow(clippy::module_inception)]
 
 // ============================================================================
 // Modules

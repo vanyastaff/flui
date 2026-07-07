@@ -274,7 +274,7 @@ impl Debug for ScrollableViewportOffset {
             .field("user_scroll_direction", &self.user_scroll_direction)
             .field("allow_implicit_scrolling", &self.allow_implicit_scrolling)
             .field("listeners_count", &self.listeners.read().len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

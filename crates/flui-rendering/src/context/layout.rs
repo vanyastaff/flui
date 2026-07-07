@@ -56,6 +56,15 @@ pub struct LayoutContext<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> 
     inner: <P::Layout as LayoutCapability>::Context<'ctx, A, PD>,
 }
 
+impl<P: Protocol, A: Arity, PD: ParentData + Default> std::fmt::Debug
+    for LayoutContext<'_, P, A, PD>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `inner` is a capability-GAT context (may hold live driver callbacks).
+        f.debug_struct("LayoutContext").finish_non_exhaustive()
+    }
+}
+
 impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, P, A, PD>
 where
     <P::Layout as LayoutCapability>::Context<'ctx, A, PD>: LayoutContextApi<'ctx, P::Layout, A, PD>,

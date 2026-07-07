@@ -207,7 +207,7 @@ impl RenderBox for RenderBackdropFilter {
         // every other `with_*` scope method) and the composer shifts it
         // to global space — no manual bounds arithmetic needed here.
         ctx.with_backdrop_filter(self.filter.clone(), self.blend_mode, |ctx| {
-            ctx.paint_child()
+            ctx.paint_child();
         });
     }
 

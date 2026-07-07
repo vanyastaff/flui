@@ -10,7 +10,10 @@ use flui_tree::Variable;
 use flui_types::{
     Offset, Pixels, Point, Rect, Size,
     geometry::px,
-    layout::{Axis, AxisDirection, AxisDirection::*},
+    layout::{
+        Axis, AxisDirection,
+        AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
+    },
     painting::Clip,
 };
 

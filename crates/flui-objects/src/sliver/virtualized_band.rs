@@ -307,6 +307,11 @@ where
         } else {
             // Absent: strategy owns the complete decision.
             let result = on_absent(logical_i, dense_count, box_constraints, ctx);
+            // match_same_arms: the `Scheduled | Ready(_)` no-op arm is kept separate
+            // from the `#[non_exhaustive]` forward-compat wildcard on purpose — the
+            // arm exists to document the per-variant semantics, and merging it into
+            // `_` would silently absorb future `ChildLayout` variants.
+            #[allow(clippy::match_same_arms)]
             match result {
                 ChildLayout::Scheduled | ChildLayout::Ready(_) => {
                     // Scheduled = parked for next frame (v1 next-frame backend).
@@ -352,8 +357,7 @@ where
             if !in_band {
                 let keep_alive = ctx
                     .child_parent_data(slot)
-                    .map(|pd| pd.keep_alive.keep_alive)
-                    .unwrap_or(false);
+                    .is_some_and(|pd| pd.keep_alive.keep_alive);
                 if keep_alive {
                     continue;
                 }

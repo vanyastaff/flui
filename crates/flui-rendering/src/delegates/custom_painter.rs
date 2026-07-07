@@ -210,9 +210,9 @@ mod tests {
 
     #[test]
     fn test_should_repaint_same_type() {
-        let painter1 = TestPainter { color: 0xFF0000 };
-        let painter2 = TestPainter { color: 0xFF0000 };
-        let painter3 = TestPainter { color: 0x00FF00 };
+        let painter1 = TestPainter { color: 0x00FF_0000 };
+        let painter2 = TestPainter { color: 0x00FF_0000 };
+        let painter3 = TestPainter { color: 0x0000_FF00 };
 
         assert!(!painter1.should_repaint(&painter2));
         assert!(painter1.should_repaint(&painter3));
@@ -220,13 +220,13 @@ mod tests {
 
     #[test]
     fn test_default_hit_test() {
-        let painter = TestPainter { color: 0xFF0000 };
+        let painter = TestPainter { color: 0x00FF_0000 };
         assert_eq!(painter.hit_test(Offset::ZERO), None);
     }
 
     #[test]
     fn test_default_semantics() {
-        let painter = TestPainter { color: 0xFF0000 };
+        let painter = TestPainter { color: 0x00FF_0000 };
         assert!(painter.semantics_builder().is_none());
     }
 }

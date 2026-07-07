@@ -181,7 +181,7 @@ impl ElementNode {
     /// after `ElementNode::new` so the field is populated before
     /// the element is returned.
     pub fn new(kind: ElementKind, parent: Option<ElementId>, slot: usize) -> Self {
-        let depth = if parent.is_some() { 1 } else { 0 }; // Will be updated by tree
+        let depth = usize::from(parent.is_some()); // Will be updated by tree
         Self {
             kind: Some(kind),
             parent,
@@ -332,7 +332,7 @@ impl std::fmt::Debug for ElementNode {
                 "lifecycle",
                 &self.kind.as_ref().map(|k| k.element().lifecycle()),
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -1561,7 +1561,7 @@ impl std::fmt::Debug for ElementTree {
         f.debug_struct("ElementTree")
             .field("len", &self.nodes.len())
             .field("root", &self.root)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

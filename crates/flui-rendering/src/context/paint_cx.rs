@@ -368,6 +368,16 @@ pub struct PaintCx<'a, A: Arity> {
     _arity: PhantomData<fn() -> A>,
 }
 
+impl<A: Arity> std::fmt::Debug for PaintCx<'_, A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `rec` is the live recording canvas; report the node-scoped scalars.
+        f.debug_struct("PaintCx")
+            .field("child_count", &self.child_count)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a, A: Arity> PaintCx<'a, A> {
     /// Creates a typed context over a recorder.
     ///

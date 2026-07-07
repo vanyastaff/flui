@@ -314,10 +314,10 @@ impl RenderBox for RenderFlow {
         // Clip-gating on `!= Clip::None` mirrors `RenderStack`'s FLUI idiom
         // (fewer emitted layers when clipping is off) rather than the
         // oracle's unconditional `pushClipRect` call — same visible result.
-        if self.clip_behavior != Clip::None {
-            ctx.with_clip_rect(bounds, self.clip_behavior, body);
-        } else {
+        if self.clip_behavior == Clip::None {
             body(ctx);
+        } else {
+            ctx.with_clip_rect(bounds, self.clip_behavior, body);
         }
     }
 

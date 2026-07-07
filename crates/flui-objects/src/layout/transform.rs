@@ -143,8 +143,8 @@ impl RenderTransform {
     /// `origin` is optional. The prior code returned `origin` alone whenever it
     /// was set, silently dropping the alignment contribution.
     fn compute_origin(&self, size: Size) -> Offset {
-        let align_x = size.width * ((self.alignment.x + 1.0) / 2.0);
-        let align_y = size.height * ((self.alignment.y + 1.0) / 2.0);
+        let align_x = size.width * f32::midpoint(self.alignment.x, 1.0);
+        let align_y = size.height * f32::midpoint(self.alignment.y, 1.0);
         let origin = self.origin.unwrap_or(Offset::ZERO);
         Offset::new(align_x + origin.dx, align_y + origin.dy)
     }

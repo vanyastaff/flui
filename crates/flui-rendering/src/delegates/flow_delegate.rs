@@ -185,6 +185,20 @@ pub struct FlowPaintingContext<'ctx, 'cx> {
     painted: &'ctx mut Vec<bool>,
 }
 
+impl std::fmt::Debug for FlowPaintingContext<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `live` holds a &mut PaintCx (the live recording canvas); report
+        // the replayable recording state instead.
+        f.debug_struct("FlowPaintingContext")
+            .field("size", &self.size)
+            .field("child_sizes", &self.child_sizes)
+            .field("live", &self.live.is_some())
+            .field("paint_order", &self.paint_order)
+            .field("painted", &self.painted)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
     /// Builds a paint-mode context that forwards each [`Self::paint_child`]
     /// call to the live `ctx` via [`PaintCx::with_transform`].

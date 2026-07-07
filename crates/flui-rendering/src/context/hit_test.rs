@@ -73,6 +73,17 @@ pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
     self_hit_entry_registered: bool,
 }
 
+impl<P: Protocol, A: Arity, PD: ParentData> std::fmt::Debug for HitTestContext<'_, P, A, PD> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `inner` is a capability-GAT context (may hold live driver callbacks);
+        // report only the driver-resolved scalars.
+        f.debug_struct("HitTestContext")
+            .field("own_size", &self.own_size)
+            .field("self_hit_entry_registered", &self.self_hit_entry_registered)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'ctx, P: Protocol, A: Arity, PD: ParentData> HitTestContext<'ctx, P, A, PD>
 where
     <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>:
