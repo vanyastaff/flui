@@ -95,7 +95,7 @@ impl Asset for ImageAsset {
             // Decode image using image crate
             let img = image::load_from_memory(&bytes).map_err(|e| AssetError::LoadFailed {
                 path: self.path.clone(),
-                reason: format!("Failed to decode image: {}", e),
+                reason: format!("Failed to decode image: {e}"),
             })?;
 
             // Convert to RGBA8

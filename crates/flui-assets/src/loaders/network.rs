@@ -74,7 +74,7 @@ impl NetworkLoader {
             .await
             .map_err(|e| AssetError::LoadFailed {
                 path: url.to_string(),
-                reason: format!("HTTP request failed: {}", e),
+                reason: format!("HTTP request failed: {e}"),
             })?;
 
         if !response.status().is_success() {
@@ -86,7 +86,7 @@ impl NetworkLoader {
 
         let bytes = response.bytes().await.map_err(|e| AssetError::LoadFailed {
             path: url.to_string(),
-            reason: format!("Failed to read response body: {}", e),
+            reason: format!("Failed to read response body: {e}"),
         })?;
 
         Ok(bytes.to_vec())
@@ -96,6 +96,10 @@ impl NetworkLoader {
     ///
     /// Returns an error when the `network` feature is not enabled.
     #[cfg(not(feature = "network"))]
+    #[allow(
+        clippy::unused_async,
+        reason = "public API: signature must match the genuinely-async `network`-enabled variant"
+    )]
     pub async fn load_url(&self, url: &str) -> Result<Vec<u8>, AssetError> {
         Err(AssetError::LoadFailed {
             path: url.to_string(),
@@ -109,7 +113,7 @@ impl NetworkLoader {
         let bytes = self.load_url(url).await?;
         String::from_utf8(bytes).map_err(|e| AssetError::LoadFailed {
             path: url.to_string(),
-            reason: format!("Invalid UTF-8: {}", e),
+            reason: format!("Invalid UTF-8: {e}"),
         })
     }
 
@@ -117,6 +121,10 @@ impl NetworkLoader {
     ///
     /// Returns an error when the `network` feature is not enabled.
     #[cfg(not(feature = "network"))]
+    #[allow(
+        clippy::unused_async,
+        reason = "public API: signature must match the genuinely-async `network`-enabled variant"
+    )]
     pub async fn load_text(&self, url: &str) -> Result<String, AssetError> {
         Err(AssetError::LoadFailed {
             path: url.to_string(),
@@ -164,7 +172,7 @@ where
             .await
             .map_err(|e| AssetError::LoadFailed {
                 path: url.to_string(),
-                reason: format!("HTTP HEAD request failed: {}", e),
+                reason: format!("HTTP HEAD request failed: {e}"),
             })?;
 
         if !response.status().is_success() {
@@ -181,7 +189,7 @@ where
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
 
         Ok(Some(AssetMetadata {
             size_bytes,
@@ -218,7 +226,7 @@ mod tests {
     // Integration test with real HTTP request (only runs with network feature)
     #[tokio::test]
     #[cfg(feature = "network")]
-    #[ignore] // Ignore by default (requires internet connection)
+    #[ignore = "requires internet connection"]
     async fn test_network_loader_real_request() {
         let loader = NetworkLoader::new();
 

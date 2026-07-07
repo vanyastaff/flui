@@ -264,7 +264,7 @@ where
         f.debug_struct("WeakAssetHandle")
             .field("key", &self.key)
             .field("weak_count", &self.weak_count())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
