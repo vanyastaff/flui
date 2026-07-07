@@ -162,9 +162,21 @@ impl PlatformBuilder for IOSBuilder {
             crate::platform::Profile::Release => "Release",
         };
 
+        // xcodebuild takes the project path as a UTF-8 CLI argument; a
+        // non-UTF-8 workspace root is a caller-supplied environment problem.
+        let xcodeproj_str = xcodeproj.to_str().ok_or_else(|| {
+            BuildError::invalid_config(
+                "workspace_root",
+                format!(
+                    "Xcode project path {} is not valid UTF-8",
+                    xcodeproj.display()
+                ),
+            )
+        })?;
+
         let args = vec![
             "-project",
-            xcodeproj.to_str().unwrap(),
+            xcodeproj_str,
             "-scheme",
             "flui",
             "-configuration",

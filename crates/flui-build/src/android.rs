@@ -233,6 +233,15 @@ impl PlatformBuilder for AndroidBuilder {
         }
         std::fs::create_dir_all(&jni_libs_dir)?;
 
+        // cargo-ndk takes the output dir as a UTF-8 CLI argument; a non-UTF-8
+        // workspace root is a caller-supplied environment problem, not a bug.
+        let jni_libs_str = jni_libs_dir.to_str().ok_or_else(|| {
+            BuildError::invalid_config(
+                "workspace_root",
+                format!("jniLibs path {} is not valid UTF-8", jni_libs_dir.display()),
+            )
+        })?;
+
         let mut rust_libs = Vec::new();
 
         for target in targets {
@@ -243,7 +252,7 @@ impl PlatformBuilder for AndroidBuilder {
                 "-t",
                 target.as_str(),
                 "-o",
-                jni_libs_dir.to_str().unwrap(),
+                jni_libs_str,
                 "--manifest-path",
                 "crates/flui_app/Cargo.toml",
                 "build",
@@ -322,13 +331,19 @@ impl PlatformBuilder for AndroidBuilder {
             crate::platform::Profile::Release => "assembleRelease",
         };
 
-        // Use absolute path for gradle wrapper
-        process::run_command_in_dir(
-            gradle_wrapper_path.to_str().unwrap(),
-            &[gradle_task],
-            &android_dir,
-        )
-        .await?;
+        // Use absolute path for gradle wrapper; it is spawned as a UTF-8
+        // command string, so a non-UTF-8 workspace root must surface as an
+        // error, not a panic.
+        let gradle_wrapper_str = gradle_wrapper_path.to_str().ok_or_else(|| {
+            BuildError::invalid_config(
+                "workspace_root",
+                format!(
+                    "Gradle wrapper path {} is not valid UTF-8",
+                    gradle_wrapper_path.display()
+                ),
+            )
+        })?;
+        process::run_command_in_dir(gradle_wrapper_str, &[gradle_task], &android_dir).await?;
 
         // Find the APK
         let apk_dir = android_dir
