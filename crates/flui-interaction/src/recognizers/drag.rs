@@ -107,11 +107,15 @@ pub struct DragEndDetails {
 // Re-export Velocity from the velocity module
 pub use crate::processing::Velocity;
 
-/// Callback types for drag events
+/// Callback fired when a pointer contacts the screen and might begin a drag.
 pub type DragDownCallback = Arc<dyn Fn(DragDownDetails) + Send + Sync>;
+/// Callback fired when the drag is recognized (slop crossed and arena won).
 pub type DragStartCallback = Arc<dyn Fn(DragStartDetails) + Send + Sync>;
+/// Callback fired for each pointer move while the drag is in progress.
 pub type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
+/// Callback fired when the pointer lifts and the drag completes.
 pub type DragEndCallback = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
+/// Callback fired when the gesture is cancelled (e.g. the arena rejects it).
 pub type DragCancelCallback = Arc<dyn Fn() + Send + Sync>;
 
 /// Recognizes drag gestures
@@ -175,6 +179,8 @@ impl std::fmt::Debug for DragGestureRecognizer {
     }
 }
 
+// Field names keep Flutter's `onDragStart`-style callback names (parity).
+#[allow(clippy::struct_field_names)]
 #[derive(Default)]
 struct DragCallbacks {
     on_down: Option<DragDownCallback>,
@@ -532,8 +538,7 @@ impl DragGestureRecognizer {
     fn extract_event_data(event: &PointerEvent) -> (Offset<Pixels>, PointerType) {
         let position = event.position();
         let pointer_type = match event {
-            PointerEvent::Down(e) => e.pointer.pointer_type,
-            PointerEvent::Up(e) => e.pointer.pointer_type,
+            PointerEvent::Down(e) | PointerEvent::Up(e) => e.pointer.pointer_type,
             PointerEvent::Move(e) => e.pointer.pointer_type,
             PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
                 info.pointer_type

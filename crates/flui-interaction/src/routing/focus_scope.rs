@@ -547,7 +547,7 @@ impl std::fmt::Debug for FocusNode {
             .field("skip_traversal", &self.skip_traversal())
             .field("attached", &self.is_attached())
             .field("children_count", &self.children.read().len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -798,7 +798,7 @@ impl std::fmt::Debug for FocusScopeNode {
             .field("autofocus", &self.autofocus())
             .field("traps_focus", &self.traps_focus())
             .field("focused_child", &self.focused_child())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -833,14 +833,14 @@ pub struct ReadingOrderPolicy;
 
 impl FocusTraversalPolicy for ReadingOrderPolicy {
     fn find_next(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = self.sorted_indices(nodes);
+        let sorted = Self::sorted_indices(nodes);
         let current_idx = sorted.iter().position(|&i| nodes[i].id() == current)?;
         let next_idx = (current_idx + 1) % sorted.len();
         Some(nodes[sorted[next_idx]].id())
     }
 
     fn find_previous(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = self.sorted_indices(nodes);
+        let sorted = Self::sorted_indices(nodes);
         let current_idx = sorted.iter().position(|&i| nodes[i].id() == current)?;
         let prev_idx = if current_idx == 0 {
             sorted.len() - 1
@@ -851,12 +851,12 @@ impl FocusTraversalPolicy for ReadingOrderPolicy {
     }
 
     fn find_first(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = self.sorted_indices(nodes);
+        let sorted = Self::sorted_indices(nodes);
         sorted.first().map(|&i| nodes[i].id())
     }
 
     fn find_last(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = self.sorted_indices(nodes);
+        let sorted = Self::sorted_indices(nodes);
         sorted.last().map(|&i| nodes[i].id())
     }
 }
@@ -865,7 +865,7 @@ impl ReadingOrderPolicy {
     /// Returns indices into `nodes` sorted by reading order (top-to-bottom,
     /// left-to-right). Avoids cloning `Arc<FocusNode>` — only sorts
     /// lightweight indices.
-    fn sorted_indices(&self, nodes: &[Arc<FocusNode>]) -> Vec<usize> {
+    fn sorted_indices(nodes: &[Arc<FocusNode>]) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..nodes.len()).collect();
         indices.sort_by(|&a, &b| {
             let rect_a = nodes[a].rect();

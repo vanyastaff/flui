@@ -550,7 +550,7 @@ impl LayerTree {
     /// O(subtree size) in time and memory. Layer cloning is cheap for
     /// most variants (f32 fields, Matrix4, Arc-backed data).
     pub fn clone_subtree(&self, root_id: LayerId) -> Option<Self> {
-        let root_node = self.get(root_id)?;
+        self.get(root_id)?; // existence check; the clone walk re-resolves ids
         let mut new_tree = Self::new();
         let new_root = self.clone_subtree_into(&mut new_tree, root_id)?;
         new_tree.set_root(Some(new_root));

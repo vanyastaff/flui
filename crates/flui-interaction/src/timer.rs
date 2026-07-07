@@ -186,7 +186,7 @@ impl std::fmt::Debug for TimerEntry {
             .field("id", &self.id)
             .field("deadline", &self.deadline)
             .field("cancelled", &self.is_cancelled())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

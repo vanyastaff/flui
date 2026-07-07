@@ -167,6 +167,8 @@ impl std::fmt::Debug for TapGestureRecognizer {
     }
 }
 
+// Field names keep Flutter's `onTapDown`-style callback names (parity).
+#[allow(clippy::struct_field_names)]
 #[derive(Default)]
 struct TapCallbacks {
     on_tap_down: Option<TapCallback>,

@@ -1302,7 +1302,7 @@ impl std::fmt::Debug for GestureArena {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureArena")
             .field("active_arenas", &self.entries.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -1397,7 +1397,7 @@ mod tests {
                 assert!(rejected, "reentrant member should have been rejected");
                 assert!(accepted, "winner should have been accepted");
             }
-            Err(_) => panic!("arena deadlocked on reentrant reject_gesture"),
+            Err(err) => panic!("arena deadlocked on reentrant reject_gesture: {err}"),
         }
     }
 

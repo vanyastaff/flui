@@ -346,7 +346,7 @@ impl GestureBinding {
     {
         match event {
             PointerEvent::Down(e) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
                 // Bound per-pointer state growth (memory-DoS guard). A re-down of
                 // an already-tracked pointer replaces rather than grows, so it is
@@ -398,7 +398,7 @@ impl GestureBinding {
             }
 
             PointerEvent::Move(_) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
                 // Coalesce move events - store only the latest, process on flush
                 self.pending_moves.insert(pointer_id, event.clone());
@@ -413,7 +413,7 @@ impl GestureBinding {
             }
 
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
                 // Use cached hit test result
                 if let Some((_, result)) = self.hit_tests.remove(&pointer_id) {
@@ -432,14 +432,14 @@ impl GestureBinding {
             PointerEvent::Enter(_) | PointerEvent::Leave(_) => {
                 // Enter/Leave don't participate in gesture recognition
                 // but we still dispatch them
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
                 if let Some(result) = self.hit_tests.get(&pointer_id) {
                     self.dispatch_event(event, &result);
                 }
             }
 
             PointerEvent::Scroll(e) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
                 // Scroll events might not have a cached hit test
                 // Use the position to do a hit test if needed
@@ -455,7 +455,7 @@ impl GestureBinding {
 
             PointerEvent::Gesture(_) => {
                 // Gesture events are high-level and handled separately
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
                 if let Some(result) = self.hit_tests.get(&pointer_id) {
                     self.dispatch_event(event, &result);
                 }
@@ -468,7 +468,7 @@ impl GestureBinding {
     /// Use this when you already have a hit test result or want to
     /// manually control hit testing.
     pub fn handle_pointer_event_with_result(&self, event: &PointerEvent, result: &HitTestResult) {
-        let pointer_id = self.extract_pointer_id(event);
+        let pointer_id = Self::extract_pointer_id(event);
 
         match event {
             PointerEvent::Down(_) => {
@@ -749,7 +749,7 @@ impl GestureBinding {
 
     /// Extract pointer ID from event.
     #[inline]
-    fn extract_pointer_id(&self, event: &PointerEvent) -> PointerId {
+    fn extract_pointer_id(event: &PointerEvent) -> PointerId {
         crate::events::extract_pointer_id(event)
     }
 
@@ -773,7 +773,7 @@ impl std::fmt::Debug for GestureBinding {
             .field("active_pointers", &self.hit_tests.len())
             .field("pending_moves", &self.pending_moves.len())
             .field("arena_count", &self.arena.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

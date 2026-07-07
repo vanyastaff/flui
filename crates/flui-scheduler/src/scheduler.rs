@@ -145,6 +145,16 @@ pub struct FrameCompletionFuture {
     state: Arc<Mutex<FrameCompletionState>>,
 }
 
+impl std::fmt::Debug for FrameCompletionFuture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `try_lock` so Debug never blocks (or deadlocks) on the shared state.
+        let completed = self.state.try_lock().map(|s| s.completed.is_some());
+        f.debug_struct("FrameCompletionFuture")
+            .field("completed", &completed)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Future for FrameCompletionFuture {
     type Output = FrameTiming;
 
@@ -420,6 +430,22 @@ pub struct Scheduler {
     binding: Arc<BindingState>,
     /// Task queue (priority-based, already Arc-wrapped internally)
     task_queue: TaskQueue,
+}
+
+impl std::fmt::Debug for Scheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Report lock-free state only (atomics + TaskQueue's atomic len);
+        // the callback/binding state is opaque `dyn Fn` storage.
+        f.debug_struct("Scheduler")
+            .field("phase", &self.phase())
+            .field("frame_count", &self.frame_count())
+            .field(
+                "frame_scheduled",
+                &self.frame.frame_scheduled.load(Ordering::Acquire),
+            )
+            .field("task_queue", &self.task_queue)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Scheduler {

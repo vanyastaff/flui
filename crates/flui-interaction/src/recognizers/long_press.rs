@@ -113,6 +113,8 @@ pub struct LongPressGestureRecognizer {
     settings: Arc<Mutex<GestureSettings>>,
 }
 
+// Field names keep Flutter's `onLongPressStart`-style callback names (parity).
+#[allow(clippy::struct_field_names)]
 #[derive(Default)]
 struct LongPressCallbacks {
     on_long_press_down: Option<LongPressDownCallback>,
@@ -638,7 +640,7 @@ impl std::fmt::Debug for LongPressGestureRecognizer {
             .field("state", &self.state)
             .field("gesture_state", &self.gesture_state.lock())
             .field("settings", &self.settings.lock())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

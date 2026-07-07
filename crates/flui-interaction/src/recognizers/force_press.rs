@@ -91,6 +91,8 @@ pub struct ForcePressGestureRecognizer {
     peak_pressure: f32,
 }
 
+// Field names keep Flutter's `onForcePressStart`-style callback names (parity).
+#[allow(clippy::struct_field_names)]
 #[derive(Default)]
 struct ForcePressCallbacks {
     on_start: Option<ForcePressStartCallback>,
@@ -254,7 +256,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Create force press details from current state
-    fn create_details(&self, state: &ForcePressState) -> ForcePressDetails {
+    fn create_details(state: &ForcePressState) -> ForcePressDetails {
         ForcePressDetails::new(
             state.current_position,
             state.current_position, // local_position (updated during hit testing)
@@ -286,7 +288,7 @@ impl ForcePressGestureRecognizer {
         // Check if already past start threshold
         if state.current_pressure >= self.start_pressure {
             state.phase = ForcePressPhase::Started;
-            let details = self.create_details(&state);
+            let details = Self::create_details(&state);
             drop(state);
 
             // Call on_start callback
@@ -310,7 +312,7 @@ impl ForcePressGestureRecognizer {
                 if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked
                 {
                     state.phase = ForcePressPhase::Ended;
-                    let details = self.create_details(&state);
+                    let details = Self::create_details(&state);
                     drop(state);
 
                     if let Some(callback) = self.callbacks.lock().on_end.clone() {
@@ -330,7 +332,7 @@ impl ForcePressGestureRecognizer {
             ForcePressPhase::Possible if state.current_pressure >= self.start_pressure => {
                 // Pressure crossed the start threshold — fire on_start.
                 state.phase = ForcePressPhase::Started;
-                let details = self.create_details(&state);
+                let details = Self::create_details(&state);
                 drop(state);
 
                 if let Some(callback) = self.callbacks.lock().on_start.clone() {
@@ -338,7 +340,7 @@ impl ForcePressGestureRecognizer {
                 }
             }
             ForcePressPhase::Started => {
-                let details = self.create_details(&state);
+                let details = Self::create_details(&state);
 
                 // Check for peak
                 if !state.peak_triggered && state.current_pressure >= self.peak_pressure {
@@ -366,7 +368,7 @@ impl ForcePressGestureRecognizer {
                 }
             }
             ForcePressPhase::Peaked => {
-                let details = self.create_details(&state);
+                let details = Self::create_details(&state);
                 drop(state);
 
                 // Call update callback
@@ -393,7 +395,7 @@ impl ForcePressGestureRecognizer {
 
         if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
             state.phase = ForcePressPhase::Ended;
-            let details = self.create_details(&state);
+            let details = Self::create_details(&state);
             drop(state);
 
             if let Some(callback) = self.callbacks.lock().on_end.clone() {
@@ -411,7 +413,7 @@ impl ForcePressGestureRecognizer {
     fn handle_end(&self) {
         let mut state = self.gesture_state.lock();
         state.phase = ForcePressPhase::Ended;
-        let details = self.create_details(&state);
+        let details = Self::create_details(&state);
         drop(state);
 
         if let Some(callback) = self.callbacks.lock().on_end.clone() {
@@ -427,7 +429,7 @@ impl ForcePressGestureRecognizer {
 
         if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
             state.phase = ForcePressPhase::Ended;
-            let details = self.create_details(&state);
+            let details = Self::create_details(&state);
             drop(state);
 
             if let Some(callback) = self.callbacks.lock().on_end.clone() {
@@ -560,7 +562,7 @@ impl GestureArenaMember for ForcePressGestureRecognizer {
         let mut state = self.gesture_state.lock();
         if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
             state.phase = ForcePressPhase::Ended;
-            let details = self.create_details(&state);
+            let details = Self::create_details(&state);
             drop(state);
 
             if let Some(callback) = self.callbacks.lock().on_end.clone() {
@@ -580,7 +582,7 @@ impl std::fmt::Debug for ForcePressGestureRecognizer {
             .field("settings", &self.settings.lock())
             .field("start_pressure", &self.start_pressure)
             .field("peak_pressure", &self.peak_pressure)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

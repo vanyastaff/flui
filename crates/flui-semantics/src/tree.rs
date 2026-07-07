@@ -286,32 +286,6 @@ impl SemanticsTree {
         }
     }
 
-    /// Returns `true` if `candidate_ancestor` is an ancestor of `descendant`.
-    ///
-    /// Walk is bounded by the tree's slab size so a malformed parent
-    /// pointer cycle (which `add_child` no longer permits to be created)
-    /// can not hang the check.
-    fn is_ancestor_of(&self, candidate_ancestor: SemanticsId, descendant: SemanticsId) -> bool {
-        let mut current = Some(descendant);
-        let mut steps = 0;
-        let max_steps = self.nodes.len() + 1;
-        while let Some(id) = current {
-            if id == candidate_ancestor {
-                return true;
-            }
-            steps += 1;
-            if steps > max_steps {
-                tracing::warn!(
-                    "SemanticsTree::is_ancestor_of: walk exceeded slab \
-                     size — malformed parent pointers?"
-                );
-                return false;
-            }
-            current = self.get(id).and_then(SemanticsNode::parent);
-        }
-        false
-    }
-
     /// Removes a child from a parent SemanticsNode.
     pub fn remove_child(&mut self, parent_id: SemanticsId, child_id: SemanticsId) {
         // Update parent's children
@@ -392,14 +366,6 @@ impl SemanticsTree {
         self.nodes
             .iter_mut()
             .map(|(index, node)| (SemanticsId::new(index + 1), node))
-    }
-
-    // ========== Internal Access for Iterators ==========
-
-    /// Returns a reference to the internal slab (for iterator implementations).
-    #[inline]
-    pub(crate) fn slab(&self) -> &Slab<SemanticsNode> {
-        &self.nodes
     }
 }
 
@@ -680,7 +646,7 @@ mod tests {
         let mut tree = SemanticsTree::new();
 
         let id1 = tree.insert(SemanticsNode::new()); // dirty by default
-        let id2 = tree.insert(SemanticsNode::new());
+        let _id2 = tree.insert(SemanticsNode::new());
 
         // All nodes start dirty
         assert!(tree.has_dirty_nodes());

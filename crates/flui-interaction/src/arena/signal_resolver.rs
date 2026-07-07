@@ -108,6 +108,15 @@ struct ResolverInner {
     handlers: HashMap<PointerId, Vec<SignalHandler>>,
 }
 
+// Manual impl: the registered handlers hold `dyn Fn` callbacks, which have no
+// useful `Debug` representation.
+impl std::fmt::Debug for PointerSignalResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointerSignalResolver")
+            .finish_non_exhaustive()
+    }
+}
+
 impl PointerSignalResolver {
     /// Creates a new signal resolver
     pub fn new() -> Self {

@@ -121,11 +121,18 @@ pub struct TapDragEndDetails {
 // Callbacks
 // ============================================================================
 
+/// Callback fired when the primary pointer contacts the screen.
 pub type TapDragDownCallback = Arc<dyn Fn(TapDragDownDetails) + Send + Sync>;
+/// Callback fired when the pointer lifts before crossing drag slop (a tap).
 pub type TapDragUpCallback = Arc<dyn Fn(TapDragUpDetails) + Send + Sync>;
+/// Callback fired when the pointer crosses drag slop and the drag begins.
 pub type TapDragStartCallback = Arc<dyn Fn(TapDragStartDetails) + Send + Sync>;
+/// Callback fired for each pointer move while the drag is in progress.
 pub type TapDragUpdateCallback = Arc<dyn Fn(TapDragUpdateDetails) + Send + Sync>;
+/// Callback fired when the pointer lifts and the drag completes.
 pub type TapDragEndCallback = Arc<dyn Fn(TapDragEndDetails) + Send + Sync>;
+/// Callback fired when the sequence is cancelled (arena loss or pointer
+/// cancel) — neither the tap nor the drag outcome will fire.
 pub type TapDragCancelCallback = Arc<dyn Fn() + Send + Sync>;
 
 // ============================================================================
@@ -147,6 +154,9 @@ enum Phase {
     Finished,
 }
 
+// Field names keep Flutter's `onTapDown`/`onDragStart`-style callback names
+// (parity with `BaseTapAndDragGestureRecognizer`).
+#[allow(clippy::struct_field_names)]
 #[derive(Default)]
 struct TapDragCallbacks {
     on_tap_down: Option<TapDragDownCallback>,
@@ -263,6 +273,8 @@ impl TapAndDragGestureRecognizer {
     // Builder-style callback setters
     // ========================================================================
 
+    /// Register the tap-down callback (fires on pointer contact, once the
+    /// arena has accepted this recogniser).
     pub fn with_on_tap_down(
         self: Arc<Self>,
         cb: impl Fn(TapDragDownDetails) + Send + Sync + 'static,
@@ -271,6 +283,8 @@ impl TapAndDragGestureRecognizer {
         self
     }
 
+    /// Register the tap-up callback (fires when the pointer lifts before
+    /// crossing drag slop, resolving the sequence as a tap).
     pub fn with_on_tap_up(
         self: Arc<Self>,
         cb: impl Fn(TapDragUpDetails) + Send + Sync + 'static,
@@ -279,6 +293,8 @@ impl TapAndDragGestureRecognizer {
         self
     }
 
+    /// Register the drag-start callback (fires when the pointer crosses drag
+    /// slop, voiding the tap outcome).
     pub fn with_on_drag_start(
         self: Arc<Self>,
         cb: impl Fn(TapDragStartDetails) + Send + Sync + 'static,
@@ -287,6 +303,8 @@ impl TapAndDragGestureRecognizer {
         self
     }
 
+    /// Register the drag-update callback (fires for each pointer move while
+    /// the drag is in progress).
     pub fn with_on_drag_update(
         self: Arc<Self>,
         cb: impl Fn(TapDragUpdateDetails) + Send + Sync + 'static,
@@ -295,6 +313,8 @@ impl TapAndDragGestureRecognizer {
         self
     }
 
+    /// Register the drag-end callback (fires when the pointer lifts after a
+    /// drag, with end-of-drag velocity).
     pub fn with_on_drag_end(
         self: Arc<Self>,
         cb: impl Fn(TapDragEndDetails) + Send + Sync + 'static,
@@ -303,6 +323,8 @@ impl TapAndDragGestureRecognizer {
         self
     }
 
+    /// Register the cancel callback (fires when the sequence is cancelled by
+    /// an arena loss or a pointer-cancel event).
     pub fn with_on_cancel(self: Arc<Self>, cb: impl Fn() + Send + Sync + 'static) -> Arc<Self> {
         self.callbacks.lock().on_cancel = Some(Arc::new(cb));
         self

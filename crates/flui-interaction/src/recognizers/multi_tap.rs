@@ -250,15 +250,18 @@ impl MultiTapGestureRecognizer {
 
                 state.device_kind = Some(kind);
 
-                if state.pointers.len() < self.required_pointer_count {
-                    state.phase = MultiTapPhase::Collecting;
-                } else if state.pointers.len() == self.required_pointer_count {
-                    // Got all required pointers!
-                    state.phase = MultiTapPhase::WaitingForUp;
-                } else {
-                    // Too many pointers - cancel (don't set phase here, let handle_cancel do it)
-                    drop(state);
-                    self.handle_cancel();
+                match state.pointers.len().cmp(&self.required_pointer_count) {
+                    std::cmp::Ordering::Less => state.phase = MultiTapPhase::Collecting,
+                    std::cmp::Ordering::Equal => {
+                        // Got all required pointers!
+                        state.phase = MultiTapPhase::WaitingForUp;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        // Too many pointers - cancel (don't set phase here, let
+                        // handle_cancel do it)
+                        drop(state);
+                        self.handle_cancel();
+                    }
                 }
             }
             MultiTapPhase::WaitingForUp => {
@@ -314,7 +317,7 @@ impl MultiTapGestureRecognizer {
                     .map(|info| info.initial_position)
                     .collect();
 
-                let center = self.calculate_center(&positions);
+                let center = Self::calculate_center(&positions);
                 let count = positions.len();
 
                 drop(state);
@@ -355,7 +358,7 @@ impl MultiTapGestureRecognizer {
             let center = if positions.is_empty() {
                 Offset::new(Pixels::ZERO, Pixels::ZERO)
             } else {
-                self.calculate_center(&positions)
+                Self::calculate_center(&positions)
             };
 
             let count = positions.len();
@@ -381,7 +384,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Calculate center point of all positions
-    fn calculate_center(&self, positions: &[Offset<Pixels>]) -> Offset<Pixels> {
+    fn calculate_center(positions: &[Offset<Pixels>]) -> Offset<Pixels> {
         if positions.is_empty() {
             return Offset::new(Pixels::ZERO, Pixels::ZERO);
         }
@@ -492,7 +495,7 @@ impl std::fmt::Debug for MultiTapGestureRecognizer {
             .field("required_pointer_count", &self.required_pointer_count)
             .field("gesture_state", &self.gesture_state.lock())
             .field("settings", &self.settings.lock())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

@@ -64,6 +64,9 @@
 //! - `wgpu` (default) - wgpu GPU backend
 //! - Future: `skia`, `vello`, `software`
 
+// Ship bar (wave 2): every public item is documented; keep it that way.
+#![deny(missing_docs)]
+
 // Compile-time guard: the `fragile-send-sync-non-atomic-wasm` wgpu feature
 // marks !Send types as Send+Sync, which is only sound when the wasm target has
 // no threads (no atomics target feature). Enabling atomics with this feature

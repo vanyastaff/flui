@@ -178,6 +178,16 @@ pub struct PerformanceModeRequestHandle {
     cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
+impl std::fmt::Debug for PerformanceModeRequestHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `cleanup` is an opaque `dyn FnOnce`; report only whether the
+        // handle has already been disposed.
+        f.debug_struct("PerformanceModeRequestHandle")
+            .field("disposed", &self.cleanup.is_none())
+            .finish_non_exhaustive()
+    }
+}
+
 impl PerformanceModeRequestHandle {
     /// Create a new handle with a cleanup callback.
     pub(crate) fn new(cleanup: impl FnOnce() + Send + 'static) -> Self {

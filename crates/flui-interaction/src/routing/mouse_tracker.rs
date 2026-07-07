@@ -85,6 +85,19 @@ pub struct MouseTrackerAnnotation {
     pub on_hover: Option<MouseHoverCallback>,
 }
 
+// Manual impl: the callback fields are `dyn Fn` and have no useful `Debug`
+// representation; report their presence instead.
+impl std::fmt::Debug for MouseTrackerAnnotation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MouseTrackerAnnotation")
+            .field("region_id", &self.region_id)
+            .field("has_on_enter", &self.on_enter.is_some())
+            .field("has_on_exit", &self.on_exit.is_some())
+            .field("has_on_hover", &self.on_hover.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl MouseTrackerAnnotation {
     /// Creates a new annotation for a region
     pub fn new(region_id: RegionId) -> Self {
@@ -142,6 +155,14 @@ struct DeviceState {
 #[derive(Clone)]
 pub struct MouseTracker {
     inner: Arc<Mutex<MouseTrackerInner>>,
+}
+
+// Manual impl: the tracker state holds annotation/cursor callbacks (`dyn Fn`)
+// behind a mutex, so there is no useful derived representation.
+impl std::fmt::Debug for MouseTracker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MouseTracker").finish_non_exhaustive()
+    }
 }
 
 /// Callback for cursor changes.

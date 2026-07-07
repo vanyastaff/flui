@@ -138,6 +138,8 @@ impl PolynomialFit {
 /// fit the x and y pointer coordinates together via [`solve_two`], which shares
 /// the QR factorization.
 #[cfg(test)]
+// Math-style names (x, y, w, q, r, m, n) mirror Flutter's lsq_solver.dart.
+#[allow(clippy::many_single_char_names)]
 pub(crate) fn solve_one(x: &[f64], y: &[f64], w: &[f64], degree: usize) -> Option<PolynomialFit> {
     debug_assert_eq!(x.len(), y.len(), "x and y must have the same length");
     debug_assert_eq!(x.len(), w.len(), "x and w must have the same length");
@@ -156,6 +158,9 @@ pub(crate) fn solve_one(x: &[f64], y: &[f64], w: &[f64], degree: usize) -> Optio
 /// side, so it can be reused across multiple `y`-vectors — see [`solve_two`].
 /// Complexity: O(n²·m), and with n ≤ `MAX_DEGREE`+1 and m ≤ `MAX_SAMPLES` that is
 /// a small bounded constant.
+// Math-style names (x, w, q, r, a, m, n, h, i, j) mirror Flutter's
+// lsq_solver.dart QR/Gram-Schmidt algorithm; renaming would hurt parity review.
+#[allow(clippy::many_single_char_names)]
 fn factorize(
     x: &[f64],
     w: &[f64],
@@ -230,6 +235,9 @@ fn factorize(
 /// factorization from [`factorize`]. Back-substitutes `R B = Qᵀ W Y` and
 /// computes the R² confidence. `x`/`w` must be the slices that produced the
 /// factorization. Complexity: O(n·m).
+// Math-style names (x, y, w, q, r, m, n, h, i, j) mirror Flutter's
+// lsq_solver.dart back-substitution; renaming would hurt parity review.
+#[allow(clippy::many_single_char_names)]
 fn solve_rhs(
     x: &[f64],
     y: &[f64],
@@ -297,6 +305,8 @@ fn solve_rhs(
 /// dominant O(n²·m) cost — is computed once and reused for both, halving the
 /// factorization work versus two independent `solve_one` calls. (`solve_one`
 /// is `#[cfg(test)]`, so it is not an intra-doc link here.)
+// Math-style names (x, w, q, r, m, n) mirror Flutter's lsq_solver.dart.
+#[allow(clippy::many_single_char_names)]
 pub(crate) fn solve_two(
     x: &[f64],
     w: &[f64],
@@ -320,6 +330,8 @@ mod tests {
     use super::*;
 
     /// Helper: build (t, v) samples for a perfect line v = a + b·t.
+    // Math-style names (a, b, x, y, w) match the line equation in the doc.
+    #[allow(clippy::many_single_char_names)]
     fn linear_samples(a: f64, b: f64, count: usize, dt: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         let x: Vec<f64> = (0..count).map(|i| -((count - 1 - i) as f64) * dt).collect();
         let y: Vec<f64> = x.iter().map(|&t| a + b * t).collect();

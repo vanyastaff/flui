@@ -456,6 +456,7 @@ impl Iterator for GesturePlayer {
 // ============================================================================
 
 /// Utility for building common gesture patterns
+#[derive(Debug)]
 pub struct GestureBuilder;
 
 impl GestureBuilder {

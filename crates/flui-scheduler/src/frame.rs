@@ -352,6 +352,12 @@ impl AppLifecycleState {
     /// Check if the state transition is valid
     ///
     /// Most transitions are valid, but some are logically unusual.
+    #[allow(
+        clippy::match_same_arms,
+        reason = "deliberate transition table: each state pair is listed explicitly \
+                  (Flutter AppLifecycleState parity) so a future tightening edits one \
+                  arm instead of reconstructing the table"
+    )]
     pub const fn can_transition_to(self, next: Self) -> bool {
         match (self, next) {
             // Same state is always valid (no-op)
