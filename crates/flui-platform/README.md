@@ -4,7 +4,9 @@
 pipeline and the operating system's windowing, input, and event-loop APIs.
 
 `flui-platform` defines the `Platform` trait family and ships one backend per
-target, selected at compile time by `current_platform()`:
+target. `current_platform()` selects in two stages: a runtime `FLUI_HEADLESS`
+environment check first (any value forces the headless backend — the CI/test
+path), then compile-time `#[cfg]` picks the OS backend:
 
 | Backend | Target | Status |
 |---------|--------|--------|

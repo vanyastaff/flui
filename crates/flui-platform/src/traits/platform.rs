@@ -414,7 +414,7 @@ pub enum WindowEvent {
     /// Window was moved (position in logical pixels)
     Moved {
         /// The window that was moved
-        id: WindowId,
+        window_id: WindowId,
         /// New top-left position in logical pixels
         position: Point<Pixels>,
     },
