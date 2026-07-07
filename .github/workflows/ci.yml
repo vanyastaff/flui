@@ -407,5 +407,8 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
+      # `+nightly` is required: the committed rust-toolchain.toml pin (1.96.0)
+      # overrides the job's installed default toolchain, and the pinned stable
+      # has no miri component (first run failed exactly there).
       - name: cargo miri test (subtree_arena)
-        run: cargo miri test -p flui-rendering --lib pipeline::owner::subtree_arena
+        run: cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
