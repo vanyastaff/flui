@@ -13,6 +13,15 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **`cargo-deny` CI job** (merge-blocking): the in-repo `deny.toml` was never
+  executed in CI; the first wired run surfaced four real advisories —
+  `anyhow` 1.0.102 unsound `downcast_mut` (RUSTSEC-2026-0190),
+  `crossbeam-epoch` 0.9.18 invalid deref (RUSTSEC-2026-0204), and a
+  `quick-xml` DoS pair (RUSTSEC-2026-0194/0195). Three fixed by lockfile
+  bumps; the transitive quick-xml pair (build-time Wayland scanner) and the
+  unmaintained `ttf-parser` notice carry documented ignores. `just deny`
+  added.
+
 - **CI gates**: integration tests now run in CI (previously `--lib` only —
   the Core.0/Core.2 exit-gate suites in `crates/*/tests/` were never
   executed); new `doc-test` job runs every rustdoc example; new `msrv` job
@@ -27,6 +36,12 @@ file records the repo-consumer-visible summary.
 - This changelog.
 
 ### Changed
+
+- **Toolchain pin 1.96.0 → 1.96.1** (MIR miscompilation fix, cargo HTTP
+  retries, three libssh2 CVEs in cargo). MSRV unchanged at 1.96.
+- Lockfile: `wgpu` 29.0.3 → 29.0.4, `anyhow` → 1.0.103, `crossbeam-epoch`
+  → 0.9.20, `swash` → 0.2.9 (off a yanked version). `clippy.toml` gains
+  `msrv = "1.96"` so MSRV-aware lints track the declared floor.
 
 - **Lint normalization**: every workspace crate now inherits
   `[workspace.lints]` via `[lints] workspace = true` (12 crates previously

@@ -323,6 +323,30 @@ jobs:
         run: cargo doc --workspace --no-deps --document-private-items
 
   # ─────────────────────────────────────────────────────────────────────────
+  # deny — cargo-deny over advisories/bans/licenses/sources. deny.toml has
+  # been maintained in-repo since the 0.19 schema migration but was never
+  # executed in CI; the first wired run surfaced 4 real advisories (anyhow
+  # unsound downcast_mut, crossbeam-epoch deref, quick-xml DoS pair) — three
+  # fixed by lockfile bumps, the transitive rest carry documented ignores.
+  # Merge-blocking: it was green at wiring time and every ignore is argued.
+  # ─────────────────────────────────────────────────────────────────────────
+  deny:
+    name: deny (advisories, bans, licenses, sources)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19
+
+      - name: cargo deny check
+        run: cargo deny check
+
+  # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
   # doctests (cargo-nextest#16), so the `test` job above never covers them;
   # without this job the 700+ doc code fences in the workspace are unverified

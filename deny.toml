@@ -35,6 +35,24 @@ ignore = [
     # hash non-determinism, which does not affect the compiled artefact.
     { id = "RUSTSEC-2025-0057" },
 
+    # RUSTSEC-2026-0192: ttf-parser is unmaintained (author archived the
+    # repo).  Source: ttf-parser ← fontdb/swash ← cosmic-text (the text stack
+    # pins it; no maintained alternative exposes the same face-parsing surface
+    # yet).  Parsing happens on locally installed fonts, not remote input.
+    # Revisit when cosmic-text migrates (skrifa is the ecosystem successor).
+    { id = "RUSTSEC-2026-0192" },
+
+    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml <0.41 quadratic
+    # duplicate-attribute check + unbounded namespace allocation (DoS via
+    # hostile XML).  Source: quick-xml v0.39.4 ← wayland-scanner v0.31.10 ←
+    # smithay-client-toolkit ← winit 0.30 (BUILD-TIME code generator only —
+    # it parses the vendored Wayland protocol XML shipped inside the crates,
+    # never attacker-controlled input, and is not compiled into the binary).
+    # Unfixable locally: wayland-scanner caps quick-xml at ^0.39; drop these
+    # ignores when winit's Wayland stack releases against >=0.41.
+    { id = "RUSTSEC-2026-0194" },
+    { id = "RUSTSEC-2026-0195" },
+
     # RUSTSEC-2026-0186: memmap2 ≤0.9.10 passes an unchecked pointer offset to
     # madvise/msync syscalls.  PRE-EXISTING on main (pinned by cosmic-text 0.18.2
     # → fontdb → memmap2 0.9.10; cosmic-text caps the version).

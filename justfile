@@ -112,6 +112,11 @@ test-release:
 test-doc:
     cargo test --workspace --exclude flui-platform --doc
 
+[group("quality")]
+[doc("Dependency audit: advisories, bans, licenses, sources (requires cargo-deny)")]
+deny:
+    cargo deny check
+
 [group("test")]
 [doc("Run miri on the flui-rendering subtree arena (the unsafe hot spot; requires nightly + miri component)")]
 miri:
