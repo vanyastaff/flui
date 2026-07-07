@@ -108,6 +108,16 @@ test-release:
     cargo test --workspace --release
 
 [group("test")]
+[doc("Run rustdoc examples as tests (CI gate; nextest does not execute doctests)")]
+test-doc:
+    cargo test --workspace --exclude flui-platform --doc
+
+[group("test")]
+[doc("Run miri on the flui-rendering subtree arena (the unsafe hot spot; requires nightly + miri component)")]
+miri:
+    cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
+
+[group("test")]
 [doc("Generate an HTML coverage report (requires cargo-llvm-cov)")]
 coverage:
     cargo llvm-cov --workspace --html
@@ -295,8 +305,8 @@ watch-test crate="":
 # =============================================================================
 
 [group("ci")]
-[doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test)")]
-ci: fmt-check inventory-check port-check clippy test
+[doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
+ci: fmt-check inventory-check port-check clippy test test-doc
 
 # =============================================================================
 # Maintenance
