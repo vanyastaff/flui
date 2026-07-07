@@ -157,7 +157,7 @@ impl std::fmt::Debug for FocusManager {
             .field("primary_focus", &*self.primary_focus.read())
             .field("root_scope_id", &self.root_scope.id())
             .field("listener_count", &self.listeners.read().len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

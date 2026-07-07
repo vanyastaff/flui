@@ -34,17 +34,21 @@ use crate::{
 /// Event propagation control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EventPropagation {
+    /// Keep dispatching the event to the remaining entries on the route.
     #[default]
     Continue,
+    /// Stop dispatching; entries deeper on the route do not see the event.
     Stop,
 }
 
 impl EventPropagation {
+    /// Returns `true` if dispatch should continue to the next entry.
     #[inline]
     pub const fn should_continue(self) -> bool {
         matches!(self, Self::Continue)
     }
 
+    /// Returns `true` if dispatch should stop at this entry.
     #[inline]
     pub const fn should_stop(self) -> bool {
         matches!(self, Self::Stop)
@@ -68,18 +72,27 @@ pub type ScrollEventHandler = Arc<dyn Fn(&ScrollEventData) -> EventPropagation +
 /// Hit test behavior (Flutter's HitTestBehavior).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HitTestBehavior {
+    /// Receive events only if a child is hit (Flutter's `deferToChild`).
     #[default]
     DeferToChild,
+    /// Hit within bounds even with no child hit, and block targets visually
+    /// behind from receiving the event (Flutter's `opaque`).
     Opaque,
+    /// Hit within bounds while still letting targets visually behind receive
+    /// the event too (Flutter's `translucent`).
     Translucent,
 }
 
 impl HitTestBehavior {
+    /// Returns `true` if the element adds itself to the hit-test result even
+    /// when no child was hit (`Opaque` and `Translucent`).
     #[inline]
     pub const fn registers_self(self) -> bool {
         matches!(self, Self::Opaque | Self::Translucent)
     }
 
+    /// Returns `true` if a hit on this element prevents targets visually
+    /// behind it from being hit (`Opaque` only).
     #[inline]
     pub const fn blocks_below(self) -> bool {
         matches!(self, Self::Opaque)
@@ -123,8 +136,9 @@ impl std::fmt::Debug for HitTestEntry {
             .field("has_transform", &self.transform.is_some())
             .field("has_handler", &self.handler.is_some())
             .field("cursor", &self.cursor)
+            .field("has_scroll_handler", &self.scroll_handler.is_some())
             .field("has_mouse_annotation", &self.mouse_annotation.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -478,6 +492,7 @@ impl HitTestResult {
 ///
 /// Automatically pops transform when dropped.
 #[must_use = "TransformGuard must be held to maintain the transform"]
+#[derive(Debug)]
 pub struct TransformGuard<'a> {
     result: &'a mut HitTestResult,
 }

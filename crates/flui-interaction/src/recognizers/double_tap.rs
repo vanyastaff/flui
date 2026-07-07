@@ -427,8 +427,7 @@ impl DoubleTapGestureRecognizer {
     fn extract_event_data(event: &PointerEvent) -> (Offset<Pixels>, PointerType) {
         let position = event.position();
         let pointer_type = match event {
-            PointerEvent::Down(e) => e.pointer.pointer_type,
-            PointerEvent::Up(e) => e.pointer.pointer_type,
+            PointerEvent::Down(e) | PointerEvent::Up(e) => e.pointer.pointer_type,
             PointerEvent::Move(e) => e.pointer.pointer_type,
             PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
                 info.pointer_type
@@ -586,7 +585,7 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
             .field("state", &self.state)
             .field("gesture_state", &self.gesture_state.lock())
             .field("settings", &self.settings.lock())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

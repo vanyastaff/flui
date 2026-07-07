@@ -95,11 +95,12 @@ struct BufferedEvent {
 /// # Thread Safety
 ///
 /// This type is thread-safe using `Arc<Mutex<_>>` internally.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PointerEventResampler {
     inner: Arc<Mutex<ResamplerInner>>,
 }
 
+#[derive(Debug)]
 struct ResamplerInner {
     /// Pointer ID this resampler tracks
     pointer_id: PointerId,
