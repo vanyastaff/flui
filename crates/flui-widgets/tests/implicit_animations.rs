@@ -9,12 +9,10 @@
 //! retargets its controller in `did_update_view`); `pump_for(dt)` then advances
 //! the controller frame-by-frame.
 
-mod common;
-
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{lay_out_animated, loose, tight};
+use crate::common::{lay_out_animated, loose, tight};
 use flui_animation::{ElasticOutCurve, Vsync};
 use flui_geometry::{EdgeInsets, px};
 use flui_types::{Alignment, Offset};
@@ -229,7 +227,7 @@ fn animated_padding_interpolates_child_offset_over_frames() {
     // Loose-enough tight box so the padded child has room to shift.
     let mut laid = lay_out_animated(probe, tight(100.0, 100.0), vsync);
 
-    let child_offset = |laid: &common::LaidOut| -> Offset {
+    let child_offset = |laid: &crate::common::LaidOut| -> Offset {
         let root = laid.current_root();
         laid.offset(laid.only_child(root))
     };
@@ -314,7 +312,7 @@ fn animated_align_interpolates_child_position_over_frames() {
     // 100×100 box, 20×20 child: TOP_LEFT → child at (0,0); BOTTOM_RIGHT → (80,80).
     let mut laid = lay_out_animated(probe, tight(100.0, 100.0), vsync);
 
-    let child_x = |laid: &common::LaidOut| -> f32 {
+    let child_x = |laid: &crate::common::LaidOut| -> f32 {
         let root = laid.current_root();
         laid.offset(laid.only_child(root)).dx.get()
     };
@@ -400,7 +398,8 @@ fn animated_container_interpolates_size_over_frames() {
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
 
-    let width = |laid: &common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
+    let width =
+        |laid: &crate::common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
 
     assert!(
         (width(&laid) - 20.0).abs() < 1e-3,

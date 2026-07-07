@@ -2,9 +2,7 @@
 //! dynamic `Vec<BoxedView>` path (`Column`) and the static tuple path
 //! (`row!` macro), asserting main/cross-axis sizing and child positions.
 
-mod common;
-
-use common::{lay_out, loose, offset, size, tight};
+use crate::common::{lay_out, loose, offset, size, tight};
 use flui_objects::FlexDirection;
 use flui_view::ViewExt;
 use flui_widgets::row;

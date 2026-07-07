@@ -9,9 +9,7 @@
 //! async loading is wired, the assertion flips red, which is the desired
 //! sentinel.
 
-mod common;
-
-use common::{lay_out, loose, size, tight};
+use crate::common::{lay_out, loose, size, tight};
 use flui_types::painting::Image as PixelImage;
 use flui_widgets::{Image, ImageAlignment, ImageFit};
 

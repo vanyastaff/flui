@@ -4,12 +4,10 @@
 //! `absorbing = true` (the default), its subtree must never receive a hit,
 //! not even a `GestureDetector` directly beneath it.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, size, tight};
+use crate::common::{lay_out, size, tight};
 use flui_types::Color;
 use flui_widgets::{AbsorbPointer, ColoredBox, GestureDetector};
 

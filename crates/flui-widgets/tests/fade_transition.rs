@@ -4,12 +4,10 @@
 //! external build inbox, NOT a root `setState`), which re-reads the animation
 //! value into its `Opacity` render object.
 
-mod common;
-
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_animation::{Animation, AnimationController};
 use flui_scheduler::Scheduler;
 use flui_widgets::{FadeTransition, SizedBox};
@@ -65,5 +63,5 @@ fn fade_transition_lays_its_child_out_as_a_passthrough() {
     );
 
     let render_opacity = laid.root();
-    assert_eq!(laid.size(render_opacity), common::size(120.0, 80.0));
+    assert_eq!(laid.size(render_opacity), crate::common::size(120.0, 80.0));
 }

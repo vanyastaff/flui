@@ -3,9 +3,7 @@
 //! `build()` branches documented in `crates/flui-widgets/src/interaction/
 //! visibility.rs` (Flutter oracle: `indexed_stack.dart` lines 452-473).
 
-mod common;
-
-use common::{lay_out, loose, size};
+use crate::common::{lay_out, loose, size};
 use flui_widgets::{SizedBox, Visibility};
 
 #[test]

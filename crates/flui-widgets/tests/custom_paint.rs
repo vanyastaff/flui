@@ -1,8 +1,6 @@
 //! `CustomPaint` widget smoke coverage over `RenderCustomPaint`.
 
-mod common;
-
-use common::{lay_out, loose, size};
+use crate::common::{lay_out, loose, size};
 use flui_widgets::{CustomPaint, SizedBox};
 
 #[test]

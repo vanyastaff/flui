@@ -12,12 +12,10 @@
 //! `build_scope` (the dirty entry would miss this frame's drain — a one-frame
 //! lag).
 
-mod common;
-
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_animation::{Animation, AnimationController, AnimationStatus};
 use flui_scheduler::Scheduler;
 use flui_widgets::{FadeTransition, SizedBox};

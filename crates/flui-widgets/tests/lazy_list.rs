@@ -21,12 +21,10 @@
 //! built and the sliver is marked dirty; after `tick2` the sliver lays out
 //! its real children and reaches a stable state.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 

@@ -5,9 +5,7 @@
 //! the main axis. This proves the seam end-to-end: the configured flex reaches
 //! the render tree and drives both child **sizes** and **offsets**.
 
-mod common;
-
-use common::{lay_out, offset, size, tight};
+use crate::common::{lay_out, offset, size, tight};
 use flui_widgets::row;
 use flui_widgets::{Expanded, Flexible, Row, SizedBox};
 

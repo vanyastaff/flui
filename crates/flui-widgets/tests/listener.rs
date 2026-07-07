@@ -3,12 +3,10 @@
 //! `HitTestBehavior` contract — `DeferToChild` (the default) fires only when a
 //! descendant is hit, `Opaque` fires for any pointer within bounds.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, size, tight};
+use crate::common::{lay_out, size, tight};
 use flui_interaction::events::pointer::{
     PointerButtons, PointerGesture, PointerGestureEvent, PointerInfo, PointerState, PointerType,
     PointerUpdate,

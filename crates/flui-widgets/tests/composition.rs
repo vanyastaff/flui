@@ -3,9 +3,7 @@
 //! distribution. Each asserts computed geometry that would be wrong if a layer
 //! mis-propagated constraints or mis-placed a child.
 
-mod common;
-
-use common::{lay_out, loose, offset, size, tight};
+use crate::common::{lay_out, loose, offset, size, tight};
 use flui_geometry::{EdgeInsets, px};
 use flui_types::Alignment;
 use flui_types::Color;

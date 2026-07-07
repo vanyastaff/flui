@@ -2,9 +2,7 @@
 //! computed size/offset that would be wrong if the widget mis-wired its render
 //! object or failed to attach its child.
 
-mod common;
-
-use common::{lay_out, loose, offset, size, tight};
+use crate::common::{lay_out, loose, offset, size, tight};
 use flui_types::Alignment;
 use flui_types::Color;
 use flui_widgets::{Align, Center, ColoredBox, Padding, SizedBox};

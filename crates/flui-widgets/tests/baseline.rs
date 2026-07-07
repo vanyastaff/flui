@@ -1,8 +1,6 @@
 //! Layout test for [`Baseline`] — positions a child by a baseline distance.
 
-mod common;
-
-use common::{lay_out, loose, offset, size};
+use crate::common::{lay_out, loose, offset, size};
 use flui_widgets::prelude::TextBaseline;
 use flui_widgets::{Baseline, SizedBox};
 

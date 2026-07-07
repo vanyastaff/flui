@@ -10,6 +10,9 @@ repository.workspace = true
 readme = "README.md"
 keywords = ["ui", "widget", "flutter", "flui", "gui"]
 categories = ["gui"]
+# Root tests/*.rs are consolidated into the single `widgets_it` binary below
+# (one link of the wgpu stack instead of 49) — disable per-file auto-discovery.
+autotests = false
 
 [dependencies]
 # Authoring spine: View/Element traits, BuildContext, ViewSeq, keys, derives
@@ -59,6 +62,14 @@ flui-binding = { path = "../flui-binding", version = "0.2.0" }
 parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.
 insta = { workspace = true }
+
+# All root tests/*.rs files, consolidated into one binary via `#[path]` module
+# declarations in tests/main.rs (autotests = false above disables the per-file
+# auto-discovered binaries that each linked the whole wgpu stack).
+[[test]]
+name = "widgets_it"
+path = "tests/main.rs"
+harness = true
 
 # The parity test suite lives in a subdirectory so `mod harness; mod *_test;`
 # work via Cargo's single-binary test model. Auto-discovery misses subdirectory

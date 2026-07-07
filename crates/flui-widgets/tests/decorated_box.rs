@@ -2,9 +2,7 @@
 //! layout is a pass-through (the child's size), mirroring `tests/clip.rs`'s
 //! convention for the other paint-effect proxy widgets.
 
-mod common;
-
-use common::{lay_out, loose, size};
+use crate::common::{lay_out, loose, size};
 use flui_types::Color;
 use flui_types::styling::BoxDecoration;
 use flui_widgets::{DecoratedBox, SizedBox};

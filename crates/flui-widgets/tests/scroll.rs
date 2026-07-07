@@ -6,12 +6,10 @@
 //! 3. `Scrollable` interactive drag integration (gesture → offset change).
 //! 4. `ClampingScrollPhysics` hard-boundary enforcement.
 
-mod common;
-
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
+use crate::common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
 use flui_animation::Vsync;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;

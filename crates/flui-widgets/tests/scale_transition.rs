@@ -3,12 +3,10 @@
 //! transition spine generalizes from `Opacity` to a `Transform` property — a
 //! tick re-reads the animation value into the render object's scale matrix.
 
-mod common;
-
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{lay_out, size, tight};
+use crate::common::{lay_out, size, tight};
 use flui_animation::{Animation, AnimationController};
 use flui_scheduler::Scheduler;
 use flui_widgets::{ScaleTransition, SizedBox};
