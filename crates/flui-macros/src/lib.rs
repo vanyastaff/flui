@@ -35,7 +35,9 @@
 //! Authors who pull the derive via the prelude automatically satisfy
 //! this requirement.
 
-#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
+#![warn(missing_debug_implementations, rust_2018_idioms)]
 
 mod derive_animatable;
 mod derive_diagnosticable;

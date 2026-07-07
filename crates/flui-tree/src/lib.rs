@@ -27,6 +27,8 @@
 
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // ============================================================================
 // MODULES
