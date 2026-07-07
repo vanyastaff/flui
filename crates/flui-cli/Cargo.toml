@@ -9,6 +9,10 @@ repository.workspace = true
 description = "Command-line interface for FLUI - Project creation, building, and deployment automation"
 keywords = ["cli", "flui", "ui", "cross-platform", "build-tool"]
 categories = ["command-line-utilities", "development-tools", "gui"]
+# Single-binary integration-test consolidation: every root test file is a
+# module of `tests/main.rs` (one link of the full dep stack instead of 5
+# separate binaries). See the `[[test]] name = "cli_it"` target below.
+autotests = false
 
 [[bin]]
 name = "flui"
@@ -61,6 +65,14 @@ devtools = ["dep:flui-devtools"]
 tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+
+# Consolidated integration-test binary (see `autotests = false` above).
+# All five suites drive the built `flui` binary in subprocesses via
+# assert_cmd; no test file writes process-global state in the test
+# process itself, so no isolated [[test]] targets are needed.
+[[test]]
+name = "cli_it"
+path = "tests/main.rs"
 
 [lints]
 workspace = true

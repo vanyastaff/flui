@@ -7,6 +7,10 @@ authors.workspace = true
 license.workspace = true
 description = "Core types for Flui framework - geometry, layout, styling"
 repository.workspace = true
+# Single-binary integration-test consolidation: every root test file is a
+# module of `tests/main.rs` (one link of the full dep stack instead of 16
+# separate binaries). See the `[[test]] name = "types_it"` target below.
+autotests = false
 
 [dependencies]
 # Geometry primitives — split out into its own Layer-0 crate in D-block
@@ -64,6 +68,16 @@ full = ["serde", "simd", "mint"]
 
 # NOTE: Image and font loading moved to flui-assets crate.
 # flui_types only provides type definitions!
+
+# Consolidated integration-test binary (see `autotests = false` above).
+# Includes the trybuild compile-fail suite (`unit_mixing_compile_fail.rs`
+# driving `tests/compile_fail/*.rs`) — trybuild resolves fixtures via
+# CARGO_MANIFEST_DIR, so it is safe inside the consolidated target. No
+# test file writes process-global state, so no isolated [[test]] targets
+# are needed.
+[[test]]
+name = "types_it"
+path = "tests/main.rs"
 
 [[bench]]
 name = "geometry_bench"
