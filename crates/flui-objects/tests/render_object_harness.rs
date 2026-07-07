@@ -83,6 +83,13 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
+// Single-binary consolidation (`autotests = false` in `Cargo.toml`): the
+// snapshot dogfood suite compiles as a module of this target instead of
+// linking the full dependency stack a second time. Its insta snapshots are
+// prefixed `render_object_harness__harness_snapshot__` accordingly.
+#[path = "harness_snapshot.rs"]
+mod harness_snapshot;
+
 use std::{
     any::Any,
     collections::HashMap,

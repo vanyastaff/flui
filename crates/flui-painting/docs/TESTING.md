@@ -17,7 +17,9 @@ integration, prefer [`flui-rendering::testing`](../../flui-rendering/docs/TESTIN
 
 ```bash
 cargo test -p flui-painting
-cargo test -p flui-painting --test display_list_unit
+# All root integration tests compile into the single `painting_it` binary
+# (see `[[test]]` in Cargo.toml); filter by module to run one former file:
+cargo test -p flui-painting --test painting_it display_list_unit::
 ```
 
 ## Design

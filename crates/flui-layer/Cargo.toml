@@ -9,6 +9,13 @@ repository.workspace = true
 description = "Layer tree for FLUI compositor - part of 5-tree architecture"
 keywords = ["ui", "gpu", "compositor", "layer", "rendering"]
 categories = ["gui", "graphics", "rendering"]
+# Single-binary integration-test consolidation: every root test file is a
+# module of `tests/main.rs` (one link of the full dep stack instead of 3
+# separate binaries). See the `[[test]] name = "layer_it"` target below.
+# Ambient-state note: no root test writes process-global state (the
+# `LeaderLayer` `NEXT_ID` counter is a benign monotonic atomic), so no
+# isolated targets.
+autotests = false
 
 [features]
 default = []
@@ -45,6 +52,10 @@ thiserror = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 flui-layer = { path = ".", version = "0.2.0", features = ["testing"] }
+
+[[test]]
+name = "layer_it"
+path = "tests/main.rs"
 
 [lints]
 workspace = true
