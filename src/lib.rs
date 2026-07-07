@@ -46,6 +46,9 @@
 //! re-exported: their surfaces are consumed *through* the widget layer and
 //! remain path-dependencies for the rare integrator who needs them directly.
 
+// Ship bar (wave 4): every public item is documented; keep it that way.
+#![deny(missing_docs)]
+
 pub use flui_animation as animation;
 pub use flui_app as app;
 pub use flui_foundation as foundation;

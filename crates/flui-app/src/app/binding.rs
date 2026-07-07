@@ -905,7 +905,7 @@ impl std::fmt::Debug for AppBinding {
             .field("needs_redraw", &self.needs_redraw.load(Ordering::Relaxed))
             .field("vsync", &self.vsync_slot.lock().clone())
             .field("renderer", &*self.renderer.read())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

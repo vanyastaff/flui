@@ -31,11 +31,8 @@
 //! }
 //! ```
 
-#![warn(missing_docs)]
-// Tracked ship-quality debt:
-#![allow(clippy::unwrap_used)] // TODO(ship-wave-4): convert to Result / `expect("BUG: …")` per docs/PANIC-POLICY.md
-#![allow(clippy::missing_fields_in_debug)] // TODO(ship-wave-4): `finish_non_exhaustive()` or full fields
-#![allow(clippy::unreadable_literal)] // TODO(ship-wave-4): add digit separators
+// Ship bar (wave 4): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // Modules
 pub mod app;

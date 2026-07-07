@@ -45,8 +45,8 @@
 //! }
 //! ```
 
-// Tracked ship-quality debt:
-#![allow(clippy::unwrap_used)] // TODO(ship-wave-4): convert to Result / `expect("BUG: …")` per docs/PANIC-POLICY.md
+// Ship bar (wave 4): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 /// Android platform build support
 pub mod android;

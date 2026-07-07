@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  ✓ First 10 bytes: {:?}", &bytes[..10.min(bytes.len())]);
             }
             Err(e) => {
-                println!("  ✗ Failed to load: {}", e);
+                println!("  ✗ Failed to load: {e}");
                 println!("  ℹ This might be a network connectivity issue");
             }
         }
@@ -41,11 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let lines: Vec<&str> = text.lines().take(3).collect();
                 println!("  ✓ First 3 lines:");
                 for line in lines {
-                    println!("    {}", line);
+                    println!("    {line}");
                 }
             }
             Err(e) => {
-                println!("  ✗ Failed to load: {}", e);
+                println!("  ✗ Failed to load: {e}");
             }
         }
         println!();
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 println!("  ✓ Correctly handled error");
-                println!("  ℹ Error: {}", e);
+                println!("  ℹ Error: {e}");
             }
         }
         println!();

@@ -198,6 +198,10 @@ impl AssetRegistry {
     }
 
     /// Clears all caches in the registry.
+    #[allow(
+        clippy::unused_async,
+        reason = "public API: uniform async surface with the genuinely-async `invalidate`/`clear` siblings"
+    )]
     pub async fn clear_all(&self) {
         let mut caches = self.caches.write();
         caches.clear();

@@ -373,52 +373,77 @@ pub enum WindowEvent {
     Created(WindowId),
 
     /// Window close was requested (user clicked X button)
-    CloseRequested { window_id: WindowId },
+    CloseRequested {
+        /// The window whose close button was activated
+        window_id: WindowId,
+    },
 
     /// Window was closed
     Closed(WindowId),
 
     /// Window focus changed
-    FocusChanged { window_id: WindowId, focused: bool },
+    FocusChanged {
+        /// The window whose focus state changed
+        window_id: WindowId,
+        /// `true` if the window gained focus, `false` if it lost focus
+        focused: bool,
+    },
 
     /// Window was resized (size in device pixels)
     Resized {
+        /// The window that was resized
         window_id: WindowId,
+        /// New client-area size in device pixels
         size: Size<DevicePixels>,
     },
 
     /// Window scale factor (DPI) changed
     ScaleFactorChanged {
+        /// The window whose scale factor changed
         window_id: WindowId,
+        /// New device-pixel-per-logical-pixel ratio
         scale_factor: f64,
     },
 
     /// Window needs to be redrawn
-    RedrawRequested { window_id: WindowId },
+    RedrawRequested {
+        /// The window that must be repainted
+        window_id: WindowId,
+    },
 
     /// Window was moved (position in logical pixels)
     Moved {
-        id: WindowId,
+        /// The window that was moved
+        window_id: WindowId,
+        /// New top-left position in logical pixels
         position: Point<Pixels>,
     },
 
     /// Window was minimized (iconified)
-    Minimized { window_id: WindowId },
+    Minimized {
+        /// The window that was minimized
+        window_id: WindowId,
+    },
 
     /// Window was maximized
     Maximized {
+        /// The window that was maximized
         window_id: WindowId,
+        /// Maximized client-area size in device pixels
         size: Size<DevicePixels>,
     },
 
     /// Window was restored from minimized or maximized state
     Restored {
+        /// The window that was restored
         window_id: WindowId,
+        /// Restored client-area size in device pixels
         size: Size<DevicePixels>,
     },
 
     /// Window entered fullscreen mode
     Fullscreen {
+        /// The window that entered fullscreen
         window_id: WindowId,
         /// Size of the fullscreen window (monitor size)
         size: Size<DevicePixels>,
@@ -426,6 +451,7 @@ pub enum WindowEvent {
 
     /// Window exited fullscreen mode
     ExitFullscreen {
+        /// The window that left fullscreen
         window_id: WindowId,
         /// Restored window size
         size: Size<DevicePixels>,

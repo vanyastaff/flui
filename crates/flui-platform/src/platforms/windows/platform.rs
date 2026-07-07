@@ -508,7 +508,7 @@ impl WindowsPlatform {
                             px(y as f32 / ctx.scale_factor),
                         );
                         ctx.dispatch_event(WindowEvent::Moved {
-                            id: ctx.window_id,
+                            window_id: ctx.window_id,
                             position,
                         });
                     }

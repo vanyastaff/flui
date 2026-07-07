@@ -164,10 +164,8 @@
 //! See the [API Guidelines Audit](https://github.com/your-repo/flui/blob/main/crates/flui_assets/API_GUIDELINES_AUDIT.md)
 //! for detailed compliance report.
 
-#![warn(missing_docs)]
-// Tracked ship-quality debt:
-#![allow(clippy::missing_fields_in_debug)] // TODO(ship-wave-4): `finish_non_exhaustive()` or full fields
-#![allow(clippy::unused_async)] // TODO(ship-wave-4): drop `async` from fns with no await or document why
+// Ship bar: crate is doc-complete — keep it that way.
+#![deny(missing_docs)]
 
 // Core traits and interfaces
 pub mod core;

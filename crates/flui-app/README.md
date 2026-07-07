@@ -1,0 +1,76 @@
+# flui-app
+
+**The application layer — where the three trees meet the platform.**
+
+`flui-app` is the top of the framework stack: it owns the `run_app` entry
+point, combines every subsystem binding into one `AppBinding` singleton, and
+drives the frame loop that turns platform callbacks into build → layout →
+paint → composite passes, mirroring Flutter's binding architecture:
+
+| FLUI | Flutter |
+|------|---------|
+| `AppBinding` (alias `WidgetsFlutterBinding`) | `WidgetsFlutterBinding` |
+| `run_app` / `run_app_with_config` | `runApp` |
+| `WidgetsBinding` | `WidgetsBinding` |
+| `RenderingFlutterBinding` + `PipelineOwner` | `RendererBinding` |
+| `GestureBinding` / `PaintingBinding` / `SemanticsBinding` / `Scheduler` | `GestureBinding` / `PaintingBinding` / `SemanticsBinding` / `SchedulerBinding` |
+
+Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
+consumed by path (not published to crates.io).
+
+## How it fits the pipeline
+
+```text
+run_app(view)                       — bootstrap: window, GPU surface, frame loop
+    │
+    ▼
+AppBinding (central coordinator)    — singleton combining all bindings
+    ├── GestureBinding              — pointer events, hit testing, event coalescing
+    ├── FocusManager                — keyboard event dispatch
+    ├── WidgetsBinding              — build phase (View → Element, flui-view)
+    ├── RenderingFlutterBinding     — layout/paint via PipelineOwner (flui-rendering)
+    ├── SemanticsBinding            — accessibility tree flushes (flui-semantics)
+    └── Scheduler                   — frame callbacks, animation tickers (flui-scheduler)
+```
+
+- **Entry points** — `run_app` / `run_app_with_config` bootstrap a platform
+  window and hand the root `View` to `AppBinding::attach_root_widget`, which
+  auto-wraps it in `VsyncScope` so implicit-animation widgets tick with zero
+  boilerplate. `run_direct` bypasses the widget tree for raw
+  `SceneBuilder`-callback rendering.
+- **Lifecycle** — `LifecycleState`/`LifecycleEvent` port Flutter's
+  `AppLifecycleState` (resumed, inactive, paused, detached);
+  `DefaultLifecycle` is the stock observer.
+- **Frame loop** — on-demand rendering: a frame runs only when the tree is
+  dirty or the scheduler has pending work, and pure ticker-driven frames are
+  paced to the configured target FPS.
+- **Embedder** (`embedder`) — adapter types connecting the framework to
+  windowing, GPU, and input on desktop (Win32/AppKit/headless via
+  flui-platform + wgpu); Android/iOS/Web entry points are feature-gated.
+- **Overlay** (`overlay`) — `OverlayManager`/`OverlayEntry` for content that
+  floats above the main tree (dialogs, tooltips, snackbars, debug overlays).
+- **Theme** (`theme`) — `AppTheme` pre-tree configuration with semantic
+  `ColorScheme` tokens; distinct from the in-tree `flui_widgets::Theme`
+  inherited widget.
+
+## Known architectural debt
+
+`AppBinding`, `Scheduler`, and friends are process-wide singletons
+(`instance()`), so tests touching binding state cannot run in parallel — this
+is why workspace CI runs nextest with `--test-threads=1`. Scoping binding
+state per test/app instance is a tracked ship-quality item; until it lands,
+run this crate's tests single-threaded:
+
+```bash
+cargo test -p flui-app -- --test-threads=1
+```
+
+## Documentation
+
+Every public item is documented (`#![deny(missing_docs)]`); build locally with
+`cargo doc -p flui-app --open`. Architecture context lives in
+[`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md).
+
+## License
+
+MIT OR Apache-2.0, per the workspace license.

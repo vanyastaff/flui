@@ -131,11 +131,11 @@ impl PlatformLifecycle for DefaultLifecycle {
         tracing::debug!(?event, "Lifecycle event");
 
         self.state = match event {
-            LifecycleEvent::Started => LifecycleState::Active,
-            LifecycleEvent::Activated => LifecycleState::Active,
+            LifecycleEvent::Started | LifecycleEvent::Activated | LifecycleEvent::Foregrounded => {
+                LifecycleState::Active
+            }
             LifecycleEvent::Deactivated => LifecycleState::Inactive,
             LifecycleEvent::Backgrounded => LifecycleState::Background,
-            LifecycleEvent::Foregrounded => LifecycleState::Active,
             LifecycleEvent::Terminating => LifecycleState::Terminating,
             LifecycleEvent::FocusGained => {
                 self.is_focused = true;
