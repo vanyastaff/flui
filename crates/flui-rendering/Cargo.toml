@@ -11,6 +11,13 @@ readme = "README.md"
 # Benches are declared explicitly below; disable auto-discovery so the shared
 # `benches/helpers.rs` module is not itself compiled as a standalone bench target.
 autobenches = false
+# Integration tests are consolidated into one binary (tests/main.rs declares
+# each root file as a module) so the dependency stack links once, not 36x.
+autotests = false
+
+[[test]]
+name = "rendering_it"
+path = "tests/main.rs"
 
 [dependencies]
 flui-types = { path = "../flui-types", version = "0.2.0" }
