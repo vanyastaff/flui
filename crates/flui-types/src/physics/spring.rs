@@ -5,6 +5,12 @@
 
 use super::{Simulation, Tolerance};
 
+/// The damping regime of a spring, determined by its damping ratio ζ.
+///
+/// Classified from the discriminant `c² − 4mk` (see
+/// `SpringDescription::spring_type`): ζ < 1 is underdamped, ζ = 1 is
+/// critically damped, ζ > 1 is overdamped. Mirrors Flutter's `SpringType`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SpringType {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -19,6 +25,13 @@ pub enum SpringType {
     Overdamped,
 }
 
+/// The physical parameters of a damped harmonic spring: mass, stiffness,
+/// and damping coefficient.
+///
+/// Describes the spring itself, independent of any particular motion; pair
+/// it with a start/end position and initial velocity via `SpringSimulation`.
+/// Mirrors Flutter's `SpringDescription`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpringDescription {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -33,6 +46,11 @@ pub struct SpringDescription {
 }
 
 impl SpringDescription {
+    /// Creates a spring description from raw mass, stiffness, and damping
+    /// coefficient.
+    ///
+    /// Values are not validated here; use `is_valid` to check that mass and
+    /// stiffness are positive, damping is non-negative, and all are finite.
     #[must_use]
     #[inline]
     pub const fn new(mass: f32, stiffness: f32, damping: f32) -> Self {
@@ -43,6 +61,10 @@ impl SpringDescription {
         }
     }
 
+    /// Creates a critically damped spring (ζ = 1) from mass and stiffness.
+    ///
+    /// The damping coefficient is computed as `2√(mk)`, so the spring returns
+    /// to rest as fast as possible without oscillating.
     #[must_use]
     #[inline]
     pub fn with_critical_damping(mass: f32, stiffness: f32) -> Self {
@@ -54,6 +76,10 @@ impl SpringDescription {
         }
     }
 
+    /// Preset for a bouncy, underdamped spring (ζ ≈ 0.4) that visibly
+    /// overshoots and oscillates before settling.
+    ///
+    /// Parameters: mass 1, stiffness 300, damping 10.
     #[must_use]
     #[inline]
     pub fn bouncy() -> Self {
@@ -61,12 +87,18 @@ impl SpringDescription {
         Self::new(1.0, 300.0, 10.0)
     }
 
+    /// Preset for a stiff, critically damped spring (mass 1, stiffness 500)
+    /// that snaps to its target quickly without overshooting.
     #[must_use]
     #[inline]
     pub fn stiff() -> Self {
         Self::with_critical_damping(1.0, 500.0)
     }
 
+    /// Preset for a soft, overdamped spring (ζ ≈ 1.5) that eases to its
+    /// target slowly without oscillating.
+    ///
+    /// Parameters: mass 1, stiffness 100, damping 30.
     #[must_use]
     #[inline]
     pub fn soft() -> Self {
@@ -110,6 +142,10 @@ impl SpringDescription {
         }
     }
 
+    /// Returns the damping ratio `ζ = c / (2√(mk))`.
+    ///
+    /// ζ < 1 is underdamped, ζ = 1 critically damped, ζ > 1 overdamped
+    /// (though `spring_type` classifies via the discriminant, not this value).
     #[must_use]
     #[inline]
     pub fn damping_ratio(&self) -> f32 {
@@ -117,12 +153,20 @@ impl SpringDescription {
         self.damping / critical_damping
     }
 
+    /// Returns the undamped natural angular frequency `ω₀ = √(k/m)`, in
+    /// radians per second.
     #[must_use]
     #[inline]
     pub fn natural_frequency(&self) -> f32 {
         (self.stiffness / self.mass).sqrt()
     }
 
+    /// Returns the damped angular frequency `ω_d = ω₀·√(1 − ζ²)`, in radians
+    /// per second.
+    ///
+    /// This is the frequency at which an underdamped spring actually
+    /// oscillates. For critically damped or overdamped springs (ζ ≥ 1) the
+    /// radicand is clamped to zero, so this returns `0.0`.
     #[must_use]
     #[inline]
     pub fn damped_frequency(&self) -> f32 {
@@ -131,6 +175,8 @@ impl SpringDescription {
         w0 * (1.0 - zeta * zeta).max(0.0).sqrt()
     }
 
+    /// Returns the oscillation period `2π/ω_d` in seconds, or `None` when the
+    /// spring does not oscillate (damped frequency is zero, i.e. ζ ≥ 1).
     #[must_use]
     #[inline]
     pub fn period(&self) -> Option<f32> {
@@ -142,6 +188,8 @@ impl SpringDescription {
         }
     }
 
+    /// Returns whether the parameters describe a physically meaningful spring:
+    /// positive finite mass and stiffness, non-negative finite damping.
     #[must_use]
     #[inline]
     pub fn is_valid(&self) -> bool {
@@ -153,6 +201,8 @@ impl SpringDescription {
             && self.damping.is_finite()
     }
 
+    /// Returns the critical damping coefficient `2√(mk)` for this mass and
+    /// stiffness — the damping at which ζ = 1.
     #[must_use]
     #[inline]
     pub fn critical_damping(&self) -> f32 {
@@ -160,6 +210,15 @@ impl SpringDescription {
     }
 }
 
+/// A spring simulation: motion of a particle attached to a damped harmonic
+/// spring toward an equilibrium position.
+///
+/// The closed-form solution is selected per sample from the spring's damping
+/// regime (underdamped, critically damped, or overdamped — see `SpringType`).
+/// Positions are in logical pixels, time in seconds. The simulation is done
+/// once both the distance to `end` and the velocity are within tolerance.
+/// Mirrors Flutter's `SpringSimulation`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpringSimulation {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -180,6 +239,9 @@ pub struct SpringSimulation {
 }
 
 impl SpringSimulation {
+    /// Creates a spring simulation from `start` toward the equilibrium
+    /// position `end`, beginning with the given `velocity` (logical pixels
+    /// per second), using the default tolerance.
     #[must_use]
     #[inline]
     pub fn new(spring: SpringDescription, start: f32, end: f32, velocity: f32) -> Self {
@@ -192,6 +254,9 @@ impl SpringSimulation {
         }
     }
 
+    /// Returns the simulation with its tolerance replaced (builder style).
+    ///
+    /// The tolerance controls when `is_done` reports the spring as settled.
     #[must_use]
     #[inline]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
@@ -199,30 +264,36 @@ impl SpringSimulation {
         self
     }
 
+    /// Returns the spring description driving this simulation.
     #[must_use]
     #[inline]
     pub fn spring(&self) -> &SpringDescription {
         &self.spring
     }
 
+    /// Returns the starting position, in logical pixels.
     #[must_use]
     #[inline]
     pub fn start(&self) -> f32 {
         self.start
     }
 
+    /// Returns the equilibrium (target) position, in logical pixels.
     #[must_use]
     #[inline]
     pub fn end(&self) -> f32 {
         self.end
     }
 
+    /// Returns the initial velocity, in logical pixels per second.
     #[must_use]
     #[inline]
     pub fn initial_velocity(&self) -> f32 {
         self.initial_velocity
     }
 
+    /// Returns whether the simulation is well-formed: a valid spring, finite
+    /// start/end/velocity, and a valid tolerance.
     #[must_use]
     #[inline]
     pub fn is_valid(&self) -> bool {

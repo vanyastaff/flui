@@ -1,8 +1,12 @@
 //! Canvas painting primitives.
 
+/// How a shader (gradient or image) samples beyond its defined bounds.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileMode {
+    /// Edge colors are extended (clamped) beyond the bounds.
+    ///
+    /// Samples outside the gradient or image use the nearest edge color.
     #[default]
     Clamp,
 
@@ -23,9 +27,13 @@ pub enum TileMode {
     Decal,
 }
 
+/// Styles for blur effects in a mask filter.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BlurStyle {
+    /// Blur inside and outside the shape.
+    ///
+    /// This is the typical Gaussian blur applied across the shape's edge.
     #[default]
     Normal,
 
@@ -46,6 +54,7 @@ pub enum BlurStyle {
     Inner,
 }
 
+/// Quality levels for sampling images and scaled textures.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FilterQuality {
@@ -54,6 +63,9 @@ pub enum FilterQuality {
     /// Fastest, but lowest quality. Good for pixel art.
     None,
 
+    /// Bilinear interpolation.
+    ///
+    /// A reasonable quality/performance trade-off; the default.
     #[default]
     Low,
 
@@ -68,9 +80,11 @@ pub enum FilterQuality {
     High,
 }
 
-#[derive(Default)]
+/// Whether to paint a shape's interior, or its outline.
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PaintingStyle {
+    /// Fill the interior of the shape with the paint's color.
     #[default]
     Fill,
 
@@ -78,6 +92,8 @@ pub enum PaintingStyle {
     Stroke,
 }
 
+/// Boolean operations for combining two paths.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathOperation {
     /// Subtract the second path from the first path.
@@ -107,9 +123,14 @@ pub enum PathOperation {
     ReverseDifference,
 }
 
+/// Fill rules that determine which regions of a path are inside it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathFillType {
+    /// The non-zero winding rule.
+    ///
+    /// A point is inside the path if the signed sum of edge crossings
+    /// (winding number) is non-zero.
     #[default]
     NonZero,
 
@@ -119,9 +140,11 @@ pub enum PathFillType {
     EvenOdd,
 }
 
+/// Styles for the endings of unclosed stroked contours.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StrokeCap {
+    /// Begin and end contours with a flat edge and no extension.
     #[default]
     Butt,
 
@@ -132,9 +155,11 @@ pub enum StrokeCap {
     Square,
 }
 
+/// Styles for the joints between stroked line segments.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StrokeJoin {
+    /// Join line segments with a sharp corner, extended to the miter limit.
     #[default]
     Miter,
 
@@ -145,9 +170,13 @@ pub enum StrokeJoin {
     Bevel,
 }
 
-#[derive(Default)]
+/// How a list of vertices is interpreted when drawing a triangle mesh.
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VertexMode {
+    /// Draw each sequence of three vertices as a separate triangle.
+    ///
+    /// Vertices 0, 1, 2 form a triangle, then 3, 4, 5, etc.
     #[default]
     Triangles,
 
@@ -162,23 +191,29 @@ pub enum VertexMode {
     TriangleFan,
 }
 
+/// An opaque identifier for a texture registered with the rendering engine.
+///
+/// The raw value `0` is reserved as the null identifier (see `is_null`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextureId(u64);
 
 impl TextureId {
+    /// Creates a texture identifier wrapping the given raw id.
     #[must_use]
     #[inline]
     pub const fn new(id: u64) -> Self {
         Self(id)
     }
 
+    /// Returns the raw `u64` value of this identifier.
     #[must_use]
     #[inline]
     pub const fn get(self) -> u64 {
         self.0
     }
 
+    /// Returns `true` if this is the null identifier (raw value `0`).
     #[must_use]
     #[inline]
     pub const fn is_null(self) -> bool {
@@ -200,9 +235,11 @@ impl From<TextureId> for u64 {
     }
 }
 
+/// How a list of points is interpreted when drawn to a canvas.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PointMode {
+    /// Draw each point as a separate dot.
     #[default]
     Points,
 
@@ -220,24 +257,29 @@ pub enum PointMode {
 }
 
 impl PointMode {
+    /// Returns `true` if this is `PointMode::Points`.
     #[must_use]
     #[inline]
     pub const fn is_points(&self) -> bool {
         matches!(self, PointMode::Points)
     }
 
+    /// Returns `true` if this is `PointMode::Lines`.
     #[must_use]
     #[inline]
     pub const fn is_lines(&self) -> bool {
         matches!(self, PointMode::Lines)
     }
 
+    /// Returns `true` if this is `PointMode::Polygon`.
     #[must_use]
     #[inline]
     pub const fn is_polygon(&self) -> bool {
         matches!(self, PointMode::Polygon)
     }
 
+    /// Returns the minimum number of points needed to draw anything in this
+    /// mode (1 for points, 2 for lines, 3 for a polygon).
     #[must_use]
     #[inline]
     pub const fn min_points(&self) -> usize {

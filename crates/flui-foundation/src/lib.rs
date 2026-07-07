@@ -135,8 +135,9 @@
 //! - Change notifiers use efficient listener storage
 //! - Atomic flags provide lock-free state management
 
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 #![warn(
-    missing_docs,
     missing_debug_implementations,
     rust_2018_idioms,
     unreachable_pub,

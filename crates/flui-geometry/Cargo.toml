@@ -7,13 +7,12 @@ authors.workspace = true
 license.workspace = true
 description = "Type-safe 2D geometry primitives for FLUI (split from flui-types in D-block PR-C-2)"
 repository.workspace = true
+readme = "README.md"
 keywords = ["geometry", "graphics", "ui", "flui", "math"]
 categories = ["graphics", "mathematics"]
 
-# Geometry-specific lint relaxations — mirrors crates/flui-types/Cargo.toml
-# pre-split. Math/geometry crates legitimately have many single-char names,
-# tolerated truncation casts, similar names (x/y/z), float comparisons (with
-# epsilon checks done at higher levels), and wildcard imports in preludes.
+# Crate-specific lint relaxations live in src/lib.rs next to the code they
+# cover; the manifest inherits [workspace.lints] unmodified.
 [lints]
 workspace = true
 

@@ -1270,6 +1270,10 @@ impl<'a> Sum<&'a DevicePixels> for DevicePixels {
 // String parsing (FromStr)
 // ============================================================================
 
+/// Error returned when a length string fails to parse.
+///
+/// Produced by the [`FromStr`](std::str::FromStr) implementations on unit
+/// types such as [`Pixels`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseLengthError {
     /// The input string that failed to parse.

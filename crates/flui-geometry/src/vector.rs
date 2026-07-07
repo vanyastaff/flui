@@ -335,6 +335,8 @@ where
         }
     }
 
+    /// Returns a normalized (unit length) vector, or `Vec2::ZERO` if the
+    /// length is near zero.
     #[inline]
     #[must_use]
     pub fn normalize(self) -> Vec2<Pixels> {

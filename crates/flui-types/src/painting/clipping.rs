@@ -2,9 +2,12 @@
 
 use crate::geometry::{Offset, Pixels, Rect, Size, px};
 
+/// How a new clip region combines with the current clip.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ClipOp {
+    /// The new region is intersected with the current clip.
+    /// Only pixels inside both regions remain visible.
     #[default]
     Intersect,
     /// The new region is subtracted from the current clip.
@@ -12,6 +15,9 @@ pub enum ClipOp {
     Difference,
 }
 
+/// The quality (and cost) with which content is clipped.
+///
+/// Ordered from cheapest to most expensive; mirrors Flutter's `Clip` enum.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Clip {
@@ -21,6 +27,10 @@ pub enum Clip {
     /// will not exceed the bounds of the box, use this.
     None,
 
+    /// Clip, but do not apply anti-aliasing.
+    ///
+    /// Faster than `AntiAlias`, but jagged on non-axis-aligned edges. This is
+    /// the default and is appropriate for rectangular clips.
     #[default]
     HardEdge,
 
@@ -39,24 +49,29 @@ pub enum Clip {
 }
 
 impl Clip {
+    /// Returns `true` if this mode applies anti-aliasing to clip edges.
     #[must_use]
     #[inline]
     pub const fn is_anti_aliased(&self) -> bool {
         matches!(self, Clip::AntiAlias | Clip::AntiAliasWithSaveLayer)
     }
 
+    /// Returns `true` if this mode saves a layer in addition to clipping.
     #[must_use]
     #[inline]
     pub const fn saves_layer(&self) -> bool {
         matches!(self, Clip::AntiAliasWithSaveLayer)
     }
 
+    /// Returns `true` if this mode performs any clipping at all.
     #[must_use]
     #[inline]
     pub const fn clips(&self) -> bool {
         !matches!(self, Clip::None)
     }
 
+    /// Returns `true` for the cheap modes (`None` and `HardEdge`) that need
+    /// neither anti-aliasing nor a saved layer.
     #[must_use]
     #[inline]
     pub const fn is_efficient(&self) -> bool {
@@ -64,12 +79,14 @@ impl Clip {
     }
 }
 
+/// Widget-level clipping behavior, convertible to a low-level [`Clip`] mode.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ClipBehavior {
     /// No clipping.
     None,
 
+    /// Clip without anti-aliasing; the default.
     #[default]
     HardEdge,
 
@@ -86,6 +103,7 @@ pub enum ClipBehavior {
 }
 
 impl ClipBehavior {
+    /// Converts this behavior to the equivalent low-level [`Clip`] mode.
     #[must_use]
     #[inline]
     pub const fn to_clip(self) -> Clip {
@@ -97,12 +115,14 @@ impl ClipBehavior {
         }
     }
 
+    /// Returns `true` if this behavior performs any clipping at all.
     #[must_use]
     #[inline]
     pub const fn clips(self) -> bool {
         !matches!(self, ClipBehavior::None)
     }
 
+    /// Returns `true` if this behavior applies anti-aliasing to clip edges.
     #[must_use]
     #[inline]
     pub const fn is_anti_aliased(self) -> bool {
@@ -141,6 +161,10 @@ pub trait NotchedShape: std::fmt::Debug {
     ) -> Vec<Offset<Pixels>>;
 }
 
+/// A rectangle with a semi-circular notch cut out of its top edge.
+///
+/// Similar to Flutter's `CircularNotchedRectangle`; used by a bottom app bar
+/// to make room for a circular floating action button.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CircularNotchedRectangle {
@@ -149,12 +173,15 @@ pub struct CircularNotchedRectangle {
 }
 
 impl CircularNotchedRectangle {
+    /// Creates a circular notched rectangle with the default margin (4.0).
     #[must_use]
     #[inline]
     pub const fn new() -> Self {
         Self { margin: 4.0 }
     }
 
+    /// Creates a circular notched rectangle with the given margin around the
+    /// guest.
     #[must_use]
     #[inline]
     pub const fn with_margin(margin: f32) -> Self {
@@ -228,6 +255,8 @@ impl NotchedShape for CircularNotchedRectangle {
     }
 }
 
+/// A [`NotchedShape`] wrapper that scales the guest rectangle around its
+/// center before delegating to the inner shape.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AutomaticNotchedShape<T: NotchedShape> {
@@ -239,12 +268,15 @@ pub struct AutomaticNotchedShape<T: NotchedShape> {
 }
 
 impl<T: NotchedShape> AutomaticNotchedShape<T> {
+    /// Wraps `inner` without scaling the guest (scale factor 1.0).
     #[must_use]
     #[inline]
     pub const fn new(inner: T) -> Self {
         Self { inner, scale: 1.0 }
     }
 
+    /// Wraps `inner`, scaling the guest rectangle by `scale` around its
+    /// center before computing the notch.
     #[must_use]
     #[inline]
     pub const fn with_scale(inner: T, scale: f32) -> Self {

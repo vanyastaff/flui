@@ -4,6 +4,15 @@
 
 use super::{Simulation, Tolerance};
 
+/// A friction (exponential deceleration) simulation: velocity decays as
+/// `v(t) = v₀·e^(−k·t)` toward a finite stopping position.
+///
+/// Positions are in logical pixels, time in seconds, `k` is the decay rate
+/// (see `FrictionSimulation::new` for how this differs from Flutter's drag
+/// coefficient). The simulation is done once the speed drops below the
+/// velocity tolerance; position converges to `final_position` but never
+/// reverses direction.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FrictionSimulation {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -56,6 +65,10 @@ impl FrictionSimulation {
         }
     }
 
+    /// Returns the simulation with its tolerance replaced (builder style).
+    ///
+    /// The velocity tolerance controls when `is_done` reports the motion as
+    /// stopped.
     #[must_use]
     #[inline]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
@@ -63,30 +76,38 @@ impl FrictionSimulation {
         self
     }
 
+    /// Returns the exponential decay rate `k` (per second); higher values
+    /// mean stronger friction.
     #[must_use]
     #[inline]
     pub fn decay_rate(&self) -> f32 {
         self.decay_rate
     }
 
+    /// Returns the position at `t = 0`, in logical pixels.
     #[must_use]
     #[inline]
     pub fn start_position(&self) -> f32 {
         self.position_at_zero
     }
 
+    /// Returns the velocity at `t = 0`, in logical pixels per second.
     #[must_use]
     #[inline]
     pub fn initial_velocity(&self) -> f32 {
         self.velocity_at_zero
     }
 
+    /// Returns the position the simulation converges to as `t → ∞`:
+    /// `x₀ + v₀/k`, in logical pixels.
     #[must_use]
     #[inline]
     pub fn final_position(&self) -> f32 {
         self.position_at_zero + self.velocity_at_zero / self.decay_rate
     }
 
+    /// Returns whether the simulation is well-formed: a positive finite decay
+    /// rate, finite position and velocity, and a valid tolerance.
     #[must_use]
     #[inline]
     pub fn is_valid(&self) -> bool {
@@ -97,6 +118,13 @@ impl FrictionSimulation {
             && self.tolerance.is_valid()
     }
 
+    /// Returns the time, in seconds, at which the velocity decays to
+    /// `target_velocity`.
+    ///
+    /// Returns `Some(f32::INFINITY)` for a target of exactly `0.0` (the decay
+    /// only reaches zero asymptotically), and `None` when the target is
+    /// unreachable: its magnitude exceeds the initial speed, or its sign
+    /// differs from the initial velocity's.
     #[must_use]
     #[inline]
     pub fn time_to_velocity(&self, target_velocity: f32) -> Option<f32> {
@@ -118,6 +146,11 @@ impl FrictionSimulation {
         Some(-ratio.ln() / self.decay_rate)
     }
 
+    /// Returns the signed distance travelled, in logical pixels, until the
+    /// velocity decays to `target_velocity`.
+    ///
+    /// When the target velocity is unreachable, returns the total remaining
+    /// travel (`final_position` minus the start position) instead.
     #[must_use]
     #[inline]
     pub fn distance_to_velocity(&self, target_velocity: f32) -> f32 {
@@ -128,6 +161,10 @@ impl FrictionSimulation {
         }
     }
 
+    /// Returns the acceleration `−k·v(t)` at `time` seconds, in logical
+    /// pixels per second squared.
+    ///
+    /// Its sign always opposes the current velocity (friction decelerates).
     #[must_use]
     #[inline]
     pub fn deceleration(&self, time: f32) -> f32 {
@@ -158,6 +195,15 @@ impl Simulation for FrictionSimulation {
     }
 }
 
+/// A friction simulation whose position stops at a single directional
+/// boundary.
+///
+/// The travel direction is inferred from the sign of the initial velocity;
+/// position is clamped at `boundary` in that direction and velocity reports
+/// `0.0` once the boundary is reached. See
+/// `BoundedFrictionSimulation::new` for the documented divergences from
+/// Flutter's two-bound `BoundedFrictionSimulation`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundedFrictionSimulation {
     // PORT-CHECK-OK-SP3: parallel to flui-animation::simulation::BoundedFrictionSimulation; the two physics layers use distinct Simulation traits (position/velocity here vs x/dx + Send+Sync there). Consolidation tracked.
@@ -206,6 +252,8 @@ impl BoundedFrictionSimulation {
         }
     }
 
+    /// Returns the simulation with the underlying friction simulation's
+    /// tolerance replaced (builder style).
     #[must_use]
     #[inline]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
@@ -213,18 +261,22 @@ impl BoundedFrictionSimulation {
         self
     }
 
+    /// Returns the boundary position, in logical pixels.
     #[must_use]
     #[inline]
     pub fn boundary(&self) -> f32 {
         self.boundary
     }
 
+    /// Returns a reference to the underlying unbounded friction simulation.
     #[must_use]
     #[inline]
     pub fn inner(&self) -> &FrictionSimulation {
         &self.friction
     }
 
+    /// Returns whether the unbounded simulation's final position reaches or
+    /// passes the boundary in the direction of travel.
     #[must_use]
     #[inline]
     pub fn will_hit_boundary(&self) -> bool {
@@ -236,6 +288,10 @@ impl BoundedFrictionSimulation {
         }
     }
 
+    /// Returns whether the unbounded position at `time` has reached or passed
+    /// the boundary in the direction of travel.
+    ///
+    /// When this is `true`, `velocity` reports `0.0`.
     #[must_use]
     #[inline]
     pub fn is_at_boundary(&self, time: f32) -> bool {
@@ -247,6 +303,8 @@ impl BoundedFrictionSimulation {
         }
     }
 
+    /// Returns whether the simulation is well-formed: a valid underlying
+    /// friction simulation and a finite boundary.
     #[must_use]
     #[inline]
     pub fn is_valid(&self) -> bool {

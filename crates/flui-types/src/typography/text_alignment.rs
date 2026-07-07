@@ -2,7 +2,9 @@
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// How text is aligned horizontally within its container.
 pub enum TextAlign {
+    /// Align text to the left edge.
     #[default]
     Left,
     /// Align text to the right edge.
@@ -18,6 +20,9 @@ pub enum TextAlign {
 }
 
 impl TextAlign {
+    /// Resolves `Start`/`End` to `Left`/`Right` for the given text direction.
+    ///
+    /// Direction-independent variants are returned unchanged.
     #[must_use]
     #[inline]
     pub const fn resolve(&self, direction: TextDirection) -> Self {
@@ -34,12 +39,17 @@ impl TextAlign {
         }
     }
 
+    /// Returns `true` if this alignment depends on the text direction (`Start` or `End`).
     #[must_use]
     #[inline]
     pub const fn is_direction_dependent(&self) -> bool {
         matches!(self, Self::Start | Self::End)
     }
 
+    /// Returns the horizontal alignment factor: 0.0 (left), 0.5 (center), or 1.0 (right).
+    ///
+    /// `Start` maps to 0.0 and `End` to 1.0 without direction resolution;
+    /// call `resolve` first for RTL-aware alignment.
     #[must_use]
     #[inline]
     pub const fn horizontal_factor(&self) -> f32 {
@@ -53,9 +63,11 @@ impl TextAlign {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// How text is aligned vertically within its container.
 pub enum TextAlignVertical {
     /// Align text to the top.
     Top,
+    /// Center text vertically.
     #[default]
     Center,
     /// Align text to the bottom.
@@ -63,6 +75,7 @@ pub enum TextAlignVertical {
 }
 
 impl TextAlignVertical {
+    /// Returns the vertical alignment factor: 0.0 (top), 0.5 (center), or 1.0 (bottom).
     #[must_use]
     #[inline]
     pub const fn vertical_factor(&self) -> f32 {
@@ -79,8 +92,10 @@ pub use crate::layout::TextBaseline;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// The directionality in which text flows.
 pub enum TextDirection {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    /// Left-to-right text direction.
     #[default]
     Ltr,
     /// Right-to-left text direction.
@@ -88,18 +103,21 @@ pub enum TextDirection {
 }
 
 impl TextDirection {
+    /// Returns `true` if the direction is left-to-right.
     #[must_use]
     #[inline]
     pub const fn is_ltr(&self) -> bool {
         matches!(self, Self::Ltr)
     }
 
+    /// Returns `true` if the direction is right-to-left.
     #[must_use]
     #[inline]
     pub const fn is_rtl(&self) -> bool {
         matches!(self, Self::Rtl)
     }
 
+    /// Returns the opposite direction (`Ltr` <-> `Rtl`).
     #[must_use]
     #[inline]
     pub const fn opposite(&self) -> Self {
@@ -112,7 +130,10 @@ impl TextDirection {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Which side of a text position the cursor associates with when the
+/// position is ambiguous (e.g. at a line break or bidi boundary).
 pub enum TextAffinity {
+    /// Cursor has affinity for the upstream (previous) character.
     #[default]
     Upstream,
     /// Cursor has affinity for the downstream (next) character.

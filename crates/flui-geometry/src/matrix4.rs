@@ -339,6 +339,8 @@ impl Matrix4 {
         Self::skew_2d(skew_x, skew_y)
     }
 
+    /// Returns whether this is an identity matrix, using a default epsilon of
+    /// `1e-5`.
     #[inline]
     pub fn is_identity(&self) -> bool {
         self.is_identity_with_epsilon(1e-5)
@@ -354,6 +356,8 @@ impl Matrix4 {
         true
     }
 
+    /// Returns whether this matrix represents only a translation, using
+    /// `f32::EPSILON` as the comparison tolerance.
     #[inline]
     pub fn is_translation_only(&self) -> bool {
         self.is_translation_only_with_epsilon(f32::EPSILON)

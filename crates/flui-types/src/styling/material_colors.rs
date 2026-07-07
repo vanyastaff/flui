@@ -18,6 +18,7 @@ use super::color::Color;
 /// let primary = MaterialColors::BLUE_500;
 /// let accent = MaterialColors::PINK_A200;
 /// ```
+#[derive(Debug)]
 pub struct MaterialColors;
 
 impl MaterialColors {

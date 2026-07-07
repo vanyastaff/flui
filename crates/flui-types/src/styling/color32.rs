@@ -27,6 +27,12 @@
 
 use super::Color;
 
+/// A packed 32-bit sRGB color with premultiplied alpha.
+///
+/// Stored as `[r, g, b, a]` bytes where the RGB channels are already
+/// multiplied by alpha. Alpha of 0 with non-zero RGB encodes an additive
+/// color. See the module docs for the premultiplication and gamma-space
+/// trade-offs; use [`Color`] for straight-alpha colors.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Color32([u8; 4]);
@@ -58,21 +64,29 @@ impl std::ops::IndexMut<usize> for Color32 {
 impl Color32 {
     // ===== Constructors =====
 
+    /// Creates a fully opaque color from RGB values.
     #[inline]
     pub const fn from_rgb(r: u8, g: u8, b: u8) -> Self {
         Self([r, g, b, 255])
     }
 
+    /// Creates an additive color (alpha = 0) from RGB values.
+    ///
+    /// When blended, an additive color adds to the background instead of
+    /// covering it.
     #[inline]
     pub const fn from_rgb_additive(r: u8, g: u8, b: u8) -> Self {
         Self([r, g, b, 0])
     }
 
+    /// Creates a color from RGBA values that are already premultiplied.
     #[inline]
     pub const fn from_rgba_premultiplied(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self([r, g, b, a])
     }
 
+    /// Creates a color from straight (unmultiplied) RGBA values,
+    /// premultiplying the RGB channels by alpha.
     #[inline]
     pub fn from_rgba_unmultiplied(r: u8, g: u8, b: u8, a: u8) -> Self {
         match a {
@@ -90,22 +104,29 @@ impl Color32 {
         }
     }
 
+    /// Creates an opaque gray with all RGB channels set to `l`.
     #[inline]
     pub const fn from_gray(l: u8) -> Self {
         Self([l, l, l, 255])
     }
 
+    /// Creates black with the given alpha (premultiplied black keeps RGB at
+    /// zero).
     #[inline]
     pub const fn from_black_alpha(a: u8) -> Self {
         Self([0, 0, 0, a])
     }
 
+    /// Creates white with the given alpha (premultiplied, so all four
+    /// channels equal `a`).
     #[inline]
     pub fn from_white_alpha(a: u8) -> Self {
         // Premultiply: white * alpha = (a, a, a, a)
         Self([a, a, a, a])
     }
 
+    /// Creates an additive gray (alpha = 0) that brightens the background by
+    /// `l`.
     #[inline]
     pub const fn from_additive_luminance(l: u8) -> Self {
         Self([l, l, l, 0])
@@ -113,21 +134,25 @@ impl Color32 {
 
     // ===== Component accessors =====
 
+    /// Returns the red channel (premultiplied by alpha).
     #[inline]
     pub const fn r(&self) -> u8 {
         self.0[0]
     }
 
+    /// Returns the green channel (premultiplied by alpha).
     #[inline]
     pub const fn g(&self) -> u8 {
         self.0[1]
     }
 
+    /// Returns the blue channel (premultiplied by alpha).
     #[inline]
     pub const fn b(&self) -> u8 {
         self.0[2]
     }
 
+    /// Returns the alpha channel.
     #[inline]
     pub const fn a(&self) -> u8 {
         self.0[3]
@@ -135,16 +160,21 @@ impl Color32 {
 
     // ===== Checks =====
 
+    /// Returns `true` if the alpha channel is 255 (fully opaque).
     #[inline]
     pub const fn is_opaque(&self) -> bool {
         self.a() == 255
     }
 
+    /// Returns `true` if the alpha channel is 0 (fully transparent or
+    /// additive).
     #[inline]
     pub const fn is_transparent(&self) -> bool {
         self.a() == 0
     }
 
+    /// Returns `true` if this is an additive color: alpha is 0 but at least
+    /// one RGB channel is non-zero.
     #[inline]
     pub fn is_additive(&self) -> bool {
         self.a() == 0 && (self.r() != 0 || self.g() != 0 || self.b() != 0)
@@ -152,16 +182,22 @@ impl Color32 {
 
     // ===== Conversions =====
 
+    /// Returns the premultiplied RGBA components as a `[r, g, b, a]` array.
     #[inline]
     pub const fn to_array(&self) -> [u8; 4] {
         [self.r(), self.g(), self.b(), self.a()]
     }
 
+    /// Returns the premultiplied RGBA components as a `(r, g, b, a)` tuple.
     #[inline]
     pub const fn to_tuple(&self) -> (u8, u8, u8, u8) {
         (self.r(), self.g(), self.b(), self.a())
     }
 
+    /// Converts to straight (unmultiplied) RGBA by dividing the RGB channels
+    /// by alpha.
+    ///
+    /// Lossy for partially transparent colors due to `u8` rounding.
     #[inline]
     pub fn to_rgba_unmultiplied(&self) -> [u8; 4] {
         let [r, g, b, a] = self.to_array();
@@ -179,6 +215,8 @@ impl Color32 {
         }
     }
 
+    /// Returns the premultiplied RGBA components as `f32` values in
+    /// `0.0..=1.0`.
     #[inline]
     pub fn to_rgba_f32(&self) -> [f32; 4] {
         [
@@ -191,12 +229,16 @@ impl Color32 {
 
     // ===== Modifiers =====
 
+    /// Returns this color with alpha forced to 255, keeping the RGB channels
+    /// unchanged.
     #[inline]
     pub const fn to_opaque(self) -> Self {
         let [r, g, b, _] = self.to_array();
         Self([r, g, b, 255])
     }
 
+    /// Returns this color with alpha forced to 0, turning it into an additive
+    /// color.
     #[inline]
     pub const fn to_additive(self) -> Self {
         let [r, g, b, _] = self.to_array();
@@ -205,6 +247,10 @@ impl Color32 {
 
     // ===== Operations =====
 
+    /// Multiplies all four channels by `factor` in gamma space, with
+    /// rounding.
+    ///
+    /// Debug-asserts that `factor` is finite and non-negative.
     #[inline]
     pub fn gamma_multiply(self, factor: f32) -> Self {
         debug_assert!(
@@ -220,6 +266,8 @@ impl Color32 {
         ])
     }
 
+    /// Multiplies all four channels by `factor / 255` in gamma space, using
+    /// integer arithmetic with rounding.
     #[inline]
     pub fn gamma_multiply_u8(self, factor: u8) -> Self {
         let Self([r, g, b, a]) = self;
@@ -278,16 +326,20 @@ impl Color32 {
         background.gamma_multiply_u8(255 - self.a()) + self
     }
 
+    /// Returns the perceived brightness in `0.0..=1.0`, using Rec. 601 luma
+    /// coefficients on the gamma-encoded channels.
     #[inline]
     pub fn intensity(&self) -> f32 {
         (self.r() as f32 * 0.299 + self.g() as f32 * 0.587 + self.b() as f32 * 0.114) / 255.0
     }
 
+    /// Returns `true` if the perceived brightness is below 0.5.
     #[inline]
     pub fn is_dark(&self) -> bool {
         self.intensity() < 0.5
     }
 
+    /// Returns `true` if the perceived brightness is 0.5 or above.
     #[inline]
     pub fn is_light(&self) -> bool {
         self.intensity() >= 0.5
