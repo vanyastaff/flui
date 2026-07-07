@@ -42,21 +42,37 @@ pub use tolerance::Tolerance;
 /// ```
 pub trait Simulation {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    /// Returns the position at `time` seconds, in logical pixels.
     #[must_use]
     fn position(&self, time: f32) -> f32;
 
+    /// Returns the velocity at `time` seconds, in logical pixels per second.
     #[must_use]
     fn velocity(&self, time: f32) -> f32;
 
+    /// Returns whether the simulation has settled at `time` seconds.
+    ///
+    /// Once this returns `true` the caller may stop sampling; what "settled"
+    /// means (position and/or velocity within [`Tolerance`]) is defined by
+    /// each implementation.
     #[must_use]
     fn is_done(&self, time: f32) -> bool;
 
+    /// Returns the tolerance used to decide when this simulation is done.
+    ///
+    /// Defaults to `Tolerance::default()`.
     #[must_use]
     fn tolerance(&self) -> Tolerance {
         Tolerance::default()
     }
 }
 
+/// A simulation that clamps another simulation's position to `[min, max]`.
+///
+/// Position is clamped on every sample; velocity reports `0.0` whenever the
+/// underlying (unclamped) position is at or beyond a boundary, so callers see
+/// the object as pinned rather than still moving. `is_done` and `tolerance`
+/// delegate to the inner simulation unchanged.
 #[derive(Debug, Clone)]
 pub struct ClampedSimulation<S: Simulation> {
     // PORT-CHECK-OK-SP3: parallel to flui-animation::simulation::ClampedSimulation; the two physics layers use distinct Simulation traits (position/velocity here vs x/dx + Send+Sync there). Consolidation tracked.
@@ -71,6 +87,8 @@ pub struct ClampedSimulation<S: Simulation> {
 }
 
 impl<S: Simulation> ClampedSimulation<S> {
+    /// Creates a clamped simulation wrapping `simulation`, limiting its
+    /// position to `[min, max]`.
     #[must_use]
     pub fn new(simulation: S, min: f32, max: f32) -> Self {
         Self {
@@ -80,26 +98,34 @@ impl<S: Simulation> ClampedSimulation<S> {
         }
     }
 
+    /// Returns the minimum allowed position, in logical pixels.
     #[must_use]
     pub fn min(&self) -> f32 {
         self.min
     }
 
+    /// Returns the maximum allowed position, in logical pixels.
     #[must_use]
     pub fn max(&self) -> f32 {
         self.max
     }
 
+    /// Returns a reference to the wrapped simulation.
     #[must_use]
     pub fn inner(&self) -> &S {
         &self.simulation
     }
 
+    /// Consumes the wrapper and returns the wrapped simulation.
     #[must_use]
     pub fn into_inner(self) -> S {
         self.simulation
     }
 
+    /// Returns whether the unclamped position at `time` is at or beyond
+    /// either boundary.
+    ///
+    /// When this is `true`, `velocity` reports `0.0`.
     #[must_use]
     pub fn is_at_boundary(&self, time: f32) -> bool {
         let unclamped_pos = self.simulation.position(time);

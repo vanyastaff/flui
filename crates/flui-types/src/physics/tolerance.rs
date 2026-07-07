@@ -3,6 +3,13 @@
 //! This module provides types for defining tolerances used to determine
 //! when a simulation has reached a stable state.
 
+/// Structure that specifies maximum allowable magnitudes for distances,
+/// durations, and velocity differences to be considered equal.
+///
+/// Simulations use these thresholds to decide when they are done: a value
+/// whose magnitude is strictly below the corresponding epsilon is treated as
+/// zero. Distances are in logical pixels, velocities in logical pixels per
+/// second, times in seconds. Mirrors Flutter's `Tolerance`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Tolerance {
@@ -54,6 +61,8 @@ impl Tolerance {
         time: 0.01,
     };
 
+    /// Creates a tolerance from explicit distance (logical pixels), velocity
+    /// (logical pixels per second), and time (seconds) epsilons.
     #[must_use]
     #[inline]
     pub const fn new(distance: f32, velocity: f32, time: f32) -> Self {
@@ -64,36 +73,48 @@ impl Tolerance {
         }
     }
 
+    /// Returns whether all three epsilons are finite (not NaN or infinite).
     #[must_use]
     #[inline]
     pub fn is_finite(&self) -> bool {
         self.distance.is_finite() && self.velocity.is_finite() && self.time.is_finite()
     }
 
+    /// Returns whether all three epsilons are finite and non-negative.
     #[must_use]
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.is_finite() && self.distance >= 0.0 && self.velocity >= 0.0 && self.time >= 0.0
     }
 
+    /// Returns whether `distance` is negligible: its magnitude is strictly
+    /// below the distance epsilon.
     #[must_use]
     #[inline]
     pub fn is_distance_within(&self, distance: f32) -> bool {
         distance.abs() < self.distance
     }
 
+    /// Returns whether `velocity` is negligible: its magnitude is strictly
+    /// below the velocity epsilon.
     #[must_use]
     #[inline]
     pub fn is_velocity_within(&self, velocity: f32) -> bool {
         velocity.abs() < self.velocity
     }
 
+    /// Returns whether `time` is negligible: its magnitude is strictly below
+    /// the time epsilon.
     #[must_use]
     #[inline]
     pub fn is_time_within(&self, time: f32) -> bool {
         time.abs() < self.time
     }
 
+    /// Returns a copy with all three epsilons multiplied by `factor`.
+    ///
+    /// Use a factor greater than `1.0` to relax the tolerance, or less than
+    /// `1.0` to tighten it.
     #[must_use]
     #[inline]
     pub fn scale(self, factor: f32) -> Self {
@@ -104,6 +125,8 @@ impl Tolerance {
         }
     }
 
+    /// Creates a tolerance from distance and velocity epsilons, using the
+    /// default time epsilon (`0.001` seconds).
     #[must_use]
     #[inline]
     pub const fn from_distance_velocity(distance: f32, velocity: f32) -> Self {

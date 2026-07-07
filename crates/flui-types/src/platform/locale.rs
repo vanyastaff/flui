@@ -2,6 +2,11 @@
 
 use std::fmt;
 
+/// An identifier for a user's language and regional preferences.
+///
+/// Mirrors Flutter's `Locale`: a language code plus optional country
+/// and script subtags (e.g. `en_US`, `zh_Hans_CN`), used for
+/// localization and text-direction resolution.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Locale {
     /// The language code (e.g., "en", "es", "fr")
@@ -60,24 +65,31 @@ impl Locale {
         }
     }
 
+    /// Returns the language code (e.g. `"en"`).
     #[must_use]
     #[inline]
     pub fn language(&self) -> &str {
         &self.language
     }
 
+    /// Returns the country/region code, if any (e.g. `"US"`).
     #[must_use]
     #[inline]
     pub fn country(&self) -> Option<&str> {
         self.country.as_deref()
     }
 
+    /// Returns the script code, if any (e.g. `"Hans"`).
     #[must_use]
     #[inline]
     pub fn script(&self) -> Option<&str> {
         self.script.as_deref()
     }
 
+    /// Formats this locale as an underscore-separated language tag
+    /// (e.g. `"en_US"`, or just `"en"` when there is no country).
+    ///
+    /// Note: the script code is not included in the output.
     #[must_use]
     #[inline]
     pub fn to_language_tag(&self) -> String {
@@ -88,12 +100,20 @@ impl Locale {
         }
     }
 
+    /// Returns `true` if this locale's text direction is left-to-right.
+    ///
+    /// The complement of [`is_rtl`](Self::is_rtl).
     #[must_use]
     #[inline]
     pub fn is_ltr(&self) -> bool {
         !self.is_rtl()
     }
 
+    /// Returns `true` if this locale's text direction is right-to-left.
+    ///
+    /// Determined by the language code against a fixed set of RTL
+    /// languages (Arabic, Hebrew, Persian, Urdu, Yiddish); the script
+    /// code is not consulted.
     #[must_use]
     #[inline]
     pub fn is_rtl(&self) -> bool {
@@ -103,6 +123,11 @@ impl Locale {
         )
     }
 
+    /// Parses a locale from a language tag with `-` or `_` separators.
+    ///
+    /// Accepts `"en"`, `"en_US"`/`"en-US"`, `"zh_Hans"` (a 4-character
+    /// second subtag is treated as a script), and `"zh_Hans_CN"`.
+    /// Returns `None` for empty input or more than three subtags.
     #[must_use]
     #[inline]
     pub fn from_language_tag(tag: &str) -> Option<Self> {
