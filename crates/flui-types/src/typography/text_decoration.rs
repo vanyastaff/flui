@@ -2,6 +2,11 @@
 
 use crate::Color;
 
+/// A linear decoration to draw near the text (underline, overline, line-through).
+///
+/// Decorations are stored as a bitfield, so multiple decorations can be
+/// combined via [`TextDecoration::combine`] (mirroring Flutter's
+/// `TextDecoration.combine`).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextDecoration {
     /// Bitfield of decoration flags.
@@ -18,12 +23,14 @@ impl TextDecoration {
     /// Line-through decoration.
     pub const LINE_THROUGH: Self = Self { flags: 1 << 2 };
 
+    /// Creates a decoration from a raw bitfield of decoration flags.
     #[must_use]
     #[inline]
     pub const fn new(flags: u8) -> Self {
         Self { flags }
     }
 
+    /// Combines multiple decorations into one by OR-ing their flags.
     #[must_use]
     #[inline]
     pub const fn combine(decorations: &[Self]) -> Self {
@@ -36,24 +43,28 @@ impl TextDecoration {
         Self { flags }
     }
 
+    /// Returns `true` if the underline decoration is set.
     #[must_use]
     #[inline]
     pub const fn has_underline(&self) -> bool {
         self.flags & Self::UNDERLINE.flags != 0
     }
 
+    /// Returns `true` if the overline decoration is set.
     #[must_use]
     #[inline]
     pub const fn has_overline(&self) -> bool {
         self.flags & Self::OVERLINE.flags != 0
     }
 
+    /// Returns `true` if the line-through decoration is set.
     #[must_use]
     #[inline]
     pub const fn has_line_through(&self) -> bool {
         self.flags & Self::LINE_THROUGH.flags != 0
     }
 
+    /// Returns `true` if no decoration is set.
     #[must_use]
     #[inline]
     pub const fn is_none(&self) -> bool {
@@ -70,7 +81,9 @@ impl Default for TextDecoration {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// The style in which a text decoration line is drawn.
 pub enum TextDecorationStyle {
+    /// A single solid line.
     #[default]
     Solid,
     /// Double line.
@@ -85,7 +98,9 @@ pub enum TextDecorationStyle {
 
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// How visual text overflow is handled.
 pub enum TextOverflow {
+    /// Clip the overflowing text at its container boundary.
     #[default]
     Clip,
     /// Fade the overflowing text to transparent.
@@ -98,7 +113,9 @@ pub enum TextOverflow {
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// How the width of a text paragraph is measured.
 pub enum TextWidthBasis {
+    /// Width fills the parent's width constraint (multiline text takes the full width).
     #[default]
     Parent,
     /// Width is based on the longest line.
@@ -107,6 +124,8 @@ pub enum TextWidthBasis {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// How the `height` line-height multiplier applies to the ascent of the
+/// first line and the descent of the last line of a paragraph.
 pub struct TextHeightBehavior {
     /// Whether to apply height to the first line ascent.
     pub apply_height_to_first_ascent: bool,
@@ -155,13 +174,18 @@ impl TextHeightBehavior {
 
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// How the extra vertical space added by the `height` multiplier is
+/// distributed above and below the text.
 pub enum TextLeadingDistribution {
+    /// Distribute leading according to the font's ascent/descent ratio.
     #[default]
     Proportional,
     /// Leading is distributed evenly.
     Even,
 }
 
+/// Full decoration description: which lines to draw plus their style,
+/// color, and thickness.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextDecorationConfig {
     /// The decoration type.
@@ -187,6 +211,7 @@ impl Default for TextDecorationConfig {
 }
 
 impl TextDecorationConfig {
+    /// Creates a config for the given decoration with default style, color, and thickness.
     #[must_use]
     #[inline]
     pub fn new(decoration: TextDecoration) -> Self {
@@ -196,6 +221,7 @@ impl TextDecorationConfig {
         }
     }
 
+    /// Sets the decoration style.
     #[must_use]
     #[inline]
     pub fn with_style(mut self, style: TextDecorationStyle) -> Self {
@@ -203,6 +229,7 @@ impl TextDecorationConfig {
         self
     }
 
+    /// Sets the decoration color.
     #[must_use]
     #[inline]
     pub fn with_color(mut self, color: Color) -> Self {
@@ -210,6 +237,7 @@ impl TextDecorationConfig {
         self
     }
 
+    /// Sets the decoration thickness.
     #[must_use]
     #[inline]
     pub fn with_thickness(mut self, thickness: f64) -> Self {

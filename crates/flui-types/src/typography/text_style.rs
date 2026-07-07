@@ -4,6 +4,7 @@ use crate::Color;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// The thickness of glyphs used to draw text, on the standard 100–900 scale.
 pub enum FontWeight {
     /// Thin (100)
     W100,
@@ -32,6 +33,7 @@ impl FontWeight {
     /// Bold font weight (700).
     pub const BOLD: Self = Self::W700;
 
+    /// Returns the numeric weight value (100 for `W100` through 900 for `W900`).
     #[must_use]
     #[inline]
     pub const fn value(&self) -> u16 {
@@ -48,12 +50,17 @@ impl FontWeight {
         }
     }
 
+    /// Returns `true` if this weight renders as bold (600 or heavier).
     #[must_use]
     #[inline]
     pub const fn is_bold(&self) -> bool {
         self.value() >= 600
     }
 
+    /// Converts a CSS numeric weight to the nearest `FontWeight` variant.
+    ///
+    /// Values are bucketed to the closest hundred; out-of-range values
+    /// clamp to `W100` or `W900`.
     #[must_use]
     #[inline]
     pub const fn from_css(value: i32) -> Self {
@@ -80,7 +87,9 @@ impl Default for FontWeight {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Whether glyphs are drawn upright or slanted.
 pub enum FontStyle {
+    /// Upright (non-italic) font style.
     #[default]
     Normal,
     /// Italic font style.
@@ -89,6 +98,8 @@ pub enum FontStyle {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// An OpenType feature setting (e.g. `"smcp"` for small caps) applied
+/// during text shaping.
 pub struct FontFeature {
     /// OpenType feature tag (4 characters).
     pub feature: String,
@@ -121,6 +132,8 @@ impl FontFeature {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// A variable-font axis setting (e.g. `"wght"` for weight) applied
+/// during text shaping.
 pub struct FontVariation {
     /// Variation axis tag (4 characters).
     pub axis: String,
@@ -139,6 +152,9 @@ impl FontVariation {
     }
 }
 
+/// Defines a strut: a minimum line-height scaffold that vertical text
+/// metrics are laid out against, independent of the actual glyphs
+/// (mirrors Flutter's `StrutStyle`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StrutStyle {
     /// Font family name.
@@ -196,6 +212,12 @@ impl StrutStyle {
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
+/// Visual and layout styling to apply to a span of text (mirrors
+/// Flutter's `TextStyle`).
+///
+/// All fields are optional; unset fields inherit from an enclosing style
+/// via `merge`. Use `layout_affecting_eq` to compare only the fields that
+/// influence glyph shaping and layout.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextStyle {
     /// Text color.
@@ -382,6 +404,7 @@ impl TextStyle {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// A single shadow cast by text.
 pub struct TextShadow {
     /// Shadow color.
     pub color: Color,
