@@ -5,7 +5,7 @@
 /// Mirrors Flutter's `DeviceOrientation` enum. The four variants describe
 /// where the top of the device is pointing relative to its natural
 /// portrait position.
-#[derive(Default)]
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DeviceOrientation {
     /// Portrait orientation with the top of the device up (the default).

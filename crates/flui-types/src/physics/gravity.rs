@@ -12,6 +12,7 @@ use super::{Simulation, Tolerance};
 /// in the direction implied by the sign of `acceleration`, or of `velocity`
 /// when acceleration is zero — see `GravitySimulation::new` for how this
 /// diverges from Flutter's magnitude-threshold `endDistance`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GravitySimulation {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked

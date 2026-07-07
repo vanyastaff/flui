@@ -372,6 +372,7 @@ impl PaintStyle {
 }
 
 /// Builder for constructing `Paint` instances.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaintBuilder {
     paint: Paint,

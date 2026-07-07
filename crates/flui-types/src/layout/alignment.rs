@@ -44,7 +44,7 @@ impl MainAxisSize {
 /// (the horizontal axis for `Row`, the vertical axis for `Column`).
 ///
 /// Mirrors Flutter's `MainAxisAlignment`.
-#[derive(Default)]
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisAlignment {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -156,7 +156,7 @@ impl MainAxisAlignment {
 /// (the vertical axis for `Row`, the horizontal axis for `Column`).
 ///
 /// Mirrors Flutter's `CrossAxisAlignment`.
-#[derive(Default)]
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CrossAxisAlignment {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked

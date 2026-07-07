@@ -52,6 +52,7 @@ pub enum MaterialType {
 /// Custom elevations can be used by specifying f32 values directly.
 ///
 /// Reference: Material Design 3 elevation scale
+#[derive(Debug)]
 pub struct Elevation;
 
 impl Elevation {

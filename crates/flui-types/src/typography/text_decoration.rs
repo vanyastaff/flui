@@ -7,6 +7,7 @@ use crate::Color;
 /// Decorations are stored as a bitfield, so multiple decorations can be
 /// combined via [`TextDecoration::combine`] (mirroring Flutter's
 /// `TextDecoration.combine`).
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextDecoration {
     /// Bitfield of decoration flags.
@@ -96,7 +97,7 @@ pub enum TextDecorationStyle {
     Wavy,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How visual text overflow is handled.
 pub enum TextOverflow {
@@ -172,7 +173,7 @@ impl TextHeightBehavior {
     };
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How the extra vertical space added by the `height` multiplier is
 /// distributed above and below the text.
@@ -186,6 +187,7 @@ pub enum TextLeadingDistribution {
 
 /// Full decoration description: which lines to draw plus their style,
 /// color, and thickness.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextDecorationConfig {
     /// The decoration type.

@@ -10,6 +10,7 @@ use super::{Simulation, Tolerance};
 /// Classified from the discriminant `c² − 4mk` (see
 /// `SpringDescription::spring_type`): ζ < 1 is underdamped, ζ = 1 is
 /// critically damped, ζ > 1 is overdamped. Mirrors Flutter's `SpringType`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SpringType {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -30,6 +31,7 @@ pub enum SpringType {
 /// Describes the spring itself, independent of any particular motion; pair
 /// it with a start/end position and initial velocity via `SpringSimulation`.
 /// Mirrors Flutter's `SpringDescription`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpringDescription {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -216,6 +218,7 @@ impl SpringDescription {
 /// Positions are in logical pixels, time in seconds. The simulation is done
 /// once both the distance to `end` and the velocity are within tolerance.
 /// Mirrors Flutter's `SpringSimulation`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpringSimulation {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked

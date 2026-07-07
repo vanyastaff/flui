@@ -7,6 +7,7 @@ use std::fmt;
 /// Mirrors Flutter's `Locale`: a language code plus optional country
 /// and script subtags (e.g. `en_US`, `zh_Hans_CN`), used for
 /// localization and text-direction resolution.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Locale {
     /// The language code (e.g., "en", "es", "fr")

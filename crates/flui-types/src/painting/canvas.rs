@@ -81,7 +81,7 @@ pub enum FilterQuality {
 }
 
 /// Whether to paint a shape's interior, or its outline.
-#[derive(Default)]
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PaintingStyle {
     /// Fill the interior of the shape with the paint's color.
@@ -93,6 +93,7 @@ pub enum PaintingStyle {
 }
 
 /// Boolean operations for combining two paths.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathOperation {
     /// Subtract the second path from the first path.
@@ -170,7 +171,7 @@ pub enum StrokeJoin {
 }
 
 /// How a list of vertices is interpreted when drawing a triangle mesh.
-#[derive(Default)]
+#[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VertexMode {
     /// Draw each sequence of three vertices as a separate triangle.

@@ -85,8 +85,6 @@
 
 // Ship bar (wave 1): every public item is documented; keep it that way.
 #![deny(missing_docs)]
-#![allow(missing_debug_implementations)]
-// TODO(ship-wave-1): add Debug impls (28 types), then delete
 // Math-crate idiom shared with flui-geometry (see its lib.rs): permanent
 // crate-specific relaxations of workspace pedantic lints for math-heavy code.
 // (The float-comparison / numeric-cast family is allowed workspace-wide.)

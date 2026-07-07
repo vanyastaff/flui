@@ -65,6 +65,7 @@ impl Default for TextPosition {
 ///
 /// Represents a contiguous span of text characters. Start is inclusive, end is
 /// exclusive.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextRange {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -190,6 +191,7 @@ impl Default for TextRange {
 /// Represents a text selection with separate tracking of where it started
 /// (base) and where it currently ends (extent). This allows for directional
 /// selections.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextSelection {
     /// Base position (where selection started).
@@ -324,6 +326,7 @@ impl Default for TextSelection {
 ///
 /// Represents the rectangular bounds of text with directional information
 /// for handling bidirectional text layout.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextBox {
     /// Bounding rectangle.
@@ -395,6 +398,7 @@ impl TextBox {
 ///
 /// Contains rendering information for a single glyph including its ID,
 /// Unicode code point, bounding box, and advance width.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GlyphInfo {
     /// Glyph ID in the font.
@@ -467,6 +471,7 @@ impl GlyphInfo {
 ///
 /// Contains comprehensive layout information for a text line including
 /// dimensions, baseline, and text range information.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineMetrics {
     /// Whether this line ends with a hard break.

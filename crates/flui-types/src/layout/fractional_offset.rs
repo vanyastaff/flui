@@ -9,6 +9,7 @@
 /// Mirrors Flutter's `FractionalOffset`. Unlike `Alignment`, which is
 /// centered at (0, 0), coordinates run from 0.0 to 1.0 with (0, 0) at
 /// the top-left corner and (1, 1) at the bottom-right corner.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FractionalOffset {
     /// The distance fraction in the horizontal direction.

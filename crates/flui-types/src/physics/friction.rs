@@ -12,6 +12,7 @@ use super::{Simulation, Tolerance};
 /// coefficient). The simulation is done once the speed drops below the
 /// velocity tolerance; position converges to `final_position` but never
 /// reverses direction.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FrictionSimulation {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -202,6 +203,7 @@ impl Simulation for FrictionSimulation {
 /// `0.0` once the boundary is reached. See
 /// `BoundedFrictionSimulation::new` for the documented divergences from
 /// Flutter's two-bound `BoundedFrictionSimulation`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundedFrictionSimulation {
     // PORT-CHECK-OK-SP3: parallel to flui-animation::simulation::BoundedFrictionSimulation; the two physics layers use distinct Simulation traits (position/velocity here vs x/dx + Send+Sync there). Consolidation tracked.
