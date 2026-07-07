@@ -1022,7 +1022,7 @@ impl std::fmt::Debug for BuildOwner {
         f.debug_struct("BuildOwner")
             .field("dirty_count", &self.dirty_elements.len())
             .field("global_keys", &self.global_keys.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

@@ -567,7 +567,7 @@ where
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
             .field("has_pipeline_owner", &self.pipeline_owner.is_some())
             .field("parent_render_id", &self.parent_render_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

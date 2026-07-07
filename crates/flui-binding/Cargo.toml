@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme = "README.md"
 description = "Deterministic headless frame driver (pump_frame) over the gesture arena + virtual clock for FLUI"
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]

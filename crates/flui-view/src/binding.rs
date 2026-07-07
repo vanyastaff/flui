@@ -1455,7 +1455,7 @@ impl std::fmt::Debug for WidgetsBinding {
             .field("dirty_count", &inner.build_owner.dirty_count())
             .field("element_count", &inner.element_tree.len())
             .field("observer_count", &inner.observers.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

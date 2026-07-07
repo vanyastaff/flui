@@ -63,23 +63,12 @@
 //! }
 //! ```
 
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    rust_2018_idioms,
-    clippy::all,
-    clippy::pedantic
-)]
-#![allow(
-    clippy::module_name_repetitions,
-    clippy::must_use_candidate,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::doc_markdown,
-    clippy::module_inception,
-    clippy::missing_fields_in_debug,
-    clippy::bool_to_int_with_if
-)]
+// Lint levels come from `[workspace.lints]`. Ship bar (wave 3): every public
+// item is documented; keep it that way.
+#![deny(missing_docs)]
+// `element/element.rs`, `view/view.rs`: a one-type family module named after
+// its type is the catalog's house style (matches flui-widgets/flui-objects).
+#![allow(clippy::module_inception)]
 
 // ============================================================================
 // Modules
