@@ -51,23 +51,8 @@
 #![allow(clippy::type_complexity)]
 // Some render objects have many configuration parameters
 #![allow(clippy::too_many_arguments)]
-// Tracked ship-quality debt:
-#![allow(missing_debug_implementations)] // TODO(ship-wave-3): add Debug impls (15 types), then delete
-#![allow(
-    clippy::default_trait_access,
-    clippy::format_push_string,
-    clippy::manual_let_else,
-    clippy::many_single_char_names,
-    clippy::map_unwrap_or,
-    clippy::match_same_arms,
-    clippy::match_wildcard_for_single_variants,
-    clippy::missing_fields_in_debug,
-    clippy::should_panic_without_expect,
-    clippy::struct_field_names,
-    clippy::unreadable_literal,
-    clippy::unused_self,
-    clippy::used_underscore_binding
-)] // TODO(ship-wave-3): burn down per-lint, then delete
+// Ship bar (wave 3): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 pub mod binding;
 pub mod constraints;

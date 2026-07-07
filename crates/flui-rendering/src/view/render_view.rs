@@ -85,7 +85,7 @@ impl Debug for RenderView {
             .field("configuration", &self.configuration)
             .field("size", &self.size)
             .field("has_layer", &self.layer.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -280,15 +280,16 @@ impl RenderView {
             "set a configuration before calling prepare_initial_frame"
         );
 
-        self.schedule_initial_layout_internal();
+        Self::schedule_initial_layout_internal();
         self.schedule_initial_paint_internal();
     }
 
-    fn schedule_initial_layout_internal(&mut self) {
+    fn schedule_initial_layout_internal() {
         // Cycle 4 R-14: the previous `self.needs_layout = true` write
         // had zero readers. RenderState<P>::flags::NEEDS_LAYOUT is
         // the load-bearing equivalent; the full plumbing lands when
-        // RenderView grows its own RenderState (or attaches to one).
+        // RenderView grows its own RenderState (or attaches to one) —
+        // at which point this becomes a `&mut self` method again.
     }
 
     fn schedule_initial_paint_internal(&mut self) {
@@ -303,7 +304,7 @@ impl RenderView {
         if self.root_transform.is_some() {
             return;
         }
-        self.schedule_initial_layout_internal();
+        Self::schedule_initial_layout_internal();
         self.schedule_initial_paint_internal();
     }
 
@@ -502,12 +503,13 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        _size: flui_types::Size,
+        size: flui_types::Size,
     ) {
         // Root pass-through: the view draws nothing itself and splices
-        // every child subtree in order — its own `_size` is unused.
+        // every child subtree in order — `size` is only forwarded to
+        // the child-painting context.
         let mut cx =
-            crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count, _size);
+            crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count, size);
         cx.paint_children();
     }
 
@@ -855,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "self.root_transform.is_some()")]
     fn composite_frame_panics_before_initial_frame_is_prepared() {
         let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
         let view = RenderView::with_configuration(config);

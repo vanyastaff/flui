@@ -416,7 +416,7 @@ impl fmt::Debug for SliverConstraints {
             .field("scroll_offset", &self.scroll_offset)
             .field("remaining_paint", &self.remaining_paint_extent)
             .field("cross_extent", &self.cross_axis_extent)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

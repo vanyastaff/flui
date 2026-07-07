@@ -101,6 +101,15 @@ pub struct BoxDryBaselineCtx<'a> {
             ),
 }
 
+impl std::fmt::Debug for BoxDryBaselineCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `query` is a live driver callback into the slot map; show counters only.
+        f.debug_struct("BoxDryBaselineCtx")
+            .field("child_count", &self.child_count)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> BoxDryBaselineCtx<'a> {
     /// Wraps the driver's child dry-baseline callback.
     pub(crate) fn new(
@@ -224,6 +233,15 @@ pub struct BoxIntrinsicsCtx<'a> {
     query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
 }
 
+impl std::fmt::Debug for BoxIntrinsicsCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `query` is a live driver callback into the slot map; show counters only.
+        f.debug_struct("BoxIntrinsicsCtx")
+            .field("child_count", &self.child_count)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> BoxIntrinsicsCtx<'a> {
     /// Wraps the driver's child-query callback.
     pub(crate) fn new(
@@ -331,6 +349,15 @@ pub struct BoxDryLayoutCtx<'a> {
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query:
         &'a mut (dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse + Send + Sync),
+}
+
+impl std::fmt::Debug for BoxDryLayoutCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `query` is a live driver callback into the slot map; show counters only.
+        f.debug_struct("BoxDryLayoutCtx")
+            .field("child_count", &self.child_count)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> BoxDryLayoutCtx<'a> {

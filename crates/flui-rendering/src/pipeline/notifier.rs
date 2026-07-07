@@ -31,25 +31,22 @@ type Callback = Box<dyn Fn() + Send + Sync>;
 /// pipeline-owner trait bound.
 #[derive(Default)]
 pub struct VisualUpdateNotifier {
-    on_need_visual_update: Option<Callback>,
-    on_semantics_owner_created: Option<Callback>,
-    on_semantics_owner_disposed: Option<Callback>,
+    need_visual_update: Option<Callback>,
+    semantics_owner_created: Option<Callback>,
+    semantics_owner_disposed: Option<Callback>,
 }
 
 impl std::fmt::Debug for VisualUpdateNotifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VisualUpdateNotifier")
+            .field("need_visual_update", &self.need_visual_update.is_some())
             .field(
-                "on_need_visual_update",
-                &self.on_need_visual_update.is_some(),
+                "semantics_owner_created",
+                &self.semantics_owner_created.is_some(),
             )
             .field(
-                "on_semantics_owner_created",
-                &self.on_semantics_owner_created.is_some(),
-            )
-            .field(
-                "on_semantics_owner_disposed",
-                &self.on_semantics_owner_disposed.is_some(),
+                "semantics_owner_disposed",
+                &self.semantics_owner_disposed.is_some(),
             )
             .finish()
     }
@@ -69,13 +66,13 @@ impl VisualUpdateNotifier {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_need_visual_update = Some(Box::new(callback));
+        self.need_visual_update = Some(Box::new(callback));
     }
 
     /// Fires the visual-update callback if one is set; otherwise no-op.
     #[inline]
     pub fn fire_need_visual_update(&self) {
-        if let Some(callback) = &self.on_need_visual_update {
+        if let Some(callback) = &self.need_visual_update {
             callback();
         }
     }
@@ -87,13 +84,13 @@ impl VisualUpdateNotifier {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_semantics_owner_created = Some(Box::new(callback));
+        self.semantics_owner_created = Some(Box::new(callback));
     }
 
     /// Fires the semantics-owner-created callback if one is set.
     #[inline]
     pub fn fire_semantics_owner_created(&self) {
-        if let Some(callback) = &self.on_semantics_owner_created {
+        if let Some(callback) = &self.semantics_owner_created {
             callback();
         }
     }
@@ -105,13 +102,13 @@ impl VisualUpdateNotifier {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_semantics_owner_disposed = Some(Box::new(callback));
+        self.semantics_owner_disposed = Some(Box::new(callback));
     }
 
     /// Fires the semantics-owner-disposed callback if one is set.
     #[inline]
     pub fn fire_semantics_owner_disposed(&self) {
-        if let Some(callback) = &self.on_semantics_owner_disposed {
+        if let Some(callback) = &self.semantics_owner_disposed {
             callback();
         }
     }

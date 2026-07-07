@@ -306,6 +306,21 @@ pub struct SliverLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     _phantom: std::marker::PhantomData<(A, P)>,
 }
 
+impl<A: Arity, P: ParentData + Default> std::fmt::Debug for SliverLayoutCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Storage holds live driver callbacks / an erased pipeline context;
+        // report the storage mode and the (Copy) constraints only.
+        let (mode, constraints) = match &self.storage {
+            SliverLayoutCtxStorage::Direct { constraints, .. } => ("Direct", constraints),
+            SliverLayoutCtxStorage::Proxy { constraints, .. } => ("Proxy", constraints),
+        };
+        f.debug_struct("SliverLayoutCtx")
+            .field("storage", &mode)
+            .field("constraints", constraints)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Internal storage variants for [`SliverLayoutCtx`].
 enum SliverLayoutCtxStorage<'ctx, P: ParentData + Default> {
     /// Production / pipeline path: owns constraints, geometry slot, and
@@ -992,6 +1007,19 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
 }
 
+impl std::fmt::Debug for ErasedSliverLayoutCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Callbacks are live driver closures and the pending_* sinks are
+        // shared mutexes (never locked in fmt); report ids + child state.
+        f.debug_struct("ErasedSliverLayoutCtx")
+            .field("constraints", &self.constraints)
+            .field("children", &self.children)
+            .field("child_ids", &self.child_ids)
+            .field("node_id", &self.node_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
     /// Creates the walk-side context over pre-built child slots. `node_id` is the
     /// sliver being laid out, `pending_builds` is the walk-owned sink for
@@ -1283,6 +1311,16 @@ pub struct SliverHitTestCtx<'ctx, A: Arity, P: ParentData> {
     result: SliverHitTestResult,
     child_callback: Option<SliverHitTestChildCallback<'ctx>>,
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
+}
+
+impl<A: Arity, P: ParentData> std::fmt::Debug for SliverHitTestCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `child_callback` is the driver's live hit-test recursion.
+        f.debug_struct("SliverHitTestCtx")
+            .field("position", &self.position)
+            .field("result", &self.result)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'ctx, A: Arity, P: ParentData> SliverHitTestCtx<'ctx, A, P> {

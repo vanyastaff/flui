@@ -215,6 +215,10 @@ pub struct BoxLayout;
 /// Uses integer representation of floats (bits) for reliable hashing.
 /// This handles -0.0/+0.0 and provides exact equality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// The `_bits` postfix is load-bearing: each field is the `f32::to_bits` image
+// of the same-named `BoxConstraints` field, and dropping it would suggest the
+// fields hold pixel values.
+#[allow(clippy::struct_field_names)]
 pub struct BoxConstraintsCacheKey {
     min_width_bits: u32,
     max_width_bits: u32,
@@ -376,6 +380,21 @@ type ProxyChildSizeCache = Vec<Option<Size>>;
 pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     storage: BoxLayoutCtxStorage<'ctx, P>,
     _phantom: std::marker::PhantomData<A>,
+}
+
+impl<A: Arity, P: ParentData + Default> std::fmt::Debug for BoxLayoutCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Storage holds live driver callbacks / an erased pipeline context;
+        // report the storage mode and the (Copy) constraints only.
+        let (mode, constraints) = match &self.storage {
+            BoxLayoutCtxStorage::Direct { constraints, .. } => ("Direct", constraints),
+            BoxLayoutCtxStorage::Proxy { constraints, .. } => ("Proxy", constraints),
+        };
+        f.debug_struct("BoxLayoutCtx")
+            .field("storage", &mode)
+            .field("constraints", constraints)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Internal storage variants. See [`BoxLayoutCtx`] doc.
@@ -1092,6 +1111,18 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
 }
 
+impl std::fmt::Debug for ErasedBoxLayoutCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The layout / baseline / intrinsic callbacks are live driver
+        // closures over the slot map; report constraints and child state.
+        f.debug_struct("ErasedBoxLayoutCtx")
+            .field("constraints", &self.constraints)
+            .field("children", &self.children)
+            .field("child_ids", &self.child_ids)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     /// Creates the walk-side context over pre-built child slots.
     ///
@@ -1363,6 +1394,19 @@ pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     /// `pop_transform` (full re-fold over the truncated stack).
     composed_transform: Matrix4,
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
+}
+
+impl<A: Arity, P: ParentData> std::fmt::Debug for BoxHitTestCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `child_callback` is the driver's live hit-test recursion; report
+        // the position, accumulated result, and transform state.
+        f.debug_struct("BoxHitTestCtx")
+            .field("position", &self.position)
+            .field("result", &self.result)
+            .field("transform_stack", &self.transform_stack)
+            .field("composed_transform", &self.composed_transform)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {

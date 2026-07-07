@@ -269,7 +269,7 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
                 &self.last_hidden_follower_ids.len(),
             )
             .field("has_semantics_owner", &self.semantics_owner.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

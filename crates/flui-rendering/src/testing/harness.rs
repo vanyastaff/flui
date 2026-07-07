@@ -96,6 +96,16 @@ pub struct RenderTester {
     semantics_enabled: bool,
 }
 
+impl std::fmt::Debug for RenderTester {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderTester")
+            .field("spec", &self.spec)
+            .field("constraints", &self.constraints)
+            .field("semantics_enabled", &self.semantics_enabled)
+            .finish()
+    }
+}
+
 impl RenderTester {
     /// Configures a test from a [`TreeNode`] spec (the root must be a Box
     /// node — see [`crate::testing::tree::mount`]).

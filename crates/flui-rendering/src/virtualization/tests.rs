@@ -59,7 +59,9 @@ fn estimated_to_exact_transition() {
     assert_eq!(v.estimated_count(), 1);
     match v.total_extent() {
         Extent::Estimated(t) => assert!(approx(t, 12.0 + 8.0 + 10.0)),
-        other => panic!("expected Estimated while a prefix is unmeasured, got {other:?}"),
+        other @ Extent::Exact(_) => {
+            panic!("expected Estimated while a prefix is unmeasured, got {other:?}")
+        }
     }
 
     // Measure the last — now Exact.
@@ -865,20 +867,20 @@ mod tree_edits {
     /// someone reintroduced incremental-delta summary maintenance.
     #[test]
     fn drift_long_edit_session() {
-        let n = 4000usize;
-        let mut t = ExtentTree::from_fn(n, |_| measured(0.1));
-        let mut o = Vecf(vec![0.1; n]);
-        let mut x = 0u64;
+        let len = 4000usize;
+        let mut tree = ExtentTree::from_fn(len, |_| measured(0.1));
+        let mut oracle = Vecf(vec![0.1; len]);
+        let mut state = 0u64;
         for _ in 0..200_000usize {
-            x = x
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let i = (x >> 33) as usize % t.len();
-            let e = ((x & 0xffff) as f32) / 6553.6;
-            t.set(i, measured(e));
-            o.set(i, e);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let idx = (state >> 33) as usize % tree.len();
+            let extent = ((state & 0xffff) as f32) / 6553.6;
+            tree.set(idx, measured(extent));
+            oracle.set(idx, extent);
         }
-        let drift = (t.total_extent() - o.total()).abs();
+        let drift = (tree.total_extent() - oracle.total()).abs();
         assert!(drift < 5.0, "drift {drift} too large — incremental delta?");
     }
 
