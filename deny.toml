@@ -17,6 +17,18 @@
 #     | "external") rather than a severity string.
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Graph - how the dependency graph is built for every check
+# ═══════════════════════════════════════════════════════════════════════════════
+[graph]
+# Audit the union of ALL feature-gated dependency trees, not just defaults —
+# without this, optional features (e.g. flui-assets/network → reqwest) are
+# invisible to the merge-blocking gate. NB: the CLI --all-features flag does
+# NOT reach workspace members' features in this layout; this config key is the
+# working switch (verified by ban-probe: a temporary `deny` on reqwest fails
+# the bans check only once this key is set).
+all-features = true
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Advisories - Security vulnerability database checks
 # ═══════════════════════════════════════════════════════════════════════════════
 [advisories]

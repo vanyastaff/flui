@@ -195,7 +195,13 @@ regex = "1"
 moka = { version = "0.12", features = ["future"] }
 
 # NETWORKING - Used by flui-assets
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+# default-features = false: reqwest's default `native-tls` pulls openssl,
+# which deny.toml bans — this workspace is rustls-only by policy.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.3"
