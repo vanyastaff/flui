@@ -517,7 +517,11 @@ impl Ticker {
                     .checked_sub(std::time::Duration::from_secs_f64(
                         inner.muted_elapsed.value(),
                     ))
-                    .unwrap();
+                    .expect(
+                        "BUG: muted_elapsed was measured as (mute instant - start_time), so \
+                         subtracting it from a later `now` cannot precede the ticker's start \
+                         instant, which is a valid Instant",
+                    );
                 inner.start_time = Some(adjusted_start);
                 inner.state = TickerState::Active;
             }
@@ -777,7 +781,7 @@ impl std::fmt::Debug for Ticker {
             .field("id", &self.id)
             .field("state", &self.state())
             .field("elapsed", &self.elapsed())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -802,6 +806,7 @@ impl std::fmt::Debug for Ticker {
 /// group.unmute_all();
 /// group.stop_all();
 /// ```
+#[derive(Debug)]
 pub struct TickerGroup {
     tickers: Vec<Ticker>,
 }
@@ -1191,8 +1196,10 @@ impl Future for TickerFuture {
                     if let Some(ref mut listener) = self.listener {
                         match Pin::new(listener).poll(cx) {
                             Poll::Ready(()) => {
+                                // Event fired: clear the listener and fall
+                                // through to re-check state on the next
+                                // loop iteration.
                                 self.listener = None;
-                                continue; // Re-check state
                             }
                             Poll::Pending => return Poll::Pending,
                         }
@@ -1244,9 +1251,10 @@ impl Future for TickerFutureOrCancel {
                         let pinned = Pin::new(listener);
                         match pinned.poll(cx) {
                             Poll::Ready(()) => {
-                                // Event fired, clear listener and re-check state
+                                // Event fired: clear the listener and fall
+                                // through to re-check state on the next
+                                // loop iteration.
                                 self.listener = None;
-                                continue;
                             }
                             Poll::Pending => return Poll::Pending,
                         }
