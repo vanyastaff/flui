@@ -339,10 +339,10 @@ fn round_to_hundredths_runtime(value: f32) -> f32 {
 /// Checks if value is already normalized to hundredths precision.
 #[inline]
 fn is_normalized(value: f32) -> bool {
-    if !value.is_finite() {
-        true // Infinity/NaN are "normalized"
-    } else {
+    if value.is_finite() {
         value == round_to_hundredths_runtime(value)
+    } else {
+        true // Infinity/NaN are "normalized"
     }
 }
 
@@ -376,8 +376,7 @@ impl Constraints for SliverConstraints {
     fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {
         debug_assert!(
             self.is_normalized(),
-            "SliverConstraints must be normalized: {:?}",
-            self
+            "SliverConstraints must be normalized: {self:?}"
         );
 
         if is_applied_constraint {
@@ -423,7 +422,7 @@ impl fmt::Debug for SliverConstraints {
 
 impl fmt::Display for SliverConstraints {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

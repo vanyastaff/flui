@@ -288,7 +288,7 @@ impl VsyncScheduler {
                     let interval = self.frame_interval_duration();
 
                     if elapsed < interval {
-                        let wait_time = interval - elapsed;
+                        let wait_time = interval.checked_sub(elapsed).unwrap();
                         std::thread::sleep(wait_time);
                         Instant::now()
                     } else {

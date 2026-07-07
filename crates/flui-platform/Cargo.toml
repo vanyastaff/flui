@@ -133,10 +133,11 @@ web = []
 wayland = []
 x11 = []
 
-[lints.rust]
-# objc 0.2 macros expand `cfg(feature = "cargo-clippy")` probes (macOS backend);
-# declare the value so `unexpected_cfgs` stays quiet under the clippy driver.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+# The `unexpected_cfgs` check-cfg declaration for objc 0.2's
+# `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids
+# mixing local lint keys with `workspace = true`.
+[lints]
+workspace = true
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

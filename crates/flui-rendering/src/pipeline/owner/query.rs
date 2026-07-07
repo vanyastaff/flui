@@ -167,8 +167,8 @@ pub(super) struct QuerySlot<'a> {
 ///
 /// The slice is built from owned `Box<dyn ParentData>` values so it can
 /// coexist with the `&mut slots` that the recursion closure needs.
-fn build_child_parent_data<'slot>(
-    slots: &rustc_hash::FxHashMap<RenderId, QuerySlot<'slot>>,
+fn build_child_parent_data(
+    slots: &rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
     children: &[RenderId],
     #[cfg(any(test, feature = "testing"))] seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] _seeds: &(),

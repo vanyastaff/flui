@@ -84,10 +84,8 @@
 //! [`Arc`]: std::sync::Arc
 
 #![warn(missing_docs)]
-#![warn(clippy::all)]
-// Curve endpoints (`t == 0.0` / `t == 1.0`) and tween math use exact float
-// equality against known sentinel values; tolerance comparison would be wrong here.
-#![allow(clippy::float_cmp)]
+// Tracked ship-quality debt:
+#![allow(clippy::unwrap_used)] // TODO(ship-wave-3): convert to Result / `expect("BUG: …")` per docs/PANIC-POLICY.md
 
 // Core animation modules
 pub mod animation;

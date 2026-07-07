@@ -159,7 +159,7 @@ fn main() -> anyhow::Result<()> {
 
     // For this demo, we'll just keep the window open
     // In a real app, platform.run() would handle the event loop
-    std::thread::sleep(std::time::Duration::from_secs(60));
+    std::thread::sleep(std::time::Duration::from_mins(1));
 
     tracing::info!("\n👋 Demo complete!");
     Ok(())

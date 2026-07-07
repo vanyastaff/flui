@@ -45,3 +45,6 @@ thiserror = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 flui-layer = { path = ".", version = "0.2.0", features = ["testing"] }
+
+[lints]
+workspace = true

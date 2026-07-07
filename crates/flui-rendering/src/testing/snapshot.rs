@@ -655,7 +655,7 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
 /// `BackdropFilter` commands so that masked content appears in the snapshot.
 fn write_display_list(out: &mut String, dl: &DisplayList, depth: usize) {
     let indent = "  ".repeat(depth);
-    for cmd in dl.iter() {
+    for cmd in dl {
         // Recurse into effect-command children before printing the line so that
         // the child content appears nested under the effect header.
         match cmd {
@@ -688,7 +688,7 @@ fn write_display_list(out: &mut String, dl: &DisplayList, depth: usize) {
 /// Collect all `DrawCommandSummary` values from a `DisplayList`, recursing
 /// into `ShaderMask` and `BackdropFilter` child lists.
 fn collect_from_display_list(dl: &DisplayList, out: &mut Vec<DrawCommandSummary>) {
-    for cmd in dl.iter() {
+    for cmd in dl {
         match cmd {
             DrawCommand::ShaderMask { child, .. } => {
                 out.push(summarize_command(cmd));
@@ -978,12 +978,11 @@ pub fn commands_of(tree: Option<&LayerTree>) -> Vec<DrawCommandSummary> {
 /// Unlike Flutter's `paints..something()` matcher this assertion is **strict**:
 /// if `pred` never matches it is always a test failure, never a silent pass.
 pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -> bool) {
-    if !commands_of(tree).iter().any(pred) {
-        panic!(
-            "no painted command matched the predicate:\n{}",
-            snapshot_tree(tree),
-        );
-    }
+    assert!(
+        commands_of(tree).iter().any(pred),
+        "no painted command matched the predicate:\n{}",
+        snapshot_tree(tree),
+    );
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

@@ -152,8 +152,8 @@ fn covers_fr028_type_mismatch() {
 fn covers_fr028_mixed_keyed_unkeyed() {
     let keyed = Alpha::with_key(ValueKey::new(7_u32));
     let keyless = Alpha::keyless();
-    assert!(!keyed.can_update(&keyless), "keyed must NOT update keyless",);
-    assert!(!keyless.can_update(&keyed), "keyless must NOT update keyed",);
+    assert!(!keyed.can_update(&keyless), "keyed must NOT update keyless");
+    assert!(!keyless.can_update(&keyed), "keyless must NOT update keyed");
 }
 
 // ============================================================================

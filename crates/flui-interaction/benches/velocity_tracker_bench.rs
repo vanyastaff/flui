@@ -17,6 +17,10 @@
 //!
 //! Run with `cargo bench -p flui-interaction --bench velocity_tracker_bench`.
 
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
+
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 

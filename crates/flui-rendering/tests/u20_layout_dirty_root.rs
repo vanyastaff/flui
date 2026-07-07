@@ -162,11 +162,11 @@ fn u20_three_level_padding_center_colored_box_grandchild_propagation() {
     let padding_geom = pipeline
         .render_tree()
         .get(padding_id)
-        .and_then(|n| n.geometry_box());
+        .and_then(flui_rendering::storage::RenderNode::geometry_box);
     let center_geom = pipeline
         .render_tree()
         .get(center_id)
-        .and_then(|n| n.geometry_box());
+        .and_then(flui_rendering::storage::RenderNode::geometry_box);
 
     assert_eq!(padding_geom, Some(Size::new(px(400.0), px(300.0))));
     assert_eq!(
@@ -258,7 +258,7 @@ fn u20_leaf_path_delegates_to_layout_leaf_only() {
     let geom = pipeline
         .render_tree()
         .get(leaf_id)
-        .and_then(|n| n.geometry_box());
+        .and_then(flui_rendering::storage::RenderNode::geometry_box);
     assert_eq!(geom, Some(Size::new(px(120.0), px(50.0))));
 }
 

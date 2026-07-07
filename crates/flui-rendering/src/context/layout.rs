@@ -513,7 +513,7 @@ where
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::dispose_box_child(
             &mut self.inner,
             id,
-        )
+        );
     }
 
     /// Returns the [`RenderId`](flui_foundation::RenderId) of the Box child at
@@ -563,7 +563,7 @@ where
             &mut self.inner,
             first,
             last,
-        )
+        );
     }
 }
 

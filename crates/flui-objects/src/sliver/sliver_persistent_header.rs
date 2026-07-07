@@ -723,6 +723,7 @@ pub trait FloatingHeaderMode: sealed::Sealed + Send + Sync + 'static {
 /// A read-only view of the fields of [`PersistentHeaderCore`] the sealed
 /// [`FloatingHeaderMode`] formulas need, without giving them access to
 /// `layout_child`/setters (which stay `perform_layout`'s job).
+#[derive(Debug)]
 pub struct PersistentHeaderCoreView<'a> {
     core: &'a PersistentHeaderCore,
 }

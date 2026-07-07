@@ -107,6 +107,16 @@
 //! - [`transform`] - 2D transformations
 //! - [`bezier`] - Bézier curve types
 
+// Math-crate idiom: these pedantic lints fight geometry/physics code (single-
+// letter coordinate names, Copy types passed by ref for API symmetry, prelude
+// glob re-exports). Permanent, not debt — the manifest inherits
+// `[workspace.lints]`; crate-specific relaxations live here where they are
+// visible next to the code they cover. (The float-comparison / numeric-cast
+// family is allowed workspace-wide — see `[workspace.lints.clippy]`.)
+#![allow(clippy::many_single_char_names, clippy::wildcard_imports)]
+// Tracked ship-quality debt (unlike the permanent idiom block above):
+#![allow(missing_docs)] // TODO(ship-wave-1): public-item doc backlog (~77 items), then delete
+
 // =============================================================================
 // MODULES
 // =============================================================================

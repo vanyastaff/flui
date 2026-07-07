@@ -6,6 +6,11 @@
 //!
 //! Run with: cargo run --example wgpu_window
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::sync::{Arc, Mutex};
 
 use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};

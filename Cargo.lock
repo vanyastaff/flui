@@ -1436,6 +1436,7 @@ dependencies = [
  "flui-app",
  "flui-engine",
  "flui-foundation",
+ "flui-geometry",
  "flui-hot-reload",
  "flui-layer",
  "flui-objects",

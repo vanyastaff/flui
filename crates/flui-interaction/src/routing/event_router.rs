@@ -122,8 +122,7 @@ impl EventRouter {
                     .pointer_state
                     .read()
                     .get(&pointer_id)
-                    .map(|s| s.is_down)
-                    .unwrap_or(false);
+                    .is_some_and(|s| s.is_down);
 
                 if is_dragging {
                     // Send to original down target (drag continuity)

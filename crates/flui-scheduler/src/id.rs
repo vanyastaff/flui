@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn test_id_display() {
         let frame_id = FrameId::zip(42);
-        let display = format!("{}", frame_id);
+        let display = format!("{frame_id}");
         assert!(display.contains("Frame"));
         assert!(display.contains("42"));
     }

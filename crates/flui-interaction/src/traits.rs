@@ -210,7 +210,7 @@ pub trait Disposable {
 
 impl<T: HitTestTarget + ?Sized> HitTestTarget for Box<T> {
     fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
-        (**self).handle_event(event, entry)
+        (**self).handle_event(event, entry);
     }
 }
 

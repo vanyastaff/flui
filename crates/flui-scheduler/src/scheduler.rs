@@ -500,9 +500,7 @@ impl Scheduler {
                 .unwrap_or(SchedulerPhase::Idle);
         debug_assert!(
             current.can_transition_to(new_phase),
-            "Invalid phase transition: {:?} -> {:?}",
-            current,
-            new_phase
+            "Invalid phase transition: {current:?} -> {new_phase:?}"
         );
         self.frame
             .scheduler_phase
@@ -947,7 +945,7 @@ impl Scheduler {
             .current_frame
             .lock()
             .as_ref()
-            .is_some_and(|t| t.is_over_budget())
+            .is_some_and(super::frame::FrameTiming::is_over_budget)
     }
 
     /// Check if deadline is near (>80% budget used)
@@ -956,7 +954,7 @@ impl Scheduler {
             .current_frame
             .lock()
             .as_ref()
-            .is_some_and(|t| t.is_deadline_near())
+            .is_some_and(super::frame::FrameTiming::is_deadline_near)
     }
 
     /// Get remaining budget as type-safe Milliseconds
@@ -965,7 +963,7 @@ impl Scheduler {
             .current_frame
             .lock()
             .as_ref()
-            .map_or(Milliseconds::ZERO, |t| t.remaining())
+            .map_or(Milliseconds::ZERO, super::frame::FrameTiming::remaining)
     }
 
     /// Get remaining budget in milliseconds (raw f64)

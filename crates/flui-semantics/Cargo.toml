@@ -46,3 +46,6 @@ smallvec = "1.15"
 rustc-hash = "2.1"
 
 [dev-dependencies]
+
+[lints]
+workspace = true

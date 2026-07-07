@@ -74,7 +74,7 @@ fn identity_shim_succeeds_on_type_match() {
     let node = tree.get(id).expect("node alive after update");
     let stored_hash = node
         .key()
-        .map(|k| k.key_hash())
+        .map(flui_foundation::ViewKey::key_hash)
         .expect("key survives update");
     let probe = ValueKey::<u32>::new(42_u32);
     assert_eq!(

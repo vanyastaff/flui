@@ -81,3 +81,6 @@ testing = []
 
 # Serialization support (if needed in the future)
 serde = ["flui-types/serde"]
+
+[lints]
+workspace = true

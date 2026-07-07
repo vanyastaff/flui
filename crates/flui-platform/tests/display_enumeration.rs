@@ -3,6 +3,11 @@
 //! Comprehensive tests for display/monitor enumeration with DPI-aware bounds,
 //! refresh rates, and multi-monitor support.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::ignore_without_reason)]
+
 use std::collections::HashSet;
 
 use flui_platform::current_platform;
@@ -72,14 +77,12 @@ fn test_displays_enumeration() {
 
         assert!(
             scale > 0.0 && scale <= 4.0,
-            "Scale factor should be reasonable (0.0-4.0), got {}",
-            scale
+            "Scale factor should be reasonable (0.0-4.0), got {scale}"
         );
 
         assert!(
             refresh > 0.0 && refresh <= 500.0,
-            "Refresh rate should be reasonable (0-500Hz), got {}",
-            refresh
+            "Refresh rate should be reasonable (0-500Hz), got {refresh}"
         );
     }
 
@@ -88,8 +91,7 @@ fn test_displays_enumeration() {
     if !displays.is_empty() {
         assert_eq!(
             primary_count, 1,
-            "Exactly one display should be marked as primary, found {}",
-            primary_count
+            "Exactly one display should be marked as primary, found {primary_count}"
         );
     }
 
@@ -165,7 +167,7 @@ fn test_high_dpi_scale_factor() {
     let mut found_hidpi = false;
     let mut found_standard = false;
 
-    for display in displays.iter() {
+    for display in &displays {
         let scale = display.scale_factor();
         let bounds = display.bounds();
         let name = display.name();
@@ -217,8 +219,7 @@ fn test_high_dpi_scale_factor() {
         // All scale factors should be positive and reasonable
         assert!(
             scale > 0.0 && scale <= 4.0,
-            "Scale factor should be 0.0-4.0, got {}",
-            scale
+            "Scale factor should be 0.0-4.0, got {scale}"
         );
     }
 
@@ -244,7 +245,7 @@ fn test_usable_bounds_exclude_system_ui() {
         return;
     }
 
-    for display in displays.iter() {
+    for display in &displays {
         let full_bounds = display.bounds();
         let usable_bounds = display.usable_bounds();
         let name = display.name();
@@ -590,8 +591,7 @@ fn test_display_enumeration_performance() {
     // Most systems should be much faster (<1ms)
     assert!(
         avg_ms < 10.0,
-        "Display enumeration should take <10ms, got {:.3}ms",
-        avg_ms
+        "Display enumeration should take <10ms, got {avg_ms:.3}ms"
     );
 
     if avg_ms < 1.0 {

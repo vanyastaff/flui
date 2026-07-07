@@ -1,7 +1,6 @@
 //! Interned asset keys for efficient hashing and comparison.
 
 use lasso::{Rodeo, Spur};
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -10,7 +9,8 @@ use std::hash::{Hash, Hasher};
 ///
 /// This uses `lasso` for efficient string interning. Strings are stored once
 /// and referenced by a 32-bit integer (`Spur`), making keys only 4 bytes.
-static INTERNER: Lazy<RwLock<Rodeo>> = Lazy::new(|| RwLock::new(Rodeo::new()));
+static INTERNER: std::sync::LazyLock<RwLock<Rodeo>> =
+    std::sync::LazyLock::new(|| RwLock::new(Rodeo::new()));
 
 /// An interned asset key.
 ///
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn test_key_display() {
         let key = AssetKey::new("image.png");
-        assert_eq!(format!("{}", key), "image.png");
+        assert_eq!(format!("{key}"), "image.png");
     }
 
     #[test]
@@ -197,7 +197,7 @@ mod tests {
     fn test_multiple_keys_interned() {
         // Test that many different strings can be interned
         let keys: Vec<_> = (0..1000)
-            .map(|i| AssetKey::new(&format!("asset_{}.png", i)))
+            .map(|i| AssetKey::new(&format!("asset_{i}.png")))
             .collect();
 
         // Each should be unique

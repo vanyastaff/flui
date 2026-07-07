@@ -504,7 +504,7 @@ impl RenderTree {
         }
 
         // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(|n| n.parent())
+        if let Some(parent_id) = self.get(id).and_then(super::node::RenderNode::parent)
             && let Some(parent) = self.get_mut(parent_id)
         {
             parent.remove_child(id);
@@ -575,13 +575,15 @@ impl RenderTree {
     /// Returns the children IDs of a node.
     #[inline]
     pub fn children(&self, id: RenderId) -> &[RenderId] {
-        self.get(id).map(|n| n.children()).unwrap_or(&[])
+        self.get(id)
+            .map(super::node::RenderNode::children)
+            .unwrap_or(&[])
     }
 
     /// Returns the depth of a node in the tree.
     #[inline]
     pub fn depth(&self, id: RenderId) -> Option<u16> {
-        self.get(id).map(|n| n.depth())
+        self.get(id).map(super::node::RenderNode::depth)
     }
 
     /// Collects `root_id` plus every transitive descendant in
@@ -945,7 +947,7 @@ impl TreeWrite<RenderId> for RenderTree {
         }
 
         // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(|n| n.parent())
+        if let Some(parent_id) = self.get(id).and_then(super::node::RenderNode::parent)
             && let Some(parent) = RenderTree::get_mut(self, parent_id)
         {
             parent.remove_child(id);
@@ -1004,14 +1006,12 @@ impl TreeNav<RenderId> for RenderTree {
 
     #[inline]
     fn child_count(&self, id: RenderId) -> usize {
-        self.get(id).map(|node| node.children().len()).unwrap_or(0)
+        self.get(id).map_or(0, |node| node.children().len())
     }
 
     #[inline]
     fn has_children(&self, id: RenderId) -> bool {
-        self.get(id)
-            .map(|node| !node.children().is_empty())
-            .unwrap_or(false)
+        self.get(id).is_some_and(|node| !node.children().is_empty())
     }
 }
 
@@ -1121,7 +1121,10 @@ mod tests {
         assert!(pair.is_some(), "two existing distinct ids must yield Some");
         let (na, nb) = pair.unwrap();
         // The two refs must point to different RenderNodes -- compare addresses.
-        assert!(!std::ptr::eq(na as *const _, nb as *const _));
+        assert!(!std::ptr::eq(
+            std::ptr::from_ref(na),
+            std::ptr::from_ref(nb)
+        ));
     }
 
     #[test]
@@ -1218,7 +1221,10 @@ mod tests {
 
         // Verify disjointness — all 4 references point to distinct
         // RenderNodes (compare addresses through *const _).
-        let addrs: Vec<*const RenderNode> = refs.iter().map(|r| *r as *const RenderNode).collect();
+        let addrs: Vec<*const RenderNode> = refs
+            .iter()
+            .map(|r| std::ptr::from_ref::<RenderNode>(*r))
+            .collect();
         for (i, &a_addr) in addrs.iter().enumerate() {
             for &b_addr in &addrs[i + 1..] {
                 assert!(

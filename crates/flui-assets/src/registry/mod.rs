@@ -61,8 +61,7 @@ impl AssetRegistry {
     /// let image = registry.load(ImageAsset::file("logo.png")).await?;
     /// ```
     pub fn global() -> &'static Self {
-        use once_cell::sync::Lazy;
-        static REGISTRY: Lazy<AssetRegistry> = Lazy::new(|| {
+        static REGISTRY: std::sync::LazyLock<AssetRegistry> = std::sync::LazyLock::new(|| {
             AssetRegistryBuilder::new()
                 .with_capacity(100 * 1024 * 1024) // 100 MB default
                 .build()
@@ -315,6 +314,7 @@ pub struct HasCapacity(pub(crate) usize);
 ///     .with_default_capacity() // 100 MB
 ///     .build();
 /// ```
+#[derive(Debug)]
 pub struct AssetRegistryBuilder<C = NoCapacity> {
     capacity: C,
 }
@@ -490,7 +490,7 @@ mod tests {
         // Load multiple fonts
         for i in 0..3 {
             let ttf_bytes = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-            let font = FontAsset::from_bytes(format!("test{}.ttf", i), ttf_bytes);
+            let font = FontAsset::from_bytes(format!("test{i}.ttf"), ttf_bytes);
             let _handle = registry.load(font).await.unwrap();
         }
 
@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn test_registry_debug() {
         let registry = AssetRegistry::default();
-        let debug_str = format!("{:?}", registry);
+        let debug_str = format!("{registry:?}");
         assert!(debug_str.contains("AssetRegistry"));
         assert!(debug_str.contains("cache_count"));
         assert!(debug_str.contains("default_capacity"));
@@ -612,8 +612,8 @@ mod tests {
         let no_cap = NoCapacity;
         let has_cap = HasCapacity(100);
 
-        let debug1 = format!("{:?}", no_cap);
-        let debug2 = format!("{:?}", has_cap);
+        let debug1 = format!("{no_cap:?}");
+        let debug2 = format!("{has_cap:?}");
 
         assert!(debug1.contains("NoCapacity"));
         assert!(debug2.contains("HasCapacity"));

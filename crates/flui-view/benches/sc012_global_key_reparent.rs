@@ -12,6 +12,10 @@
 //! `ReconcileEvent::Reparent` emission) so the latency signal is
 //! representative.
 
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
+
 use std::sync::Arc;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};

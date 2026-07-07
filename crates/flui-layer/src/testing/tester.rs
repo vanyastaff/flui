@@ -14,6 +14,7 @@ use crate::{
 };
 
 /// A mounted layer tree plus its label registry, ready to inspect.
+#[derive(Debug)]
 pub struct LayerTester {
     tree: LayerTree,
     root: LayerId,

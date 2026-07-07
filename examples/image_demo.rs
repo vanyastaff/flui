@@ -67,10 +67,10 @@ impl View for App {
 }
 
 fn load_image() -> anyhow::Result<SharedImage> {
-    let input = std::env::args()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("flui_test_cat.jpg"));
+    let input = std::env::args().nth(1).map_or_else(
+        || std::env::temp_dir().join("flui_test_cat.jpg"),
+        std::path::PathBuf::from,
+    );
     println!("Loading image: {}", input.display());
 
     let decoded = image::open(&input)?.to_rgba8();

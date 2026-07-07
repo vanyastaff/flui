@@ -187,9 +187,10 @@ impl RenderLabelRegistry {
     /// Records a label -> id mapping, panicking on a duplicate label (a
     /// duplicate is a test-authoring bug, not a runtime condition).
     fn record(&mut self, label: &'static str, id: RenderId) {
-        if self.by_label.insert(label, id).is_some() {
-            panic!("duplicate node label in test tree: {label:?}");
-        }
+        assert!(
+            self.by_label.insert(label, id).is_none(),
+            "duplicate node label in test tree: {label:?}"
+        );
     }
 
     /// Returns the id for `label`, if one was registered.

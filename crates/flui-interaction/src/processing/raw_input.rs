@@ -411,8 +411,7 @@ impl RawInputHandler {
                     let mut tracking = self.tracking.lock();
                     tracking
                         .remove(&pointer)
-                        .map(|s| s.last_position)
-                        .unwrap_or(Offset::ZERO)
+                        .map_or(Offset::ZERO, |s| s.last_position)
                 };
 
                 Some(RawPointerEvent::Cancel {

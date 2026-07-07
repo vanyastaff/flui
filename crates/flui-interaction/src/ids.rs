@@ -269,8 +269,8 @@ mod tests {
     fn test_focus_node_id() {
         let id = FocusNodeId::new(123);
         assert_eq!(id.get(), 123);
-        assert_eq!(format!("{:?}", id), "FocusNodeId(123)");
-        assert_eq!(format!("{}", id), "focus:123");
+        assert_eq!(format!("{id:?}"), "FocusNodeId(123)");
+        assert_eq!(format!("{id}"), "focus:123");
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
     fn test_handler_id() {
         let id = HandlerId::new(999);
         assert_eq!(id.get(), 999);
-        assert_eq!(format!("{:?}", id), "HandlerId(999)");
+        assert_eq!(format!("{id:?}"), "HandlerId(999)");
     }
 
     #[test]

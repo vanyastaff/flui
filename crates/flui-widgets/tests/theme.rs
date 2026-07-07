@@ -12,6 +12,11 @@
 //! node) rather than unwinding out to the test, so `#[should_panic]` around
 //! the harness would not observe it.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
 use std::sync::{Arc, Mutex};

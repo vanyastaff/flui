@@ -120,8 +120,7 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
     fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {
         debug_assert!(
             self.is_normalized(),
-            "Constraints must be normalized: {:?}",
-            self
+            "Constraints must be normalized: {self:?}"
         );
 
         if is_applied_constraint {

@@ -549,10 +549,10 @@ pub enum WindowError {
 impl std::fmt::Display for WindowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WindowError::CreationFailed(msg) => write!(f, "Window creation failed: {}", msg),
-            WindowError::NotFound(id) => write!(f, "Window not found: {:?}", id),
-            WindowError::InvalidState(msg) => write!(f, "Invalid window state: {}", msg),
-            WindowError::PlatformError(msg) => write!(f, "Platform error: {}", msg),
+            WindowError::CreationFailed(msg) => write!(f, "Window creation failed: {msg}"),
+            WindowError::NotFound(id) => write!(f, "Window not found: {id:?}"),
+            WindowError::InvalidState(msg) => write!(f, "Invalid window state: {msg}"),
+            WindowError::PlatformError(msg) => write!(f, "Platform error: {msg}"),
         }
     }
 }

@@ -83,7 +83,13 @@
 //! etc.) have been moved to `flui_rendering::constraints` as they are part of
 //! the rendering protocol rather than basic types.
 
-#![allow(missing_docs)] // TODO: Add comprehensive docs (486 items remaining - ongoing improvement)
+#![allow(missing_docs)] // TODO(ship-wave-1): 486-item doc backlog — burn down per module, then delete this line
+#![allow(missing_debug_implementations)]
+// TODO(ship-wave-1): add Debug impls (28 types), then delete
+// Math-crate idiom shared with flui-geometry (see its lib.rs): permanent
+// crate-specific relaxations of workspace pedantic lints for math-heavy code.
+// (The float-comparison / numeric-cast family is allowed workspace-wide.)
+#![allow(clippy::many_single_char_names, clippy::wildcard_imports)]
 // Geometry primitives split out into flui-geometry crate in D-block PR-C-2 (U6+U7).
 // Re-exported here under the original `geometry` namespace so existing consumers
 // of `flui_types::geometry::*` continue to compile unchanged during the transition.

@@ -157,8 +157,7 @@ fn u19_single_bridge_pads_child_and_returns_total_size() {
     assert!(
         (child_offset.dx.get() - 10.0).abs() < f32::EPSILON
             && (child_offset.dy.get() - 10.0).abs() < f32::EPSILON,
-        "child offset {:?} should equal (10, 10)",
-        child_offset
+        "child offset {child_offset:?} should equal (10, 10)"
     );
 }
 
@@ -244,8 +243,7 @@ fn u19_variable_bridge_walks_child_slice_with_typed_parent_data() {
         size,
         Size::new(px(300.0), px(100.0)),
         "Variable bridge with flex 1:2 over 300px main axis must produce \
-         exact (300, 100) — actual {:?}",
-        size,
+         exact (300, 100) — actual {size:?}",
     );
 
     // Each child's constraints prove the typed parent-data round-tripped

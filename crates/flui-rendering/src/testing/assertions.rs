@@ -8,7 +8,11 @@ use flui_foundation::DiagnosticsNode;
 /// Asserts that `node` exposes every property name in `required`.
 #[track_caller]
 pub fn assert_properties(node: &DiagnosticsNode, required: &[&str]) {
-    let names: Vec<&str> = node.properties().iter().map(|p| p.name()).collect();
+    let names: Vec<&str> = node
+        .properties()
+        .iter()
+        .map(flui_foundation::DiagnosticsProperty::name)
+        .collect();
     for &req in required {
         assert!(
             names.contains(&req),

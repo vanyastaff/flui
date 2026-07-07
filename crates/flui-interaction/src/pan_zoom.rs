@@ -350,10 +350,10 @@ mod tests {
             PointerPanZoomEvent::Update {
                 scale, rotation, ..
             } => {
-                assert!((scale - 1.2).abs() < 1e-6, "scale={}", scale);
+                assert!((scale - 1.2).abs() < 1e-6, "scale={scale}");
                 assert_eq!(rotation, 0.0);
             }
-            _ => panic!("expected Update, got {:?}", ev),
+            _ => panic!("expected Update, got {ev:?}"),
         }
     }
 
@@ -364,7 +364,7 @@ mod tests {
         let ev = convert_gesture(&gesture);
         match ev {
             PointerPanZoomEvent::Update { scale, .. } => {
-                assert!((scale - 0.9).abs() < 1e-6, "scale={}", scale);
+                assert!((scale - 0.9).abs() < 1e-6, "scale={scale}");
             }
             _ => panic!("expected Update"),
         }

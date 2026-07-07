@@ -608,7 +608,7 @@ where
         &self,
         config: &mut crate::semantics::SemanticsConfiguration,
     ) {
-        <T as RenderSliver>::describe_semantics_configuration(self, config)
+        <T as RenderSliver>::describe_semantics_configuration(self, config);
     }
 
     fn excludes_semantics_subtree(&self) -> bool {
@@ -616,15 +616,15 @@ where
     }
 
     fn reassemble(&mut self) {
-        <T as RenderSliver>::reassemble(self)
+        <T as RenderSliver>::reassemble(self);
     }
 
     fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
-        <T as RenderSliver>::attach(self, handle)
+        <T as RenderSliver>::attach(self, handle);
     }
 
     fn detach(&mut self) {
-        <T as RenderSliver>::detach(self)
+        <T as RenderSliver>::detach(self);
     }
 
     // Compositing / layer-boundary forwards — mirror the RenderBox blanket

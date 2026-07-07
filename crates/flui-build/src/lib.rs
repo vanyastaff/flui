@@ -45,6 +45,9 @@
 //! }
 //! ```
 
+// Tracked ship-quality debt:
+#![allow(clippy::unwrap_used)] // TODO(ship-wave-4): convert to Result / `expect("BUG: …")` per docs/PANIC-POLICY.md
+
 /// Android platform build support
 pub mod android;
 /// Type-state builder for `BuilderContext`

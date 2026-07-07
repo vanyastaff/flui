@@ -426,7 +426,11 @@ impl<'a> BoxDryLayoutCtx<'a> {
 /// these when the `testing` feature is enabled.
 #[cfg(any(test, feature = "testing"))]
 pub mod test_support {
-    use super::*;
+    use super::{
+        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, DryBaselineChildRequest,
+        DryBaselineChildResponse, DryLayoutChildRequest, DryLayoutChildResponse,
+        IntrinsicDimension,
+    };
 
     /// A leaf context for unit-testing `compute_*` implementations of
     /// childless objects: any child query is a contract violation and

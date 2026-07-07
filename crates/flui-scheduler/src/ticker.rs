@@ -513,8 +513,11 @@ impl Ticker {
             let mut inner = self.inner.lock();
             if inner.state == TickerState::Muted {
                 let now = Instant::now();
-                let adjusted_start =
-                    now - std::time::Duration::from_secs_f64(inner.muted_elapsed.value());
+                let adjusted_start = now
+                    .checked_sub(std::time::Duration::from_secs_f64(
+                        inner.muted_elapsed.value(),
+                    ))
+                    .unwrap();
                 inner.start_time = Some(adjusted_start);
                 inner.state = TickerState::Active;
             }
@@ -599,8 +602,7 @@ impl Ticker {
             TickerState::Muted => inner.muted_elapsed,
             TickerState::Active => inner
                 .start_time
-                .map(|s| Seconds::new(s.elapsed().as_secs_f64()))
-                .unwrap_or(Seconds::ZERO),
+                .map_or(Seconds::ZERO, |s| Seconds::new(s.elapsed().as_secs_f64())),
         }
     }
 
@@ -1209,7 +1211,7 @@ impl std::fmt::Debug for TickerFuture {
             TickerFutureState::Complete => "complete",
             TickerFutureState::Canceled => "canceled",
         };
-        write!(f, "TickerFuture({})", state_str)
+        write!(f, "TickerFuture({state_str})")
     }
 }
 

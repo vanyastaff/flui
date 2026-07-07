@@ -32,6 +32,11 @@
 //!    which fails E0308. We test the canonical "every arm
 //!    `.boxed()`" shape only.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::used_underscore_items)]
+
 use flui_view::context::BuildContext;
 use flui_view::prelude::*;
 

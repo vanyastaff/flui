@@ -15,6 +15,7 @@ use crate::{Layer, LayerTree};
 /// Build one with [`layer`], nest children with [`child`](LayerSpec::child) /
 /// [`children`](LayerSpec::children), and tag it with
 /// [`label`](LayerSpec::label) for lookup after mounting.
+#[derive(Debug)]
 pub struct LayerSpec {
     layer: Layer,
     label: Option<&'static str>,

@@ -175,6 +175,16 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 | C1.12 | Frame-time histogram ≤ 16ms median over 5-second animation run | 🛇 needs display | proves real `Ticker`; needs a windowed animation run |
 | C1.13 | Ported Flutter test scaffolding at `crates/flui-widgets/tests/parity/` | ✅ first slice (2026-06-30) | Scaffolding + 18 oracle-cited parity tests land (commit 0f0e14b2; plan `docs/research/2026-06-30-c1-13-parity-scaffolding-plan.md`). WidgetTester-shim (screen/find_by_render_type/find_text/pump_widget) over the existing HeadlessBinding+LaidOut harness. Gate = scaffolding exists + first slice passes ✓. Broader corpus + paint/semantics/key finders = Phase 3, grow incrementally. |
 
+> **OPEN ITEM — Core.1 formal exit (C1.10 + C1.12).** Core.1 has never been
+> formally closed: the two `🛇 needs display` rows above require a windowed
+> desktop session (demo app assembled from slice widgets with a real frame
+> loop, plus a 5-second animation run with a ≤ 16 ms median frame-time
+> histogram). Every agent checkout so far has been headless, so the rows have
+> sat implicit. **Owner action:** on a machine with a display, run the demo
+> app and the histogram capture, then promote C1.10/C1.12 with the run
+> evidence. Until then, downstream phase entries that cite "Core.1 exit"
+> stand on C1.11/C1.13 evidence only.
+
 ---
 
 ## Core.2 — Render-object catalog  *(entry: Core.1 exit + N12)*

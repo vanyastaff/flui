@@ -3,6 +3,11 @@
 //!
 //! Tests view creation, element management, state handling, and update cycles.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::struct_field_names, clippy::unwrap_used)]
+
 use std::{
     any::TypeId,
     sync::{
@@ -473,7 +478,7 @@ fn test_stateless_element_is_small() {
     // StatelessElement should be reasonably sized
     let size = std::mem::size_of::<StatelessElement<SimpleStatelessView>>();
     // Should be less than 256 bytes (view + lifecycle + depth + child + dirty)
-    assert!(size < 256, "StatelessElement is too large: {} bytes", size);
+    assert!(size < 256, "StatelessElement is too large: {size} bytes");
 }
 
 #[test]
@@ -481,7 +486,7 @@ fn test_stateful_element_is_reasonably_sized() {
     // StatefulElement includes state, so it can be larger
     let size = std::mem::size_of::<StatefulElement<CounterView>>();
     // Should be less than 512 bytes
-    assert!(size < 512, "StatefulElement is too large: {} bytes", size);
+    assert!(size < 512, "StatefulElement is too large: {size} bytes");
 }
 
 // ============================================================================
@@ -511,7 +516,7 @@ fn test_stateless_element_debug() {
     };
     let element = StatelessElement::new(&view, StatelessBehavior);
 
-    let debug_str = format!("{:?}", element);
+    let debug_str = format!("{element:?}");
     assert!(debug_str.contains("StatelessElement"));
     assert!(debug_str.contains("lifecycle"));
 }
@@ -521,7 +526,7 @@ fn test_stateful_element_debug() {
     let view = CounterView { initial_count: 42 };
     let element = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
-    let debug_str = format!("{:?}", element);
+    let debug_str = format!("{element:?}");
     assert!(debug_str.contains("StatefulElement"));
     assert!(debug_str.contains("lifecycle"));
 }

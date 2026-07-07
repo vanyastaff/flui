@@ -122,3 +122,6 @@ testing = ["flui-layer/testing"]
 # `RenderCustomMultiChildLayoutBox`) landed; the remaining gated module is
 # `custom_clipper.rs`. Opt in via `--features experimental-delegates`.
 experimental-delegates = []
+
+[lints]
+workspace = true

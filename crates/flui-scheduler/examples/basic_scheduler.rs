@@ -30,7 +30,7 @@ fn main() {
     let tc = Arc::clone(&transient_count);
     scheduler.schedule_frame_callback(Box::new(move |timestamp| {
         tc.fetch_add(1, Ordering::SeqCst);
-        println!("  Transient callback fired! Timestamp: {:?}", timestamp);
+        println!("  Transient callback fired! Timestamp: {timestamp:?}");
     }));
 
     // 2. Add a persistent callback (runs every frame)
@@ -54,7 +54,7 @@ fn main() {
     println!("Executing 3 frames...\n");
 
     for i in 1..=3 {
-        println!("--- Frame {} ---", i);
+        println!("--- Frame {i} ---");
         println!("  Phase before: {:?}", scheduler.scheduler_phase());
 
         scheduler.execute_frame();

@@ -425,6 +425,7 @@ impl SemanticsActionEvent {
 /// // Make an assertive announcement
 /// SemanticsService::announce_with_assertiveness("Error occurred", Assertiveness::Assertive);
 /// ```
+#[derive(Debug)]
 pub struct SemanticsService;
 
 impl SemanticsService {

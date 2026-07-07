@@ -20,10 +20,10 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 
 # High-performance cache
-moka = { version = "0.12", features = ["future"] }
+moka = { workspace = true }
 
 # String interning for efficient asset keys
-lasso = { version = "0.7", features = ["multi-threaded"] }
+lasso = { workspace = true }
 
 # Sync primitives
 parking_lot = { workspace = true }
@@ -71,3 +71,6 @@ network = ["dep:reqwest"]
 
 # Enable all stable features (recommended for applications)
 full = ["images", "network"]
+
+[lints]
+workspace = true

@@ -74,3 +74,6 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+
+[lints]
+workspace = true

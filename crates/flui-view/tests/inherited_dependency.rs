@@ -23,6 +23,11 @@
 //! non-recording read), and `framework.dart:6414`
 //! (`InheritedElement.notifyClients`).
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unreadable_literal, clippy::unwrap_used)]
+
 use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;
@@ -632,8 +637,7 @@ mod did_change_dependencies_on_inherited_update {
         let events = probe.lock().unwrap().clone();
         assert!(
             events.iter().any(|e| e == "dcd:1"),
-            "ViewState::did_change_dependencies must fire exactly once. recorded: {:?}",
-            events
+            "ViewState::did_change_dependencies must fire exactly once. recorded: {events:?}"
         );
         // Exactly once: the typed hook must not have fired a second
         // time. `ProbeDependentState.dcd_calls` increments on every
@@ -641,8 +645,7 @@ mod did_change_dependencies_on_inherited_update {
         // probe vec.
         assert!(
             !events.iter().any(|e| e == "dcd:2"),
-            "ViewState::did_change_dependencies fired more than once. recorded: {:?}",
-            events
+            "ViewState::did_change_dependencies fired more than once. recorded: {events:?}"
         );
         let dcd_idx = events
             .iter()
@@ -654,8 +657,7 @@ mod did_change_dependencies_on_inherited_update {
             .expect("build present (perform_build must run after notify_dependency_change)");
         assert!(
             dcd_idx < build_idx,
-            "did_change_dependencies must fire BEFORE build. recorded: {:?}",
-            events
+            "did_change_dependencies must fire BEFORE build. recorded: {events:?}"
         );
         // Sequencing contract: the recorded order is exactly
         // [dcd:1, build] — `dcd` immediately precedes `build` with no
@@ -793,8 +795,7 @@ mod did_change_dependencies_on_inherited_update {
         let events = probe.lock().unwrap().clone();
         assert!(
             events.iter().all(|e| e != "dcd:1"),
-            "did_change_dependencies must NOT fire when update_should_notify=false. recorded: {:?}",
-            events
+            "did_change_dependencies must NOT fire when update_should_notify=false. recorded: {events:?}"
         );
     }
 

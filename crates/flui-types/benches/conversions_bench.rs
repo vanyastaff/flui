@@ -1,3 +1,6 @@
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
 #![allow(deprecated)]
 // N-geom U5: target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Unit conversion benchmarks

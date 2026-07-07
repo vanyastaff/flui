@@ -45,3 +45,6 @@ path = "src/lib.rs"
 [features]
 default = []
 serde = ["dep:serde"]
+
+[lints]
+workspace = true

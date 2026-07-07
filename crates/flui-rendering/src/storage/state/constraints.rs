@@ -72,9 +72,6 @@ impl<P: Protocol> RenderState<P> {
     where
         ProtocolConstraints<P>: PartialEq,
     {
-        self.constraints
-            .as_ref()
-            .map(|c| c == constraints)
-            .unwrap_or(false)
+        self.constraints.as_ref().is_some_and(|c| c == constraints)
     }
 }

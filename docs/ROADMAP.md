@@ -21,7 +21,7 @@ The target is **full parity with released Flutter** — every framework package,
 | `scheduler` | 2.2k | ~95% | Core.0 |
 | `gestures` | 14.3k | ~95% | Cross.H |
 | `semantics` | 7.9k | ~70% | Cross.H |
-| `animation` | 5.3k | ~85% (disabled) | Core.1 (re-enable) |
+| `animation` | 5.3k | ~85% | Core.1 ✓ (re-enabled; active workspace member) |
 | `painting` | 24.9k | ~60% | Core.0 → Core.2 |
 | `rendering` | 52.1k | machine ~90%, catalog ~12% | Core.0 (machine) + Core.2 (catalog) |
 | `widgets` | 157.4k | spine ~85%, catalog ~2% | Core.0 (spine) + Core.1 / Business.1 (catalog) |

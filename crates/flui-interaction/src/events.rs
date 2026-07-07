@@ -258,7 +258,7 @@ impl PointerEventData {
             device_kind: info.pointer_type,
             device,
             buttons,
-            pressure: state.map(|s| s.pressure).unwrap_or(0.0),
+            pressure: state.map_or(0.0, |s| s.pressure),
             time_stamp,
         })
     }

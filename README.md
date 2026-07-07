@@ -1,8 +1,14 @@
 # FLUI
 
+[![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](README.md#license)
+[![MSRV: 1.96](https://img.shields.io/badge/MSRV-1.96-orange.svg)](README.md#minimum-supported-rust-version)
+
 > A modular, Flutter-inspired declarative UI framework for Rust with GPU-accelerated rendering.
 
 FLUI brings the proven three-tree architecture (View → Element → Render) to Rust, adapted to native ownership, type-safe arity, and a strict layered crate DAG. The Core.1 vertical slice is complete: the widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline is exercised end-to-end, and the gesture/animation integration ships.
+
+**Project stage: pre-release — build from source.** FLUI is not published to crates.io; the workspace builds and runs from a clone (instructions below), and APIs may still change between commits. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
 
 ## Status
 
@@ -16,13 +22,13 @@ See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate st
 
 ## Quick Start
 
-Prerequisites: Rust 1.96 (edition 2024). The repository is a Cargo workspace, not yet published to crates.io. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
+Prerequisites: Rust 1.96 (edition 2024). The repository is a Cargo workspace consumed by path — clone and build. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
 
 ```bash
 git clone https://github.com/vanyastaff/flui
 cd flui
 cargo build --workspace
-cargo run --example hello_world
+cargo run --example widgets_gallery
 ```
 
 A [`justfile`](justfile) is provided for common tasks — install [`just`](https://just.systems) and run `just` for the recipe list (`just check`, `just test`, `just clippy`, `just ci`, ...). Raw `cargo` commands always work too.
@@ -40,37 +46,62 @@ For a step-by-step setup including platform notes (Windows / macOS / Android NDK
 
 ## Hello World
 
+An app is a `View` that builds other views — the widget layer drives the whole
+pipeline (element tree → render objects → layout → paint → `wgpu`):
+
 ```rust
-//! examples/hello_world.rs (excerpt)
-use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
+//! examples/widgets_gallery.rs (excerpt)
+use flui_app::run_app;
+use flui_widgets::prelude::*;
+use flui_widgets::{column, row};
+
+/// A circular colour avatar: a coloured box clipped to an inscribed oval.
+fn avatar(color: Color) -> ClipOval {
+    ClipOval::new().child(ColoredBox::new(color).child(SizedBox::square(64.0)))
+}
+
+#[derive(Clone, StatelessView)]
+struct Gallery;
+
+impl StatelessView for Gallery {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Container::new()
+            .color(Color::rgb(18, 18, 24))
+            .padding(EdgeInsets::all(px(24.0)))
+            .child(Column::new(column![
+                Text::new("FLUI widget gallery"),
+                SizedBox::height(16.0),
+                Row::new(row![
+                    avatar(Color::rgb(229, 57, 53)),
+                    SizedBox::width(12.0),
+                    avatar(Color::rgb(30, 136, 229)),
+                ]),
+                Container::new()
+                    .color(Color::rgb(38, 38, 48))
+                    .padding(EdgeInsets::all(px(16.0)))
+                    .child(Center::new().child(Text::new("centered in a card"))),
+            ]))
+    }
+}
 
 fn main() {
-    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
-
-    let platform = current_platform().expect("failed to initialize platform");
-    tracing::info!("Platform: {:?}", platform.name());
-
-    let window = platform
-        .open_window(WindowOptions {
-            title: "Hello FLUI!".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
-            resizable: true,
-            visible: true,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-        })
-        .expect("failed to create window");
-
-    platform.run(Box::new(move || {
-        tracing::info!("ready");
-        let _window = window; // keep window alive in event loop
-    }));
+    run_app(Gallery);
 }
 ```
 
-Run with `cargo run --example hello_world`. More examples live under `examples/` and per-target crates (`examples/desktop_scene/`, `examples/web_demo/`, `examples/painting_demo/`).
+Run with `cargo run --example widgets_gallery`. For the platform layer without
+widgets (raw window + event loop), see `examples/hello_world.rs`; more examples
+live under `examples/` and per-target crates (`examples/desktop_scene/`,
+`examples/web_demo/`, `examples/painting_demo/`).
+
+## Minimum Supported Rust Version
+
+The MSRV is **Rust 1.96**, declared as `rust-version` in the workspace
+manifest, pinned by `rust-toolchain.toml`, and verified by a dedicated CI job.
+Policy: pre-release, the MSRV may be bumped in any commit when a dependency or
+language feature warrants it; every bump updates the manifest, the toolchain
+pin, this section, and CI together (the procedure lives in
+`rust-toolchain.toml`'s header).
 
 ## Documentation
 

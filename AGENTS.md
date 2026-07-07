@@ -78,7 +78,7 @@ FLUI is a Flutter-inspired declarative UI framework for Rust with a three-tree a
 - **Graphics:** `wgpu` 29.x, `lyon`, `glyphon`, `cosmic-text`, `glam`
 - **Platform:** native Win32, AppKit, headless backends + `winit` 0.30 fallback
 - **Diagnostics:** `tracing` only — **no `println!`, `eprintln!`, or `dbg!` in shipped code** (CI enforces this in foundation/tree/macros crates via port-check trigger #15)
-- **Errors:** `thiserror` (libraries), `anyhow` (applications)
+- **Errors:** `thiserror` (libraries), `anyhow` (applications); panics only per [`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md) — `expect("BUG: <invariant>")` for internal invariants, never bare `unwrap()` on production paths (`clippy::unwrap_used` gates this)
 - **Async runtime:** `tokio` 1.43 LTS
 
 ## Key Entry Points
@@ -108,8 +108,10 @@ This project uses **`justfile`** for build automation. Install [`just`](https://
 | `just clippy` | Lint gate: `cargo clippy --workspace --all-targets -- -D warnings` |
 | `just fmt` | Format with rustfmt |
 | `just fmt-check` | Format check (CI gate) |
-| `just inventory-check` | Docs / justfile crate inventory drift guard |
-| `just ci` | Full local CI: `fmt-check` → `inventory-check` → `port-check` → `clippy` → `test` |
+| `just inventory-check` | Docs / justfile crate inventory drift guard (incl. `[lints] workspace = true` on every crate) |
+| `just ci` | Full local CI: `fmt-check` → `inventory-check` → `port-check` → `clippy` → `test` → `test-doc` |
+| `just test-doc` | Run rustdoc examples as tests (nextest never executes doctests) |
+| `just miri` | Miri over the `flui-rendering` subtree arena (unsafe hot spot; needs nightly + miri) |
 | `just example-hello` | Platform smoke test |
 | `just port-check` | Port-methodology refusal triggers |
 | `just port-check-verbose` | Per-trigger pass/fail + marker totals |
@@ -174,6 +176,7 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 | **Architecture** | `docs/architecture.md` | Three-tree pipeline overview |
 | **Crates map** | `docs/crates.md` | Per-layer crate inventory |
 | **Testing** | `docs/testing.md` | Build/test/coverage commands |
+| **Panic policy** | `docs/PANIC-POLICY.md` | When `expect("BUG: …")` is allowed vs. `Result`; `clippy::unwrap_used` gate |
 | **Render harness** | `crates/flui-rendering/docs/TESTING.md` | RenderTester API, catalog rules |
 | **Crate ARCHITECTURE.md** | `crates/flui-{foundation,rendering,engine,layer,painting}/ARCHITECTURE.md` | Per-crate deep architecture |
 
@@ -194,13 +197,17 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 
 ## CI Pipeline
 
-CI runs on PR + push to main. Jobs (in dependency order):
+CI runs on PR + push to main. Jobs (all gated on `checks`):
 
-1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh`, `port-check.sh`
-2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings` (needs: checks)
-3. **test** — `cargo nextest run --workspace --exclude flui-platform --lib --test-threads 1` (needs: checks, Linux only)
-4. **bench-compile** — `cargo bench -p flui-rendering --no-run` (needs: checks)
-5. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"` (needs: checks)
+1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh` (incl. the `[lints] workspace = true` drift guard), `port-check.sh`
+2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
+3. **test** — `cargo nextest run --workspace --exclude flui-platform --test-threads 1` (lib **and** integration targets; Linux only)
+4. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking)
+5. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
+6. **msrv** — `cargo check --workspace --all-targets` on Rust 1.96 (the declared MSRV; other jobs run latest stable)
+7. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing)
+8. **bench-compile** — `cargo bench -p flui-rendering --no-run`
+9. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"`
 
 ## Important Config
 

@@ -1134,8 +1134,7 @@ impl GestureArena {
     pub fn winner_count(&self, pointer: PointerId) -> usize {
         self.entries
             .get(&pointer)
-            .map(|entry_ref| entry_ref.lock().winners.len())
-            .unwrap_or(0)
+            .map_or(0, |entry_ref| entry_ref.lock().winners.len())
     }
 
     /// Check if an arena is resolved.
@@ -1177,8 +1176,7 @@ impl GestureArena {
     pub fn member_count(&self, pointer: PointerId) -> usize {
         self.entries
             .get(&pointer)
-            .map(|entry_ref| entry_ref.lock().members.len())
-            .unwrap_or(0)
+            .map_or(0, |entry_ref| entry_ref.lock().members.len())
     }
 
     // ========================================================================
@@ -1807,7 +1805,7 @@ mod tests {
         arena.add(pointer, member.clone());
 
         // With a very long timeout, should not force resolve
-        let resolved = arena.force_resolve_if_timed_out(pointer, Duration::from_secs(3600));
+        let resolved = arena.force_resolve_if_timed_out(pointer, Duration::from_hours(1));
 
         assert!(!resolved);
         assert!(!arena.is_resolved(pointer));
@@ -2108,7 +2106,7 @@ mod tests {
         let member = Arc::new(MockMember::new());
 
         let entry = arena.add(pointer, member);
-        let debug = format!("{:?}", entry);
+        let debug = format!("{entry:?}");
 
         assert!(debug.contains("GestureArenaEntry"));
         assert!(debug.contains("pointer"));

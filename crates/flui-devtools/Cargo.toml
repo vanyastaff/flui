@@ -75,3 +75,6 @@ required-features = ["profiling"]
 # [[bench]]
 # name = "profiler_bench"
 # harness = false
+
+[lints]
+workspace = true

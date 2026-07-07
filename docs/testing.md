@@ -240,8 +240,15 @@ typos
 bash scripts/check-workspace-inventory.sh
 bash scripts/port-check.sh -v
 cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace --exclude flui-platform --lib --no-fail-fast --test-threads 1
+cargo nextest run --workspace --exclude flui-platform --no-fail-fast --test-threads 1
+cargo test --workspace --exclude flui-platform --doc
+cargo check --workspace --all-targets           # repeated on Rust 1.96 (MSRV job)
+cargo miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory
 ```
+
+The `gpu-test` job additionally runs the full `enable-wgpu-tests` readback
+suite on a windows-latest runner (WARP software rasterizer) and is
+merge-blocking.
 
 A change cannot be merged if any of these fail. If you encounter a flaky test, file a fix issue rather than retrying CI.
 

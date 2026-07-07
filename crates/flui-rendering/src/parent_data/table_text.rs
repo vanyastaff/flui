@@ -207,7 +207,7 @@ impl TextParentData {
     /// Get span length if present.
     #[inline]
     pub fn span_length(&self) -> Option<usize> {
-        self.span.as_ref().map(|s| s.len())
+        self.span.as_ref().map(TextRange::len)
     }
 }
 

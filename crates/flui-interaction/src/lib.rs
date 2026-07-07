@@ -130,6 +130,20 @@
 //! - ✅ Clear separation of concerns (SOLID principles)
 //! - ✅ Smaller compile times and dependencies
 
+// Lint levels come from `[workspace.lints]`. Tracked ship-quality debt:
+#![allow(missing_docs)] // TODO(ship-wave-2): public-item doc backlog (~33 items), then delete
+#![allow(missing_debug_implementations)] // TODO(ship-wave-2): add Debug impls (7 types), then delete
+#![allow(
+    clippy::comparison_chain,
+    clippy::many_single_char_names,
+    clippy::match_same_arms,
+    clippy::match_wild_err_arm,
+    clippy::missing_fields_in_debug,
+    clippy::struct_field_names,
+    clippy::unnecessary_wraps,
+    clippy::unused_self
+)] // TODO(ship-wave-2): burn down per-lint, then delete
+
 // ============================================================================
 // Core infrastructure modules
 // ============================================================================

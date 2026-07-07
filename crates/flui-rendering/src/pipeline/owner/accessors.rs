@@ -427,35 +427,31 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             if child_node.as_sliver().is_some() {
                 // Explicit positions are already child-local; the layout-offset
                 // fallback starts from the child's physical paint offset.
-                return match override_pos {
-                    Some(position) => {
-                        let child_position =
-                            Self::sliver_hit_position_from_offset(child_node, position);
-                        self.hit_test_sliver_subtree(child_id, child_position, result)
+                return if let Some(position) = override_pos {
+                    let child_position =
+                        Self::sliver_hit_position_from_offset(child_node, position);
+                    self.hit_test_sliver_subtree(child_id, child_position, result)
+                } else {
+                    if !Self::sliver_child_is_visible(child_node) {
+                        return false;
                     }
-                    None => {
-                        if !Self::sliver_child_is_visible(child_node) {
-                            return false;
-                        }
-                        let child_offset = child_node.offset();
-                        result.with_paint_offset(child_offset, |result| {
-                            let child_position = Self::sliver_hit_position_from_paint_offset(
-                                child_node,
-                                position - child_offset,
-                            );
-                            self.hit_test_sliver_subtree(child_id, child_position, result)
-                        })
-                    }
-                };
-            }
-            match override_pos {
-                Some(child_position) => self.hit_test_subtree(child_id, child_position, result),
-                None => {
                     let child_offset = child_node.offset();
                     result.with_paint_offset(child_offset, |result| {
-                        self.hit_test_subtree(child_id, position - child_offset, result)
+                        let child_position = Self::sliver_hit_position_from_paint_offset(
+                            child_node,
+                            position - child_offset,
+                        );
+                        self.hit_test_sliver_subtree(child_id, child_position, result)
                     })
-                }
+                };
+            }
+            if let Some(child_position) = override_pos {
+                self.hit_test_subtree(child_id, child_position, result)
+            } else {
+                let child_offset = child_node.offset();
+                result.with_paint_offset(child_offset, |result| {
+                    self.hit_test_subtree(child_id, position - child_offset, result)
+                })
             }
         };
 

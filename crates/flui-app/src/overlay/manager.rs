@@ -90,8 +90,7 @@ impl OverlayManager {
         self.order.iter().rev().copied().find(|id| {
             self.entries
                 .get(id)
-                .map(|e| e.is_modal() && e.is_visible())
-                .unwrap_or(false)
+                .is_some_and(|e| e.is_modal() && e.is_visible())
         })
     }
 
@@ -108,8 +107,7 @@ impl OverlayManager {
         self.order.iter().copied().filter(|id| {
             self.entries
                 .get(id)
-                .map(|e| e.is_visible())
-                .unwrap_or(false)
+                .is_some_and(super::entry::OverlayEntry::is_visible)
         })
     }
 
@@ -154,8 +152,7 @@ impl OverlayManager {
         let pos = self.order.partition_point(|&oid| {
             self.entries
                 .get(&oid)
-                .map(|e| e.priority() <= priority)
-                .unwrap_or(false)
+                .is_some_and(|e| e.priority() <= priority)
         });
         self.order.insert(pos, id);
     }

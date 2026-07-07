@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn test_team_debug_impl() {
         let team = GestureArenaTeam::new();
-        let debug = format!("{:?}", team);
+        let debug = format!("{team:?}");
 
         assert!(debug.contains("GestureArenaTeam"));
         assert!(debug.contains("active_combiners"));
@@ -708,7 +708,7 @@ mod tests {
         let member = MockMember::new(1);
 
         let entry = team.add(pointer, member, &arena);
-        let debug = format!("{:?}", entry);
+        let debug = format!("{entry:?}");
 
         assert!(debug.contains("TeamEntry"));
     }
