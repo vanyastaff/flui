@@ -34,7 +34,11 @@ pub enum TableColumnWidth {
     ///
     /// Flutter parity: `IntrinsicColumnWidth({double? flex})`
     /// (`rendering/table.dart:94`).
-    Intrinsic { flex: Option<f32> },
+    Intrinsic {
+        /// Optional flex factor for distributing leftover space;
+        /// `None` means the column never takes extra space.
+        flex: Option<f32>,
+    },
 
     /// Fraction of available width (0.0-1.0).
     ///

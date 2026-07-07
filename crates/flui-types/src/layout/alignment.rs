@@ -7,6 +7,9 @@ use std::ops::{Add, Neg};
 
 use crate::geometry::{Offset, Pixels, Rect, Size};
 
+/// How much space a flex container should occupy in its main axis.
+///
+/// Mirrors Flutter's `MainAxisSize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisSize {
@@ -16,6 +19,9 @@ pub enum MainAxisSize {
     /// children.
     Min,
 
+    /// Maximize the amount of space along the main axis (the default).
+    ///
+    /// The widget expands to fill the incoming main-axis constraint.
     #[default]
     Max,
 }
@@ -34,10 +40,18 @@ impl MainAxisSize {
     }
 }
 
+/// How children should be placed along the main axis of a flex layout
+/// (the horizontal axis for `Row`, the vertical axis for `Column`).
+///
+/// Mirrors Flutter's `MainAxisAlignment`.
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisAlignment {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    /// Place children at the start of the main axis (the default).
+    ///
+    /// For Row: left side (in LTR)
+    /// For Column: top side
     #[default]
     Start,
 
@@ -138,10 +152,18 @@ impl MainAxisAlignment {
     }
 }
 
+/// How children should be placed along the cross axis of a flex layout
+/// (the vertical axis for `Row`, the horizontal axis for `Column`).
+///
+/// Mirrors Flutter's `CrossAxisAlignment`.
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CrossAxisAlignment {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    /// Place children at the start of the cross axis (the default).
+    ///
+    /// For Row: top side
+    /// For Column: left side (in LTR)
     #[default]
     Start,
 
@@ -188,6 +210,13 @@ impl CrossAxisAlignment {
     }
 }
 
+/// A point within a rectangle, in normalized coordinates.
+///
+/// Mirrors Flutter's `Alignment`: both axes run from -1.0 to 1.0,
+/// where (-1, -1) is the top-left corner, (0, 0) the center, and
+/// (1, 1) the bottom-right corner. Values outside that range place
+/// the point outside the rectangle. For text-direction-aware
+/// alignment, use `AlignmentDirectional`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Alignment {
@@ -356,6 +385,12 @@ impl Neg for Alignment {
     }
 }
 
+/// An `Alignment` whose horizontal component depends on text direction.
+///
+/// Mirrors Flutter's `AlignmentDirectional`: `start` is the reading
+/// edge (left in LTR, right in RTL) and must be resolved with
+/// [`resolve`](Self::resolve) before use; the vertical axis matches
+/// `Alignment`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AlignmentDirectional {
@@ -450,6 +485,10 @@ impl Neg for AlignmentDirectional {
     }
 }
 
+/// Either an absolute or a text-direction-relative alignment.
+///
+/// Mirrors Flutter's `AlignmentGeometry` base class as a Rust enum;
+/// call [`resolve`](Self::resolve) to obtain an absolute `Alignment`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AlignmentGeometry {

@@ -83,7 +83,8 @@
 //! etc.) have been moved to `flui_rendering::constraints` as they are part of
 //! the rendering protocol rather than basic types.
 
-#![allow(missing_docs)] // TODO(ship-wave-1): 486-item doc backlog — burn down per module, then delete this line
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 #![allow(missing_debug_implementations)]
 // TODO(ship-wave-1): add Debug impls (28 types), then delete
 // Math-crate idiom shared with flui-geometry (see its lib.rs): permanent

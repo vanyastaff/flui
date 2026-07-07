@@ -4,6 +4,11 @@
 //! -1.0 to 1.0 coordinates, `FractionalOffset` uses 0.0 to 1.0 where
 //! (0.0, 0.0) is the top-left corner.
 
+/// An offset expressed as a fraction of a container's size.
+///
+/// Mirrors Flutter's `FractionalOffset`. Unlike `Alignment`, which is
+/// centered at (0, 0), coordinates run from 0.0 to 1.0 with (0, 0) at
+/// the top-left corner and (1, 1) at the bottom-right corner.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FractionalOffset {
     /// The distance fraction in the horizontal direction.
@@ -45,12 +50,16 @@ impl FractionalOffset {
     /// The bottom-right corner (1.0, 1.0).
     pub const BOTTOM_RIGHT: Self = Self { dx: 1.0, dy: 1.0 };
 
+    /// Creates a fractional offset with the given horizontal and
+    /// vertical fractions.
     #[must_use]
     #[inline]
     pub const fn new(dx: f32, dy: f32) -> Self {
         Self { dx, dy }
     }
 
+    /// Converts an `Alignment` (-1.0..=1.0 coordinates) into the
+    /// equivalent fractional offset (0.0..=1.0 coordinates).
     #[must_use]
     #[inline]
     #[allow(clippy::manual_midpoint)]
@@ -61,12 +70,20 @@ impl FractionalOffset {
         }
     }
 
+    /// Converts this fractional offset into the equivalent `Alignment`
+    /// (-1.0..=1.0 coordinates); the inverse of
+    /// [`from_alignment`](Self::from_alignment).
     #[must_use]
     #[inline]
     pub fn to_alignment(&self) -> crate::layout::Alignment {
         crate::layout::Alignment::new(self.dx * 2.0 - 1.0, self.dy * 2.0 - 1.0)
     }
 
+    /// Linearly interpolates between two fractional offsets.
+    ///
+    /// `t == 0.0` returns `a`; `t == 1.0` returns `b`. Values of `t`
+    /// outside `[0, 1]` extrapolate — they are **not** clamped,
+    /// matching `Alignment::lerp`.
     #[must_use]
     #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
@@ -76,12 +93,16 @@ impl FractionalOffset {
         }
     }
 
+    /// Returns `true` if both `dx` and `dy` are finite
+    /// (neither infinite nor NaN).
     #[must_use]
     #[inline]
     pub fn is_finite(&self) -> bool {
         self.dx.is_finite() && self.dy.is_finite()
     }
 
+    /// Returns the offset with both components negated
+    /// (the `-` operator delegates to this).
     #[must_use]
     #[inline]
     pub fn negate(&self) -> Self {

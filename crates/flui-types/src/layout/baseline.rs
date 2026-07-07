@@ -1,5 +1,10 @@
 //! Baseline types for text alignment
 
+/// A horizontal line used for aligning text, equivalent to Flutter's
+/// `TextBaseline`.
+///
+/// Baseline-aligned layout (e.g. `CrossAxisAlignment::Baseline`) lines up
+/// children along the selected baseline kind rather than their box edges.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextBaseline {
