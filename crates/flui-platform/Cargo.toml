@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme = "README.md"
 description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
 
 [dependencies]

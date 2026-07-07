@@ -118,7 +118,7 @@ impl std::fmt::Debug for RenderingFlutterBinding {
                 "first_frame_sent",
                 &self.first_frame_sent.load(Ordering::Relaxed),
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

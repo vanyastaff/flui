@@ -99,6 +99,7 @@ use crate::traits::{
 /// - **fontconfig** for font discovery
 /// - **FreeType** for text rendering
 /// - **Vulkan/wgpu** for GPU rendering
+#[derive(Debug)]
 pub struct LinuxPlatform;
 
 impl LinuxPlatform {

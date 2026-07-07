@@ -257,7 +257,11 @@ where
         if !dirty && let Some(started) = last_frame_started {
             let elapsed = started.elapsed();
             if elapsed < frame_budget {
-                std::thread::sleep(frame_budget.checked_sub(elapsed).unwrap());
+                std::thread::sleep(
+                    frame_budget
+                        .checked_sub(elapsed)
+                        .expect("BUG: `elapsed < frame_budget` was checked on the previous line"),
+                );
             }
         }
 

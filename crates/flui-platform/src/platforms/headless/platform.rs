@@ -79,6 +79,12 @@ impl HeadlessPlatform {
     }
 }
 
+impl std::fmt::Debug for HeadlessPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessPlatform").finish_non_exhaustive()
+    }
+}
+
 impl Default for HeadlessPlatform {
     fn default() -> Self {
         Self::new()

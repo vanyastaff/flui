@@ -103,7 +103,7 @@ impl PlatformInput {
     pub fn as_pointer(&self) -> Option<&PointerEvent> {
         match self {
             PlatformInput::Pointer(event) => Some(event),
-            _ => None,
+            PlatformInput::Keyboard(_) => None,
         }
     }
 
@@ -112,7 +112,7 @@ impl PlatformInput {
     pub fn as_keyboard(&self) -> Option<&KeyboardEvent> {
         match self {
             PlatformInput::Keyboard(event) => Some(event),
-            _ => None,
+            PlatformInput::Pointer(_) => None,
         }
     }
 }
@@ -248,12 +248,14 @@ impl Default for BasicVelocityTracker {
 
 /// Timestamp provider for platform events
 pub trait TimestampProvider {
+    /// Current instant used to stamp platform input events
     fn now() -> Instant {
         Instant::now()
     }
 }
 
 /// Default timestamp provider using std::time::Instant
+#[derive(Debug)]
 pub struct SystemTimestamp;
 
 impl TimestampProvider for SystemTimestamp {}

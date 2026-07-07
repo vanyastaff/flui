@@ -120,6 +120,12 @@ impl BackgroundExecutor {
     }
 }
 
+impl std::fmt::Debug for BackgroundExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackgroundExecutor").finish_non_exhaustive()
+    }
+}
+
 impl PlatformExecutor for BackgroundExecutor {
     fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
         self.runtime.spawn(async move {
@@ -245,6 +251,14 @@ impl ForegroundExecutor {
     pub fn pending_count(&self) -> usize {
         let receiver = self.receiver.lock();
         receiver.len()
+    }
+}
+
+impl std::fmt::Debug for ForegroundExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForegroundExecutor")
+            .field("pending_tasks", &self.pending_count())
+            .finish_non_exhaustive()
     }
 }
 
