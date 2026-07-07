@@ -834,7 +834,7 @@ When a need arises that the table does not cover, the order of operations is:
 
 ### Version policy
 
-- **Rust toolchain**: pinned to an explicit stable version (currently `channel = "1.96.0"`) in [`rust-toolchain.toml`](../rust-toolchain.toml), kept in lockstep with the MSRV below and bumped by the same PR.
+- **Rust toolchain**: pinned to an explicit stable version (currently `channel = "1.96.1"`) in [`rust-toolchain.toml`](../rust-toolchain.toml), kept in lockstep with the MSRV below and bumped by the same PR.
 - **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.96**, released 2026-05-25; next: **1.97** ~2026-07-09). The MSRV bump PR is mechanical — bump the field and `rust-toolchain.toml`, update the CI matrix, ship.
 - **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
 - **Pinned exceptions**: documented inline in `Cargo.toml` (current: `image` `webp` feature disabled per `image-webp` issue #102; no wgpu pin — tracking latest stable major).

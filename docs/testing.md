@@ -111,6 +111,7 @@ Performance targets defined by the constitution:
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check
 cargo clippy -p flui-engine --all-targets -- -D warnings
 cargo clippy --workspace --fix --allow-dirty       # auto-fix where Clippy can
 ```

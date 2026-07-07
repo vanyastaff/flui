@@ -112,6 +112,11 @@ test-release:
 test-doc:
     cargo test --workspace --exclude flui-platform --doc
 
+[group("quality")]
+[doc("Dependency audit: advisories, bans, licenses, sources (requires cargo-deny)")]
+deny:
+    cargo deny check
+
 [group("test")]
 [doc("Run miri on the flui-rendering subtree arena (the unsafe hot spot; requires nightly + miri component)")]
 miri:
@@ -311,6 +316,12 @@ ci: fmt-check inventory-check port-check clippy test test-doc
 # =============================================================================
 # Maintenance
 # =============================================================================
+
+[group("maintenance")]
+[doc("Prune stale build artifacts: current-toolchain sweep + anything older than 7 days (requires cargo-sweep)")]
+sweep:
+    cargo sweep --installed
+    cargo sweep --time 7
 
 [confirm("Remove target/ and all build artifacts?")]
 [group("maintenance")]

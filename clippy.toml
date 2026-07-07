@@ -5,3 +5,7 @@
 # the `unwrap_used` gate that guards production paths.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# MSRV-aware lints (e.g. incompatible_msrv, std_instead_of_core) respect the
+# workspace floor instead of assuming latest stable.
+msrv = "1.96"

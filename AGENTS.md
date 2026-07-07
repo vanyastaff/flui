@@ -112,6 +112,7 @@ This project uses **`justfile`** for build automation. Install [`just`](https://
 | `just ci` | Full local CI: `fmt-check` → `inventory-check` → `port-check` → `clippy` → `test` → `test-doc` |
 | `just test-doc` | Run rustdoc examples as tests (nextest never executes doctests) |
 | `just miri` | Miri over the `flui-rendering` subtree arena (unsafe hot spot; needs nightly + miri) |
+| `just deny` | Dependency audit — advisories/bans/licenses/sources (needs cargo-deny; config `deny.toml`) |
 | `just example-hello` | Platform smoke test |
 | `just port-check` | Port-methodology refusal triggers |
 | `just port-check-verbose` | Per-trigger pass/fail + marker totals |
@@ -201,18 +202,19 @@ CI runs on PR + push to main. Jobs (all gated on `checks`):
 
 1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh` (incl. the `[lints] workspace = true` drift guard), `port-check.sh`
 2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
-3. **test** — `cargo nextest run --workspace --exclude flui-platform --test-threads 1` (lib **and** integration targets; Linux only)
-4. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking)
-5. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
-6. **msrv** — `cargo check --workspace --all-targets` on Rust 1.96 (the declared MSRV; other jobs run latest stable)
-7. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing)
-8. **bench-compile** — `cargo bench -p flui-rendering --no-run`
-9. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"`
+3. **deny** — `cargo deny check` (advisories, bans, licenses, sources; config: `deny.toml`)
+4. **test** — `cargo nextest run --workspace --exclude flui-platform --test-threads 1` (lib **and** integration targets; Linux only)
+5. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking)
+6. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
+7. **msrv** — `cargo check --workspace --all-targets` on Rust 1.96 (the declared MSRV; other jobs run latest stable)
+8. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing)
+9. **bench-compile** — `cargo bench -p flui-rendering --no-run`
+10. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"`
 
 ## Important Config
 
-- **Toolchain:** pinned in `rust-toolchain.toml` to `1.96.0` with `rustfmt` + `clippy` components
-- **Cargo profiles:** dev `opt-level = 1` (faster runtime) + `debug = 1` ("limited" — backtraces + debugger vars, no DWARF/CodeView type info, the bulk of `target/debug/deps` size), deps `opt-level = 2`; `dbg` profile (`inherits = "dev"`, `debug = "full"`) is the opt-in full-type-info build for a step-debugger; release `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`. Local disk: the `target/debug/incremental` cache (no size cap) is the largest consumer on a 28-crate wgpu workspace — sweep it periodically. CI sets `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and reclaims ~25 GB of runner bloat before building.
+- **Toolchain:** pinned in `rust-toolchain.toml` to `1.96.1` with `rustfmt` + `clippy` components
+- **Cargo profiles:** dev `opt-level = 1` (faster runtime) + `debug = "line-tables-only"` (backtrace file:line only — matches CI; variable/type DWARF was the bulk of `target/debug/deps`), deps `opt-level = 2`; `dbg` profile (`inherits = "dev"`, `debug = "full"`) is the opt-in full-type-info build for a step-debugger; release `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`. Local disk: `target/debug/deps` is the largest consumer on a 28-crate wgpu workspace (incremental is pinned off via `.cargo/config.toml` `[env]`) — artifacts accumulate per RUSTFLAGS/feature/toolchain fingerprint with no size cap; run `just sweep` periodically (cargo-sweep: current-toolchain + 7-day prune). CI sets `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and reclaims ~25 GB of runner bloat before building.
 - **Build jobs:** 8 (set in `.cargo/config.toml`)
 - **Android examples** require `cargo-ndk` + Android NDK (not in workspace default-members)
 - **WASM examples** require `wasm-pack` (not in workspace default-members); use `just web-server` for the dev server
