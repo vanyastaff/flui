@@ -26,7 +26,8 @@ members = [
     "crates/flui-binding",   # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
 
     # === Phase 4: Application Layer ===
-    "crates/flui-app", # Application framework (ACTIVE - Migration)
+    "crates/flui-app",    # Application framework (ACTIVE - Migration)
+    "crates/flui-assets", # Asset loading/caching (ACTIVE — wired into Image per Cross.A)
 
     # === Examples (platform-specific) ===
     # NOTE: Android examples are excluded from workspace.members because they
@@ -64,9 +65,8 @@ members = [
     # "crates/flui-reactivity",
 ]
 
-# Default members exclude platform-specific examples/tools and flui-assets'
-# heavier optional integration path. `cargo build --workspace` still builds every
-# workspace member listed above.
+# Default members exclude platform-specific examples/tools. `cargo build
+# --workspace` still builds every workspace member listed above.
 default-members = [
     "crates/flui-geometry",
     "crates/flui-types",
@@ -87,6 +87,7 @@ default-members = [
     "crates/flui-widgets",
     "crates/flui-binding",
     "crates/flui-app",
+    "crates/flui-assets",
     "crates/flui-animation",
     "crates/flui-devtools",
     "crates/flui-build",
@@ -231,6 +232,13 @@ rust_2018_idioms = "warn"
 # Lint groups need lower priority to allow individual lint overrides
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+# Panic policy (docs/PANIC-POLICY.md): production paths return Result or
+# assert invariants via `expect("BUG: ...")`; bare unwrap() is banned. Test
+# code is exempt via clippy.toml (allow-unwrap-in-tests). Crates predating
+# the policy carry a tracked `#![allow(clippy::unwrap_used)]` burned down in
+# ship-quality waves. `expect_used` stays off — expect() with the BUG:
+# message convention IS the sanctioned invariant idiom.
+unwrap_used = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
@@ -240,6 +248,29 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 doc_markdown = "allow"
+# Graphics/layout idiom, workspace-wide: pixel math converts between float
+# and integer spaces constantly (px ↔ DevicePixels ↔ buffer indices), and
+# layout values are exact-by-construction so strict float comparison in
+# code and tests is deliberate (Flutter's own layout tests compare doubles
+# exactly). Same rationale as `cast_precision_loss` above.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+cast_possible_wrap = "allow"
+float_cmp = "allow"
+# Pedantic style relaxations that fight this codebase's idiom: math-adjacent
+# names (`x0`/`x1`, `min_w`/`max_w`) and helper items declared next to the
+# test statements that use them.
+similar_names = "allow"
+items_after_statements = "allow"
+# Declarative-UI API idiom: widget builders and `run_app` consume their
+# configuration by value (the View IS the argument — 100+ sites in
+# flui-widgets alone); small Copy geometry types are passed by ref for API
+# symmetry with their non-Copy siblings; UI config structs (WindowOptions,
+# gesture settings) are naturally bool-heavy.
+needless_pass_by_value = "allow"
+trivially_copy_pass_by_ref = "allow"
+struct_excessive_bools = "allow"
 
 [package]
 name = "flui"
@@ -254,12 +285,23 @@ readme = "README.md"
 keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 categories = ["gui", "rendering::engine"]
 
+[lints]
+workspace = true
+
+# The facade surface (src/lib.rs): the layers an application author consumes.
+# Lower layers (rendering/painting/engine/platform) stay dev-deps — examples
+# reach them directly, app authors go through the widget layer.
 [dependencies]
+flui-types = { path = "crates/flui-types", version = "0.2.0" }
+flui-geometry = { path = "crates/flui-geometry", version = "0.2.0" }
+flui-foundation = { path = "crates/flui-foundation", version = "0.2.0" }
+flui-view = { path = "crates/flui-view", version = "0.2.0" }
+flui-widgets = { path = "crates/flui-widgets", version = "0.2.0" }
+flui-animation = { path = "crates/flui-animation", version = "0.2.0" }
+flui-app = { path = "crates/flui-app", version = "0.2.0" }
 
 [dev-dependencies]
 # === Foundation Layer ===
-flui-types = { path = "crates/flui-types", version = "0.2.0" }
-flui-foundation = { path = "crates/flui-foundation", version = "0.2.0" } # HasInstance/Listenable in animated_box_app
 # flui-tree = { path = "crates/flui-tree" }
 
 # === Core Layer ===
@@ -269,18 +311,8 @@ flui-painting = { path = "crates/flui-painting", version = "0.2.0" }
 flui-rendering = { path = "crates/flui-rendering", version = "0.2.0" }
 flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
 
-# === View Layer ===
-flui-view = { path = "crates/flui-view", version = "0.2.0" }
-
-# === Widget Catalog (widgets_gallery example) ===
-flui-widgets = { path = "crates/flui-widgets", version = "0.2.0" }
-
 # === Reactive Layer (animated_box_app example) ===
 flui-scheduler = { path = "crates/flui-scheduler", version = "0.2.0" }
-flui-animation = { path = "crates/flui-animation", version = "0.2.0" }
-
-# === Application Layer ===
-flui-app = { path = "crates/flui-app", version = "0.2.0" }
 
 # === Platform Layer (for examples) ===
 flui-platform = { path = "crates/flui-platform", version = "0.2.0" }

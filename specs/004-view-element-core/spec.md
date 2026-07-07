@@ -3,7 +3,7 @@
 **Feature Branch**: `004-view-element-core` *(historical name — originally scoped as C4+C6; expanded per the 2026-05-22 doc-review finding that the four contracts cannot be locked independently)*
 **Created**: 2026-05-22
 **Last revised**: 2026-05-22 (round 5 — post-ideation doc-review verification; clusters C1-C5 + singletons applied; S6 mechanism redesigned)
-**Status**: Draft (round-5 — post-doc-review verification)
+**Status**: Closed (2026-06-30 — all four phases delivered with executable evidence; see `docs/ROADMAP-TRACKER.md` N5: Phase 0 S1/S2 spikes, Phase 1 storage/key round-trip tests, Phase 2 production keyed reconciliation + GlobalKey reparent tests, Phase 3 `IntoView`/derive/macro/port-check authoring surface)
 **Input**: Lock the FLUI Core Contracts — heterogeneous children (C2), widget-authoring API (C3), and the View / Element / Reconciliation core (C4 + C6) from `docs/FOUNDATIONS.md` Part III. Co-designed as one atomic merge unit because the four contracts share files and propagate constraints across each other (the `ViewSeq` shape forces the reconciler signature; `impl IntoView` ergonomics force the authoring surface; the element-storage shape couples to the heterogeneous-children boundary).
 
 ---
