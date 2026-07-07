@@ -116,8 +116,7 @@ impl RenderSliverList {
     pub fn new(item_count: usize, default_extent_estimate: f32) -> Self {
         assert!(
             default_extent_estimate.is_finite() && default_extent_estimate > 0.0,
-            "default_extent_estimate must be finite and positive, got {}",
-            default_extent_estimate,
+            "default_extent_estimate must be finite and positive, got {default_extent_estimate}",
         );
         Self {
             item_count,

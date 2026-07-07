@@ -154,10 +154,11 @@ impl Clone for RenderShaderMask {
 
 impl fmt::Debug for RenderShaderMask {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `shader_callback` is an opaque closure with no useful `Debug` form.
         f.debug_struct("RenderShaderMask")
             .field("blend_mode", &self.blend_mode)
             .field("has_child", &self.has_child)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -197,6 +198,10 @@ impl RenderBox for RenderShaderMask {
         self.has_child
     }
 
+    // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
+    // (Single's zero-arg overload vs the indexed variant on other arities), so the
+    // closure cannot be replaced by a method reference.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         // Oracle `:1191-1193` — no child means nothing at all is drawn
         // (not even an empty mask layer).

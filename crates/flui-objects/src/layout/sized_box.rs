@@ -89,14 +89,12 @@ impl RenderSizedBox {
     }
 
     fn resolved_size(&self, constraints: &BoxConstraints) -> Size {
-        let width = self
-            .width
-            .map(|w| w.clamp(constraints.min_width, constraints.max_width))
-            .unwrap_or(constraints.max_width);
-        let height = self
-            .height
-            .map(|h| h.clamp(constraints.min_height, constraints.max_height))
-            .unwrap_or(constraints.max_height);
+        let width = self.width.map_or(constraints.max_width, |w| {
+            w.clamp(constraints.min_width, constraints.max_width)
+        });
+        let height = self.height.map_or(constraints.max_height, |h| {
+            h.clamp(constraints.min_height, constraints.max_height)
+        });
         Size::new(width, height)
     }
 }
@@ -115,15 +113,13 @@ impl RenderBox for RenderSizedBox {
         let constraints = ctx.constraints();
 
         // Use fixed dimension or constrain to max
-        let width = self
-            .width
-            .map(|w| w.clamp(constraints.min_width, constraints.max_width))
-            .unwrap_or(constraints.max_width);
+        let width = self.width.map_or(constraints.max_width, |w| {
+            w.clamp(constraints.min_width, constraints.max_width)
+        });
 
-        let height = self
-            .height
-            .map(|h| h.clamp(constraints.min_height, constraints.max_height))
-            .unwrap_or(constraints.max_height);
+        let height = self.height.map_or(constraints.max_height, |h| {
+            h.clamp(constraints.min_height, constraints.max_height)
+        });
 
         Size::new(width, height)
     }
@@ -133,7 +129,7 @@ impl RenderBox for RenderSizedBox {
         _height: f32,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
     ) -> f32 {
-        self.width.map(|w| w.get()).unwrap_or(0.0)
+        self.width.map_or(0.0, Pixels::get)
     }
 
     fn compute_max_intrinsic_width(
@@ -141,7 +137,7 @@ impl RenderBox for RenderSizedBox {
         _height: f32,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
     ) -> f32 {
-        self.width.map(|w| w.get()).unwrap_or(0.0)
+        self.width.map_or(0.0, Pixels::get)
     }
 
     fn compute_min_intrinsic_height(
@@ -149,7 +145,7 @@ impl RenderBox for RenderSizedBox {
         _width: f32,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
     ) -> f32 {
-        self.height.map(|h| h.get()).unwrap_or(0.0)
+        self.height.map_or(0.0, Pixels::get)
     }
 
     fn compute_max_intrinsic_height(
@@ -157,7 +153,7 @@ impl RenderBox for RenderSizedBox {
         _width: f32,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
     ) -> f32 {
-        self.height.map(|h| h.get()).unwrap_or(0.0)
+        self.height.map_or(0.0, Pixels::get)
     }
 
     fn compute_dry_layout(

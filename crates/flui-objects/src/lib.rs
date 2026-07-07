@@ -26,24 +26,11 @@
 //! [`RenderBox`]: flui_rendering::traits::RenderBox
 //! [`RenderSliver`]: flui_rendering::traits::RenderSliver
 
-#![warn(missing_docs)]
+// Ship bar (wave 3): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 // Crate-specific relaxations (same rationale as flui-rendering):
 #![allow(clippy::type_complexity)]
 #![allow(clippy::too_many_arguments)]
-// Tracked ship-quality debt:
-#![allow(
-    clippy::enum_glob_use,
-    clippy::if_not_else,
-    clippy::manual_midpoint,
-    clippy::map_unwrap_or,
-    clippy::match_same_arms,
-    clippy::missing_fields_in_debug,
-    clippy::redundant_closure_for_method_calls,
-    clippy::semicolon_if_nothing_returned,
-    clippy::single_match_else,
-    clippy::uninlined_format_args,
-    clippy::unused_self
-)] // TODO(ship-wave-3): burn down per-lint, then delete
 
 mod image;
 mod interaction;

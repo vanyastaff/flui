@@ -73,7 +73,6 @@ impl RenderIntrinsicHeight {
     /// method.  Callers pass `|dim, extent| ctx.child_intrinsic(0, dim, extent)`
     /// for all three compute passes; only the ctx type differs.
     fn child_constraints(
-        &self,
         constraints: BoxConstraints,
         mut intrinsic: impl FnMut(IntrinsicDimension, f32) -> f32,
     ) -> BoxConstraints {
@@ -121,7 +120,7 @@ impl RenderBox for RenderIntrinsicHeight {
 
         // `child_constraints` queries the child's max intrinsic height through
         // the live `box_intrinsic_query_borrowed` callback, same as before.
-        let child_constraints = self.child_constraints(constraints, |dim, extent| {
+        let child_constraints = Self::child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
         });
         let child_size = ctx.layout_child(0, child_constraints);
@@ -192,7 +191,7 @@ impl RenderBox for RenderIntrinsicHeight {
         // the real intrinsic sub-query through DryLayoutChildRequest::Intrinsic
         // (ADR-0011 Slice 1), routed by the driver to the memoized intrinsic_query.
         // The old `child_dry_layout`-based approximation is removed — dry ≡ committed.
-        let child_constraints = self.child_constraints(constraints, |dim, extent| {
+        let child_constraints = Self::child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
         });
         let child_size = ctx.child_dry_layout(0, child_constraints);
@@ -210,7 +209,7 @@ impl RenderBox for RenderIntrinsicHeight {
         }
         // Same child_constraints helper; the intrinsic closure routes through
         // BoxDryBaselineCtx's intrinsic channel.
-        let child_constraints = self.child_constraints(constraints, |dim, extent| {
+        let child_constraints = Self::child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
         });
         ctx.child_dry_baseline(0, child_constraints, baseline)
@@ -232,10 +231,9 @@ mod tests {
 
     #[test]
     fn child_constraints_tight_height_not_queried() {
-        let node = RenderIntrinsicHeight::new();
         // When incoming height is tight, the closure must NOT be called.
         let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
-        let child_c = node.child_constraints(constraints, |_, _| {
+        let child_c = RenderIntrinsicHeight::child_constraints(constraints, |_, _| {
             panic!("intrinsic queried on tight height")
         });
         assert!(child_c.has_tight_height());
@@ -244,20 +242,18 @@ mod tests {
 
     #[test]
     fn child_constraints_intrinsic_height_clamped() {
-        let node = RenderIntrinsicHeight::new();
         // Incoming height range [20, 80]; child says max intrinsic = 150 → clamp to 80.
         let constraints = bc(0.0, 200.0, 20.0, 80.0);
-        let child_c = node.child_constraints(constraints, |_, _| 150.0);
+        let child_c = RenderIntrinsicHeight::child_constraints(constraints, |_, _| 150.0);
         assert!(child_c.has_tight_height());
         assert_eq!(child_c.min_height, px(80.0));
     }
 
     #[test]
     fn child_constraints_intrinsic_height_within_range() {
-        let node = RenderIntrinsicHeight::new();
         // Child says 60, range [20, 80] → stays at 60.
         let constraints = bc(0.0, 200.0, 20.0, 80.0);
-        let child_c = node.child_constraints(constraints, |_, _| 60.0);
+        let child_c = RenderIntrinsicHeight::child_constraints(constraints, |_, _| 60.0);
         assert!(child_c.has_tight_height());
         assert_eq!(child_c.min_height, px(60.0));
     }
@@ -265,10 +261,9 @@ mod tests {
     #[test]
     fn child_constraints_height_raw_arg_is_max_width() {
         // The height query arg must be constraints.max_width (raw).
-        let node = RenderIntrinsicHeight::new();
         let constraints = bc(0.0, 120.0, 0.0, 200.0);
         let mut saw_extent = f32::NAN;
-        node.child_constraints(constraints, |dim, extent| {
+        RenderIntrinsicHeight::child_constraints(constraints, |dim, extent| {
             assert_eq!(dim, IntrinsicDimension::MaxHeight);
             saw_extent = extent;
             40.0

@@ -237,11 +237,7 @@ impl RenderAnimatedSize {
     /// value". Getting this branch wrong (reusing `current_size` here) is
     /// the headline risk this module's docs call out.
     fn layout_changed(&mut self, child_size: Size) {
-        if self.size_tween.end != child_size {
-            self.size_tween = SizeTween::new(child_size, child_size);
-            self.restart_animation();
-            self.state = AnimatedSizeState::Unstable;
-        } else {
+        if self.size_tween.end == child_size {
             // The child's size repeated -> stabilized. The genuine
             // interpolation span from `layout_stable` is left untouched and
             // keeps running to completion; just resume it if it stopped.
@@ -249,6 +245,10 @@ impl RenderAnimatedSize {
             if !self.controller.is_animating() {
                 let _ = self.controller.forward();
             }
+        } else {
+            self.size_tween = SizeTween::new(child_size, child_size);
+            self.restart_animation();
+            self.state = AnimatedSizeState::Unstable;
         }
     }
 
@@ -258,12 +258,12 @@ impl RenderAnimatedSize {
     /// already `begin == end == this size` from the last unstable
     /// iteration, so there is no visual glitch).
     fn layout_unstable(&mut self, child_size: Size) {
-        if self.size_tween.end != child_size {
-            self.size_tween = SizeTween::new(child_size, child_size);
-            self.restart_animation();
-        } else {
+        if self.size_tween.end == child_size {
             let _ = self.controller.stop();
             self.state = AnimatedSizeState::Stable;
+        } else {
+            self.size_tween = SizeTween::new(child_size, child_size);
+            self.restart_animation();
         }
     }
 
@@ -291,10 +291,10 @@ impl RenderAnimatedSize {
                 }
             }
             AnimatedSizeState::Changed | AnimatedSizeState::Unstable => {
-                if self.size_tween.end != child_size {
-                    constraints.constrain(child_size)
-                } else {
+                if self.size_tween.end == child_size {
                     constraints.constrain(self.size_tween.transform(self.animation.value()))
+                } else {
+                    constraints.constrain(child_size)
                 }
             }
         }
@@ -430,6 +430,10 @@ impl RenderBox for RenderAnimatedSize {
         Some(child_baseline + offset.dy.get())
     }
 
+    // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
+    // (Single's zero-arg overload vs the indexed variant on other arities), so the
+    // closure cannot be replaced by a method reference.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());

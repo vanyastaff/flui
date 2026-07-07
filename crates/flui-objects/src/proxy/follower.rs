@@ -272,7 +272,7 @@ impl RenderBox for RenderFollowerLayer {
             self.show_when_unlinked,
             self.leader_anchor,
             self.follower_anchor,
-            |ctx| ctx.paint_children_in_order(),
+            PaintCx::paint_children_in_order,
         );
     }
 

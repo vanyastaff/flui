@@ -72,11 +72,7 @@ impl RenderCustomSingleChildLayoutBox {
         self.delegate.get_constraints_for_child(constraints)
     }
 
-    fn child_size_for_position(
-        &self,
-        child_constraints: BoxConstraints,
-        actual_child_size: Size,
-    ) -> Size {
+    fn child_size_for_position(child_constraints: BoxConstraints, actual_child_size: Size) -> Size {
         if child_constraints.is_tight() {
             child_constraints.smallest()
         } else {
@@ -144,7 +140,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         self.has_child = true;
         let child_constraints = self.child_constraints(constraints);
         let child_size = ctx.layout_child(0, child_constraints);
-        let child_size_for_position = self.child_size_for_position(child_constraints, child_size);
+        let child_size_for_position = Self::child_size_for_position(child_constraints, child_size);
         self.child_offset = self
             .delegate
             .get_position_for_child(size, child_size_for_position);

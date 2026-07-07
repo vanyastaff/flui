@@ -283,7 +283,6 @@ impl RenderFlex {
 
     /// Folds child intrinsics along the cross axis (max of child cross sizes).
     fn intrinsic_cross(
-        &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
         main_extent: f32,
         mut child_cross: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
@@ -565,15 +564,14 @@ impl RenderFlex {
             let child_size = slot.unwrap_or(Size::ZERO);
 
             let cross_offset = match self.cross_axis_alignment {
-                CrossAxisAlignment::Start => Pixels::ZERO,
+                CrossAxisAlignment::Start | CrossAxisAlignment::Stretch => Pixels::ZERO,
                 CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
                 CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
-                CrossAxisAlignment::Stretch => Pixels::ZERO,
                 CrossAxisAlignment::Baseline => {
                     max_alignment_baseline.map_or(Pixels::ZERO, |max_dist| {
-                        alignment_baselines[i]
-                            .map(|child_dist| Pixels::new(max_dist - child_dist))
-                            .unwrap_or(Pixels::ZERO)
+                        alignment_baselines[i].map_or(Pixels::ZERO, |child_dist| {
+                            Pixels::new(max_dist - child_dist)
+                        })
                     })
                 }
             };
@@ -625,8 +623,7 @@ impl RenderBox for RenderFlex {
         for i in 0..child_count {
             let (flex, fit) = ctx
                 .child_parent_data(i)
-                .map(|pd| (pd.flex, pd.fit))
-                .unwrap_or((None, FlexFit::Loose));
+                .map_or((None, FlexFit::Loose), |pd| (pd.flex, pd.fit));
             flex_factors.push(flex);
             flex_fits.push(fit);
         }
@@ -719,8 +716,7 @@ impl RenderBox for RenderFlex {
         for i in 0..child_count {
             let (flex, fit) = ctx
                 .child_parent_data_as::<FlexParentData>(i)
-                .map(|pd| (pd.flex, pd.fit))
-                .unwrap_or((None, FlexFit::Loose));
+                .map_or((None, FlexFit::Loose), |pd| (pd.flex, pd.fit));
             flex_factors.push(flex);
             flex_fits.push(fit);
         }
@@ -769,8 +765,7 @@ impl RenderBox for RenderFlex {
         for i in 0..child_count {
             let (flex, fit) = ctx
                 .child_parent_data_as::<FlexParentData>(i)
-                .map(|pd| (pd.flex, pd.fit))
-                .unwrap_or((None, FlexFit::Loose));
+                .map_or((None, FlexFit::Loose), |pd| (pd.flex, pd.fit));
             flex_factors.push(flex);
             flex_fits.push(fit);
         }
@@ -828,6 +823,10 @@ impl RenderBox for RenderFlex {
         reported
     }
 
+    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
+    // is not higher-ranked), so the closure cannot be replaced by a method reference.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Horizontal => {
@@ -836,11 +835,15 @@ impl RenderBox for RenderFlex {
                 })
             }
             FlexDirection::Vertical => {
-                self.intrinsic_cross(ctx, height, |ctx, i, e| ctx.child_min_intrinsic_width(i, e))
+                Self::intrinsic_cross(ctx, height, |ctx, i, e| ctx.child_min_intrinsic_width(i, e))
             }
         }
     }
 
+    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
+    // is not higher-ranked), so the closure cannot be replaced by a method reference.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Horizontal => {
@@ -849,29 +852,37 @@ impl RenderBox for RenderFlex {
                 })
             }
             FlexDirection::Vertical => {
-                self.intrinsic_cross(ctx, height, |ctx, i, e| ctx.child_max_intrinsic_width(i, e))
+                Self::intrinsic_cross(ctx, height, |ctx, i, e| ctx.child_max_intrinsic_width(i, e))
             }
         }
     }
 
+    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
+    // is not higher-ranked), so the closure cannot be replaced by a method reference.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
                 ctx.child_min_intrinsic_height(i, e)
             }),
             FlexDirection::Horizontal => {
-                self.intrinsic_cross(ctx, width, |ctx, i, e| ctx.child_min_intrinsic_height(i, e))
+                Self::intrinsic_cross(ctx, width, |ctx, i, e| ctx.child_min_intrinsic_height(i, e))
             }
         }
     }
 
+    // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
+    // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
+    // is not higher-ranked), so the closure cannot be replaced by a method reference.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
                 ctx.child_max_intrinsic_height(i, e)
             }),
             FlexDirection::Horizontal => {
-                self.intrinsic_cross(ctx, width, |ctx, i, e| ctx.child_max_intrinsic_height(i, e))
+                Self::intrinsic_cross(ctx, width, |ctx, i, e| ctx.child_max_intrinsic_height(i, e))
             }
         }
     }

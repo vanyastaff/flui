@@ -132,23 +132,20 @@ impl Diagnosticable for RenderParagraph {
             "text_direction",
             self.painter
                 .text_direction()
-                .map(|d| format!("{d:?}"))
-                .unwrap_or_else(|| "unset".to_string()),
+                .map_or_else(|| "unset".to_string(), |d| format!("{d:?}")),
         );
         properties.add_flag("soft_wrap", self.soft_wrap, "soft wrap");
         properties.add(
             "max_lines",
             self.painter
                 .max_lines()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "unlimited".to_string()),
+                .map_or_else(|| "unlimited".to_string(), |n| n.to_string()),
         );
         properties.add(
             "ellipsis",
             self.painter
                 .ellipsis()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "none".to_string()),
+                .map_or_else(|| "none".to_string(), ToString::to_string),
         );
         // Emit the plain text so diagnostics dumps and test finders can match on
         // content without inspecting the full `InlineSpan` tree.

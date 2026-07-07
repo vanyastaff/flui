@@ -303,15 +303,14 @@ impl PhysicalClipSource for PathClip {
     const DIAGNOSTIC_NAME: &'static str = "RenderPhysicalShape";
 
     fn compute_clip(&self, size: Size) -> Path {
-        match &self.clipper {
-            Some(clipper) => clipper(size),
+        if let Some(clipper) = &self.clipper {
+            clipper(size)
+        } else {
             // Oracle `:2296`'s `_defaultClip` fallback — only reachable
             // once a clipper is cleared via `set_clipper(None)`.
-            None => {
-                let mut path = Path::new();
-                path.add_rect(Rect::from_origin_size(Point::ZERO, size));
-                path
-            }
+            let mut path = Path::new();
+            path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+            path
         }
     }
 

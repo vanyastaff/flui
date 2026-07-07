@@ -345,7 +345,7 @@ impl RenderBox for RenderExcludeSemantics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::semantics::SemanticsFlag;
+    use flui_rendering::semantics::{AttributedString, SemanticsFlag};
 
     #[test]
     fn annotations_describe_semantics_configuration() {
@@ -366,7 +366,7 @@ mod tests {
         assert!(config.is_semantics_boundary());
         assert!(config.explicit_children_are_traversal_groups());
         assert!(config.blocks_user_actions());
-        assert_eq!(config.label().map(|label| label.as_str()), Some("Submit"));
+        assert_eq!(config.label().map(AttributedString::as_str), Some("Submit"));
         assert!(config.is_button());
         assert_eq!(config.is_enabled(), Some(true));
         assert_eq!(config.is_toggled(), Some(false));
@@ -417,11 +417,11 @@ mod tests {
         assert!(config.names_route());
         assert!(config.is_in_mutually_exclusive_group());
         assert_eq!(
-            config.increased_value().map(|value| value.as_str()),
+            config.increased_value().map(AttributedString::as_str),
             Some("More"),
         );
         assert_eq!(
-            config.decreased_value().map(|value| value.as_str()),
+            config.decreased_value().map(AttributedString::as_str),
             Some("Less"),
         );
     }

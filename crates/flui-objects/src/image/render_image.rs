@@ -321,14 +321,12 @@ impl Diagnosticable for RenderImage {
         properties.add(
             "width",
             self.width
-                .map(|w| format!("{w:?}"))
-                .unwrap_or_else(|| "unset".to_string()),
+                .map_or_else(|| "unset".to_string(), |w| format!("{w:?}")),
         );
         properties.add(
             "height",
             self.height
-                .map(|h| format!("{h:?}"))
-                .unwrap_or_else(|| "unset".to_string()),
+                .map_or_else(|| "unset".to_string(), |h| format!("{h:?}")),
         );
         properties.add_default_double("scale", self.scale, 1.0, None);
         properties.add_enum("fit", self.fit);

@@ -163,10 +163,10 @@ impl RenderBox for RenderConstrainedBox {
             width.is_finite(),
             "child min intrinsic width must be finite"
         );
-        if !ac.has_infinite_width() {
-            ac.constrain_width(flui_types::geometry::px(width)).get()
-        } else {
+        if ac.has_infinite_width() {
             width
+        } else {
+            ac.constrain_width(flui_types::geometry::px(width)).get()
         }
     }
 
@@ -188,10 +188,10 @@ impl RenderBox for RenderConstrainedBox {
             width.is_finite(),
             "child max intrinsic width must be finite"
         );
-        if !ac.has_infinite_width() {
-            ac.constrain_width(flui_types::geometry::px(width)).get()
-        } else {
+        if ac.has_infinite_width() {
             width
+        } else {
+            ac.constrain_width(flui_types::geometry::px(width)).get()
         }
     }
 
@@ -213,10 +213,10 @@ impl RenderBox for RenderConstrainedBox {
             height.is_finite(),
             "child min intrinsic height must be finite"
         );
-        if !ac.has_infinite_height() {
-            ac.constrain_height(flui_types::geometry::px(height)).get()
-        } else {
+        if ac.has_infinite_height() {
             height
+        } else {
+            ac.constrain_height(flui_types::geometry::px(height)).get()
         }
     }
 
@@ -238,10 +238,10 @@ impl RenderBox for RenderConstrainedBox {
             height.is_finite(),
             "child max intrinsic height must be finite"
         );
-        if !ac.has_infinite_height() {
-            ac.constrain_height(flui_types::geometry::px(height)).get()
-        } else {
+        if ac.has_infinite_height() {
             height
+        } else {
+            ac.constrain_height(flui_types::geometry::px(height)).get()
         }
     }
 

@@ -212,12 +212,12 @@ impl RenderFractionallySizedBox {
     /// Width factor as a bare multiplier, `1.0` when unset (Flutter's
     /// `_widthFactor ?? 1.0` in the intrinsic formulas).
     fn width_factor_or_one(&self) -> f32 {
-        self.width_factor.map_or(1.0, |f| f.value())
+        self.width_factor.map_or(1.0, FractionFactor::value)
     }
 
     /// Height factor as a bare multiplier, `1.0` when unset.
     fn height_factor_or_one(&self) -> f32 {
-        self.height_factor.map_or(1.0, |f| f.value())
+        self.height_factor.map_or(1.0, FractionFactor::value)
     }
 
     fn child_constraints(&self, incoming: BoxConstraints) -> BoxConstraints {
@@ -275,14 +275,12 @@ impl flui_foundation::Diagnosticable for RenderFractionallySizedBox {
         builder.add(
             "width_factor",
             self.width_factor
-                .map(|f| format!("{}", f.value()))
-                .unwrap_or_else(|| "unset".to_string()),
+                .map_or_else(|| "unset".to_string(), |f| format!("{}", f.value())),
         );
         builder.add(
             "height_factor",
             self.height_factor
-                .map(|f| format!("{}", f.value()))
-                .unwrap_or_else(|| "unset".to_string()),
+                .map_or_else(|| "unset".to_string(), |f| format!("{}", f.value())),
         );
         builder.add(
             "alignment",

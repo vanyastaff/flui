@@ -375,7 +375,7 @@ impl RenderWrap {
         let max_run_main: f32 = runs
             .iter()
             .map(|r| r.main_axis_extent)
-            .fold(0.0_f32, |a, b| a.max(b));
+            .fold(0.0_f32, f32::max);
 
         let container = self.constrain_size(&constraints, max_run_main, total_cross);
 

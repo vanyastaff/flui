@@ -210,9 +210,8 @@ impl RenderBox for RenderMouseRegion {
 
         let child_hit = self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO);
         let hit_target = match self.behavior {
-            HitTestBehavior::DeferToChild => child_hit,
             HitTestBehavior::Opaque => true,
-            HitTestBehavior::Translucent => child_hit,
+            HitTestBehavior::DeferToChild | HitTestBehavior::Translucent => child_hit,
         };
 
         if hit_target || self.behavior == HitTestBehavior::Translucent {
