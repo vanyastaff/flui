@@ -3,6 +3,11 @@
 //! This module provides a comprehensive Color type with conversions between
 //! different color spaces (RGB, HSL, HSV), similar to Flutter's Color system.
 
+/// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
+///
+/// Channels are in sRGB gamma space, matching Flutter's `Color`. For the
+/// packed premultiplied-alpha representation used by the renderer, see
+/// `Color32`.
 // `Color` is a plain RGBA quadruple of independent `u8` channels — every bit
 // pattern is a valid `Color`. The derived `Deserialize` therefore cannot
 // produce an instance that violates any invariant the `unsafe` SIMD helpers
@@ -146,6 +151,7 @@ impl Color {
 
     // ===== Component accessors =====
 
+    /// Returns the alpha channel as an opacity value in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn opacity(&self) -> f32 {
@@ -366,12 +372,19 @@ impl Color {
         }
     }
 
+    /// Converts to a 32-bit ARGB value in `0xAARRGGBB` format.
+    ///
+    /// Inverse of [`Color::from_argb`].
     #[inline]
     #[must_use]
     pub const fn to_argb(&self) -> u32 {
         ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
+    /// Formats as an uppercase hex string: `#RRGGBB` when fully opaque,
+    /// `#AARRGGBB` otherwise.
+    ///
+    /// Both forms round-trip through [`Color::from_hex`].
     #[must_use]
     #[inline]
     pub fn to_hex(&self) -> String {
@@ -398,6 +411,8 @@ impl Color {
         }
     }
 
+    /// Returns the RGBA channels as an `(r, g, b, a)` tuple of `f32` values
+    /// in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn to_rgba_f32(&self) -> (f32, f32, f32, f32) {
@@ -409,6 +424,8 @@ impl Color {
         )
     }
 
+    /// Returns the RGBA channels as an `[r, g, b, a]` array of `f32` values
+    /// in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn to_rgba_f32_array(&self) -> [f32; 4] {
@@ -420,6 +437,10 @@ impl Color {
         ]
     }
 
+    /// Creates a color from an `[r, g, b, a]` array of `f32` values in
+    /// `0.0..=1.0`.
+    ///
+    /// Values are clamped to `0.0..=1.0` before conversion.
     #[inline]
     #[must_use]
     pub fn from_rgba_f32_array(rgba: [f32; 4]) -> Self {
@@ -431,6 +452,10 @@ impl Color {
         )
     }
 
+    /// Returns the RGBA channels as an `[r, g, b, a]` array of `f32` values
+    /// in `0.0..=1.0`.
+    ///
+    /// Equivalent to [`Color::to_rgba_f32_array`].
     #[inline]
     #[must_use]
     pub fn to_f32_array(&self) -> [f32; 4] {
@@ -442,24 +467,28 @@ impl Color {
         ]
     }
 
+    /// Returns the red channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn red_f32(&self) -> f32 {
         self.r as f32 / 255.0
     }
 
+    /// Returns the green channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn green_f32(&self) -> f32 {
         self.g as f32 / 255.0
     }
 
+    /// Returns the blue channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn blue_f32(&self) -> f32 {
         self.b as f32 / 255.0
     }
 
+    /// Returns the alpha channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn alpha_f32(&self) -> f32 {
@@ -468,6 +497,12 @@ impl Color {
 
     // ===== Helper methods for rendering =====
 
+    /// Alpha-blends this color over `background` (Porter-Duff "source over",
+    /// straight alpha, gamma space).
+    ///
+    /// Fully opaque returns `self` and fully transparent returns
+    /// `background`; other alphas take a SIMD path when the `simd` feature
+    /// and target support are available.
     #[must_use]
     #[inline]
     pub fn blend_over(&self, background: Color) -> Color {
@@ -652,6 +687,7 @@ impl Color {
         }
     }
 
+    /// Multiplies each channel (including alpha) componentwise with `other`.
     #[inline]
     #[must_use]
     pub const fn multiply(&self, other: Color) -> Color {
@@ -663,6 +699,11 @@ impl Color {
         )
     }
 
+    /// Darkens the color by scaling the RGB channels by `factor` (clamped to
+    /// `0.0..=1.0`).
+    ///
+    /// `0.0` yields black; `1.0` leaves the color unchanged. Alpha is
+    /// preserved.
     #[inline]
     #[must_use]
     pub fn darken(&self, factor: f32) -> Color {
@@ -675,6 +716,11 @@ impl Color {
         )
     }
 
+    /// Lightens the color by moving the RGB channels toward white by
+    /// `factor` (clamped to `0.0..=1.0`).
+    ///
+    /// `0.0` leaves the color unchanged; `1.0` yields white. Alpha is
+    /// preserved.
     #[inline]
     #[must_use]
     pub fn lighten(&self, factor: f32) -> Color {
@@ -687,24 +733,30 @@ impl Color {
         )
     }
 
+    /// Returns the perceived brightness in `0.0..=1.0`, using Rec. 709 luma
+    /// coefficients on the gamma-encoded channels.
     #[inline]
     #[must_use]
     pub const fn luminance(&self) -> f32 {
         (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
     }
 
+    /// Returns `true` if the luminance is below 0.5.
     #[inline]
     #[must_use]
     pub const fn is_dark(&self) -> bool {
         self.luminance() < 0.5
     }
 
+    /// Returns `true` if the luminance is 0.5 or above.
     #[inline]
     #[must_use]
     pub const fn is_light(&self) -> bool {
         self.luminance() >= 0.5
     }
 
+    /// Returns a legible text color for use over this background: white for
+    /// dark colors, black for light ones.
     #[inline]
     #[must_use]
     pub const fn contrasting_text_color(&self) -> Color {
@@ -798,6 +850,12 @@ impl Color {
         Color::from_oklab(mixed, alpha)
     }
 
+    /// Samples a multi-stop color ramp at position `t` (clamped to
+    /// `0.0..=1.0`), like evaluating a gradient.
+    ///
+    /// `stops` are `(color, position)` pairs sorted by ascending position.
+    /// Returns `Color::TRANSPARENT` for an empty slice, and the nearest
+    /// endpoint color when `t` falls outside the stop range.
     #[must_use]
     #[inline]
     pub fn lerp_multi_stop(stops: &[(Color, f32)], t: f32) -> Color {
@@ -1259,6 +1317,8 @@ impl crate::geometry::ApproxEq for Color {
 
 // ===== Error types =====
 
+/// Error returned by [`Color::from_hex`] when parsing a hex color string
+/// fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseColorError {
     /// Invalid hex string format

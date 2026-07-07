@@ -4,6 +4,7 @@
 pub use crate::painting::TileMode;
 use crate::{layout::Alignment, styling::Color};
 
+/// A description of a color gradient, similar to Flutter's `Gradient`.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Gradient {
@@ -60,6 +61,8 @@ impl Gradient {
     }
 }
 
+/// A gradient that transitions colors along a line between two alignment
+/// points, similar to Flutter's `LinearGradient`.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinearGradient {
@@ -218,6 +221,8 @@ impl LinearGradient {
     }
 }
 
+/// A gradient that radiates outward from a center point, similar to
+/// Flutter's `RadialGradient`.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RadialGradient {
@@ -251,6 +256,7 @@ pub struct RadialGradient {
 }
 
 impl RadialGradient {
+    /// Creates a radial gradient.
     #[allow(clippy::too_many_arguments)]
     #[inline]
     pub fn new(
@@ -362,6 +368,8 @@ impl RadialGradient {
     }
 }
 
+/// A gradient that sweeps through an arc of angles around a center point,
+/// similar to Flutter's `SweepGradient`.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SweepGradient {
@@ -467,6 +475,8 @@ pub trait GradientTransform: std::fmt::Debug {
     fn transform(&self) -> [[f32; 3]; 3];
 }
 
+/// A gradient transform that rotates the gradient by a fixed angle, similar
+/// to Flutter's `GradientRotation`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GradientRotation {

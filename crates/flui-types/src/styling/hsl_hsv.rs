@@ -5,6 +5,7 @@
 
 use super::color::Color;
 
+/// A color in the HSL (hue, saturation, lightness) color space.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HSLColor {
     /// Hue in degrees (0.0-360.0).
@@ -125,6 +126,7 @@ impl From<HSLColor> for Color {
     }
 }
 
+/// A color in the HSV (hue, saturation, value) color space.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HSVColor {
     /// Hue in degrees (0.0-360.0).
