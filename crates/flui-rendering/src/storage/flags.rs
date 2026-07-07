@@ -1089,7 +1089,7 @@ mod tests {
     #[test]
     fn test_display() {
         let flags = RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT;
-        let display = format!("{}", flags);
+        let display = format!("{flags}");
         assert!(display.contains("NEEDS_LAYOUT"));
         assert!(display.contains("NEEDS_PAINT"));
     }

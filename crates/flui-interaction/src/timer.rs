@@ -391,7 +391,7 @@ impl GestureTimerService {
                 .min(Duration::from_millis(100));
 
             tokio::select! {
-                _ = tokio::time::sleep(wait_duration) => {}
+                () = tokio::time::sleep(wait_duration) => {}
                 _ = &mut shutdown => {
                     tracing::trace!("Timer service shutting down");
                     break;
@@ -421,8 +421,8 @@ impl std::fmt::Debug for GestureTimerService {
 // ============================================================================
 
 /// Global timer service instance.
-static GLOBAL_TIMER_SERVICE: once_cell::sync::Lazy<GestureTimerService> =
-    once_cell::sync::Lazy::new(GestureTimerService::new);
+static GLOBAL_TIMER_SERVICE: std::sync::LazyLock<GestureTimerService> =
+    std::sync::LazyLock::new(GestureTimerService::new);
 
 /// Get the global timer service.
 ///
@@ -505,7 +505,7 @@ mod tests {
         let fired_clone = fired.clone();
 
         // Schedule a timer far in the future
-        service.schedule(Duration::from_secs(3600), move || {
+        service.schedule(Duration::from_hours(1), move || {
             fired_clone.store(true, Ordering::SeqCst);
         });
 
@@ -592,7 +592,7 @@ mod tests {
         let service = GestureTimerService::new();
         let timer = service.schedule(Duration::from_millis(100), || {});
 
-        let debug = format!("{:?}", timer);
+        let debug = format!("{timer:?}");
         assert!(debug.contains("GestureTimer"));
         assert!(debug.contains("cancelled"));
     }

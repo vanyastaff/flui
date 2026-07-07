@@ -569,7 +569,7 @@ impl GestureBinding {
             // and would otherwise grow unbounded to `MAX_BUFFERED_EVENTS` and
             // emit drop warnings every frame, since this path never drains
             // them via `sample()`.
-            for resampler in self.resamplers.iter() {
+            for resampler in &self.resamplers {
                 resampler.clear();
             }
         }
@@ -1069,8 +1069,7 @@ mod tests {
         let tracked = binding
             .resamplers
             .get(&PointerId::PRIMARY)
-            .map(|r| r.is_tracked())
-            .unwrap_or(false);
+            .is_some_and(|r| r.is_tracked());
         assert!(tracked, "resampler must be tracked after the Down");
     }
 

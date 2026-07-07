@@ -172,7 +172,7 @@ fn global_key_current_state_after_mount() {
         "current_element should map back to the mounted element id"
     );
 
-    let snapshot = key.with_current_state::<i32>(|state| state.count());
+    let snapshot = key.with_current_state::<i32>(KeyedCounterState::count);
     assert_eq!(
         snapshot,
         Some(7),
@@ -247,8 +247,8 @@ fn global_key_state_migrates_to_new_parent_slot() {
     );
 
     // State is still reachable and the sentinel survived the migration.
-    let count = key.with_current_state::<i32>(|s| s.count());
-    let sentinel = key.with_current_state::<u64>(|s| s.sentinel());
+    let count = key.with_current_state::<i32>(KeyedCounterState::count);
+    let sentinel = key.with_current_state::<u64>(KeyedCounterState::sentinel);
     assert_eq!(
         count,
         Some(11),
@@ -303,7 +303,7 @@ fn global_key_returns_none_after_full_unmount() {
         "after finalize_tree drains inactive, registry should be empty"
     );
     assert_eq!(
-        key.with_current_state::<i32>(|s| s.count()),
+        key.with_current_state::<i32>(KeyedCounterState::count),
         None,
         "current_state returns None once the element is finalized"
     );
@@ -453,7 +453,7 @@ fn global_key_state_preserved_across_100_reparents() {
         );
 
         assert_eq!(
-            key.with_current_state::<u64>(|s| s.sentinel()),
+            key.with_current_state::<u64>(KeyedCounterState::sentinel),
             Some(sentinel_value),
             "cycle {cycle}: sentinel must survive every reparent",
         );

@@ -88,7 +88,7 @@ pub fn run_direct(
     let options: WindowOptions = (&config).into();
     let window = platform
         .open_window(options)
-        .map_err(|e| anyhow::anyhow!("Failed to create window: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create window: {e}"))?;
 
     // 2. Create GPU renderer
     let phys_size = window.physical_size();
@@ -100,7 +100,7 @@ pub fn run_direct(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("GPU init failed: {:?}", e);
-            return Err(anyhow::anyhow!("GPU initialization failed: {}", e));
+            return Err(anyhow::anyhow!("GPU initialization failed: {e}"));
         }
     };
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);

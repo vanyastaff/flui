@@ -17,6 +17,11 @@
 //! caught — that stderr noise is expected; the test process must NOT
 //! abort and the assertions below must hold.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::{
     any::TypeId,
     sync::{

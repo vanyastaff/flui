@@ -186,8 +186,8 @@ fn main() -> anyhow::Result<()> {
 
         // Check for scale factor differences
         let scales: Vec<_> = displays.iter().map(|d| d.scale_factor()).collect();
-        let min_scale = scales.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_scale = scales.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let min_scale = scales.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_scale = scales.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
         if (max_scale - min_scale).abs() > 0.1 {
             tracing::warn!(

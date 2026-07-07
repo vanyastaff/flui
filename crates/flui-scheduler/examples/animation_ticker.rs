@@ -48,7 +48,7 @@ fn demo_manual_ticker() {
     let fc = Arc::clone(&frame_count);
     ticker.start(move |elapsed| {
         fc.fetch_add(1, Ordering::SeqCst);
-        println!("  Tick! Elapsed: {:.3}s", elapsed);
+        println!("  Tick! Elapsed: {elapsed:.3}s");
     });
 
     println!("Ticker state: {:?}", ticker.state());

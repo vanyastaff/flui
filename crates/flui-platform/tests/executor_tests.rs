@@ -390,8 +390,7 @@ fn test_executor_spawn_overhead_benchmark() {
 
         assert!(
             avg_micros < 100.0,
-            "Background spawn overhead ({:.2}us) exceeds 100us target",
-            avg_micros
+            "Background spawn overhead ({avg_micros:.2}us) exceeds 100us target"
         );
     }
 
@@ -415,8 +414,7 @@ fn test_executor_spawn_overhead_benchmark() {
 
         assert!(
             avg_micros < 100.0,
-            "Foreground spawn overhead ({:.2}us) exceeds 100us target",
-            avg_micros
+            "Foreground spawn overhead ({avg_micros:.2}us) exceeds 100us target"
         );
     }
 

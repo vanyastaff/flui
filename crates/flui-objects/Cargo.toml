@@ -32,3 +32,6 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 insta = { workspace = true }
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+
+[lints]
+workspace = true

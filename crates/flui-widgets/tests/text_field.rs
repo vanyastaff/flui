@@ -41,7 +41,7 @@ static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
 fn focus_test_guard() -> MutexGuard<'static, ()> {
     let guard = FOCUS_TEST_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     FocusManager::global().unfocus();
     guard
 }

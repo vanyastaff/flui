@@ -497,18 +497,14 @@ impl BoxConstraints {
     #[must_use]
     pub fn tighten(&self, width: Option<Pixels>, height: Option<Pixels>) -> Self {
         Self {
-            min_width: width
-                .map(|w| w.clamp(self.min_width, self.max_width))
-                .unwrap_or(self.min_width),
-            max_width: width
-                .map(|w| w.clamp(self.min_width, self.max_width))
-                .unwrap_or(self.max_width),
-            min_height: height
-                .map(|h| h.clamp(self.min_height, self.max_height))
-                .unwrap_or(self.min_height),
-            max_height: height
-                .map(|h| h.clamp(self.min_height, self.max_height))
-                .unwrap_or(self.max_height),
+            min_width: width.map_or(self.min_width, |w| w.clamp(self.min_width, self.max_width)),
+            max_width: width.map_or(self.max_width, |w| w.clamp(self.min_width, self.max_width)),
+            min_height: height.map_or(self.min_height, |h| {
+                h.clamp(self.min_height, self.max_height)
+            }),
+            max_height: height.map_or(self.max_height, |h| {
+                h.clamp(self.min_height, self.max_height)
+            }),
         }
     }
 
@@ -742,21 +738,21 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub fn round(&self) -> Self {
-        self.map(|v| v.round())
+        self.map(flui_types::Pixels::round)
     }
 
     /// Floors all constraint values.
     #[inline]
     #[must_use]
     pub fn floor(&self) -> Self {
-        self.map(|v| v.floor())
+        self.map(flui_types::Pixels::floor)
     }
 
     /// Ceils all constraint values.
     #[inline]
     #[must_use]
     pub fn ceil(&self) -> Self {
-        self.map(|v| v.ceil())
+        self.map(flui_types::Pixels::ceil)
     }
 }
 
@@ -777,10 +773,10 @@ fn round_pixels_to_hundredths(value: Pixels) -> Pixels {
 /// Checks if a Pixels value is already normalized.
 #[inline]
 fn is_pixels_normalized(value: Pixels) -> bool {
-    if !value.is_finite() {
-        true
-    } else {
+    if value.is_finite() {
         value == round_pixels_to_hundredths(value)
+    } else {
+        true
     }
 }
 
@@ -835,7 +831,7 @@ impl fmt::Debug for BoxConstraints {
 
 impl fmt::Display for BoxConstraints {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

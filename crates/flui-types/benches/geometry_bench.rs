@@ -5,6 +5,10 @@
 //! - Rect::intersect: <20ns
 //! - Rect::union: <20ns
 
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
+
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};

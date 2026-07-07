@@ -237,8 +237,7 @@ impl PointerSignalResolver {
             .lock()
             .handlers
             .get(&pointer_id)
-            .map(|h| h.len())
-            .unwrap_or(0)
+            .map_or(0, std::vec::Vec::len)
     }
 }
 

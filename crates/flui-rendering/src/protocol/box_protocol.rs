@@ -558,7 +558,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
     fn child_count(&self) -> usize {
         match &self.storage {
             BoxLayoutCtxStorage::Direct { children, .. } => {
-                children.as_ref().map(|c| c.len()).unwrap_or(0)
+                children.as_ref().map_or(0, |c| c.len())
             }
             BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_count(),
         }
@@ -931,7 +931,7 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
 
     #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
-        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset)
+        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset);
     }
 
     #[inline]
@@ -1185,8 +1185,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
     fn sliver_child_needs_layout(&self, index: usize) -> bool {
         self.children
             .get(index)
-            .map(|slot| slot.needs_layout)
-            .unwrap_or(true)
+            .is_none_or(|slot| slot.needs_layout)
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {

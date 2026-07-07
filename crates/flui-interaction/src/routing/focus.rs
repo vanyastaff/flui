@@ -266,8 +266,8 @@ impl FocusManager {
         };
 
         tracing::trace!(
-            previous = ?previous.map(|id| id.get()),
-            new = ?node_id.map(|id| id.get()),
+            previous = ?previous.map(super::super::ids::FocusNodeId::get),
+            new = ?node_id.map(super::super::ids::FocusNodeId::get),
             "Focus changed"
         );
 

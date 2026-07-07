@@ -646,7 +646,7 @@ fn test_depend_on_returns_none_when_no_inherited_ancestor() {
 
     let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
 
-    let result: Option<String> = ctx.depend_on::<String, String>(|s| s.clone());
+    let result: Option<String> = ctx.depend_on::<String, String>(std::clone::Clone::clone);
     assert!(result.is_none());
 }
 
@@ -686,7 +686,7 @@ fn test_context_debug() {
 
     let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
 
-    let debug_str = format!("{:?}", ctx);
+    let debug_str = format!("{ctx:?}");
     assert!(debug_str.contains("ElementBuildContext"));
     assert!(debug_str.contains("element_id"));
     assert!(debug_str.contains("depth"));
@@ -696,7 +696,7 @@ fn test_context_debug() {
 #[test]
 fn test_builder_debug() {
     let builder = ElementBuildContextBuilder::new();
-    let debug_str = format!("{:?}", builder);
+    let debug_str = format!("{builder:?}");
     assert!(debug_str.contains("ElementBuildContextBuilder"));
 }
 
@@ -721,7 +721,7 @@ fn test_deep_tree_ancestor_traversal() {
 
     for i in 1..10 {
         let view = SimpleView {
-            name: format!("node_{}", i),
+            name: format!("node_{i}"),
         };
         let child_id =
             tree.write()

@@ -73,7 +73,7 @@ impl<T: Asset> AssetCache<T> {
         // Assume average asset is ~10KB
         let estimated_items = (capacity_bytes / 10_240).max(100);
 
-        Self::with_config(estimated_items, Duration::from_secs(300))
+        Self::with_config(estimated_items, Duration::from_mins(5))
     }
 
     /// Creates a cache with custom configuration.
@@ -86,7 +86,7 @@ impl<T: Asset> AssetCache<T> {
         let cache = MokaCache::builder()
             .max_capacity(max_capacity as u64)
             .time_to_live(time_to_live)
-            .time_to_idle(Duration::from_secs(60))
+            .time_to_idle(Duration::from_mins(1))
             .build();
 
         Self {
@@ -245,7 +245,7 @@ impl<T: Asset> AssetCache<T> {
 /// Sealed trait module to prevent external implementations.
 #[doc(hidden)]
 pub mod sealed {
-    use super::*;
+    use super::{Asset, AssetCache};
 
     /// Sealed trait to prevent external implementations of AssetCacheCore.
     pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
@@ -572,7 +572,7 @@ mod tests {
         let cache = AssetCache::<TestAsset>::new(1024 * 1024);
 
         for i in 0..10 {
-            let key = AssetKey::new(&format!("test{}", i));
+            let key = AssetKey::new(&format!("test{i}"));
             cache.insert(key, TestData { value: i }).await;
         }
 
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn test_cache_debug() {
         let cache = AssetCache::<TestAsset>::new(1024 * 1024);
-        let debug_str = format!("{:?}", cache);
+        let debug_str = format!("{cache:?}");
         assert!(debug_str.contains("AssetCache"));
         assert!(debug_str.contains("entry_count"));
     }

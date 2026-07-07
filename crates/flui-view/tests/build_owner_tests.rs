@@ -310,7 +310,7 @@ fn test_build_owner_debug() {
     owner.schedule_build_for(ElementId::new(1), 0);
     owner.register_global_key(123, ElementId::new(2));
 
-    let debug_str = format!("{:?}", owner);
+    let debug_str = format!("{owner:?}");
 
     assert!(debug_str.contains("BuildOwner"));
     assert!(debug_str.contains("dirty_count"));
@@ -415,5 +415,5 @@ fn test_reassemble_marks_all_live_elements_dirty() {
 fn test_build_owner_memory_size() {
     let size = std::mem::size_of::<BuildOwner>();
     // Should be reasonably sized (BinaryHeap + HashSet + HashMap + debug flags)
-    assert!(size < 512, "BuildOwner is too large: {} bytes", size);
+    assert!(size < 512, "BuildOwner is too large: {size} bytes");
 }

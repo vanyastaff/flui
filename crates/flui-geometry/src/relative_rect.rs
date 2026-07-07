@@ -8,6 +8,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 use super::traits::{NumericUnit, Unit};
 use crate::{Offset, Size};
 
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RelativeRect<T: Unit> {
     /// Offset from the left edge of the parent.

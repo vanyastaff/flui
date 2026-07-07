@@ -93,7 +93,7 @@ where
             format: path
                 .extension()
                 .and_then(|ext| ext.to_str())
-                .map(|ext| ext.to_uppercase()),
+                .map(str::to_uppercase),
             ..Default::default()
         }))
     }
@@ -166,7 +166,7 @@ impl BytesFileLoader {
             format: full_path
                 .extension()
                 .and_then(|ext| ext.to_str())
-                .map(|ext| ext.to_uppercase()),
+                .map(str::to_uppercase),
             ..Default::default()
         })
     }

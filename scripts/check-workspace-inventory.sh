@@ -200,10 +200,18 @@ for package in workspace_packages:
     if not package.get("description"):
         errors.append(f"{rel} is missing package description")
 
-    raw_package = tomllib.loads(manifest.read_text())["package"]
+    raw_manifest = tomllib.loads(manifest.read_text())
+    raw_package = raw_manifest["package"]
     for key in ("version", "edition", "rust-version", "license", "authors", "repository"):
         if raw_package.get(key) != {"workspace": True}:
             errors.append(f"{rel} must inherit `{key}.workspace = true`")
+
+    # Workspace lints must apply to every active crate. A missing `[lints]`
+    # table silently opts the crate out of `[workspace.lints]`; a local table
+    # shadows it with a stale copy (and Cargo forbids mixing `workspace = true`
+    # with local keys, so equality is the only valid shape).
+    if raw_manifest.get("lints") != {"workspace": True}:
+        errors.append(f"{rel} must set `[lints] workspace = true` (local or missing lint tables bypass workspace lints)")
 
 if errors:
     print("workspace-inventory: drift detected", file=sys.stderr)

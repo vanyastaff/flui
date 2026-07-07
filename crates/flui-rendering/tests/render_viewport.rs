@@ -367,10 +367,7 @@ impl RenderSliver for CorrectingSliver {
         &mut self,
         _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
     ) -> SliverGeometry {
-        if !self.corrected {
-            self.corrected = true;
-            SliverGeometry::scroll_offset_correction(self.correction)
-        } else {
+        if self.corrected {
             SliverGeometry {
                 scroll_extent: 80.0,
                 paint_extent: 80.0,
@@ -381,6 +378,9 @@ impl RenderSliver for CorrectingSliver {
                 visible: true,
                 ..SliverGeometry::ZERO
             }
+        } else {
+            self.corrected = true;
+            SliverGeometry::scroll_offset_correction(self.correction)
         }
     }
 
@@ -564,7 +564,7 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
     let laid_out_size = owner
         .render_tree()
         .get(root_id)
-        .and_then(|node| node.geometry_box())
+        .and_then(flui_rendering::storage::RenderNode::geometry_box)
         .expect("root viewport has committed box geometry");
     let viewport = owner
         .render_tree()

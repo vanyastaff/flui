@@ -16,6 +16,11 @@
 //! - the typed `View::create_element` returns a valid `ElementBase`
 //!   for both stateless and stateful authoring shapes
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::no_effect_underscore_binding, clippy::used_underscore_items)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_view::context::BuildContext;

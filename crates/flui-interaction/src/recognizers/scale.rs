@@ -380,10 +380,10 @@ impl ScaleGestureRecognizer {
             // Not enough pointers anymore
             if state.phase == ScalePhase::Started {
                 // End the gesture
-                let focal_point = if !state.pointers.is_empty() {
-                    self.calculate_focal_point(&state.pointers)
-                } else {
+                let focal_point = if state.pointers.is_empty() {
                     Offset::ZERO
+                } else {
+                    self.calculate_focal_point(&state.pointers)
                 };
 
                 let scale = if let (Some(initial_span), Some(prev_span)) =
@@ -834,8 +834,7 @@ mod tests {
         let scale = current_span / state.initial_span.unwrap();
         assert!(
             (scale - 2.0).abs() < 0.01,
-            "Scale was {}, expected 2.0",
-            scale
+            "Scale was {scale}, expected 2.0"
         );
     }
 }

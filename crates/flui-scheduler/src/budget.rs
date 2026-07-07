@@ -240,9 +240,9 @@ impl FrameBudget {
 
     /// Get elapsed time since frame start
     pub fn elapsed(&self) -> Milliseconds {
-        self.frame_start
-            .map(|start| Milliseconds::new(start.elapsed().as_secs_f64() * 1000.0))
-            .unwrap_or(Milliseconds::ZERO)
+        self.frame_start.map_or(Milliseconds::ZERO, |start| {
+            Milliseconds::new(start.elapsed().as_secs_f64() * 1000.0)
+        })
     }
 
     /// Get elapsed time since frame start (raw f64 for backwards compat)

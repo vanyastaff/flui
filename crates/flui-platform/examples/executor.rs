@@ -4,6 +4,11 @@
 //! execution. Shows how to run CPU-intensive work on background threads and
 //! update UI safely on the foreground thread.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::{
     sync::{
         Arc,
@@ -63,9 +68,9 @@ fn example_background_cpu_work() {
             );
 
             // Simulate CPU-intensive work
-            let result = (0..10_000_000).fold(0u64, |acc, x| acc.wrapping_add(x));
+            let result = (0..10_000_000).fold(0u64, u64::wrapping_add);
 
-            println!("Background work complete: result = {}", result);
+            println!("Background work complete: result = {result}");
             completed_clone.store(1, Ordering::SeqCst);
         })
         .detach();
@@ -104,7 +109,7 @@ fn example_background_with_ui_update() {
             PlatformExecutor::spawn(
                 &foreground_clone,
                 Box::new(move || {
-                    println!("Foreground: Updating UI with loaded data: {}", data);
+                    println!("Foreground: Updating UI with loaded data: {data}");
                     ui_state_bg.store(data, Ordering::SeqCst);
                 }),
             );
@@ -132,9 +137,9 @@ fn example_parallel_background_tasks() {
         let count_clone = Arc::clone(&completed_count);
         executor
             .spawn(async move {
-                println!("Task {} started", i);
+                println!("Task {i} started");
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                println!("Task {} completed", i);
+                println!("Task {i} completed");
                 count_clone.fetch_add(1, Ordering::SeqCst);
             })
             .detach();
@@ -146,10 +151,7 @@ fn example_parallel_background_tasks() {
     }
 
     let elapsed = start.elapsed();
-    println!(
-        "All 4 tasks completed in {:?} (parallel execution)",
-        elapsed
-    );
+    println!("All 4 tasks completed in {elapsed:?} (parallel execution)");
     println!(
         "Sequential would take ~400ms, parallel took ~{}ms",
         elapsed.as_millis()
@@ -208,7 +210,7 @@ fn example_async_await_integration() {
 
             // Simulate async I/O
             let result = async_compute().await;
-            println!("Async task: computed result = {}", result);
+            println!("Async task: computed result = {result}");
 
             completed_clone.store(1, Ordering::SeqCst);
         })

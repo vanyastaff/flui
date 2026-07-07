@@ -2,6 +2,10 @@
 //!
 //! Tests for headless platform used in CI/testing environments.
 
+// `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; tests run
+// serially (`--test-threads 1`), which is the safety condition.
+#![allow(unsafe_code)]
+
 use flui_platform::{WindowOptions, current_platform, headless_platform};
 use flui_types::geometry::{Size, px};
 

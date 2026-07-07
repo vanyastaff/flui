@@ -156,16 +156,14 @@ fn u34_run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
     let needs_compositing_before = owner
         .render_tree()
         .get(padding_id)
-        .map(|n| n.needs_compositing())
-        .unwrap_or(false);
+        .is_some_and(flui_rendering::storage::RenderNode::needs_compositing);
 
     owner.run_compositing().expect("run_compositing succeeds");
 
     let needs_compositing_after = owner
         .render_tree()
         .get(padding_id)
-        .map(|n| n.needs_compositing())
-        .unwrap_or(false);
+        .is_some_and(flui_rendering::storage::RenderNode::needs_compositing);
 
     // Walk short-circuits → NEEDS_COMPOSITING unchanged.
     assert_eq!(

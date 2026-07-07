@@ -1,3 +1,5 @@
+//! Damage-tracker integration tests: dirty-region accumulation and reset.
+
 use flui_layer::damage::DamageTracker;
 use flui_types::geometry::{Rect, px};
 

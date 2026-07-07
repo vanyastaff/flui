@@ -148,6 +148,15 @@
 //! }
 //! ```
 
+// Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
+// AppKit / headless backends); every block carries a `// SAFETY:` comment.
+// Permanent, unlike the tracked debt below.
+#![allow(unsafe_code)]
+// Lint levels come from `[workspace.lints]`. Tracked ship-quality debt:
+#![allow(missing_docs)] // TODO(ship-wave-4): public-item doc backlog (~18 items), then delete
+#![allow(missing_debug_implementations)] // TODO(ship-wave-4): add Debug impls (5 types), then delete
+#![allow(clippy::match_same_arms, clippy::match_wildcard_for_single_variants)] // TODO(ship-wave-4): burn down, then delete
+
 pub mod config;
 pub mod cursor;
 #[cfg(not(target_arch = "wasm32"))]

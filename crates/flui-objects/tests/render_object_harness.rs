@@ -1187,8 +1187,10 @@ fn harness_padding_hit_localizes_to_padding_inset() {
     let child_transform = hit_entries
         .iter()
         .find(|(id, _)| *id == child_id)
-        .map(|(_, t)| *t)
-        .unwrap_or_else(|| panic!("child must be hit at ({HIT_X}, {HIT_Y})"));
+        .map_or_else(
+            || panic!("child must be hit at ({HIT_X}, {HIT_Y})"),
+            |(_, t)| *t,
+        );
 
     let recorded_transform = child_transform.expect(
         "child HitTestEntry must carry a recorded transform from hit_test_child_at_layout_offset",
@@ -5010,8 +5012,10 @@ fn harness_align_hit_localizes_to_child_offset() {
     let child_transform = hit_entries
         .iter()
         .find(|(id, _)| *id == child_id)
-        .map(|(_, t)| *t)
-        .unwrap_or_else(|| panic!("child must be in the hit path at ({HIT_X}, {HIT_Y})"));
+        .map_or_else(
+            || panic!("child must be in the hit path at ({HIT_X}, {HIT_Y})"),
+            |(_, t)| *t,
+        );
 
     let recorded_transform = child_transform.unwrap_or_else(|| {
         panic!(

@@ -79,7 +79,10 @@ use std::sync::Arc;
 use anyhow::Result;
 pub use window_ext::*;
 
-use crate::traits::*;
+use crate::traits::{
+    Clipboard, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformWindow,
+    WindowEvent, WindowId, WindowOptions,
+};
 
 /// Linux platform implementation (stub)
 ///

@@ -118,12 +118,13 @@ impl SchedulerPhase {
         matches!(
             (self, next),
             (Self::Idle, Self::TransientCallbacks)
-                | (Self::TransientCallbacks, Self::MidFrameMicrotasks)
+                | (
+                    Self::TransientCallbacks,
+                    Self::MidFrameMicrotasks | Self::PersistentCallbacks
+                )
                 | (Self::MidFrameMicrotasks, Self::PersistentCallbacks)
                 | (Self::PersistentCallbacks, Self::PostFrameCallbacks)
                 | (Self::PostFrameCallbacks, Self::Idle)
-                // Allow skipping MidFrameMicrotasks if no microtasks pending
-                | (Self::TransientCallbacks, Self::PersistentCallbacks)
         )
     }
 

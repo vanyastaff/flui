@@ -1,5 +1,13 @@
 # flui-reactivity
 
+> **Status: excluded from the workspace, standalone by design.** This crate is
+> not in `[workspace] members` and is not built by CI: FLUI's locked contract
+> C1 (`docs/FOUNDATIONS.md`) keeps signals out of the view layer, so the crate
+> has zero workspace consumers, and its manifest inherits `any_spawner` from
+> `workspace.dependencies`, which the root does not declare. It re-enters the
+> workspace only if/when signals are integrated into the view layer (see the
+> note in the root `Cargo.toml` members list).
+
 Production-ready reactive state management system for Rust, inspired by React Hooks and Solid.js. Provides signals, computed values, effects, and a comprehensive hook system with full thread-safety.
 
 ## Features

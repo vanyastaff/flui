@@ -34,6 +34,12 @@
 //! attached to each `unsafe` block document the invariant that makes the
 //! operation sound; they are the primary artefact for the audit.
 
+// The sanctioned `unsafe` island for the layout walk (see module docs above).
+// The opt-out is scoped to this file; every block carries a `// SAFETY:`
+// comment, and the invariants are machine-checked by the miri CI job /
+// `just miri`, which runs exactly this module's tests.
+#![allow(unsafe_code)]
+
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -217,7 +223,13 @@ impl<'tree> SubtreeArena<'tree> {
         let mut by_id = HashMap::with_capacity(ids.len());
         for (&id, r) in ids.iter().zip(refs) {
             // `AtomicBool::new(false)` — not in-flight at construction.
-            by_id.insert(id, (NodePtr(r as *mut RenderNode), AtomicBool::new(false)));
+            by_id.insert(
+                id,
+                (
+                    NodePtr(std::ptr::from_mut::<RenderNode>(r)),
+                    AtomicBool::new(false),
+                ),
+            );
         }
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = ids
@@ -253,19 +265,19 @@ impl<'tree> SubtreeArena<'tree> {
     #[inline]
     fn check_thread(&self) {
         let current = std::thread::current().id();
-        if current != self.owner_thread {
-            panic!(
-                "SubtreeArena accessed from non-owner thread: \
-                 owner = {:?}, current = {:?}. The U20 layout walk \
-                 requires the layout_child callback to fire on the \
-                 same thread as PipelineOwner::layout_dirty_root \
-                 (the pipeline phase holds &mut self synchronously). \
-                 User RenderBox::perform_layout body must not spawn \
-                 ctx.layout_child(...) calls to other threads — the \
-                 underlying RenderTree slab is not Sync.",
-                self.owner_thread, current,
-            );
-        }
+        assert!(
+            current == self.owner_thread,
+            "SubtreeArena accessed from non-owner thread: \
+             owner = {:?}, current = {:?}. The U20 layout walk \
+             requires the layout_child callback to fire on the \
+             same thread as PipelineOwner::layout_dirty_root \
+             (the pipeline phase holds &mut self synchronously). \
+             User RenderBox::perform_layout body must not spawn \
+             ctx.layout_child(...) calls to other threads — the \
+             underlying RenderTree slab is not Sync.",
+            self.owner_thread,
+            current,
+        );
     }
 
     /// Returns the [`NodePtr`] for `id` if present, panicking
@@ -507,7 +519,7 @@ impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
     }
 }
 
-impl<'arena, 'tree> Drop for LayoutCycleGuard<'arena, 'tree> {
+impl Drop for LayoutCycleGuard<'_, '_> {
     fn drop(&mut self) {
         // Unconditional clear — runs on every exit path including unwind.
         // The in-flight flag stays consistent for the next frame.
@@ -651,8 +663,8 @@ unsafe fn build_intrinsic_child_parent_data(
 ///    `LayoutCycleGuard` (returns
 ///    [`crate::error::RenderError::LayoutCycle`] on re-entry into
 ///    a slot already in flight up the stack).
-unsafe fn layout_subtree_borrowed<'tree>(
-    arena: &SubtreeArena<'tree>,
+unsafe fn layout_subtree_borrowed(
+    arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<flui_types::Size> {
@@ -671,8 +683,8 @@ unsafe fn layout_subtree_borrowed<'tree>(
 /// # Safety
 ///
 /// Same contract as [`layout_subtree_borrowed`].
-unsafe fn layout_subtree_borrowed_impl<'tree>(
-    arena: &SubtreeArena<'tree>,
+unsafe fn layout_subtree_borrowed_impl(
+    arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<flui_types::Size> {
@@ -718,14 +730,14 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
         let needs_layout_flag = entry.needs_layout();
         // Snapshot the cached geometry for the short-circuit check below;
         // no allocation — `Size` is `Copy`.
-        let cached_geometry: Option<flui_types::Size> = if !needs_layout_flag {
+        let cached_geometry: Option<flui_types::Size> = if needs_layout_flag {
+            None
+        } else {
             entry
                 .state()
                 .has_constraints(&constraints)
                 .then(|| entry.state().geometry())
                 .flatten()
-        } else {
-            None
         };
         let is_leaf = child_ids.is_empty();
         (
@@ -1053,14 +1065,14 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
         // Only clear NEEDS_LAYOUT if the recursive callback observed no
         // descendant failure.  Preserves retry-next-frame semantics.
         let had_descendant_error = descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed);
-        if !had_descendant_error {
-            entry.clear_needs_layout();
-        } else {
+        if had_descendant_error {
             tracing::debug!(
                 parent = ?id,
                 "layout_dirty_root: a descendant errored during this walk; \
                  keeping parent NEEDS_LAYOUT set for next-frame retry"
             );
+        } else {
+            entry.clear_needs_layout();
         }
 
         // `entry`, `node_ref`, and all callbacks drop here.
@@ -1129,8 +1141,8 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
 /// layout.  It shares the layout walk's [`SubtreeArena`] pool instead of
 /// re-entering `PipelineOwner`, preserving the same disjoint-slot discipline
 /// as `layout_subtree_borrowed`.
-unsafe fn box_intrinsic_query_borrowed<'tree>(
-    arena: &SubtreeArena<'tree>,
+unsafe fn box_intrinsic_query_borrowed(
+    arena: &SubtreeArena<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
@@ -1149,8 +1161,8 @@ unsafe fn box_intrinsic_query_borrowed<'tree>(
 /// Same contract as [`layout_subtree_borrowed`]: `arena` must outlive this
 /// call and recursive child callbacks, and re-entry into an in-flight node is
 /// rejected by [`LayoutCycleGuard`] before any second mutable reborrow occurs.
-unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
-    arena: &SubtreeArena<'tree>,
+unsafe fn box_intrinsic_query_borrowed_impl(
+    arena: &SubtreeArena<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
@@ -1284,8 +1296,8 @@ unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
 ///    exist.  The `LayoutCycleGuard` enforces this by returning
 ///    [`crate::error::RenderError::LayoutCycle`] on re-entry into a slot
 ///    already in flight, preventing the otherwise-UB second Unique tag.
-unsafe fn layout_sliver_subtree_borrowed<'tree>(
-    arena: &SubtreeArena<'tree>,
+unsafe fn layout_sliver_subtree_borrowed(
+    arena: &SubtreeArena<'_>,
     id: flui_foundation::RenderId,
     constraints: SliverConstraints,
 ) -> crate::error::RenderResult<SliverGeometry> {
@@ -1304,8 +1316,8 @@ unsafe fn layout_sliver_subtree_borrowed<'tree>(
 /// # Safety
 ///
 /// Same contract as [`layout_sliver_subtree_borrowed`].
-unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
-    arena: &SubtreeArena<'tree>,
+unsafe fn layout_sliver_subtree_borrowed_impl(
+    arena: &SubtreeArena<'_>,
     id: flui_foundation::RenderId,
     constraints: SliverConstraints,
 ) -> crate::error::RenderResult<SliverGeometry> {
@@ -1565,14 +1577,14 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             has_parent,
         );
 
-        if !descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            entry.clear_needs_layout();
-        } else {
+        if descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::debug!(
                 parent = ?id,
                 "layout_dirty_root: a sliver descendant errored during this walk; \
                  keeping parent NEEDS_LAYOUT set for next-frame retry"
             );
+        } else {
+            entry.clear_needs_layout();
         }
 
         // `entry`, `node_ref`, and all callbacks drop here.

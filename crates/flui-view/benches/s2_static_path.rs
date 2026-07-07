@@ -52,6 +52,10 @@
 //! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`] U3
 //! - [`specs/004-view-element-core/spec.md`] Deferred S2, FR-016
 
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
+
 #[path = "shared/mock_tuple.rs"]
 mod mock_tuple;
 

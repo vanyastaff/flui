@@ -156,8 +156,7 @@ impl MultiTapGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena, required_pointer_count: usize) -> Arc<Self> {
         assert!(
             required_pointer_count >= 2,
-            "MultiTapGestureRecognizer requires at least 2 pointers, got {}",
-            required_pointer_count
+            "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
         );
         Arc::new(Self {
             state: RecognizerBase::new(arena),
@@ -177,8 +176,7 @@ impl MultiTapGestureRecognizer {
     ) -> Arc<Self> {
         assert!(
             required_pointer_count >= 2,
-            "MultiTapGestureRecognizer requires at least 2 pointers, got {}",
-            required_pointer_count
+            "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
         );
         Arc::new(Self {
             state: RecognizerBase::new(arena),
@@ -354,10 +352,10 @@ impl MultiTapGestureRecognizer {
                 .map(|info| info.initial_position)
                 .collect();
 
-            let center = if !positions.is_empty() {
-                self.calculate_center(&positions)
-            } else {
+            let center = if positions.is_empty() {
                 Offset::new(Pixels::ZERO, Pixels::ZERO)
+            } else {
+                self.calculate_center(&positions)
             };
 
             let count = positions.len();

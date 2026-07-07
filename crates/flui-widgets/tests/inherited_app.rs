@@ -21,6 +21,11 @@
 //! "No ancestor" tests first assert `is_some()` on the outer option so they
 //! fail loudly if the framework skips `build()` entirely.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::option_option, clippy::unwrap_used)]
+
 mod common;
 
 use std::sync::{Arc, Mutex};

@@ -249,8 +249,7 @@ fn step3_logical_index_stamped_on_deferred_insert() {
     assert_eq!(
         unique_count,
         indices.len(),
-        "duplicate logical indices: {:?}",
-        indices,
+        "duplicate logical indices: {indices:?}",
     );
 }
 
@@ -385,8 +384,7 @@ fn u3c_9a_convergence_logical_indices_reconcile() {
     assert_eq!(
         unique_count,
         indices.len(),
-        "duplicate logical indices detected: {:?} — two children claim the same item",
-        indices,
+        "duplicate logical indices detected: {indices:?} — two children claim the same item",
     );
 
     // The lowest visible logical index must be ≥ cache_first.  With
@@ -395,7 +393,7 @@ fn u3c_9a_convergence_logical_indices_reconcile() {
     // scroll_offset = 500 px (cache reaches back 50 px before the viewport).
     // Asserting ≥ 9 (= cache_first) is the correct invariant; ≥ 10 (= visible
     // first) would be too tight and would spuriously fail on valid pre-fetch.
-    let min_idx = pairs.first().map(|(idx, _)| *idx).unwrap_or(0);
+    let min_idx = pairs.first().map_or(0, |(idx, _)| *idx);
     assert!(
         min_idx >= 9,
         "scroll_offset={scroll_offset}: visible band must start at item ≥ 9 \
@@ -405,8 +403,8 @@ fn u3c_9a_convergence_logical_indices_reconcile() {
     eprintln!(
         "9a convergence ok: {} children, logical indices {}..{}",
         pairs.len(),
-        pairs.first().map(|(i, _)| *i).unwrap_or(0),
-        pairs.last().map(|(i, _)| *i).unwrap_or(0),
+        pairs.first().map_or(0, |(i, _)| *i),
+        pairs.last().map_or(0, |(i, _)| *i),
     );
 }
 
@@ -605,7 +603,7 @@ fn u3c_9c_full_range_scroll_reaches_tail_with_bounded_children() {
         // scroll position actually visited.
         if step == scroll_steps - 1 {
             let pairs = collect_child_indices(&owner, sliver_id);
-            last_min_idx = pairs.first().map(|(idx, _)| *idx).unwrap_or(0);
+            last_min_idx = pairs.first().map_or(0, |(idx, _)| *idx);
         }
     }
 

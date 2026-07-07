@@ -199,7 +199,7 @@ fn find_ancestor_view_returns_nearest_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(
         value,
         Some(42),
@@ -234,7 +234,7 @@ fn find_ancestor_view_picks_nearest_when_multiple_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(
         value,
         Some(2),
@@ -260,7 +260,7 @@ fn find_ancestor_view_returns_none_when_no_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(value, None, "no LabeledView ancestor -> None");
 }
 
@@ -279,7 +279,7 @@ fn find_ancestor_view_excludes_self() {
 
     let ctx = ElementBuildContext::for_element(labeled_id, tree, owner).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(
         value, None,
         "self is excluded from strict-ancestor walk per Flutter parity"
@@ -317,7 +317,7 @@ fn find_ancestor_state_returns_nearest_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
 
-    let count = ctx.find_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(10),
@@ -354,7 +354,7 @@ fn find_ancestor_state_picks_nearest_when_multiple_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(2),
@@ -380,7 +380,7 @@ fn find_ancestor_state_returns_none_when_no_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(count, None, "no CounterState ancestor -> None");
 }
 
@@ -449,7 +449,7 @@ fn find_root_ancestor_state_returns_root_most_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(100),
@@ -485,7 +485,7 @@ fn find_root_ancestor_state_single_match_works() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(7),
@@ -511,7 +511,7 @@ fn find_root_ancestor_state_returns_none_when_no_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(count, None, "no Counter ancestor -> None");
 }
 
@@ -552,7 +552,7 @@ fn find_root_ancestor_state_with_non_matching_intermediate() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(1),

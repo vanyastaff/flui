@@ -57,6 +57,7 @@ use crate::{
 /// let root = builder.build();
 /// assert!(root.is_some());
 /// ```
+#[derive(Debug)]
 pub struct SceneBuilder<'a> {
     /// Reference to the layer tree being built
     tree: &'a mut LayerTree,

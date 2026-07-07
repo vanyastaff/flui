@@ -24,6 +24,10 @@
 //!
 //! Run with `cargo bench -p flui-interaction --bench pointer_resampler_bench`.
 
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
+
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -98,7 +102,7 @@ fn bench_sample_flush(c: &mut Criterion) {
     }
     // Push 100 ns past MIN_SAMPLE_INTERVAL so the per-sample
     // throttling gate does not early-return.
-    let now = Instant::now() + Duration::from_micros(2000);
+    let now = Instant::now() + Duration::from_millis(2);
     let next = now + Duration::from_millis(16);
     c.bench_function(
         "PointerEventResampler::sample (drain 60-event queue)",

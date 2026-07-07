@@ -249,12 +249,11 @@ impl GestureRecorder {
     /// Get the current time offset from start
     fn time_offset(&mut self) -> Duration {
         let now = Instant::now();
-        match self.start_time {
-            Some(start) => now.duration_since(start),
-            None => {
-                self.start_time = Some(now);
-                Duration::ZERO
-            }
+        if let Some(start) = self.start_time {
+            now.duration_since(start)
+        } else {
+            self.start_time = Some(now);
+            Duration::ZERO
         }
     }
 
@@ -406,7 +405,7 @@ impl GesturePlayer {
 
     /// Get the next PointerEvent and advance
     pub fn next_pointer_event(&mut self) -> Option<PointerEvent> {
-        self.next_event().map(|e| e.to_pointer_event())
+        self.next_event().map(RecordedEvent::to_pointer_event)
     }
 
     /// Check if there are more events
@@ -439,7 +438,7 @@ impl GesturePlayer {
         self.recording
             .events
             .iter()
-            .map(|e| e.to_pointer_event())
+            .map(RecordedEvent::to_pointer_event)
             .collect()
     }
 }

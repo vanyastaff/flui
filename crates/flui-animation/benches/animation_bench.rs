@@ -5,6 +5,10 @@
 //! `cargo bench -p flui-animation`; the numbers in `docs/PERFORMANCE.md` should
 //! be sourced from here, not estimated.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
 // Benchmark harness functions are internal measurement scaffolding, not a
 // public API surface, so they are exempt from the crate's missing-docs lint.
 #![allow(missing_docs)]

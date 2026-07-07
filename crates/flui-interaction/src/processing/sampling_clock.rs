@@ -217,19 +217,17 @@ mod tests {
         let (now1, next1) = clock.tick().expect("Fixed tick is Some");
         let (now2, next2) = clock.tick().expect("Fixed tick is Some");
         // Wall clock is monotonic: now2 >= now1.
-        assert!(now2 >= now1, "now1={:?} now2={:?}", now1, now2);
+        assert!(now2 >= now1, "now1={now1:?} now2={now2:?}");
         // next = now + period exactly (within 1µs of measurement).
         let stride1 = next1.duration_since(now1);
         let stride2 = next2.duration_since(now2);
         assert!(
             (stride1.as_micros() as i128 - 8_000).abs() <= 1_000,
-            "stride1={:?}",
-            stride1
+            "stride1={stride1:?}"
         );
         assert!(
             (stride2.as_micros() as i128 - 8_000).abs() <= 1_000,
-            "stride2={:?}",
-            stride2
+            "stride2={stride2:?}"
         );
     }
 

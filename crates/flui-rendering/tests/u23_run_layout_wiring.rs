@@ -107,7 +107,7 @@ fn u23_run_layout_uses_cached_constraints_on_frame_two() {
     let frame_1_size = owner
         .render_tree()
         .get(padding_id)
-        .and_then(|n| n.geometry_box());
+        .and_then(flui_rendering::storage::RenderNode::geometry_box);
     assert_eq!(frame_1_size, Some(Size::new(px(64.0), px(34.0))));
 
     // Clear root_constraints to prove frame 2 doesn't depend on it.
@@ -124,7 +124,7 @@ fn u23_run_layout_uses_cached_constraints_on_frame_two() {
     let frame_2_size = owner
         .render_tree()
         .get(padding_id)
-        .and_then(|n| n.geometry_box());
+        .and_then(flui_rendering::storage::RenderNode::geometry_box);
     assert_eq!(
         frame_2_size, frame_1_size,
         "frame 2 must produce the same geometry as frame 1 — \
@@ -161,7 +161,7 @@ fn u23_run_layout_skips_dirty_entry_with_no_constraints() {
         owner
             .render_tree()
             .get(padding_id)
-            .and_then(|n| n.geometry_box())
+            .and_then(flui_rendering::storage::RenderNode::geometry_box)
             .is_none(),
         "skipped entry must NOT have geometry computed",
     );
@@ -272,7 +272,7 @@ fn u23_run_layout_skips_already_cleaned_dirty_entries() {
     let padding_geom = owner
         .render_tree()
         .get(padding_id)
-        .and_then(|n| n.geometry_box());
+        .and_then(flui_rendering::storage::RenderNode::geometry_box);
     assert_eq!(padding_geom, Some(Size::new(px(50.0), px(50.0))));
     // No way to count perform_layout invocations from integration test,
     // but the skip path is exercised (covered by lib-scoped test if

@@ -51,18 +51,10 @@
 //! - `SemanticsOwner` ≈ Flutter's `SemanticsOwner`
 //! - `SemanticsAction` ≈ Flutter's `SemanticsAction`
 
-#![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
-#![allow(
-    dead_code,
-    unused_variables,
-    missing_docs,
-    clippy::module_name_repetitions,
-    clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
-    clippy::doc_markdown,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc
-)]
+// Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
+// The two remaining opt-outs are tracked ship-quality debt, not configuration:
+#![allow(dead_code, unused_variables)] // TODO(ship-wave-2): wire or delete each dead item (tracker M3 audit)
+#![allow(missing_docs)] // TODO(ship-wave-2): public-item doc backlog — burn down, then delete this line
 
 // ============================================================================
 // MODULES

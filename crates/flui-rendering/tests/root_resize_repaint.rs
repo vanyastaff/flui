@@ -53,7 +53,7 @@ fn run_frame_sizes(
     let root_geometry = owner
         .render_tree()
         .get(root_id)
-        .and_then(|n| n.geometry_box())
+        .and_then(flui_rendering::storage::RenderNode::geometry_box)
         .expect("root geometry computed");
 
     (root_geometry, painted, owner.into_idle())

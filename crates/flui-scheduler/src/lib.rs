@@ -124,8 +124,17 @@
 //!
 //! [`web_time`]: https://docs.rs/web-time
 
+// `[workspace.lints]` supplies the baseline; this crate already holds the
+// stricter missing-docs bar.
 #![deny(missing_docs)]
-#![warn(clippy::all)]
+// Tracked ship-quality debt:
+#![allow(missing_debug_implementations)] // TODO(ship-wave-2): add Debug impls (6 types), then delete
+#![allow(clippy::unwrap_used)] // TODO(ship-wave-2): convert to Result / `expect("BUG: …")` per docs/PANIC-POLICY.md
+#![allow(
+    clippy::match_same_arms,
+    clippy::missing_fields_in_debug,
+    clippy::needless_continue
+)] // TODO(ship-wave-2): burn down per-lint, then delete
 
 // Core modules
 pub mod budget;

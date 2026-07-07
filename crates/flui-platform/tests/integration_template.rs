@@ -38,6 +38,11 @@
 //! }
 //! ```
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::ignore_without_reason)]
+
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::geometry::{Size, px};
 
@@ -112,7 +117,7 @@ fn test_window_handle_compatibility() {
             );
         }
         Err(e) => {
-            panic!("Failed to create window: {}", e);
+            panic!("Failed to create window: {e}");
         }
     }
 }

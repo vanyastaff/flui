@@ -481,7 +481,7 @@ fn test_tree_memory_layout() {
     // ElementTree should be reasonably sized
     let size = std::mem::size_of::<ElementTree>();
     // Slab + Option<ElementId>
-    assert!(size < 128, "ElementTree is too large: {} bytes", size);
+    assert!(size < 128, "ElementTree is too large: {size} bytes");
 }
 
 #[test]
@@ -523,7 +523,7 @@ fn test_tree_debug() {
 
     tree.mount_root(&view, &mut owner.element_owner_mut());
 
-    let debug_str = format!("{:?}", tree);
+    let debug_str = format!("{tree:?}");
     assert!(debug_str.contains("ElementTree"));
     assert!(debug_str.contains("len"));
 }
@@ -537,7 +537,7 @@ fn test_element_node_debug() {
     let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     let node = tree.get(id).unwrap();
 
-    let debug_str = format!("{:?}", node);
+    let debug_str = format!("{node:?}");
     assert!(debug_str.contains("ElementNode"));
     assert!(debug_str.contains("depth"));
 }

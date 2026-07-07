@@ -159,8 +159,8 @@ struct MouseTrackerInner {
 }
 
 // Global singleton
-static GLOBAL_TRACKER: once_cell::sync::Lazy<MouseTracker> =
-    once_cell::sync::Lazy::new(MouseTracker::new);
+static GLOBAL_TRACKER: std::sync::LazyLock<MouseTracker> =
+    std::sync::LazyLock::new(MouseTracker::new);
 
 impl MouseTracker {
     /// Creates a new mouse tracker.
@@ -561,8 +561,7 @@ impl MouseTracker {
             .lock()
             .devices
             .get(&device_id)
-            .map(|state| state.current_cursor)
-            .unwrap_or(CursorIcon::Default)
+            .map_or(CursorIcon::Default, |state| state.current_cursor)
     }
 
     /// Sets the callback for cursor changes.

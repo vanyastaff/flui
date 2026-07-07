@@ -536,7 +536,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
     fn child_count(&self) -> usize {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { children, .. } => {
-                children.as_ref().map(|c| c.len()).unwrap_or(0)
+                children.as_ref().map_or(0, |c| c.len())
             }
             SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_count(),
         }
@@ -846,7 +846,7 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
 
     #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
-        <Self as LayoutContextApi<'_, SliverLayout, A, P>>::position_child(self, index, offset)
+        <Self as LayoutContextApi<'_, SliverLayout, A, P>>::position_child(self, index, offset);
     }
 
     #[inline]

@@ -91,3 +91,6 @@ harness = false
 [[bench]]
 name = "sc012_global_key_reparent"
 harness = false
+
+[lints]
+workspace = true

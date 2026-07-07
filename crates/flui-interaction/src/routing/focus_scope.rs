@@ -283,7 +283,10 @@ impl FocusNode {
 
     /// Returns the parent node.
     pub fn parent(&self) -> Option<Arc<FocusNode>> {
-        self.parent.read().as_ref().and_then(|w| w.upgrade())
+        self.parent
+            .read()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
     }
 
     /// Returns the children.

@@ -731,7 +731,7 @@ where
         &self,
         config: &mut crate::semantics::SemanticsConfiguration,
     ) {
-        <T as RenderBox>::describe_semantics_configuration(self, config)
+        <T as RenderBox>::describe_semantics_configuration(self, config);
     }
 
     fn excludes_semantics_subtree(&self) -> bool {
@@ -739,15 +739,15 @@ where
     }
 
     fn reassemble(&mut self) {
-        <T as RenderBox>::reassemble(self)
+        <T as RenderBox>::reassemble(self);
     }
 
     fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
-        <T as RenderBox>::attach(self, handle)
+        <T as RenderBox>::attach(self, handle);
     }
 
     fn detach(&mut self) {
-        <T as RenderBox>::detach(self)
+        <T as RenderBox>::detach(self);
     }
 
     fn debug_name(&self) -> &'static str {

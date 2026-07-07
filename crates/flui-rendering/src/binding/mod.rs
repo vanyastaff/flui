@@ -407,7 +407,7 @@ pub fn debug_dump_render_tree<B: RendererBinding + ?Sized>(binding: &B) -> Strin
         .filter_map(|id| {
             binding.render_view(id).map(|view| {
                 let view_guard = view.read();
-                format!("=== RenderView {} ===\n{:?}", id, view_guard)
+                format!("=== RenderView {id} ===\n{view_guard:?}")
             })
         })
         .collect::<Vec<_>>()
@@ -426,9 +426,9 @@ pub fn debug_dump_layer_tree<B: RendererBinding + ?Sized>(binding: &B) -> String
             binding.render_view(id).map(|view| {
                 let view_guard = view.read();
                 if let Some(layer) = view_guard.layer() {
-                    format!("=== LayerTree {} ===\n{:?}", id, layer)
+                    format!("=== LayerTree {id} ===\n{layer:?}")
                 } else {
-                    format!("=== LayerTree {} ===\nLayer tree unavailable", id)
+                    format!("=== LayerTree {id} ===\nLayer tree unavailable")
                 }
             })
         })
@@ -463,10 +463,8 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
             // 1. View to expose its PipelineOwner
             // 2. RendererBinding to route each view id to that PipelineOwner
             // 3. SemanticsTree to implement Debug or custom formatting
-            let mut message = format!(
-                "=== SemanticsTree {} ===\nSemantics dump not available via binding.",
-                id
-            );
+            let mut message =
+                format!("=== SemanticsTree {id} ===\nSemantics dump not available via binding.");
             if !printed_explanation {
                 printed_explanation = true;
                 message.push('\n');

@@ -697,11 +697,11 @@ impl RenderNode {
         match self {
             Self::Box(entry) => {
                 let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
-                entry.render_object().paint_raw(recorder, child_count, size)
+                entry.render_object().paint_raw(recorder, child_count, size);
             }
             Self::Sliver(entry) => {
                 let size = entry.state().absolute_paint_size();
-                entry.render_object().paint_raw(recorder, child_count, size)
+                entry.render_object().paint_raw(recorder, child_count, size);
             }
         }
     }
