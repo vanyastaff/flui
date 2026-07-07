@@ -394,6 +394,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
+    env:
+      # Override the workflow-level `-D warnings`: nightly deprecates APIs
+      # ahead of stable (e.g. `Atomic::fetch_update` -> `try_update`, which
+      # does not exist on the 1.96 MSRV yet), and those deprecation warnings
+      # would fail this job spuriously. Lint enforcement is the stable jobs'
+      # business; this job exists solely to catch undefined behavior.
+      RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v6
 
