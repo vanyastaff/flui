@@ -93,7 +93,8 @@
 //! **Note**: This crate has NO dependency on `flui_core` to avoid circular
 //! dependencies. Widget inspection is available through separate tools.
 
-#![warn(missing_docs)]
+// Ship bar (wave 4): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 mod common;
 #[cfg(feature = "hot-reload")]
