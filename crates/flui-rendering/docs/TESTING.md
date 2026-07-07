@@ -16,7 +16,7 @@ The module is **off by default** so it never lands in release builds.
 
 ```bash
 cargo test -p flui-rendering
-cargo test -p flui-rendering --test render_object_harness
+cargo test -p flui-objects --test render_object_harness
 cargo test -p flui-rendering --test harness_animation
 ```
 
