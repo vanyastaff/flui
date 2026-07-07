@@ -69,11 +69,17 @@ pub struct Transform2D<T: Unit> {
     // 2x3 affine matrix stored as f32
     // [ m11  m12  m31 ]
     // [ m21  m22  m32 ]
+    /// X-axis scale factor (`sx`).
     pub m11: f32,
+    /// Y-axis shear factor (`shy`).
     pub m12: f32,
+    /// X-axis shear factor (`shx`).
     pub m21: f32,
+    /// Y-axis scale factor (`sy`).
     pub m22: f32,
+    /// X translation offset (`tx`).
     pub m31: f32,
+    /// Y translation offset (`ty`).
     pub m32: f32,
     _phantom: PhantomData<T>,
 }

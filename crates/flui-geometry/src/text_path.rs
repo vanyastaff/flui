@@ -43,6 +43,7 @@ use crate::{
     traits::{FloatUnit, NumericUnit, Unit},
 };
 
+/// Position and rotation for a single character placed along a path.
 #[derive(Debug, Clone, Copy)]
 pub struct CharTransform<T: Unit> {
     /// Position of the character (center point or baseline)
@@ -51,6 +52,12 @@ pub struct CharTransform<T: Unit> {
     pub rotation: f64,
 }
 
+/// Calculate the position and rotation of a character along a circular arc.
+///
+/// The character at `char_index` (of `total_chars`) is placed on a circle of
+/// `radius` centered at the origin, sweeping `arc_length` radians from
+/// `start_angle`. The rotation is the arc angle plus 90° so glyphs face
+/// outward along the tangent.
 #[inline]
 pub fn arc_position(
     char_index: usize,
@@ -71,11 +78,20 @@ pub fn arc_position(
     }
 }
 
+/// Calculate the sinusoidal vertical offset for a character in a wave effect.
+///
+/// Returns `sin(char_index * frequency) * amplitude`.
 #[inline]
 pub fn wave_offset(char_index: usize, frequency: f64, amplitude: f64) -> f64 {
     (char_index as f64 * frequency).sin() * amplitude
 }
 
+/// Calculate the position and rotation of a character along an Archimedean spiral.
+///
+/// The spiral starts at `start_radius` and grows by `radius_per_revolution`
+/// for each of the `revolutions` turns; characters are spread evenly along it.
+/// The rotation is the spiral angle plus 90° so glyphs face outward along the
+/// tangent.
 #[inline]
 pub fn spiral_position(
     char_index: usize,
@@ -97,16 +113,29 @@ pub fn spiral_position(
     }
 }
 
+/// Calculate the sinusoidal rotation for a character in a wave effect, in radians.
+///
+/// Returns `sin(char_index * frequency) * max_angle`, oscillating between
+/// `-max_angle` and `max_angle`.
 #[inline]
 pub fn wave_rotation(char_index: usize, frequency: f64, max_angle: f64) -> f64 {
     (char_index as f64 * frequency).sin() * max_angle
 }
 
+/// Linearly interpolate a scale factor between `top_scale` and `bottom_scale`.
+///
+/// `normalized_y` is clamped to `[0.0, 1.0]`, where 0.0 yields `top_scale`
+/// and 1.0 yields `bottom_scale`. Useful for perspective-style text effects.
 #[inline]
 pub fn vertical_scale(normalized_y: f64, top_scale: f64, bottom_scale: f64) -> f64 {
     top_scale + (bottom_scale - top_scale) * normalized_y.clamp(0.0, 1.0)
 }
 
+/// Calculate the position of a character in a fixed-size grid layout.
+///
+/// Characters fill rows left-to-right, wrapping every `chars_per_row`
+/// characters (treated as at least 1); each cell is `char_width` by
+/// `char_height`.
 #[inline]
 pub fn grid_position<T>(
     char_index: usize,
@@ -126,6 +155,10 @@ where
     )
 }
 
+/// Evaluate a quadratic Bezier curve at parameter `t`.
+///
+/// `t` is clamped to `[0.0, 1.0]`; `p0` and `p2` are the endpoints and `p1`
+/// is the control point.
 #[inline]
 pub fn bezier_point<T>(t: f64, p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Point<T>
 where
@@ -145,6 +178,11 @@ where
     Point::new(T::from_f32(x), T::from_f32(y))
 }
 
+/// Calculate the tangent angle of a quadratic Bezier curve at parameter `t`, in radians.
+///
+/// `t` is clamped to `[0.0, 1.0]`. The angle is derived from the curve's
+/// derivative via `atan2`, suitable for rotating characters to follow the
+/// curve.
 #[inline]
 pub fn bezier_tangent_rotation<T>(t: f64, p0: Point<T>, p1: Point<T>, p2: Point<T>) -> f64
 where
@@ -168,6 +206,11 @@ where
     dy.atan2(dx)
 }
 
+/// Calculate a character transform from a user-supplied parametric path function.
+///
+/// `path_fn` receives the normalized position `t` in `[0.0, 1.0)` for
+/// `char_index` of `total_chars` and returns `(x, y, rotation)`, where the
+/// coordinates are in pixels and the rotation is in radians.
 #[inline]
 pub fn parametric_position<F>(
     char_index: usize,

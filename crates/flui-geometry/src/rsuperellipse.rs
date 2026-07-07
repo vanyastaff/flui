@@ -13,6 +13,11 @@
 
 use super::{Pixels, Radius, Rect, px};
 
+/// A rounded superellipse (squircle) with independent corner radii.
+///
+/// Like a rounded rectangle, but corners blend smoothly into the edges,
+/// matching iOS/SwiftUI's `.continuous` corner style. Corresponds to
+/// Flutter's `RSuperellipse`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -43,6 +48,8 @@ impl RSuperellipse {
     // Constructors
     // ========================================================================
 
+    /// Creates a rounded superellipse from edge coordinates with the same
+    /// radius for all corners.
     #[inline]
     #[must_use]
     pub fn from_ltrb_r(
@@ -61,6 +68,8 @@ impl RSuperellipse {
         }
     }
 
+    /// Creates a rounded superellipse from edge coordinates with separate
+    /// x and y radii for all corners.
     #[inline]
     #[must_use]
     pub fn from_ltrb_xy(
@@ -75,6 +84,8 @@ impl RSuperellipse {
         Self::from_ltrb_r(left, top, right, bottom, radius)
     }
 
+    /// Creates a rounded superellipse from edge coordinates with independent
+    /// corner radii.
     #[allow(clippy::too_many_arguments)]
     #[inline]
     pub fn from_ltrb_and_corners(
@@ -96,6 +107,8 @@ impl RSuperellipse {
         }
     }
 
+    /// Creates a rounded superellipse from a rectangle with the same radius
+    /// for all corners.
     #[inline]
     #[must_use]
     pub fn from_rect_and_radius(rect: Rect<Pixels>, radius: Radius<Pixels>) -> Self {
@@ -108,6 +121,8 @@ impl RSuperellipse {
         }
     }
 
+    /// Creates a rounded superellipse from a rectangle with independent
+    /// corner radii.
     #[inline]
     #[must_use]
     pub fn from_rect_and_corners(
@@ -126,6 +141,8 @@ impl RSuperellipse {
         }
     }
 
+    /// Creates a rounded superellipse from a rectangle with a circular radius
+    /// for all corners.
     #[inline]
     #[must_use]
     pub fn from_rect_circular(rect: Rect<Pixels>, radius: Pixels) -> Self {
@@ -136,72 +153,84 @@ impl RSuperellipse {
     // Properties
     // ========================================================================
 
+    /// Returns the bounding rectangle.
     #[inline]
     #[must_use]
     pub fn outer_rect(&self) -> Rect<Pixels> {
         self.rect
     }
 
+    /// Returns the left edge x-coordinate.
     #[inline]
     #[must_use]
     pub fn left(&self) -> Pixels {
         self.rect.left()
     }
 
+    /// Returns the top edge y-coordinate.
     #[inline]
     #[must_use]
     pub fn top(&self) -> Pixels {
         self.rect.top()
     }
 
+    /// Returns the right edge x-coordinate.
     #[inline]
     #[must_use]
     pub fn right(&self) -> Pixels {
         self.rect.right()
     }
 
+    /// Returns the bottom edge y-coordinate.
     #[inline]
     #[must_use]
     pub fn bottom(&self) -> Pixels {
         self.rect.bottom()
     }
 
+    /// Returns the width of the bounding rectangle.
     #[inline]
     #[must_use]
     pub fn width(&self) -> Pixels {
         self.rect.width()
     }
 
+    /// Returns the height of the bounding rectangle.
     #[inline]
     #[must_use]
     pub fn height(&self) -> Pixels {
         self.rect.height()
     }
 
+    /// Returns the top-left corner radius.
     #[inline]
     #[must_use]
     pub fn tl_radius(&self) -> Radius<Pixels> {
         self.tl_radius
     }
 
+    /// Returns the top-right corner radius.
     #[inline]
     #[must_use]
     pub fn tr_radius(&self) -> Radius<Pixels> {
         self.tr_radius
     }
 
+    /// Returns the bottom-right corner radius.
     #[inline]
     #[must_use]
     pub fn br_radius(&self) -> Radius<Pixels> {
         self.br_radius
     }
 
+    /// Returns the bottom-left corner radius.
     #[inline]
     #[must_use]
     pub fn bl_radius(&self) -> Radius<Pixels> {
         self.bl_radius
     }
 
+    /// Checks if all four corner radii are equal.
     #[inline]
     #[must_use]
     pub fn has_uniform_corners(&self) -> bool {
@@ -210,6 +239,7 @@ impl RSuperellipse {
             && self.br_radius == self.bl_radius
     }
 
+    /// Checks if every corner radius is circular (x equals y).
     #[inline]
     #[must_use]
     pub fn has_circular_corners(&self) -> bool {
@@ -219,6 +249,7 @@ impl RSuperellipse {
             && self.bl_radius.is_circular()
     }
 
+    /// Checks if all corner radii are zero (a plain rectangle).
     #[inline]
     #[must_use]
     pub fn is_rect(&self) -> bool {
@@ -228,6 +259,7 @@ impl RSuperellipse {
             && self.bl_radius.is_zero()
     }
 
+    /// Checks if the bounding rectangle is empty.
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -238,6 +270,11 @@ impl RSuperellipse {
     // Safe inner rectangles
     // ========================================================================
 
+    /// Returns the largest axis-aligned rectangle guaranteed to lie inside
+    /// the shape.
+    ///
+    /// Each side is inset by the maximum corner radius component along that
+    /// side, so the result avoids all four corner regions.
     #[inline]
     #[must_use]
     pub fn safe_inner_rect(&self) -> Rect<Pixels> {
@@ -255,6 +292,10 @@ impl RSuperellipse {
         )
     }
 
+    /// Returns the widest inner rectangle spanning the full width.
+    ///
+    /// Only the top and bottom edges are inset (by the maximum vertical
+    /// corner radii); the left and right edges match the bounding rectangle.
     #[inline]
     #[must_use]
     pub fn wide_middle_rect(&self) -> Rect<Pixels> {
@@ -269,6 +310,10 @@ impl RSuperellipse {
         )
     }
 
+    /// Returns the tallest inner rectangle spanning the full height.
+    ///
+    /// Only the left and right edges are inset (by the maximum horizontal
+    /// corner radii); the top and bottom edges match the bounding rectangle.
     #[inline]
     #[must_use]
     pub fn tall_middle_rect(&self) -> Rect<Pixels> {
@@ -287,6 +332,8 @@ impl RSuperellipse {
     // Transformations
     // ========================================================================
 
+    /// Returns a copy inflated by `delta` on all sides, with corner radii
+    /// grown by the same amount.
     #[inline]
     #[must_use]
     pub fn inflate(&self, delta: Pixels) -> Self {
@@ -299,12 +346,18 @@ impl RSuperellipse {
         }
     }
 
+    /// Returns a copy deflated by `delta` on all sides, with corner radii
+    /// shrunk by the same amount.
     #[inline]
     #[must_use]
     pub fn deflate(&self, delta: Pixels) -> Self {
         self.inflate(-delta)
     }
 
+    /// Returns a copy with the bounding rectangle and all corner radii scaled
+    /// by `factor`.
+    ///
+    /// Edge coordinates are scaled about the origin, not the shape's center.
     #[inline]
     #[must_use]
     pub fn scale(&self, factor: f32) -> Self {
@@ -346,6 +399,10 @@ impl RSuperellipse {
     // Interpolation
     // ========================================================================
 
+    /// Linearly interpolates between two rounded superellipses.
+    ///
+    /// The bounding rectangle and each corner radius are interpolated
+    /// component-wise.
     #[inline]
     #[must_use]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {

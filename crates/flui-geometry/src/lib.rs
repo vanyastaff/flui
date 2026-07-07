@@ -114,8 +114,8 @@
 // visible next to the code they cover. (The float-comparison / numeric-cast
 // family is allowed workspace-wide — see `[workspace.lints.clippy]`.)
 #![allow(clippy::many_single_char_names, clippy::wildcard_imports)]
-// Tracked ship-quality debt (unlike the permanent idiom block above):
-#![allow(missing_docs)] // TODO(ship-wave-1): public-item doc backlog (~77 items), then delete
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // =============================================================================
 // MODULES
