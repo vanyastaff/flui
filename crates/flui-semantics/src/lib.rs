@@ -52,9 +52,8 @@
 //! - `SemanticsAction` ≈ Flutter's `SemanticsAction`
 
 // Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
-// The two remaining opt-outs are tracked ship-quality debt, not configuration:
-#![allow(dead_code, unused_variables)] // TODO(ship-wave-2): wire or delete each dead item (tracker M3 audit)
-#![allow(missing_docs)] // TODO(ship-wave-2): public-item doc backlog — burn down, then delete this line
+// Ship bar (wave 2): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // ============================================================================
 // MODULES

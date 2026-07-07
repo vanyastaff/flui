@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme = "README.md"
 description = "Semantics tree for FLUI accessibility - part of 5-tree architecture"
 keywords = ["ui", "accessibility", "semantics", "a11y", "screen-reader"]
 categories = ["gui", "accessibility"]

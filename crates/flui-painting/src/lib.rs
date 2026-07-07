@@ -139,6 +139,8 @@
 //! - [`display_list`] - DisplayList and DrawCommand types
 //! - [`error`] - Error types
 
+// Ship bar (wave 2): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 // ===== Quality Control: Compiler & Clippy Lints =====
 //
 // Note: Most lints are inherited from [workspace.lints] in root Cargo.toml.
