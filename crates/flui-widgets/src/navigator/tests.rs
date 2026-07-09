@@ -1179,7 +1179,13 @@ fn inert_wake() -> Arc<dyn Fn() + Send + Sync> {
 }
 
 fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
-    RouteBinding::new(id, history.command_queue(), inert_wake())
+    RouteBinding::new(
+        id,
+        history.command_queue(),
+        inert_wake(),
+        Arc::new(Mutex::new(None)),
+        Arc::new(Mutex::new(std::collections::HashMap::new())),
+    )
 }
 
 /// A route raising `finalize()` from `did_pop` — i.e. **inside** the flush that

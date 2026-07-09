@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Accepted — **U5.0 and U5.1 landed 2026-07-09** (`RenderOffstage` parity fix; the route-animation binding seam). U5.2–U5.5 are unstarted; no `TransitionRoute`, no public API. **Decision 2 was wrong twice and is corrected in §7b.**
+- **Status:** Accepted — **U5.0, U5.1 and U5.2 landed 2026-07-09** (`RenderOffstage` parity fix; the route-animation binding seam; the private `TransitionRoute`). U5.3–U5.5 unstarted; no `ModalRoute`, no barrier, no public API. **Decision 2 was wrong twice (§7b) and Decision 1 needed correcting (§7c).**
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult animation owner (ticker ownership: who is FLUI's `vsync:`), view owner (route → navigator and route → overlay-entry back-references, both of which ADR-0019 deliberately omitted), rendering owner (`RenderOffstage` correction, `maintainSize`), repository owner (any public API — `TransitionRoute`/`ModalRoute`/`PageRoute` shape, and whether `Overlay` becomes public), qa-lead (deterministic transition tests: driving a controller inside a headless frame).
 - **Relates to:** implements ADR-0019 §5 **U5**. Depends on the seams ADR-0019 U2 already carved out (`PushCompletion::Animating`, `Route::finished_when_popped`, `RouteHistory::notify_push_completed`) — all of which currently have **no production producer**.
@@ -353,7 +353,7 @@ The task's suggested order is right in outline; the reference forces two changes
 |------|-------|-----------|
 | **U5.0** ✓ | **`RenderOffstage` correction** (Decision 4). **Landed 2026-07-09** — see §7a. Child laid out under real constraints; box reports `constraints.smallest`; paint/hit-test skipped, and semantics suppression *added* (it was missing). `SliverOffstage` audited: **does not share the defect**. | ✓ 6 harness tests + 1 widget test, each red-checked |
 | **U5.1** ✓ | **The route-animation seam, no `TransitionRoute`.** **Landed 2026-07-09** — see §7b. `RouteBinding` enqueues `RouteCommand`s; `RouteHistory::flush` drains them at the head of each flush and again after each pass, bounded. **No `Vsync` was added** (U5.1 needs no clock) and `Route::install` keeps its public signature — both Decision 2 corrections. | ✓ 8 tests, each red-checked; `reentrant_flush_panics_with_bug` **kept**; `route_stack_flush_is_pure_data` green |
-| **U5.2** | **`TransitionRoute`, private.** Controller lifecycle (`install`/`dispose`, `willDisposeAnimationController`), `_handleStatusChanged` (all four arms incl. the `!isActive` guard and `_popFinalized`), `finished_when_popped`, `didAdd`/`didReplace` value inheritance, `secondaryAnimation` + `canTransitionTo`/`canTransitionFrom`, and train-hopping via `AnimationSwitch` — **after** auditing `AnimationSwitch` against `TrainHoppingAnimation` (§2). `completed` future. | §5 tests 1–7, 11 |
+| **U5.2** ✓ | **`TransitionRoute`, private.** **Landed 2026-07-09** — see §7c. Controller lifecycle (`install`/`dispose`, `willDisposeAnimationController`), `_handleStatusChanged` (all four arms incl. the `!isActive` guard and `_popFinalized`), `finished_when_popped`, `didAdd`/`didReplace` value inheritance, `secondaryAnimation` + `canTransitionTo`/`canTransitionFrom`, and train-hopping via `AnimationSwitch` — **after** auditing `AnimationSwitch` against `TrainHoppingAnimation` (§2). `completed` future. | §5 tests 1–7, 11 |
 | **U5.3** | **`Overlay` `opaque`/`maintainState`/`skipCount`** (Decision 3) — a real `RenderTheater`; `overlay_deferred_opaque_builds_every_entry` deliberately goes red and is replaced. **Then `ModalRoute`, private:** two entries (barrier below scope), `buildPage` cached once, `buildTransitions`, `offstage`, `setState`/`changedInternalState`/`changedExternalState`, barrier via `GestureDetector`+opaque hit-test. **Focus is deferred and named** (Seam 6): no `FocusScope` widget exists, and faking it is the Definition-of-Done failure mode. | §5 tests 8–10, 12–14 |
 | **U5.4** | **`PageRoute` / `PopupRoute` + parity re-check + sign-off, then public export.** Decide whether `Overlay`/`OverlayEntry` become public (they must, if app authors are to write custom routes — or `NavigatorRoute::content_builder` must stay the only door). | Full §5 suite; ADR gains a *Parity findings (U5.4)* table |
 | **U5.5** | Tracker flip; `Hero` unblocked and handed to its own ADR. | — |
@@ -478,6 +478,52 @@ Everything in `binding.rs`, plus `command_queue`, `has_pending_commands`, `pump_
 ### Divergence recorded
 
 Flutter's `finalizeRoute` mutates the entry immediately, and the *in-progress* flush observes it on the same walk (`navigator.dart:5825-5828`, plus the `Pop` arm's `if (entry.currentState == dispose) continue;`). FLUI defers it to a second pass of the same `flush`. The end state, the observer stream and the accumulated `FlushOutcome` are identical before `flush` returns; only the pass count differs, and `last_flush_passes` asserts it is exactly two.
+
+## 7c. Implementation findings (U5.2, 2026-07-09)
+
+`TransitionRoute` landed in `navigator/transition_route.rs`, `pub(crate)`, unexported — the first consumer of U5.1's `RouteBinding`. 17 tests, plus 2 preflight tests in `flui-animation`. Everything was red-checked; four red-checks came back **green** and each exposed either a wrong test or a wrong claim.
+
+### Preflight: `AnimationSwitch` is sound, and neither contract was tested
+
+§2 said `AnimationSwitch` looked like a faithful `TrainHoppingAnimation` but that `on_switched` firing exactly once and `dispose()` detaching from **both** trains were unconfirmed. Both hold. Neither had a test: `test_animation_switch_callback` never triggers a hop, and `switch_rebinds_listeners_to_new_current` only covers *post-hop* disposal. Added `on_switched_fires_exactly_once` and `dispose_before_a_hop_detaches_from_both_trains`, plus a `debug_status_listener_count` probe. Note the once-only guarantee comes from `inner.next.take()`, not from `mode = None` — my first red-check aimed at the wrong line and passed.
+
+### A real bug the tests caught: `is_animating` is not Flutter's `isAnimating`
+
+`_updateSecondaryAnimation`'s jump condition is `currentTrain.value == nextTrain.value || !nextTrain.isAnimating` (`routes.dart:438`). Flutter's `Animation.isAnimating` is **status-based** (`forward || reverse`). FLUI's `AnimationController` **overrides** `is_animating` to mean *the ticker is running*, which stays true after the controller has settled at `Completed`.
+
+Using the override made a settled route look like a moving train and forced a spurious train-hop. `TransitionRoute` now tests the status directly. **`AnimationController::is_animating` remains divergent from Flutter and is not fixed here** — it is a `flui-animation` contract with other callers, and changing it belongs in its own slice. Recorded, not silently worked around.
+
+### Two claims this ADR's own draft got wrong
+
+An early `transition_route.rs` made `did_pop_next` a no-op and skipped the `completed` channel, reasoning that `did_change_next(None)` would release the proxy. Two tests failed, and the reference explains why: `_RouteEntry.handleDidPopNext` hands `didPopNext` the **popped** route (`navigator.dart:3312`), so the secondary deliberately keeps tracking it as it reverses away; and `did_change_next(None)` never arrives, because `shouldAnnounceChangeToNext` suppresses it precisely *because* `didPopNext` already spoke (`:3541-3546`). The proxy is released by `nextRoute.completed` (`routes.dart:503-509`), guarded by `if (_secondaryAnimation.parent == animation)`.
+
+So a private `CompletedSignal` was added — the `completed` channel U5.2 was told to add **only if the contract demanded it**. It does.
+
+### Correction to Decision 1 — the navigator owns a `Vsync`, it is not a `TickerProvider`
+
+Flutter's `vsync: navigator!` works because `NavigatorState` mixes in `TickerProviderStateMixin`. FLUI's `AnimationController::new` takes an `Arc<Scheduler>` and builds its **own** ticker; `flui_animation::Vsync` is not a `TickerProvider` at all but a *registry* a binding drives with `tick_all`. So the seam is "the navigator owns the `Vsync` its routes register with", which preserves the property that matters: one clock per navigator, and transitions freeze when its binding stops ticking. `NavigatorState::init_state` resolves an ambient `VsyncScope`; absent one, each controller keeps its own wall-clock ticker, exactly as `AnimatedSize` does.
+
+`VsyncRegistration` has **no `Drop`**, so `dispose` must unregister explicitly or a disposed route's controller ticks forever. Pinned by `dispose_unregisters_the_controller_from_the_navigators_clock`.
+
+### Three guards that are faithful but unobservable, stated rather than claimed
+
+1. **`finishedWhenPopped`'s `&& !_popFinalized`.** FLUI consults it once, in `handle_pop`, and a second `finalize` is a no-op because U5.1 drops a `RouteCommand` naming a vanished route; Flutter needs the term because `finalizeRoute` *asserts*. The thing it protects — the listener raising `finalize()` twice — is pinned **directly** by `pop_finalized_stops_a_second_finalize`, using a `#[cfg(test)]` counter.
+2. **The synchronous-finalize branch of `finishedWhenPopped`.** FLUI's `AnimationController::reverse()` on an already-dismissed controller re-emits `Dismissed` *synchronously*, so the status listener finalizes first and sets `_popFinalized`; `finished_when_popped` then reads `false` and the branch is never taken. Dart's controller does not notify from `reverse()`. End state identical — disposed within the pop's own `flush`.
+3. **"Dispose the old hopper last" (`routes.dart:495`).** `ProxyAnimation::set_parent` re-subscribes eagerly, so once the new parent is installed the proxy holds no reference to the old hopper. Kept because it is faithful and free.
+
+`did_pop_next` is likewise idempotent, because `update_secondary_animation` early-returns when the proxy already names that route.
+
+### One test that fooled itself
+
+The first `a_stale_train_does_not_clobber_a_newer_parent` never disposed anything: the routes above were left in `Pushing`, which keeps `can_remove_or_add` false, so `completed` never fired and the `parent == animation` guard went untested. Rewritten with a settled (`Idle`) top route, and it now red-checks.
+
+### Not implemented, not claimed
+
+`opaque` — `_handleStatusChanged` writes `overlayEntries.first.opaque` (`:297`, `:304`) and FLUI's `Overlay` has none (U5.3). `didReplace`'s controller-value inheritance — it needs the *replaced* route's controller, and the `TransitionPeer` registry publishes an `Animation`, not an `AnimationController`; `pushReplacement` is not exported either. Predictive back, `_simulation`, `DartPerformanceMode`.
+
+### Dead code, honestly
+
+`transition_route.rs` carries a file-scoped `#![allow(dead_code)]`, and **U5.1's scoped allows could not be removed**: `push_bound`'s only caller is still the test suite, because nothing in production pushes a `TransitionRoute` until `ModalRoute` (U5.3) / `PageRoute` (U5.4). Each attribute names that consumer. No module-wide allow was added to `history.rs` or `navigator.rs`.
 
 ## 7. Consequences
 

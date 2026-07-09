@@ -579,6 +579,119 @@ mod tests {
         controller2.dispose();
     }
 
+    /// **ADR-0020 U5.2 preflight.** `TrainHoppingAnimation` fires `onSwitchedTrain`
+    /// **exactly once** (`animations.dart:591-593`): the hop nulls `_nextTrain`, so
+    /// no later tick can hop again. The route layer's teardown paths
+    /// (`_trainHoppingListenerRemover`, `onSwitchedTrain`) rely on that — a second
+    /// fire would dispose a hopper that is already gone.
+    ///
+    /// Red-check: remove `inner.mode = None;` from the hop in `setup_listeners`.
+    #[test]
+    fn on_switched_fires_exactly_once() {
+        use std::sync::atomic::AtomicUsize;
+
+        let scheduler = Arc::new(Scheduler::new());
+        let controller1 = create_controller(&scheduler, 0.8);
+        let controller2 = create_controller(&scheduler, 0.3);
+
+        let hops = Arc::new(AtomicUsize::new(0));
+        let hops_clone = Arc::clone(&hops);
+        let switch = AnimationSwitch::new(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+        )
+        .on_switched(move || {
+            hops_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        assert_eq!(hops.load(Ordering::SeqCst), 0);
+
+        // `current > next` at construction ⇒ Maximize ⇒ hop when next >= current.
+        controller1.set_value(0.2);
+        assert_eq!(hops.load(Ordering::SeqCst), 1, "the hop fired");
+        assert!(Arc::ptr_eq(
+            &switch.current(),
+            &(controller2.clone() as Arc<dyn Animation<f32>>)
+        ));
+
+        // Keep both trains moving, in both directions, past each other again.
+        controller2.set_value(0.9);
+        controller1.set_value(0.95);
+        controller2.set_value(0.1);
+        controller1.set_value(0.0);
+
+        assert_eq!(
+            hops.load(Ordering::SeqCst),
+            1,
+            "on_switched must fire exactly once, however the trains move afterwards"
+        );
+
+        switch.dispose();
+        controller1.dispose();
+        controller2.dispose();
+    }
+
+    /// **ADR-0020 U5.2 preflight.** `TrainHoppingAnimation.dispose` detaches from
+    /// **both** trains (`animations.dart:601-613`): status + value listeners from
+    /// `_currentTrain`, and the value listener from `_nextTrain`. The route layer
+    /// disposes a hopper that never hopped (`jumpOnAnimationEnd`, and the
+    /// `disposed`-future path in `_setSecondaryAnimation`), so a leak here would
+    /// keep a disposed route's controller alive and notifying.
+    ///
+    /// `switch_rebinds_listeners_to_new_current` covers the *post-hop* case. This
+    /// is the *pre-hop* case, which nothing covered.
+    ///
+    /// Red-check: delete the `next_listener_id` branch of `AnimationSwitch::dispose`.
+    #[test]
+    fn dispose_before_a_hop_detaches_from_both_trains() {
+        let scheduler = Arc::new(Scheduler::new());
+        let controller1 = create_controller(&scheduler, 0.8);
+        let controller2 = create_controller(&scheduler, 0.3);
+
+        let value1 = controller1.debug_value_listener_count();
+        let value2 = controller2.debug_value_listener_count();
+        let status1 = controller1.debug_status_listener_count();
+
+        let switch = AnimationSwitch::new(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+        );
+        assert_eq!(controller1.debug_value_listener_count(), value1 + 1);
+        assert_eq!(controller2.debug_value_listener_count(), value2 + 1);
+        assert_eq!(controller1.debug_status_listener_count(), status1 + 1);
+
+        switch.dispose();
+
+        assert_eq!(
+            controller1.debug_value_listener_count(),
+            value1,
+            "the current train's value listener must be removed"
+        );
+        assert_eq!(
+            controller1.debug_status_listener_count(),
+            status1,
+            "the current train's status listener must be removed"
+        );
+        assert_eq!(
+            controller2.debug_value_listener_count(),
+            value2,
+            "the NEXT train's value listener must be removed too"
+        );
+
+        // And a disposed switch never hops.
+        controller1.set_value(0.2);
+        assert!(
+            Arc::ptr_eq(
+                &switch.current(),
+                &(controller1.clone() as Arc<dyn Animation<f32>>)
+            ),
+            "a disposed switch must not hop"
+        );
+
+        controller1.dispose();
+        controller2.dispose();
+    }
+
     #[test]
     fn test_animation_switch_status() {
         let scheduler = Arc::new(Scheduler::new());

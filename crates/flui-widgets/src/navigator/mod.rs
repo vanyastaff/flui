@@ -40,6 +40,7 @@ mod observer;
 mod overlay_route;
 mod result;
 mod route;
+mod transition_route;
 
 pub use navigator::{Navigator, NavigatorHandle, NavigatorState};
 pub use observer::NavigatorObserver;
@@ -51,3 +52,5 @@ pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 mod navigator_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transition_route_tests;

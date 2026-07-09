@@ -61,10 +61,11 @@
 // rustc's reachability view every item here is dead. The attribute goes with U5.2.
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 
+use flui_animation::{Animation, Vsync};
 use parking_lot::Mutex;
 
 use super::route::{Route, RouteId};
@@ -84,6 +85,92 @@ pub(crate) enum RouteCommand {
     /// already running.
     Finalize(RouteId),
 }
+
+/// What one transition route publishes about itself so the route **below** it can
+/// drive its `secondary_animation`.
+///
+/// Flutter reads these straight off the next `Route` object
+/// (`routes.dart:429-437`). FLUI's routes are named by [`RouteId`] and live behind
+/// `Box<dyn ErasedRoute>` inside a `Mutex`, so a route cannot reach another —
+/// ADR-0019 §7b flagged exactly this ("U5 will need a lookup handle"). The
+/// registry is that handle.
+#[derive(Clone)]
+pub(crate) struct TransitionPeer {
+    /// The route's **primary** animation, controller-backed.
+    pub(crate) animation: Arc<dyn Animation<f32>>,
+    /// `nextRoute.canTransitionFrom(this)` (`routes.dart:561`), asked of the
+    /// route *above*.
+    pub(crate) can_transition_from: bool,
+    /// Fires when the route is disposed — Flutter's `Route.completed`
+    /// (`routes.dart:115-122`), which `_setSecondaryAnimation` awaits to release
+    /// its reference to a gone route's animation (`:503-509`).
+    pub(crate) completed: Arc<CompletedSignal>,
+}
+
+/// A one-shot "this route is disposed" signal with callbacks.
+///
+/// Flutter uses a `Future`; FLUI's routes are driven synchronously from the flush,
+/// so a plain callback list is both sufficient and observable. Private: this is
+/// the `completed` channel ADR-0020 U5.2 said to add **only if** the disposal /
+/// train-hopping contract needs it. It does — see `transition_route.rs`.
+#[derive(Default)]
+pub(crate) struct CompletedSignal {
+    done: Mutex<bool>,
+    listeners: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl CompletedSignal {
+    /// Run `callback` when the route completes, or **now** if it already has.
+    pub(crate) fn on_completed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        if *self.done.lock() {
+            callback();
+            return;
+        }
+        self.listeners.lock().push(callback);
+    }
+
+    /// Fire once. Later `on_completed` calls run immediately.
+    pub(crate) fn complete(&self) {
+        {
+            let mut done = self.done.lock();
+            if *done {
+                return;
+            }
+            *done = true;
+        }
+        // Snapshot then fire: a callback may re-enter the route.
+        let callbacks: Vec<_> = self.listeners.lock().drain(..).collect();
+        for callback in callbacks {
+            callback();
+        }
+    }
+}
+
+impl fmt::Debug for CompletedSignal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompletedSignal")
+            .field("done", &*self.done.lock())
+            .finish_non_exhaustive()
+    }
+}
+
+/// `RouteId -> TransitionPeer`, shared by every binding a navigator mints.
+pub(crate) type TransitionRegistry = Arc<Mutex<HashMap<RouteId, TransitionPeer>>>;
+
+/// The clock a route's `AnimationController` registers with.
+///
+/// **Correction to ADR-0020 Decision 1.** Flutter's `vsync: navigator!` works
+/// because `NavigatorState` mixes in `TickerProviderStateMixin`. FLUI's
+/// `AnimationController::new` takes an `Arc<Scheduler>` and builds its **own**
+/// ticker; `flui_animation::Vsync` is not a `TickerProvider` at all but a
+/// *registry* a binding drives with `tick_all`. So the seam is not "the navigator
+/// is the ticker" but "the navigator owns the `Vsync` its routes register with" —
+/// which preserves the property that matters: one clock per navigator, and
+/// transitions freeze when the navigator's binding stops ticking.
+///
+/// `None` when no `VsyncScope` is above the navigator; the controller then falls
+/// back to its own wall-clock ticker, exactly as `AnimatedSize` does.
+pub(crate) type RouteVsync = Arc<Mutex<Option<Vsync>>>;
 
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
@@ -105,6 +192,12 @@ pub(crate) struct RouteBinding {
     queue: RouteCommandQueue,
     /// Applies the queue if the history is not currently locked. See *Correction 1*.
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// The navigator's clock. `Mutex` because `NavigatorState::init_state`
+    /// resolves it after the handle (and therefore any seeded binding) exists.
+    vsync: RouteVsync,
+    /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
+    /// route may consult it from inside a flush.
+    peers: TransitionRegistry,
 }
 
 impl RouteBinding {
@@ -112,8 +205,39 @@ impl RouteBinding {
         route: RouteId,
         queue: RouteCommandQueue,
         wake: Arc<dyn Fn() + Send + Sync>,
+        vsync: RouteVsync,
+        peers: TransitionRegistry,
     ) -> Self {
-        Self { route, queue, wake }
+        Self {
+            route,
+            queue,
+            wake,
+            vsync,
+            peers,
+        }
+    }
+
+    /// The navigator's clock, if it has one.
+    pub(crate) fn vsync(&self) -> Option<Vsync> {
+        self.vsync.lock().clone()
+    }
+
+    /// Publish this route's primary animation so the route below can drive its
+    /// `secondary_animation` from it.
+    pub(crate) fn publish_peer(&self, peer: TransitionPeer) {
+        self.peers.lock().insert(self.route, peer);
+    }
+
+    /// Withdraw it. Called from `dispose`; a peer that outlives its controller
+    /// would hand out a disposed animation.
+    pub(crate) fn withdraw_peer(&self) {
+        self.peers.lock().remove(&self.route);
+    }
+
+    /// The peer for `route`, or `None` when it is not a transition route —
+    /// Flutter's `nextRoute is TransitionRoute` test (`routes.dart:429`).
+    pub(crate) fn peer(&self, route: RouteId) -> Option<TransitionPeer> {
+        self.peers.lock().get(&route).cloned()
     }
 
     /// The route this binding drives.

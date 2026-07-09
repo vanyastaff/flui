@@ -44,12 +44,13 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::binding::{BoundRoute, RouteBinding};
+use super::binding::{BoundRoute, RouteBinding, RouteVsync, TransitionRegistry};
 use super::history::{FlushOutcome, RouteHistory};
 use super::observer::NavigatorObserver;
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
 use super::route::{AnyResult, RouteId, RoutePopDisposition};
+use crate::animated::VsyncScope;
 use crate::overlay::{Overlay, OverlayEntry, OverlayHandle};
 
 /// Everything a [`NavigatorHandle`] and the mounted [`NavigatorState`] share.
@@ -68,6 +69,16 @@ struct NavigatorShared {
     /// `RouteId -> OverlayEntry`. Flutter stores these on the route
     /// (`OverlayRoute.overlayEntries`); see `overlay_route.rs` for why FLUI cannot.
     entries: Mutex<HashMap<RouteId, OverlayEntry>>,
+
+    /// The clock this navigator's route transitions register with (ADR-0020
+    /// U5.2). Resolved from an ambient `VsyncScope` in `init_state`; `None` when
+    /// there is none, in which case each controller falls back to its own
+    /// wall-clock ticker, as `AnimatedSize` does.
+    vsync: RouteVsync,
+
+    /// `RouteId -> TransitionPeer`, the lookup handle ADR-0019 §7b said U5 would
+    /// need: a route names its neighbours by id and cannot reach their objects.
+    peers: TransitionRegistry,
 }
 
 impl NavigatorShared {
@@ -174,6 +185,8 @@ impl NavigatorHandle {
                 history: Mutex::new(RouteHistory::new()),
                 overlay: OverlayHandle::new(),
                 entries: Mutex::new(HashMap::new()),
+                vsync: Arc::new(Mutex::new(None)),
+                peers: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -227,6 +240,8 @@ impl NavigatorHandle {
                     shared.pump_route_commands();
                 }
             }),
+            Arc::clone(&self.shared.vsync),
+            Arc::clone(&self.shared.peers),
         )
     }
 
@@ -400,6 +415,12 @@ impl NavigatorHandle {
         &self.shared.overlay
     }
 
+    /// The lifecycle state of `id`'s entry. Test-facing.
+    #[cfg(test)]
+    pub(crate) fn route_state(&self, id: RouteId) -> Option<super::lifecycle::RouteLifecycle> {
+        self.shared.history.lock().state_of(id)
+    }
+
     /// How many `RouteId -> OverlayEntry` pairs the navigator is holding.
     ///
     /// Test-facing. Must track the route count exactly: an entry left behind for
@@ -533,7 +554,12 @@ impl ViewState<Navigator> for NavigatorState {
     ///
     /// No `rebuild_handle()` is acquired here or anywhere in this file: the
     /// overlay owns its own rebuild, so trigger #22 has nothing to guard.
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        // ADR-0020 U5.2: the navigator owns the clock its route transitions
+        // register with — the FLUI shape of Flutter's `vsync: navigator!`. Read
+        // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.
+        *self.shared.vsync.lock() = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+
         debug_assert!(
             self.shared.history.lock().len() > 0,
             "BUG: a Navigator was mounted with no routes — seed one before mounting \
