@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::ElementId;
 use flui_view::prelude::*;
 
-use super::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
+use super::{InsertPosition, OnstagePlan, Overlay, OverlayEntry, OverlayHandle, onstage_plan};
 use crate::SizedBox;
 use crate::test_harness::{Harness, mount};
 
@@ -93,7 +93,7 @@ fn probe_entry(creations: &Arc<AtomicUsize>) -> OverlayEntry {
     })
 }
 
-/// The `Stack` element the overlay builds (the overlay element's only child).
+/// The `Theater` element the overlay builds (the overlay element's only child).
 fn stack_element(harness: &mut Harness, overlay_element: ElementId) -> ElementId {
     harness.only_child(overlay_element)
 }
@@ -552,23 +552,246 @@ fn overlay_rearrange_inserts_unknown_entries() {
     assert!(entry_b.is_attached());
 }
 
-/// **`opaque` / `maintainState` are deferred, not implemented.** Every entry is
-/// built every frame, even one fully covered by another.
+// ============================================================================
+// opaque / maintainState / skipCount  (ADR-0020 U5.3)
+// ============================================================================
+
+/// `overlay.dart:890-897`: the loop stops adding onstage children once an opaque
+/// entry is reached, and an entry below it without `maintainState` is not added
+/// at all — it never enters the view tree.
 ///
-/// This pins the *current* behavior so that implementing Flutter's
-/// `OverlayState.build` skipping loop (`overlay.dart:888-918`) turns it red —
-/// which is the point. It is not a parity claim; ADR-0019 §6 records the cost.
+/// Replaces ADR-0019 U1's `overlay_deferred_opaque_builds_every_entry`, which
+/// pinned the not-yet-implemented behavior and is red by design now.
 #[test]
-fn overlay_deferred_opaque_builds_every_entry() {
+fn overlay_opaque_top_entry_drops_lower_entries_entirely() {
     let (bottom, top) = (Calls::default(), Calls::default());
-    let (entry_a, entry_b) = (counting_entry(&bottom), counting_entry(&top));
-    let (_handle, overlay) = overlay_with(&[entry_a, entry_b]);
+    let entry_a = counting_entry(&bottom);
+    let entry_b = counting_entry(&top).with_opaque(true);
+    let (_handle, overlay) = overlay_with(&[entry_a.clone(), entry_b]);
+    let mut harness = mount(overlay);
+
+    assert_eq!(
+        (bottom.get(), top.get()),
+        (0, 1),
+        "the covered entry must not be built at all"
+    );
+    assert_eq!(layer_count(&mut harness), 1);
+    assert!(
+        !entry_a.is_mounted(),
+        "a covered entry without maintain_state has no mounted subtree"
+    );
+}
+
+/// `overlay.dart:898-905`: `maintainState` keeps a covered entry in the tree.
+/// It is then one of the theater's leading `skipCount` children.
+#[test]
+fn overlay_maintain_state_keeps_covered_entry_built() {
+    let (bottom, top) = (Calls::default(), Calls::default());
+    let entry_a = counting_entry(&bottom).with_maintain_state(true);
+    let entry_b = counting_entry(&top).with_opaque(true);
+    let (_handle, overlay) = overlay_with(&[entry_a.clone(), entry_b]);
     let mut harness = mount(overlay);
 
     assert_eq!(
         (bottom.get(), top.get()),
         (1, 1),
-        "the covered entry is still built — opaque skipping is not implemented"
+        "a maintain_state entry is built even when covered"
     );
     assert_eq!(layer_count(&mut harness), 2);
+    assert!(entry_a.is_mounted());
+}
+
+/// `opaque == false` is the default and skips nothing — the ADR-0019 U1
+/// behavior, which must survive.
+#[test]
+fn overlay_non_opaque_top_entry_skips_nothing() {
+    let (bottom, top) = (Calls::default(), Calls::default());
+    let (entry_a, entry_b) = (counting_entry(&bottom), counting_entry(&top));
+    let (_handle, overlay) = overlay_with(&[entry_a, entry_b]);
+    let mut harness = mount(overlay);
+
+    assert_eq!((bottom.get(), top.get()), (1, 1));
+    assert_eq!(layer_count(&mut harness), 2);
+}
+
+/// Only the entries *below* the topmost opaque one are covered. Flutter adds the
+/// opaque entry itself before flipping `onstage` (`overlay.dart:892-896`).
+#[test]
+fn overlay_opaque_entry_below_another_still_builds_the_top() {
+    let (bottom, middle, top) = (Calls::default(), Calls::default(), Calls::default());
+    let entry_a = counting_entry(&bottom);
+    let entry_b = counting_entry(&middle).with_opaque(true);
+    let entry_c = counting_entry(&top);
+    let (_handle, overlay) = overlay_with(&[entry_a, entry_b, entry_c]);
+    let mut harness = mount(overlay);
+
+    assert_eq!(
+        (bottom.get(), middle.get(), top.get()),
+        (0, 1, 1),
+        "the opaque entry and everything above it build; only below is dropped"
+    );
+    assert_eq!(layer_count(&mut harness), 2);
+}
+
+/// The `opaque` setter rebuilds the **overlay** — Flutter's
+/// `_didChangeEntryOpacity` is `setState` on `OverlayState` (`overlay.dart:879`).
+/// Clearing it brings the covered entry back, with fresh state.
+#[test]
+fn overlay_toggling_opaque_rebuilds_and_restores_the_covered_entry() {
+    let creations = Arc::new(AtomicUsize::new(0));
+    let entry_a = probe_entry(&creations);
+    let entry_b = OverlayEntry::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed());
+    let (_handle, overlay) = overlay_with(&[entry_a.clone(), entry_b.clone()]);
+    let mut harness = mount(overlay);
+
+    assert_eq!(creations.load(Ordering::Relaxed), 1);
+    assert_eq!(layer_count(&mut harness), 2);
+
+    entry_b.set_opaque(true);
+    harness.tick();
+    assert_eq!(layer_count(&mut harness), 1, "covered entry left the tree");
+    assert!(!entry_a.is_mounted());
+
+    entry_b.set_opaque(false);
+    harness.tick();
+    assert_eq!(layer_count(&mut harness), 2);
+    assert_eq!(
+        creations.load(Ordering::Relaxed),
+        2,
+        "an uncovered entry's state is created fresh — its old state was disposed"
+    );
+}
+
+/// A `set_opaque` that does not change the value must not rebuild — Flutter's
+/// `if (_opaque == value) return;` (`overlay.dart:140-142`).
+#[test]
+fn overlay_setting_opaque_to_the_same_value_is_a_noop() {
+    let calls = Calls::default();
+    let entry = counting_entry(&calls);
+    let (_handle, overlay) = overlay_with(std::slice::from_ref(&entry));
+    let mut harness = mount(overlay);
+    assert_eq!(calls.get(), 1);
+
+    entry.set_opaque(false);
+    harness.tick();
+    assert_eq!(calls.get(), 1, "no rebuild for an unchanged flag");
+
+    entry.set_opaque(true);
+    harness.tick();
+    assert_eq!(calls.get(), 2, "a real change rebuilds the overlay");
+}
+
+/// `set_maintain_state` goes through the same `_didChangeEntryOpacity` path, so
+/// turning it on under an opaque entry brings the covered entry back.
+#[test]
+fn overlay_setting_maintain_state_rebuilds_the_overlay() {
+    let calls = Calls::default();
+    let entry_a = counting_entry(&calls);
+    let entry_b =
+        OverlayEntry::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()).with_opaque(true);
+    let (_handle, overlay) = overlay_with(&[entry_a.clone(), entry_b]);
+    let mut harness = mount(overlay);
+    assert_eq!(calls.get(), 0);
+
+    entry_a.set_maintain_state(true);
+    harness.tick();
+    assert_eq!(calls.get(), 1, "the covered entry is built once maintained");
+    assert_eq!(layer_count(&mut harness), 2);
+}
+
+/// A `rearrange` that reorders entries under an opaque top must still preserve
+/// the surviving keyed entries' subtree state — ADR-0019 §3.2's contract, now
+/// with `skipCount` in play.
+#[test]
+fn overlay_rearrange_with_opaque_preserves_surviving_entry_state() {
+    let creations = Arc::new(AtomicUsize::new(0));
+    let maintained = probe_entry(&creations).with_maintain_state(true);
+    let filler = OverlayEntry::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed())
+        .with_maintain_state(true);
+    let opaque =
+        OverlayEntry::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()).with_opaque(true);
+
+    let (handle, overlay) = overlay_with(&[maintained.clone(), filler.clone(), opaque.clone()]);
+    let mut harness = mount(overlay);
+
+    assert_eq!(creations.load(Ordering::Relaxed), 1);
+    let before = maintained.element_id();
+    assert!(before.is_some());
+
+    handle.rearrange(&[filler, maintained.clone(), opaque]);
+    harness.tick();
+
+    assert_eq!(
+        creations.load(Ordering::Relaxed),
+        1,
+        "the keyed reorder must move the element, not recreate its state"
+    );
+    assert_eq!(maintained.element_id(), before);
+    assert_eq!(layer_count(&mut harness), 3);
+}
+
+/// The `skipCount` handed to the theater is the number of *covered but
+/// maintained* entries, and they are always the leading children — the property
+/// [`RenderTheater`](flui_objects::RenderTheater) relies on.
+///
+/// Asserted on [`onstage_plan`] directly: the element tree cannot observe
+/// `skip_count`, and `harness_theater_*` in `flui-objects` covers what the render
+/// object then does with it.
+#[test]
+fn overlay_build_plan_matches_flutters_onstage_loop() {
+    let plain = || OverlayEntry::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed());
+    let opaque = || plain().with_opaque(true);
+    let maintained = || plain().with_maintain_state(true);
+    let maintained_opaque = || plain().with_opaque(true).with_maintain_state(true);
+
+    let plan = |entries: &[OverlayEntry]| onstage_plan(entries);
+
+    assert_eq!(
+        plan(&[plain(), plain()]),
+        OnstagePlan {
+            build: vec![0, 1],
+            skip_count: 0
+        },
+        "nothing opaque: every entry onstage, a plain expanding stack"
+    );
+    assert_eq!(
+        plan(&[plain(), opaque()]),
+        OnstagePlan {
+            build: vec![1],
+            skip_count: 0
+        },
+        "the covered entry is dropped, not skipped — it never enters the tree"
+    );
+    assert_eq!(
+        plan(&[maintained(), opaque()]),
+        OnstagePlan {
+            build: vec![0, 1],
+            skip_count: 1
+        },
+        "a maintained covered entry is built and then skipped by the theater"
+    );
+    assert_eq!(
+        plan(&[maintained(), plain(), opaque(), plain()]),
+        OnstagePlan {
+            build: vec![0, 2, 3],
+            skip_count: 1
+        },
+        "only entries below the topmost opaque one are covered; the \
+         non-maintained one among them is dropped"
+    );
+    assert_eq!(
+        plan(&[maintained(), maintained_opaque(), opaque()]),
+        OnstagePlan {
+            build: vec![0, 1, 2],
+            skip_count: 2
+        },
+        "an opaque entry that is itself covered is still skipped, not dropped"
+    );
+    assert_eq!(
+        plan(&[]),
+        OnstagePlan {
+            build: vec![],
+            skip_count: 0
+        },
+    );
 }

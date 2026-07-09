@@ -69,6 +69,7 @@ use flui_animation::{Animation, Vsync};
 use parking_lot::Mutex;
 
 use super::route::{Route, RouteId};
+use crate::overlay::OverlayEntry;
 
 /// A lifecycle transition a route asks its navigator to make.
 ///
@@ -172,6 +173,11 @@ pub(crate) type TransitionRegistry = Arc<Mutex<HashMap<RouteId, TransitionPeer>>
 /// back to its own wall-clock ticker, exactly as `AnimatedSize` does.
 pub(crate) type RouteVsync = Arc<Mutex<Option<Vsync>>>;
 
+/// `RouteId -> OverlayEntry`, the navigator's map. A route reaches **its own**
+/// entry through it — Flutter's `OverlayRoute.overlayEntries`, which FLUI keeps
+/// on the navigator instead (`overlay_route.rs`).
+pub(crate) type RouteEntries = Arc<Mutex<HashMap<RouteId, OverlayEntry>>>;
+
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
 /// Its own mutex, deliberately: it must be lockable while the history's mutex is
@@ -198,6 +204,8 @@ pub(crate) struct RouteBinding {
     /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
     /// route may consult it from inside a flush.
     peers: TransitionRegistry,
+    /// `RouteId -> OverlayEntry`. Likewise its own mutex (ADR-0020 U5.3).
+    entries: RouteEntries,
 }
 
 impl RouteBinding {
@@ -207,6 +215,7 @@ impl RouteBinding {
         wake: Arc<dyn Fn() + Send + Sync>,
         vsync: RouteVsync,
         peers: TransitionRegistry,
+        entries: RouteEntries,
     ) -> Self {
         Self {
             route,
@@ -214,6 +223,38 @@ impl RouteBinding {
             wake,
             vsync,
             peers,
+            entries,
+        }
+    }
+
+    /// This route's overlay entry, or `None` before it is installed — Flutter's
+    /// `overlayEntries.isNotEmpty` guard (`routes.dart:295`).
+    ///
+    /// Cloned **out** of the map, so the caller never holds the `entries` lock
+    /// while touching the overlay.
+    fn entry(&self) -> Option<OverlayEntry> {
+        self.entries.lock().get(&self.route).cloned()
+    }
+
+    /// `overlayEntries.first.opaque = value` (`routes.dart:296`, `:304`).
+    pub(crate) fn set_entry_opaque(&self, opaque: bool) {
+        if let Some(entry) = self.entry() {
+            entry.set_opaque(opaque);
+        }
+    }
+
+    /// `_modalScope.maintainState = maintainState` (`routes.dart:2230`).
+    pub(crate) fn set_entry_maintain_state(&self, maintain_state: bool) {
+        if let Some(entry) = self.entry() {
+            entry.set_maintain_state(maintain_state);
+        }
+    }
+
+    /// `_modalBarrier.markNeedsBuild()` (`routes.dart:2228`) — rebuild **this
+    /// route's** overlay entry, not the navigator.
+    pub(crate) fn mark_entry_needs_build(&self) {
+        if let Some(entry) = self.entry() {
+            entry.mark_needs_build();
         }
     }
 

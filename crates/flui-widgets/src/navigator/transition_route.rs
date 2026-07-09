@@ -136,6 +136,12 @@ struct TransitionInner {
     /// Flutter's `_popFinalized` (`routes.dart:180`).
     pop_finalized: AtomicBool,
 
+    /// `TransitionRoute.opaque` (`routes.dart:156`) — whether the route obscures
+    /// the ones below **once its entrance transition completes**. Abstract in
+    /// Flutter; `PageRoute` returns `true`, `PopupRoute` `false`. FLUI defaults to
+    /// `false`, the conservative value: nothing is skipped unless a route asks.
+    opaque: AtomicBool,
+
     vsync_registration: Mutex<Option<(flui_animation::Vsync, VsyncRegistration)>>,
     will_dispose_controller: bool,
 
@@ -159,21 +165,28 @@ impl TransitionInner {
 
     /// `_handleStatusChanged` (`routes.dart:293-321`).
     ///
-    /// `completed` and `dismissed` are the two arms with behavior here. The
-    /// `forward`/`reverse` arm only writes `overlayEntries.first.opaque = false`,
-    /// which FLUI has nowhere to write (see the module docs), so it is a no-op —
-    /// and *not* claimed.
+    /// All four arms have behavior since ADR-0020 U5.3 gave the overlay entry an
+    /// `opaque` flag to write. `_performanceModeRequestHandle` has no FLUI
+    /// analogue and is not claimed.
     fn handle_status_changed(&self, status: AnimationStatus) {
         let binding = self.binding.lock().clone();
         let Some(binding) = binding else { return };
 
         match status {
             AnimationStatus::Completed => {
+                // `overlayEntries.first.opaque = opaque` (`routes.dart:296`).
+                binding.set_entry_opaque(self.opaque.load(Ordering::Relaxed));
                 // The entrance transition finished: `pushing` → `idle`.
                 // Flutter gets this from `didPush`'s `TickerFuture`; FLUI's
                 // controller returns no future, so the status listener is the
                 // seam (`PushCompletion::Animating` + the command queue).
                 binding.notify_push_completed();
+            }
+            // `overlayEntries.first.opaque = false` (`routes.dart:303-305`): a
+            // route in motion never occludes, because the routes beneath it show
+            // through the transition.
+            AnimationStatus::Forward | AnimationStatus::Reverse => {
+                binding.set_entry_opaque(false);
             }
             // "We might still be an active route if a subclass is controlling the
             // transition and hits the dismissed status." (`routes.dart:310-313`)
@@ -184,9 +197,8 @@ impl TransitionInner {
                 self.finalize_calls.fetch_add(1, Ordering::Relaxed);
                 binding.finalize();
             }
-            // `forward`/`reverse` only write `overlayEntries.first.opaque = false`
-            // (`routes.dart:303-305`), which FLUI has nowhere to write. Not claimed.
-            // A `dismissed` that fails the guard above lands here too.
+            // A `dismissed` that fails the guard above: still an active route.
+            // `AnimationStatus` is `#[non_exhaustive]`.
             _ => {}
         }
     }
@@ -234,6 +246,7 @@ impl<T> TransitionRoute<T> {
                 secondary_parent: Mutex::new(SecondaryParent::Dismissed),
                 popped: AtomicBool::new(false),
                 pop_finalized: AtomicBool::new(false),
+                opaque: AtomicBool::new(false),
                 vsync_registration: Mutex::new(None),
                 will_dispose_controller: true,
                 completed: Arc::new(CompletedSignal::default()),
@@ -268,6 +281,14 @@ impl<T> TransitionRoute<T> {
 
     pub(crate) fn can_transition_from(mut self, allow: bool) -> Self {
         self.can_transition_from = allow;
+        self
+    }
+
+    /// Flutter's `TransitionRoute.opaque` (`routes.dart:156`). Written to the
+    /// route's overlay entry when the entrance transition completes, and cleared
+    /// while it moves.
+    pub(crate) fn opaque(self, opaque: bool) -> Self {
+        self.inner.opaque.store(opaque, Ordering::Relaxed);
         self
     }
 

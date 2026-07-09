@@ -46,6 +46,7 @@
 //! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
+//! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
 //! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
@@ -183,6 +184,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderListBody",
     "RenderFlow",
     "RenderTable",
+    "RenderTheater",
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
     "RenderListener",
@@ -7783,5 +7785,123 @@ fn render_object_types_match_exports() {
     assert_eq!(
         catalog, exported,
         "RENDER_OBJECT_TYPES must match `pub use` exports in objects/mod.rs",
+    );
+}
+
+// ── RenderTheater ─────────────────────────────────────────────────────────────
+
+/// `skip_count == 0` must be indistinguishable from `RenderStack` with
+/// `StackFit::Expand`: `size = constraints.biggest`, every child tight to it.
+#[test]
+fn harness_theater_skip_count_zero_is_stack_expand() {
+    let theater = RenderTester::mount(
+        box_node(RenderTheater::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(box_node(RenderColoredBox::green(30.0, 30.0)).label("top")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let stack = RenderTester::mount(
+        box_node(RenderStack::new().with_fit(StackFit::Expand))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(box_node(RenderColoredBox::green(30.0, 30.0)).label("top")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let expected = Size::new(px(200.0), px(200.0));
+    assert_eq!(theater.box_geometry(theater.root()), expected);
+    assert_eq!(stack.box_geometry(stack.root()), expected);
+    for label in ["bottom", "top"] {
+        assert_eq!(
+            theater.box_geometry(theater.id(label)),
+            stack.box_geometry(stack.id(label)),
+            "child `{label}` must be laid out exactly as StackFit::Expand does",
+        );
+    }
+    assert_eq!(
+        theater.hit_first(10.0, 10.0),
+        Some(theater.id("top")),
+        "with nothing skipped the topmost child wins the hit test",
+    );
+    assert_descendant_properties(&theater.diagnostics(), "RenderTheater", &["skip_count"]);
+}
+
+/// The leading `skip_count` children are offstage: not laid out, not painted,
+/// not hit-tested. Flutter's `_childrenInPaintOrder` / `_childrenInHitTestOrder`
+/// both start at `_firstOnstageChild` (`overlay.dart:1424-1458`), and
+/// `performLayout` only walks paint order (`:1481-1484`).
+#[test]
+fn harness_theater_skips_leading_children_in_layout_paint_and_hit_test() {
+    let run = RenderTester::mount(
+        box_node(RenderTheater::new().with_skip_count(1))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("offstage"))
+            .child(box_node(RenderColoredBox::green(30.0, 30.0)).label("onstage")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(200.0), px(200.0)),
+        "skipping children must not change the theater's own size",
+    );
+    assert_eq!(
+        run.try_box_geometry(run.id("offstage")),
+        None,
+        "the skipped child must never be laid out — it has no committed geometry",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("onstage")),
+        Size::new(px(200.0), px(200.0)),
+        "the onstage child is still tight to the theater's size",
+    );
+    assert_eq!(
+        run.hit_first(10.0, 10.0),
+        Some(run.id("onstage")),
+        "the skipped child must not be hit-testable",
+    );
+
+    let painted = run
+        .display_commands()
+        .into_iter()
+        .map(|cmd| cmd.line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        painted.contains("#00FF00FF"),
+        "onstage green child must paint; commands:\n{painted}",
+    );
+    assert!(
+        !painted.contains("#FF0000FF"),
+        "offstage red child must not paint; commands:\n{painted}",
+    );
+}
+
+/// Intrinsics and dry layout must ignore the offstage children too —
+/// `_RenderTheater` passes `_firstOnstageChild` to `getIntrinsicDimension`
+/// (`overlay.dart:1359-1389`).
+#[test]
+fn harness_theater_intrinsics_ignore_offstage_children() {
+    let mut run = RenderTester::mount(
+        box_node(RenderTheater::new().with_skip_count(1))
+            .child(
+                box_node(RenderSizedBox::new(Some(px(150.0)), Some(px(150.0)))).label("offstage"),
+            )
+            .child(box_node(RenderSizedBox::new(Some(px(40.0)), Some(px(40.0)))).label("onstage")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.max_intrinsic_width(run.root(), f32::INFINITY),
+        40.0,
+        "the 150px offstage child must not widen the theater's intrinsic width",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), loose(200.0)),
+        Size::new(px(200.0), px(200.0)),
+        "dry layout is constraints.biggest, exactly as performLayout sizes",
     );
 }

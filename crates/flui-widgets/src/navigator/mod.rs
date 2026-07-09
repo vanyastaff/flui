@@ -34,6 +34,7 @@
 mod binding;
 mod history;
 mod lifecycle;
+mod modal_route;
 #[allow(clippy::module_inception)]
 mod navigator;
 mod observer;
@@ -48,6 +49,8 @@ pub use overlay_route::{NavigatorRoute, RouteContentBuilder, SimpleRoute};
 pub use result::RouteResult;
 pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 
+#[cfg(test)]
+mod modal_route_tests;
 #[cfg(test)]
 mod navigator_tests;
 #[cfg(test)]

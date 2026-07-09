@@ -28,14 +28,18 @@
 //!   `setState` throws during build. [`RebuildHandle::schedule`] only inserts an
 //!   id into an inbox drained by the next `build_scope`, so it is already safe
 //!   from any phase and any thread. The hack has no analogue to port.
-//! - **`opaque` / `maintainState` are not implemented** and not claimed. See the
-//!   module docs on [`super`] for the cost.
+//! - **No `tickerEnabled: false` for covered entries.** Flutter mutes the tickers
+//!   of a `maintainState` entry that an opaque entry covers (`overlay.dart:906`).
+//!   FLUI has no per-subtree ticker gate, so a covered entry's animations keep
+//!   running. Recorded, not claimed.
+//! - **No `canSizeOverlay`.** It only bites under unbounded constraints; see
+//!   [`RenderTheater`](flui_objects::RenderTheater).
 //!
 //! [`Overlay`]: super::Overlay
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use flui_view::{BoxedView, BuildContext, RebuildHandle};
@@ -85,6 +89,16 @@ struct EntryInner {
     /// Acquired in `init_state` — never in `build` — per port-check trigger #22.
     rebuild: Mutex<Option<RebuildHandle>>,
 
+    /// Whether this entry occludes the whole overlay, so the ones below it need
+    /// not be built. Flutter's `OverlayEntry.opaque` (`overlay.dart:136-146`).
+    opaque: AtomicBool,
+
+    /// Whether this entry stays in the tree even when an [`opaque`] entry covers
+    /// it. Flutter's `OverlayEntry.maintainState` (`overlay.dart:163-173`).
+    ///
+    /// [`opaque`]: EntryInner::opaque
+    maintain_state: AtomicBool,
+
     /// The overlay currently holding this entry, or `None` when detached.
     ///
     /// `Weak`, so an entry outliving its overlay does not keep the overlay's
@@ -105,6 +119,9 @@ pub(crate) struct OverlayEntry {
 
 impl OverlayEntry {
     /// An entry that builds its subtree with `builder`, attached to no overlay.
+    ///
+    /// `opaque` and `maintain_state` both default to `false`, as in Flutter
+    /// (`overlay.dart:117-121`).
     pub(crate) fn new(
         builder: impl Fn(&dyn BuildContext) -> BoxedView + Send + Sync + 'static,
     ) -> Self {
@@ -113,8 +130,58 @@ impl OverlayEntry {
                 id: OverlayEntryId::next(),
                 builder: Arc::new(builder),
                 rebuild: Mutex::new(None),
+                opaque: AtomicBool::new(false),
+                maintain_state: AtomicBool::new(false),
                 overlay: Mutex::new(None),
             }),
+        }
+    }
+
+    /// Builder form of [`set_opaque`](Self::set_opaque), for an entry that is not
+    /// yet attached (so no rebuild is needed).
+    pub(crate) fn with_opaque(self, opaque: bool) -> Self {
+        self.inner.opaque.store(opaque, Ordering::Relaxed);
+        self
+    }
+
+    /// Builder form of [`set_maintain_state`](Self::set_maintain_state).
+    pub(crate) fn with_maintain_state(self, maintain_state: bool) -> Self {
+        self.inner
+            .maintain_state
+            .store(maintain_state, Ordering::Relaxed);
+        self
+    }
+
+    /// Whether this entry occludes the entire overlay.
+    pub(crate) fn opaque(&self) -> bool {
+        self.inner.opaque.load(Ordering::Relaxed)
+    }
+
+    /// Whether this entry stays built even when covered by an opaque entry.
+    pub(crate) fn maintain_state(&self) -> bool {
+        self.inner.maintain_state.load(Ordering::Relaxed)
+    }
+
+    /// Flutter's `opaque` setter (`overlay.dart:138-146`): a change rebuilds the
+    /// **overlay**, not the entry, because `OverlayState.build` reads it.
+    pub(crate) fn set_opaque(&self, opaque: bool) {
+        self.set_build_flag(&self.inner.opaque, opaque);
+    }
+
+    /// Flutter's `maintainState` setter (`overlay.dart:165-173`), which likewise
+    /// goes through `_didChangeEntryOpacity`.
+    pub(crate) fn set_maintain_state(&self, maintain_state: bool) {
+        self.set_build_flag(&self.inner.maintain_state, maintain_state);
+    }
+
+    /// Store `value`, and rebuild the whole overlay only if it changed —
+    /// Flutter's `if (_opaque == value) return;` short-circuit.
+    fn set_build_flag(&self, flag: &AtomicBool, value: bool) {
+        if flag.swap(value, Ordering::Relaxed) == value {
+            return;
+        }
+        if let Some(shared) = self.attached_overlay() {
+            shared.schedule_rebuild();
         }
     }
 

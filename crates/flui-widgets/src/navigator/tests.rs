@@ -1185,6 +1185,7 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
         inert_wake(),
         Arc::new(Mutex::new(None)),
         Arc::new(Mutex::new(std::collections::HashMap::new())),
+        Arc::new(Mutex::new(std::collections::HashMap::new())),
     )
 }
 

@@ -44,7 +44,7 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::binding::{BoundRoute, RouteBinding, RouteVsync, TransitionRegistry};
+use super::binding::{BoundRoute, RouteBinding, RouteEntries, RouteVsync, TransitionRegistry};
 use super::history::{FlushOutcome, RouteHistory};
 use super::observer::NavigatorObserver;
 use super::overlay_route::NavigatorRoute;
@@ -68,7 +68,10 @@ struct NavigatorShared {
 
     /// `RouteId -> OverlayEntry`. Flutter stores these on the route
     /// (`OverlayRoute.overlayEntries`); see `overlay_route.rs` for why FLUI cannot.
-    entries: Mutex<HashMap<RouteId, OverlayEntry>>,
+    ///
+    /// `Arc`-shared with every [`RouteBinding`], so a route can reach its own
+    /// entry to write `opaque` / `maintainState` (ADR-0020 U5.3).
+    entries: RouteEntries,
 
     /// The clock this navigator's route transitions register with (ADR-0020
     /// U5.2). Resolved from an ambient `VsyncScope` in `init_state`; `None` when
@@ -184,7 +187,7 @@ impl NavigatorHandle {
             shared: Arc::new(NavigatorShared {
                 history: Mutex::new(RouteHistory::new()),
                 overlay: OverlayHandle::new(),
-                entries: Mutex::new(HashMap::new()),
+                entries: Arc::new(Mutex::new(HashMap::new())),
                 vsync: Arc::new(Mutex::new(None)),
                 peers: Arc::new(Mutex::new(HashMap::new())),
             }),
@@ -242,6 +245,7 @@ impl NavigatorHandle {
             }),
             Arc::clone(&self.shared.vsync),
             Arc::clone(&self.shared.peers),
+            Arc::clone(&self.shared.entries),
         )
     }
 
@@ -260,16 +264,22 @@ impl NavigatorHandle {
         let id = RouteId::next();
         route.bind(self.binding_for(id));
 
+        // Before the flush, unlike `push`: `install()` and the first status
+        // change both run inside `push_with_id`, and both may reach for this
+        // route's entry (`RouteBinding::set_entry_opaque`). Flutter has the same
+        // order — `OverlayRoute.install` creates the entries, then calls
+        // `super.install()` (`routes.dart:69-71`).
         let builder = route.content_builder();
+        self.shared
+            .entries
+            .lock()
+            .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
+
         let (result, outcome) = {
             let mut history = self.shared.history.lock();
             let (_, result) = history.push_with_id(id, route);
             (result, history.take_outcome())
         };
-        self.shared
-            .entries
-            .lock()
-            .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
 
         if let Some(outcome) = outcome {
             self.shared.apply(&outcome);
@@ -419,6 +429,14 @@ impl NavigatorHandle {
     #[cfg(test)]
     pub(crate) fn route_state(&self, id: RouteId) -> Option<super::lifecycle::RouteLifecycle> {
         self.shared.history.lock().state_of(id)
+    }
+
+    /// The overlay entry `id`'s route presents. Test-facing: `opaque` and
+    /// `maintain_state` are written through a `RouteBinding`, and this is the only
+    /// way to read back what a route actually wrote.
+    #[cfg(test)]
+    pub(crate) fn entry_of(&self, id: RouteId) -> Option<OverlayEntry> {
+        self.shared.entries.lock().get(&id).cloned()
     }
 
     /// How many `RouteId -> OverlayEntry` pairs the navigator is holding.

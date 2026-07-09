@@ -53,7 +53,7 @@ pub use layout::{
     RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,
     RenderListBody, RenderPadding, RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox,
-    RenderStack, RenderTable, RenderTransform, RenderWrap,
+    RenderStack, RenderTable, RenderTheater, RenderTransform, RenderWrap,
 };
 
 // --- flat re-exports (proxy) ---

@@ -22,6 +22,7 @@ use parking_lot::RwLock;
 pub(crate) struct Harness {
     binding: HeadlessBinding,
     root_element: ElementId,
+    pipeline_owner: Arc<RwLock<PipelineOwner>>,
 }
 
 /// Mount `root` as the render-tree root and drive one frame.
@@ -60,11 +61,12 @@ pub(crate) fn mount(root: impl View) -> Harness {
         .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
         .expect("headless frame should succeed");
 
-    binding.bind_tree(build_owner, tree, pipeline_owner);
+    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
 
     Harness {
         binding,
         root_element,
+        pipeline_owner,
     }
 }
 
@@ -104,6 +106,20 @@ impl Harness {
             .collect();
         kids.sort_unstable();
         kids.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// The `debug_name()` of every render object currently in the tree.
+    ///
+    /// The one structural probe a widget-level test has: it says *which* render
+    /// objects a view built, without duplicating the render-layer harness in
+    /// `flui-objects`, which is where their behavior is pinned.
+    pub(crate) fn render_debug_names(&self) -> Vec<&'static str> {
+        let owner = self.pipeline_owner.read();
+        owner
+            .render_tree()
+            .iter()
+            .map(|(_, node)| node.debug_name())
+            .collect()
     }
 
     /// The only child of `parent`.

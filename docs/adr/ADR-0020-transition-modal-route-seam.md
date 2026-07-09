@@ -525,6 +525,123 @@ The first `a_stale_train_does_not_clobber_a_newer_parent` never disposed anythin
 
 `transition_route.rs` carries a file-scoped `#![allow(dead_code)]`, and **U5.1's scoped allows could not be removed**: `push_bound`'s only caller is still the test suite, because nothing in production pushes a `TransitionRoute` until `ModalRoute` (U5.3) / `PageRoute` (U5.4). Each attribute names that consumer. No module-wide allow was added to `history.rs` or `navigator.rs`.
 
+## 7d. Implementation findings (U5.3, 2026-07-09)
+
+**Status: landed.** `RenderTheater` in `flui-objects`; `Overlay` honours `opaque` /
+`maintainState` / `skipCount`; private `ModalRoute` on top of `TransitionRoute`.
+No public export. Decision 3 is answered: **implement them**, as recommended.
+
+### `_RenderTheater` is a `Stack` with a skipped prefix, and nothing more
+
+`OverlayState.build` (`overlay.dart:886-918`) walks `_entries.reversed` — top
+first — collecting children until it passes an `opaque` entry, then collecting
+only the `maintainState` ones below it, and reverses once at the end. So the
+covered-but-maintained entries land at the **front** of the child list, and
+`skipCount = children.length - onstageCount` counts a *prefix*. An entry below an
+opaque one **without** `maintainState` never enters the widget tree at all.
+
+`_RenderTheater.performLayout` (`:1462-1485`) then sizes to `constraints.biggest`
+and lays every onstage child out with `BoxConstraints.tight(size)` — which
+Flutter's own comment calls "Equivalent to BoxConstraints used by RenderStack for
+`StackFit.expand`". So `RenderTheater` with `skip_count == 0` **is** ADR-0019
+U1's `Stack(fit: Expand)`, and `harness_theater_skip_count_zero_is_stack_expand`
+pins that against a live `RenderStack` rather than asserting it.
+
+FLUI's pipeline tolerates a never-laid-out child: the skipped children simply have
+no committed geometry (`try_box_geometry(...) == None`), which is what
+`harness_theater_skips_leading_children_in_layout_paint_and_hit_test` asserts.
+That was the one open risk in the design and it did not bite.
+
+### Three things `RenderTheater` does not port, and does not claim
+
+* **Positioned children.** `_RenderTheater` runs the full `RenderStack`
+  positioned/non-positioned split. FLUI's `Overlay` builds exactly one
+  non-positioned `OverlayEntryView` per entry, so there are none.
+* **`canSizeOverlay` / `alwaysSizeToContent`.** They only matter under unbounded
+  constraints, where Flutter *throws* unless an entry opts in
+  (`overlay.dart:1511-1525`). FLUI falls back to `constraints.smallest()`, matching
+  `RenderStack`'s own fallback rather than panicking (PANIC-POLICY).
+* **Semantics skipping.** `visitChildrenForSemantics` walks
+  `_childrenInPaintOrder()` (`:1427-1428`), so offstage entries leave the semantics
+  tree. FLUI's `RenderBox` has no per-child semantics visitor — only the
+  whole-subtree `excludes_semantics_subtree` — so a `maintainState` entry beneath
+  an opaque one is **still announced**. Recorded, not claimed.
+
+### `tickerEnabled: false` has no analogue
+
+Flutter mutes a covered `maintainState` entry's tickers (`overlay.dart:906`). FLUI
+has no per-subtree ticker gate, so a covered entry's animations keep running. Cost,
+not correctness.
+
+### `ModalRoute` merges Flutter's two overlay entries into one
+
+`createOverlayEntries` returns `[_modalBarrier, _modalScope]`
+(`routes.dart:2350-2356`). ADR-0019 U3 keys **one** `OverlayEntry` per `RouteId`,
+so `ModalRoute` builds a `Stack[barrier, page]` into a single entry. Every property
+the overlay reads survives the merge, because they all live on the entry Flutter
+would have written them to:
+
+| Flutter | Merged |
+|---|---|
+| `_modalBarrier.opaque = opaque` on transition complete (`:296`) | the one entry's `opaque` |
+| `_modalScope.maintainState = maintainState` (`:2230`) | the one entry's `maintain_state` |
+| `_modalBarrier.markNeedsBuild()` (`:2228`) | the one entry's `mark_needs_build()` |
+
+Barrier-below-page paint and hit-test order are unchanged. Two costs, recorded: a
+barrier-only `markNeedsBuild` rebuilds the page too, and a covered `maintainState`
+route keeps its (stateless) barrier subtree mounted where Flutter drops it.
+
+### The route now reaches its own overlay entry
+
+U5.2 left `_handleStatusChanged`'s `overlayEntries.first.opaque` writes
+unimplemented — "FLUI has nowhere to write". `RouteBinding` now carries the
+navigator's `RouteId -> OverlayEntry` map (its own mutex, like `peers`), so all
+four status arms are ported: `completed` writes `opaque`, `forward`/`reverse`
+clear it, `dismissed` finalizes.
+
+One ordering fix followed: `push_bound` now inserts the overlay entry **before**
+`history.push_with_id`, because `install()` and a zero-duration route's first
+status change both run inside the push and both reach for that entry. Flutter has
+the same order — `OverlayRoute.install` creates the entries, *then* calls
+`super.install()` (`routes.dart:69-71`).
+
+`TransitionRoute.opaque` is abstract in Flutter (`PageRoute` → `true`,
+`PopupRoute` → `false`). FLUI defaults it to `false`: nothing is skipped unless a
+route asks.
+
+### `ModalRoute` divergences — none of this is parity
+
+No `FocusScope` (FLUI has no `FocusScopeNode`). No `BlockSemantics`, no
+`semanticsDismissible`, no `barrierLabel`, no `Semantics(sortKey:)` — the barrier
+absorbs *pointers* only, via `AbsorbPointer`, with a `GestureDetector` for
+`barrierDismissible`. No `AnimatedModalBarrier` / `barrierCurve` colour tween. No
+`IgnorePointer(ignoring: !animation.isForwardOrCompleted)` (`:2278-2283`). No
+`filter`/`BackdropFilter`, `PopScope`, `LocalHistoryRoute`, `_modalScopeCache`.
+`offstage` does **not** swap the animations to `kAlwaysComplete`/`kAlwaysDismissed`
+(`:1958-1962`) — that exists for `HeroController`, and Hero is out of scope.
+
+### A red-check that credited the wrong mechanism
+
+`modal_changed_internal_state_…` asserted that `changedInternalState` "marks that
+entry dirty". Deleting `mark_entry_needs_build()` left it **green**: the rebuild it
+saw came from the `maintainState` write, which is `_didChangeEntryOpacity` — an
+overlay `setState`, exactly as in Flutter. The `markNeedsBuild` half is pinned by
+`modal_setting_offstage_to_the_same_value_is_a_noop`, where `maintainState` does
+not change. The test's claim was corrected, not the code.
+
+Likewise `overlay_build_plan_matches_flutters_onstage_loop` exists because forcing
+`skip_count = 0` left every element-tree test green — the widget layer cannot
+observe `skipCount`. The build loop was extracted into a pure `onstage_plan()` so
+it could be asserted directly; what the render object then *does* with `skip_count`
+is `harness_theater_*`'s job.
+
+### Not implemented, not claimed
+
+`PageRoute`, `PopupRoute`, Hero, `OverlayPortal`, predictive back, named routes,
+restoration. `Overlay` / `OverlayEntry` / `TransitionRoute` / `ModalRoute` all
+remain private; `modal_route_is_not_exported` and `transition_route_is_not_exported`
+keep them there until U5.4's parity + sign-off gate.
+
 ## 7. Consequences
 
 **Good.** The two deferral points U5 needs — `PushCompletion::Animating` and `finished_when_popped` — were designed into ADR-0019 U2 and are already tested; U5 supplies their first production producer. The animation library is unusually complete: `ProxyAnimation::set_parent`, `ALWAYS_DISMISSED`/`ALWAYS_COMPLETE`, and an `AnimationSwitch` that claims to be `TrainHoppingAnimation`. `RouteBinding` reuses the owned-capability pattern three ADRs have now converged on.
@@ -538,6 +655,6 @@ The first `a_stale_train_does_not_clobber_a_newer_parent` never disposed anythin
 ## Open questions for the deciders
 
 1. **Decision 1:** does `NavigatorState` take its `Vsync` from an ambient `VsyncScope` (matching `Scrollable`), or from the binding directly? The former makes a navigator inside a paused subtree freeze correctly; the latter always ticks.
-2. **Decision 3:** implement `Overlay.opaque`/`maintainState` in U5.3 (recommended), or ship `ModalRoute` without them and delete both from its surface?
+2. ~~**Decision 3:** implement `Overlay.opaque`/`maintainState` in U5.3 (recommended), or ship `ModalRoute` without them and delete both from its surface?~~ **Answered in §7d: implemented.**
 3. **U5.4:** must `Overlay` / `OverlayEntry` become public for app authors to write custom routes, or is `NavigatorRoute::content_builder` a sufficient door?
 4. **U5.0:** is anything depending on `RenderOffstage`'s current zero-size behavior? (`Visibility(maintain_state: true)` is the obvious candidate.)

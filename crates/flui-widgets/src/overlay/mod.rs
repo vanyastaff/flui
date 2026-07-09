@@ -16,40 +16,29 @@
 //! (`overlay.dart:894`, `:916`), with `_RenderTheater.paint` walking
 //! first-onstage → last (`:1157-1161`).
 //!
-//! # No new render object
+//! # `opaque` / `maintainState` / `skipCount`
 //!
-//! Flutter's `_RenderTheater` (`overlay.dart:1194`) is *not* a `RenderStack`; it
-//! reimplements the stack algorithm so it can skip the first `skipCount`
-//! children. But `skipCount` exists **only** to serve `opaque`-skipping: entries
-//! below the topmost `opaque` entry are dropped from the widget tree unless they
-//! set `maintainState`, and the ones kept are the ones skipped in layout, paint,
-//! hit-test and semantics (`:888-918`, `:1344-1355`, `:1427-1428`).
+//! ADR-0019 U1 shipped this as a plain `Stack` with `StackFit::Expand` and
+//! deferred the three flags. ADR-0020 U5.3 lands them, because `ModalRoute`'s
+//! `maintainState` would otherwise be a field that lies.
 //!
-//! With `skipCount == 0` and `alwaysSizeToContent == false`, `_RenderTheater`
-//! lays every child out with `BoxConstraints.tight(size)` where
-//! `size = constraints.biggest` — which its own source comments as "Equivalent to
-//! BoxConstraints used by RenderStack for StackFit.expand" (`:1478-1484`). So
-//! this `Overlay` builds a plain [`Stack`] with [`StackFit::Expand`], exactly as
-//! ADR-0019 §2.2 predicted, and adds no render object.
+//! [`OverlayState::build`] is now a port of `overlay.dart:886-918`: walk the
+//! entries **top-first**, keep building until an [`opaque`] entry is reached, then
+//! keep only the entries below it that set [`maintain_state`]. The kept-but-covered
+//! entries end up as the *leading* children of the reversed list, so they are
+//! exactly the first `skip_count` children — which [`RenderTheater`] does not lay
+//! out, paint or hit-test.
 //!
-//! # `opaque` / `maintainState` are deferred, not claimed
+//! An entry below an opaque one **without** `maintain_state` is absent from the
+//! view tree entirely: its state is disposed, and rebuilt fresh when it is
+//! uncovered. That is Flutter's contract, and routes depend on it.
 //!
-//! Every entry is built, laid out and painted, every frame.
+//! Two divergences, both recorded in [`entry`]: no `tickerEnabled: false` for the
+//! covered entries, and no `canSizeOverlay`.
 //!
-//! - **Cost:** `O(number of entries)` wasted layout + paint once a full-screen
-//!   layer covers the ones beneath it.
-//! - **Behavioral consequence:** Flutter's `maintainState == false` — a covered
-//!   entry's state is *destroyed* and rebuilt fresh when it is uncovered — is
-//!   unobservable here, because nothing is ever unbuilt. FLUI preserves strictly
-//!   *more* state than Flutter, never less, so no correctness contract is broken;
-//!   but parity for `opaque`/`maintainState` is **not** claimed and must not be
-//!   reported as done. `overlay_deferred_opaque_builds_every_entry` pins the
-//!   current behavior so the day someone implements skipping, it goes red.
-//! - **Input isolation must not lean on this.** With no skipping, covered layers
-//!   remain hit-testable; a modal layer has to absorb pointers itself
-//!   (`AbsorbPointer`). ADR-0019 §2.4.
-//! - **Upgrade path:** a dedicated `RenderTheater` carrying `skip_count`, plus a
-//!   port of `OverlayState.build`'s onstage loop.
+//! [`opaque`]: OverlayEntry::opaque
+//! [`maintain_state`]: OverlayEntry::maintain_state
+//! [`RenderTheater`]: flui_objects::RenderTheater
 //!
 //! # Threading and locks
 //!
@@ -77,6 +66,7 @@
 #![allow(dead_code)]
 
 mod entry;
+mod theater;
 
 #[cfg(test)]
 mod tests;
@@ -86,13 +76,12 @@ use std::sync::Arc;
 
 pub(crate) use entry::{OverlayEntry, OverlayEntryId};
 use flui_foundation::ViewKey;
-use flui_types::layout::StackFit;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RebuildHandle, ValueKey};
 use parking_lot::Mutex;
 
-use crate::Stack;
+use self::theater::Theater;
 
 /// Where [`OverlayHandle::insert`] places a new entry.
 ///
@@ -307,6 +296,47 @@ fn insertion_index(entries: &[OverlayEntry], position: &InsertPosition) -> usize
     }
 }
 
+/// Which entries [`OverlayState::build`] puts in the tree, and how many of them
+/// the [`Theater`] holds offstage.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct OnstagePlan {
+    /// Indices into the entry list, bottom → top. A covered entry without
+    /// `maintain_state` is absent.
+    pub(crate) build: Vec<usize>,
+    /// How many leading entries of `build` are covered by an opaque entry.
+    pub(crate) skip_count: usize,
+}
+
+/// `OverlayState.build`'s onstage loop, as pure data (`overlay.dart:888-918`).
+///
+/// Flutter walks `_entries.reversed` — top first — adding children until it
+/// passes an `opaque` entry, then adding only the `maintainState` ones below it.
+/// It reverses once at the end, which is why the covered entries land at the
+/// front of the list and `skipCount` counts a *prefix*.
+pub(crate) fn onstage_plan(entries: &[OverlayEntry]) -> OnstagePlan {
+    let mut build = Vec::new();
+    let mut onstage = true;
+    let mut onstage_count = 0usize;
+
+    for (index, entry) in entries.iter().enumerate().rev() {
+        if onstage {
+            onstage_count += 1;
+            build.push(index);
+            if entry.opaque() {
+                onstage = false;
+            }
+        } else if entry.maintain_state() {
+            // Flutter also passes `tickerEnabled: false` here; FLUI has no
+            // per-subtree ticker gate. See `entry`'s module docs.
+            build.push(index);
+        }
+    }
+
+    let skip_count = build.len() - onstage_count;
+    build.reverse();
+    OnstagePlan { build, skip_count }
+}
+
 // ============================================================================
 // THE OVERLAY VIEW
 // ============================================================================
@@ -373,25 +403,21 @@ impl ViewState<Overlay> for OverlayState {
     }
 
     /// Bottom → top: `entries[i]` paints below `entries[i + 1]`, because
-    /// [`Stack`] paints its children in order and [`RenderStack`] is
-    /// last-child-on-top — the same contract as `_RenderTheater.paint`
-    /// (`overlay.dart:1157-1161`).
+    /// [`Theater`] paints its children in order.
     ///
-    /// [`RenderStack`]: flui_objects::RenderStack
+    /// A line-for-line port of `OverlayState.build` (`overlay.dart:886-918`).
+    /// The loop runs **top-first** over `_entries.reversed`, so `children` comes
+    /// out top→bottom and is reversed once at the end; `skip_count` therefore
+    /// counts the covered `maintain_state` entries, which are the leading ones.
     fn build(&self, _view: &Overlay, _ctx: &dyn BuildContext) -> impl IntoView {
-        let children: Vec<BoxedView> = self
-            .shared
-            .entries
-            .lock()
+        let entries = self.shared.entries.lock();
+        let plan = onstage_plan(&entries);
+        let children: Vec<BoxedView> = plan
+            .build
             .iter()
-            .cloned()
-            .map(|entry| OverlayEntryView::new(entry).boxed())
+            .map(|&index| OverlayEntryView::new(entries[index].clone()).boxed())
             .collect();
-
-        // `StackFit::Expand` reproduces `_RenderTheater.performLayout`'s
-        // `BoxConstraints.tight(constraints.biggest)` for every child
-        // (`overlay.dart:1478-1484`).
-        Stack::new(children).fit(StackFit::Expand)
+        Theater::new(children, plan.skip_count)
     }
 
     /// Drop the rebuild capability, making every surviving [`OverlayHandle`]
