@@ -25,7 +25,7 @@
 //! bool get finishedWhenPopped => _controller!.isDismissed && !_popFinalized;  // :177
 //! ```
 //!
-//! Both callbacks reach the navigator through a [`RouteBinding`], which enqueues a
+//! Both callbacks reach the navigator through a `RouteBinding`, which enqueues a
 //! `RouteCommand` rather than re-entering the flush (U5.1, `binding.rs`
 //! *Correction 1*). A zero-duration transition therefore completes *inside* the
 //! flush that started it, and settles on that flush's second pass.
@@ -60,11 +60,10 @@
 //! synchronous, and added only because the contract demanded it.
 //! - **Predictive back / `_simulation` / `DartPerformanceMode`.** Platform work.
 
-// `TransitionRoute` is reached only through `NavigatorHandle::push_bound`, whose
-// production caller is `ModalRoute` (U5.3) / `PageRoute` (U5.4). Until then only
-// the tests push one, so rustc sees the whole file as dead. Same posture, and the
-// same promise, as `binding.rs`: this attribute goes when the consumer arrives.
-#![allow(dead_code)]
+// `TransitionRoute` is private and reached only through `ModalRoute` (U5.3) and,
+// above it, the public `PageRoute` / `PopupRoute` (U5.4). ADR-0020 U5.4 removed
+// this file's `#![allow(dead_code)]`: everything left is either reachable from a
+// public route or `#[cfg(test)]`.
 
 use std::sync::Arc;
 #[cfg(test)]
@@ -79,7 +78,7 @@ use flui_animation::{
 };
 use parking_lot::Mutex;
 
-use super::binding::{BoundRoute, CompletedSignal, RouteBinding, TransitionPeer};
+use super::binding::{CompletedSignal, RouteBindingSlot, TransitionGroup, TransitionPeer};
 use super::overlay_route::{NavigatorRoute, RouteContentBuilder};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
@@ -121,7 +120,7 @@ impl SecondaryParent {
 /// route, so everything it touches lives here behind an `Arc`.
 struct TransitionInner {
     controller: Mutex<Option<AnimationController>>,
-    binding: Mutex<Option<RouteBinding>>,
+    binding: RouteBindingSlot,
 
     /// The proxy handed to the route *below* this one is **this** route's
     /// secondary; the primary is the controller, unproxied. Flutter is the same:
@@ -169,8 +168,9 @@ impl TransitionInner {
     /// `opaque` flag to write. `_performanceModeRequestHandle` has no FLUI
     /// analogue and is not claimed.
     fn handle_status_changed(&self, status: AnimationStatus) {
-        let binding = self.binding.lock().clone();
-        let Some(binding) = binding else { return };
+        let Some(binding) = self.binding.get() else {
+            return;
+        };
 
         match status {
             AnimationStatus::Completed => {
@@ -220,6 +220,9 @@ pub(crate) struct TransitionRoute<T> {
     /// `canTransitionFrom(previousRoute)` (`:561`), default `true`. Published to
     /// the registry so the route *below* can ask it.
     can_transition_from: bool,
+    /// The family this route coordinates transitions with. `PageRoute` sets
+    /// [`TransitionGroup::Page`]; everything else stays at the default.
+    group: TransitionGroup,
 
     inner: Arc<TransitionInner>,
     _output: PhantomData<fn() -> T>,
@@ -239,9 +242,10 @@ impl<T> TransitionRoute<T> {
             current_result: None,
             can_transition_to: true,
             can_transition_from: true,
+            group: TransitionGroup::Default,
             inner: Arc::new(TransitionInner {
                 controller: Mutex::new(None),
-                binding: Mutex::new(None),
+                binding: RouteBindingSlot::new(),
                 secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
                 secondary_parent: Mutex::new(SecondaryParent::Dismissed),
                 popped: AtomicBool::new(false),
@@ -262,6 +266,13 @@ impl<T> TransitionRoute<T> {
         self
     }
 
+    /// Flutter's `transitionDuration` (`routes.dart:140-147`). Read once, in
+    /// `install()`, so a builder may change it any time before the push.
+    pub(crate) fn duration(mut self, duration: Duration) -> Self {
+        self.duration = duration;
+        self
+    }
+
     /// Flutter's `reverseTransitionDuration`, which defaults to
     /// `transitionDuration` (`routes.dart:148`).
     pub(crate) fn reverse_duration(mut self, duration: Duration) -> Self {
@@ -274,11 +285,17 @@ impl<T> TransitionRoute<T> {
         self
     }
 
+    /// `canTransitionTo` (`routes.dart:536`), default `true`. No public route sets
+    /// it: `PageRoute`'s family restriction is a [`TransitionGroup`], not a bool.
+    #[cfg(test)]
     pub(crate) fn can_transition_to(mut self, allow: bool) -> Self {
         self.can_transition_to = allow;
         self
     }
 
+    /// `canTransitionFrom` (`routes.dart:561`), default `true`. See
+    /// [`can_transition_to`](Self::can_transition_to).
+    #[cfg(test)]
     pub(crate) fn can_transition_from(mut self, allow: bool) -> Self {
         self.can_transition_from = allow;
         self
@@ -287,13 +304,20 @@ impl<T> TransitionRoute<T> {
     /// Flutter's `TransitionRoute.opaque` (`routes.dart:156`). Written to the
     /// route's overlay entry when the entrance transition completes, and cleared
     /// while it moves.
+    /// The transition family — `PageRoute` coordinates only with other
+    /// `PageRoute`s (`pages.dart:58-61`).
+    pub(crate) fn group(mut self, group: TransitionGroup) -> Self {
+        self.group = group;
+        self
+    }
+
     pub(crate) fn opaque(self, opaque: bool) -> Self {
         self.inner.opaque.store(opaque, Ordering::Relaxed);
         self
     }
 
     /// A cloneable view of the route's animation state, obtainable **before** the
-    /// route is moved into `push_bound`.
+    /// route is moved into `NavigatorHandle::push`.
     ///
     /// The controller is created in `install()`, so a caller cannot hold it up
     /// front; the handle resolves it lazily. Test-facing: FLUI's controller
@@ -312,15 +336,17 @@ impl<T> TransitionRoute<T> {
     /// target is moving — installs an [`AnimationSwitch`] that hops when they
     /// cross.
     fn update_secondary_animation(&self, next: Option<RouteId>) {
-        let binding = self.inner.binding.lock().clone();
-        let Some(binding) = binding else { return };
+        let Some(binding) = self.inner.binding.get() else {
+            return;
+        };
 
         // `nextRoute is TransitionRoute && canTransitionTo(next) && next.canTransitionFrom(this)`
-        // (`routes.dart:429-431`). A non-transition route has no peer.
+        // (`routes.dart:429-431`). A non-transition route has no peer, and a route
+        // of another family never coordinates — see [`TransitionGroup`].
         let target = next.and_then(|id| binding.peer(id).map(|peer| (id, peer)));
-        let Some((next_id, peer)) =
-            target.filter(|(_, peer)| self.can_transition_to && peer.can_transition_from)
-        else {
+        let Some((next_id, peer)) = target.filter(|(_, peer)| {
+            self.can_transition_to && peer.can_transition_from && peer.group == self.group
+        }) else {
             self.set_secondary(SecondaryParent::Dismissed, always_dismissed());
             return;
         };
@@ -441,6 +467,21 @@ impl TransitionHandle {
         self.inner.controller.lock().clone()
     }
 
+    /// Flutter's `animation` (`routes.dart:190-195`): the controller, erased.
+    /// `kAlwaysDismissedAnimation` before `install()` — a route that is not yet
+    /// pushed has no controller, and Flutter's getter is likewise nullable.
+    pub(crate) fn primary_animation(&self) -> Arc<dyn Animation<f32>> {
+        match self.controller() {
+            Some(controller) => Arc::new(controller) as Arc<dyn Animation<f32>>,
+            None => always_dismissed(),
+        }
+    }
+
+    /// This route's navigator capability, once it is pushed.
+    pub(crate) fn binding(&self) -> Option<super::binding::RouteBinding> {
+        self.inner.binding.get()
+    }
+
     /// Flutter's `secondaryAnimation` (`routes.dart:197`). A `ProxyAnimation`
     /// resting at `kAlwaysDismissedAnimation`.
     pub(crate) fn secondary_animation(&self) -> Arc<ProxyAnimation<f32>> {
@@ -448,6 +489,7 @@ impl TransitionHandle {
     }
 
     /// Flutter's `_popFinalized` (`routes.dart:180`).
+    #[cfg(test)]
     pub(crate) fn is_pop_finalized(&self) -> bool {
         self.inner.pop_finalized.load(Ordering::Acquire)
     }
@@ -459,6 +501,7 @@ impl TransitionHandle {
     }
 
     /// Whether the secondary proxy currently rests at always-dismissed.
+    #[cfg(test)]
     pub(crate) fn secondary_is_dismissed(&self) -> bool {
         matches!(
             &*self.inner.secondary_parent.lock(),
@@ -467,6 +510,7 @@ impl TransitionHandle {
     }
 
     /// Whether the secondary proxy is mid-hop (an `AnimationSwitch` is installed).
+    #[cfg(test)]
     pub(crate) fn secondary_is_hopping(&self) -> bool {
         matches!(
             &*self.inner.secondary_parent.lock(),
@@ -520,8 +564,9 @@ impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
     /// same, and it is what lets a route be constructed before it has a navigator.
     fn install(&mut self) {
         debug_assert!(
-            self.inner.binding.lock().is_some(),
-            "BUG: a TransitionRoute must be pushed with `push_bound` so it is bound before install"
+            self.inner.binding.is_bound(),
+            "BUG: a TransitionRoute must be bound before install — \
+             `NavigatorHandle::push` fills its `RouteBindingSlot` first"
         );
 
         let controller = AnimationController::new(self.duration, Arc::new(Scheduler::new()));
@@ -538,7 +583,7 @@ impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
 
         // The navigator's clock — the FLUI shape of `vsync: navigator!`. Absent a
         // `VsyncScope`, the controller keeps its own wall-clock ticker.
-        if let Some(binding) = self.inner.binding.lock().as_ref()
+        if let Some(binding) = self.inner.binding.get()
             && let Some(vsync) = binding.vsync()
         {
             let registration = vsync.register(controller.clone());
@@ -546,12 +591,21 @@ impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
         }
 
         // Publish the primary animation so the route below can coordinate.
-        if let Some(binding) = self.inner.binding.lock().as_ref() {
+        if let Some(binding) = self.inner.binding.get() {
             binding.publish_peer(TransitionPeer {
                 animation: Arc::new(controller.clone()) as Arc<dyn Animation<f32>>,
                 can_transition_from: self.can_transition_from,
+                group: self.group,
                 completed: Arc::clone(&self.inner.completed),
             });
+
+            // `if (_animation!.isCompleted && overlayEntries.isNotEmpty) {
+            //    overlayEntries.first.opaque = opaque; }` (`routes.dart:328-330`).
+            // A controller that installs already completed never fires a status
+            // change, so the status listener would never write `opaque`.
+            if controller.is_completed() {
+                binding.set_entry_opaque(self.inner.opaque.load(Ordering::Relaxed));
+            }
         }
 
         *self.inner.controller.lock() = Some(controller);
@@ -606,7 +660,7 @@ impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
     /// `dispose()` (`routes.dart:627-638`): detach the listener, unregister the
     /// clock, drop the peer, and dispose the controller **only if we own it**.
     fn dispose(&mut self) {
-        if let Some(binding) = self.inner.binding.lock().as_ref() {
+        if let Some(binding) = self.inner.binding.get() {
             binding.withdraw_peer();
         }
         // Release every route below that is still proxying our animation, before
@@ -632,10 +686,8 @@ impl<T: Send + Sync + Clone + 'static> NavigatorRoute for TransitionRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
         Arc::clone(&self.builder)
     }
-}
 
-impl<T: Send + Sync + Clone + 'static> BoundRoute for TransitionRoute<T> {
-    fn bind(&mut self, binding: RouteBinding) {
-        *self.inner.binding.lock() = Some(binding);
+    fn binding_slot(&self) -> Option<&RouteBindingSlot> {
+        Some(&self.inner.binding)
     }
 }

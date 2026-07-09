@@ -30,18 +30,20 @@
 //! overlay entry just after. Nothing observes the difference, because a FLUI route
 //! holds no reference to its overlay entry.
 //!
-//! # Not implemented
+//! # `SimpleRoute` is the floor, not the ceiling
 //!
-//! No `TransitionRoute`, `ModalRoute`, `PopupRoute` or `PageRoute` (ADR-0019 §2.4,
-//! §5 U5): no animation, no barrier, no focus scope, no `offstage`. A
-//! [`SimpleRoute`] pushes and pops instantly, which is exactly the floor
-//! ADR-0019 §2.4 identified.
+//! [`SimpleRoute`] pushes and pops instantly: no animation, no barrier, no
+//! `offstage`. ADR-0020 U5.4 adds `PageRoute` and `PopupRoute` on top of the
+//! private `TransitionRoute` / `ModalRoute`; they reach their navigator through
+//! [`NavigatorRoute::binding_slot`].
 
 use std::fmt;
 use std::sync::Arc;
 
+use flui_animation::Animation;
 use flui_view::{BoxedView, BuildContext};
 
+use super::binding::RouteBindingSlot;
 use super::route::{Route, RouteSettings};
 
 /// Builds a route's subtree, on demand and possibly many times.
@@ -50,6 +52,28 @@ use super::route::{Route, RouteSettings};
 /// that the public [`NavigatorRoute`] surface does not mention `Overlay`, which
 /// stays private until it has its own parity gate (ADR-0019 §5 U5).
 pub type RouteContentBuilder = Arc<dyn Fn(&dyn BuildContext) -> BoxedView + Send + Sync>;
+
+/// One of a route's two animations, as seen by a page or transitions builder.
+///
+/// The **primary** animation runs 0 → 1 as the route enters and 1 → 0 as it
+/// leaves. The **secondary** animation is the primary animation of the route
+/// *above* this one, when the two coordinate — Flutter's `secondaryAnimation`
+/// (`routes.dart:197`, `:422-496`).
+pub type RouteAnimation = Arc<dyn Animation<f32>>;
+
+/// Builds a route's page. Flutter's `RoutePageBuilder` / `ModalRoute.buildPage`
+/// (`routes.dart:1455-1459`).
+pub type RoutePageBuilder =
+    Arc<dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + Send + Sync>;
+
+/// Wraps a route's page in its entrance/exit transition. Flutter's
+/// `RouteTransitionsBuilder` / `ModalRoute.buildTransitions`
+/// (`routes.dart:1591-1598`), whose default is a jump cut — `child` unchanged.
+pub type RouteTransitionsBuilder = Arc<
+    dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation, BoxedView) -> BoxedView
+        + Send
+        + Sync,
+>;
 
 /// A route that can be shown in the navigator's overlay.
 ///
@@ -62,6 +86,20 @@ pub trait NavigatorRoute: Route {
     /// Returned as a shared closure, not `&self`, because the navigator installs
     /// it into an `OverlayEntry` that outlives any borrow of the route.
     fn content_builder(&self) -> RouteContentBuilder;
+
+    /// The cell this route wants its navigator capability delivered into, filled
+    /// by `NavigatorHandle::push` / `seed_initial` **before** [`Route::install`].
+    ///
+    /// A route that neither animates nor drives its own lifecycle returns `None`
+    /// — the default, and what [`SimpleRoute`] does. `PageRoute` and `PopupRoute`
+    /// return `Some`, because a transition finishing has to tell the navigator to
+    /// settle the route, and a pop's exit animation has to finalize it.
+    ///
+    /// The slot is opaque: nothing public can read the binding back out of it.
+    /// ADR-0020 §7e.
+    fn binding_slot(&self) -> Option<&RouteBindingSlot> {
+        None
+    }
 }
 
 /// The floor: a route with content, an instant transition, and a typed result.

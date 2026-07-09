@@ -20,7 +20,7 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::binding::{BoundRoute, RouteBinding};
+use super::binding::RouteBindingSlot;
 use super::navigator::{Navigator, NavigatorHandle};
 use super::overlay_route::{NavigatorRoute, RouteContentBuilder, SimpleRoute};
 use super::route::{PushCompletion, Route, RouteSettings};
@@ -594,7 +594,7 @@ fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 struct ZeroDurationRoute {
     settings: RouteSettings,
     builder: RouteContentBuilder,
-    binding: Option<RouteBinding>,
+    binding: RouteBindingSlot,
 }
 
 impl ZeroDurationRoute {
@@ -606,7 +606,7 @@ impl ZeroDurationRoute {
                 built.0.lock().push(name);
                 SizedBox::new(10.0, 10.0).into_view().boxed()
             }),
-            binding: None,
+            binding: RouteBindingSlot::new(),
         }
     }
 }
@@ -625,14 +625,14 @@ impl Route for ZeroDurationRoute {
     }
 
     fn did_push(&mut self) -> PushCompletion {
-        if let Some(binding) = &self.binding {
+        if let Some(binding) = self.binding.get() {
             binding.notify_push_completed();
         }
         PushCompletion::Animating
     }
 
     fn did_pop(&mut self) -> bool {
-        if let Some(binding) = &self.binding {
+        if let Some(binding) = self.binding.get() {
             binding.finalize();
         }
         true
@@ -643,11 +643,9 @@ impl NavigatorRoute for ZeroDurationRoute {
     fn content_builder(&self) -> RouteContentBuilder {
         Arc::clone(&self.builder)
     }
-}
 
-impl BoundRoute for ZeroDurationRoute {
-    fn bind(&mut self, binding: RouteBinding) {
-        self.binding = Some(binding);
+    fn binding_slot(&self) -> Option<&RouteBindingSlot> {
+        Some(&self.binding)
     }
 }
 
@@ -661,11 +659,11 @@ impl BoundRoute for ZeroDurationRoute {
 /// Red-check: change `pump_route_commands` to `self.history.lock()`; this test
 /// deadlocks (nextest's per-test timeout catches it).
 #[test]
-fn push_bound_zero_duration_route_settles_lifecycle_and_overlay() {
+fn bound_zero_duration_route_settles_lifecycle_and_overlay() {
     let built = Built::default();
     let (handle, mut harness) = navigator_with(&built);
 
-    let result = handle.push_bound(ZeroDurationRoute::new(&built, "animated"));
+    let result = handle.push(ZeroDurationRoute::new(&built, "animated"));
     harness.tick();
 
     assert!(built.contains("animated"), "the pushed route built");
@@ -774,7 +772,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 14] = [
+    const INTERNAL: [&str; 12] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -783,30 +781,17 @@ fn public_no_internal_route_stack_exports() {
         "FlushOutcome",
         "Observation",
         "RoutePopDisposition",
-        // ADR-0020 U5.1: the route-animation seam is private, and U5.2's
-        // TransitionRoute/ModalRoute/PageRoute must not leak either.
+        // ADR-0020: the route-animation seam stays private. U5.4 exports the
+        // opaque `RouteBindingSlot`, *not* the `RouteBinding` inside it — which is
+        // why this check matches whole identifiers.
         "RouteBinding",
         "RouteCommand",
-        "BoundRoute",
         "TransitionRoute",
         "ModalRoute",
-        "PageRoute",
     ];
 
-    for (name, source) in [("navigator/mod.rs", NAV_MOD), ("lib.rs", LIB)] {
-        for line in source.lines() {
-            let code = line.trim_start();
-            if !code.starts_with("pub use") {
-                continue;
-            }
-            for internal in INTERNAL {
-                assert!(
-                    !code.contains(internal),
-                    "{name} re-exports the internal `{internal}`: {line}"
-                );
-            }
-        }
-    }
+    super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);
+    super::export_guard::assert_not_exported("lib.rs", LIB, &INTERNAL);
 }
 
 /// `Overlay` / `OverlayEntry` / `OverlayHandle` stay **private** after U4.

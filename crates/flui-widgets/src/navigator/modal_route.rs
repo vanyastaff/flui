@@ -57,27 +57,36 @@
 //! * **No `filter` / `BackdropFilter`, no `PopScope`, no `LocalHistoryRoute`, no
 //!   `_modalScopeCache`.**
 
-// `ModalRoute` is reached only through `NavigatorHandle::push_bound`, whose
-// production caller is `PageRoute` / `PopupRoute` (U5.4). Until then only the
-// tests push one, so rustc sees most of this file as dead. Same posture, and the
-// same promise, as `transition_route.rs`.
-#![allow(dead_code)]
+// `ModalRoute` is private; `PageRoute` / `PopupRoute` (U5.4) are its production
+// consumers and do not surface every knob. `ModalHandle::set_offstage` in
+// particular has no public caller until `Hero` drives it (B1.4).
 
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use std::sync::OnceLock;
+
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use flui_types::Color;
-use flui_view::{BoxedView, BuildContext, ViewExt};
+use flui_view::prelude::*;
+use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
 
-use super::binding::{BoundRoute, RouteBinding};
+use super::binding::{RouteBindingSlot, TransitionGroup};
 use super::navigator::NavigatorHandle;
-use super::overlay_route::{NavigatorRoute, RouteContentBuilder};
+use super::overlay_route::{
+    NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
+};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
-use super::transition_route::TransitionRoute;
-use crate::{AbsorbPointer, ColoredBox, GestureDetector, Offstage, Stack, StackFit};
+use super::transition_route::{TransitionHandle, TransitionRoute};
+use crate::{AbsorbPointer, ColoredBox, GestureDetector, Offstage, SizedBox, Stack, StackFit};
+
+/// `_defaultTransitionsBuilder` (`pages.dart:68-75`): a jump cut.
+pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
+    Arc::new(|_ctx, _animation, _secondary, child| child)
+}
 
 /// The mutable half a `ModalRoute` shares with its content builder and its
 /// binding. The builder is an `Arc<dyn Fn>` installed in the overlay entry and
@@ -96,9 +105,32 @@ struct ModalInner {
     /// `barrierColor` (`:1774`). `None` means an invisible barrier that still
     /// absorbs pointers — Flutter's `ModalBarrier` with no colour.
     barrier_color: Mutex<Option<Color>>,
-    /// Published by `bind`, before `install`. `None` for an unpushed route, which
-    /// makes [`changed_internal_state`] correctly inert.
-    binding: Mutex<Option<RouteBinding>>,
+
+    /// `buildPage` (`routes.dart:1455`).
+    page: RoutePageBuilder,
+    /// `buildTransitions` (`:1591`), defaulting to a jump cut. A cell because the
+    /// content closure captures `inner` at construction, before a
+    /// `.transitions(…)` builder can run.
+    transitions: Mutex<RouteTransitionsBuilder>,
+    /// Set once, immediately after the `TransitionRoute` is constructed. The
+    /// content builder is `Arc`-captured *before* that route exists, so the two
+    /// cannot be wired the other way round.
+    ///
+    /// It carries both animations the page and transitions builders read, and the
+    /// [`RouteBindingSlot`] `changed_internal_state` writes through.
+    transition: OnceLock<TransitionHandle>,
+
+    /// One notifier the `_ModalScope` subscribes to, fed by *both* animations.
+    ///
+    /// Flutter uses `Listenable.merge([animation, secondaryAnimation])`
+    /// (`routes.dart:1101`); `flui_foundation::Listenable` has no `merge`. A relay
+    /// is the equivalent, and it has the property `AnimatedView` needs: the same
+    /// object every time `listenable()` is called, even though the `ModalScope`
+    /// view is rebuilt on every overlay-entry build.
+    relay: Arc<ChangeNotifier>,
+    /// The relay's subscriptions to the two animations, opened in `install` and
+    /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
+    relay_subscriptions: Mutex<Vec<(RouteAnimation, ListenerId)>>,
 }
 
 impl ModalInner {
@@ -107,18 +139,26 @@ impl ModalInner {
     ///
     /// `!offstage` gates the barrier, exactly as `buildModalBarrier` does
     /// (`:2301`) — an offstage route must not eat pointers.
+    ///
+    /// The [`AbsorbPointer`] is what makes the barrier a barrier: it is hit within
+    /// its own bounds whether or not it has a child, so a *colourless* barrier
+    /// still stops the pointer reaching the routes beneath. Giving it a
+    /// `ColoredBox` child instead would have blocked pointers too — that box is
+    /// itself hit-testable — but only when `barrier_color` is set, which is not the
+    /// contract. (Found by red-check: with `absorbing(false)` and a colour, every
+    /// test stayed green.)
     fn build_barrier(&self, ctx: &dyn BuildContext) -> BoxedView {
         if self.offstage.load(Ordering::Relaxed) {
             return AbsorbPointer::new().absorbing(false).boxed();
         }
 
-        // `ColoredBox` is the hit-testable full-size box; a `None` colour paints
-        // nothing but is still hit, which is what a dismissible-but-invisible
-        // barrier needs.
-        let colored = ColoredBox::new(self.barrier_color.lock().unwrap_or(Color::TRANSPARENT));
+        let mut barrier = AbsorbPointer::new().absorbing(true);
+        if let Some(color) = *self.barrier_color.lock() {
+            barrier = barrier.child(ColoredBox::new(color));
+        }
 
         if !self.barrier_dismissible.load(Ordering::Relaxed) {
-            return AbsorbPointer::new().absorbing(true).child(colored).boxed();
+            return barrier.boxed();
         }
 
         // `ModalBarrier`'s `onDismiss ?? () => Navigator.maybePop(context)`
@@ -131,17 +171,111 @@ impl ModalInner {
                     navigator.maybe_pop();
                 }
             })
-            .child(AbsorbPointer::new().absorbing(true).child(colored))
+            .child(barrier)
             .boxed()
     }
 
     /// `_buildModalScope` (`routes.dart:2333-2345`), minus `Semantics`,
-    /// `_ModalScope` and its `FocusScope`.
-    fn build_scope(&self, page: &RouteContentBuilder, ctx: &dyn BuildContext) -> BoxedView {
+    /// `PrimaryScrollController` and `FocusScope`.
+    ///
+    /// The `Offstage` wraps the whole scope, as Flutter's does — so an offstage
+    /// route's transitions still run, its page still lays out at real size, and
+    /// nothing of it paints.
+    fn build_scope(self: &Arc<Self>) -> BoxedView {
+        let scope = match self.transition.get() {
+            Some(transition) => ModalScope {
+                page: Arc::clone(&self.page),
+                transitions: Arc::clone(&self.transitions.lock()),
+                transition: transition.clone(),
+                relay: Arc::clone(&self.relay),
+            }
+            .boxed(),
+            // Unreachable in a pushed route: `install()` seeds the `OnceLock`
+            // before the overlay ever builds this entry.
+            None => SizedBox::shrink().boxed(),
+        };
+
         Offstage::new()
             .offstage(self.offstage.load(Ordering::Relaxed))
-            .child(page(ctx))
+            .child(scope)
             .boxed()
+    }
+
+    /// Point the relay at both animations. Called from `install()`, once the
+    /// controller exists.
+    fn open_relay(self: &Arc<Self>, transition: &TransitionHandle) {
+        let animations: [RouteAnimation; 2] = [
+            transition.primary_animation(),
+            transition.secondary_animation(),
+        ];
+        let mut subscriptions = self.relay_subscriptions.lock();
+        for animation in animations {
+            let relay = Arc::clone(&self.relay);
+            let id = animation.add_listener(Arc::new(move || relay.notify_listeners()));
+            subscriptions.push((animation, id));
+        }
+    }
+
+    /// Drop them again. Called from `dispose()`, **before** the controller is.
+    fn close_relay(&self) {
+        for (animation, id) in self.relay_subscriptions.lock().drain(..) {
+            animation.remove_listener(id);
+        }
+    }
+}
+
+// ============================================================================
+// _ModalScope — the animation-driven half of the entry
+// ============================================================================
+
+/// Flutter's `_ModalScope` (`routes.dart:1055-1250`), reduced to the one job FLUI
+/// can do today: rebuild the page and its transitions when either animation ticks.
+///
+/// Flutter caches the page in `_page ??= …` so only the transitions rebuild per
+/// frame (`routes.dart:1229-1240`). FLUI's `BoxedView` is not cloneable, so the
+/// page builder re-runs on every tick. Element reconciliation preserves the page's
+/// `ViewState`, so this is a **cost**, not a state difference; recorded, not
+/// claimed as parity.
+///
+/// An [`AnimatedView`], which is `AnimatedWidget` — the framework subscribes to
+/// [`listenable`](AnimatedView::listenable) on mount and unsubscribes on unmount.
+/// `AnimatedBuilder` could not be used: its builder takes no `BuildContext`, and
+/// `buildPage` needs one.
+#[derive(Clone)]
+struct ModalScope {
+    page: RoutePageBuilder,
+    transitions: RouteTransitionsBuilder,
+    transition: TransitionHandle,
+    relay: Arc<ChangeNotifier>,
+}
+
+impl_animated_view!(ModalScope);
+
+impl AnimatedView for ModalScope {
+    fn listenable(&self) -> Arc<dyn Listenable> {
+        Arc::clone(&self.relay) as Arc<dyn Listenable>
+    }
+}
+
+impl StatefulView for ModalScope {
+    type State = ModalScopeState;
+
+    fn create_state(&self) -> Self::State {
+        ModalScopeState
+    }
+}
+
+/// Stateless beyond the subscription `AnimatedView` manages.
+pub(crate) struct ModalScopeState;
+
+impl ViewState<ModalScope> for ModalScopeState {
+    /// `buildTransitions(context, animation, secondaryAnimation, buildPage(…))`
+    /// (`routes.dart:1229-1240`, `:1656`).
+    fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
+        let primary = view.transition.primary_animation();
+        let secondary: RouteAnimation = view.transition.secondary_animation();
+        let child = (view.page)(ctx, &primary, &secondary);
+        (view.transitions)(ctx, &primary, &secondary, child)
     }
 }
 
@@ -155,39 +289,41 @@ pub(crate) struct ModalRoute<T> {
 }
 
 impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
-    /// A modal showing `page`, entering and leaving over `duration`.
+    /// A modal showing `page`, entering and leaving over `duration`, with a
+    /// jump-cut transition.
     ///
-    /// Defaults match Flutter's `ModalRoute`: `maintain_state = true`
-    /// (`routes.dart:2394` for `PopupRoute`, and `PageRoute`'s constructor
-    /// argument defaults to `true`), `offstage = false`, no barrier colour, not
-    /// dismissible, not opaque.
-    pub(crate) fn new(
-        duration: Duration,
-        page: impl Fn(&dyn BuildContext) -> BoxedView + Send + Sync + 'static,
-    ) -> Self {
+    /// Defaults match Flutter's `ModalRoute`: `maintain_state = true`,
+    /// `offstage = false`, no barrier colour, not dismissible, not opaque.
+    pub(crate) fn new(duration: Duration, page: RoutePageBuilder) -> Self {
         let inner = Arc::new(ModalInner {
             offstage: AtomicBool::new(false),
             maintain_state: AtomicBool::new(true),
             barrier_dismissible: AtomicBool::new(false),
             barrier_color: Mutex::new(None),
-            binding: Mutex::new(None),
+            page,
+            transitions: Mutex::new(default_transitions_builder()),
+            transition: OnceLock::new(),
+            relay: Arc::new(ChangeNotifier::new()),
+            relay_subscriptions: Mutex::new(Vec::new()),
         });
 
-        let page: RouteContentBuilder = Arc::new(page);
         let content = {
             let inner = Arc::clone(&inner);
             move |ctx: &dyn BuildContext| -> BoxedView {
                 // Barrier first: it paints below the page and is hit-tested after
                 // it, matching `[_modalBarrier, _modalScope]` entry order.
-                let children = vec![inner.build_barrier(ctx), inner.build_scope(&page, ctx)];
+                let children = vec![inner.build_barrier(ctx), inner.build_scope()];
                 Stack::new(children).fit(StackFit::Expand).boxed()
             }
         };
 
-        Self {
-            transition: TransitionRoute::new(duration, content),
-            inner,
-        }
+        let transition = TransitionRoute::new(duration, content);
+        // The content closure captured `inner` before the route existed, so the
+        // handle can only be wired in afterwards. `OnceLock` makes that a fact of
+        // the type rather than a comment.
+        let _ = inner.transition.set(transition.handle());
+
+        Self { transition, inner }
     }
 
     /// The builders below mutate `inner` *before* the route is pushed, so no
@@ -200,6 +336,36 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
     /// `TransitionRoute.opaque`. `PageRoute` sets this; `PopupRoute` does not.
     pub(crate) fn opaque(mut self, opaque: bool) -> Self {
         self.transition = self.transition.opaque(opaque);
+        self
+    }
+
+    /// `buildTransitions` (`routes.dart:1591`).
+    pub(crate) fn transitions(self, transitions: RouteTransitionsBuilder) -> Self {
+        *self.inner.transitions.lock() = transitions;
+        self
+    }
+
+    /// `transitionDuration` (`routes.dart:140-147`).
+    pub(crate) fn duration(mut self, duration: Duration) -> Self {
+        self.transition = self.transition.duration(duration);
+        self
+    }
+
+    /// `reverseTransitionDuration` (`routes.dart:148`).
+    pub(crate) fn reverse_duration(mut self, duration: Duration) -> Self {
+        self.transition = self.transition.reverse_duration(duration);
+        self
+    }
+
+    /// The transition family — see [`TransitionGroup`].
+    pub(crate) fn group(mut self, group: TransitionGroup) -> Self {
+        self.transition = self.transition.group(group);
+        self
+    }
+
+    /// The `result ?? currentResult` fallback (`navigator.dart:426`).
+    pub(crate) fn with_current_result(mut self, result: T) -> Self {
+        self.transition = self.transition.with_current_result(result);
         self
     }
 
@@ -226,7 +392,13 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
     }
 
     /// A cloneable view of this route's modal state, obtainable **before** the
-    /// route is moved into `push_bound`.
+    /// route is moved into `NavigatorHandle::push`.
+    ///
+    /// The `offstage` half of [`ModalHandle`] is the seam `Hero` will drive
+    /// (B1.4); no production caller exists yet, so the whole handle is reachable
+    /// only from tests. It is kept — not deleted — because U5.3 verified it
+    /// against `routes.dart:1949-1962` and B1.4 names it as a precondition.
+    #[cfg(test)]
     pub(crate) fn handle(&self) -> ModalHandle {
         ModalHandle {
             inner: Arc::clone(&self.inner),
@@ -234,6 +406,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
     }
 
     /// The transition handle, for driving the animation by hand.
+    #[cfg(test)]
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.transition.handle()
     }
@@ -254,11 +427,15 @@ impl<T> fmt::Debug for ModalRoute<T> {
 /// An owned, `'static` capability to drive a pushed [`ModalRoute`]'s internal
 /// state — the ADR-0019 §3.2 pattern, again: the route itself lives behind
 /// `Box<dyn ErasedRoute>` inside the history's mutex and cannot be reached.
+///
+/// Reachable only from tests until `Hero` (B1.4) drives `offstage`.
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct ModalHandle {
     inner: Arc<ModalInner>,
 }
 
+#[cfg(test)]
 impl ModalHandle {
     /// `ModalRoute.offstage = value` (`routes.dart:1951-1962`), minus the
     /// animation-proxy swap.
@@ -296,9 +473,11 @@ impl ModalHandle {
 /// `schedulerPhase != persistentCallbacks` guard has no analogue: FLUI's
 /// `mark_needs_build` only inserts an id into an inbox the next `build_scope`
 /// drains, so it is already safe from any phase (`entry.rs` module docs).
+#[cfg(test)]
 fn changed_internal_state(inner: &ModalInner) {
-    let binding = inner.binding.lock().clone();
-    let Some(binding) = binding else { return };
+    let Some(binding) = inner.transition.get().and_then(TransitionHandle::binding) else {
+        return;
+    };
     binding.set_entry_maintain_state(inner.maintain_state.load(Ordering::Relaxed));
     binding.mark_entry_needs_build();
 }
@@ -333,7 +512,14 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// `createOverlayEntries` (`:2353-2355`).
     fn install(&mut self) {
         self.transition.install();
-        if let Some(binding) = self.inner.binding.lock().as_ref() {
+        self.inner
+            .open_relay(self.inner.transition.get().expect("BUG: set in `new`"));
+        if let Some(binding) = self
+            .inner
+            .transition
+            .get()
+            .and_then(TransitionHandle::binding)
+        {
             binding.set_entry_maintain_state(self.inner.maintain_state.load(Ordering::Relaxed));
         }
     }
@@ -374,7 +560,11 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         self.transition.on_pop_invoked(did_pop);
     }
 
+    /// Close the relay **before** `TransitionRoute::dispose` drops the controller:
+    /// a live listener on a disposed controller is a use-after-free of the
+    /// notifier list.
     fn dispose(&mut self) {
+        self.inner.close_relay();
         self.transition.dispose();
     }
 }
@@ -383,11 +573,8 @@ impl<T: Send + Sync + Clone + 'static> NavigatorRoute for ModalRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
         self.transition.content_builder()
     }
-}
 
-impl<T: Send + Sync + Clone + 'static> BoundRoute for ModalRoute<T> {
-    fn bind(&mut self, binding: RouteBinding) {
-        *self.inner.binding.lock() = Some(binding.clone());
-        self.transition.bind(binding);
+    fn binding_slot(&self) -> Option<&RouteBindingSlot> {
+        self.transition.binding_slot()
     }
 }

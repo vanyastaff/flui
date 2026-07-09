@@ -81,7 +81,7 @@ fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
     let top = {
-        let _result = navigator_handle.push_bound(route);
+        let _result = navigator_handle.push(route);
         navigator_handle.current().expect("a top route")
     };
     harness.tick();
@@ -112,7 +112,7 @@ fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
 fn push_completion_travels_through_the_route_binding_command_queue() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
-    navigator_handle.push_bound(route);
+    navigator_handle.push(route);
     let top = navigator_handle.current().expect("a top route");
     harness.tick();
     assert_eq!(
@@ -141,7 +141,7 @@ fn push_completion_travels_through_the_route_binding_command_queue() {
 fn pop_transition_keeps_the_route_until_dismissed_but_completes_its_result_at_once() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
-    let result = navigator_handle.push_bound(route);
+    let result = navigator_handle.push(route);
     let top = navigator_handle.current().expect("a top route");
     complete(&animation);
     harness.tick();
@@ -203,7 +203,7 @@ fn pop_transition_keeps_the_route_until_dismissed_but_completes_its_result_at_on
 fn an_already_dismissed_controller_finalizes_synchronously_without_double_finalize() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
-    navigator_handle.push_bound(route);
+    navigator_handle.push(route);
     let top = navigator_handle.current().expect("a top route");
     complete(&animation);
     harness.tick();
@@ -236,7 +236,7 @@ fn an_already_dismissed_controller_finalizes_synchronously_without_double_finali
 fn pop_finalized_stops_a_second_finalize() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
-    navigator_handle.push_bound(route);
+    navigator_handle.push(route);
     complete(&animation);
     harness.tick();
 
@@ -271,7 +271,7 @@ fn pop_finalized_stops_a_second_finalize() {
 fn dismissed_while_still_active_does_not_finalize() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
-    navigator_handle.push_bound(route);
+    navigator_handle.push(route);
     let top = navigator_handle.current().expect("a top route");
     complete(&animation);
     harness.tick();
@@ -313,7 +313,7 @@ fn dispose_unregisters_the_controller_from_the_navigators_clock() {
     ));
 
     let (route, animation) = transition("second");
-    navigator_handle.push_bound(route);
+    navigator_handle.push(route);
     harness.tick();
 
     assert_eq!(
@@ -350,7 +350,7 @@ fn secondary_animation_tracks_the_next_routes_primary_animation() {
     let (navigator_handle, mut harness) = navigator();
 
     let (lower, lower_animation) = transition("lower");
-    navigator_handle.push_bound(lower);
+    navigator_handle.push(lower);
     complete(&lower_animation);
     harness.tick();
     assert!(
@@ -359,7 +359,7 @@ fn secondary_animation_tracks_the_next_routes_primary_animation() {
     );
 
     let (upper, upper_animation) = transition("upper");
-    navigator_handle.push_bound(upper);
+    navigator_handle.push(upper);
     harness.tick();
 
     assert!(!lower_animation.secondary_is_dismissed());
@@ -390,12 +390,12 @@ fn can_transition_predicates_leave_the_secondary_at_always_dismissed() {
     })
     .can_transition_to(false);
     let lower_animation = lower.handle();
-    navigator_handle.push_bound(lower);
+    navigator_handle.push(lower);
     complete(&lower_animation);
     harness.tick();
 
     let (upper, upper_animation) = transition("upper");
-    navigator_handle.push_bound(upper);
+    navigator_handle.push(upper);
     harness.tick();
 
     assert!(
@@ -408,7 +408,7 @@ fn can_transition_predicates_leave_the_secondary_at_always_dismissed() {
     // And the mirror: the upper route refuses to transition *from* the lower.
     let (navigator_handle, mut harness) = navigator();
     let (lower, lower_animation) = transition("lower");
-    navigator_handle.push_bound(lower);
+    navigator_handle.push(lower);
     complete(&lower_animation);
     harness.tick();
 
@@ -416,7 +416,7 @@ fn can_transition_predicates_leave_the_secondary_at_always_dismissed() {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
     .can_transition_from(false);
-    navigator_handle.push_bound(upper);
+    navigator_handle.push(upper);
     harness.tick();
 
     assert!(
@@ -434,7 +434,7 @@ fn can_transition_predicates_leave_the_secondary_at_always_dismissed() {
 fn a_plain_route_above_leaves_the_secondary_at_always_dismissed() {
     let (navigator_handle, mut harness) = navigator();
     let (lower, lower_animation) = transition("lower");
-    navigator_handle.push_bound(lower);
+    navigator_handle.push(lower);
     complete(&lower_animation);
     harness.tick();
 
@@ -458,12 +458,12 @@ fn a_plain_route_above_leaves_the_secondary_at_always_dismissed() {
 fn secondary_animation_resets_when_the_next_route_is_popped() {
     let (navigator_handle, mut harness) = navigator();
     let (lower, lower_animation) = transition("lower");
-    navigator_handle.push_bound(lower);
+    navigator_handle.push(lower);
     complete(&lower_animation);
     harness.tick();
 
     let (upper, upper_animation) = transition("upper");
-    navigator_handle.push_bound(upper);
+    navigator_handle.push(upper);
     complete(&upper_animation);
     harness.tick();
     assert!(!lower_animation.secondary_is_dismissed());
@@ -499,13 +499,13 @@ fn train_hopping_proxies_the_old_train_until_the_two_cross() {
     let (navigator_handle, mut harness) = navigator();
 
     let (bottom, bottom_animation) = transition("bottom");
-    navigator_handle.push_bound(bottom);
+    navigator_handle.push(bottom);
     complete(&bottom_animation);
     harness.tick();
 
     // `middle` rises to 0.8; `bottom`'s secondary follows it directly.
     let (middle, middle_animation) = transition("middle");
-    navigator_handle.push_bound(middle);
+    navigator_handle.push(middle);
     harness.tick();
     let middle_controller = middle_animation.controller().expect("installed");
     middle_controller.set_value(0.8);
@@ -515,7 +515,7 @@ fn train_hopping_proxies_the_old_train_until_the_two_cross() {
     // Remove `middle` so `top` becomes `bottom`'s next while `top` is moving at a
     // *different* value: the trains must be hopped, not snapped.
     let (top, top_animation) = transition("top");
-    navigator_handle.push_bound(top);
+    navigator_handle.push(top);
     harness.tick();
     let top_controller = top_animation.controller().expect("installed");
     top_controller.set_value(0.2);
@@ -569,13 +569,13 @@ fn a_stale_train_does_not_clobber_a_newer_parent() {
     let (navigator_handle, mut harness) = navigator();
 
     let (bottom, bottom_animation) = transition("bottom");
-    navigator_handle.push_bound(bottom);
+    navigator_handle.push(bottom);
     complete(&bottom_animation);
     harness.tick();
 
     // `low` is bottom's current next, sitting at 0.8 and moving.
     let (low, low_animation) = transition("low");
-    navigator_handle.push_bound(low);
+    navigator_handle.push(low);
     harness.tick();
     low_animation
         .controller()
@@ -584,7 +584,7 @@ fn a_stale_train_does_not_clobber_a_newer_parent() {
 
     // `middle` is moving at 0.2 — the hop target once `low` goes away.
     let (middle, middle_animation) = transition("middle");
-    navigator_handle.push_bound(middle);
+    navigator_handle.push(middle);
     harness.tick();
     let middle_controller = middle_animation.controller().expect("installed");
     middle_controller.set_value(0.2);
@@ -593,7 +593,7 @@ fn a_stale_train_does_not_clobber_a_newer_parent() {
     // `top` is settled, so `can_remove_or_add` is true and removals actually
     // dispose. Without this, nothing below is ever disposed.
     let (top, top_animation) = transition("top");
-    navigator_handle.push_bound(top);
+    navigator_handle.push(top);
     complete(&top_animation);
     harness.tick();
 
@@ -647,12 +647,12 @@ fn a_stale_train_does_not_clobber_a_newer_parent() {
 fn secondary_keeps_tracking_the_exiting_route_while_it_reverses() {
     let (navigator_handle, mut harness) = navigator();
     let (lower, lower_animation) = transition("lower");
-    navigator_handle.push_bound(lower);
+    navigator_handle.push(lower);
     complete(&lower_animation);
     harness.tick();
 
     let (upper, upper_animation) = transition("upper");
-    navigator_handle.push_bound(upper);
+    navigator_handle.push(upper);
     complete(&upper_animation);
     harness.tick();
 
@@ -674,37 +674,28 @@ fn secondary_keeps_tracking_the_exiting_route_while_it_reverses() {
 // PRIVACY
 // ============================================================================
 
-/// `TransitionRoute` is private until U5.4's parity + sign-off gate. So are the
-/// classes above it, which do not exist yet.
+/// `TransitionRoute` and `ModalRoute` stay private after U5.4's sign-off gate:
+/// Rust has no subclassing, so exporting them as extensible bases needs a trait
+/// design that ADR-0020 §7e deliberately defers. Only `PageRoute` / `PopupRoute`
+/// came out.
 ///
-/// Red-check: add `pub use navigator::transition_route::TransitionRoute;` to
-/// `lib.rs`.
+/// Red-check: add `pub use transition_route::TransitionRoute;` to
+/// `navigator/mod.rs`.
 #[test]
 fn transition_route_is_not_exported() {
     const LIB: &str = include_str!("../lib.rs");
     const NAV_MOD: &str = include_str!("mod.rs");
 
-    for (name, source) in [("lib.rs", LIB), ("navigator/mod.rs", NAV_MOD)] {
-        for line in source.lines() {
-            let code = line.trim_start();
-            if !code.starts_with("pub use") && !code.starts_with("pub mod") {
-                continue;
-            }
-            for internal in [
-                "TransitionRoute",
-                "TransitionHandle",
-                "TransitionPeer",
-                "ModalRoute",
-                "PageRoute",
-                "PopupRoute",
-            ] {
-                assert!(
-                    !code.contains(internal),
-                    "{name} exports the internal `{internal}`: {line}"
-                );
-            }
-        }
-    }
+    const INTERNAL: [&str; 5] = [
+        "TransitionRoute",
+        "TransitionHandle",
+        "TransitionPeer",
+        "TransitionGroup",
+        "ModalRoute",
+    ];
+
+    super::export_guard::assert_not_exported("lib.rs", LIB, &INTERNAL);
+    super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);
 }
 
 /// The secondary proxy is shared, and the route drives it from a status listener,
@@ -713,7 +704,7 @@ fn transition_route_is_not_exported() {
 fn a_handle_outliving_its_route_is_inert() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
-    navigator_handle.push_bound(route);
+    navigator_handle.push(route);
     complete(&animation);
     harness.tick();
 
@@ -740,7 +731,7 @@ fn a_handle_outliving_its_route_is_inert() {
 fn status_listener_does_not_hold_a_lock_across_the_binding_call() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
-    navigator_handle.push_bound(route);
+    navigator_handle.push(route);
     complete(&animation);
     harness.tick();
     navigator_handle.pop();

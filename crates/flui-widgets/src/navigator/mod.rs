@@ -39,20 +39,30 @@ mod modal_route;
 mod navigator;
 mod observer;
 mod overlay_route;
+mod page_route;
 mod result;
 mod route;
 mod transition_route;
 
+pub use binding::RouteBindingSlot;
 pub use navigator::{Navigator, NavigatorHandle, NavigatorState};
 pub use observer::NavigatorObserver;
-pub use overlay_route::{NavigatorRoute, RouteContentBuilder, SimpleRoute};
+pub use overlay_route::{
+    NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
+    SimpleRoute,
+};
+pub use page_route::{PageRoute, PopupRoute};
 pub use result::RouteResult;
 pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 
 #[cfg(test)]
+mod export_guard;
+#[cfg(test)]
 mod modal_route_tests;
 #[cfg(test)]
 mod navigator_tests;
+#[cfg(test)]
+mod page_route_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -642,6 +642,121 @@ restoration. `Overlay` / `OverlayEntry` / `TransitionRoute` / `ModalRoute` all
 remain private; `modal_route_is_not_exported` and `transition_route_is_not_exported`
 keep them there until U5.4's parity + sign-off gate.
 
+## 7e. Implementation findings and API sign-off (U5.4, 2026-07-09)
+
+**Status: landed.** Public `PageRoute` and `PopupRoute`; private `TransitionRoute`
+and `ModalRoute` stay private. The chain U5.0 → U5.4 is closed.
+
+### The sign-off: what came out, and what deliberately did not
+
+| Exported | Why |
+|---|---|
+| `PageRoute<T>`, `PopupRoute<T>` | The two shapes an app needs. Concrete, closure-configured. |
+| `RoutePageBuilder`, `RouteTransitionsBuilder`, `RouteAnimation` | Naming the closures a caller writes. |
+| `RouteBindingSlot` | Opaque. See below. |
+
+| Kept private | Why |
+|---|---|
+| `TransitionRoute`, `ModalRoute` | Rust has no subclassing. Exporting them as *extensible bases* means designing a trait (`buildPage`/`buildTransitions` as required methods, with the lifecycle delegated) — a real API decision that must be made on its own, not smuggled in behind a `pub use`. |
+| `Overlay`, `OverlayEntry`, `OverlayHandle` | No app-authored custom routes yet, so nothing needs them. Exporting them is its own parity gate (`OverlayPortal`, `canSizeOverlay`, positioned entries). |
+| `RouteBinding`, `TransitionGroup`, `ModalHandle` | Capabilities, not configuration. `RouteBinding` can finalize and dispose a route. |
+
+`PageRoute` **is** Flutter's `PageRouteBuilder` — Flutter needs two types only
+because one is an abstract base. Stated plainly in the module docs: *an app cannot
+write a route with custom `buildPage` state today.*
+
+### `BoundRoute` had to go, and what replaced it
+
+U5.1 delivered the binding through a private `BoundRoute` trait and a private
+`push_bound`. That cannot survive a public `PageRoute`: an app calls the one public
+`NavigatorHandle::push`, which must bind the route it is handed.
+
+So `NavigatorRoute` grew a defaulted `binding_slot(&self) -> Option<&RouteBindingSlot>`.
+`RouteBindingSlot` is public and **opaque**: it has `new()` and `is_bound()`, and the
+`RouteBinding` inside is `pub(crate)` with no accessor. `push` and `seed_initial`
+fill it before `install()`. A route that does not animate returns `None` — the
+default, which is what `SimpleRoute` does — and never sees one.
+
+`push_bound` and `BoundRoute` are deleted. This is *Correction 2*'s resolution,
+recorded in `binding.rs`.
+
+### `canTransitionTo`/`canTransitionFrom` are a symmetric family test
+
+`PageRoute` overrides **both** predicates with the same test — `other is PageRoute`
+(`pages.dart:58-61`) — while every other `TransitionRoute` leaves both at `true`.
+That pair is exactly a "same family?" relation, so FLUI publishes a
+`TransitionGroup` on the `TransitionPeer` and gates on
+`can_transition_to && peer.can_transition_from && peer.group == self.group`.
+A `PopupRoute` opening over a page therefore drives no secondary animation on it,
+and two popups still coordinate. Both directions are tested.
+
+### A real deadlock in `flui-animation`, found by the first end-to-end pop
+
+`Vsync::tick_all` held the registry mutex across `tick_at`. `tick_at` fires status
+listeners; a route whose exit transition reaches `dismissed` finalizes and disposes
+itself from that listener, and `TransitionRoute::dispose` calls
+`Vsync::unregister`. `parking_lot::Mutex` is not reentrant, so this **hung**.
+
+Nothing caught it before because no test had ever driven a `TransitionRoute`
+through a real `Vsync` — the in-crate harness has no `VsyncScope`, so every route
+controller fell back to its own ticker and was driven by hand.
+
+Fixed by ticking each controller with the lock released, and regression-tested in
+`flui-animation` (`a_listener_may_{unregister,register}_from_inside_tick_all`).
+
+**A first fix was wrong and a test caught it.** Snapshotting *all* due controllers
+up front, then ticking them, dropped a property the old loop had: a controller
+started by an **earlier** controller's listener during the same call — a
+`Scrollable` handing off to its fling controller — was skipped until the next
+frame. `scrollable_fling_advances_offset_past_release` went from 2-in-8 flaky under
+CPU saturation to 6-in-8. Ticking one controller at a time, re-locking per
+controller, restores the interleaving and returns the rate to baseline. (The
+residual 2-in-8 is a pre-existing wall-clock flake in that test, unrelated.)
+
+### `_ModalScope`, and the page cache FLUI cannot have
+
+`buildTransitions` needs both animations *and* a `BuildContext`, so `AnimatedBuilder`
+(whose builder takes no context) could not be reused. `ModalScope` is an
+`AnimatedView` subscribed to a `ChangeNotifier` **relay** that both animations feed
+— `flui_foundation::Listenable` has no `merge`, and the relay has the property
+`AnimatedView` needs: the same object every time `listenable()` is called, even
+though the `ModalScope` view is rebuilt on every overlay-entry build.
+
+Flutter caches the page (`_page ??= …`, `routes.dart:1229`) so only the transitions
+rebuild per frame. `BoxedView` is not cloneable, so FLUI re-runs the page builder on
+every tick. Element reconciliation preserves the page's `ViewState`, so this is a
+**cost**, not a state difference. Recorded, not claimed.
+
+### The modal barrier absorbed nothing — a red-check found it
+
+`build_barrier` returned `AbsorbPointer(absorbing: true, child: ColoredBox(...))`.
+Flipping `absorbing` to `false` left **every test green**: the `ColoredBox` under it
+is itself hit-testable, so the pointer stopped there regardless. The barrier only
+blocked when it had a colour, which is not the contract — a colourless barrier must
+absorb too.
+
+Fixed: the `ColoredBox` is now an *optional child* of the `AbsorbPointer`, which is
+hit within its own bounds either way. The mutation now goes red.
+
+### Export guards now match whole identifiers
+
+`RouteBindingSlot` *contains* the string `RouteBinding`, so the substring-based
+privacy tests flagged the safe export. `export_guard.rs` splits `pub use` lines into
+identifiers and compares exactly — it says what the test means, and it has its own
+red-check.
+
+### Not implemented, not claimed
+
+`fullscreenDialog`, `allowSnapshotting`, `barrierLabel`, `barrierCurve` /
+`AnimatedModalBarrier`, `filter` / `BackdropFilter`, `FocusScope`, `BlockSemantics`
+and barrier semantics, `IgnorePointer(ignoring: !animation.isForwardOrCompleted)`,
+`PopScope`, `LocalHistoryRoute`, predictive back, `Hero`, `OverlayPortal`,
+page-based Navigator 2.0, named routes, restoration. `offstage` does not swap the
+animations to `kAlwaysComplete`/`kAlwaysDismissed`.
+
+`AnimationController::is_animating` remains ticker-based where Flutter's is
+status-based (U5.2). Still not fixed, still divergent.
+
 ## 7. Consequences
 
 **Good.** The two deferral points U5 needs — `PushCompletion::Animating` and `finished_when_popped` — were designed into ADR-0019 U2 and are already tested; U5 supplies their first production producer. The animation library is unusually complete: `ProxyAnimation::set_parent`, `ALWAYS_DISMISSED`/`ALWAYS_COMPLETE`, and an `AnimationSwitch` that claims to be `TrainHoppingAnimation`. `RouteBinding` reuses the owned-capability pattern three ADRs have now converged on.
@@ -656,5 +771,5 @@ keep them there until U5.4's parity + sign-off gate.
 
 1. **Decision 1:** does `NavigatorState` take its `Vsync` from an ambient `VsyncScope` (matching `Scrollable`), or from the binding directly? The former makes a navigator inside a paused subtree freeze correctly; the latter always ticks.
 2. ~~**Decision 3:** implement `Overlay.opaque`/`maintainState` in U5.3 (recommended), or ship `ModalRoute` without them and delete both from its surface?~~ **Answered in §7d: implemented.**
-3. **U5.4:** must `Overlay` / `OverlayEntry` become public for app authors to write custom routes, or is `NavigatorRoute::content_builder` a sufficient door?
+3. ~~**U5.4:** must `Overlay` / `OverlayEntry` become public for app authors to write custom routes, or is `NavigatorRoute::content_builder` a sufficient door?~~ **Answered in §7e: neither is exported. `PageRoute`/`PopupRoute` cover the cases that exist; an extensible route trait is U5.5's decision.**
 4. **U5.0:** is anything depending on `RenderOffstage`'s current zero-size behavior? (`Visibility(maintain_state: true)` is the obvious candidate.)

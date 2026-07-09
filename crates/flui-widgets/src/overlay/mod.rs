@@ -52,17 +52,19 @@
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
-// `Overlay` stays **private** after ADR-0019 U4: `Navigator` needs it, but nothing
-// in the signed-off public surface names it, and exporting Flutter's `Overlay` /
-// `OverlayEntry` / `OverlayPortal` is a separate parity gate (§5 U5, with
-// `ModalRoute`). `Navigator` therefore exercises only part of this module —
-// `rearrange`, `OverlayEntry::new/remove/is_attached` — while the rest
-// (`insert`/`insert_all`/`InsertPosition`, `OverlayEntry::mark_needs_build`) is
-// ported, tested, and waiting for its consumer. Hence the allow; it goes when the
-// Overlay surface is exported, or when U5 wires `mark_needs_build` from a route.
+// `Overlay` stays **private** after ADR-0020 U5.4: `Navigator`, `ModalRoute` and
+// the public `PageRoute` / `PopupRoute` all need it, but nothing in the signed-off
+// public surface names it, and exporting Flutter's `Overlay` / `OverlayEntry` /
+// `OverlayPortal` is a separate parity gate (§7e).
 //
-// The `navigator` module needs no such allow any more: U4's export made it
-// reachable, and its remaining test-only helpers are `#[cfg(test)]`, not hidden.
+// `Navigator` exercises `rearrange`, `OverlayEntry::new/remove/is_attached`, and —
+// since U5.3 — `opaque` / `maintain_state`. What stays dead is the *insertion*
+// half (`insert`, `insert_all`, `InsertPosition`, `entry_ids`) plus the builder
+// forms and `mark_needs_build`, which only an app author placing entries directly,
+// or `Hero` (B1.4), would call. Ported, tested, waiting for a consumer.
+//
+// The `navigator` module needs no such allow: U5.4 gave every item a production
+// caller or a `#[cfg(test)]`.
 #![allow(dead_code)]
 
 mod entry;

@@ -75,10 +75,15 @@ impl ViewState<Probe> for ProbeState {
 /// A modal whose page is a state-counting [`Probe`].
 fn modal(built: &Built, creations: &Arc<AtomicUsize>) -> ModalRoute<i32> {
     let (built, creations) = (built.clone(), Arc::clone(creations));
-    ModalRoute::new(FRAME, move |_ctx| {
-        built.0.fetch_add(1, Ordering::Relaxed);
-        Probe(Arc::clone(&creations)).into_view().boxed()
-    })
+    ModalRoute::new(
+        FRAME,
+        Arc::new(
+            move |_ctx: &dyn BuildContext, _animation: &_, _secondary: &_| {
+                built.0.fetch_add(1, Ordering::Relaxed);
+                Probe(Arc::clone(&creations)).into_view().boxed()
+            },
+        ),
+    )
 }
 
 fn plain_page() -> SimpleRoute<i32> {
@@ -128,7 +133,7 @@ fn modal_opaque_route_occludes_the_route_below_once_its_transition_completes() {
 
     let route = modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).opaque(true);
     let transition = route.transition_handle();
-    let _result = navigator.push_bound(route);
+    let _result = navigator.push(route);
     harness.tick();
 
     let top = *navigator.route_ids().last().expect("the modal is on top");
@@ -158,7 +163,7 @@ fn modal_opaque_route_clears_opaque_while_it_moves() {
 
     let route = modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).opaque(true);
     let transition = route.transition_handle();
-    let _result = navigator.push_bound(route);
+    let _result = navigator.push(route);
     harness.tick();
     complete_entrance(&transition, &mut harness);
 
@@ -190,7 +195,7 @@ fn modal_non_opaque_route_never_occludes() {
 
     let route = modal(&Built::default(), &Arc::new(AtomicUsize::new(0)));
     let transition = route.transition_handle();
-    let _result = navigator.push_bound(route);
+    let _result = navigator.push(route);
     harness.tick();
     complete_entrance(&transition, &mut harness);
 
@@ -212,13 +217,13 @@ fn modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state()
 
     let creations = Arc::new(AtomicUsize::new(0));
     let covered = modal(&Built::default(), &creations).maintain_state(false);
-    let _covered_result = navigator.push_bound(covered);
+    let _covered_result = navigator.push(covered);
     harness.tick();
     assert_eq!(creations.load(Ordering::Relaxed), 1);
 
     let coverer = modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).opaque(true);
     let coverer_transition = coverer.transition_handle();
-    let _coverer_result = navigator.push_bound(coverer);
+    let _coverer_result = navigator.push(coverer);
     harness.tick();
     complete_entrance(&coverer_transition, &mut harness);
 
@@ -255,12 +260,12 @@ fn modal_covered_route_with_maintain_state_stays_mounted() {
 
     let creations = Arc::new(AtomicUsize::new(0));
     let covered = modal(&Built::default(), &creations).maintain_state(true);
-    let _covered_result = navigator.push_bound(covered);
+    let _covered_result = navigator.push(covered);
     harness.tick();
 
     let coverer = modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).opaque(true);
     let coverer_transition = coverer.transition_handle();
-    let _coverer_result = navigator.push_bound(coverer);
+    let _coverer_result = navigator.push(coverer);
     harness.tick();
     complete_entrance(&coverer_transition, &mut harness);
 
@@ -283,7 +288,7 @@ fn modal_covered_route_with_maintain_state_stays_mounted() {
 fn modal_install_publishes_maintain_state_onto_the_overlay_entry() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
 
-    let _result = navigator.push_bound(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));
+    let _result = navigator.push(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));
     harness.tick();
 
     let id = *navigator.route_ids().last().expect("pushed");
@@ -313,7 +318,7 @@ fn modal_changed_internal_state_rebuilds_only_this_entry_and_republishes_maintai
     let built = Built::default();
     let route = modal(&built, &Arc::new(AtomicUsize::new(0)));
     let modal_handle: ModalHandle = route.handle();
-    let _result = navigator.push_bound(route);
+    let _result = navigator.push(route);
     harness.tick();
     assert_eq!(built.get(), 1);
 
@@ -340,7 +345,7 @@ fn modal_setting_offstage_to_the_same_value_is_a_noop() {
     let built = Built::default();
     let route = modal(&built, &Arc::new(AtomicUsize::new(0)));
     let modal_handle = route.handle();
-    let _result = navigator.push_bound(route);
+    let _result = navigator.push(route);
     harness.tick();
     assert_eq!(built.get(), 1);
 
@@ -373,7 +378,7 @@ fn modal_offstage_keeps_the_page_but_drops_the_barrier() {
     let creations = Arc::new(AtomicUsize::new(0));
     let route = modal(&Built::default(), &creations).barrier_color(Color::RED);
     let modal_handle = route.handle();
-    let _result = navigator.push_bound(route);
+    let _result = navigator.push(route);
     harness.tick();
 
     let names = harness.render_debug_names();
@@ -422,7 +427,7 @@ fn modal_offstage_keeps_the_page_but_drops_the_barrier() {
 #[test]
 fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
-    let _result = navigator.push_bound(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));
+    let _result = navigator.push(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));
     harness.tick();
 
     let names = harness.render_debug_names();
@@ -440,7 +445,7 @@ fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector(
     let (navigator, mut harness, _bottom) = navigator_with_seed();
     let dismissible =
         modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).barrier_dismissible(true);
-    let _result = navigator.push_bound(dismissible);
+    let _result = navigator.push(dismissible);
     harness.tick();
 
     let names = harness.render_debug_names();
@@ -454,27 +459,35 @@ fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector(
 // Privacy
 // ============================================================================
 
-/// U5.3 authorises no public API. `ModalRoute`, `ModalHandle`, `PageRoute` and
-/// `PopupRoute` stay behind the crate boundary until U5.4's sign-off gate, and
-/// `tests/navigator_public.rs` is the integration test that would fail to compile
-/// if they leaked.
+/// `ModalRoute` and `ModalHandle` stay private through U5.4: they are the
+/// implementation `PageRoute` / `PopupRoute` are built on, and exporting them as
+/// extensible bases is a separate sign-off (ADR-0020 §7e).
+///
+/// Red-check: add `pub use modal_route::ModalRoute;` to `navigator/mod.rs`.
 #[test]
 fn modal_route_is_not_exported() {
-    let source = include_str!("../lib.rs");
-    for symbol in ["ModalRoute", "ModalHandle", "PageRoute", "PopupRoute"] {
-        assert!(
-            !source.contains(symbol),
-            "{symbol} must not be exported from flui-widgets before its sign-off gate"
-        );
-    }
+    super::export_guard::assert_not_exported(
+        "lib.rs",
+        include_str!("../lib.rs"),
+        &["ModalRoute", "ModalHandle", "ModalScope"],
+    );
+    super::export_guard::assert_not_exported(
+        "navigator/mod.rs",
+        include_str!("mod.rs"),
+        &["ModalRoute", "ModalHandle", "ModalScope"],
+    );
 }
 
 /// [`ModalHandle`] is the ADR-0019 §3.2 owned capability: every clone names the
 /// same route, so a handle taken before `push_bound` still drives it afterwards.
 #[test]
 fn modal_handle_is_cloneable_and_shares_state() {
-    let route: ModalRoute<i32> =
-        ModalRoute::new(FRAME, |_ctx| SizedBox::new(10.0, 10.0).into_view().boxed());
+    let route: ModalRoute<i32> = ModalRoute::new(
+        FRAME,
+        Arc::new(|_ctx: &dyn BuildContext, _a: &_, _s: &_| {
+            SizedBox::new(10.0, 10.0).into_view().boxed()
+        }),
+    );
     let a = route.handle();
     let b: ModalHandle = a.clone();
 

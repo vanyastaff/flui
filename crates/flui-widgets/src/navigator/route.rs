@@ -287,6 +287,7 @@ impl<R: Route> RouteRecord<R> {
     /// The future exists **before any lifecycle runs**, exactly as
     /// `Navigator.push` returns `route.popped` before `_flushHistoryUpdates`
     /// (`navigator.dart:5060-5063`).
+    #[cfg(test)]
     pub(crate) fn erase(route: R) -> (Box<dyn ErasedRoute>, RouteResult<R::Output>) {
         Self::erase_with_id(RouteId::next(), route)
     }

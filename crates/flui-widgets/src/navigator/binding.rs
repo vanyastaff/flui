@@ -1,8 +1,9 @@
 //! [`RouteBinding`] — the owned capability a route uses to drive its own
 //! lifecycle: the ADR-0020 U5.1 route-animation seam.
 //!
-//! Private. Nothing here is exported, and `Route` — which *is* public — never
-//! mentions it. See *Correction 2* below.
+//! `RouteBinding` itself stays private — it can finalize and dispose routes — but
+//! ADR-0020 U5.4 exports the opaque [`RouteBindingSlot`] a route hands the
+//! navigator to receive one. See *Correction 2* and its U5.4 resolution below.
 //!
 //! # What Flutter does
 //!
@@ -47,19 +48,19 @@
 //!
 //! `Route` is public (ADR-0019 U4). Threading a `&RouteBinding` through
 //! `Route::install` would force `RouteBinding` into the public surface, which U5.1
-//! is explicitly not authorized to do. Instead the binding reaches a route through
-//! [`BoundRoute`], a private trait, delivered by a private
-//! `NavigatorHandle::push_bound` **before** the route is boxed — which is why
-//! `RouteId` is minted up front rather than inside `RouteRecord::erase`.
+//! was explicitly not authorized to do. U5.1 therefore delivered the binding
+//! through `BoundRoute`, a private trait, from a private `push_bound` — which is
+//! why `RouteId` is minted up front rather than inside `RouteRecord::erase`.
 //!
-//! U5.2's `TransitionRoute` is internal, so it can implement `BoundRoute`. If
-//! U5.4 ever lets an app author write an animated route, *that* is where the
-//! public shape gets decided — and signed off.
-
-// U5.2's `TransitionRoute` is the intended consumer of this seam. Until it lands,
-// the only caller of `NavigatorHandle::push_bound` is the test suite, so from
-// rustc's reachability view every item here is dead. The attribute goes with U5.2.
-#![allow(dead_code)]
+//! **U5.4 resolution.** `PageRoute` and `PopupRoute` are public and must be
+//! pushable through the one public `NavigatorHandle::push`, so a private
+//! `push_bound` no longer works. `BoundRoute` is gone. In its place
+//! [`NavigatorRoute::binding_slot`] returns an optional [`RouteBindingSlot`]: a
+//! public, opaque cell with no public accessor. `push` fills it before `install()`.
+//! The capability stays private; only the *cell* is public, and a route that does
+//! not animate returns `None` and never sees one.
+//!
+//! [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -68,7 +69,7 @@ use std::sync::Arc;
 use flui_animation::{Animation, Vsync};
 use parking_lot::Mutex;
 
-use super::route::{Route, RouteId};
+use super::route::RouteId;
 use crate::overlay::OverlayEntry;
 
 /// A lifecycle transition a route asks its navigator to make.
@@ -102,10 +103,36 @@ pub(crate) struct TransitionPeer {
     /// `nextRoute.canTransitionFrom(this)` (`routes.dart:561`), asked of the
     /// route *above*.
     pub(crate) can_transition_from: bool,
+    /// Which family of routes this one coordinates transitions with.
+    pub(crate) group: TransitionGroup,
     /// Fires when the route is disposed — Flutter's `Route.completed`
     /// (`routes.dart:115-122`), which `_setSecondaryAnimation` awaits to release
     /// its reference to a gone route's animation (`:503-509`).
     pub(crate) completed: Arc<CompletedSignal>,
+}
+
+/// The family a route coordinates its transitions with.
+///
+/// Flutter expresses this as a *pair* of predicates over the other route's Dart
+/// type — `PageRoute.canTransitionTo(next) => next is PageRoute` and
+/// `PageRoute.canTransitionFrom(prev) => prev is PageRoute` (`pages.dart:58-61`),
+/// while every other `TransitionRoute` leaves both at `true`. Because
+/// `PageRoute` overrides *both* sides with the same test, the pair is exactly a
+/// symmetric "same family?" relation, which is what this enum encodes. FLUI's
+/// routes cannot ask "is the route above a `PageRoute`" — they name each other by
+/// [`RouteId`] and never hold each other's object (ADR-0019 §7b) — so the family
+/// travels with the published [`TransitionPeer`].
+///
+/// A `PopupRoute` pushed over a `PageRoute` therefore drives no secondary
+/// animation on the page, matching `PageRoute.canTransitionTo(popup) == false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum TransitionGroup {
+    /// `TransitionRoute`'s defaults: coordinates with anything else that also
+    /// leaves both predicates at `true`. `PopupRoute` lives here.
+    #[default]
+    Default,
+    /// `PageRoute`, which coordinates only with other `PageRoute`s.
+    Page,
 }
 
 /// A one-shot "this route is disposed" signal with callbacks.
@@ -252,6 +279,10 @@ impl RouteBinding {
 
     /// `_modalBarrier.markNeedsBuild()` (`routes.dart:2228`) — rebuild **this
     /// route's** overlay entry, not the navigator.
+    ///
+    /// Reached only through `ModalRoute::changed_internal_state`, whose sole
+    /// caller is `ModalHandle` — the `Hero` seam (B1.4), test-only for now.
+    #[cfg(test)]
     pub(crate) fn mark_entry_needs_build(&self) {
         if let Some(entry) = self.entry() {
             entry.mark_needs_build();
@@ -275,15 +306,17 @@ impl RouteBinding {
         self.peers.lock().remove(&self.route);
     }
 
+    /// The route this binding drives. Test-facing: production code never needs it,
+    /// because every capability is already pre-bound to this id.
+    #[cfg(test)]
+    pub(crate) fn route_id(&self) -> RouteId {
+        self.route
+    }
+
     /// The peer for `route`, or `None` when it is not a transition route —
     /// Flutter's `nextRoute is TransitionRoute` test (`routes.dart:429`).
     pub(crate) fn peer(&self, route: RouteId) -> Option<TransitionPeer> {
         self.peers.lock().get(&route).cloned()
-    }
-
-    /// The route this binding drives.
-    pub(crate) fn route_id(&self) -> RouteId {
-        self.route
     }
 
     /// The entrance transition finished — Flutter's `whenCompleteOrCancel`.
@@ -316,12 +349,51 @@ impl fmt::Debug for RouteBinding {
     }
 }
 
-/// A route that participates in the animation seam.
+/// The cell a route hands the navigator so it can receive its own navigator
+/// capability before it is pushed.
 ///
-/// Private, and it must stay that way until the public shape is signed off — see
-/// *Correction 2*. U5.2's `TransitionRoute` is the intended implementor; today
-/// only tests implement it, and `NavigatorHandle::push_bound` is the only door.
-pub(crate) trait BoundRoute: Route {
-    /// Called once, before the route is pushed and therefore before `install()`.
-    fn bind(&mut self, binding: RouteBinding);
+/// **Public but opaque.** A route type stores one, exposes it through
+/// [`NavigatorRoute::binding_slot`], and can do nothing else with it: the
+/// `RouteBinding` inside is `pub(crate)` and there is no accessor. This is how an
+/// animated route gets a navigator capability without that binding — which can
+/// finalize and dispose routes — becoming public. ADR-0020 §7e records the
+/// sign-off.
+///
+/// [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
+#[derive(Clone, Default)]
+pub struct RouteBindingSlot {
+    inner: Arc<Mutex<Option<RouteBinding>>>,
+}
+
+impl RouteBindingSlot {
+    /// An empty slot. A route creates one in its constructor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the navigator has filled this slot — i.e. the route is pushed.
+    #[must_use]
+    pub fn is_bound(&self) -> bool {
+        self.inner.lock().is_some()
+    }
+
+    /// Filled by `NavigatorHandle::push` / `seed_initial`, before `install()`.
+    pub(crate) fn fill(&self, binding: RouteBinding) {
+        *self.inner.lock() = Some(binding);
+    }
+
+    /// The binding, cloned out. `None` for a route that was never pushed, which
+    /// is what makes every capability call on an unpushed route inert.
+    pub(crate) fn get(&self) -> Option<RouteBinding> {
+        self.inner.lock().clone()
+    }
+}
+
+impl fmt::Debug for RouteBindingSlot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RouteBindingSlot")
+            .field("bound", &self.is_bound())
+            .finish()
+    }
 }

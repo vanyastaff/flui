@@ -144,19 +144,61 @@ impl Vsync {
     /// tick it with the raw seconds elapsed since that anchor. A non-running
     /// controller is skipped (its anchor is set on the frame it next starts), so
     /// a disposed-but-not-unregistered controller is simply not ticked.
+    ///
+    /// # The registry lock is **not** held while ticking
+    ///
+    /// `tick_at` fires the controller's status and value listeners, and a listener
+    /// may legitimately [`unregister`](Self::unregister): a route whose exit
+    /// transition reaches `dismissed` disposes itself from that very listener, and
+    /// disposal unregisters its controller. Holding the lock across `tick_at` made
+    /// that re-entrant — and `parking_lot::Mutex` is not reentrant, so it
+    /// deadlocked rather than panicked.
+    ///
+    /// So each controller is looked up, its bookkeeping updated, and the lock
+    /// dropped *before* it is ticked. Ticking one controller at a time, rather than
+    /// snapshotting them all up front, preserves the property the old loop had:
+    /// a controller that an **earlier** controller's listener starts during this
+    /// same call (a `Scrollable` handing off to its fling controller) is anchored
+    /// and ticked in this frame, not the next.
+    ///
+    /// A controller *registered* during this call is not ticked until the next
+    /// frame, and one *unregistered* during it is skipped from that point on.
+    ///
+    // ponytail: linear scan per controller. The registry holds a handful of
+    // controllers; if it ever holds hundreds, key it by `VsyncRegistration`.
     pub fn tick_all(&self, now_secs: f64) {
-        let mut inner = self.inner.lock();
-        for registered in &mut inner.controllers {
-            let generation = registered.controller.run_generation();
-            if generation != registered.last_gen || registered.run_start_secs.is_none() {
-                registered.last_gen = generation;
-                registered.run_start_secs = Some(now_secs);
-            }
-            if registered.controller.status().is_running() {
-                // `run_start_secs` is `Some` here — set in the branch above on
-                // this same call if it was `None`.
-                let run_start = registered.run_start_secs.unwrap_or(now_secs);
-                registered.controller.tick_at(now_secs - run_start);
+        let registrations: Vec<VsyncRegistration> = self
+            .inner
+            .lock()
+            .controllers
+            .iter()
+            .map(|registered| registered.id)
+            .collect();
+
+        for id in registrations {
+            let due = {
+                let mut inner = self.inner.lock();
+                let Some(registered) = inner.controllers.iter_mut().find(|c| c.id == id) else {
+                    continue; // A previous tick's listener unregistered it.
+                };
+
+                let generation = registered.controller.run_generation();
+                if generation != registered.last_gen || registered.run_start_secs.is_none() {
+                    registered.last_gen = generation;
+                    registered.run_start_secs = Some(now_secs);
+                }
+                if registered.controller.status().is_running() {
+                    // `run_start_secs` is `Some` here — set in the branch above on
+                    // this same call if it was `None`.
+                    let run_start = registered.run_start_secs.unwrap_or(now_secs);
+                    Some((registered.controller.clone(), now_secs - run_start))
+                } else {
+                    None
+                }
+            };
+
+            if let Some((controller, elapsed)) = due {
+                controller.tick_at(elapsed);
             }
         }
     }
@@ -254,5 +296,72 @@ mod tests {
         );
 
         controller.dispose();
+    }
+
+    /// A status listener that unregisters its own controller — what a route does
+    /// when its exit transition reaches `dismissed` and it disposes itself — must
+    /// not deadlock.
+    ///
+    /// Regression: `tick_all` used to hold the registry lock across `tick_at`, so
+    /// the listener's `unregister` re-entered a non-reentrant `parking_lot::Mutex`
+    /// and hung. Found by ADR-0020 U5.4's first end-to-end `PopupRoute` pop.
+    #[test]
+    fn a_listener_may_unregister_from_inside_tick_all() {
+        let vsync = Vsync::new();
+        let controller =
+            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let registration = vsync.register(controller.clone());
+
+        let slot: Arc<Mutex<Option<VsyncRegistration>>> = Arc::new(Mutex::new(Some(registration)));
+        let vsync_for_listener = vsync.clone();
+        let slot_for_listener = Arc::clone(&slot);
+        controller.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed
+                && let Some(registration) = slot_for_listener.lock().take()
+            {
+                vsync_for_listener.unregister(registration);
+            }
+        }));
+
+        controller.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0);
+        vsync.tick_all(0.2); // past the 100 ms duration → Completed → unregisters
+
+        assert!(slot.lock().is_none(), "the listener ran and unregistered");
+        assert_eq!(vsync.len(), 0, "and the registry dropped the controller");
+
+        controller.dispose();
+    }
+
+    /// The converse: registering from inside a listener is also legal, and the new
+    /// controller simply waits for the next frame.
+    #[test]
+    fn a_listener_may_register_from_inside_tick_all() {
+        let vsync = Vsync::new();
+        let driver =
+            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let _driver_reg = vsync.register(driver.clone());
+
+        let late = AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let vsync_for_listener = vsync.clone();
+        let late_for_listener = late.clone();
+        let registered = Arc::new(Mutex::new(false));
+        let registered_for_listener = Arc::clone(&registered);
+        driver.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed && !*registered_for_listener.lock() {
+                *registered_for_listener.lock() = true;
+                vsync_for_listener.register(late_for_listener.clone());
+            }
+        }));
+
+        driver.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0);
+        vsync.tick_all(0.2);
+
+        assert!(*registered.lock());
+        assert_eq!(vsync.len(), 2, "the late controller joined the registry");
+
+        driver.dispose();
+        late.dispose();
     }
 }

@@ -44,7 +44,7 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::binding::{BoundRoute, RouteBinding, RouteEntries, RouteVsync, TransitionRegistry};
+use super::binding::{RouteBinding, RouteEntries, RouteVsync, TransitionRegistry};
 use super::history::{FlushOutcome, RouteHistory};
 use super::observer::NavigatorObserver;
 use super::overlay_route::NavigatorRoute;
@@ -131,10 +131,6 @@ impl NavigatorShared {
     /// between frames (an animation status listener, U5.2), and the commands take
     /// effect now. See `binding.rs`, *Correction 1*.
     ///
-    /// Dead until U5.2's `TransitionRoute` gives `push_bound` a production caller;
-    /// today only the tests reach it, through the `wake` closure. Delete the
-    /// attribute then.
-    #[allow(dead_code)]
     fn pump_route_commands(&self) {
         let outcome = {
             let Some(mut history) = self.history.try_lock() else {
@@ -216,13 +212,23 @@ impl NavigatorHandle {
     /// Seed before handing the handle to [`Navigator::new`]. A deep link's
     /// synthesized back-stack is several `seed_initial` calls.
     pub fn seed_initial<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        let id = RouteId::next();
+        self.bind(&route, id);
         let builder = route.content_builder();
-        let (id, result) = self.shared.history.lock().seed_initial(route);
         self.shared
             .entries
             .lock()
             .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
-        result
+        self.shared.history.lock().seed_initial_with_id(id, route)
+    }
+
+    /// Fill the route's [`RouteBindingSlot`], if it has one, before `install()`.
+    ///
+    /// [`RouteBindingSlot`]: super::binding::RouteBindingSlot
+    fn bind<R: NavigatorRoute>(&self, route: &R, id: RouteId) {
+        if let Some(slot) = route.binding_slot() {
+            slot.fill(self.binding_for(id));
+        }
     }
 
     /// Mint a [`RouteBinding`] for `route`, pre-bound to that id.
@@ -230,8 +236,6 @@ impl NavigatorHandle {
     /// The `wake` closure holds a `Weak`, so a binding that outlives its navigator
     /// is inert rather than a leak.
     ///
-    /// Dead until U5.2 (see `push_bound`).
-    #[allow(dead_code)]
     fn binding_for(&self, route: RouteId) -> RouteBinding {
         let queue = self.shared.history.lock().command_queue();
         let weak: Weak<NavigatorShared> = Arc::downgrade(&self.shared);
@@ -249,26 +253,18 @@ impl NavigatorHandle {
         )
     }
 
-    /// Push a route that participates in the animation seam, handing it a
-    /// [`RouteBinding`] **before** it is boxed (ADR-0020 U5.1).
+    /// Flutter's `NavigatorState.push` (`navigator.dart:5060-5063`). The future is
+    /// created before any lifecycle runs.
     ///
-    /// Private. U5.2's `TransitionRoute` is the intended caller; today only the
-    /// tests are — hence the `dead_code` allow, which goes with U5.2.
-    /// `Route::install` deliberately keeps its public signature — see
-    /// `binding.rs`, *Correction 2*.
-    #[allow(dead_code)]
-    pub(crate) fn push_bound<R: NavigatorRoute + BoundRoute>(
-        &self,
-        mut route: R,
-    ) -> RouteResult<R::Output> {
+    /// The route is bound and its overlay entry inserted **before** the flush.
+    /// `install()` and a zero-duration route's first animation status change both
+    /// run inside `push_with_id`, and both reach for that entry — Flutter has the
+    /// same order, since `OverlayRoute.install` creates the entries and *then*
+    /// calls `super.install()` (`routes.dart:69-71`).
+    pub fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
         let id = RouteId::next();
-        route.bind(self.binding_for(id));
+        self.bind(&route, id);
 
-        // Before the flush, unlike `push`: `install()` and the first status
-        // change both run inside `push_with_id`, and both may reach for this
-        // route's entry (`RouteBinding::set_entry_opaque`). Flutter has the same
-        // order — `OverlayRoute.install` creates the entries, then calls
-        // `super.install()` (`routes.dart:69-71`).
         let builder = route.content_builder();
         self.shared
             .entries
@@ -280,29 +276,6 @@ impl NavigatorHandle {
             let (_, result) = history.push_with_id(id, route);
             (result, history.take_outcome())
         };
-
-        if let Some(outcome) = outcome {
-            self.shared.apply(&outcome);
-        }
-        result
-    }
-
-    /// Flutter's `NavigatorState.push` (`navigator.dart:5060-5063`). The future is
-    /// created before any lifecycle runs.
-    pub fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
-        let builder = route.content_builder();
-
-        // The entry must exist before the flush's overlay work runs, but the id is
-        // minted by `push`. Insert between the two, with the history lock released.
-        let (id, result, outcome) = {
-            let mut history = self.shared.history.lock();
-            let (id, result) = history.push(route);
-            (id, result, history.take_outcome())
-        };
-        self.shared
-            .entries
-            .lock()
-            .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
 
         if let Some(outcome) = outcome {
             self.shared.apply(&outcome);

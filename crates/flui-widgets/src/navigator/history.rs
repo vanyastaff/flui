@@ -360,17 +360,12 @@ impl RouteHistory {
     /// The queue a [`RouteBinding`](super::binding::RouteBinding) writes to.
     /// Cloned into every binding the navigator mints.
     ///
-    /// Dead until U5.2's `TransitionRoute`: only `NavigatorHandle::push_bound`
-    /// (private, test-only for now) mints bindings. Delete the attribute then.
-    #[allow(dead_code)]
     pub(crate) fn command_queue(&self) -> RouteCommandQueue {
         Arc::clone(&self.commands)
     }
 
     /// Whether any route has raised a command that has not been applied.
     ///
-    /// Dead until U5.2, for the same reason as [`command_queue`](Self::command_queue).
-    #[allow(dead_code)]
     pub(crate) fn has_pending_commands(&self) -> bool {
         !self.commands.lock().is_empty()
     }
@@ -518,12 +513,27 @@ impl RouteHistory {
     ///
     /// Entries enter in `Add`: no push transition, but observers still see a push
     /// observation (`handleAdd`, `:3249`).
+    #[cfg(test)]
     pub(crate) fn seed_initial<R: Route>(&mut self, route: R) -> (RouteId, RouteResult<R::Output>) {
         let (erased, result) = RouteRecord::erase(route);
         let id = erased.id();
         self.entries
             .push(RouteEntry::new(erased, RouteLifecycle::Add));
         (id, result)
+    }
+
+    /// `seed_initial`, under an id the caller minted so it can bind the route
+    /// first (ADR-0020 U5.4). A seeded `PageRoute` needs its binding before
+    /// `install()`, exactly as a pushed one does.
+    pub(crate) fn seed_initial_with_id<R: Route>(
+        &mut self,
+        id: RouteId,
+        route: R,
+    ) -> RouteResult<R::Output> {
+        let (erased, result) = RouteRecord::erase_with_id(id, route);
+        self.entries
+            .push(RouteEntry::new(erased, RouteLifecycle::Add));
+        result
     }
 
     /// Seed one initial route and flush — the common single-route bootstrap.
@@ -539,6 +549,7 @@ impl RouteHistory {
 
     /// Flutter's `NavigatorState.push` (`:5060-5063`): append, flush, and return
     /// the future that was created before any lifecycle ran.
+    #[cfg(test)]
     pub(crate) fn push<R: Route>(&mut self, route: R) -> (RouteId, RouteResult<R::Output>) {
         self.push_with_id(RouteId::next(), route)
     }
