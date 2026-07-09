@@ -47,8 +47,6 @@ AppBinding (central coordinator)    — singleton combining all bindings
 - **Embedder** (`embedder`) — adapter types connecting the framework to
   windowing, GPU, and input on desktop (Win32/AppKit/headless via
   flui-platform + wgpu); Android/iOS/Web entry points are feature-gated.
-- **Overlay** (`overlay`) — `OverlayManager`/`OverlayEntry` for content that
-  floats above the main tree (dialogs, tooltips, snackbars, debug overlays).
 - **Theme** (`theme`) — `AppTheme` pre-tree configuration with semantic
   `ColorScheme` tokens; distinct from the in-tree `flui_widgets::Theme`
   inherited widget.
