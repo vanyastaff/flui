@@ -156,7 +156,7 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 
 ## Testing Quirks
 
-- **CI runs nextest with `--test-threads=1`** due to a pre-existing flui-app singleton-state flake
+- **CI runs nextest fully parallel.** flui-app's bindings are process-global singletons, but nextest gives each test its own process; the in-process race on `semantics_enabled` is serialized by `SEMANTICS_TEST_LOCK`. A new test that mutates shared binding state must take that lock.
 - **`flui-platform` tests are excluded from CI** (STATUS_HEAP_CORRUPTION investigation in progress)
 - **Render-object harness** — every concrete `RenderBox`/`RenderSliver` must have harness tests. See [`crates/flui-rendering/docs/TESTING.md`](crates/flui-rendering/docs/TESTING.md) for the `RenderTester`/`Probe` API and catalog rules. The catalog CI guard (`render_object_harness.rs`) verifies every exported type appears in `RENDER_OBJECT_TYPES` and has a matching `harness_*` test.
 - **Coverage**: `just coverage` (requires `cargo-llvm-cov`)
@@ -203,7 +203,7 @@ CI runs on PR + push to main. Jobs (all gated on `checks`):
 1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh` (incl. the `[lints] workspace = true` drift guard), `port-check.sh`
 2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
 3. **deny** — `cargo deny check` (advisories, bans, licenses, sources; config: `deny.toml`)
-4. **test** — `cargo nextest run --workspace --exclude flui-platform --test-threads 1` (lib **and** integration targets; Linux only)
+4. **test** — `cargo nextest run --workspace --exclude flui-platform` (lib **and** integration targets; Linux only)
 5. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking)
 6. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
 7. **msrv** — `cargo check --workspace --all-targets` on Rust 1.96 (the declared MSRV; other jobs run latest stable)
@@ -227,7 +227,7 @@ When you hit a build/test error:
 2. **Clippy warning** → run `just clippy` to see workspace-wide. Fix the warning, don't suppress it.
 3. **`unimplemented!()`/`todo!()` in production** → implement or gate behind `cfg(test)` / platform-init exemption.
 4. **Render-object harness failure** → every exported `RenderBox`/`RenderSliver` must appear in `RENDER_OBJECT_TYPES` with a matching `harness_*` test. See `crates/flui-rendering/docs/TESTING.md`.
-5. **Test flake (flui-app singleton)** → CI uses `--test-threads=1`. If tests fail locally with parallelism, try single-threaded.
+5. **Test flake (flui-app singleton)** → a test is mutating process-global binding state without taking `SEMANTICS_TEST_LOCK` (or an equivalent guard). Serialize it; do not reach for `--test-threads=1`.
 6. **Type mismatch across crate boundary** → check if you're using the wrong ID type (1-based vs 0-based). See ID offset pattern above.
 
 ## Definition of Done (anti-cheating)

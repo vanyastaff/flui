@@ -56,14 +56,16 @@ AppBinding (central coordinator)    — singleton combining all bindings
 ## Known architectural debt
 
 `AppBinding`, `Scheduler`, and friends are process-wide singletons
-(`instance()`), so tests touching binding state cannot run in parallel — this
-is why workspace CI runs nextest with `--test-threads=1`. Scoping binding
-state per test/app instance is a tracked ship-quality item; until it lands,
-run this crate's tests single-threaded:
+(`instance()`), mirroring Flutter's `WidgetsFlutterBinding.instance`. Tests
+share that global, so any test mutating binding state must serialize against
+the others touching the same field — `renderer_binding.rs` does this with
+`SEMANTICS_TEST_LOCK` around the `semantics_enabled` toggles. Under `cargo
+nextest` each test gets its own process, so the tests run fully parallel;
+under `cargo test` they share one process and rely on that lock.
 
-```bash
-cargo test -p flui-app -- --test-threads=1
-```
+Scoping binding state per test/app instance (via `flui-binding`'s
+`HeadlessBinding`) remains a tracked ship-quality item, but it no longer
+gates parallel test execution.
 
 ## Documentation
 

@@ -182,16 +182,17 @@ jobs:
       # integration dirs carry the Core.0/Core.2 exit-gate suites
       # (flui-rendering 37 files, flui-widgets 51, flui-view 26) and were
       # previously never executed in CI (the invocation was `--lib` only).
-      # `--test-threads=1` guards the documented pre-existing flui-app
-      # singleton-state flake (CLAUDE.md). flui-platform tests are excluded
-      # until the spawned STATUS_HEAP_CORRUPTION investigation lands a fix.
-      - name: cargo nextest run (lib + integration, --test-threads 1)
+      # Runs fully parallel: nextest gives each test its own process, so the
+      # flui-app process-global binding cannot leak across tests, and the
+      # in-process semantics-flag race is serialized by `SEMANTICS_TEST_LOCK`
+      # in flui-app. flui-platform tests are excluded until the spawned
+      # STATUS_HEAP_CORRUPTION investigation lands a fix.
+      - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
           --workspace
           --exclude flui-platform
           --no-fail-fast
-          --test-threads 1
 
   # ─────────────────────────────────────────────────────────────────────────
   # gpu-test (PILOT) — actually RUN the `enable-wgpu-tests` readback/oracle
