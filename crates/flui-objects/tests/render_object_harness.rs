@@ -19,6 +19,7 @@
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
 //! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
 //! | `RenderConstrainedBox` | `harness_constrained_box_*` | yes | — | — | yes | — |
+//! | `RenderLayoutBuilder` | `harness_layout_builder_*` | yes | — | — | yes | dry |
 //! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes | — |
 //! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes | — |
 //! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes | queries |
@@ -152,6 +153,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAspectRatio",
     "RenderBaseline",
     "RenderConstrainedBox",
+    "RenderLayoutBuilder",
     "RenderLimitedBox",
     "RenderOffstage",
     "RenderOpacity",
@@ -7295,6 +7297,219 @@ fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scr
         120.0,
         "a completed snap must land exactly on the target (fully revealed)",
     );
+}
+
+// ============================================================================
+// RenderLayoutBuilder (ADR-0017 U2) — the render half of the
+// build-during-layout seam. It publishes constraints; it never builds.
+//
+// Parity is NOT claimed: `.flutter/` is absent from this checkout, so these
+// assertions encode the algorithm recorded in ADR-0017, not a verified match
+// against `widgets/layout_builder.dart`. ADR-0017 U4 is the parity gate.
+// ============================================================================
+
+/// A layout pass must publish the **real** incoming constraints — not a
+/// placeholder, and not a default. This is the regression that catches a
+/// reprise of the pre-rewrite `LayoutBuilder`, whose builder was handed
+/// `BoxConstraints::UNCONSTRAINED` (commit `bb58a8fa`).
+#[test]
+fn harness_layout_builder_publishes_the_real_incoming_constraints() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let incoming = BoxConstraints::new(px(10.0), px(120.0), px(20.0), px(90.0));
+
+    let _run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(incoming)
+    .run_layout();
+
+    assert_eq!(
+        cell.constraints(),
+        Some(incoming),
+        "the builder must see the exact constraints the parent imposed"
+    );
+    assert!(
+        cell.needs_build(),
+        "the first-ever publish must schedule the builder"
+    );
+}
+
+/// Changed constraints re-publish and re-raise `needs_build`, so the binding's
+/// fixpoint rebuilds the child against the new constraints.
+#[test]
+fn harness_layout_builder_republishes_when_constraints_change() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let first = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(first)
+    .run_layout();
+
+    assert_eq!(cell.constraints(), Some(first));
+    // Simulate `service_layout_builders` having built against `first`.
+    cell.commit();
+    assert!(!cell.needs_build());
+
+    let second = BoxConstraints::tight(Size::new(px(60.0), px(80.0)));
+    run.owner_mut().set_root_constraints(Some(second));
+    run.relayout();
+
+    assert_eq!(
+        cell.constraints(),
+        Some(second),
+        "a resized parent must publish the new constraints"
+    );
+    assert!(
+        cell.needs_build(),
+        "changed constraints must schedule a rebuild"
+    );
+}
+
+/// Unchanged constraints must NOT re-raise `needs_build` after a commit.
+///
+/// This is what terminates the layout<->build fixpoint: a level-triggered flag
+/// would re-dirty the element on every pass and the frame would never settle.
+#[test]
+fn harness_layout_builder_same_constraints_do_not_rebuild() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    cell.commit();
+    assert!(!cell.needs_build());
+
+    // Force a second pass with the SAME constraints.
+    let root = run.root();
+    run.owner_mut().mark_needs_layout(root);
+    run.relayout();
+
+    assert_eq!(cell.constraints(), Some(constraints));
+    assert!(
+        !cell.needs_build(),
+        "republishing the committed constraints must not re-dirty the element"
+    );
+}
+
+/// The child is laid out under the builder's own constraints (not loosened),
+/// and the builder sizes itself to `constraints.constrain(child_size)`.
+#[test]
+fn harness_layout_builder_lays_child_out_with_published_constraints() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    // Loose constraints: a tight child would prove nothing about pass-through.
+    let incoming = BoxConstraints::new(px(40.0), px(120.0), px(30.0), px(90.0));
+
+    let run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            // A 20x20 box under min 40x30 must be stretched to the minimum by
+            // the constraints it receives — proving they were passed through.
+            .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(incoming)
+    .run_layout();
+
+    let child = run.box_geometry(run.id("child"));
+    assert_eq!(
+        child,
+        Size::new(px(40.0), px(30.0)),
+        "the child must be laid out under the builder's constraints, not loosened ones"
+    );
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        incoming.constrain(child),
+        "the builder sizes to constrain(child_size) — it follows its child"
+    );
+}
+
+/// With no child (a freshly mounted builder, before the element layer has run
+/// the builder even once) the size is `constraints.biggest()`.
+#[test]
+fn harness_layout_builder_without_child_takes_the_biggest_size() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let incoming = BoxConstraints::new(px(10.0), px(120.0), px(20.0), px(90.0));
+
+    let run = RenderTester::mount(box_node(RenderLayoutBuilder::new(Arc::clone(&cell))))
+        .with_constraints(incoming)
+        .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        incoming.biggest(),
+        "a childless layout builder fills the space it was given"
+    );
+    // Publishing happens whether or not a child exists — that is precisely how
+    // the element layer learns which constraints to build the first child for.
+    assert_eq!(cell.constraints(), Some(incoming));
+    assert!(cell.needs_build());
+}
+
+/// Dry layout is unsupported (Flutter parity: `_RenderLayoutBuilder.computeDryLayout`
+/// asserts `debugCannotComputeDryLayout` and returns `Size.zero`). It must also
+/// not publish: a dry probe is a hypothetical, and dirtying the cell from one
+/// would rebuild the element against constraints the node was never laid out with.
+#[test]
+fn harness_layout_builder_dry_layout_is_unsupported_and_does_not_publish() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let laid_out = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(laid_out)
+    .run_layout();
+    cell.commit();
+
+    let probe = BoxConstraints::new(px(0.0), px(70.0), px(0.0), px(70.0));
+    let root = run.root();
+    let dry = run.dry_layout(root, probe);
+
+    assert_eq!(
+        dry,
+        Size::ZERO,
+        "dry layout must refuse: the built child was built for other constraints, \
+         so answering from it would be confidently wrong"
+    );
+    assert_eq!(
+        cell.constraints(),
+        Some(laid_out),
+        "a dry probe must not overwrite the published constraints"
+    );
+    assert!(
+        !cell.needs_build(),
+        "a dry probe must not dirty the cell — it would rebuild against a \
+         hypothetical the node was never laid out with"
+    );
+}
+
+/// Intrinsics are unsupported and answer `0.0` (Flutter parity: all four
+/// `computeMin/MaxIntrinsic*` return `0.0` after an assert that throws outside
+/// `debugCheckingIntrinsics`).
+#[test]
+fn harness_layout_builder_intrinsics_are_unsupported() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::tight(Size::new(px(100.0), px(50.0))))
+    .run_layout();
+
+    let root = run.root();
+    assert_eq!(run.min_intrinsic_width(root, f32::INFINITY), 0.0);
+    assert_eq!(run.max_intrinsic_width(root, f32::INFINITY), 0.0);
+    assert_eq!(run.min_intrinsic_height(root, f32::INFINITY), 0.0);
+    assert_eq!(run.max_intrinsic_height(root, f32::INFINITY), 0.0);
 }
 
 // ============================================================================

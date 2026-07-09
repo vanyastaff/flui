@@ -525,14 +525,30 @@ where
     /// ```
     pub fn create_mark_dirty_callback(&self) -> ListenerCallback {
         let dirty = Arc::clone(&self.dirty);
-        let scheduler = self.external_scheduler.clone();
-        let self_id = self.self_id;
+        let handle = self.rebuild_handle();
         Arc::new(move || {
             dirty.store(true, Ordering::Relaxed);
-            if let (Some(scheduler), Some(id)) = (&scheduler, self_id) {
-                scheduler.schedule(id);
-            }
+            handle.schedule();
         })
+    }
+
+    /// An owned, `'static` [`RebuildHandle`] for this element (ADR-0018 U1).
+    ///
+    /// Inert until the element is mounted: before `ElementTree::insert` stamps
+    /// `self_id` and `on_mount` installs the scheduler there is nothing to
+    /// schedule. After mount the handle stays valid for the element's lifetime,
+    /// and remains a safe no-op after unmount.
+    ///
+    /// This is the single source of the out-of-frame rebuild capability;
+    /// [`create_mark_dirty_callback`](Self::create_mark_dirty_callback) is a thin
+    /// `Listenable`-shaped wrapper over it, so `AnimatedView` and an async
+    /// builder ride the same channel.
+    #[must_use]
+    pub fn rebuild_handle(&self) -> crate::RebuildHandle {
+        match (self.external_scheduler.clone(), self.self_id) {
+            (Some(scheduler), Some(element)) => crate::RebuildHandle::new(scheduler, element),
+            _ => crate::RebuildHandle::inert(),
+        }
     }
 
     /// Get the PipelineOwner, if set.

@@ -125,7 +125,9 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 ### 9. Sanctioned `dyn`-boundary registry (FR-036)
 
-**FR-036 — every `Box<dyn …>` / `&dyn …` / `Arc<dyn …>` / `Rc<dyn …>` introduction (and every type alias of that shape) in the framework crates must either (a) name a sanctioned trait from the inline allowlist, (b) match a language-runtime exempt pattern (`Pin<Box<dyn Future>>`, `Box<dyn Iterator>`, `&dyn Fn*` callback parameters), or (c) carry an explicit `// PORT-CHECK-OK-DYN:` marker on the same line.** Phase 3.1 §U30 of the view/element core-contracts plan installs this trigger as the canonical FR-036 enforcement layer.
+**FR-036 — every `Box<dyn …>` / `&dyn …` / `Arc<dyn …>` / `Rc<dyn …>` introduction (and every type alias of that shape) in the framework crates must either (a) name a sanctioned trait from the inline allowlist, (b) match a language-runtime exempt pattern (`Pin<Box<dyn Future>>`, `Pin<Box<dyn Stream>>`, `Box<dyn Iterator>`, `&dyn Fn*` callback parameters), or (c) carry an explicit `// PORT-CHECK-OK-DYN:` marker on the same line.** Phase 3.1 §U30 of the view/element core-contracts plan installs this trigger as the canonical FR-036 enforcement layer.
+
+**Registry addition (2026-07-09, ADR-0018 U5):** `dyn Stream` joins `dyn Future` and `dyn Iterator` as a language-runtime exempt. `Stream` is the async `Iterator` — a trait from `futures-core` (trait-only: no executor, no combinators, no proc macros) that `StreamBuilder` polls by hand through `std::future::poll_fn`, because `futures-core` deliberately ships no `StreamExt::next()`. It is erased for the same reason `Future` is: the concrete stream type is the caller's, and a `StatefulView` cannot be generic over it and stay object-safe as a `dyn View`. This is a registry entry, not a loosening — an unsanctioned `Box<dyn Foo>` in the framework crates still fails trigger 9.
 
 **Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
 
@@ -322,6 +324,20 @@ The two sentinel patterns are `"is not supported by the"` and `"rendering as Src
 - **Non-panic + non-zero-output witness:** GPU test GI7 (`crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs`) verifies all 15 modes × gradient + image produce valid RGBA output. GI7 does not verify routing (pixel equality alone cannot distinguish an `AdvancedShape` from a lucky SrcOver result); the routing witnesses above provide that guarantee. GI8 covers the atlas producer.
 
 **Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/wgpu/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/wgpu/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
+
+### 22. `rebuild_handle()` acquired inside a `build` / layout / paint body
+
+**Why:** `RebuildHandle::schedule()` marks its element dirty for the next frame ([`ADR-0018`](adr/ADR-0018-async-builder-seam.md) U1). Acquiring a handle inside `build` and scheduling from it is an unbounded rebuild loop; acquiring one inside `perform_layout`, `paint`, or a compositing walk would dirty the tree *after* `build_scope` has already run for this frame, so the dirty element would be laid out and painted stale.
+
+[`FOUNDATIONS.md`](FOUNDATIONS.md) permits an out-of-catalog `mark_needs_build` driver **only** when "gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`". This is that gate, and it ships in the same PR as the capability.
+
+**Sanctioned shape:** acquire the handle in `ViewState::init_state` or `did_change_dependencies`, store it in the state, and fire it later from a completion callback (any thread). The framework's own `make_build_ctx` mints one outside any guarded body, which is why the trigger scopes to function bodies rather than to the token.
+
+**Guarded functions:** `build`, `build_into_views`, `perform_layout`, `layout_node_with_children`, `paint`, `paint_raw`, `run_paint`, `run_layout`, `run_compositing`, `compose`, `composite`.
+
+**Implementation:** a line regex cannot express "inside a function body", so this trigger delegates to [`scripts/check-rebuild-handle-scope.sh`](../scripts/check-rebuild-handle-scope.sh) — a brace-depth scanner that enters a guarded function at its opening `{`, leaves at the matching `}`, strips line comments, and flags any `rebuild_handle` token in between. The scanner has its own accept/reject fixtures under `scripts/fixtures/rebuild-handle/`; run `scripts/check-rebuild-handle-scope.sh --self-test` to verify the scanner itself.
+
+**Allowlist:** none. Nothing in `crates/` acquires a handle in a guarded body today.
 
 ### Reactive lint promotion
 
@@ -978,7 +994,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 21 refusal triggers plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

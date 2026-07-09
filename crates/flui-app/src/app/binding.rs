@@ -188,6 +188,14 @@ impl AppBinding {
         // creates its RenderView — the window renders nothing.
         let widgets = WidgetsBinding::new();
         widgets.set_pipeline_owner(Arc::clone(&shared_pipeline_owner));
+        // ADR-0018 U4: widgets spawn into the driver `draw_frame`'s async step
+        // polls. Production drives `Scheduler::instance()`; `HeadlessBinding`
+        // drives a binding-local `Scheduler` and installs that one instead. Both
+        // route through `BuildContext::async_driver()`, so a widget never has to
+        // know which.
+        widgets.with_build_owner_mut(|owner| {
+            owner.set_async_driver(Scheduler::instance().async_driver().clone());
+        });
 
         Self {
             renderer: RwLock::new(renderer),
@@ -662,6 +670,19 @@ impl AppBinding {
             }
         }
 
+        // Phase 0b: THE async-driver step (ADR-0018 U2). Flutter's
+        // `SchedulerPhase.midFrameMicrotasks`: after the transient callbacks (the
+        // vsync tick above), before the persistent ones (Phase 1 build, then
+        // layout/paint). A future completing here calls `RebuildHandle::schedule()`,
+        // whose id Phase 1's `build_scope` drains — so a completion lands in THIS
+        // frame.
+        //
+        // `HeadlessBinding::pump_frame` calls the SAME `Scheduler::drive_async_tasks`
+        // in the SAME slot. Neither binding hand-rolls a poll loop; a task that ran
+        // headlessly but not on screen would be a silent divergence — the lesson
+        // ADR-0017 U4 paid for.
+        Scheduler::instance().drive_async_tasks();
+
         // Phase 1: Build (WidgetsBinding)
         {
             let w = self.widgets.write();
@@ -683,21 +704,37 @@ impl AppBinding {
         // caught by `catch_unwind`), we log via tracing and drop the
         // frame -- the owner is still usable for the next call.
         let (layer_tree, link_registry) = {
-            let mut guard = self.shared_pipeline_owner.write();
-            // The window's constraints ARE the root constraints — without
-            // this, frame 1 has neither cached state nor root_constraints
-            // and run_layout drops the root dirty entry (blank window).
-            // set_root_constraints marks the root dirty only on CHANGE,
-            // so the per-frame call is idempotent and resize-correct.
-            guard.set_root_constraints(Some(constraints));
-            let owner = std::mem::take(&mut *guard);
-            let (mut owner, result) = owner.run_frame();
+            {
+                // The window's constraints ARE the root constraints — without
+                // this, frame 1 has neither cached state nor root_constraints
+                // and run_layout drops the root dirty entry (blank window).
+                // set_root_constraints marks the root dirty only on CHANGE,
+                // so the per-frame call is idempotent and resize-correct.
+                self.shared_pipeline_owner
+                    .write()
+                    .set_root_constraints(Some(constraints));
+            }
+            // ADR-0017: the shared layout<->build fixpoint settles every
+            // build-during-layout node before paint, then delegates to
+            // `PipelineOwner::run_frame`. `HeadlessBinding::pump_frame` calls the
+            // SAME `BuildOwner::run_frame_with_layout_builders`; a builder that
+            // settles headlessly but not on screen would be a silent correctness
+            // bug, so neither frame path may hand-roll the loop. A plain
+            // `run_frame` when no `LayoutBuilder` is mounted.
+            //
+            // The owner is threaded by lock: the helper restores it and frees the
+            // write guard before each `build_scope`, which mounts render objects
+            // through that same lock. Holding the guard here would deadlock the
+            // first time a builder mounts a child.
+            let result = self
+                .widgets
+                .read()
+                .run_frame_with_layout_builders(&self.shared_pipeline_owner);
             // Taken alongside the layer tree so `Scene::with_links` (below)
             // gets the SAME frame's leader/follower registry — resolving a
             // `Layer::Follower` position against a stale or empty registry
             // would silently misposition tooltips/dropdowns.
-            let link_registry = owner.take_link_registry();
-            *guard = owner;
+            let link_registry = self.shared_pipeline_owner.write().take_link_registry();
             match result {
                 Ok(layer_tree) => (layer_tree, link_registry),
                 Err(e) => {
@@ -1240,6 +1277,98 @@ mod tests {
              {} request(s) remained undrained — wiring is absent",
             remaining.len(),
         );
+    }
+
+    // ========================================================================
+    // ADR-0018 U2 — async-driver wiring test
+    // ========================================================================
+
+    /// Wiring test: `AppBinding::draw_frame` must run the shared async-driver
+    /// step (`Scheduler::drive_async_tasks`), in the slot before the build phase.
+    ///
+    /// `flui-binding` carries the mirror test for `HeadlessBinding::pump_frame`.
+    /// Both call the same `Scheduler` method; if either frame path stopped calling
+    /// it, exactly one of the two would fail — which is the headless↔production
+    /// divergence this pair exists to catch.
+    ///
+    /// Production reaches the driver through the `Scheduler::instance()` singleton
+    /// (the same one `renderer_binding` already uses), so the task is spawned there.
+    #[test]
+    fn draw_frame_invokes_the_async_driver_step() {
+        use std::sync::atomic::AtomicBool;
+
+        let binding = AppBinding::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_for_task = Arc::clone(&ran);
+
+        let _token = flui_scheduler::Scheduler::instance().spawn_local(Box::pin(async move {
+            ran_for_task.store(true, std::sync::atomic::Ordering::Release);
+        }));
+
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::Acquire),
+            "spawn must not poll inline"
+        );
+
+        let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            ),
+        ));
+
+        assert!(
+            ran.load(std::sync::atomic::Ordering::Acquire),
+            "draw_frame must run Scheduler::drive_async_tasks — the same step \
+             HeadlessBinding::pump_frame runs"
+        );
+    }
+
+    // ========================================================================
+    // ADR-0017 U1 — layout-builder seam wiring test
+    // ========================================================================
+
+    /// Wiring test: `AppBinding::draw_frame` must run the shared layout<->build
+    /// fixpoint (`BuildOwner::run_frame_with_layout_builders`), not a bare
+    /// `PipelineOwner::run_frame`.
+    ///
+    /// This test plants a registry entry by hand rather than mounting a real
+    /// `LayoutBuilder`, so it stays a pure wiring test of the frame path. `service_layout_builders` prunes entries
+    /// whose element and render node do not exist, on every pass, before
+    /// anything is built; that prune is the observable side effect.
+    ///
+    /// `flui-binding` carries the mirror test for `HeadlessBinding::pump_frame`.
+    /// If either frame path stopped calling the shared helper, exactly one of
+    /// the two would fail — which is the headless↔production divergence this
+    /// pair exists to catch.
+    #[test]
+    fn draw_frame_invokes_the_layout_builder_seam() {
+        let binding = AppBinding::new();
+
+        // Plant a stale entry: neither the element nor the render node exists.
+        binding.widgets.read().with_build_owner_mut(|owner| {
+            let _cell = owner.register_layout_builder_for_test(
+                flui_foundation::RenderId::new(1),
+                flui_foundation::ElementId::new(1),
+            );
+            assert_eq!(owner.layout_builder_count(), 1);
+        });
+
+        let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            ),
+        ));
+
+        binding.widgets.read().with_build_owner_mut(|owner| {
+            assert_eq!(
+                owner.layout_builder_count(),
+                0,
+                "draw_frame must run service_layout_builders (via the shared \
+                 run_frame_with_layout_builders helper), which prunes the stale entry"
+            );
+        });
     }
 
     /// Wake-gate contract: after a frame marks a render node dirty (simulating

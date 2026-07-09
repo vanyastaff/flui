@@ -1,0 +1,34 @@
+// Fixture for port-check trigger #22 — MUST pass.
+//
+// The sanctioned shape: acquire in a lifecycle hook, store, fire later.
+
+impl ViewState<Async> for AsyncState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.handle = Some(ctx.rebuild_handle());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        self.handle = Some(ctx.rebuild_handle());
+    }
+
+    // `build` only READS state the callback wrote. It never acquires a handle.
+    fn build(&self, _view: &Async, _ctx: &dyn BuildContext) -> impl IntoView {
+        let snapshot = self.cell.lock().clone();
+        Text::new(format!("{snapshot:?}"))
+    }
+}
+
+impl AsyncState {
+    /// Fired from a worker thread, long after `build` returned.
+    fn on_complete(&self, value: u32) {
+        *self.cell.lock() = Some(value);
+        if let Some(handle) = &self.handle {
+            handle.schedule();
+        }
+    }
+}
+
+// The framework itself mints handles outside any guarded body.
+fn make_build_ctx(core: &ElementCore, owner: &ElementOwner) -> BuildCtx<'_> {
+    BuildCtx::new(core.self_id(), core.depth(), owner.tree(), core.rebuild_handle())
+}

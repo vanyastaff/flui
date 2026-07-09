@@ -18,6 +18,12 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
 flui-objects = { path = "../flui-objects", version = "0.2.0" }
+# The frame-driven async task driver (ADR-0018 U2). A `ViewState` reaches its
+# binding's driver through `BuildContext::async_driver()`; the type lives here.
+# No cycle: flui-rendering already depends on flui-scheduler.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
+# The `Stream` trait `StreamBuilder` polls (ADR-0018 U5). Trait-only.
+futures-core = { workspace = true }
 
 # Core dependencies
 parking_lot.workspace = true
@@ -37,6 +43,10 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+# Enable flui-rendering's `testing` feature for unit tests so the ADR-0017 U3
+# layout-builder tests can read committed geometry back off the pipeline
+# (`testing::box_geometry`). Dev-only; stays out of release builds.
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 # Same crate; dev-deps must redeclare so unit tests + integration
 # tests under `#[cfg(test)]` (without the `test-utils` feature flag
 # enabled at the integration boundary) still see it. Cargo merges

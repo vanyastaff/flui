@@ -140,7 +140,7 @@ Additionally, CI gates on:
 
 ## Architecture Constraints (port methodology)
 
-These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 21 refusal triggers plus FR-033.
+These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 22 refusal triggers plus FR-033.
 
 | Rule | Why |
 |------|-----|
@@ -153,6 +153,7 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 | **Sanctioned `dyn` boundaries only** — see the allowlist in port-check.sh trigger #9 | FR-036 registry |
 | **No locks in public API** (`pub fn -> MutexGuard`, `pub field: Mutex<...>`) | SP-6: locks behind private fields |
 | **No `println!`/`eprintln!`/`dbg!`** in foundation/tree/macros crates | Use `tracing` macros |
+| **No `rebuild_handle()` inside `build`/`perform_layout`/`paint`** — acquire it in `ViewState::init_state` / `did_change_dependencies` and fire it later | Trigger #22: scheduling from a frame phase is an unbounded rebuild loop (ADR-0018) |
 
 ## Testing Quirks
 

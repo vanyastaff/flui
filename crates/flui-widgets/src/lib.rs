@@ -66,6 +66,7 @@ mod support;
 
 pub mod animated;
 pub mod app;
+mod async_builders;
 pub mod clip;
 mod container;
 pub mod flex;
@@ -101,6 +102,10 @@ pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 // `Image` widget over `RenderImage`; provider types live in the same module.
 // `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
 // need only import from `flui-widgets`, not from lower-level crates.
+pub use async_builders::{
+    BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,
+    SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
+};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
@@ -117,8 +122,8 @@ pub use interaction::{
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
-    IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, OverflowBox, Padding,
-    RotatedBox, SizedBox, SizedOverflowBox, Table, TableCell, TableRow, Transform,
+    IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, OverflowBox,
+    Padding, RotatedBox, SizedBox, SizedOverflowBox, Table, TableCell, TableRow, Transform,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
@@ -205,18 +210,19 @@ pub mod prelude {
         ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomMultiChildLayout,
         CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox, EditableText,
         EditableTextState, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
-        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector, GridView,
-        Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image, ImageAlignment, ImageFit,
-        ImageProvider, IndexedStack, IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox,
-        ListBody, ListView, Listener, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion,
-        Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary,
-        RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics,
-        ShrinkWrappingViewport, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, Table, TableCell, TableRow, Text, TextEditingController,
-        TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
+        FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
+        GestureDetector, GridView, Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image,
+        ImageAlignment, ImageFit, ImageProvider, IndexedStack, IntrinsicHeight, IntrinsicWidth,
+        LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, MediaQuery,
+        MediaQueryData, MergeSemantics, MouseRegion, Offstage, Opacity, OverflowBox,
+        OverflowBoxFit, Padding, Positioned, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
+        ScrollController, Scrollable, Scrollbar, Semantics, ShrinkWrappingViewport,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
+        StreamBuilder, Table, TableCell, TableRow, Text, TextEditingController, TextField, Theme,
+        ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

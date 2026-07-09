@@ -218,11 +218,15 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    fn owner(&self) -> Option<&BuildOwner> {
-        // We can't return a reference to data behind RwLock directly
-        // This method may need redesign or the trait needs adjustment
-        // For now, return None - callers should use build_owner() method instead
-        None
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        // A real handle: the owner Arc is right here. The read lock is held only
+        // to clone the shared inbox + frame-request Arcs out; nothing is held
+        // across the returned handle's lifetime.
+        self.owner.read().rebuild_handle(self.element_id)
+    }
+
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.owner.read().async_driver().cloned()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -599,6 +603,13 @@ pub(crate) struct BuildCtx<'b> {
     depth: usize,
     tree: &'b ElementTree,
     dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+    /// Owned rebuild capability for `element_id`, minted by `make_build_ctx`
+    /// from the element's own core. Cloned out by
+    /// [`BuildContext::rebuild_handle`]; the build itself never schedules —
+    /// port-check trigger #22 forbids even acquiring it here.
+    rebuild: crate::RebuildHandle,
+    /// The binding's async task driver, cloned from the `ElementOwner`.
+    async_driver: Option<flui_scheduler::AsyncDriver>,
 }
 
 impl<'b> BuildCtx<'b> {
@@ -610,12 +621,16 @@ impl<'b> BuildCtx<'b> {
         depth: usize,
         tree: &'b ElementTree,
         dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+        rebuild: crate::RebuildHandle,
+        async_driver: Option<flui_scheduler::AsyncDriver>,
     ) -> Self {
         Self {
             element_id,
             depth,
             tree,
             dep_sink,
+            rebuild,
+            async_driver,
         }
     }
 
@@ -669,8 +684,12 @@ impl BuildContext for BuildCtx<'_> {
         true
     }
 
-    fn owner(&self) -> Option<&BuildOwner> {
-        None
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        self.rebuild.clone()
+    }
+
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.async_driver.clone()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -1096,7 +1115,14 @@ mod tests {
         let tree = ElementTree::new();
         let dep_sink = parking_lot::Mutex::new(Vec::new());
         // The guard fires before any tree access, so a sentinel id is fine.
-        let ctx = BuildCtx::new(ElementId::new(1), 0, &tree, &dep_sink);
+        let ctx = BuildCtx::new(
+            ElementId::new(1),
+            0,
+            &tree,
+            &dep_sink,
+            crate::RebuildHandle::inert(),
+            None,
+        );
         ctx.visit_child_elements(&mut |_| {});
     }
 }

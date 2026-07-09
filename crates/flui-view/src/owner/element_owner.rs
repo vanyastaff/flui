@@ -42,7 +42,10 @@ use std::{
 use flui_foundation::{ElementId, RenderId};
 use parking_lot::Mutex;
 
+use flui_objects::LayoutConstraintsCell;
+
 use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
+use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
@@ -162,6 +165,17 @@ pub struct ElementOwner<'a> {
     /// registry without re-borrowing `BuildOwner`. `service_child_requests` on
     /// `BuildOwner` reads it after all `ElementOwner` borrows drop.
     pub(crate) child_manager_registry: &'a ChildManagerRegistry,
+
+    /// Split-borrow view of `BuildOwner::layout_builder_registry` (ADR-0017 U1),
+    /// so a build-during-layout element can register its
+    /// `(RenderId -> ElementId + LayoutConstraintsCell)` entry at mount and drop
+    /// it at unmount — the same shape as `child_manager_registry`.
+    pub(crate) layout_builder_registry: &'a LayoutBuilderRegistry,
+
+    /// The binding's async task driver (ADR-0018 U2/U4), or `None` when no
+    /// binding installed one. Cloned into the live `BuildCtx` so a
+    /// `ViewState::init_state` can spawn a subscription.
+    pub(crate) async_driver: &'a Option<flui_scheduler::AsyncDriver>,
 }
 
 impl ElementOwner<'_> {
@@ -353,6 +367,38 @@ impl ElementOwner<'_> {
     /// No-op if the id is not present.
     pub(crate) fn unregister_child_manager(&mut self, render_id: RenderId) {
         self.child_manager_registry.lock().remove(&render_id);
+    }
+
+    /// Register a build-during-layout node (ADR-0017 U1).
+    ///
+    /// Called from a layout-builder element's `on_mount` — the only lifecycle
+    /// hook handed an `&mut ElementOwner`, and therefore the only normal hook
+    /// that can register the render id, element id, and constraints cell as one
+    /// atomic mount-time fact. A later [`RebuildHandle`](crate::RebuildHandle)
+    /// can schedule the element, but it deliberately cannot mutate this
+    /// registry.
+    ///
+    /// `cell` must be the same `Arc` the render object registered under
+    /// `render_id` publishes its constraints into.
+    pub(crate) fn register_layout_builder(
+        &mut self,
+        render_id: RenderId,
+        element: ElementId,
+        cell: Arc<LayoutConstraintsCell>,
+    ) {
+        self.layout_builder_registry
+            .lock()
+            .insert(render_id, LayoutBuilderEntry { element, cell });
+    }
+
+    /// Unregister the build-during-layout node for `render_id`.
+    ///
+    /// Must run in `on_unmount`, before the render object is disposed.
+    /// `service_layout_builders` prunes entries that outlive their element or
+    /// render node anyway, but relying on that is how the sliver adaptor grew
+    /// its stale-entry bug.
+    pub(crate) fn unregister_layout_builder(&mut self, render_id: RenderId) {
+        self.layout_builder_registry.lock().remove(&render_id);
     }
 }
 

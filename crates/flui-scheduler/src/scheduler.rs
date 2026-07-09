@@ -430,6 +430,9 @@ pub struct Scheduler {
     binding: Arc<BindingState>,
     /// Task queue (priority-based, already Arc-wrapped internally)
     task_queue: TaskQueue,
+    /// Frame-driven async task driver (ADR-0018 U2). Polled once per frame by
+    /// [`Scheduler::drive_async_tasks`], which the bindings call.
+    async_driver: crate::AsyncDriver,
 }
 
 impl std::fmt::Debug for Scheduler {
@@ -448,6 +451,21 @@ impl std::fmt::Debug for Scheduler {
     }
 }
 
+/// Shared body of [`Scheduler::request_frame`] and the async driver's wake hook.
+///
+/// Factored out so the hook can capture only `Arc<FrameState>` + `Arc<BindingState>`
+/// instead of a whole `Scheduler`. Capturing the `Scheduler` would form an
+/// `Arc` cycle (`Scheduler → AsyncDriver → hook → Scheduler`) and leak the driver.
+fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
+    let was_scheduled = frame.frame_scheduled.swap(true, Ordering::AcqRel);
+    if !was_scheduled {
+        let hook = binding.on_frame_scheduled.lock().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
 impl Scheduler {
     /// Create a new scheduler with 60 FPS target
     pub fn new() -> Self {
@@ -462,7 +480,7 @@ impl Scheduler {
     /// Create a scheduler with specific frame duration
     pub fn with_frame_duration(frame_duration: FrameDuration) -> Self {
         let target_fps = frame_duration.fps() as u32;
-        Self {
+        let scheduler = Self {
             frame: Arc::new(FrameState {
                 scheduler_phase: AtomicU8::new(SchedulerPhase::Idle as u8),
                 current_frame: Mutex::new(None),
@@ -503,7 +521,21 @@ impl Scheduler {
                 on_frame_scheduled: Mutex::new(None),
             }),
             task_queue: TaskQueue::new(),
-        }
+            async_driver: crate::AsyncDriver::new(),
+        };
+
+        // The driver's wakers request a frame through the scheduler's existing
+        // coalescing path (`frame_scheduled` + `on_frame_scheduled`), so an
+        // async completion wakes an idle event loop exactly like `setState`.
+        // The hook captures the two `Arc` state blobs, never the `Scheduler`,
+        // to keep `Scheduler → AsyncDriver → hook` acyclic.
+        let frame = Arc::clone(&scheduler.frame);
+        let binding = Arc::clone(&scheduler.binding);
+        scheduler
+            .async_driver
+            .set_request_frame(move || request_frame_impl(&frame, &binding));
+
+        scheduler
     }
 
     // =========================================================================
@@ -797,13 +829,82 @@ impl Scheduler {
     /// frame is already pending the hook stays silent — one wake per
     /// scheduled frame.
     pub fn request_frame(&self) {
-        let was_scheduled = self.frame.frame_scheduled.swap(true, Ordering::AcqRel);
-        if !was_scheduled {
-            let hook = self.binding.on_frame_scheduled.lock().clone();
-            if let Some(hook) = hook {
-                hook();
-            }
-        }
+        request_frame_impl(&self.frame, &self.binding);
+    }
+
+    // =========================================================================
+    // Async task driver (ADR-0018 U2)
+    // =========================================================================
+
+    /// The frame-driven task driver.
+    ///
+    /// Clone it to spawn tasks from elsewhere; every clone shares one task set.
+    #[must_use]
+    pub fn async_driver(&self) -> &crate::AsyncDriver {
+        &self.async_driver
+    }
+
+    /// Queue `future` for polling on the frame thread, and request a frame.
+    ///
+    /// Thin forwarder to [`AsyncDriver::spawn_local`](crate::AsyncDriver::spawn_local).
+    /// Dropping the returned [`TaskToken`](crate::TaskToken) cancels the task.
+    #[must_use = "dropping the TaskToken immediately cancels the task"]
+    pub fn spawn_local(&self, future: crate::BoxedTask) -> crate::TaskToken {
+        self.async_driver.spawn_local(future)
+    }
+
+    /// Spawn `future`, polling it once inline (Flutter's synchronous-`.then`
+    /// window). `None` when it completed on that first poll.
+    ///
+    /// Thin forwarder to [`AsyncDriver::spawn_local_eager`](crate::AsyncDriver::spawn_local_eager).
+    #[must_use = "dropping the TaskToken immediately cancels the task"]
+    pub fn spawn_local_eager(&self, future: crate::BoxedTask) -> Option<crate::TaskToken> {
+        self.async_driver.spawn_local_eager(future)
+    }
+
+    /// **The** async-driver step of a frame — the single call site both bindings
+    /// use (`HeadlessBinding::pump_frame` and `AppBinding::draw_frame`).
+    ///
+    /// Polls every task whose waker fired, on the calling thread. A future
+    /// completing here calls `RebuildHandle::schedule()` (ADR-0018 U1), whose id
+    /// the *same* frame's `build_scope` then drains — so a completion is observed
+    /// without waiting an extra frame.
+    ///
+    /// # Where this sits in a frame
+    ///
+    /// Flutter's `SchedulerPhase.midFrameMicrotasks`: after the frame's transient
+    /// callbacks (animation ticks), before its persistent callbacks (build →
+    /// layout → paint). Both bindings call it in exactly that slot, between
+    /// `vsync.tick_all` and `build_scope`.
+    ///
+    /// Note that FLUI's binding frame path is **decoupled** from this scheduler's
+    /// phase state machine: `handle_begin_frame` / `handle_draw_frame` are driven
+    /// by the desktop runner, and `handle_draw_frame` returns the phase to
+    /// [`SchedulerPhase::Idle`] before `AppBinding::draw_frame` runs. So this
+    /// method does not mutate the phase (the machine is strictly forward-only —
+    /// `MidFrameMicrotasks -> Idle` is not a legal transition). It asserts the
+    /// invariant that actually matters instead: **never poll while the scheduler
+    /// is running persistent callbacks**, i.e. inside build / layout / paint.
+    ///
+    /// `handle_begin_frame` deliberately does not call this either: exactly one
+    /// driver step per frame, owned by the binding, mirroring the ADR-0017 U4
+    /// rule that headless and production must share one frame-step implementation.
+    ///
+    /// Returns the number of tasks polled.
+    pub fn drive_async_tasks(&self) -> usize {
+        debug_assert_ne!(
+            self.phase(),
+            SchedulerPhase::PersistentCallbacks,
+            "BUG: the async driver must not poll during build/layout/paint; the \
+             driver step belongs between the transient and persistent callbacks"
+        );
+        self.async_driver.poll_ready()
+    }
+
+    /// Number of tasks the async driver holds.
+    #[must_use]
+    pub fn pending_task_count(&self) -> usize {
+        self.async_driver.pending_task_count()
     }
 
     /// Install the platform wake hook fired when a frame is first
@@ -1665,6 +1766,150 @@ impl Default for SchedulerBuilder {
 
 #[cfg(test)]
 mod tests {
+
+    // =========================================================================
+    // Async driver integration (ADR-0018 U2)
+    // =========================================================================
+
+    /// Requirement 1: tasks are polled in the `MidFrameMicrotasks` phase.
+    ///
+    /// `handle_begin_frame` leaves the scheduler in that phase, which is exactly
+    /// the slot the binding calls the driver step from.
+    #[test]
+    fn drive_async_tasks_polls_in_mid_frame_microtasks_phase() {
+        let scheduler = Scheduler::new();
+        let observed = Arc::new(Mutex::new(None));
+        let observed_for_task = Arc::clone(&observed);
+        let probe = scheduler.clone();
+
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            *observed_for_task.lock() = Some(probe.phase());
+        }));
+
+        scheduler.handle_begin_frame(Instant::now());
+        assert_eq!(scheduler.phase(), SchedulerPhase::MidFrameMicrotasks);
+
+        assert_eq!(scheduler.drive_async_tasks(), 1);
+        assert_eq!(
+            *observed.lock(),
+            Some(SchedulerPhase::MidFrameMicrotasks),
+            "the future must be polled in the microtask phase"
+        );
+    }
+
+    /// Requirement 6: polling during build/layout/paint is a `BUG:` panic in
+    /// debug. A persistent frame callback runs in `PersistentCallbacks`, so
+    /// calling the driver step from one must trip the guard.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "BUG: the async driver must not poll during build/layout/paint")]
+    fn drive_async_tasks_panics_if_called_during_persistent_callbacks() {
+        let scheduler = Scheduler::new();
+        let probe = scheduler.clone();
+        scheduler.add_persistent_frame_callback(Arc::new(move |_timing: &FrameTiming| {
+            probe.drive_async_tasks();
+        }));
+
+        scheduler.handle_begin_frame(Instant::now());
+        scheduler.handle_draw_frame();
+    }
+
+    /// The driver step is callable from the bindings' `Idle` phase — FLUI's
+    /// binding frame path is decoupled from the scheduler's phase machine.
+    #[test]
+    fn drive_async_tasks_is_callable_outside_a_scheduler_frame() {
+        let scheduler = Scheduler::new();
+        let polled = Arc::new(AtomicBool::new(false));
+        let polled_for_task = Arc::clone(&polled);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            polled_for_task.store(true, Ordering::Release);
+        }));
+
+        assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
+        assert_eq!(scheduler.drive_async_tasks(), 1);
+        assert!(polled.load(Ordering::Acquire));
+    }
+
+    /// `handle_begin_frame` must NOT poll tasks: exactly one driver step per
+    /// frame, owned by the binding (the ADR-0017 U4 shared-call-site rule).
+    #[test]
+    fn handle_begin_frame_does_not_poll_async_tasks() {
+        let scheduler = Scheduler::new();
+        let polled = Arc::new(AtomicBool::new(false));
+        let polled_for_task = Arc::clone(&polled);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            polled_for_task.store(true, Ordering::Release);
+        }));
+
+        scheduler.handle_begin_frame(Instant::now());
+        assert!(
+            !polled.load(Ordering::Acquire),
+            "handle_begin_frame must leave the driver step to the binding"
+        );
+
+        scheduler.drive_async_tasks();
+        assert!(polled.load(Ordering::Acquire));
+    }
+
+    /// A task's waker requests a frame through the scheduler's existing
+    /// coalescing path (`frame_scheduled` + `on_frame_scheduled`).
+    #[test]
+    fn async_task_wake_requests_a_frame_through_the_scheduler_hook() {
+        let scheduler = Scheduler::new();
+        let wakes = Arc::new(AtomicU64::new(0));
+        let wakes_for_hook = Arc::clone(&wakes);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            wakes_for_hook.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        let stored: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        let stored_for_task = Arc::clone(&stored);
+        let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+            *stored_for_task.lock() = Some(cx.waker().clone());
+            std::task::Poll::<()>::Pending
+        })));
+        // `spawn_local` requested the frame that will first poll the task.
+        assert_eq!(wakes.load(Ordering::Relaxed), 1);
+
+        // Consume the pending-frame flag as a real frame would.
+        scheduler.handle_begin_frame(Instant::now());
+        scheduler.drive_async_tasks();
+        let waker = stored.lock().clone().expect("waker stored");
+
+        waker.wake_by_ref();
+        waker.wake_by_ref();
+        waker.wake_by_ref();
+        assert_eq!(
+            wakes.load(Ordering::Relaxed),
+            2,
+            "repeated wakes between frames request exactly one frame"
+        );
+        assert!(scheduler.is_frame_scheduled());
+    }
+
+    /// Requirement 7: the microtask queue keeps its existing behavior — the
+    /// driver step does not drain or reorder it.
+    #[test]
+    fn drive_async_tasks_does_not_disturb_microtasks() {
+        let scheduler = Scheduler::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_for_task = Arc::clone(&ran);
+        scheduler.schedule_microtask(Box::new(move || {
+            ran_for_task.store(true, Ordering::Release);
+        }));
+
+        scheduler.drive_async_tasks();
+        assert!(
+            !ran.load(Ordering::Acquire),
+            "the driver step must not drain the microtask queue"
+        );
+
+        scheduler.handle_begin_frame(Instant::now());
+        assert!(
+            ran.load(Ordering::Acquire),
+            "handle_begin_frame still flushes"
+        );
+    }
     use super::*;
 
     #[test]

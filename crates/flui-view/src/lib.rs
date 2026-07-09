@@ -179,7 +179,7 @@ pub use test_only_global_key_registry::{
     test_only_clear_global_key_registry, test_only_set_global_key_registry,
 };
 // Tree management
-pub use owner::{BuildOwner, ElementOwner};
+pub use owner::{BuildOwner, ElementOwner, RebuildHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement,

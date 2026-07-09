@@ -1,0 +1,34 @@
+// Fixture for port-check trigger #22 — MUST be rejected.
+//
+// Not compiled: the `.fixture` extension keeps it out of `cargo` and out of the
+// scanner's own `*.rs` sweep over `crates/`. Each of the three bodies below is
+// a distinct way to dirty the tree from inside a frame phase.
+//
+// Prose mentioning rebuild_handle in a comment must NOT count as a violation;
+// this line exists to prove the comment filter works.
+
+impl StatelessView for Loop {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // Unbounded rebuild loop: schedule from the very phase that is building.
+        let handle = ctx.rebuild_handle();
+        handle.schedule();
+        Text::new("boom")
+    }
+}
+
+impl RenderBox for Bad {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_>) -> Size {
+        let nested = if true {
+            let handle = self.ctx.rebuild_handle();
+            handle.schedule();
+            1
+        } else {
+            0
+        };
+        Size::ZERO
+    }
+
+    fn paint(&self, ctx: &mut PaintContext<'_>) {
+        self.ctx.rebuild_handle().schedule();
+    }
+}

@@ -32,14 +32,14 @@ use crate::{
 ///
 /// Holding the concrete value in a local lets the caller hand out a
 /// `&dyn BuildContext` whose borrow outlives the user `build()` closure.
-enum BuildCtxChoice<'a> {
+pub(crate) enum BuildCtxChoice<'a> {
     /// Live context over the borrowed real tree (inside `build_scope`).
     Live(BuildCtx<'a>),
 }
 
 impl BuildCtxChoice<'_> {
     /// Borrow the chosen context as the object-safe trait.
-    fn as_ctx(&self) -> &dyn BuildContext {
+    pub(crate) fn as_ctx(&self) -> &dyn BuildContext {
         match self {
             Self::Live(ctx) => ctx,
         }
@@ -52,7 +52,7 @@ impl BuildCtxChoice<'_> {
 /// tree/sink references (lifetime `'a`, tied to the data — not to this `&`
 /// borrow of `owner`) out cleanly; the returned `BuildCtxChoice<'a>` does not
 /// keep `owner` borrowed, so the caller can still pass `owner` on mutably.
-fn make_build_ctx<'a, V, A>(
+pub(crate) fn make_build_ctx<'a, V, A>(
     core: &ElementCore<V, A>,
     owner: &crate::ElementOwner<'a>,
 ) -> BuildCtxChoice<'a>
@@ -82,11 +82,17 @@ where
         Some(node) => node.depth(),
         None => core.depth(),
     };
+    // The rebuild capability is minted from the element's own core (ADR-0018 U1),
+    // which already holds the `ExternalBuildScheduler` installed at mount — the
+    // same channel `AnimatedView` rides. `build` must not call `schedule()`;
+    // port-check trigger #22 enforces that a handle is not even acquired there.
     BuildCtxChoice::Live(BuildCtx::new(
         element_id,
         tree_depth,
         handle.tree,
         handle.dep_sink,
+        core.rebuild_handle(),
+        owner.async_driver.clone(),
     ))
 }
 

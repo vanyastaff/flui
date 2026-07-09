@@ -1096,6 +1096,34 @@ impl WidgetsBinding {
         build_owner.service_child_requests(element_tree, pipeline);
     }
 
+    /// Run one frame, settling every build-during-layout node before paint
+    /// (ADR-0017 U1).
+    ///
+    /// Threads the `PipelineOwner` **by lock**, not by value: each layout pass
+    /// takes it out under the write guard and restores it before the builders
+    /// run, because `build_scope` mounts render objects through that same lock.
+    ///
+    /// This is the second production↔headless convergence point:
+    /// `AppBinding::draw_frame` reaches the shared fixpoint through here, and
+    /// `HeadlessBinding::pump_frame` calls
+    /// `BuildOwner::run_frame_with_layout_builders` directly (it owns its
+    /// `BuildOwner` and `ElementTree` without a lock). Both end up in the same
+    /// helper; neither hand-rolls the loop.
+    ///
+    /// With no `LayoutBuilder` mounted, this is exactly `PipelineOwner::run_frame`.
+    pub fn run_frame_with_layout_builders(
+        &self,
+        pipeline: &Arc<RwLock<PipelineOwner>>,
+    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        let mut inner = self.inner.write();
+        let WidgetsBindingInner {
+            ref mut build_owner,
+            ref mut element_tree,
+            ..
+        } = *inner;
+        build_owner.run_frame_with_layout_builders(element_tree, pipeline)
+    }
+
     /// Check if we are currently building dirty elements.
     ///
     /// Reads the atomic flag directly — no lock acquired.

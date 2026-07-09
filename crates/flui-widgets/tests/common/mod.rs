@@ -62,6 +62,13 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     let mut build_owner = BuildOwner::new();
     let mut tree = ElementTree::new();
 
+    // The binding is created FIRST so its async driver can be installed on the
+    // `BuildOwner` before the mount `build_scope` below. `FutureBuilder` /
+    // `StreamBuilder` subscribe in `init_state`, which runs inside that pass — with
+    // no driver installed they would silently never poll (ADR-0018 U4/U6).
+    let mut binding = HeadlessBinding::new();
+    build_owner.set_async_driver(binding.scheduler().async_driver().clone());
+
     let root_id = tree.mount_root_with_pipeline_owner(
         &root,
         Some(Arc::clone(&pipeline_owner)),
@@ -99,19 +106,23 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         guard.set_root_id(Some(root_render_id));
         // Setting fresh root constraints marks the root dirty for layout.
         guard.set_root_constraints(Some(constraints));
-        // Mirror the production frame path: swap the owner out (leaving a
-        // Default placeholder under the still-shared Arc), run all phases by
-        // value, then restore.
-        let owner = std::mem::take(&mut *guard);
-        let (owner, result) = owner.run_frame();
-        result.expect("headless frame should succeed");
-        *guard = owner;
+    }
+
+    {
+        // Mirror the production frame path exactly: `HeadlessBinding::pump_frame`
+        // and `AppBinding::draw_frame` both run the ADR-0017 layout<->build
+        // fixpoint, not a bare `PipelineOwner::run_frame`. Bootstrapping with
+        // `run_frame` here would leave a `LayoutBuilder`'s child unbuilt on the
+        // very frame these tests assert about.
+        build_owner
+            .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
+            .expect("headless frame should succeed");
     }
 
     // Bootstrap done (mounted, rooted, first frame run): hand the three owners to
-    // a tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
+    // the tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
     // for geometry reads. `pump`/`tick`/`pump_for` route through the binding.
-    let binding = HeadlessBinding::with_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
 
     LaidOut {
         binding,

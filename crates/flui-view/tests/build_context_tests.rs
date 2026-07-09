@@ -571,13 +571,14 @@ fn test_set_building_flag() {
 }
 
 // ============================================================================
-// owner() Tests
+// rebuild_handle() Tests  (ADR-0018 U1)
 // ============================================================================
 
+/// `ElementBuildContext` mints a REAL handle — it owns the `BuildOwner` `Arc`.
+/// This replaces the old `owner() -> None` stub, which reported a design
+/// limitation instead of providing the capability callers actually needed.
 #[test]
-fn test_owner_returns_none() {
-    // Note: owner() returns None because we can't return reference through RwLock
-    // This is a design limitation that may need addressing
+fn rebuild_handle_from_element_build_context_is_active_and_bound() {
     let (tree, owner) = create_tree_and_owner();
 
     let view = SimpleView {
@@ -587,9 +588,15 @@ fn test_owner_returns_none() {
         .write()
         .mount_root(&view, &mut owner.write().element_owner_mut());
 
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
+    let ctx = ElementBuildContext::for_element(root_id, tree, Arc::clone(&owner)).unwrap();
+    let handle = ctx.rebuild_handle();
 
-    assert!(ctx.owner().is_none());
+    assert!(handle.is_active());
+    assert_eq!(handle.element_id(), Some(root_id));
+
+    // Scheduling routes into the same inbox `build_scope` drains.
+    handle.schedule();
+    assert_eq!(owner.read().pending_external_builds(), 1);
 }
 
 #[test]

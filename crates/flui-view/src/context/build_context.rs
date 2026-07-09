@@ -70,13 +70,41 @@ pub trait BuildContext: Send + Sync {
     fn is_building(&self) -> bool;
 
     // ========================================================================
-    // Owner Access
+    // Rebuild capability
     // ========================================================================
 
-    /// Get the BuildOwner managing this context.
+    /// An owned, `'static` handle that schedules **this** element for rebuild on
+    /// the next frame (ADR-0018 U1).
     ///
-    /// The BuildOwner coordinates build phases across the tree.
-    fn owner(&self) -> Option<&crate::BuildOwner>;
+    /// Capture it in `ViewState::init_state` (or `did_change_dependencies`) and
+    /// call [`RebuildHandle::schedule`](crate::RebuildHandle::schedule) from a
+    /// completion callback on any thread. `schedule()` only writes to
+    /// `BuildOwner`'s shared inbox and requests a frame; the rebuild itself runs
+    /// on the frame thread inside `build_scope`.
+    ///
+    /// # Never acquire this during `build`
+    ///
+    /// Scheduling from `build` is an unbounded rebuild loop, and scheduling from
+    /// layout or paint would rebuild the tree mid-frame. `scripts/port-check.sh`
+    /// trigger **#22** rejects `rebuild_handle()` in `build` / `perform_layout` /
+    /// `paint` / composite bodies, as [`FOUNDATIONS.md`] requires of any
+    /// out-of-catalog `mark_needs_build` driver.
+    ///
+    /// [`FOUNDATIONS.md`]: ../../../docs/FOUNDATIONS.md
+    fn rebuild_handle(&self) -> crate::RebuildHandle;
+
+    /// The binding's frame-driven async task driver (ADR-0018 U2), if a binding
+    /// installed one.
+    ///
+    /// Spawn subscriptions from `ViewState::init_state` / `did_change_dependencies`
+    /// and hold the returned `TaskToken` in the state — dropping it cancels.
+    ///
+    /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
+    /// unit test), reported honestly rather than by silently spawning into a
+    /// driver nobody polls. Never reach for `Scheduler::instance()` from a
+    /// widget: `HeadlessBinding` drives a binding-local `Scheduler`, so the
+    /// singleton's tasks would never run headlessly.
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver>;
 
     // ========================================================================
     // Inherited Data (Dependency Injection)

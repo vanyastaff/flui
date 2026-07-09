@@ -138,10 +138,12 @@ pub mod ticker;
 pub mod vsync;
 
 // Type-safe primitives
+pub mod async_driver;
 pub mod duration;
 pub mod id;
 
 // Re-exports - Core types
+pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
 pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };

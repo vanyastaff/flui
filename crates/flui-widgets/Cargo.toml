@@ -15,6 +15,10 @@ categories = ["gui"]
 # Authoring spine: View/Element traits, BuildContext, ViewSeq, keys, derives
 # (also transitively re-exports flui-foundation's ElementId/RenderId).
 flui-view = { path = "../flui-view", version = "0.2.0" }
+# Re-exported as `flui_widgets::Stream` so a `StreamBuilder` consumer can name the
+# trait without depending on futures-core directly (ADR-0018 U6). Trait-only: no
+# executor, no combinators, no proc macros.
+futures-core = { workspace = true }
 # Concrete RenderBox catalog every render-object widget wraps (also re-exports
 # the flex/stack config enums it owns from flui-types).
 flui-objects = { path = "../flui-objects", version = "0.2.0" }

@@ -1100,7 +1100,7 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(
@@ -1128,7 +1128,7 @@ fr036_hits=$(rg --line-number --column \
     "${fr036_scope[@]}" 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   | grep -Ev '//\s*PORT-CHECK-OK-DYN:' \
-  | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
+  | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*(Future|Stream)|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*(Future|Stream)|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
   | grep -Ev "${fr036_ref_prefix}Fn[A-Za-z]*\\s*[(<]|${fr036_ref_prefix}FnMut|${fr036_ref_prefix}FnOnce" \
   | grep -Ev "${fr036_allowed}" \
   || true)
@@ -1440,6 +1440,36 @@ check "21" \
   crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
+# Trigger 22 (ADR-0018 U1) — `rebuild_handle()` never acquired in a frame phase.
+#
+# `RebuildHandle::schedule()` dirties an element for the next frame. Acquiring a
+# handle inside `build` and scheduling from it is an unbounded rebuild loop;
+# inside `perform_layout` / `paint` / compositing it would dirty the tree after
+# `build_scope` has already run for this frame. FOUNDATIONS.md permits an
+# out-of-catalog `mark_needs_build` driver ONLY when "gated by a refusal trigger
+# barring signal subscriptions from `build`/`layout`/`paint`" — this is it.
+#
+# Sanctioned shape: acquire in `ViewState::init_state` /
+# `did_change_dependencies`, store it, fire it later from a callback.
+#
+# A line grep cannot express "inside a function body", so this trigger delegates
+# to a brace-depth scanner. Run `scripts/check-rebuild-handle-scope.sh
+# --self-test` to verify the scanner against its own accept/reject fixtures.
+# -----------------------------------------------------------------------------
+rebuild_handle_hits=$("${repo_root}/scripts/check-rebuild-handle-scope.sh" crates 2>/dev/null || true)
+if [[ -n "${rebuild_handle_hits}" ]]; then
+  echo "VIOLATION 22: rebuild_handle() acquired inside a build/layout/paint body (ADR-0018 U1)"
+  echo "see ${trigger_doc} (trigger 22)"
+  echo "${rebuild_handle_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    22: rebuild_handle() acquired in build/layout/paint (must be a lifecycle hook)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1448,7 +1478,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
+echo "port-check: all 22 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

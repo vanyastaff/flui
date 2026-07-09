@@ -75,6 +75,10 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+# Enable flui-view's `test-utils` feature in test builds so the ADR-0017 U1
+# wiring test can plant a layout-builder registry entry. Same pattern; the
+# `register_layout_builder_for_test` hook stays out of release builds.
+flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
 
 [lints]
 workspace = true

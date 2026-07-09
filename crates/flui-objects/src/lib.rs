@@ -46,13 +46,14 @@ pub use layout::{
     WrapCrossAlignment,
 };
 pub use layout::{
-    AspectRatioFactor, FractionFactor, RenderAlign, RenderAnimatedSize, RenderAspectRatio,
-    RenderBaseline, RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox,
-    RenderCustomMultiChildLayoutBox, RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex,
-    RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
-    RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLimitedBox, RenderListBody, RenderPadding,
-    RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox, RenderStack, RenderTable,
-    RenderTransform, RenderWrap,
+    AspectRatioFactor, FractionFactor, LayoutConstraintsCell, RenderAlign, RenderAnimatedSize,
+    RenderAspectRatio, RenderBaseline, RenderCenter, RenderConstrainedBox,
+    RenderConstrainedOverflowBox, RenderCustomMultiChildLayoutBox,
+    RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex, RenderFlow,
+    RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
+    RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,
+    RenderListBody, RenderPadding, RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox,
+    RenderStack, RenderTable, RenderTransform, RenderWrap,
 };
 
 // --- flat re-exports (proxy) ---
