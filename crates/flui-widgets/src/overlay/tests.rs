@@ -403,6 +403,43 @@ fn stale_overlay_handle_is_harmless() {
     assert_eq!(calls.get(), 1, "nothing was rebuilt after unmount");
 }
 
+/// `OverlayEntry::remove` on an **unmounted** overlay detaches the entry but leaves
+/// the overlay's entry list untouched — Flutter's `if (!overlay.mounted) return;`
+/// (`overlay.dart:231-233`), which sits *before* `overlay._entries.remove(this)`.
+///
+/// Found by ADR-0019 U4's parity re-check: FLUI mutated the list regardless.
+///
+/// Red-check: delete the `if !shared.is_mounted() { return; }` guard in
+/// `OverlayEntry::remove`; the list drops to 0.
+#[test]
+fn overlay_entry_remove_leaves_an_unmounted_overlays_list_alone() {
+    let calls = Calls::default();
+    let entry = counting_entry(&calls);
+    let handle = OverlayHandle::new();
+    handle.insert(&entry, &InsertPosition::Top);
+
+    let mut harness = mount(Host {
+        show_overlay: true,
+        handle: handle.clone(),
+    });
+    assert_eq!(handle.len(), 1);
+
+    harness.swap_root(Host {
+        show_overlay: false,
+        handle: handle.clone(),
+    });
+    assert!(!handle.is_mounted());
+
+    entry.remove();
+
+    assert!(!entry.is_attached(), "the entry detached from the overlay");
+    assert_eq!(
+        handle.len(),
+        1,
+        "but an unmounted overlay's entry list is left alone"
+    );
+}
+
 /// `rearrange` reorders, and the keyed reconciler reuses each layer's element —
 /// so subtree state survives the move.
 ///

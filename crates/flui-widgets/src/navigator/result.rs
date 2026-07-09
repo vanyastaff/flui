@@ -69,8 +69,16 @@ pub(crate) struct Completer<T> {
 /// `current_result()` fallback, or `None`. **Dropping it does not cancel
 /// anything**: the route completes regardless, exactly as a Dart `Future` that
 /// nobody awaits still completes.
-pub(crate) struct RouteResult<T> {
+pub struct RouteResult<T> {
     shared: Arc<Mutex<Shared<T>>>,
+}
+
+impl<T> std::fmt::Debug for RouteResult<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RouteResult")
+            .field("completed", &self.is_completed())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Completer<T> {
@@ -135,7 +143,8 @@ impl<T> RouteResult<T> {
     /// "has it completed?", the **inner** one is the result, which is
     /// legitimately absent (Dart's `T?`).
     #[allow(clippy::option_option)]
-    pub(crate) fn try_take(&self) -> Option<Option<T>> {
+    #[must_use]
+    pub fn try_take(&self) -> Option<Option<T>> {
         match core::mem::replace(&mut self.shared.lock().value, Completion::Pending) {
             Completion::Done(value) => Some(value),
             Completion::Pending => None,
@@ -143,7 +152,8 @@ impl<T> RouteResult<T> {
     }
 
     /// Whether the route has completed (even with `None`).
-    pub(crate) fn is_completed(&self) -> bool {
+    #[must_use]
+    pub fn is_completed(&self) -> bool {
         self.shared.lock().value.is_done()
     }
 }

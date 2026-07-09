@@ -44,6 +44,9 @@ use super::result::{Completer, RouteResult};
 
 /// A pop result, erased. See the module docs.
 pub(crate) type AnyResult = Box<dyn Any + Send>;
+// Deliberately **not** public. `NavigatorHandle::pop_with<T>` takes a typed `T`
+// and erases it here, so the erasure is an implementation detail rather than a
+// shape callers must name. ADR-0019 U4 signed off the boundary, not its exposure.
 
 /// Process-unique route identity.
 ///
@@ -53,7 +56,7 @@ pub(crate) type AnyResult = Box<dyn Any + Send>;
 /// compares them with `==`. Passing ids keeps this layer pure data — see
 /// `history.rs`' divergence note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct RouteId(u64);
+pub struct RouteId(u64);
 
 impl RouteId {
     fn next() -> Self {
@@ -61,7 +64,9 @@ impl RouteId {
         Self(COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub(crate) fn get(self) -> u64 {
+    /// The raw identifier. Stable for the route's lifetime, never reused.
+    #[must_use]
+    pub fn get(self) -> u64 {
         self.0
     }
 }
@@ -72,15 +77,23 @@ impl RouteId {
 /// nothing produces or reads it yet, and adding it would mean a second erased
 /// `dyn Any` field before the U4 gate has ruled on the first one.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct RouteSettings {
-    pub(crate) name: Option<String>,
+pub struct RouteSettings {
+    name: Option<String>,
 }
 
 impl RouteSettings {
-    pub(crate) fn named(name: impl Into<String>) -> Self {
+    /// Settings carrying a route name — Flutter's `RouteSettings(name:)`.
+    #[must_use]
+    pub fn named(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
         }
+    }
+
+    /// The route's name, if it has one.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 }
 
@@ -90,6 +103,10 @@ impl RouteSettings {
 /// `DoNotPop` has no producer yet: it comes from `PopScope` / page-based
 /// `canPop`, both deferred (ADR-0019 §6). Modelled so `maybe_pop` transcribes
 /// Flutter's `switch` rather than a two-armed approximation of it.
+/// `DoNotPop` has no producer until `PopScope` / page-based `canPop` land
+/// (ADR-0019 §6); the variant exists so `maybe_pop` transcribes Flutter's
+/// three-armed `switch` rather than an approximation of it.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoutePopDisposition {
     /// Pop the route.
@@ -106,7 +123,7 @@ pub(crate) enum RoutePopDisposition {
 /// entry in `pushing` until it resolves (`navigator.dart:3273-3290`). FLUI has no
 /// animation at this layer, so the route says which of the two it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PushCompletion {
+pub enum PushCompletion {
     /// The route is fully pushed already. The entry settles to `Idle` inside the
     /// same flush.
     ///
@@ -133,10 +150,11 @@ pub(crate) enum PushCompletion {
 ///
 /// Every hook has a default, so a test route is a struct with one line.
 #[allow(unused_variables)]
-pub(crate) trait Route: Send + Sync + 'static {
+pub trait Route: Send + Sync + 'static {
     /// The value a `pop` of this route delivers.
     type Output: Send + 'static;
 
+    /// This route's settings — Flutter's `Route.settings`.
     fn settings(&self) -> &RouteSettings;
 
     /// The fallback used when a pop supplies no result — Flutter's
@@ -185,7 +203,7 @@ pub(crate) trait Route: Send + Sync + 'static {
     ///
     /// This is the **return value** of Flutter's `Route.didPop(result)`
     /// (`navigator.dart:458`); the result delivery half lives in
-    /// [`RouteRecord::did_pop`], which calls `did_complete` when this returns
+    /// the framework's route record, which calls `did_complete` when this returns
     /// `true`. Returning `false` refuses the pop and the entry returns to `Idle`
     /// — `LocalHistoryRoute.didPop` (`routes.dart:950`) is the reference user.
     fn did_pop(&mut self) -> bool {
@@ -193,7 +211,7 @@ pub(crate) trait Route: Send + Sync + 'static {
     }
 
     /// Flutter's `Route.didComplete(result)` (`:480`), *observation only*: the
-    /// completer is completed by [`RouteRecord`] immediately afterwards.
+    /// completer is completed by the framework's route record immediately afterwards.
     fn did_complete(&mut self, result: Option<&Self::Output>) {}
 
     /// Flutter's `Route.didPopNext(nextRoute)`.
@@ -219,7 +237,6 @@ pub(crate) trait Route: Send + Sync + 'static {
 /// value crossing the boundary is an [`AnyResult`].
 pub(crate) trait ErasedRoute: Send + Sync {
     fn id(&self) -> RouteId;
-    fn settings(&self) -> &RouteSettings;
 
     /// Flutter's `Route._installed` (`navigator.dart:180`). Read by
     /// `handle_removal`, which disposes a never-installed route outright.
@@ -282,10 +299,6 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
         self.id
     }
 
-    fn settings(&self) -> &RouteSettings {
-        self.route.settings()
-    }
-
     fn is_installed(&self) -> bool {
         self.installed
     }
@@ -343,7 +356,13 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
         let value = match result {
             None => self.route.current_result(),
             Some(erased) => {
-                if let Ok(value) = erased.downcast::<R::Output>() {
+                // The ADR-0019 §4 pop-result boundary. A heterogeneous route stack
+                // cannot carry each route's `Output`, so `pop` erases and the owning
+                // record downcasts back. Signed off in ADR-0019 *Public API and
+                // sign-off (U4)*; the only downcast in `flui-widgets`, and
+                // port-check's FR-033/widgets grep keeps it that way.
+                let typed = erased.downcast::<R::Output>(); // PORT-CHECK-OK-DOWNCAST: ADR-0019 §4
+                if let Ok(value) = typed {
                     Some(*value)
                 } else {
                     tracing::error!(

@@ -50,11 +50,16 @@ use super::route::RouteId;
 /// flush. Implementations that accumulate use interior mutability, exactly as the
 /// rest of the framework does behind private fields.
 #[allow(unused_variables)]
-pub(crate) trait NavigatorObserver: Send + Sync {
+pub trait NavigatorObserver: Send + Sync {
+    /// A route was pushed (or an initial route added).
     fn did_push(&self, route: RouteId, previous: Option<RouteId>) {}
+    /// A route was popped.
     fn did_pop(&self, route: RouteId, previous: Option<RouteId>) {}
+    /// A route was removed without being popped.
     fn did_remove(&self, route: RouteId, previous: Option<RouteId>) {}
+    /// A route replaced another.
     fn did_replace(&self, new_route: Option<RouteId>, old_route: Option<RouteId>) {}
+    /// The topmost present route changed.
     fn did_change_top(&self, top: RouteId, previous_top: Option<RouteId>) {}
 }
 
@@ -120,10 +125,6 @@ impl ObservationQueues {
         } else {
             self.deletions.push_back(observation);
         }
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.additions.is_empty() && self.deletions.is_empty()
     }
 
     /// Flutter's `_flushObserverNotifications` (`navigator.dart:4621-4636`),

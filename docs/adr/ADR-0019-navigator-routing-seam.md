@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Accepted — **U1–U3 landed 2026-07-09** (`Overlay` / `OverlayEntry`; the pure-data route stack; and now a working private `Navigator` view, `NavigatorState` and owned `NavigatorHandle`). U4–U5 unstarted. **No public API**; the `dyn Any` pop-result divergence (§4) is still **unauthorized** and confined to private modules.
+- **Status:** Accepted — **U1–U4 landed 2026-07-09.** `Navigator` is **public** from `flui-widgets` + prelude; parity re-checked against `.flutter/` (see *Parity findings (U4)*), and the `dyn Any` pop-result boundary is **signed off** below and now guarded. U5 (`TransitionRoute` / `ModalRoute` / `PageRoute`) remains open.
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult view owner (`Navigator::of` handle shape, the two lock hazards in §3), api-design-lead *(role does not exist in this repo — see* Gate 2 *)*, repository owner (the `dyn Any` pop-result divergence: a public API shape we cannot walk back), qa-lead (headless determinism: driving a route transition inside a test frame).
 - **Relates to:** reuses [`ADR-0018`](ADR-0018-async-builder-seam.md)'s `RebuildHandle` verbatim, and the "state publishes its handle into a shared cell at `init_state`" pattern from [`ADR-0017`](ADR-0017-build-during-layout-callback-seam.md) U1 (`LayoutConstraintsCell`) / ADR-0018 U4 (`SharedSlot`). Constrained by [`FOUNDATIONS.md`](../FOUNDATIONS.md) and [`PANIC-POLICY.md`](../PANIC-POLICY.md).
@@ -349,14 +349,14 @@ The reference confirms the shape the task proposed, with **one adjustment**: the
 | Unit | Scope | Exit gate |
 |------|-------|-----------|
 | **U1** ✓ | **`Overlay` + `OverlayEntry`, private, unexported.** Built on the existing `RenderStack` with `StackFit::Expand` — **no new render object**. Entry list, `insert`/`insert_all`/`remove`/`rearrange`, per-entry `RebuildHandle` published at `init_state`. Build **every** entry (no `opaque`/`maintainState`/`skipCount`). Both preconditions discharged: `flui-app::overlay` deleted (§3.4), keyed reorder proven to preserve `ViewState` (§3.2). **Landed 2026-07-09** — see §7a. | ✓ 13 tests, each red-checked; gates green |
-| **U2** ✓ | **Route data model + lifecycle + flush, private.** `RouteLifecycle` (16 states, `PartialOrd` range predicates), `RouteEntry`, `ErasedRoute`, `OverlayRoute`, the `flush_history_updates` algorithm (reverse walk, `can_remove_or_add`, `popped_route`/`seen_top_active_route`, deferred disposal), observer queues (**additions LIFO / deletions FIFO**), and the result channel (`RouteResult<T>`, `did_complete`, `result ?? current_result`). **No widget, no Navigator, no animation.** The flush is a pure function over the entry vec: it must be unit-testable with a fake observer and zero element tree. | §7 tests 3–9, 15–17; a re-entrancy guard (`flushing` flag + `debug_assert` the scheduler phase is not build/layout/paint, mirroring `Scheduler::drive_async_tasks`) |
-| **U3** ✓ | **Private `Navigator` view/element.** `NavigatorState` owning the route stack behind a private `Mutex`; `NavigatorHandle`; `Navigator::of` / `maybe_of` / `of_root` **including the self-check of §3.3**; `initial_route` + `default_generate_initial_routes`. Still unexported. | §7 tests 1–2, 10–12 |
-| **U4** | **Parity re-check against `.flutter/` → Gate 1. Then Gate 2 (below). Only then: public export** of `Navigator`, `Route`, `Overlay`, `OverlayEntry`, `NavigatorObserver` + prelude. Register `dyn ErasedRoute` in the FR-036 allowlist (`port-check.sh` trigger 9) and the result downcast under FR-033. | Full §7 suite through the public prelude; `just ci`; ADR updated with a *Parity findings (U4)* table |
+| **U2** ✓ | **Route data model + lifecycle + flush, private.** `RouteLifecycle` (14 states: Flutter's `staging` and `disposing` omitted, see §7b), `RouteEntry`, `ErasedRoute`, the `flush_history_updates` algorithm (reverse walk, `can_remove_or_add`, `popped_route`/`seen_top_active_route`, deferred disposal), observer queues (**additions LIFO / deletions FIFO**), and the result channel (`RouteResult<T>`, `did_complete`, `result ?? current_result`). **No widget, no Navigator, no animation.** The flush is a pure function over the entry vec: it must be unit-testable with a fake observer and zero element tree. | §7 tests 3–9, 15–17; a re-entrancy guard (`flushing` flag + `debug_assert` the scheduler phase is not build/layout/paint, mirroring `Scheduler::drive_async_tasks`) |
+| **U3** ✓ | **Private `Navigator` view/element.** `NavigatorState` owning the route stack behind a private `Mutex`; `NavigatorHandle`; `Navigator::of` / `maybe_of` / `of_root`; `initial_route` + private overlay integration. The expected Flutter self-check from §3.3 was found unreachable without `GlobalKey<NavigatorState>.currentContext` and is corrected in §7c. | §7 tests 1–2, 10–12 |
+| **U4** ✓ | **Parity re-check against `.flutter/` → Gate 1. Then Gate 2 (below). Only then: public export** of the signed-off baseline surface: `Navigator`, `NavigatorHandle`, `NavigatorState`, `NavigatorObserver`, `NavigatorRoute`, `Route`, `SimpleRoute`, `RouteContentBuilder`, `RouteId`, `RouteResult`, `RouteSettings`, `PushCompletion`. `Overlay` / `OverlayEntry` stay private until their own parity gate. Register `dyn ErasedRoute` / `dyn NavigatorObserver` in the FR-036 allowlist (`port-check.sh` trigger 9) and the result downcast under FR-033/widgets. | Public navigator tests through the real prelude; `just ci`; ADR updated with a *Parity findings (U4)* table |
 | **U5** | **`TransitionRoute` / `ModalRoute` / `PageRoute`** — animation (`AnimationController` with `NavigatorState` as `TickerProvider`), `secondaryAnimation` + train-hopping, the pointer-absorbing barrier, `finishedWhenPopped => controller.is_dismissed`. **Its own parity gate** (`routes_test.dart` oracles). Likely deserves its own ADR — the train-hopping state machine (`routes.dart:422-496`) is not a small port. | `routes_test.dart` transitions oracles |
 
 **Gate 1 (parity).** Re-read `navigator.dart` / `overlay.dart` / `routes.dart` at the pinned revision. Every §7 oracle passes or is a *documented* divergence. No export before this passes. If `.flutter/` is absent or has moved revision, **stop and report** — do not claim parity.
 
-**Gate 2 (sign-off on the `dyn Any` pop result, §4).** The repo has **no api-design-lead role**; ADR-0018 U6 recorded its equivalent divergence as signed off by the **repository owner** in the task authorization, and said so plainly rather than implying a review that did not happen. The same applies here. **Option A is not yet authorized** — this ADR proposes it. If sign-off is absent when U4 begins, U4 stops at docs and tests: **no public export.**
+**Gate 2 (sign-off on the `dyn Any` pop result, §4).** The repo has **no api-design-lead role**; ADR-0018 U6 recorded its equivalent divergence as signed off by the **repository owner** in the task authorization, and said so plainly rather than implying a review that did not happen. The same applies here. **Option A was authorized in U4** and is recorded in §7e. The erasure is not public (`AnyResult` stays private); callers use typed front doors (`pop_with`, `remove_route_with`, `maybe_pop_with`).
 
 ---
 
@@ -481,6 +481,65 @@ Also landed: `can_pop` and `maybe_pop`, transcribed from `:5551-5566` and `:5582
 Two smaller notes. The in-crate harness was factored out of `overlay/tests.rs` into `src/test_harness.rs` (`#[cfg(test)]`), shared by both private modules — a third copy was the alternative. And `navigator_private_no_prelude_export` guards U4's gate mechanically by reading `lib.rs`; red-checked with `pub use stack::Stack as Navigator;`.
 
 Still not implemented, and not claimed: `TransitionRoute` / `ModalRoute` / `PageRoute` (no animation, no barrier, no focus scope), `Hero`, page-based routing, restoration, named-route generation, `PopScope`, `LocalHistoryRoute`, and everything Flutter's `NavigatorState.build` wraps the `Overlay` in (`HeroControllerScope`, `NavigationNotification`, the pointer-cancelling `Listener`, `FocusTraversalGroup`).
+
+## 7d. Parity findings (U4, 2026-07-09)
+
+**Gate 1.** The implementation was re-read against `navigator.dart`, `overlay.dart` and `routes.dart` at the pinned revision, arm by arm through `_flushHistoryUpdates`, adversarially — looking for divergences rather than for confirmation. Everything in §1 held: the reverse-walk index arithmetic (`_getRouteBefore(index-1, isPresent)` in the add/push arms vs `_getRouteBefore(index, willBePresent)` in the pop/remove arms), `_getRouteAfter(index+1, …)`, the `canRemoveOrAdd` set points, the `poppedRoute`/`seenTopActiveRoute` pair (including the `remove` arm deliberately *not* setting `seenTopActiveRoute`), the `dispose` arm's `next` handling, the additions-LIFO / deletions-FIFO drain, `install()` before `didPush()`, `didReplace` receiving the raw entry below rather than `previousPresent`, `canPop` consulting the **bottom-most** route's `willHandlePopInternally`, and `arm_complete`'s `>= remove` guard.
+
+**Three divergences were found that §7a–§7c had not recorded. All three are now fixed, not documented away.**
+
+| # | Severity | Flutter | FLUI (before) | Resolution |
+|---|---|---|---|---|
+| 1 | **Bug** | `_RouteEntry` seeds `lastAnnouncedPreviousRoute` / `lastAnnouncedNextRoute` / `lastAnnouncedPoppedNextRoute` with a **`notAnnounced` sentinel**, distinct from `null` (`navigator.dart:3204-3212`). So on the first flush `null != notAnnounced` is **true** and the bottom route receives `didChangePrevious(null)` exactly once (`:4657-4664`). | The fields were `Option<RouteId>` seeded with `None`, so `None != None` was false and **`did_change_previous(None)` was never sent to the bottom route.** Masked entirely by `SimpleRoute`'s no-op default. | Introduced an `Announced { Never, Route(Option<RouteId>) }` sentinel. Pinned by `bottom_route_receives_its_initial_did_change_previous`, which also asserts the *absence* of a second `didChangeNext(None)` — suppressed by `shouldAnnounceChangeToNext` precisely because both sentinel fields still compare equal. |
+| 2 | Divergence | `OverlayRoute.didPop` calls `navigator.finalizeRoute(this)` → `entry.finalize()` → `currentState = dispose` (`routes.dart:90-92`), and **only then** does `handlePop` call `onPopInvokedWithResult(true, …)` (`navigator.dart:3372`). The route is already finalized when its callback runs. | `on_pop_invoked(true)` fired while the entry was still `Popping`; `Dispose` was set afterwards. | Reordered. Unobservable today — a FLUI route holds no navigator back-reference and cannot query its own `isActive` — so **there is no test**, and none is claimed. It matters once `PopScope` callbacks can inspect navigator state (U5). |
+| 3 | Divergence | `OverlayEntry.remove` early-returns on `!overlay.mounted` **before** touching the entry list (`overlay.dart:231-235`): the entry detaches, the unmounted overlay's list is left alone. | FLUI detached and then mutated the list regardless. | Added the mounted gate. Pinned by `overlay_entry_remove_leaves_an_unmounted_overlays_list_alone`. |
+
+Explicitly checked and found **equivalent, not divergent** (so no change): `_lastTopmostRoute` compares `_RouteEntry` identity where FLUI compares `RouteId`, which cannot disagree because ids are process-unique and never reused; `popDisposition`'s `isFirst ? bubble : pop` versus FLUI's `present.len() == 1`, since the *top* route is `isFirst` iff it is the only present route; `pop_disposition_of_top`'s `will_handle_pop_internally → Pop` short-circuit, which faithfully inlines `LocalHistoryRoute.popDisposition` (`routes.dart:942-946`); the `_popCompleter.isCompleted` early-return in `handlePop`, which is page-based-only and provably dead here; `rearrange`'s `entry._overlay ??= this` versus FLUI's unconditional `attach`, which rewrites a `Weak` to the same target; and `finalizeRoute` emitting an extra `_NavigatorPopObservation` only for page-based routes, of which FLUI has none.
+
+Answering the gate's questions directly. **First-route build timing** matches: seeded routes enter as `add` → `didAdd` (no push transition) and observers still see a push observation, and they are flushed **once** on mount as `restoreState` does. **push/pop/remove ordering** is unchanged by the public wrapping — `pop_with`/`remove_route_with` erase and delegate to the same private path. **`canPop`/`maybePop`** match for the single-route, multi-route and route-refusal cases (a refused pop still reports *handled*, because `popDisposition` was `pop`). **Observer ordering** is unchanged. **A removed route still completes its future.**
+
+### Divergences remaining after U4
+
+Unchanged and still not claimed: no `TransitionRoute` / `ModalRoute` / `PageRoute` (no animation, no barrier, no focus scope, no `offstage`); no `Hero`; no page-based `Navigator` 2.0 / `Router`; no restoration; no named-route generation; no `PopScope`; no `LocalHistoryRoute`; `opaque`/`maintainState`/`skipCount` unimplemented in `Overlay`; `rearrange`'s `above:`/`below:` placement unimplemented; `RouteSettings.arguments` omitted; `staging` and `disposing` lifecycle states omitted; `PushCompletion::Immediate` settles inside the first flush; the overlay rearrange is hoisted into the caller; routes are named by `RouteId` rather than by object; the overlay entry lives on the navigator, not the route; `maybePop` is synchronous; there is no `GlobalKey`; Flutter's `Navigator.of` self-check is unreachable; `NavigatorState.build` returns the overlay bare, without `HeroControllerScope` / `NavigationNotification` / the pointer-cancelling `Listener` / `FocusTraversalGroup`.
+
+Plus the one this ADR exists for: **a wrong `pop` result type logs and completes with `None`, where Flutter throws a cast error.**
+
+Not exported, though ported and tested: `pushReplacement`, `pushAndRemoveUntil`, `replace`. Widening the surface to them needs its own sign-off; their `#[cfg(test)]` gating is what keeps `RouteLifecycle::PushReplace`/`Replace` from being dead code in a production build.
+
+---
+
+## 7e. Public API and sign-off (U4, 2026-07-09)
+
+### Gate 2 — the `dyn Any` pop-result boundary
+
+**Decision: approved (Option A of §4).** A heterogeneous route stack cannot carry each route's `Output`, so the stack is `Vec<Box<dyn ErasedRoute>>` and a pop result crosses `Box<dyn Any + Send>`, downcast back in `RouteRecord::did_complete`. Flutter has the same runtime failure mode — `Route<dynamic>` plus an unchecked `pop<T>` — but Rust would not otherwise need it.
+
+**Signed off by the repository owner (`vanyastaff`)** in the U4 task authorization, which states the shape, the failure mode and the guard requirement explicitly. This repo has **no separate api-design-lead role**; the ADR says so rather than implying a review that did not happen. Same attribution as ADR-0018 U6's keyed-identity divergence.
+
+Two things the sign-off deliberately narrows:
+
+1. **The erasure is a boundary, not a shape.** `AnyResult` is **not public**. The public front doors are typed — `pop_with<T: Send + 'static>(result: T)`, `remove_route_with<T>(id, result)`, `maybe_pop_with<T>(result)` — plus their result-less siblings `pop()`, `remove_route(id)`, `maybe_pop()`. A caller never names `Box<dyn Any + Send>`. The type is checked at **delivery**, not at the call site, because the navigator does not know the top route's `Output`.
+2. **Mismatch logs; it does not panic.** `tracing::error!` naming the expected type, then the future completes with `None`. Per [`PANIC-POLICY.md`](../PANIC-POLICY.md) a wrong `pop` type is caller error, not a framework invariant, so `expect("BUG: …")` is not available. Pinned by `public_pop_mismatched_result_logs_and_completes_none`, red-checked by `unwrap()`ing the downcast.
+
+### The exported surface
+
+From `flui_widgets` (root): `Navigator`, `NavigatorHandle`, `NavigatorState`, `NavigatorObserver`, `NavigatorRoute`, `Route`, `SimpleRoute`, `RouteContentBuilder`, `RouteId`, `RouteResult`, `RouteSettings`, `PushCompletion`.
+
+In `flui_widgets::prelude`: `Navigator`, `NavigatorHandle`, `SimpleRoute` — the three names a route-using app writes. The rest are named explicitly, as the traits and value types they are.
+
+Deliberately **private**: `RouteHistory`, `RouteLifecycle`, `RouteEntry`, `ErasedRoute`, `RouteRecord`, `AnyResult`, `FlushOutcome`, `Observation`, `ObservationQueues`, `Completer`, `RoutePopDisposition`, and the whole `overlay` module (`Overlay`, `OverlayEntry`, `OverlayHandle`, `OverlayEntryId`, `InsertPosition`). Exporting Flutter's `Overlay` surface is a separate parity gate — it belongs with `ModalRoute` and `OverlayPortal` in U5. `Navigator` needs the overlay; no signed-off name mentions it.
+
+`RouteContentBuilder` exists so the public `NavigatorRoute` does not have to name the private `overlay::OverlayBuilder`; the two are the same type.
+
+Guarded by `public_no_internal_route_stack_exports`, `overlay_stays_private_after_u4` and `public_prelude_exports_exact_approved_surface`, all of which read the sources. The *positive* half — that the approved names are exported — is structural: `tests/navigator_public.rs` imports them, so a missing export is a compile error rather than an assertion.
+
+### Guard updates
+
+Before U4, `crates/flui-widgets` sat outside **both** FR-036 (trigger 9, the sanctioned-`dyn` registry) and FR-033 (the downcast grep). The first erased boundary in the public catalog would have shipped with no gate at all. Closed:
+
+- **FR-036 scope** now includes `crates/flui-widgets/src`. Registering it surfaced four `dyn` boundaries, each added to the allowlist rather than waived: `ErasedRoute` and `NavigatorObserver` (new, from this ADR) and `ScrollPhysics` and `ImageProvider` (**pre-existing** public delegate boundaries that had simply never been under a gate).
+- **FR-033/widgets** is a new grep: any `downcast`/`downcast_ref`/`downcast_mut` in `crates/flui-widgets/src` must carry a same-line `// PORT-CHECK-OK-DOWNCAST:` marker. There is exactly one, in `RouteRecord::did_complete`. Verified both ways: the guard accepts the sanctioned site and rejects an unsanctioned `downcast_ref::<u8>()` added anywhere in the crate.
+- `docs/PORT.md` records both, under trigger 9's *Registry addition (2026-07-09, ADR-0019 U4)* and a new *FR-033/widgets* section.
 
 ## 8. Consequences
 

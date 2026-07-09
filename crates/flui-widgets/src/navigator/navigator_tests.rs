@@ -22,18 +22,12 @@ use parking_lot::Mutex;
 
 use super::navigator::{Navigator, NavigatorHandle};
 use super::overlay_route::SimpleRoute;
-use super::route::AnyResult;
 use crate::SizedBox;
 use crate::test_harness::{Harness, mount};
 
 // ============================================================================
 // PROBES
 // ============================================================================
-
-/// An erased pop result, as `NavigatorHandle::pop` takes one.
-fn boxed(value: i32) -> AnyResult {
-    Box::new(value)
-}
 
 /// Records every route builder invocation, so "did this route's content build?"
 /// is observable.
@@ -225,7 +219,7 @@ fn navigator_pop_removes_top_route_and_completes_result() {
     harness.tick();
     assert_eq!(layers(&mut harness).len(), 2);
 
-    assert!(handle.pop(Some(boxed(42))));
+    assert!(handle.pop_with(42_i32));
     harness.tick();
 
     assert_eq!(result.try_take(), Some(Some(42)), "the future resolved");
@@ -247,7 +241,7 @@ fn navigator_remove_route_completes_result_and_rearranges_overlay() {
     harness.tick();
 
     let top = handle.current().expect("a top route");
-    assert!(handle.remove_route(top, Some(boxed(7))));
+    assert!(handle.remove_route_with(top, 7_i32));
     harness.tick();
 
     assert_eq!(result.try_take(), Some(Some(7)));
@@ -276,7 +270,7 @@ fn navigator_maybe_pop_respects_route_refusal() {
     let result = handle.push(refusing);
     harness.tick();
 
-    assert!(handle.maybe_pop(Some(boxed(1))), "the pop was handled");
+    assert!(handle.maybe_pop_with(1_i32), "the pop was handled");
     harness.tick();
 
     assert_eq!(handle.route_ids().len(), 2, "the route refused and stayed");
@@ -299,7 +293,7 @@ fn navigator_can_pop_matches_flutter_contract() {
 
     assert!(!handle.can_pop(), "a single route cannot pop");
     assert!(
-        !handle.maybe_pop(None),
+        !handle.maybe_pop(),
         "and maybe_pop bubbles rather than popping it"
     );
     assert_eq!(handle.route_ids().len(), 1, "the root route survived");
@@ -307,7 +301,7 @@ fn navigator_can_pop_matches_flutter_contract() {
     handle.push(page(&built, "second"));
     harness.tick();
     assert!(handle.can_pop(), "two routes can pop");
-    assert!(handle.maybe_pop(None));
+    assert!(handle.maybe_pop());
     harness.tick();
     assert_eq!(handle.route_ids().len(), 1);
 
@@ -471,9 +465,9 @@ fn stale_navigator_handle_is_harmless() {
     built.clear();
     // Every operation on the stale handle is a silent no-op, not a panic.
     handle.push(page(&built, "late"));
-    handle.pop(None);
+    handle.pop();
     assert!(
-        handle.maybe_pop(None),
+        handle.maybe_pop(),
         "an unmounted navigator swallows the pop"
     );
     harness.tick();
@@ -500,7 +494,7 @@ fn navigator_flush_rearranges_overlay_after_disposal() {
     harness.tick();
     assert_eq!(handle.overlay_handle().len(), 2);
 
-    handle.pop(None);
+    handle.pop();
     harness.tick();
 
     assert_eq!(
@@ -528,7 +522,7 @@ fn navigator_drops_overlay_entries_of_disposed_routes() {
     for _ in 0..3 {
         handle.push(page(&built, "x"));
         harness.tick();
-        handle.pop(None);
+        handle.pop();
         harness.tick();
     }
 
@@ -617,34 +611,73 @@ fn navigator_uses_no_global_key() {
     }
 }
 
-/// U3 ships **no public API**. `Navigator` must not be re-exported from the crate
-/// root or the prelude until ADR-0019 U4's parity + sign-off gate.
+/// U4 exports a **signed-off surface and nothing more**. The route stack's
+/// internals must stay private: leaking `RouteHistory`, `RouteLifecycle`,
+/// `RouteEntry`, `ErasedRoute`, `AnyResult`, `FlushOutcome`, `Observation` or the
+/// overlay's bookkeeping would freeze implementation detail into semver.
 ///
-/// Red-check: add `pub use navigator::Navigator;` to `lib.rs`.
+/// The positive half — that the approved names *are* exported — is asserted from
+/// outside the crate, in `tests/navigator_public.rs`, where a wrong `pub use`
+/// fails to compile rather than fails an assertion.
+///
+/// Red-check: add `pub use history::RouteHistory;` to `navigator/mod.rs`.
 #[test]
-fn navigator_private_no_prelude_export() {
+fn public_no_internal_route_stack_exports() {
+    const NAV_MOD: &str = include_str!("mod.rs");
+    const LIB: &str = include_str!("../lib.rs");
+
+    const INTERNAL: [&str; 8] = [
+        "RouteHistory",
+        "RouteLifecycle",
+        "RouteEntry",
+        "ErasedRoute",
+        "AnyResult",
+        "FlushOutcome",
+        "Observation",
+        "RoutePopDisposition",
+    ];
+
+    for (name, source) in [("navigator/mod.rs", NAV_MOD), ("lib.rs", LIB)] {
+        for line in source.lines() {
+            let code = line.trim_start();
+            if !code.starts_with("pub use") {
+                continue;
+            }
+            for internal in INTERNAL {
+                assert!(
+                    !code.contains(internal),
+                    "{name} re-exports the internal `{internal}`: {line}"
+                );
+            }
+        }
+    }
+}
+
+/// `Overlay` / `OverlayEntry` / `OverlayHandle` stay **private** after U4.
+///
+/// `Navigator` needs them, but exporting Flutter's `Overlay` surface is a separate
+/// parity gate (ADR-0019 §5 U5, with `ModalRoute` and `OverlayPortal`). Nothing in
+/// the signed-off `Navigator` surface names them.
+///
+/// Red-check: add `pub mod overlay;` to `lib.rs`.
+#[test]
+fn overlay_stays_private_after_u4() {
     const LIB: &str = include_str!("../lib.rs");
 
     for line in LIB.lines() {
         let code = line.trim_start();
-        if code.starts_with("//") || code.starts_with("#!") {
+        if code.starts_with("//") {
             continue;
         }
         assert!(
-            !(code.starts_with("pub use navigator") || code.starts_with("pub mod navigator")),
-            "the navigator module must stay private until U4: {line}"
+            !code.starts_with("pub mod overlay"),
+            "the overlay module must stay private: {line}"
         );
-        assert!(
-            !(code.starts_with("pub use overlay") || code.starts_with("pub mod overlay")),
-            "the overlay module must stay private until U4: {line}"
-        );
+        if code.starts_with("pub use") {
+            assert!(
+                !(code.contains("OverlayEntry") || code.contains("OverlayHandle")),
+                "the overlay surface must stay private: {line}"
+            );
+        }
     }
-
-    // And no `Navigator` / `Overlay` identifier anywhere in the re-export or
-    // prelude sections. `mod navigator;` / `mod overlay;` are the only mentions.
-    let exported = LIB
-        .lines()
-        .filter(|line| line.trim_start().starts_with("pub use"))
-        .any(|line| line.contains("Navigator") || line.contains("OverlayEntry"));
-    assert!(!exported, "no Navigator/OverlayEntry in the public surface");
 }

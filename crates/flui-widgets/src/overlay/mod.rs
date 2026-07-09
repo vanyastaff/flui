@@ -63,11 +63,17 @@
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
-// `Navigator` (ADR-0019 U3) is the intended consumer; until it lands, nothing in
-// `flui-widgets` calls this module, and nothing outside can (it is private until
-// the U4 gate). Same posture as ADR-0018's `FutureBuilder` between U4 and U6 —
-// and, like it, this attribute must be **deleted** when the consumer arrives, so
-// genuinely-dead code cannot hide behind it.
+// `Overlay` stays **private** after ADR-0019 U4: `Navigator` needs it, but nothing
+// in the signed-off public surface names it, and exporting Flutter's `Overlay` /
+// `OverlayEntry` / `OverlayPortal` is a separate parity gate (§5 U5, with
+// `ModalRoute`). `Navigator` therefore exercises only part of this module —
+// `rearrange`, `OverlayEntry::new/remove/is_attached` — while the rest
+// (`insert`/`insert_all`/`InsertPosition`, `OverlayEntry::mark_needs_build`) is
+// ported, tested, and waiting for its consumer. Hence the allow; it goes when the
+// Overlay surface is exported, or when U5 wires `mark_needs_build` from a route.
+//
+// The `navigator` module needs no such allow any more: U4's export made it
+// reachable, and its remaining test-only helpers are `#[cfg(test)]`, not hidden.
 #![allow(dead_code)]
 
 mod entry;
@@ -78,7 +84,7 @@ mod tests;
 use std::fmt;
 use std::sync::Arc;
 
-pub(crate) use entry::{OverlayBuilder, OverlayEntry, OverlayEntryId};
+pub(crate) use entry::{OverlayEntry, OverlayEntryId};
 use flui_foundation::ViewKey;
 use flui_types::layout::StackFit;
 use flui_view::element::ElementKind;
@@ -129,6 +135,16 @@ impl OverlayShared {
         if let Some(handle) = self.rebuild.lock().as_ref() {
             handle.schedule();
         }
+    }
+
+    /// Whether the overlay is mounted. Flutter's `OverlayState.mounted`, consulted
+    /// by `OverlayEntry.remove` before it touches the entry list
+    /// (`overlay.dart:233`).
+    pub(crate) fn is_mounted(&self) -> bool {
+        self.rebuild
+            .lock()
+            .as_ref()
+            .is_some_and(RebuildHandle::is_active)
     }
 
     /// Retain the entries matching `keep`. Used by [`OverlayEntry::remove`].

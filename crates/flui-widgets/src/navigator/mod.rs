@@ -10,14 +10,14 @@
 //! render pipeline, and no overlay, and `route_stack_flush_is_pure_data`
 //! enforces that mechanically rather than on trust.
 //!
-//! U3 added the private `Navigator` view, `NavigatorState` and the owned
-//! `NavigatorHandle` on top: [`navigator`] and [`overlay_route`] are the only
-//! files here that may touch the widget tree or the overlay.
+//! U3 added the `Navigator` view, `NavigatorState` and the owned
+//! `NavigatorHandle` on top: the `navigator` and `overlay_route` modules are the
+//! only files here that may touch the widget tree or the overlay.
 //!
-//! Nothing here is exported from the crate root or the prelude. U4 owns the parity
-//! and sign-off gate that decides what — if anything — becomes public. In
-//! particular, the `Box<dyn Any + Send>` pop-result boundary is **not** authorized
-//! merely by existing here.
+//! U4 exported the signed-off baseline surface from the crate root and prelude.
+//! The pure route-stack internals stay private, and the `Box<dyn Any + Send>`
+//! pop-result boundary remains an implementation detail behind typed public
+//! methods (`pop_with`, `remove_route_with`, `maybe_pop_with`).
 //!
 //! # Flutter parity
 //!
@@ -31,14 +31,6 @@
 //! `PopScope`, no `LocalHistoryRoute`. ADR-0019 §5–§6 owns the sequence and the
 //! deferrals. `can_pop` / `maybe_pop` landed in U3.
 
-// U4's public export is what finally gives this module a non-test consumer.
-// Until then `Navigator` is reachable only from its own tests, so **everything
-// here is dead code from rustc's reachability view** — including the parts U3
-// genuinely wired together. The `unused_imports` allows U2 needed are gone (the
-// re-export block they covered was itself unused, and has been deleted); this one
-// must survive until U4, and must go with it.
-#![allow(dead_code)]
-
 mod history;
 mod lifecycle;
 #[allow(clippy::module_inception)]
@@ -47,6 +39,12 @@ mod observer;
 mod overlay_route;
 mod result;
 mod route;
+
+pub use navigator::{Navigator, NavigatorHandle, NavigatorState};
+pub use observer::NavigatorObserver;
+pub use overlay_route::{NavigatorRoute, RouteContentBuilder, SimpleRoute};
+pub use result::RouteResult;
+pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 
 #[cfg(test)]
 mod navigator_tests;

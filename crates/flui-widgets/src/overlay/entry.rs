@@ -203,6 +203,13 @@ impl OverlayEntry {
             return;
         };
 
+        // `if (!overlay.mounted) return;` (`overlay.dart:231-233`) — Flutter detaches
+        // the entry but leaves the unmounted overlay's list alone. Found by
+        // ADR-0019 U4's parity re-check: FLUI used to mutate it regardless.
+        if !shared.is_mounted() {
+            return;
+        }
+
         shared.retain_entries(|entry| entry.id() != self.inner.id);
         shared.schedule_rebuild();
     }

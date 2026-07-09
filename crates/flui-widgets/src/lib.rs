@@ -80,9 +80,10 @@ pub mod layout;
 #[cfg(test)]
 mod test_harness;
 
-// The route stack — ADR-0019 U2. Private and pure data: no widget, no
-// `Navigator`, no public API. U3 adds the `Navigator` view on top of it.
-mod navigator;
+/// `Navigator` and routing — ADR-0019. The route stack, its lifecycle, the flush
+/// algorithm and the result channel are private; the surface signed off in
+/// ADR-0019 U4 is re-exported from the crate root below.
+pub mod navigator;
 // `Overlay` / `OverlayEntry` — ADR-0019 U1, the first `Navigator` prerequisite.
 // Deliberately private: nothing here is exported from the crate root or the
 // prelude until ADR-0019 U4's parity + sign-off gate. `Navigator` (U3) is the
@@ -148,6 +149,10 @@ pub use flui_objects::OverflowBoxFit;
 // need only import from `flui_widgets`.
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
+pub use navigator::{
+    Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PushCompletion,
+    Route, RouteContentBuilder, RouteId, RouteResult, RouteSettings, SimpleRoute,
+};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
@@ -229,10 +234,10 @@ pub mod prelude {
         GestureDetector, GridView, Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image,
         ImageAlignment, ImageFit, ImageProvider, IndexedStack, IntrinsicHeight, IntrinsicWidth,
         LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, MediaQuery,
-        MediaQueryData, MergeSemantics, MouseRegion, Offstage, Opacity, OverflowBox,
-        OverflowBoxFit, Padding, Positioned, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
-        ScrollController, Scrollable, Scrollbar, Semantics, ShrinkWrappingViewport,
-        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle, Offstage, Opacity,
+        OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary, RichText, RotatedBox,
+        Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, ShrinkWrappingViewport,
+        SimpleRoute, SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
         SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
         SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
         SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,

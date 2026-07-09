@@ -43,6 +43,31 @@ use super::route::{
     AnyResult, ErasedRoute, PushCompletion, Route, RouteId, RoutePopDisposition, RouteRecord,
 };
 
+/// What was last announced to a route's `did_change_next` / `did_change_previous`.
+///
+/// **Not** `Option<RouteId>`. Flutter seeds these fields with a `notAnnounced`
+/// sentinel, distinct from `null` (`navigator.dart:3204-3212`):
+///
+/// ```dart
+/// static const _RoutePlaceholder notAnnounced = _RoutePlaceholder();
+/// _RoutePlaceholder? lastAnnouncedPreviousRoute = notAnnounced;
+/// ```
+///
+/// That distinction is load-bearing. On the first flush the bottom route has no
+/// route below it, so `previous` is `null`; `null != notAnnounced` is **true**, and
+/// `didChangePrevious(null)` fires exactly once. Collapsing the sentinel into
+/// `None` makes `None != None` false and the call is silently never made — which
+/// is what U4's parity re-check found FLUI doing. `ModalRoute` drives
+/// `changedInternalState()` from `didChangePrevious`, so a bottom modal route
+/// would have missed its initial internal-state init at U5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Announced {
+    /// Flutter's `notAnnounced`: nothing has been announced yet.
+    Never,
+    /// The last value announced, which may legitimately be "no route".
+    Route(Option<RouteId>),
+}
+
 /// One route plus its bookkeeping. Flutter's `_RouteEntry` (`navigator.dart:3178`).
 pub(crate) struct RouteEntry {
     route: Box<dyn ErasedRoute>,
@@ -57,11 +82,14 @@ pub(crate) struct RouteEntry {
     /// `_reportRemovalToObserver` (`:3428`).
     report_removal_to_observer: bool,
 
-    last_announced_next: Option<RouteId>,
-    last_announced_previous: Option<RouteId>,
-    /// Flutter's `lastAnnouncedPoppedNextRoute` (`:3200`), a `WeakReference`
-    /// there only to avoid retaining a disposed route.
-    last_announced_popped_next: Option<RouteId>,
+    last_announced_next: Announced,
+    last_announced_previous: Announced,
+    /// Flutter's `lastAnnouncedPoppedNextRoute` (`:3209`), a `WeakReference`
+    /// there only to avoid retaining a disposed route. Seeded with the same
+    /// `notAnnounced` sentinel, which is what makes
+    /// `should_announce_change_to_next` suppress the *first* `didChangeNext(null)`
+    /// (already sent by `handle_push` / `did_add` when `is_new_first`).
+    last_announced_popped_next: Announced,
 }
 
 impl RouteEntry {
@@ -82,9 +110,9 @@ impl RouteEntry {
             state: initial_state,
             pending_result: None,
             report_removal_to_observer: true,
-            last_announced_next: None,
-            last_announced_previous: None,
-            last_announced_popped_next: None,
+            last_announced_next: Announced::Never,
+            last_announced_previous: Announced::Never,
+            last_announced_popped_next: Announced::Never,
         }
     }
 
@@ -92,6 +120,7 @@ impl RouteEntry {
         self.route.id()
     }
 
+    #[cfg(test)]
     pub(crate) fn state(&self) -> RouteLifecycle {
         self.state
     }
@@ -212,11 +241,18 @@ impl RouteEntry {
             self.state = RouteLifecycle::Idle;
             return false;
         }
-        self.route.on_pop_invoked(true);
 
+        // Order matters. Flutter reaches `dispose` *inside* `didPop` —
+        // `OverlayRoute.didPop` calls `navigator.finalizeRoute(this)`
+        // (`routes.dart:90-92`) → `entry.finalize()` → `currentState = dispose` —
+        // and only then does `handlePop` call `onPopInvokedWithResult(true, …)`
+        // (`navigator.dart:3372`). So the route is already finalized when its
+        // callback runs. Found by U4's parity re-check; matters once `PopScope`
+        // callbacks can inspect navigator state.
         if self.route.finished_when_popped() {
             self.state = RouteLifecycle::Dispose;
         }
+        self.route.on_pop_invoked(true);
         true
     }
 
@@ -247,7 +283,7 @@ impl RouteEntry {
     /// Flutter's `_RouteEntry.handleDidPopNext` (`:3312`).
     fn handle_did_pop_next(&mut self, popped: RouteId) {
         self.route.did_pop_next(popped);
-        self.last_announced_popped_next = Some(popped);
+        self.last_announced_popped_next = Announced::Route(Some(popped));
     }
 
     /// Flutter's `_RouteEntry.shouldAnnounceChangeToNext` (`:3541-3546`).
@@ -255,7 +291,7 @@ impl RouteEntry {
     /// Suppresses a redundant `didChangeNext(null)` when the route that vanished
     /// is the one we just announced via `didPopNext`.
     fn should_announce_change_to_next(&self, next: Option<RouteId>) -> bool {
-        debug_assert_ne!(next, self.last_announced_next);
+        debug_assert_ne!(Announced::Route(next), self.last_announced_next);
         !(next.is_none() && self.last_announced_popped_next == self.last_announced_next)
     }
 }
@@ -360,6 +396,7 @@ impl RouteHistory {
     }
 
     /// The state of `id`'s entry, or `None` once disposed and dropped.
+    #[cfg(test)]
     pub(crate) fn state_of(&self, id: RouteId) -> Option<RouteLifecycle> {
         self.entries
             .iter()
@@ -396,6 +433,10 @@ impl RouteHistory {
     }
 
     /// Seed one initial route and flush — the common single-route bootstrap.
+    ///
+    /// Test-only: `NavigatorState::init_state` seeds without flushing and flushes
+    /// once on mount, as Flutter's `restoreState` does.
+    #[cfg(test)]
     pub(crate) fn add_initial<R: Route>(&mut self, route: R) -> (RouteId, RouteResult<R::Output>) {
         let seeded = self.seed_initial(route);
         self.flush(true);
@@ -416,6 +457,10 @@ impl RouteHistory {
     /// Flutter's `NavigatorState.pushReplacement` (`:5245-5268`): complete the
     /// current top with `is_replaced = true` (so it emits **no** `did_remove`),
     /// append the new route in `PushReplace`, then a single flush.
+    /// Not exported: `NavigatorHandle` does not surface `pushReplacement` yet, and
+    /// widening the U4 surface needs its own sign-off. The algorithm is ported and
+    /// tested; only the public front door is missing.
+    #[cfg(test)]
     pub(crate) fn push_replacement<R: Route>(
         &mut self,
         route: R,
@@ -440,6 +485,8 @@ impl RouteHistory {
     /// This is the one Flutter API that puts an addition and several deletions in
     /// one flush, which is what makes the additions-before-deletions ordering and
     /// the deletions' FIFO drain observable.
+    /// Not exported, for the same reason as [`push_replacement`](Self::push_replacement).
+    #[cfg(test)]
     pub(crate) fn push_and_remove_until<R: Route>(
         &mut self,
         route: R,
@@ -495,7 +542,9 @@ impl RouteHistory {
     /// The `Pushing → Idle` transition. Flutter's `whenCompleteOrCancel` callback
     /// on the `TickerFuture` `didPush` returned (`:3276-3290`): flip and re-flush.
     ///
-    /// U5's `TransitionRoute` calls this from its animation-status listener.
+    /// U5's `TransitionRoute` will call this from its animation-status listener.
+    /// Until then only the tests do — an `Animating` push has no other producer.
+    #[cfg(test)]
     pub(crate) fn notify_push_completed(&mut self, id: RouteId) {
         let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) else {
             return;
@@ -758,18 +807,20 @@ impl RouteHistory {
                 position + 1,
                 RouteLifecycle::suitable_for_transition_animation,
             );
-            if next != self.entries[position].last_announced_next {
+            if Announced::Route(next) != self.entries[position].last_announced_next {
                 if self.entries[position].should_announce_change_to_next(next) {
                     self.entries[position].route.did_change_next(next);
                 }
-                self.entries[position].last_announced_next = next;
+                // Updated even when the announcement was suppressed — Flutter does
+                // the same (`navigator.dart:4651-4656`).
+                self.entries[position].last_announced_next = Announced::Route(next);
             }
 
             let previous =
                 self.route_before(index - 1, RouteLifecycle::suitable_for_transition_animation);
-            if previous != self.entries[position].last_announced_previous {
+            if Announced::Route(previous) != self.entries[position].last_announced_previous {
                 self.entries[position].route.did_change_previous(previous);
-                self.entries[position].last_announced_previous = previous;
+                self.entries[position].last_announced_previous = Announced::Route(previous);
             }
 
             index -= 1;

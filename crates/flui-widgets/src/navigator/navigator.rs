@@ -129,14 +129,15 @@ impl NavigatorShared {
 /// caller can obtain. Cloneable, `Send + Sync`, and inert once the navigator
 /// unmounts.
 #[derive(Clone)]
-pub(crate) struct NavigatorHandle {
+pub struct NavigatorHandle {
     shared: Arc<NavigatorShared>,
 }
 
 impl NavigatorHandle {
     /// A handle to an empty, unmounted navigator. Seed it, hand it to
     /// [`Navigator::new`], and keep a clone.
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             shared: Arc::new(NavigatorShared {
                 history: Mutex::new(RouteHistory::new()),
@@ -146,7 +147,8 @@ impl NavigatorHandle {
         }
     }
 
-    pub(crate) fn add_observer(&self, observer: Arc<dyn NavigatorObserver>) {
+    /// Register an observer. Flutter's `Navigator.observers`.
+    pub fn add_observer(&self, observer: Arc<dyn NavigatorObserver>) {
         self.shared.history.lock().add_observer(observer);
     }
 
@@ -155,7 +157,8 @@ impl NavigatorHandle {
     ///
     /// Derived from the overlay rather than a separate flag: the overlay is this
     /// navigator's only child, so it is mounted exactly when the navigator is.
-    pub(crate) fn is_mounted(&self) -> bool {
+    #[must_use]
+    pub fn is_mounted(&self) -> bool {
         self.shared.overlay.is_mounted()
     }
 
@@ -165,8 +168,8 @@ impl NavigatorHandle {
     ///
     /// Seed before handing the handle to [`Navigator::new`]. A deep link's
     /// synthesized back-stack is several `seed_initial` calls.
-    pub(crate) fn seed_initial<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
-        let builder = route.overlay_builder();
+    pub fn seed_initial<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        let builder = route.content_builder();
         let (id, result) = self.shared.history.lock().seed_initial(route);
         self.shared
             .entries
@@ -177,8 +180,8 @@ impl NavigatorHandle {
 
     /// Flutter's `NavigatorState.push` (`navigator.dart:5060-5063`). The future is
     /// created before any lifecycle runs.
-    pub(crate) fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
-        let builder = route.overlay_builder();
+    pub fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        let builder = route.content_builder();
 
         // The entry must exist before the flush's overlay work runs, but the id is
         // minted by `push`. Insert between the two, with the history lock released.
@@ -198,21 +201,55 @@ impl NavigatorHandle {
         result
     }
 
-    /// Flutter's `NavigatorState.pop` (`:5642-5675`). Returns whether a present
-    /// route was found; a route that refuses (`did_pop → false`) stays.
-    pub(crate) fn pop(&self, result: Option<AnyResult>) -> bool {
+    fn pop_erased(&self, result: Option<AnyResult>) -> bool {
         self.shared.mutate(|history| history.pop(result))
     }
 
-    /// Flutter's `NavigatorState.removeRoute` (`:5733-5751`). The removed route
-    /// still completes its future.
-    pub(crate) fn remove_route(&self, id: RouteId, result: Option<AnyResult>) -> bool {
+    fn remove_route_erased(&self, id: RouteId, result: Option<AnyResult>) -> bool {
         self.shared
             .mutate(|history| history.remove_route(id, result))
     }
 
+    /// Pop the top route with no result — Flutter's `Navigator.pop()`
+    /// (`navigator.dart:5642-5675`).
+    ///
+    /// The popped route's future resolves with its `current_result()` fallback, or
+    /// `None`. Returns whether a present route was found. A route that refuses
+    /// (`Route::did_pop` → `false`) stays, and this still returns `true`.
+    pub fn pop(&self) -> bool {
+        self.pop_erased(None)
+    }
+
+    /// Pop the top route, delivering `result` to whoever awaits its
+    /// [`RouteResult`] — Flutter's `Navigator.pop(result)`.
+    ///
+    /// `T` is checked at **delivery**, not at the call site: the navigator holds a
+    /// heterogeneous stack and cannot know the top route's `Output`. Passing the
+    /// wrong type logs an error and completes the future with `None` rather than
+    /// panicking. ADR-0019 §4; Flutter throws a cast error here.
+    pub fn pop_with<T: Send + 'static>(&self, result: T) -> bool {
+        self.pop_erased(Some(Box::new(result)))
+    }
+
+    /// Remove `id` without popping it — Flutter's `Navigator.removeRoute`
+    /// (`:5733-5751`).
+    ///
+    /// **The removed route still completes its future**, with its
+    /// `current_result()` fallback or `None`. A port that completed only on `pop`
+    /// would hang every awaiter.
+    pub fn remove_route(&self, id: RouteId) -> bool {
+        self.remove_route_erased(id, None)
+    }
+
+    /// Remove `id`, delivering `result`. Same type contract as
+    /// [`pop_with`](NavigatorHandle::pop_with).
+    pub fn remove_route_with<T: Send + 'static>(&self, id: RouteId, result: T) -> bool {
+        self.remove_route_erased(id, Some(Box::new(result)))
+    }
+
     /// Flutter's `NavigatorState.canPop` (`:5551-5566`).
-    pub(crate) fn can_pop(&self) -> bool {
+    #[must_use]
+    pub fn can_pop(&self) -> bool {
         self.shared.history.lock().can_pop()
     }
 
@@ -224,7 +261,7 @@ impl NavigatorHandle {
     ///
     /// Returns whether the pop request was **handled**. `false` means "bubble":
     /// nobody here dealt with it, so an ancestor navigator or the system should.
-    pub(crate) fn maybe_pop(&self, result: Option<AnyResult>) -> bool {
+    fn maybe_pop_erased(&self, result: Option<AnyResult>) -> bool {
         if !self.is_mounted() {
             // "Forget about this pop, we were disposed in the meantime." (`:5595`)
             return true;
@@ -237,7 +274,7 @@ impl NavigatorHandle {
         match disposition {
             RoutePopDisposition::Bubble => false,
             RoutePopDisposition::Pop => {
-                self.pop(result);
+                self.pop_erased(result);
                 true
             }
             RoutePopDisposition::DoNotPop => {
@@ -247,17 +284,34 @@ impl NavigatorHandle {
         }
     }
 
+    /// Consult the top route's `popDisposition` and act on it, with no result.
+    ///
+    /// Returns whether the pop request was **handled**. `false` means "bubble":
+    /// nothing here dealt with it, so an ancestor navigator or the system should —
+    /// which is what a lone route does (`popDisposition` is `isFirst ? bubble : pop`).
+    pub fn maybe_pop(&self) -> bool {
+        self.maybe_pop_erased(None)
+    }
+
+    /// [`maybe_pop`](NavigatorHandle::maybe_pop), delivering `result` if it pops.
+    pub fn maybe_pop_with<T: Send + 'static>(&self, result: T) -> bool {
+        self.maybe_pop_erased(Some(Box::new(result)))
+    }
+
     /// The topmost present route.
-    pub(crate) fn current(&self) -> Option<RouteId> {
+    #[must_use]
+    pub fn current(&self) -> Option<RouteId> {
         self.shared.history.lock().current()
     }
 
     /// The route stack, bottom → top.
-    pub(crate) fn route_ids(&self) -> Vec<RouteId> {
+    #[must_use]
+    pub fn route_ids(&self) -> Vec<RouteId> {
         self.shared.history.lock().ids()
     }
 
     /// The overlay entries currently presented, bottom → top. Test-facing.
+    #[cfg(test)]
     pub(crate) fn overlay_handle(&self) -> &OverlayHandle {
         &self.shared.overlay
     }
@@ -267,6 +321,7 @@ impl NavigatorHandle {
     /// Test-facing. Must track the route count exactly: an entry left behind for
     /// a disposed route is invisible in the overlay (it was removed from *its*
     /// list) but leaks here, forever.
+    #[cfg(test)]
     pub(crate) fn tracked_entry_count(&self) -> usize {
         self.shared.entries.lock().len()
     }
@@ -279,7 +334,8 @@ impl NavigatorHandle {
     ///
     /// Clones an owned handle out under the tree borrow and returns it; it takes
     /// no second lock and consults no `GlobalKey` registry. See the module docs.
-    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
+    #[must_use]
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
         ctx.find_state::<NavigatorState, _>(NavigatorState::handle)
     }
 
@@ -291,8 +347,15 @@ impl NavigatorHandle {
     /// Flutter falls back to the local navigator when the root walk finds none;
     /// here the root walk cannot find fewer navigators than the nearest walk, so
     /// the fallback is unreachable and omitted.
-    pub(crate) fn maybe_of_root(ctx: &dyn BuildContext) -> Option<Self> {
+    #[must_use]
+    pub fn maybe_of_root(ctx: &dyn BuildContext) -> Option<Self> {
         ctx.find_root_state::<NavigatorState, _>(NavigatorState::handle)
+    }
+}
+
+impl Default for NavigatorHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -309,18 +372,19 @@ impl fmt::Debug for NavigatorHandle {
 // THE VIEW
 // ============================================================================
 
-/// A stack of routes, presented in an [`Overlay`].
+/// A stack of routes, presented in an overlay.
 ///
 /// The stack lives in the [`NavigatorHandle`] the caller supplies, so it survives
 /// this view being rebuilt and can be driven from outside the tree.
 #[derive(Clone)]
-pub(crate) struct Navigator {
+pub struct Navigator {
     handle: NavigatorHandle,
 }
 
 impl Navigator {
     /// A navigator backed by `handle`. Seed its initial route(s) first.
-    pub(crate) fn new(handle: NavigatorHandle) -> Self {
+    #[must_use]
+    pub fn new(handle: NavigatorHandle) -> Self {
         Self { handle }
     }
 }
@@ -352,8 +416,16 @@ impl StatefulView for Navigator {
 /// Holds nothing of its own: the stack and the overlay live behind the shared
 /// `Arc`, because they must be reachable from an owned handle that outlives any
 /// borrow of this state.
-pub(crate) struct NavigatorState {
+pub struct NavigatorState {
     shared: Arc<NavigatorShared>,
+}
+
+impl fmt::Debug for NavigatorState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NavigatorState")
+            .field("routes", &self.shared.history.lock().len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl NavigatorState {

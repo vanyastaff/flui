@@ -37,24 +37,31 @@
 //! [`SimpleRoute`] pushes and pops instantly, which is exactly the floor
 //! ADR-0019 §2.4 identified.
 
+use std::fmt;
 use std::sync::Arc;
 
 use flui_view::{BoxedView, BuildContext};
 
 use super::route::{Route, RouteSettings};
-use crate::overlay::OverlayBuilder;
+
+/// Builds a route's subtree, on demand and possibly many times.
+///
+/// Structurally identical to the private `overlay::OverlayBuilder`; named here so
+/// that the public [`NavigatorRoute`] surface does not mention `Overlay`, which
+/// stays private until it has its own parity gate (ADR-0019 §5 U5).
+pub type RouteContentBuilder = Arc<dyn Fn(&dyn BuildContext) -> BoxedView + Send + Sync>;
 
 /// A route that can be shown in the navigator's overlay.
 ///
 /// The split from [`Route`] is the `OverlayRoute` layer: [`Route`] is lifecycle
 /// and result, this adds "what to show".
-pub(crate) trait NavigatorRoute: Route {
+pub trait NavigatorRoute: Route {
     /// Builds this route's subtree. Flutter's `OverlayRoute.createOverlayEntries`
     /// (`routes.dart:61`) plus `ModalRoute.buildPage`.
     ///
     /// Returned as a shared closure, not `&self`, because the navigator installs
     /// it into an `OverlayEntry` that outlives any borrow of the route.
-    fn overlay_builder(&self) -> OverlayBuilder;
+    fn content_builder(&self) -> RouteContentBuilder;
 }
 
 /// The floor: a route with content, an instant transition, and a typed result.
@@ -62,9 +69,9 @@ pub(crate) trait NavigatorRoute: Route {
 /// Flutter's nearest equivalent is a bare `OverlayRoute` subclass — no
 /// `TransitionRoute`, so `finishedWhenPopped` stays `true` and a pop finalizes
 /// synchronously (`routes.dart:84`, `:90`).
-pub(crate) struct SimpleRoute<T> {
+pub struct SimpleRoute<T> {
     settings: RouteSettings,
-    builder: OverlayBuilder,
+    builder: RouteContentBuilder,
     /// Flutter's `currentResult` (`navigator.dart:426`) — the `??` fallback.
     current_result: Option<T>,
     /// Set by tests / `LocalHistoryRoute`-shaped routes.
@@ -74,11 +81,17 @@ pub(crate) struct SimpleRoute<T> {
     consents_to_pop: bool,
 }
 
+impl<T> fmt::Debug for SimpleRoute<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SimpleRoute")
+            .field("name", &self.settings.name())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T> SimpleRoute<T> {
     /// A route showing whatever `builder` builds.
-    pub(crate) fn new(
-        builder: impl Fn(&dyn BuildContext) -> BoxedView + Send + Sync + 'static,
-    ) -> Self {
+    pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + Send + Sync + 'static) -> Self {
         Self {
             settings: RouteSettings::default(),
             builder: Arc::new(builder),
@@ -88,24 +101,34 @@ impl<T> SimpleRoute<T> {
         }
     }
 
-    pub(crate) fn named(mut self, name: impl Into<String>) -> Self {
+    /// Give the route a name (Flutter's `RouteSettings.name`).
+    #[must_use]
+    pub fn named(mut self, name: impl Into<String>) -> Self {
         self.settings = RouteSettings::named(name);
         self
     }
 
-    /// The `result ?? currentResult` fallback.
-    pub(crate) fn with_current_result(mut self, result: T) -> Self {
+    /// The `result ?? currentResult` fallback: what a `pop` with no value delivers.
+    #[must_use]
+    pub fn with_current_result(mut self, result: T) -> Self {
         self.current_result = Some(result);
         self
     }
 
     /// Make `did_pop` refuse, modelling `LocalHistoryRoute`.
+    ///
+    /// Test-only: a real refusing route implements [`Route::did_pop`] itself, and
+    /// `LocalHistoryRoute` is deferred (ADR-0019 §6). Not part of the U4 surface.
+    #[cfg(test)]
     pub(crate) fn refusing_pop(mut self) -> Self {
         self.consents_to_pop = false;
         self
     }
 
     /// Make `will_handle_pop_internally` true, modelling `LocalHistoryRoute`.
+    ///
+    /// Test-only, for the same reason as [`SimpleRoute::refusing_pop`].
+    #[cfg(test)]
     pub(crate) fn handling_pop_internally(mut self) -> Self {
         self.handles_pop_internally = true;
         self
@@ -133,7 +156,7 @@ impl<T: Send + Sync + Clone + 'static> Route for SimpleRoute<T> {
 }
 
 impl<T: Send + Sync + Clone + 'static> NavigatorRoute for SimpleRoute<T> {
-    fn overlay_builder(&self) -> OverlayBuilder {
+    fn content_builder(&self) -> RouteContentBuilder {
         Arc::clone(&self.builder)
     }
 }

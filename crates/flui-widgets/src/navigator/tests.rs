@@ -324,8 +324,15 @@ fn push_installs_then_pushes_then_notifies_observer() {
 
     assert_eq!(
         *log.lock(),
-        vec![Event::Install, Event::DidPush, Event::DidChangeNext(None)],
-        "install → did_push → did_change_next(None) for the new first route"
+        vec![
+            Event::Install,
+            Event::DidPush,
+            Event::DidChangeNext(None),
+            Event::DidChangePrevious(None),
+        ],
+        "install → did_push → did_change_next(None) from handle_push, then \
+         did_change_previous(None) from the announcement (see \
+         `bottom_route_receives_its_initial_did_change_previous`)"
     );
     assert_eq!(
         spy.notes(),
@@ -1009,6 +1016,54 @@ fn push_pop_and_replace_in_sequence() {
     let (third, _r2) = history.push_replacement(Probe::new(&log), None);
     assert_eq!(history.ids(), vec![third], "the bottom route was replaced");
     assert_eq!(history.current(), Some(third));
+}
+
+/// The bottom-most route receives exactly one `did_change_previous(None)` when it
+/// first appears, and **no** `did_change_next(None)` from the announcement.
+///
+/// Both follow from Flutter's `notAnnounced` sentinel (`navigator.dart:3204-3212`),
+/// which is distinct from `null`:
+///
+/// - `previous` is `null`, and `null != notAnnounced`, so `didChangePrevious(null)`
+///   fires (`:4657-4664`).
+/// - `next` is also `null` and also `!= notAnnounced`, so the outer `if` is entered
+///   — but `shouldAnnounceChangeToNext` returns `false`, because
+///   `lastAnnouncedPoppedNextRoute` and `lastAnnouncedNextRoute` are *both* still
+///   the sentinel (`:3541-3546`). `handle_push` already sent `didChangeNext(null)`
+///   for a new-first route, so a second one would be redundant.
+///
+/// **Found by ADR-0019 U4's parity re-check.** FLUI initialised these fields to
+/// `None`, so `None != None` was false and the bottom route's
+/// `did_change_previous(None)` was silently never sent. `SimpleRoute`'s no-op
+/// default masked it; `ModalRoute` (U5) drives `changedInternalState()` from
+/// `didChangePrevious` and would have missed its initial init.
+///
+/// Red-check: change `Announced` back to `Option<RouteId>` (i.e. seed the fields
+/// with `None` rather than `Announced::Never`); the `DidChangePrevious(None)`
+/// disappears.
+#[test]
+fn bottom_route_receives_its_initial_did_change_previous() {
+    let log: Log = Log::default();
+    let mut history = RouteHistory::new();
+    history.add_initial(Probe::new(&log));
+
+    let events = log.lock().clone();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::DidChangePrevious(_)))
+            .collect::<Vec<_>>(),
+        vec![&Event::DidChangePrevious(None)],
+        "exactly one didChangePrevious(null), on the bottom route: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::DidChangeNext(_)))
+            .count(),
+        1,
+        "only handle_add's didChangeNext(null); the announcement suppresses a second"
+    );
 }
 
 // ============================================================================
