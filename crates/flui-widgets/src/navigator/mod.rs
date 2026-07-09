@@ -10,10 +10,14 @@
 //! render pipeline, and no overlay, and `route_stack_flush_is_pure_data`
 //! enforces that mechanically rather than on trust.
 //!
-//! Nothing here is exported from the crate root or the prelude. U3 adds the
-//! private `Navigator` view; U4 owns the parity + sign-off gate that decides what
-//! — if anything — becomes public. In particular the `Box<dyn Any + Send>`
-//! pop-result boundary in [`route`] is **not** authorized by its existence here.
+//! U3 added the private `Navigator` view, `NavigatorState` and the owned
+//! `NavigatorHandle` on top: [`navigator`] and [`overlay_route`] are the only
+//! files here that may touch the widget tree or the overlay.
+//!
+//! Nothing here is exported from the crate root or the prelude. U4 owns the parity
+//! and sign-off gate that decides what — if anything — becomes public. In
+//! particular, the `Box<dyn Any + Send>` pop-result boundary is **not** authorized
+//! merely by existing here.
 //!
 //! # Flutter parity
 //!
@@ -24,35 +28,27 @@
 //!
 //! No animation (`TransitionRoute`), no barrier or focus (`ModalRoute`), no
 //! `Hero`, no page-based routing, no restoration, no named-route generation, no
-//! `canPop` / `maybePop`, no `LocalHistoryRoute`. ADR-0019 §5–§6 owns the
-//! sequence and the deferrals.
+//! `PopScope`, no `LocalHistoryRoute`. ADR-0019 §5–§6 owns the sequence and the
+//! deferrals. `can_pop` / `maybe_pop` landed in U3.
 
-// U3's `Navigator` is the intended consumer; until it lands, nothing in
-// `flui-widgets` calls this module, and nothing outside can. Same posture as the
-// `overlay` module (U1) and ADR-0018's `FutureBuilder` between U4 and U6 — and,
-// like them, this attribute must be **deleted** when the consumer arrives.
+// U4's public export is what finally gives this module a non-test consumer.
+// Until then `Navigator` is reachable only from its own tests, so **everything
+// here is dead code from rustc's reachability view** — including the parts U3
+// genuinely wired together. The `unused_imports` allows U2 needed are gone (the
+// re-export block they covered was itself unused, and has been deleted); this one
+// must survive until U4, and must go with it.
 #![allow(dead_code)]
 
 mod history;
 mod lifecycle;
+#[allow(clippy::module_inception)]
+mod navigator;
 mod observer;
+mod overlay_route;
 mod result;
 mod route;
 
 #[cfg(test)]
+mod navigator_tests;
+#[cfg(test)]
 mod tests;
-
-// The surface U3's `Navigator` will consume. `#[allow(unused_imports)]` rather
-// than deletion, so the intended shape is visible now and `unused_imports` does
-// not force U3 to reconstruct it — the `#![allow(dead_code)]` above does not
-// cover re-exports. Both attributes go when U3 lands.
-#[allow(unused_imports)]
-pub(crate) use history::{FlushOutcome, RouteHistory};
-#[allow(unused_imports)]
-pub(crate) use lifecycle::RouteLifecycle;
-#[allow(unused_imports)]
-pub(crate) use observer::{NavigatorObserver, Observation};
-#[allow(unused_imports)]
-pub(crate) use result::RouteResult;
-#[allow(unused_imports)]
-pub(crate) use route::{AnyResult, PushCompletion, Route, RouteId, RouteSettings};

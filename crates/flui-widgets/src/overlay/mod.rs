@@ -78,7 +78,7 @@ mod tests;
 use std::fmt;
 use std::sync::Arc;
 
-pub(crate) use entry::{OverlayEntry, OverlayEntryId};
+pub(crate) use entry::{OverlayBuilder, OverlayEntry, OverlayEntryId};
 use flui_foundation::ViewKey;
 use flui_types::layout::StackFit;
 use flui_view::element::ElementKind;

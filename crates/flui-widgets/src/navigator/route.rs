@@ -84,6 +84,22 @@ impl RouteSettings {
     }
 }
 
+/// What a back-gesture / `maybe_pop` should do. Flutter's `RoutePopDisposition`
+/// (`navigator.dart:117-136`).
+///
+/// `DoNotPop` has no producer yet: it comes from `PopScope` / page-based
+/// `canPop`, both deferred (ADR-0019 §6). Modelled so `maybe_pop` transcribes
+/// Flutter's `switch` rather than a two-armed approximation of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RoutePopDisposition {
+    /// Pop the route.
+    Pop,
+    /// Refuse, and tell the route (`on_pop_invoked(false)`).
+    DoNotPop,
+    /// Not ours to handle — let an ancestor, or the system, deal with it.
+    Bubble,
+}
+
 /// What [`Route::did_push`] reports about its entrance transition.
 ///
 /// Flutter's `didPush()` returns a `TickerFuture`, and `handlePush` parks the
@@ -138,6 +154,16 @@ pub(crate) trait Route: Send + Sync + 'static {
     /// animation ends.
     fn finished_when_popped(&self) -> bool {
         true
+    }
+
+    /// Whether this route pops something of its own instead of leaving the
+    /// navigator. Flutter's `Route.willHandlePopInternally` (`navigator.dart:566`),
+    /// default `false`; `LocalHistoryRoute` overrides it (`routes.dart:970`).
+    ///
+    /// Read by `can_pop`, where it lets the *bottom-most* route claim a pop that
+    /// would otherwise be refused.
+    fn will_handle_pop_internally(&self) -> bool {
+        false
     }
 
     /// Flutter's `Route.install()` (`navigator.dart:257`) — an empty default
@@ -203,6 +229,7 @@ pub(crate) trait ErasedRoute: Send + Sync {
     fn is_completed(&self) -> bool;
 
     fn finished_when_popped(&self) -> bool;
+    fn will_handle_pop_internally(&self) -> bool;
 
     fn install(&mut self);
     fn did_push(&mut self) -> PushCompletion;
@@ -269,6 +296,10 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
 
     fn finished_when_popped(&self) -> bool {
         self.route.finished_when_popped()
+    }
+
+    fn will_handle_pop_internally(&self) -> bool {
+        self.route.will_handle_pop_internally()
     }
 
     fn install(&mut self) {

@@ -39,7 +39,9 @@ use std::sync::Arc;
 use super::lifecycle::RouteLifecycle;
 use super::observer::{NavigatorObserver, Observation, ObservationQueues};
 use super::result::RouteResult;
-use super::route::{AnyResult, ErasedRoute, PushCompletion, Route, RouteId, RouteRecord};
+use super::route::{
+    AnyResult, ErasedRoute, PushCompletion, Route, RouteId, RoutePopDisposition, RouteRecord,
+};
 
 /// One route plus its bookkeeping. Flutter's `_RouteEntry` (`navigator.dart:3178`).
 pub(crate) struct RouteEntry {
@@ -260,14 +262,18 @@ impl RouteEntry {
 
 /// What one flush did that its caller must still act on.
 ///
-/// U2 has no overlay; U3's `Navigator` reads this and performs the rearrange.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// U2 has no overlay; U3's `Navigator` reads this and performs the overlay work
+/// Flutter does at the tail of `_flushHistoryUpdates` (`navigator.dart:4609-4613`):
+/// remove each disposed route's overlay entries, then rearrange.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct FlushOutcome {
     /// Flutter's `rearrangeOverlay` argument (`navigator.dart:4451`). `pop` and
-    /// `remove_route` pass `false`.
+    /// `remove_route` pass `false`, because `OverlayEntry.remove()` has already
+    /// updated the overlay's own list.
     pub(crate) rearrange_overlay: bool,
-    /// How many entries were disposed at the end of this flush.
-    pub(crate) disposed: usize,
+    /// The routes disposed at the end of this flush, bottom-up. Their overlay
+    /// entries must be removed by the caller.
+    pub(crate) disposed: Vec<RouteId>,
 }
 
 /// The route stack. Flutter's `NavigatorState._history` plus the flush.
@@ -279,11 +285,66 @@ pub(crate) struct RouteHistory {
     last_topmost: Option<RouteId>,
     /// Flutter's `_flushingHistory` + `_debugLocked` (`:4453`).
     flushing: bool,
+    /// What the most recent flush left for the caller to apply. Flutter performs
+    /// the overlay work inline; U2 is pure data, so it hands it out instead.
+    last_outcome: Option<FlushOutcome>,
 }
 
 impl RouteHistory {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Take what the most recent flush left to apply. `None` if already taken.
+    pub(crate) fn take_outcome(&mut self) -> Option<FlushOutcome> {
+        self.last_outcome.take()
+    }
+
+    /// Flutter's `NavigatorState.canPop` (`navigator.dart:5551-5566`), which walks
+    /// the present routes **bottom-up**: no routes → `false`; the *first* one
+    /// handles pops internally → `true`; only one → `false`; otherwise `true`.
+    pub(crate) fn can_pop(&self) -> bool {
+        let mut present = self.entries.iter().filter(|entry| entry.state.is_present());
+        let Some(first) = present.next() else {
+            return false;
+        };
+        if first.route.will_handle_pop_internally() {
+            return true;
+        }
+        present.next().is_some()
+    }
+
+    /// The top present route's `popDisposition` (`navigator.dart:382-390`):
+    /// `isFirst ? bubble : pop`, unless the route handles the pop itself.
+    ///
+    /// `DoNotPop` has no producer until `PopScope` / page-based routing lands.
+    pub(crate) fn pop_disposition_of_top(&self) -> Option<RoutePopDisposition> {
+        let present: Vec<&RouteEntry> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state.is_present())
+            .collect();
+        let top = present.last()?;
+        if top.route.will_handle_pop_internally() {
+            return Some(RoutePopDisposition::Pop);
+        }
+        Some(if present.len() == 1 {
+            RoutePopDisposition::Bubble
+        } else {
+            RoutePopDisposition::Pop
+        })
+    }
+
+    /// Tell the top present route its pop was refused
+    /// (`onPopInvokedWithResult(false, result)`, `navigator.dart:5612`).
+    pub(crate) fn notify_pop_refused(&mut self) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .rfind(|entry| entry.state.is_present())
+        {
+            entry.route.on_pop_invoked(false);
+        }
     }
 
     pub(crate) fn add_observer(&mut self, observer: Arc<dyn NavigatorObserver>) {
@@ -496,6 +557,7 @@ impl RouteHistory {
         self.flushing = true;
         let outcome = self.flush_inner(rearrange_overlay);
         self.flushing = false;
+        self.last_outcome = Some(outcome.clone());
         outcome
     }
 
@@ -666,8 +728,12 @@ impl RouteHistory {
 
         // Lastly, dispose everything marked. Flutter also removes each route's
         // overlay entries here (`_disposeRouteEntry`); U3 owns that.
-        let disposed = to_be_disposed.len();
+        // The caller removes each route's overlay entries; Flutter does it here,
+        // before `entry.dispose()` (`_disposeRouteEntry`, `:3978-3987`). U3's
+        // routes hold no overlay entry themselves, so nothing observes the order.
+        let mut disposed = Vec::with_capacity(to_be_disposed.len());
         for mut entry in to_be_disposed {
+            disposed.push(entry.id());
             entry.route.dispose();
             entry.state = RouteLifecycle::Disposed;
         }
