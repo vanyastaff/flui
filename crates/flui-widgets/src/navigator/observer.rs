@@ -1,0 +1,151 @@
+//! [`NavigatorObserver`] and the two observation queues.
+//!
+//! ADR-0019 U2. Private; nothing here is exported.
+//!
+//! # Flutter parity
+//!
+//! `navigator.dart:777-839` (`class NavigatorObserver`) and `:4621-4636`
+//! (`_flushObserverNotifications`).
+//!
+//! # The queues are asymmetric, and that is not an accident
+//!
+//! ```dart
+//! while (_observedRouteAdditions.isNotEmpty) {
+//!   final observation = _observedRouteAdditions.removeLast();   // LIFO
+//!   _effectiveObservers.forEach(observation.notify);
+//! }
+//! while (_observedRouteDeletions.isNotEmpty) {
+//!   final observation = _observedRouteDeletions.removeFirst();  // FIFO
+//!   _effectiveObservers.forEach(observation.notify);
+//! }
+//! ```
+//!
+//! Additions drain **last-in-first-out**, deletions **first-in-first-out**, and
+//! every addition precedes every deletion. Observations are enqueued during the
+//! flush's reverse walk and never fire inline. With no observers registered both
+//! queues are simply cleared (`:4623-4626`), so registering an observer never
+//! changes route lifecycle — only whether anyone hears about it.
+//!
+//! Oracles: `test/widgets/navigator_test.dart` — `'initial route trigger observer
+//! in the right order'`, `'Push and pop should trigger the observers'`.
+//!
+//! # Divergence: observers receive [`RouteId`], not route objects
+//!
+//! Flutter hands observers the `Route` itself. Handing out `&mut dyn ErasedRoute`
+//! while the history holds it is not expressible, and this layer is pure data by
+//! design (ADR-0019 U2). Ids preserve identity, ordering and arity — everything
+//! the oracles assert. `HeroController`, the one observer whose implementation
+//! needs the route object, is blocked on U5 anyway (ADR-0019 §6), and U3 can
+//! widen this to a lookup handle without changing the queue semantics.
+
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use super::route::RouteId;
+
+/// Observes route-stack mutations. Flutter's `NavigatorObserver`
+/// (`navigator.dart:777`). Every method has a no-op default, as there.
+///
+/// `&self`, not `&mut self`: an observer is shared (`Arc`) and outlives any one
+/// flush. Implementations that accumulate use interior mutability, exactly as the
+/// rest of the framework does behind private fields.
+#[allow(unused_variables)]
+pub(crate) trait NavigatorObserver: Send + Sync {
+    fn did_push(&self, route: RouteId, previous: Option<RouteId>) {}
+    fn did_pop(&self, route: RouteId, previous: Option<RouteId>) {}
+    fn did_remove(&self, route: RouteId, previous: Option<RouteId>) {}
+    fn did_replace(&self, new_route: Option<RouteId>, old_route: Option<RouteId>) {}
+    fn did_change_top(&self, top: RouteId, previous_top: Option<RouteId>) {}
+}
+
+/// One queued notification. Flutter's `_NavigatorObservation` hierarchy
+/// (`navigator.dart:3690+`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Observation {
+    /// `_NavigatorPushObservation` — from `handle_push` and `handle_add`.
+    Push {
+        route: RouteId,
+        previous: Option<RouteId>,
+    },
+    /// `_NavigatorReplaceObservation` — from `handle_push` when the previous
+    /// state was `PushReplace` or `Replace`.
+    Replace {
+        new_route: Option<RouteId>,
+        old_route: Option<RouteId>,
+    },
+    /// `_NavigatorPopObservation` — from the flush's `Pop` arm.
+    Pop {
+        route: RouteId,
+        previous: Option<RouteId>,
+    },
+    /// `_NavigatorRemoveObservation` — from `handle_removal`, unless the route
+    /// was replaced.
+    Remove {
+        route: RouteId,
+        previous: Option<RouteId>,
+    },
+}
+
+impl Observation {
+    /// Whether this belongs on the additions queue (LIFO) or the deletions queue
+    /// (FIFO). Mirrors which queue Flutter's producer pushes onto.
+    pub(crate) fn is_addition(self) -> bool {
+        matches!(self, Self::Push { .. } | Self::Replace { .. })
+    }
+
+    fn notify(self, observer: &dyn NavigatorObserver) {
+        match self {
+            Self::Push { route, previous } => observer.did_push(route, previous),
+            Self::Replace {
+                new_route,
+                old_route,
+            } => observer.did_replace(new_route, old_route),
+            Self::Pop { route, previous } => observer.did_pop(route, previous),
+            Self::Remove { route, previous } => observer.did_remove(route, previous),
+        }
+    }
+}
+
+/// The pair of queues, drained together by [`ObservationQueues::flush`].
+#[derive(Default)]
+pub(crate) struct ObservationQueues {
+    additions: VecDeque<Observation>,
+    deletions: VecDeque<Observation>,
+}
+
+impl ObservationQueues {
+    pub(crate) fn enqueue(&mut self, observation: Observation) {
+        if observation.is_addition() {
+            self.additions.push_back(observation);
+        } else {
+            self.deletions.push_back(observation);
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.additions.is_empty() && self.deletions.is_empty()
+    }
+
+    /// Flutter's `_flushObserverNotifications` (`navigator.dart:4621-4636`),
+    /// transcribed: additions LIFO, then deletions FIFO; both cleared without
+    /// notification when there are no observers.
+    pub(crate) fn flush(&mut self, observers: &[Arc<dyn NavigatorObserver>]) {
+        if observers.is_empty() {
+            self.additions.clear();
+            self.deletions.clear();
+            return;
+        }
+
+        while let Some(observation) = self.additions.pop_back() {
+            for observer in observers {
+                observation.notify(observer.as_ref());
+            }
+        }
+
+        while let Some(observation) = self.deletions.pop_front() {
+            for observer in observers {
+                observation.notify(observer.as_ref());
+            }
+        }
+    }
+}

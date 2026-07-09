@@ -74,6 +74,9 @@ pub mod icon;
 pub mod image;
 pub mod interaction;
 pub mod layout;
+// The route stack — ADR-0019 U2. Private and pure data: no widget, no
+// `Navigator`, no public API. U3 adds the `Navigator` view on top of it.
+mod navigator;
 // `Overlay` / `OverlayEntry` — ADR-0019 U1, the first `Navigator` prerequisite.
 // Deliberately private: nothing here is exported from the crate root or the
 // prelude until ADR-0019 U4's parity + sign-off gate. `Navigator` (U3) is the
