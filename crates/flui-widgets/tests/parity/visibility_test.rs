@@ -18,12 +18,14 @@
 //!    `BoxConstraints::enforce({100,100,100,100}, tight)` clamps 100 → 800×600.
 //!    Under `loose(200)` it resolves to 100×100.
 //!
-//! 2. **`RenderOffstage(offstage=true)` constraint contract:** FLUI's
-//!    `RenderOffstage` currently returns `Size::ZERO` when `offstage=true`.
-//!    Under tight(800×600) that violates the constraints (FLUI-DEV-001 — tracked
-//!    for the next render-object patch; Flutter uses `sizedByParent=true` so the
-//!    parent drives size to `constraints.smallest`). Under `loose(200)`, zero is
-//!    within bounds, so no panic.
+//! 2. **`RenderOffstage(offstage=true)` constraint contract:** the box takes
+//!    `constraints.smallest()` (Flutter's `sizedByParent => offstage`), so under
+//!    `loose(200)` it is zero-sized while its child is laid out at full size.
+//!    Under tight(800×600) it would legitimately occupy 800×600.
+//!
+//!    Historical note: this used to return `Size::ZERO` unconditionally, which
+//!    violated tight constraints (the old "FLUI-DEV-001"). Fixed by ADR-0020
+//!    U5.0; `loose(200)` is now a size-legibility choice, not a panic dodge.
 //!
 //! Widget → render-object mapping:
 //! - `Visibility(visible=true)`  → child's render object directly
@@ -99,9 +101,10 @@ fn visibility_false_shows_replacement_at_zero_size() {
 /// still in the tree (state preserved) but `RenderOffstage` suppresses paint
 /// and hit-testing.
 ///
-/// Note: uses `loose(200)` to avoid a constraint-violation panic from
-/// `RenderOffstage(offstage=true)` returning `Size::ZERO` (see module
-/// doc FLUI-DEV-001).
+/// Note: uses `loose(200)` so the `RenderOffstage` box is zero-sized
+/// (`constraints.smallest()`), keeping the assertions legible. Its child is
+/// nonetheless laid out at full size — see
+/// `maintain_state_true_and_hidden_lays_the_child_out_at_full_size`.
 #[test]
 fn visibility_false_maintain_state_wraps_child_in_offstage() {
     let laid = harness::pump_widget(

@@ -1465,11 +1465,231 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
     .with_constraints(loose(200.0))
     .run_layout();
 
+    // Under LOOSE constraints `constraints.smallest()` is zero, so the box does
+    // collapse — but only incidentally. See the two tests below.
     assert_eq!(run.box_geometry(run.root()), Size::ZERO);
     assert!(run.hit(10.0, 10.0).is_empty());
     assert!(
         run.descendant_property("RenderOffstage", "offstage")
             .is_some()
+    );
+}
+
+/// An offstage child is laid out under the **real** incoming constraints and
+/// reaches its true geometry — Flutter's `child?.layout(constraints)`
+/// (`proxy_box.dart:3919-3925`). This is what `ModalRoute.offstage` exploits to
+/// measure a route at its final size before it is visible.
+///
+/// Red-check: lay the child out at `BoxConstraints::tight(Size::ZERO)` (the
+/// pre-ADR-0020-U5.0 behavior); the child measures 0×0.
+#[test]
+fn harness_offstage_hidden_lays_the_child_out_at_full_size() {
+    let run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(40.0), px(40.0)),
+        "the offstage child must reach its real geometry, not collapse to zero"
+    );
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::ZERO,
+        "only the RenderOffstage box shrinks (loose ⇒ smallest is zero)"
+    );
+}
+
+/// The box takes `constraints.smallest()`, not `Size::ZERO` — Flutter's
+/// `sizedByParent => offstage` plus `computeDryLayout => constraints.smallest`
+/// (`proxy_box.dart:3896`, `:3905-3910`).
+///
+/// Under a **tight** parent those differ: `smallest` is the tight size. Returning
+/// `Size::ZERO` there violates the incoming constraints.
+///
+/// Red-check: return `Size::ZERO` from the offstage branch of `perform_layout`.
+#[test]
+fn harness_offstage_hidden_takes_constraints_smallest_under_tight_constraints() {
+    let tight = BoxConstraints::tight(Size::new(px(120.0), px(80.0)));
+    let run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(tight)
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(120.0), px(80.0)),
+        "a tight parent's constraints must be honoured while offstage"
+    );
+    assert!(run.hit(10.0, 10.0).is_empty(), "still not hit-testable");
+}
+
+/// Toggling `offstage` relayouts: the box switches between `constraints.smallest`
+/// and the child's size, and the child becomes hit-testable again.
+///
+/// Red-check: drop the `mark_needs_layout` that `set_offstage`'s change flag
+/// drives (harness `update` + `relayout`).
+#[test]
+fn harness_offstage_toggle_relayouts_and_restores_hit_testing() {
+    let mut run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+
+    let root = run.root();
+    run.update::<RenderOffstage>(root, |node| {
+        node.set_offstage(false);
+    });
+    run.relayout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(40.0), px(40.0)),
+        "visible again ⇒ the box adopts the child's size"
+    );
+
+    run.update::<RenderOffstage>(root, |node| {
+        node.set_offstage(true);
+    });
+    run.relayout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(40.0), px(40.0)),
+        "and the child is still laid out at full size"
+    );
+}
+
+/// An offstage subtree is not painted — `paint` returns early
+/// (`proxy_box.dart:3937-3943`). The child is a red `RenderColoredBox`; nothing
+/// red may reach the display list.
+///
+/// Red-check: delete the early `return` in `RenderOffstage::paint`.
+#[test]
+fn harness_offstage_hidden_does_not_paint_its_child() {
+    let hidden = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        !hidden
+            .display_commands()
+            .iter()
+            .any(|cmd| cmd.line.contains("#FF0000FF")),
+        "an offstage child must not paint: {:?}",
+        hidden
+            .display_commands()
+            .iter()
+            .map(|cmd| cmd.line.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // The same tree, visible, does paint red — so the assertion above is not
+    // vacuous (e.g. a harness that never records commands).
+    let visible = RenderTester::mount(
+        box_node(RenderOffstage::visible())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        visible
+            .display_commands()
+            .iter()
+            .any(|cmd| cmd.line.contains("#FF0000FF")),
+        "control: a visible child paints red"
+    );
+}
+
+/// An offstage subtree is dropped from the semantics walk — Flutter's
+/// `visitChildrenForSemantics` returns early (`proxy_box.dart:3945-3951`). The
+/// node's own config is still built; only its descendants vanish.
+///
+/// Red-check: delete `RenderOffstage::excludes_semantics_subtree`; the child's
+/// labelled semantics node reappears in the tree.
+#[test]
+fn harness_offstage_hidden_drops_its_semantics_subtree() {
+    let annotated = || {
+        box_node(
+            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label("Hidden"))
+                .with_container(true),
+        )
+        .child(box_node(RenderSizedBox::new(
+            Some(px(40.0)),
+            Some(px(20.0)),
+        )))
+    };
+
+    let hidden = RenderTester::mount(box_node(RenderOffstage::hidden()).child(annotated()))
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_to_semantics();
+
+    let owner = hidden.semantics_owner().expect("semantics enabled");
+    assert!(
+        !owner
+            .tree()
+            .iter()
+            .any(|(_, node)| node.label() == Some("Hidden")),
+        "an offstage subtree must not reach the semantics tree"
+    );
+
+    // Control: visible, the same child is announced — so the assertion above is
+    // not vacuous.
+    let visible = RenderTester::mount(box_node(RenderOffstage::visible()).child(annotated()))
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_to_semantics();
+
+    let owner = visible.semantics_owner().expect("semantics enabled");
+    assert!(
+        owner
+            .tree()
+            .iter()
+            .any(|(_, node)| node.label() == Some("Hidden")),
+        "control: a visible child is announced"
+    );
+}
+
+/// `computeDryLayout` returns `constraints.smallest()` when offstage
+/// (`proxy_box.dart:3905-3910`), matching what `perform_layout` reports — a dry
+/// probe must not disagree with the real pass.
+///
+/// Red-check: return `Size::ZERO` from the offstage branch of
+/// `compute_dry_layout`; the tight probe disagrees with `perform_layout`.
+#[test]
+fn harness_offstage_dry_layout_matches_constraints_smallest() {
+    let mut run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let tight = BoxConstraints::tight(Size::new(px(120.0), px(80.0)));
+    assert_eq!(
+        run.dry_layout(run.root(), tight),
+        Size::new(px(120.0), px(80.0)),
+        "dry layout must honour a tight probe, as perform_layout does"
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), loose(200.0)),
+        Size::ZERO,
+        "and collapse under a loose probe, where smallest is zero"
     );
 }
 

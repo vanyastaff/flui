@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Proposed — **design only. No implementation, no public API, no code landed.** U5.1–U5.5 below are unstarted.
+- **Status:** Accepted — **U5.0 landed 2026-07-09** (`RenderOffstage` parity fix). U5.1–U5.5 are unstarted; no `TransitionRoute`, no public API.
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult animation owner (ticker ownership: who is FLUI's `vsync:`), view owner (route → navigator and route → overlay-entry back-references, both of which ADR-0019 deliberately omitted), rendering owner (`RenderOffstage` correction, `maintainSize`), repository owner (any public API — `TransitionRoute`/`ModalRoute`/`PageRoute` shape, and whether `Overlay` becomes public), qa-lead (deterministic transition tests: driving a controller inside a headless frame).
 - **Relates to:** implements ADR-0019 §5 **U5**. Depends on the seams ADR-0019 U2 already carved out (`PushCompletion::Animating`, `Route::finished_when_popped`, `RouteHistory::notify_push_completed`) — all of which currently have **no production producer**.
@@ -351,7 +351,7 @@ The task's suggested order is right in outline; the reference forces two changes
 
 | Unit | Scope | Exit gate |
 |------|-------|-----------|
-| **U5.0** | **`RenderOffstage` correction** (Decision 4). Child laid out under real constraints; box reports `constraints.smallest`; paint/hit-test/semantics still skipped. Audit and fix `Visibility(maintain_state)` fallout. **Independent of everything else; land it first.** | Harness tests, tight + loose; `Visibility(maintain_state)` tests **consciously updated** — a tight-constrained hidden `Visibility` becoming non-zero is the *correct* Flutter behavior; audit `SliverOffstage` for the same defect |
+| **U5.0** ✓ | **`RenderOffstage` correction** (Decision 4). **Landed 2026-07-09** — see §7a. Child laid out under real constraints; box reports `constraints.smallest`; paint/hit-test skipped, and semantics suppression *added* (it was missing). `SliverOffstage` audited: **does not share the defect**. | ✓ 6 harness tests + 1 widget test, each red-checked |
 | **U5.1** | **The route-animation seam, no `TransitionRoute`.** `NavigatorState` acquires a `Vsync`; `RouteBinding` (Decision 2) minted at `install()`; `install(&mut self, binding)` signature change; `notify_push_completed` loses `#[cfg(test)]` and gains a production caller path; **`RouteHistory::flush` re-entrancy deferral ported** (`navigator.dart:5813-5828`) so a synchronous finalize during a flush is queued rather than asserting. No animation yet. | The existing `reentrant_flush_panics_with_bug` is *replaced* by a deferral test; `route_stack_flush_is_pure_data` still green |
 | **U5.2** | **`TransitionRoute`, private.** Controller lifecycle (`install`/`dispose`, `willDisposeAnimationController`), `_handleStatusChanged` (all four arms incl. the `!isActive` guard and `_popFinalized`), `finished_when_popped`, `didAdd`/`didReplace` value inheritance, `secondaryAnimation` + `canTransitionTo`/`canTransitionFrom`, and train-hopping via `AnimationSwitch` — **after** auditing `AnimationSwitch` against `TrainHoppingAnimation` (§2). `completed` future. | §5 tests 1–7, 11 |
 | **U5.3** | **`Overlay` `opaque`/`maintainState`/`skipCount`** (Decision 3) — a real `RenderTheater`; `overlay_deferred_opaque_builds_every_entry` deliberately goes red and is replaced. **Then `ModalRoute`, private:** two entries (barrier below scope), `buildPage` cached once, `buildTransitions`, `offstage`, `setState`/`changedInternalState`/`changedExternalState`, barrier via `GestureDetector`+opaque hit-test. **Focus is deferred and named** (Seam 6): no `FocusScope` widget exists, and faking it is the Definition-of-Done failure mode. | §5 tests 8–10, 12–14 |
@@ -428,13 +428,29 @@ Each is red-checkable. `«»` names are real Flutter oracles.
 
 ---
 
+## 7a. Implementation findings (U5.0, 2026-07-09)
+
+`RenderOffstage` now matches `proxy_box.dart:3894-3951`: the child is laid out under the **real** incoming constraints, the box reports `constraints.smallest()`, and paint, hit-test and semantics are all suppressed. Three things §2's Seam 4 did not say:
+
+1. **The existing tests were structurally blind to the defect, and stayed green through the fix.** Every offstage test used `loose` constraints, where `constraints.smallest()` *is* zero — so `Size::ZERO` and the correct value coincide. The discriminating observations are (a) the **child's** size under loose constraints, and (b) the **box's** size under *tight* ones. Both are now asserted. A parity test file had even recorded the defect as `FLUI-DEV-001 — tracked for the next render-object patch` and chosen `loose(200)` to dodge the resulting constraint violation; that note is now corrected rather than deleted.
+
+2. **Semantics suppression was missing entirely**, and §2 did not notice. Flutter's `visitChildrenForSemantics` returns early when offstage (`:3945-3951`). FLUI's `RenderBox` has the exact counterpart — `excludes_semantics_subtree()`, whose contract is "this node's own config is still built; only its descendants are dropped" — and `RenderOffstage` never implemented it. So an offstage subtree was still announced to assistive technology. Now fixed, and pinned by a harness test that asserts the child's labelled node is absent from the semantics tree (with a visible-control assertion, so the test cannot pass vacuously).
+
+3. **`RenderSliverOffstage` does *not* share this defect.** Cross-checked against `proxy_sliver.dart:349-358`: Flutter lays the sliver child out with the real constraints and sets `geometry = SliverGeometry.zero` when offstage; FLUI does exactly that. Its comment is accurate.
+
+   The cross-check did, however, surface **two unrelated gaps in `RenderSliverOffstage`**, neither touched by U5.0: it has **no `paint` override** (Flutter returns early, `proxy_sliver.dart:390-396`; FLUI appears to rely on the zero geometry instead) and **no `excludes_semantics_subtree`** (Flutter skips children for semantics). These are a separate defect class needing their own harness evidence, and are recorded here rather than folded into an unrelated fix.
+
+**Fallout: none behavioral.** No test changed its expected value. `Visibility(maintain_state: true)` under loose constraints is unaffected (`smallest` is zero); under tight constraints a hidden `Visibility` would now correctly occupy its tight size, which is what Flutter does. Three comments asserting the old behavior were corrected, and a widget-level test was added asserting the hidden-but-maintained child reaches its full geometry.
+
+**One blocker removed, and only one.** `Hero` needs `ModalRoute::offstage`, which needs a correct `Offstage`. It also still needs `ModalRoute` itself (U5.3), and GlobalKey reparenting across overlay entries plus `createRectTween` flight geometry. **Hero remains blocked.**
+
 ## 7. Consequences
 
 **Good.** The two deferral points U5 needs — `PushCompletion::Animating` and `finished_when_popped` — were designed into ADR-0019 U2 and are already tested; U5 supplies their first production producer. The animation library is unusually complete: `ProxyAnimation::set_parent`, `ALWAYS_DISMISSED`/`ALWAYS_COMPLETE`, and an `AnimationSwitch` that claims to be `TrainHoppingAnimation`. `RouteBinding` reuses the owned-capability pattern three ADRs have now converged on.
 
 **Bad.** ADR-0019's proudest structural result — the route stack is pure data, routes are leaves — is exactly what makes U5 expensive. Three back-references must come back, carefully, without contaminating `RouteHistory`. And ADR-0019 §2.2's "no new render object" expires: `RenderTheater` arrives in U5.3, or `maintainState` is a lie.
 
-**Ugly.** The re-entrancy guard `flush()` asserts on is currently unreachable *by construction*; U5.1 makes it reachable and must replace the assert with Flutter's deferral, not delete it. And `RenderOffstage` has been wrong since it was written, under a comment asserting parity — which is a reminder that a comment claiming "Flutter parity" is a claim like any other, and this repo's own Definition of Done says it must be verified against `.flutter/`, not asserted.
+**Ugly.** The re-entrancy guard `flush()` asserts on is currently unreachable *by construction*; U5.1 makes it reachable and must replace the assert with Flutter's deferral, not delete it. And `RenderOffstage` had been wrong since it was written, under a comment asserting parity — fixed in U5.0, and a reminder that a comment claiming "Flutter parity" is a claim like any other, which this repo's own Definition of Done says must be verified against `.flutter/`, not asserted. Its sibling `RenderSliverOffstage` still carries two unverified suppression gaps (§7a).
 
 ---
 
