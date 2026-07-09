@@ -35,6 +35,10 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
 flui-geometry = { path = "../flui-geometry", version = "0.2.0" }
+# `Overlay`'s entry list and its published `RebuildHandle` live behind private
+# `Mutex`es (ADR-0019 U1): the list is mutated from outside the tree, and
+# `ViewState::build` takes `&self`.
+parking_lot = { workspace = true }
 # Typed error variants for `ImageProviderError` via `#[derive(Error)]`.
 thiserror = { workspace = true }
 # Structured diagnostics for image-provider failures — `tracing::warn!` on

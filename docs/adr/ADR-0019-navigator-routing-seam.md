@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Proposed — **design only. No implementation, no public API, no code landed.** U1–U5 below are unstarted.
+- **Status:** Accepted — **U1 landed 2026-07-09** (`Overlay` / `OverlayEntry`, private to `flui-widgets`). U2–U5 unstarted. No public API yet; the `dyn Any` pop-result divergence (§4) is still unauthorized.
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult view owner (`Navigator::of` handle shape, the two lock hazards in §3), api-design-lead *(role does not exist in this repo — see* Gate 2 *)*, repository owner (the `dyn Any` pop-result divergence: a public API shape we cannot walk back), qa-lead (headless determinism: driving a route transition inside a test frame).
 - **Relates to:** reuses [`ADR-0018`](ADR-0018-async-builder-seam.md)'s `RebuildHandle` verbatim, and the "state publishes its handle into a shared cell at `init_state`" pattern from [`ADR-0017`](ADR-0017-build-during-layout-callback-seam.md) U1 (`LayoutConstraintsCell`) / ADR-0018 U4 (`SharedSlot`). Constrained by [`FOUNDATIONS.md`](../FOUNDATIONS.md) and [`PANIC-POLICY.md`](../PANIC-POLICY.md).
@@ -282,7 +282,9 @@ NavigatorHandle {                      // 'static + Clone + Send + Sync
 
 This is not an invention. It is exactly `RebuildHandle` (ADR-0018 U1: escape the borrow-scoped `BuildContext` by handing out a `'static` capability) composed with the shared-cell publication pattern of ADR-0017 U1 and ADR-0018 U4. Navigator and Overlay couple through an `Arc`, not through the element tree — so **`GlobalKey<OverlayState>` is not ported, and the `GlobalKey` hazard never arises.**
 
-The same reasoning retires the second GlobalKey: `OverlayEntry` need not carry `GlobalKey<_OverlayEntryWidgetState>` to implement `markNeedsBuild`, because the entry's `ViewState` can publish its own `RebuildHandle` into the entry at `init_state` — the `LayoutConstraintsCell` move. What GlobalKey *also* buys Flutter is **state preservation across `rearrange` reordering**; FLUI must instead rely on keyed reconciliation (`reconcile_children_by_id`, which emits `Reorder`). **`UNVERIFIED`: that keyed reorder preserves `ViewState` across a sibling permutation.** U1 must prove it with a test *before* dropping GlobalKey; if it does not hold, `GlobalKey` returns for entries only, and the §3.2(b) hazard must then be resolved for real.
+The same reasoning retires the second GlobalKey: `OverlayEntry` need not carry `GlobalKey<_OverlayEntryWidgetState>` to implement `markNeedsBuild`, because the entry's `ViewState` can publish its own `RebuildHandle` into the entry at `init_state` — the `LayoutConstraintsCell` move. What GlobalKey *also* buys Flutter is **state preservation across `rearrange` reordering**; FLUI must instead rely on keyed reconciliation (`reconcile_children_by_id`, which emits `Reorder`).
+
+> **Resolved in U1 (2026-07-09).** This paragraph previously carried an `UNVERIFIED` label on "keyed reorder preserves `ViewState` across a sibling permutation", and made it U1's gate for dropping `GlobalKey`. It holds. `overlay_rearrange_reorders_and_preserves_entry_state` reorders two layers and asserts each keeps its `ElementId` *and* that neither subtree's `create_state` runs a second time. Red-checked by deleting `OverlayEntryView::key`: reconciliation then matches by index and type, and an element is reconciled onto a **different** `OverlayEntry` — caught by the `did_update_view` `debug_assert` that now guards exactly this. A `ValueKey<OverlayEntryId>` is sufficient; **`GlobalKey` is not used by `Overlay`, so the §3.2(b) hazard never arises**, and it remains unresolved-but-unreached.
 
 > Trigger #22 (ADR-0018) already forbids acquiring `rebuild_handle()` inside `build`/layout/paint. Publishing at `init_state` and firing later is the sanctioned pattern, and the existing guard covers Navigator for free.
 
@@ -301,6 +303,8 @@ Flutter checks whether `context` **is** the `NavigatorState`'s element before wa
 - **dead** — referenced nowhere outside its own module (the only other `overlay` hit in the workspace is the unrelated `performance_overlay` layer).
 
 It is exactly the category tracker **H7** ("Speculative-scaffolding feature-gating") was opened for. **It must not be the basis of Navigator's Overlay**, and its public `OverlayEntry` will collide by name with the real one. U1 must first delete it or rename it (`FloatingLayerManager`) — that decision is a one-line call for the repository owner, recorded as a U1 precondition, not something to discover mid-implementation.
+
+> **Resolved in U1: deleted.** `crates/flui-app/src/overlay/` and its `pub mod overlay;` are gone, along with the `flui-app/README.md` bullet describing them. Deletion, not renaming, because nothing referenced the module — not one call site, not one test — and it stored no view content, so there was no behavior to preserve. `cargo check --workspace --all-targets` and the full `cargo nextest run --workspace --exclude flui-platform` (5780 tests) pass with no other edit, which *is* the proof that it was dead. The workspace now defines exactly one `OverlayEntry`. Note this module carried a `PORT-CHECK-OK-SP4` waiver on trigger 11, so the speculative-scaffolding gate had been explicitly opted out of rather than passed.
 
 ### 3.5 Genuinely missing
 
@@ -342,7 +346,7 @@ The reference confirms the shape the task proposed, with **one adjustment**: the
 
 | Unit | Scope | Exit gate |
 |------|-------|-----------|
-| **U1** | **`Overlay` + `OverlayEntry`, private, unexported.** Built on the existing `RenderStack` with `StackFit::Expand` — **no new render object**. Entry list, `insert`/`insert_all`/`remove`/`rearrange`, per-entry `RebuildHandle` published at `init_state`. Build **every** entry (no `opaque`/`maintainState`/`skipCount`). **Preconditions:** (i) resolve `flui-app::overlay` (§3.4); (ii) prove keyed reorder preserves `ViewState`, else keep `GlobalKey` for entries and resolve §3.2(b). | Overlay tests in §7; `just ci` green |
+| **U1** ✓ | **`Overlay` + `OverlayEntry`, private, unexported.** Built on the existing `RenderStack` with `StackFit::Expand` — **no new render object**. Entry list, `insert`/`insert_all`/`remove`/`rearrange`, per-entry `RebuildHandle` published at `init_state`. Build **every** entry (no `opaque`/`maintainState`/`skipCount`). Both preconditions discharged: `flui-app::overlay` deleted (§3.4), keyed reorder proven to preserve `ViewState` (§3.2). **Landed 2026-07-09** — see §7a. | ✓ 13 tests, each red-checked; gates green |
 | **U2** | **Route data model + lifecycle + flush, private.** `RouteLifecycle` (16 states, `PartialOrd` range predicates), `RouteEntry`, `ErasedRoute`, `OverlayRoute`, the `flush_history_updates` algorithm (reverse walk, `can_remove_or_add`, `popped_route`/`seen_top_active_route`, deferred disposal), observer queues (**additions LIFO / deletions FIFO**), and the result channel (`RouteResult<T>`, `did_complete`, `result ?? current_result`). **No widget, no Navigator, no animation.** The flush is a pure function over the entry vec: it must be unit-testable with a fake observer and zero element tree. | §7 tests 3–9, 15–17; a re-entrancy guard (`flushing` flag + `debug_assert` the scheduler phase is not build/layout/paint, mirroring `Scheduler::drive_async_tasks`) |
 | **U3** | **Private `Navigator` view/element.** `NavigatorState` owning the route stack behind a private `Mutex`; `NavigatorHandle`; `Navigator::of` / `maybe_of` / `of_root` **including the self-check of §3.3**; `initial_route` + `default_generate_initial_routes`. Still unexported. | §7 tests 1–2, 10–12 |
 | **U4** | **Parity re-check against `.flutter/` → Gate 1. Then Gate 2 (below). Only then: public export** of `Navigator`, `Route`, `Overlay`, `OverlayEntry`, `NavigatorObserver` + prelude. Register `dyn ErasedRoute` in the FR-036 allowlist (`port-check.sh` trigger 9) and the result downcast under FR-033. | Full §7 suite through the public prelude; `just ci`; ADR updated with a *Parity findings (U4)* table |
@@ -410,13 +414,32 @@ Each is red-checkable: the named change to the implementation must turn it red. 
 
 ---
 
+## 7a. Implementation findings (U1, 2026-07-09)
+
+`Overlay` / `OverlayEntry` landed in `crates/flui-widgets/src/overlay/`, `pub(crate)`, unexported. 13 tests, each red-checked. The design in §2–§3 survived contact; four things it did not say:
+
+1. **`Stack` was sufficient — no render object added.** As §2.2 predicted: `Stack::new(children).fit(StackFit::Expand)`. Nothing in `flui-objects` or `flui-rendering` was touched.
+
+2. **An overlay rebuild reruns *every* surviving entry's builder; only `mark_needs_build` is targeted.** My first `removed_entry_…` test asserted the untouched entry would not rebuild after a sibling was removed. It rebuilt, and Flutter agrees: `OverlayState.build` constructs a fresh `_OverlayEntryWidget` per entry, each wrapping a fresh `Builder(builder: widget.entry.builder)` (`overlay.dart:424-427`), so a `setState` on the overlay rebuilds all of them. `OverlayEntry.markNeedsBuild` is the only path that rebuilds one layer alone (pinned by `overlay_mark_needs_build_rebuilds_only_that_entry`). The test was wrong, not the code.
+
+3. **A `removed` flag was written, red-checked, and deleted.** It guarded `mark_needs_build` in the window between `remove()` and the frame that unmounts the layer. Deleting it broke no test: the overlay's own rebuild removes the child *before* the drained dirty id is processed, and `RebuildHandle::schedule` already documents a vanished element as a no-op. Rather than ship defensive code no test could reach — the ADR-0018 U4 generation-guard precedent — it is gone. What *does* make a removed entry inert is `remove()` **taking** the overlay back-reference (`Option::take`), so a second `remove()` cannot schedule a second overlay rebuild; that is red-checkable and tested.
+
+4. **Flutter's mid-frame deferral has no analogue.** `OverlayEntry.remove` posts a post-frame callback when it runs during `persistentCallbacks` (`overlay.dart:236-242`), because Dart's `setState` throws during build. `RebuildHandle::schedule` only inserts an id into an inbox drained by the next `build_scope`, so it is already safe from any phase and any thread. Nothing to port. This is the first concrete payoff of ADR-0018's seam beyond async builders.
+
+Two notes for whoever writes U2/U3:
+
+- **`ElementTree::update` dispatch is keyed by `TypeId`**, so `HeadlessBinding::swap_root_view` cannot swap the root to a *different* view type. Unmounting a subtree in a test means toggling a field on one root type. (`stale_overlay_handle_is_harmless` does this via a `Host { show_overlay: bool }`.)
+- The module carries `#![allow(dead_code)]` because `Navigator` (U3) is its only intended consumer and does not exist yet. **Delete that attribute in U3**, exactly as ADR-0018 U6 deleted its own, so genuinely-dead code cannot hide behind it.
+
+Deliberately still absent, and not claimed: `opaque` / `maintainState` / `skipCount` (§6), and `rearrange`'s `above:` / `below:` placement of the unmentioned group — `Navigator._flushHistoryUpdates` passes neither (`navigator.dart:4612`). `overlay_deferred_opaque_builds_every_entry` pins the current build-everything behavior so that implementing skipping turns it red.
+
 ## 8. Consequences
 
 **Good.** Navigator needs no new framework seam: ADR-0017 and ADR-0018 already paid for the two capabilities it requires (a `'static` rebuild handle, and the publish-a-handle-into-a-shared-cell pattern). The flush algorithm is pure data and ports 1:1. Overlay needs no new render object. Both of Flutter's `GlobalKey` uses dissolve, and with them the lock hazard of §3.2.
 
 **Bad.** The pop result must cross `dyn Any` (§4) — a runtime failure mode where Flutter also has one, but which Rust otherwise would not have needed. `_RouteLifecycle::staging` is omitted until page-based routing lands, so U2's enum is 15 states, not 16, and re-adding it later touches the range predicates.
 
-**Ugly.** `flui-app::overlay` must be deleted or renamed before U1 (§3.4), and §3.2's `UNVERIFIED` GlobalKey-registry nesting is a latent hazard in code that ships today — Navigator merely declines to walk into it. Someone should check whether production `build_scope` holds `WidgetsBindingInner`'s write lock across a build; if it does, `GlobalKey::current_element()` from inside a build already deadlocks, and that is a bug independent of this ADR.
+**Ugly.** §3.2's `UNVERIFIED` GlobalKey-registry nesting remains a latent hazard in code that ships today — `Overlay` (U1) merely declines to walk into it, since it uses no `GlobalKey` at all. Someone should still check whether production `build_scope` holds `WidgetsBindingInner`'s write lock across a build; if it does, `GlobalKey::current_element()` from inside a build already deadlocks, and that is a bug independent of this ADR. (`flui-app::overlay` is resolved: deleted in U1.)
 
 ---
 
