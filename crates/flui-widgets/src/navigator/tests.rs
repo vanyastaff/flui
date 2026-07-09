@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use super::binding::{RouteBinding, RouteCommand};
 use super::history::RouteHistory;
 use super::lifecycle::RouteLifecycle;
 use super::observer::NavigatorObserver;
@@ -963,7 +964,9 @@ fn animating_push_defers_disposal_of_the_replaced_route_until_it_completes() {
     assert_eq!(history.len(), 3, "still deferred after a redundant flush");
     assert!(!old_log.lock().contains(&Event::Dispose));
 
-    history.notify_push_completed(new_top);
+    // The seam's only path: raise the command, then settle.
+    binding_for(&history, new_top).notify_push_completed();
+    history.flush(true);
 
     assert_eq!(history.state_of(new_top), Some(RouteLifecycle::Idle));
     assert_eq!(history.len(), 2, "now the replaced route is disposed");
@@ -1070,16 +1073,16 @@ fn bottom_route_receives_its_initial_did_change_previous() {
 // 10. RE-ENTRANCY
 // ============================================================================
 
-/// Flutter guards the flush with `_debugLocked` + `_flushingHistory`
-/// (`navigator.dart:4452-4453`). Re-entering means a route lifecycle callback
-/// mutated the history mid-flush — a framework invariant, so `PANIC-POLICY`
+/// A **directly recursive** `flush` is still forbidden and still loud
+/// (`navigator.dart:4452-4453`). This is framework misuse, so `PANIC-POLICY`
 /// permits the panic.
 ///
-/// Through U2's surface this is **structurally unreachable**: a `Route` hook gets
-/// only `&mut self` and cannot reach the history. The guard exists for U5, where
-/// a zero-duration transition completes inside a flush. Testing it directly
-/// rather than shipping it untested follows the ADR-0018 U4 precedent — hence
-/// `force_flushing_for_test`.
+/// ADR-0020 U5.1 did **not** relax this. What changed is that route callbacks no
+/// longer reach `flush` at all: `RouteBinding` enqueues a `RouteCommand`, and the
+/// running flush drains it (see `route_binding_finalize_during_flush_is_deferred`).
+/// So this assert now guards only a genuine recursive call, and it is still
+/// tested directly — a `Route` hook receives `&mut self` and cannot reach the
+/// history, exactly as in U2.
 ///
 /// Red-check: delete the `assert!` in `RouteHistory::flush`.
 #[test]
@@ -1088,6 +1091,271 @@ fn reentrant_flush_panics_with_bug() {
     let mut history = RouteHistory::new();
     history.force_flushing_for_test();
     history.flush(true);
+}
+
+// ============================================================================
+// 12. THE ROUTE-ANIMATION SEAM (ADR-0020 U5.1)
+// ============================================================================
+
+/// A route that raises a `RouteCommand` from one of its lifecycle callbacks —
+/// the shape of a zero-duration `TransitionRoute` (U5.2).
+struct SeamRoute {
+    settings: RouteSettings,
+    binding: Option<RouteBinding>,
+    /// Raised from `did_push`, i.e. **inside** the flush that pushes this route.
+    complete_push_on_install: bool,
+    /// Raised from `did_pop`, i.e. inside the flush that pops it — Flutter's
+    /// `OverlayRoute.didPop` → `navigator.finalizeRoute` (`routes.dart:87-94`).
+    finalize_on_pop: bool,
+    push: PushCompletion,
+    finished_when_popped: bool,
+}
+
+impl SeamRoute {
+    fn new() -> Self {
+        Self {
+            settings: RouteSettings::default(),
+            binding: None,
+            complete_push_on_install: false,
+            finalize_on_pop: false,
+            push: PushCompletion::Immediate,
+            finished_when_popped: true,
+        }
+    }
+
+    /// A zero-duration transition: parks in `Pushing`, then completes at once.
+    fn zero_duration_push(mut self) -> Self {
+        self.push = PushCompletion::Animating;
+        self.complete_push_on_install = true;
+        self
+    }
+
+    /// An exit transition that finishes synchronously inside `did_pop`.
+    fn finalizing_on_pop(mut self) -> Self {
+        self.finalize_on_pop = true;
+        self.finished_when_popped = false;
+        self
+    }
+}
+
+impl Route for SeamRoute {
+    type Output = i32;
+
+    fn settings(&self) -> &RouteSettings {
+        &self.settings
+    }
+
+    fn finished_when_popped(&self) -> bool {
+        self.finished_when_popped
+    }
+
+    fn did_push(&mut self) -> PushCompletion {
+        if self.complete_push_on_install
+            && let Some(binding) = &self.binding
+        {
+            binding.notify_push_completed();
+        }
+        self.push
+    }
+
+    fn did_pop(&mut self) -> bool {
+        if self.finalize_on_pop
+            && let Some(binding) = &self.binding
+        {
+            binding.finalize();
+        }
+        true
+    }
+}
+
+/// Drive a history's command queue without a navigator: the test's stand-in for
+/// `NavigatorShared::pump_route_commands`'s `wake`.
+///
+/// Deliberately a **no-op**: the whole point of U5.1 is that a command raised
+/// during a flush is drained by that flush, so `wake` has nothing to do. Commands
+/// raised *outside* a flush are applied by the explicit `flush` the test drives.
+fn inert_wake() -> Arc<dyn Fn() + Send + Sync> {
+    Arc::new(|| {})
+}
+
+fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
+    RouteBinding::new(id, history.command_queue(), inert_wake())
+}
+
+/// A route raising `finalize()` from `did_pop` — i.e. **inside** the flush that
+/// pops it — must not re-enter `flush`. Flutter's `finalizeRoute` handles this
+/// with `if (!_flushingHistory)` (`navigator.dart:5825-5828`); FLUI enqueues a
+/// `RouteCommand` and the running flush drains it, costing one extra pass.
+///
+/// Before U5.1 this shape was structurally unreachable. It is the reason the
+/// `BUG:` assert existed.
+///
+/// Red-check: make `RouteBinding::finalize` call `RouteHistory::finalize_route`
+/// directly — it deadlocks on the history mutex (a hang, not a panic), which is
+/// exactly why the queue exists.
+#[test]
+fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
+    let log: Log = Log::default();
+    let mut history = RouteHistory::new();
+    history.add_initial(Probe::new(&log));
+
+    let id = RouteId::next();
+    let mut route = SeamRoute::new().finalizing_on_pop();
+    route.binding = Some(binding_for(&history, id));
+    let (top, result) = history.push_with_id(id, route);
+    assert_eq!(history.len(), 2);
+
+    // `did_pop` raises `finalize()` mid-flush. No panic, no hang.
+    assert!(history.pop(Some(boxed(5))));
+
+    assert_eq!(
+        history.state_of(top),
+        None,
+        "the finalized route was disposed and dropped"
+    );
+    assert_eq!(history.len(), 1);
+    assert_eq!(result.try_take(), Some(Some(5)), "and it still completed");
+    assert_eq!(
+        history.last_flush_passes(),
+        2,
+        "one walk, then one settling pass for the deferred command"
+    );
+    assert!(!history.has_pending_commands());
+}
+
+/// A zero-duration entrance transition: the route parks in `Pushing` and raises
+/// `notify_push_completed()` from `did_push`, inside the push's own flush.
+///
+/// Flutter never sees this — `whenCompleteOrCancel` asserts `!_debugLocked` and
+/// always arrives on a later microtask (`navigator.dart:3277-3279`). FLUI has no
+/// microtask, so the command is deferred to a second pass of the same `flush`.
+/// The end state is identical: `Idle`, settled, before `push` returns.
+///
+/// Red-check: drop the `while self.apply_pending_commands()` loop in `flush`; the
+/// entry is stranded in `Pushing`.
+#[test]
+fn route_binding_notify_push_completed_during_flush_is_deferred() {
+    let log: Log = Log::default();
+    let mut history = RouteHistory::new();
+    history.add_initial(Probe::new(&log));
+
+    let id = RouteId::next();
+    let mut route = SeamRoute::new().zero_duration_push();
+    route.binding = Some(binding_for(&history, id));
+    let (top, _result) = history.push_with_id(id, route);
+
+    assert_eq!(
+        history.state_of(top),
+        Some(RouteLifecycle::Idle),
+        "a zero-duration push settles before `push` returns"
+    );
+    assert_eq!(history.last_flush_passes(), 2);
+    assert!(!history.has_pending_commands());
+}
+
+/// A zero-duration push **and** a synchronous pop, end to end: the lifecycle and
+/// the overlay outcome must both settle. `FlushOutcome` accumulates across passes,
+/// so the caller (the navigator) removes every disposed route's overlay entry.
+///
+/// Red-check: drop `FlushOutcome::absorb`'s `disposed.extend` — the route
+/// disposed on the *second* pass never reaches the caller, and its overlay entry
+/// leaks.
+#[test]
+fn zero_duration_push_then_pop_settles_lifecycle_and_overlay_outcome() {
+    let log: Log = Log::default();
+    let mut history = RouteHistory::new();
+    history.add_initial(Probe::new(&log));
+
+    let id = RouteId::next();
+    let mut route = SeamRoute::new().zero_duration_push().finalizing_on_pop();
+    route.binding = Some(binding_for(&history, id));
+    let (top, result) = history.push_with_id(id, route);
+    assert_eq!(history.state_of(top), Some(RouteLifecycle::Idle));
+
+    history.pop(None);
+    let outcome = history.take_outcome().expect("the pop flushed");
+
+    assert!(
+        outcome.disposed.contains(&top),
+        "the deferred disposal must reach the caller: {:?}",
+        outcome.disposed
+    );
+    assert_eq!(history.len(), 1);
+    assert!(result.is_completed());
+    assert!(!history.has_pending_commands());
+}
+
+/// Commands raised **between** flushes (an animation status listener, U5.2) are
+/// applied at the head of the next flush, before the walk sees the history.
+///
+/// Red-check: delete the `self.apply_pending_commands()` call before the first
+/// `flush_once`; the entry is still `Pushing` when the walk reads it, so
+/// `can_remove_or_add` stays false.
+#[test]
+fn commands_raised_between_flushes_apply_at_the_head_of_the_next_one() {
+    let log: Log = Log::default();
+    let mut history = RouteHistory::new();
+    history.add_initial(Probe::new(&log));
+
+    let id = RouteId::next();
+    let mut animating = Probe::new(&log);
+    animating.push = PushCompletion::Animating;
+    let (top, _result) = history.push_with_id(id, animating);
+    assert_eq!(history.state_of(top), Some(RouteLifecycle::Pushing));
+    assert_eq!(history.last_flush_passes(), 1, "nothing was deferred");
+
+    // Raise it out-of-flush, as an animation listener would.
+    binding_for(&history, top).notify_push_completed();
+    assert!(history.has_pending_commands());
+
+    history.flush(true);
+
+    assert_eq!(history.state_of(top), Some(RouteLifecycle::Idle));
+    assert_eq!(history.last_flush_passes(), 1, "applied before the walk");
+    assert!(!history.has_pending_commands());
+}
+
+/// A command naming a route that has already been disposed and dropped is
+/// discarded, not a panic. A `RouteBinding` outlives its route.
+///
+/// Red-check: `expect()` the entry lookup in `apply_pending_commands`.
+#[test]
+fn a_command_for_a_vanished_route_is_dropped() {
+    let log: Log = Log::default();
+    let mut history = RouteHistory::new();
+    history.add_initial(Probe::new(&log));
+    let (top, _result) = history.push(Probe::new(&log));
+
+    let stale = binding_for(&history, top);
+    history.pop(None);
+    assert_eq!(history.len(), 1);
+
+    stale.finalize();
+    stale.notify_push_completed();
+    history.flush(true);
+
+    assert_eq!(history.len(), 1, "the stale commands changed nothing");
+    assert!(!history.has_pending_commands());
+}
+
+/// `RouteCommand` is a plain value: the queue is data, not a callback into the
+/// navigator. This is what keeps `route_stack_flush_is_pure_data` true.
+#[test]
+fn route_commands_are_pre_bound_to_one_route() {
+    let history = RouteHistory::new();
+    let id = RouteId::next();
+    let binding = binding_for(&history, id);
+
+    assert_eq!(binding.route_id(), id);
+    binding.finalize();
+    binding.notify_push_completed();
+
+    let queued: Vec<RouteCommand> = history.command_queue().lock().iter().copied().collect();
+    assert_eq!(
+        queued,
+        vec![RouteCommand::Finalize(id), RouteCommand::PushCompleted(id)],
+        "a binding can only ever name its own route"
+    );
 }
 
 // ============================================================================

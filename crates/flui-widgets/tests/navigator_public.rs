@@ -509,7 +509,7 @@ fn no_global_key_in_public_navigator_path() {
 #[test]
 fn public_prelude_exports_exact_approved_surface() {
     const LIB: &str = include_str!("../src/lib.rs");
-    const INTERNAL: [&str; 8] = [
+    const INTERNAL: [&str; 14] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -518,6 +518,13 @@ fn public_prelude_exports_exact_approved_surface() {
         "FlushOutcome",
         "ObservationQueues",
         "RoutePopDisposition",
+        // ADR-0020 U5.1 seam + U5.2's route classes: all private.
+        "RouteBinding",
+        "RouteCommand",
+        "BoundRoute",
+        "TransitionRoute",
+        "ModalRoute",
+        "PageRoute",
     ];
 
     for line in LIB.lines() {

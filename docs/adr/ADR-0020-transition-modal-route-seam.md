@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Accepted — **U5.0 landed 2026-07-09** (`RenderOffstage` parity fix). U5.1–U5.5 are unstarted; no `TransitionRoute`, no public API.
+- **Status:** Accepted — **U5.0 and U5.1 landed 2026-07-09** (`RenderOffstage` parity fix; the route-animation binding seam). U5.2–U5.5 are unstarted; no `TransitionRoute`, no public API. **Decision 2 was wrong twice and is corrected in §7b.**
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult animation owner (ticker ownership: who is FLUI's `vsync:`), view owner (route → navigator and route → overlay-entry back-references, both of which ADR-0019 deliberately omitted), rendering owner (`RenderOffstage` correction, `maintainSize`), repository owner (any public API — `TransitionRoute`/`ModalRoute`/`PageRoute` shape, and whether `Overlay` becomes public), qa-lead (deterministic transition tests: driving a controller inside a headless frame).
 - **Relates to:** implements ADR-0019 §5 **U5**. Depends on the seams ADR-0019 U2 already carved out (`PushCompletion::Animating`, `Route::finished_when_popped`, `RouteHistory::notify_push_completed`) — all of which currently have **no production producer**.
@@ -352,7 +352,7 @@ The task's suggested order is right in outline; the reference forces two changes
 | Unit | Scope | Exit gate |
 |------|-------|-----------|
 | **U5.0** ✓ | **`RenderOffstage` correction** (Decision 4). **Landed 2026-07-09** — see §7a. Child laid out under real constraints; box reports `constraints.smallest`; paint/hit-test skipped, and semantics suppression *added* (it was missing). `SliverOffstage` audited: **does not share the defect**. | ✓ 6 harness tests + 1 widget test, each red-checked |
-| **U5.1** | **The route-animation seam, no `TransitionRoute`.** `NavigatorState` acquires a `Vsync`; `RouteBinding` (Decision 2) minted at `install()`; `install(&mut self, binding)` signature change; `notify_push_completed` loses `#[cfg(test)]` and gains a production caller path; **`RouteHistory::flush` re-entrancy deferral ported** (`navigator.dart:5813-5828`) so a synchronous finalize during a flush is queued rather than asserting. No animation yet. | The existing `reentrant_flush_panics_with_bug` is *replaced* by a deferral test; `route_stack_flush_is_pure_data` still green |
+| **U5.1** ✓ | **The route-animation seam, no `TransitionRoute`.** **Landed 2026-07-09** — see §7b. `RouteBinding` enqueues `RouteCommand`s; `RouteHistory::flush` drains them at the head of each flush and again after each pass, bounded. **No `Vsync` was added** (U5.1 needs no clock) and `Route::install` keeps its public signature — both Decision 2 corrections. | ✓ 8 tests, each red-checked; `reentrant_flush_panics_with_bug` **kept**; `route_stack_flush_is_pure_data` green |
 | **U5.2** | **`TransitionRoute`, private.** Controller lifecycle (`install`/`dispose`, `willDisposeAnimationController`), `_handleStatusChanged` (all four arms incl. the `!isActive` guard and `_popFinalized`), `finished_when_popped`, `didAdd`/`didReplace` value inheritance, `secondaryAnimation` + `canTransitionTo`/`canTransitionFrom`, and train-hopping via `AnimationSwitch` — **after** auditing `AnimationSwitch` against `TrainHoppingAnimation` (§2). `completed` future. | §5 tests 1–7, 11 |
 | **U5.3** | **`Overlay` `opaque`/`maintainState`/`skipCount`** (Decision 3) — a real `RenderTheater`; `overlay_deferred_opaque_builds_every_entry` deliberately goes red and is replaced. **Then `ModalRoute`, private:** two entries (barrier below scope), `buildPage` cached once, `buildTransitions`, `offstage`, `setState`/`changedInternalState`/`changedExternalState`, barrier via `GestureDetector`+opaque hit-test. **Focus is deferred and named** (Seam 6): no `FocusScope` widget exists, and faking it is the Definition-of-Done failure mode. | §5 tests 8–10, 12–14 |
 | **U5.4** | **`PageRoute` / `PopupRoute` + parity re-check + sign-off, then public export.** Decide whether `Overlay`/`OverlayEntry` become public (they must, if app authors are to write custom routes — or `NavigatorRoute::content_builder` must stay the only door). | Full §5 suite; ADR gains a *Parity findings (U5.4)* table |
@@ -443,6 +443,41 @@ Each is red-checkable. `«»` names are real Flutter oracles.
 **Fallout: none behavioral.** No test changed its expected value. `Visibility(maintain_state: true)` under loose constraints is unaffected (`smallest` is zero); under tight constraints a hidden `Visibility` would now correctly occupy its tight size, which is what Flutter does. Three comments asserting the old behavior were corrected, and a widget-level test was added asserting the hidden-but-maintained child reaches its full geometry.
 
 **One blocker removed, and only one.** `Hero` needs `ModalRoute::offstage`, which needs a correct `Offstage`. It also still needs `ModalRoute` itself (U5.3), and GlobalKey reparenting across overlay entries plus `createRectTween` flight geometry. **Hero remains blocked.**
+
+## 7b. Implementation findings (U5.1, 2026-07-09)
+
+The seam landed as `navigator/binding.rs` (`RouteBinding`, `RouteCommand`, `BoundRoute`), a command queue on `RouteHistory`, and `NavigatorHandle::push_bound` — all private. 8 tests, each red-checked. **Decision 2 was wrong in two independent ways**, and both are corrected here rather than forced through.
+
+### Correction 1 — a direct callback deadlocks; it does not panic
+
+Decision 2 proposed a `RouteBinding` whose `finalize()` and `notify_push_completed()` call straight into the navigator. That cannot work. `NavigatorShared::mutate` holds `history.lock()` for the **whole** flush, and `parking_lot::Mutex` is not reentrant — a route calling back from `did_pop` would **hang**, not trip the `BUG:` assert.
+
+Verified empirically, not reasoned about: replacing `pump_route_commands`'s `try_lock` with `lock()` makes `push_bound_zero_duration_route_settles_lifecycle_and_overlay` hang until nextest's slow-timeout kills it.
+
+So a binding **enqueues a `RouteCommand`** onto a queue with its own mutex, then calls a `wake` closure. `wake` does `try_lock` on the history: if it succeeds we are between frames and the commands apply and flush at once; if it fails, a flush is running on this thread and *that* flush drains the queue before returning. The queue is Flutter's `_flushingHistory` check expressed as ownership rather than a flag.
+
+`flush` therefore became a bounded pass loop — apply pending, walk, apply pending, walk again — capped by `MAX_FLUSH_PASSES`, the same posture as ADR-0017's layout↔build fixpoint. `FlushOutcome` gained `absorb`, so a route disposed on the *second* pass still reaches the caller and its overlay entry is removed. Dropping that one line leaks an entry, and a test catches it.
+
+**The `BUG: flush_history_updates re-entered` assert was not deleted, and not relaxed.** Route callbacks no longer reach `flush` at all, so it now guards exactly what it always meant to: a genuinely recursive `flush`. `reentrant_flush_panics_with_bug` still passes, still red-checks.
+
+### Correction 2 — `install(&mut self, binding)` would force `RouteBinding` public
+
+`Route` is public (ADR-0019 U4). Threading `&RouteBinding` through `Route::install` exports it. U5.1 is not authorized to add public API, so the binding reaches a route through `BoundRoute`, a private trait, delivered by the private `NavigatorHandle::push_bound` **before** the route is boxed. That is why `RouteId` is now minted up front (`RouteId::next` + `RouteRecord::erase_with_id`) instead of inside `RouteRecord::erase`.
+
+U5.2's `TransitionRoute` is internal and can implement `BoundRoute`. If U5.4 ever lets an app author write an animated route, that is where the public shape gets decided — and signed off.
+
+### Two things Decision 2 asked for that turned out not to exist
+
+- **No clock was added.** U5.1 needs none: nothing ticks yet. Decision 1 (`NavigatorState` acquires a `Vsync`) is deferred whole to U5.2, where an `AnimationController` gives it a consumer. Adding a `Vsync` field now would have been dead state.
+- **`RouteHistory::notify_push_completed` and `finalize_route` were deleted, not un-`cfg(test)`ed.** Once the command queue exists they are redundant standalone paths with no caller — shipping them would be exactly the untested-defensive-code failure this repo keeps refusing. There is now **one** path: raise a command, drain it. The U2 tests that used the old method were rewired through a `RouteBinding`, so they exercise the real seam.
+
+### What is still dead, and why
+
+Everything in `binding.rs`, plus `command_queue`, `has_pending_commands`, `pump_route_commands`, `binding_for` and `push_bound`, carries a scoped `#[allow(dead_code)]`: `push_bound` has no production caller until U5.2's `TransitionRoute`. Each attribute names that, and each must go with U5.2. No module-wide allow was used, so genuinely-dead code cannot hide behind it.
+
+### Divergence recorded
+
+Flutter's `finalizeRoute` mutates the entry immediately, and the *in-progress* flush observes it on the same walk (`navigator.dart:5825-5828`, plus the `Pop` arm's `if (entry.currentState == dispose) continue;`). FLUI defers it to a second pass of the same `flush`. The end state, the observer stream and the accumulated `FlushOutcome` are identical before `flush` returns; only the pass count differs, and `last_flush_passes` asserts it is exactly two.
 
 ## 7. Consequences
 

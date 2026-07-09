@@ -20,8 +20,10 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
+use super::binding::{BoundRoute, RouteBinding};
 use super::navigator::{Navigator, NavigatorHandle};
-use super::overlay_route::SimpleRoute;
+use super::overlay_route::{NavigatorRoute, RouteContentBuilder, SimpleRoute};
+use super::route::{PushCompletion, Route, RouteSettings};
 use crate::SizedBox;
 use crate::test_harness::{Harness, mount};
 
@@ -580,6 +582,152 @@ fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 }
 
 // ============================================================================
+// THE ROUTE-ANIMATION SEAM (ADR-0020 U5.1)
+// ============================================================================
+
+/// A zero-duration transition route: it parks in `Pushing`, then completes its
+/// entrance from inside `did_push` — i.e. inside the flush that pushed it — and
+/// finalizes itself from inside `did_pop`.
+///
+/// This is the shape U5.2's `TransitionRoute` will have, minus the
+/// `AnimationController`.
+struct ZeroDurationRoute {
+    settings: RouteSettings,
+    builder: RouteContentBuilder,
+    binding: Option<RouteBinding>,
+}
+
+impl ZeroDurationRoute {
+    fn new(built: &Built, name: &'static str) -> Self {
+        let built = built.clone();
+        Self {
+            settings: RouteSettings::named(name),
+            builder: Arc::new(move |_ctx| {
+                built.0.lock().push(name);
+                SizedBox::new(10.0, 10.0).into_view().boxed()
+            }),
+            binding: None,
+        }
+    }
+}
+
+impl Route for ZeroDurationRoute {
+    type Output = i32;
+
+    fn settings(&self) -> &RouteSettings {
+        &self.settings
+    }
+
+    /// `TransitionRoute.finishedWhenPopped => controller.isDismissed` — false
+    /// while the exit transition runs, so disposal defers to `finalize()`.
+    fn finished_when_popped(&self) -> bool {
+        false
+    }
+
+    fn did_push(&mut self) -> PushCompletion {
+        if let Some(binding) = &self.binding {
+            binding.notify_push_completed();
+        }
+        PushCompletion::Animating
+    }
+
+    fn did_pop(&mut self) -> bool {
+        if let Some(binding) = &self.binding {
+            binding.finalize();
+        }
+        true
+    }
+}
+
+impl NavigatorRoute for ZeroDurationRoute {
+    fn content_builder(&self) -> RouteContentBuilder {
+        Arc::clone(&self.builder)
+    }
+}
+
+impl BoundRoute for ZeroDurationRoute {
+    fn bind(&mut self, binding: RouteBinding) {
+        self.binding = Some(binding);
+    }
+}
+
+/// The seam, end to end, through a real `Navigator` and `Overlay`.
+///
+/// Both commands are raised from **inside** a flush, while `NavigatorShared`
+/// holds the history mutex. The binding enqueues rather than calling back, and
+/// `wake`'s `try_lock` correctly declines. If it locked instead, this test would
+/// hang rather than fail — which is why `pump_route_commands` uses `try_lock`.
+///
+/// Red-check: change `pump_route_commands` to `self.history.lock()`; this test
+/// deadlocks (nextest's per-test timeout catches it).
+#[test]
+fn push_bound_zero_duration_route_settles_lifecycle_and_overlay() {
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
+
+    let result = handle.push_bound(ZeroDurationRoute::new(&built, "animated"));
+    harness.tick();
+
+    assert!(built.contains("animated"), "the pushed route built");
+    assert_eq!(handle.route_ids().len(), 2, "the push settled to Idle");
+    assert_eq!(handle.overlay_handle().len(), 2);
+    assert_eq!(layers(&mut harness).len(), 2);
+
+    // `did_pop` raises `finalize()` mid-flush; the deferred pass disposes it and
+    // the accumulated outcome removes its overlay entry.
+    assert!(handle.pop_with(7_i32));
+    harness.tick();
+
+    assert_eq!(result.try_take(), Some(Some(7)));
+    assert_eq!(handle.route_ids().len(), 1);
+    assert_eq!(
+        handle.overlay_handle().len(),
+        1,
+        "the deferred disposal reached the overlay"
+    );
+    assert_eq!(handle.tracked_entry_count(), 1, "and the navigator's map");
+    assert_eq!(layers(&mut harness).len(), 1);
+}
+
+/// A route that never completes its push stays in `Pushing`, and the route below
+/// it is not disposed — the deferral must not settle what nothing raised.
+///
+/// Red-check: make `apply_pending_commands` flip `Pushing → Idle` unconditionally.
+#[test]
+fn a_route_that_raises_nothing_stays_pushing() {
+    struct Animating {
+        settings: RouteSettings,
+        builder: RouteContentBuilder,
+    }
+    impl Route for Animating {
+        type Output = i32;
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+        fn did_push(&mut self) -> PushCompletion {
+            PushCompletion::Animating
+        }
+    }
+    impl NavigatorRoute for Animating {
+        fn content_builder(&self) -> RouteContentBuilder {
+            Arc::clone(&self.builder)
+        }
+    }
+
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
+
+    handle.push(Animating {
+        settings: RouteSettings::named("stuck"),
+        builder: Arc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+    });
+    harness.tick();
+
+    assert_eq!(handle.route_ids().len(), 2);
+    assert_eq!(layers(&mut harness).len(), 2, "both routes are still shown");
+}
+
+// ============================================================================
 // ARCHITECTURE GUARDS
 // ============================================================================
 
@@ -626,7 +774,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 8] = [
+    const INTERNAL: [&str; 14] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -635,6 +783,14 @@ fn public_no_internal_route_stack_exports() {
         "FlushOutcome",
         "Observation",
         "RoutePopDisposition",
+        // ADR-0020 U5.1: the route-animation seam is private, and U5.2's
+        // TransitionRoute/ModalRoute/PageRoute must not leak either.
+        "RouteBinding",
+        "RouteCommand",
+        "BoundRoute",
+        "TransitionRoute",
+        "ModalRoute",
+        "PageRoute",
     ];
 
     for (name, source) in [("navigator/mod.rs", NAV_MOD), ("lib.rs", LIB)] {

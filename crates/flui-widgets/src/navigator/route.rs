@@ -59,7 +59,12 @@ pub(crate) type AnyResult = Box<dyn Any + Send>;
 pub struct RouteId(u64);
 
 impl RouteId {
-    fn next() -> Self {
+    /// Mint the next id.
+    ///
+    /// `pub(crate)` since ADR-0020 U5.1: `NavigatorHandle::push_bound` needs the
+    /// id **before** the route is boxed, so it can hand the route a
+    /// `RouteBinding` pre-bound to it.
+    pub(crate) fn next() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         Self(COUNTER.fetch_add(1, Ordering::Relaxed))
     }
@@ -283,9 +288,20 @@ impl<R: Route> RouteRecord<R> {
     /// `Navigator.push` returns `route.popped` before `_flushHistoryUpdates`
     /// (`navigator.dart:5060-5063`).
     pub(crate) fn erase(route: R) -> (Box<dyn ErasedRoute>, RouteResult<R::Output>) {
+        Self::erase_with_id(RouteId::next(), route)
+    }
+
+    /// Box `route` under an id minted by the caller.
+    ///
+    /// `NavigatorHandle::push_bound` mints first so it can bind the route to its
+    /// own id before boxing (ADR-0020 U5.1).
+    pub(crate) fn erase_with_id(
+        id: RouteId,
+        route: R,
+    ) -> (Box<dyn ErasedRoute>, RouteResult<R::Output>) {
         let (completer, result) = Completer::new();
         let record = Self {
-            id: RouteId::next(),
+            id,
             route,
             completer,
             installed: false,

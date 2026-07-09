@@ -36,6 +36,7 @@
 
 use std::sync::Arc;
 
+use super::binding::{RouteCommand, RouteCommandQueue};
 use super::lifecycle::RouteLifecycle;
 use super::observer::{NavigatorObserver, Observation, ObservationQueues};
 use super::result::RouteResult;
@@ -296,6 +297,14 @@ impl RouteEntry {
     }
 }
 
+/// How many `flush_once` passes one `flush` may run before we call it a bug.
+///
+/// A well-behaved route raises at most one command per lifecycle callback, so two
+/// passes is the realistic maximum. The bound exists so a route that re-raises
+/// from its own callback fails loudly instead of hanging — the same posture as
+/// ADR-0017's `MAX_LAYOUT_BUILD_PASSES`.
+const MAX_FLUSH_PASSES: usize = 10;
+
 /// What one flush did that its caller must still act on.
 ///
 /// U2 has no overlay; U3's `Navigator` reads this and performs the overlay work
@@ -307,9 +316,18 @@ pub(crate) struct FlushOutcome {
     /// `remove_route` pass `false`, because `OverlayEntry.remove()` has already
     /// updated the overlay's own list.
     pub(crate) rearrange_overlay: bool,
-    /// The routes disposed at the end of this flush, bottom-up. Their overlay
-    /// entries must be removed by the caller.
+    /// The routes disposed at the end of this flush. Their overlay entries must
+    /// be removed by the caller.
     pub(crate) disposed: Vec<RouteId>,
+}
+
+impl FlushOutcome {
+    /// Fold a follow-up pass's outcome into this one, so the caller applies the
+    /// union of everything a single `flush` did.
+    fn absorb(&mut self, later: Self) {
+        self.rearrange_overlay |= later.rearrange_overlay;
+        self.disposed.extend(later.disposed);
+    }
 }
 
 /// The route stack. Flutter's `NavigatorState._history` plus the flush.
@@ -324,11 +342,87 @@ pub(crate) struct RouteHistory {
     /// What the most recent flush left for the caller to apply. Flutter performs
     /// the overlay work inline; U2 is pure data, so it hands it out instead.
     last_outcome: Option<FlushOutcome>,
+    /// Lifecycle transitions raised by routes through a `RouteBinding`
+    /// (ADR-0020 U5.1). Drained at the head of every flush, and again after each
+    /// pass, so a command raised *during* the walk settles before `flush` returns.
+    commands: RouteCommandQueue,
+    /// How many `flush_once` passes the last `flush` ran. Test-facing: a deferred
+    /// command must cost exactly one extra pass, not a loop.
+    #[cfg(test)]
+    last_flush_passes: usize,
 }
 
 impl RouteHistory {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// The queue a [`RouteBinding`](super::binding::RouteBinding) writes to.
+    /// Cloned into every binding the navigator mints.
+    ///
+    /// Dead until U5.2's `TransitionRoute`: only `NavigatorHandle::push_bound`
+    /// (private, test-only for now) mints bindings. Delete the attribute then.
+    #[allow(dead_code)]
+    pub(crate) fn command_queue(&self) -> RouteCommandQueue {
+        Arc::clone(&self.commands)
+    }
+
+    /// Whether any route has raised a command that has not been applied.
+    ///
+    /// Dead until U5.2, for the same reason as [`command_queue`](Self::command_queue).
+    #[allow(dead_code)]
+    pub(crate) fn has_pending_commands(&self) -> bool {
+        !self.commands.lock().is_empty()
+    }
+
+    /// How many passes the last `flush` ran.
+    #[cfg(test)]
+    pub(crate) fn last_flush_passes(&self) -> usize {
+        self.last_flush_passes
+    }
+
+    /// Apply every queued [`RouteCommand`], returning whether any changed a state.
+    ///
+    /// A command naming a route that has since been disposed and dropped is
+    /// discarded — Flutter's equivalent guards are the `currentState == pushing`
+    /// check in `whenCompleteOrCancel` (`navigator.dart:3277`) and
+    /// `finalizeRoute`'s history lookup.
+    fn apply_pending_commands(&mut self) -> bool {
+        debug_assert!(
+            !self.flushing,
+            "BUG: route commands must be applied between flush passes, never during one"
+        );
+
+        let drained: Vec<RouteCommand> = self.commands.lock().drain(..).collect();
+        let mut changed = false;
+
+        for command in drained {
+            match command {
+                RouteCommand::PushCompleted(id) => {
+                    if let Some(entry) = self.entry_mut(id)
+                        && entry.state == RouteLifecycle::Pushing
+                    {
+                        entry.state = RouteLifecycle::Idle;
+                        changed = true;
+                    }
+                }
+                RouteCommand::Finalize(id) => {
+                    if let Some(entry) = self.entry_mut(id)
+                        && entry.state < RouteLifecycle::Dispose
+                    {
+                        // Flutter's `entry.finalize()` (`navigator.dart:3441-3444`).
+                        entry.state = RouteLifecycle::Dispose;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        changed
+    }
+
+    fn entry_mut(&mut self, id: RouteId) -> Option<&mut RouteEntry> {
+        self.entries.iter_mut().find(|entry| entry.id() == id)
     }
 
     /// Take what the most recent flush left to apply. `None` if already taken.
@@ -446,8 +540,16 @@ impl RouteHistory {
     /// Flutter's `NavigatorState.push` (`:5060-5063`): append, flush, and return
     /// the future that was created before any lifecycle ran.
     pub(crate) fn push<R: Route>(&mut self, route: R) -> (RouteId, RouteResult<R::Output>) {
-        let (erased, result) = RouteRecord::erase(route);
-        let id = erased.id();
+        self.push_with_id(RouteId::next(), route)
+    }
+
+    /// `push`, under an id the caller minted (ADR-0020 U5.1).
+    pub(crate) fn push_with_id<R: Route>(
+        &mut self,
+        id: RouteId,
+        route: R,
+    ) -> (RouteId, RouteResult<R::Output>) {
+        let (erased, result) = RouteRecord::erase_with_id(id, route);
         self.entries
             .push(RouteEntry::new(erased, RouteLifecycle::Push));
         self.flush(true);
@@ -539,23 +641,6 @@ impl RouteHistory {
         true
     }
 
-    /// The `Pushing → Idle` transition. Flutter's `whenCompleteOrCancel` callback
-    /// on the `TickerFuture` `didPush` returned (`:3276-3290`): flip and re-flush.
-    ///
-    /// U5's `TransitionRoute` will call this from its animation-status listener.
-    /// Until then only the tests do — an `Animating` push has no other producer.
-    #[cfg(test)]
-    pub(crate) fn notify_push_completed(&mut self, id: RouteId) {
-        let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) else {
-            return;
-        };
-        if entry.state != RouteLifecycle::Pushing {
-            return;
-        }
-        entry.state = RouteLifecycle::Idle;
-        self.flush(true);
-    }
-
     // ── The flush ────────────────────────────────────────────────────────────
 
     fn last_present_index(&self) -> Option<usize> {
@@ -598,15 +683,55 @@ impl RouteHistory {
     /// mid-flush is the way in (U5), so this is a framework invariant and
     /// `PANIC-POLICY` permits the panic.
     pub(crate) fn flush(&mut self, rearrange_overlay: bool) -> FlushOutcome {
+        // A *recursive* `flush` is still forbidden and still loud. Route callbacks
+        // no longer reach this path: they enqueue a `RouteCommand` instead
+        // (ADR-0020 U5.1, `binding.rs` Correction 1), so this assert now guards
+        // only genuine framework misuse.
         assert!(
             !self.flushing,
             "BUG: flush_history_updates re-entered — a route lifecycle callback \
              mutated the history while it was being flushed"
         );
+
+        // Commands raised since the last flush (e.g. an animation status listener
+        // firing between frames) take effect before the walk sees the history.
+        self.apply_pending_commands();
+
+        let mut outcome = self.flush_once(rearrange_overlay);
+        let mut passes = 1;
+
+        // A command raised *during* the walk — a zero-duration transition
+        // completing inside its own `did_push`, or `finalize` from `did_pop` —
+        // is applied here and settled by another pass. This is what Flutter gets
+        // from `finalizeRoute`'s `if (!_flushingHistory)` plus the microtask that
+        // carries `whenCompleteOrCancel`.
+        while self.apply_pending_commands() {
+            passes += 1;
+            assert!(
+                passes <= MAX_FLUSH_PASSES,
+                "BUG: route commands did not converge after {MAX_FLUSH_PASSES} flush passes — \
+                 a route is re-raising a command from its own lifecycle callback"
+            );
+            // `rearrange_overlay: false` — a follow-up pass only disposes and
+            // settles; `OverlayEntry::remove` has already updated the overlay's
+            // own list, exactly as Flutter's `finalizeRoute` argues (`:5827`).
+            outcome.absorb(self.flush_once(false));
+        }
+
+        #[cfg(test)]
+        {
+            self.last_flush_passes = passes;
+        }
+
+        self.last_outcome = Some(outcome.clone());
+        outcome
+    }
+
+    /// One walk of the history, with `flushing` held for its duration.
+    fn flush_once(&mut self, rearrange_overlay: bool) -> FlushOutcome {
         self.flushing = true;
         let outcome = self.flush_inner(rearrange_overlay);
         self.flushing = false;
-        self.last_outcome = Some(outcome.clone());
         outcome
     }
 

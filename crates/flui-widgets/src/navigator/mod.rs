@@ -31,6 +31,7 @@
 //! `PopScope`, no `LocalHistoryRoute`. ADR-0019 §5–§6 owns the sequence and the
 //! deferrals. `can_pop` / `maybe_pop` landed in U3.
 
+mod binding;
 mod history;
 mod lifecycle;
 #[allow(clippy::module_inception)]

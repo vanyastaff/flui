@@ -37,13 +37,14 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use flui_view::BuildContextExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
+use super::binding::{BoundRoute, RouteBinding};
 use super::history::{FlushOutcome, RouteHistory};
 use super::observer::NavigatorObserver;
 use super::overlay_route::NavigatorRoute;
@@ -104,6 +105,36 @@ impl NavigatorShared {
                 .collect()
         };
         self.overlay.rearrange(&ordered);
+    }
+
+    /// Apply any [`RouteCommand`](super::binding::RouteCommand)s a route raised,
+    /// and settle the history — the `wake` half of the ADR-0020 U5.1 seam.
+    ///
+    /// **`try_lock`, deliberately.** If the history mutex is held we are inside a
+    /// flush on this thread (`mutate` holds it for the whole walk), and that flush
+    /// drains the queue itself before returning — so there is nothing to do, and
+    /// `lock()` here would deadlock rather than panic. If it is free we are
+    /// between frames (an animation status listener, U5.2), and the commands take
+    /// effect now. See `binding.rs`, *Correction 1*.
+    ///
+    /// Dead until U5.2's `TransitionRoute` gives `push_bound` a production caller;
+    /// today only the tests reach it, through the `wake` closure. Delete the
+    /// attribute then.
+    #[allow(dead_code)]
+    fn pump_route_commands(&self) {
+        let outcome = {
+            let Some(mut history) = self.history.try_lock() else {
+                return; // A flush is running; it will drain the queue.
+            };
+            if !history.has_pending_commands() {
+                return;
+            }
+            history.flush(false);
+            history.take_outcome()
+        };
+        if let Some(outcome) = outcome {
+            self.apply(&outcome);
+        }
     }
 
     /// Run `mutate` against the stack, then apply whatever it flushed.
@@ -175,6 +206,59 @@ impl NavigatorHandle {
             .entries
             .lock()
             .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
+        result
+    }
+
+    /// Mint a [`RouteBinding`] for `route`, pre-bound to that id.
+    ///
+    /// The `wake` closure holds a `Weak`, so a binding that outlives its navigator
+    /// is inert rather than a leak.
+    ///
+    /// Dead until U5.2 (see `push_bound`).
+    #[allow(dead_code)]
+    fn binding_for(&self, route: RouteId) -> RouteBinding {
+        let queue = self.shared.history.lock().command_queue();
+        let weak: Weak<NavigatorShared> = Arc::downgrade(&self.shared);
+        RouteBinding::new(
+            route,
+            queue,
+            Arc::new(move || {
+                if let Some(shared) = weak.upgrade() {
+                    shared.pump_route_commands();
+                }
+            }),
+        )
+    }
+
+    /// Push a route that participates in the animation seam, handing it a
+    /// [`RouteBinding`] **before** it is boxed (ADR-0020 U5.1).
+    ///
+    /// Private. U5.2's `TransitionRoute` is the intended caller; today only the
+    /// tests are — hence the `dead_code` allow, which goes with U5.2.
+    /// `Route::install` deliberately keeps its public signature — see
+    /// `binding.rs`, *Correction 2*.
+    #[allow(dead_code)]
+    pub(crate) fn push_bound<R: NavigatorRoute + BoundRoute>(
+        &self,
+        mut route: R,
+    ) -> RouteResult<R::Output> {
+        let id = RouteId::next();
+        route.bind(self.binding_for(id));
+
+        let builder = route.content_builder();
+        let (result, outcome) = {
+            let mut history = self.shared.history.lock();
+            let (_, result) = history.push_with_id(id, route);
+            (result, history.take_outcome())
+        };
+        self.shared
+            .entries
+            .lock()
+            .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
+
+        if let Some(outcome) = outcome {
+            self.shared.apply(&outcome);
+        }
         result
     }
 
