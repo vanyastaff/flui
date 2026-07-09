@@ -17,120 +17,13 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
-use flui_binding::HeadlessBinding;
 use flui_foundation::ElementId;
-use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::PipelineOwner;
-use flui_types::Size;
-use flui_types::geometry::px;
 use flui_view::prelude::*;
-use flui_view::{BuildOwner, ElementTree};
-use parking_lot::RwLock;
 
 use super::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::SizedBox;
-
-// ============================================================================
-// HARNESS
-// ============================================================================
-
-struct Harness {
-    binding: HeadlessBinding,
-    root_element: ElementId,
-}
-
-/// Mount `root` as the render-tree root and drive one frame.
-fn mount(root: impl View) -> Harness {
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-    let mut build_owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    let mut binding = HeadlessBinding::new();
-    build_owner.set_async_driver(binding.scheduler().async_driver().clone());
-
-    let root_element = tree.mount_root_with_pipeline_owner(
-        &root,
-        Some(Arc::clone(&pipeline_owner)),
-        &mut build_owner.element_owner_mut(),
-    );
-
-    build_owner.schedule_build_for(root_element, 0);
-    build_owner.build_scope(&mut tree);
-
-    let root_render = {
-        let owner = pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        render_tree
-            .iter()
-            .map(|(id, _)| id)
-            .find(|id| render_tree.parent(*id).is_none())
-            .expect("the mounted subtree should have a render root")
-    };
-    {
-        let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render));
-        guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(800.0), px(600.0)))));
-    }
-    build_owner
-        .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-        .expect("headless frame should succeed");
-
-    binding.bind_tree(build_owner, tree, pipeline_owner);
-
-    Harness {
-        binding,
-        root_element,
-    }
-}
-
-impl Harness {
-    /// Drive a frame without dirtying the root — so only what an
-    /// `OverlayHandle`/`OverlayEntry` scheduled through its `RebuildHandle`
-    /// rebuilds. Every rebuild assertion below depends on this: a `pump`-style
-    /// root-dirtying tick would rebuild the whole tree and prove nothing.
-    fn tick(&mut self) {
-        self.binding.pump_frame(Duration::ZERO);
-    }
-
-    /// Replace the root view and settle — used to unmount the overlay.
-    fn swap_root(&mut self, new_root: impl View) {
-        self.binding.swap_root_view(self.root_element, &new_root);
-        self.binding.pump_frame(Duration::ZERO);
-    }
-
-    /// The ordered children of `parent`, read through the public `ElementNode`
-    /// surface (`parent()` + `slot()`); `child_ids()` is crate-private.
-    fn children_of(&mut self, parent: ElementId) -> Vec<ElementId> {
-        let mut kids: Vec<(usize, ElementId)> = self
-            .binding
-            .tree_mut()
-            .iter_nodes()
-            .filter(|(_, node)| node.parent() == Some(parent))
-            .map(|(id, node)| (node.slot(), id))
-            .collect();
-        kids.sort_unstable();
-        kids.into_iter().map(|(_, id)| id).collect()
-    }
-
-    /// The `Stack` element the overlay builds (the overlay element's only child).
-    fn stack_element(&mut self) -> ElementId {
-        let kids = self.children_of(self.root_element);
-        assert_eq!(kids.len(), 1, "the overlay builds exactly one Stack");
-        kids[0]
-    }
-
-    /// The overlay's layer elements, bottom → top.
-    fn layer_elements(&mut self) -> Vec<ElementId> {
-        let stack = self.stack_element();
-        self.children_of(stack)
-    }
-
-    fn layer_count(&mut self) -> usize {
-        self.layer_elements().len()
-    }
-}
+use crate::test_harness::{Harness, mount};
 
 // ============================================================================
 // PROBES
@@ -200,6 +93,22 @@ fn probe_entry(creations: &Arc<AtomicUsize>) -> OverlayEntry {
     })
 }
 
+/// The `Stack` element the overlay builds (the overlay element's only child).
+fn stack_element(harness: &mut Harness, overlay_element: ElementId) -> ElementId {
+    harness.only_child(overlay_element)
+}
+
+/// The overlay's layer elements, bottom → top.
+fn layer_elements(harness: &mut Harness) -> Vec<ElementId> {
+    let root = harness.root();
+    let stack = stack_element(harness, root);
+    harness.children_of(stack)
+}
+
+fn layer_count(harness: &mut Harness) -> usize {
+    layer_elements(harness).len()
+}
+
 /// An overlay pre-loaded with `entries`, bottom → top.
 fn overlay_with(entries: &[OverlayEntry]) -> (OverlayHandle, Overlay) {
     let handle = OverlayHandle::new();
@@ -248,7 +157,7 @@ fn overlay_first_entry_builds() {
     let mut harness = mount(overlay);
 
     assert_eq!(handle.len(), 1);
-    assert_eq!(harness.layer_count(), 1, "one layer element");
+    assert_eq!(layer_count(&mut harness), 1, "one layer element");
     assert_eq!(calls.get(), 1, "the entry's builder ran exactly once");
 }
 
@@ -265,7 +174,7 @@ fn overlay_entries_preserve_insertion_order() {
     let mut harness = mount(overlay);
 
     assert_eq!(handle.entry_ids(), vec![entry_a.id(), entry_b.id()]);
-    let layers = harness.layer_elements();
+    let layers = layer_elements(&mut harness);
     assert_eq!(layers.len(), 2);
     assert_eq!(
         layers,
@@ -320,7 +229,7 @@ fn overlay_insert_above_and_below_place_entries_exactly() {
             entry_e.id()
         ]
     );
-    assert_eq!(harness.layer_count(), 5);
+    assert_eq!(layer_count(&mut harness), 5);
 }
 
 /// `insertAll` places the group contiguously, preserving relative order
@@ -358,15 +267,15 @@ fn overlay_remove_entry_rebuilds() {
     let (entry_a, entry_b) = (counting_entry(&calls), counting_entry(&calls));
     let (handle, overlay) = overlay_with(&[entry_a.clone(), entry_b.clone()]);
     let mut harness = mount(overlay);
-    assert_eq!(harness.layer_count(), 2);
+    assert_eq!(layer_count(&mut harness), 2);
 
     entry_a.remove();
     assert_eq!(handle.len(), 1, "the list is mutated eagerly");
     harness.tick();
 
-    assert_eq!(harness.layer_count(), 1, "A's layer element is gone");
+    assert_eq!(layer_count(&mut harness), 1, "A's layer element is gone");
     assert_eq!(
-        harness.layer_elements(),
+        layer_elements(&mut harness),
         vec![entry_b.element_id().expect("B still mounted")]
     );
     assert!(!entry_a.is_mounted(), "A's state was disposed");
@@ -439,7 +348,7 @@ fn removed_entry_cannot_reinsert_or_rebuild_silently() {
     harness.tick();
     assert_eq!(calls_a.get(), 1, "the removed entry never rebuilt");
     assert_eq!(calls_b.get(), 2, "the overlay rebuild reran B's builder");
-    assert_eq!(harness.layer_count(), 1);
+    assert_eq!(layer_count(&mut harness), 1);
 
     // Still inert once unmounted, and it dirties nothing.
     entry_a.mark_needs_build();
@@ -515,7 +424,7 @@ fn overlay_rearrange_reorders_and_preserves_entry_state() {
         entry_a.element_id().expect("A mounted"),
         entry_b.element_id().expect("B mounted"),
     );
-    assert_eq!(harness.layer_elements(), vec![element_a, element_b]);
+    assert_eq!(layer_elements(&mut harness), vec![element_a, element_b]);
     assert_eq!(creations_a.load(Ordering::Relaxed), 1);
     assert_eq!(creations_b.load(Ordering::Relaxed), 1);
 
@@ -528,7 +437,7 @@ fn overlay_rearrange_reorders_and_preserves_entry_state() {
         "order swapped"
     );
     assert_eq!(
-        harness.layer_elements(),
+        layer_elements(&mut harness),
         vec![element_b, element_a],
         "the same elements moved; they were not recreated in place"
     );
@@ -585,7 +494,7 @@ fn overlay_rearrange_leaves_unmentioned_entries_on_top() {
         handle.entry_ids(),
         vec![entry_c.id(), entry_a.id(), entry_b.id()]
     );
-    assert_eq!(harness.layer_count(), 3);
+    assert_eq!(layer_count(&mut harness), 3);
 }
 
 /// `rearrange` inserts entries it names that the overlay does not hold
@@ -624,5 +533,5 @@ fn overlay_deferred_opaque_builds_every_entry() {
         (1, 1),
         "the covered entry is still built — opaque skipping is not implemented"
     );
-    assert_eq!(harness.layer_count(), 2);
+    assert_eq!(layer_count(&mut harness), 2);
 }

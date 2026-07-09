@@ -74,6 +74,12 @@ pub mod icon;
 pub mod image;
 pub mod interaction;
 pub mod layout;
+// Headless widget harness shared by the in-crate unit tests of the private
+// `overlay` / `navigator` modules. `tests/common` is an integration-test module
+// and cannot be reached from `src/`.
+#[cfg(test)]
+mod test_harness;
+
 // The route stack — ADR-0019 U2. Private and pure data: no widget, no
 // `Navigator`, no public API. U3 adds the `Navigator` view on top of it.
 mod navigator;
