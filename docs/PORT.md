@@ -129,15 +129,29 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Registry addition (2026-07-09, ADR-0018 U5):** `dyn Stream` joins `dyn Future` and `dyn Iterator` as a language-runtime exempt. `Stream` is the async `Iterator` — a trait from `futures-core` (trait-only: no executor, no combinators, no proc macros) that `StreamBuilder` polls by hand through `std::future::poll_fn`, because `futures-core` deliberately ships no `StreamExt::next()`. It is erased for the same reason `Future` is: the concrete stream type is the caller's, and a `StatefulView` cannot be generic over it and stay object-safe as a `dyn View`. This is a registry entry, not a loosening — an unsanctioned `Box<dyn Foo>` in the framework crates still fails trigger 9.
 
+**Registry addition (2026-07-09, ADR-0019 U4):** `crates/flui-widgets/src` enters the scope, and four traits are registered with it. `ErasedRoute` — the public `Navigator` holds `Vec<Box<dyn ErasedRoute>>` because a heterogeneous route stack cannot be generic over each route's result type (ADR-0019 §4). `NavigatorObserver` — `Arc<dyn NavigatorObserver>`, the observer chain, exactly as `Listenable` / `WidgetsBindingObserver` already are. `ScrollPhysics` and `ImageProvider` — **pre-existing** public delegate boundaries (`SharedScrollPhysics`, `Image`'s provider) that were simply never under a gate, because this crate was outside every `dyn` scope until now; registering them is the honest alternative to waiving them. Bringing the widget catalog into scope is the point: before U4 its erased boundaries shipped unguarded.
+
 **Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
 
 **Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase` / `RootElementBase` / `ErrorElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
 
-**Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`).
+**Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`) **and the public widget catalog** (`crates/flui-widgets/src`, added 2026-07-09 by ADR-0019 U4).
 
 **Multi-line declaration handling:** the scan does NOT use `rg -U` multiline mode (mixing multi-line output blocks with line-oriented `grep -Ev` filters partial-filters multi-line matches → false positives and silent bypasses). The single-line scan catches rustfmt-formatted code (which collapses `Box<dyn Trait>` to one line whenever possible).
 
 **Back-references:** [specs/004-view-element-core/spec.md FR-036](../specs/004-view-element-core/spec.md), [Phase 3.1 §U30](plans/2026-05-22-005-feat-view-element-core-contracts-plan.md).
+
+### FR-033/widgets. Type-erased downcasts in the widget catalog (ADR-0019 U4)
+
+**Every `downcast::<…>` / `downcast_ref::<…>` / `downcast_mut::<…>` in `crates/flui-widgets/src` must carry a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker on the same line.**
+
+There is exactly one sanctioned site: `RouteRecord::did_complete` in `crates/flui-widgets/src/navigator/route.rs`, where a pop result crosses the `Box<dyn Any + Send>` boundary and is downcast back to the owning route's `Output`.
+
+Why the boundary exists: `Navigator::pop(result)` is called from deep inside a route's subtree, which knows its result type; the navigator, holding `Vec<Box<dyn ErasedRoute>>`, does not. Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked `pop<T>`), but Rust would not otherwise need it. **The public shape is signed off in [`ADR-0019`](adr/ADR-0019-navigator-routing-seam.md) *Public API and sign-off (U4)*.**
+
+Why the guard exists: before U4, `flui-widgets` was outside both FR-036 (trigger 9) and FR-033, so this erasure — the first in the public catalog — would have landed with **no gate at all**. On a type mismatch FLUI logs via `tracing::error!` and completes the future with `None`; Flutter throws a cast error. Per [`PANIC-POLICY.md`](PANIC-POLICY.md), a wrong `pop` type is caller error, not a framework invariant, so it must not panic.
+
+**Enforcement:** `scripts/port-check.sh`, reported as `FR-033/widgets`. It is a spec-style grep, not a numbered refusal trigger — the numbered trigger for erased boundaries is #9 (FR-036).
 
 ### 10. Parallel cross-crate type definitions
 
@@ -994,7 +1008,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

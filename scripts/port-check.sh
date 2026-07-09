@@ -431,6 +431,38 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# FR-033/widgets (ADR-0019 U4) — type-erased downcasts in the public widget
+# catalog.
+#
+# `Navigator::pop(result)` must erase its result through `Box<dyn Any + Send>`,
+# because a heterogeneous route stack cannot carry each route's `Output` type
+# (ADR-0019 §4). The downcast back to `R::Output` in `RouteRecord::did_complete`
+# is the ONE sanctioned site, and it is signed off in ADR-0019's *Public API and
+# sign-off (U4)*.
+#
+# Before U4, `crates/flui-widgets` sat outside both FR-036 and FR-033, so that
+# boundary would have shipped with no gate at all. This grep closes it: any new
+# `downcast`/`downcast_ref`/`downcast_mut` in the catalog must be justified with
+# a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker, i.e. a deliberate act.
+# -----------------------------------------------------------------------------
+fr033w_hits=$(rg --line-number --column 'downcast(_ref|_mut)?::<' \
+  crates/flui-widgets/src 2>/dev/null \
+  | grep -Ev '//\s*PORT-CHECK-OK-DOWNCAST:' \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+if [[ -n "${fr033w_hits}" ]]; then
+  echo "VIOLATION FR-033/widgets: unsanctioned downcast in crates/flui-widgets/src"
+  echo "see docs/PORT.md (FR-033/widgets) — mark the site with // PORT-CHECK-OK-DOWNCAST: <reason>"
+  echo "${fr033w_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    FR-033/widgets: downcast in flui-widgets (Navigator pop-result boundary only)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Trigger 8 (D-block PR-C-3 §U41, architecture-correction-plan SP-1) —
 # stubbed-but-called functions.
 #
@@ -1100,7 +1132,7 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(
@@ -1110,6 +1142,11 @@ fr036_scope=(
   crates/flui-engine/src
   crates/flui-rendering/src
   crates/flui-interaction/src
+  # ADR-0019 U4: the public `Navigator` erases its route stack behind
+  # `Box<dyn ErasedRoute>` and its observers behind `Arc<dyn NavigatorObserver>`.
+  # Before U4 this crate was outside every dyn/downcast gate, so those boundaries
+  # would have shipped unguarded. Both are now registered in the allowlist above.
+  crates/flui-widgets/src
 )
 
 # Reference-form prefix covering all four `&`/`&mut`/`&'a`/`&'a mut` shapes
@@ -1478,7 +1515,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 22 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
+echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B
