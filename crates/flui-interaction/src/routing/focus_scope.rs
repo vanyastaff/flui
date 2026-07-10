@@ -718,6 +718,57 @@ impl FocusScopeNode {
         self.focus_history.lock().retain(|id| *id != node_id);
     }
 
+    /// Move `node` — with its whole subtree — under this scope, **preserving
+    /// focus**.
+    ///
+    /// The reparent primitive (ADR-0022 U1.3). [`detach_node`](Self::detach_node)
+    /// followed by [`attach_node`](Self::attach_node) is a *removal* and an
+    /// insertion: the detach marks the subtree detached and clears the manager's
+    /// primary focus if the subtree held it — right for an unmount, wrong for a
+    /// move. Flutter's `FocusAttachment.reparent` preserves focus across the
+    /// move; this is that operation for a scope-parented node.
+    ///
+    /// A node with no current parent is simply attached; adopting a node already
+    /// under this scope is a no-op.
+    pub fn adopt_node(self: &Arc<Self>, node: &Arc<FocusNode>) {
+        let old_parent = node.parent();
+        if old_parent
+            .as_ref()
+            .is_some_and(|parent| parent.id == self.inner.id)
+        {
+            return;
+        }
+
+        if let Some(old_parent) = old_parent {
+            // Lift the node out of the old parent's child list *without*
+            // `detach_child`'s removal semantics (recursive detached-marking
+            // and primary-focus clearing).
+            old_parent
+                .children
+                .write()
+                .retain(|child| child.id != node.id);
+            // The old scope's focused-child history forgets every id that
+            // moved away with the subtree.
+            if let Some(old_scope) = old_parent.as_scope() {
+                old_scope
+                    .focus_history
+                    .lock()
+                    .retain(|&id| id != node.id && !node.has_descendant(id));
+            }
+        }
+
+        self.inner.attach_child(node);
+
+        // A moved subtree that holds the primary focus keeps it — and the new
+        // scope's history learns about it, exactly as `set_primary_focus`
+        // would have recorded had the focus been requested here.
+        if let Some(focused) = crate::FocusManager::global().primary_focus()
+            && (node.id == focused || node.has_descendant(focused))
+        {
+            self.record_focus(focused);
+        }
+    }
+
     /// Sets focus to the first focusable child via the singleton.
     pub fn set_first_focus(self: &Arc<Self>) {
         let nodes = self.collect_focusable_nodes();
@@ -897,6 +948,83 @@ impl ReadingOrderPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tests that drive the process-global [`FocusManager`] serialize here —
+    /// nextest isolates test *binaries*, not the threads inside one, and a
+    /// concurrent test would see (or clobber) this one's primary focus.
+    static GLOBAL_FOCUS_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    /// ADR-0022 U1.3: `adopt_node` is a **move**, not a remove-plus-insert —
+    /// the primary focus survives the reparent, the new scope's history learns
+    /// the focused id, and the old parent forgets the subtree. `detach_node` +
+    /// `attach_node` would clear the focus (`detach_child`'s removal
+    /// semantics): that is the reparent-drops-focus hazard this pins.
+    ///
+    /// Red-check (verified): implementing `adopt_node` as `detach_node` then
+    /// `attach_node` makes the moved node lose primary focus, failing the
+    /// keeps-focus assertion after the move.
+    #[test]
+    fn adopt_preserves_primary_focus_across_a_reparent() {
+        let _guard = GLOBAL_FOCUS_LOCK.lock();
+        let manager = crate::FocusManager::global();
+        manager.unfocus();
+
+        // Under the global root, as widget-owned scopes are: focus-history
+        // recording resolves the focused node by descending from the root.
+        let scope_a = FocusScopeNode::with_debug_label("adopt-from");
+        let scope_b = FocusScopeNode::with_debug_label("adopt-to");
+        manager.root_scope().attach_node(scope_a.as_focus_node());
+        manager.root_scope().attach_node(scope_b.as_focus_node());
+        let moved = FocusNode::with_debug_label("moved");
+        scope_a.attach_node(&moved);
+        moved.request_focus();
+        assert!(moved.has_primary_focus(), "sanity: focused before the move");
+        assert_eq!(scope_a.focused_child(), Some(moved.id()));
+
+        scope_b.adopt_node(&moved);
+
+        assert!(
+            moved.has_primary_focus(),
+            "a moved node keeps the primary focus"
+        );
+        assert_eq!(
+            moved.parent().map(|parent| parent.id()),
+            Some(scope_b.as_focus_node().id()),
+            "the node now hangs under the adopting scope"
+        );
+        assert!(
+            scope_a.as_focus_node().children().is_empty(),
+            "the old parent no longer lists the moved node"
+        );
+        assert_eq!(
+            scope_a.focused_child(),
+            None,
+            "the old scope's history forgot the moved subtree"
+        );
+        assert_eq!(
+            scope_b.focused_child(),
+            Some(moved.id()),
+            "the new scope's history records the moved focus"
+        );
+
+        // Adopting again is a no-op.
+        scope_b.adopt_node(&moved);
+        assert_eq!(scope_b.as_focus_node().children().len(), 1);
+
+        // The removal semantics still live where they belong: a genuine
+        // detach clears the focus.
+        scope_b.detach_node(moved.id());
+        assert!(!moved.has_primary_focus());
+        assert_eq!(manager.primary_focus(), None, "detach still unfocuses");
+
+        // Leave the process-global root the way this test found it.
+        manager
+            .root_scope()
+            .detach_node(scope_a.as_focus_node().id());
+        manager
+            .root_scope()
+            .detach_node(scope_b.as_focus_node().id());
+    }
 
     #[test]
     fn test_focus_node_creation() {
