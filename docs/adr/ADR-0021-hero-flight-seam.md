@@ -1085,6 +1085,21 @@ It is cloned from the element's own `ElementCore`, not looked up in the tree:
 `build_scope` has the element *extracted* from its node, and `ElementNode::element`
 panics in that window.
 
+### Acquire the capability, then mutate the route
+
+Review caught the ordering. `maybe_start` flipped the destination offstage and *then*
+reached for `post_frame_handle()`, returning on `None`. Flutter can write it that way
+because `addPostFrameCallback` cannot fail (`heroes.dart:967-968`); FLUI's capability
+is an `Option` — absent on an unmounted navigator, and absent under any binding that
+never calls `install_build_capabilities`. The only code that calls `set_offstage(false)`
+is the measurement that failure would have scheduled, so the destination was stranded
+offstage forever: invisible, unhittable, animation pinned at `1.0`.
+
+The guard now precedes the mutation. `without_a_post_frame_capability_the_destination_is_left_onstage`
+mounts a navigator through a binding that installs no post-frame handle — a real,
+reachable configuration, not a mock — and pins that a fully eligible `PageRoute` →
+`PageRoute` top change schedules nothing and touches nothing.
+
 ### Still not implemented, and not claimed
 
 * **No `Hero` widget, no public API.** `HeroController`, `ModalHandle`,

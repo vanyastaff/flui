@@ -20,7 +20,7 @@ use super::observer::NavigatorObserver;
 use super::overlay_route::SimpleRoute;
 use super::page_route::{PageRoute, PopupRoute};
 use crate::SizedBox;
-use crate::test_harness::{Harness, mount};
+use crate::test_harness::{Harness, PostFrameCapability, mount, mount_with_capabilities};
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
 /// its `Stack(fit: expand)` — so a route's subtree measures the screen.
@@ -494,4 +494,61 @@ fn every_eligible_top_change_gets_its_own_measurement() {
 
     let counted = Arc::new(AtomicUsize::new(controller.measurements().len()));
     assert_eq!(counted.load(Ordering::SeqCst), 2);
+}
+
+/// **A capability that cannot be acquired must not be paid for first.**
+///
+/// `BuildContext::post_frame_handle()` is an `Option`, so a binding may install none.
+/// `maybe_start` therefore acquires it *before* flipping the destination offstage:
+/// Flutter's `addPostFrameCallback` cannot fail (`heroes.dart:967-968`), FLUI's can,
+/// and the only code that ever calls `set_offstage(false)` is the measurement that
+/// failure would have scheduled. Flip first and bail, and the destination is stranded
+/// offstage forever — invisible, unhittable, and with its animation pinned at `1.0`.
+///
+/// The top change here is fully eligible: two `PageRoute`s, both `ModalRoute`s, a
+/// live navigator, an attached controller. Only the capability is missing.
+///
+/// Red-check: move `destination.set_offstage(…)` back above the
+/// `let Some(post_frame) = navigator.post_frame_handle()` guard in
+/// `HeroController::maybe_start`.
+#[test]
+fn without_a_post_frame_capability_the_destination_is_left_onstage() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_with_capabilities(
+        Root {
+            navigator: navigator.clone(),
+            show: true,
+        },
+        PostFrameCapability::Absent,
+    );
+
+    // The controller attached, so it is not the `navigator == None` path being tested.
+    assert!(controller.navigator().is_some());
+    assert!(
+        navigator.post_frame_handle().is_none(),
+        "this binding installed no post-frame capability"
+    );
+
+    let _first = navigator.push(page_route());
+    harness.tick();
+
+    let second = page_route();
+    let modal = second.modal_handle();
+    let _second = navigator.push(second);
+
+    assert_eq!(
+        controller.scheduled_count(),
+        0,
+        "nothing can be scheduled without the capability"
+    );
+    assert!(
+        !modal.offstage(),
+        "so the destination must never have been forced offstage"
+    );
+
+    // And it stays that way: no frame restores what was never flipped.
+    harness.tick();
+    assert!(!modal.offstage());
+    assert!(controller.measurements().is_empty());
 }

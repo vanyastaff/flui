@@ -21,6 +21,11 @@
 //!    overlay entry and republishes `maintainState`. It does **not** rebuild the
 //!    navigator.
 //!
+//! ADR-0021 U3 added the fourth: **`offstage` swaps the animation proxies** to
+//! `kAlwaysComplete` / `kAlwaysDismissed` (`:1958-1961`), so an offstage route's
+//! builders lay it out at its *final* position. That is what lets `HeroController`
+//! read a flight's destination one frame early.
+//!
 //! # One overlay entry, not two
 //!
 //! Flutter's `createOverlayEntries` returns `[_modalBarrier, _modalScope]`
@@ -51,9 +56,6 @@
 //! * **No `IgnorePointer(ignoring: !animation.isForwardOrCompleted)`**
 //!   (`routes.dart:2278-2283`): the barrier absorbs pointers for the whole life of
 //!   the route, including while it pops.
-//! * **`offstage` does not swap the animations** to `kAlwaysComplete` /
-//!   `kAlwaysDismissed` (`:1958-1962`). That exists to let `HeroController` read
-//!   final positions; Hero is out of scope.
 //! * **No `filter` / `BackdropFilter`, no `PopScope`, no `LocalHistoryRoute`, no
 //!   `_modalScopeCache`.**
 
@@ -512,8 +514,12 @@ pub(crate) struct ModalHandle {
 /// caller, and it is itself dead until U4's `Hero` widget. See `hero_controller.rs`.
 #[allow(dead_code)]
 impl ModalHandle {
-    /// `ModalRoute.offstage = value` (`routes.dart:1951-1962`), minus the
-    /// animation-proxy swap.
+    /// `ModalRoute.offstage = value` (`routes.dart:1951-1962`), whole: the early
+    /// return on an unchanged value, the animation-proxy swap, and
+    /// `changedInternalState`.
+    ///
+    /// (ADR-0021 U3 added the proxy swap. Until then this doc read "minus the
+    /// animation-proxy swap", which was true when written and a trap afterwards.)
     pub(crate) fn set_offstage(&self, offstage: bool) {
         if self.inner.offstage.swap(offstage, Ordering::Relaxed) == offstage {
             return; // `if (_offstage == value) return;`

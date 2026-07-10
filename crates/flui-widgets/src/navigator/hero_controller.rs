@@ -214,17 +214,25 @@ impl HeroController {
             _ => {}
         }
 
+        // `WidgetsBinding.instance.addPostFrameCallback(…)` (`:968`). Acquired from a
+        // handle the navigator captured in `init_state`, never from a frame phase.
+        //
+        // **Before the offstage flip, not after.** Flutter's `addPostFrameCallback`
+        // cannot fail, so its setter runs first (`:967-968`); FLUI's capability is an
+        // `Option` — absent on an unmounted navigator, or under a binding that
+        // installs no post-frame handle. Flipping first and bailing here would strand
+        // the destination offstage forever: nothing else ever calls
+        // `set_offstage(false)`, because the only caller is the measurement we just
+        // failed to schedule. Acquire, then mutate.
+        let Some(post_frame) = navigator.post_frame_handle() else {
+            return;
+        };
+
         // `toRoute.offstage = toRoute.animation!.value == 0.0;` (`:967`)
         //
         // Only a destination that has not begun entering is worth hiding: one already
         // part-way through its transition is on screen, and hiding it would flicker.
         destination.set_offstage(to_animation.value() == 0.0);
-
-        // `WidgetsBinding.instance.addPostFrameCallback(…)` (`:968`). Acquired from a
-        // handle the navigator captured in `init_state`, never from a frame phase.
-        let Some(post_frame) = navigator.post_frame_handle() else {
-            return; // Unmounted, or a binding that installs no post-frame handle.
-        };
 
         self.scheduled.fetch_add(1, Ordering::SeqCst);
         let measurements = Arc::clone(&self.measurements);

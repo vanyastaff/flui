@@ -27,12 +27,40 @@ pub(crate) struct Harness {
 
 /// Mount `root` as the render-tree root and drive one frame.
 pub(crate) fn mount(root: impl View) -> Harness {
+    mount_with_capabilities(root, PostFrameCapability::Installed)
+}
+
+/// Whether the binding hands `BuildContext` a [`PostFrameHandle`] at all.
+///
+/// `BuildContext::post_frame_handle()` returns an `Option`, so "no post-frame
+/// capability" is a real, reachable configuration — an embedder that drives frames
+/// itself, or any binding that simply never calls `install_build_capabilities`.
+/// Code that acquires the handle must behave when it is absent, and the only way to
+/// test that is to mount without one.
+///
+/// [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PostFrameCapability {
+    Installed,
+    Absent,
+}
+
+/// [`mount`], but able to withhold the post-frame capability.
+pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapability) -> Harness {
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
     let mut build_owner = flui_view::BuildOwner::new();
     let mut tree = flui_view::ElementTree::new();
 
     let mut binding = HeadlessBinding::new();
-    binding.install_build_capabilities(&mut build_owner);
+    match post_frame {
+        PostFrameCapability::Installed => binding.install_build_capabilities(&mut build_owner),
+        // The async driver still goes in: withholding it too would change *which*
+        // capability the test is about (ADR-0018 U6 makes the mount `build_scope`
+        // depend on it).
+        PostFrameCapability::Absent => {
+            build_owner.set_async_driver(binding.scheduler().async_driver().clone());
+        }
+    }
 
     let root_element = tree.mount_root_with_pipeline_owner(
         &root,
