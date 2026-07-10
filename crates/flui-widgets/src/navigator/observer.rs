@@ -34,13 +34,16 @@
 //! Flutter hands observers the `Route` itself. Handing out `&mut dyn ErasedRoute`
 //! while the history holds it is not expressible, and this layer is pure data by
 //! design (ADR-0019 U2). Ids preserve identity, ordering and arity — everything
-//! the oracles assert. `HeroController`, the one observer whose implementation
-//! needs the route object, is blocked on U5 anyway (ADR-0019 §6), and U3 can
-//! widen this to a lookup handle without changing the queue semantics.
+//! the oracles assert. An observer that needs more resolves the id through the
+//! [`NavigatorHandle`] it is handed at [`did_attach`] — which is what
+//! `HeroController` will do (ADR-0021 U2, seam 2).
+//!
+//! [`did_attach`]: NavigatorObserver::did_attach
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 
 /// Observes route-stack mutations. Flutter's `NavigatorObserver`
@@ -49,8 +52,45 @@ use super::route::RouteId;
 /// `&self`, not `&mut self`: an observer is shared (`Arc`) and outlives any one
 /// flush. Implementations that accumulate use interior mutability, exactly as the
 /// rest of the framework does behind private fields.
+///
+/// # The handle, and the one thing you must not do with it
+///
+/// [`did_attach`](Self::did_attach) hands over an owned [`NavigatorHandle`], the
+/// FLUI shape of Flutter's `NavigatorObserver.navigator` getter
+/// (`navigator.dart:779`, backed by an `Expando`). No `GlobalKey`, no element-tree
+/// lookup: the navigator pushes the capability at the observer, in registration
+/// order, from its own `init_state`.
+///
+/// **The stack is locked while `did_push` / `did_pop` / `did_remove` /
+/// `did_replace` / `did_change_top` run.** They are called from inside
+/// `RouteHistory::flush`, which holds the history's mutex, and
+/// `parking_lot::Mutex` is not reentrant. Reading or mutating the stack through
+/// the handle from one of those callbacks — `pop`, `current`, `route_ids`,
+/// `can_pop` — **hangs**. Everything else on the handle is safe there, which is
+/// exactly what `HeroController.didPush` needs (`heroes.dart:964-973`): flip a
+/// route offstage, then schedule a post-frame callback and do the real work from
+/// it, outside the flush.
 #[allow(unused_variables)]
 pub trait NavigatorObserver: Send + Sync {
+    /// This observer was registered on a navigator that is now mounted.
+    ///
+    /// Flutter's `NavigatorObserver._navigators[observer] = this`
+    /// (`navigator.dart:3836`, `:4060`, `:4121`). Called once per attachment, in
+    /// registration order, with no lock held.
+    ///
+    /// Store the handle if you need it; it is `'static` and cloneable. It is
+    /// **not** valid after [`did_detach`](Self::did_detach) — a detached handle
+    /// still resolves, but names a navigator that is no longer in the tree
+    /// (`NavigatorHandle::is_mounted` is then `false`).
+    fn did_attach(&self, navigator: NavigatorHandle) {}
+
+    /// The navigator this observer was attached to left the tree, or the observer
+    /// was removed from it.
+    ///
+    /// Flutter's `NavigatorObserver._navigators[observer] = null`
+    /// (`navigator.dart:4034`, `:4056`, `:4108`). Drop the handle here.
+    fn did_detach(&self) {}
+
     /// A route was pushed (or an initial route added).
     fn did_push(&self, route: RouteId, previous: Option<RouteId>) {}
     /// A route was popped.

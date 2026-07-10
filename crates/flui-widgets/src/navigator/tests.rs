@@ -1186,6 +1186,7 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
         Arc::new(Mutex::new(None)),
         Arc::new(Mutex::new(std::collections::HashMap::new())),
         Arc::new(Mutex::new(std::collections::HashMap::new())),
+        Arc::new(Mutex::new(std::collections::HashMap::new())),
     )
 }
 
@@ -1373,18 +1374,23 @@ fn route_commands_are_pre_bound_to_one_route() {
 /// the render pipeline, or the overlay. ADR-0019's whole sequencing argument
 /// depends on it, so check the sources rather than trusting prose.
 ///
-/// Red-check: add `use crate::overlay::OverlayEntry;` to `history.rs`.
+/// # Why `observer.rs` is judged separately (ADR-0021 U2, seam 2)
+///
+/// `NavigatorObserver::did_attach` hands an observer an owned `NavigatorHandle`,
+/// so `observer.rs` names `super::navigator` — a module that *does* touch the
+/// widget tree. That is the seam, and it is deliberate: Flutter's
+/// `NavigatorObserver.navigator` getter is the same edge (`navigator.dart:779`).
+/// What must stay true is that observer.rs itself reaches **nothing** in the
+/// framework directly, and that the four genuinely pure files never acquire an
+/// edge to the navigator, the overlay, the scheduler, or either tree — which is
+/// what `PURE_DATA` now forbids by name, and did not before.
+///
+/// Red-check: add `use crate::overlay::OverlayEntry;` to `history.rs`, or
+/// `use super::navigator::NavigatorHandle;` to `route.rs`.
 #[test]
 fn route_stack_flush_is_pure_data() {
-    const SOURCES: [(&str, &str); 5] = [
-        ("history.rs", include_str!("history.rs")),
-        ("route.rs", include_str!("route.rs")),
-        ("lifecycle.rs", include_str!("lifecycle.rs")),
-        ("observer.rs", include_str!("observer.rs")),
-        ("result.rs", include_str!("result.rs")),
-    ];
-    // Tokens that would mean this layer had grown a dependency on the framework.
-    const FORBIDDEN: [&str; 8] = [
+    /// Tokens that would mean this layer had grown a dependency on the framework.
+    const FRAMEWORK: [&str; 8] = [
         "ElementTree",
         "BuildOwner",
         "PipelineOwner",
@@ -1394,13 +1400,56 @@ fn route_stack_flush_is_pure_data() {
         "flui_rendering",
         "crate::overlay",
     ];
+    /// …and, for the four files that are pure *data*, anything that reaches the
+    /// navigator, the scheduler, or an id minted by either tree.
+    const NAVIGATOR_EDGE: [&str; 7] = [
+        "super::navigator",
+        "NavigatorHandle",
+        "OverlayHandle",
+        "flui_scheduler",
+        "PostFrameHandle",
+        "SubtreeAnchor",
+        "RouteSubtree",
+    ];
 
-    for (name, source) in SOURCES {
-        for token in FORBIDDEN {
+    /// Line comments are prose: `history.rs` may *name* `NavigatorHandle` while
+    /// explaining what it deliberately does not do. A dependency is an import or a
+    /// path in code, so strip `//`, `///` and `//!` lines before scanning.
+    fn code_only(source: &str) -> String {
+        source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    const PURE_DATA: [(&str, &str); 4] = [
+        ("history.rs", include_str!("history.rs")),
+        ("route.rs", include_str!("route.rs")),
+        ("lifecycle.rs", include_str!("lifecycle.rs")),
+        ("result.rs", include_str!("result.rs")),
+    ];
+    /// Holds one sanctioned edge — the `NavigatorHandle` it hands to `did_attach` —
+    /// and no framework dependency of its own.
+    const OBSERVER: (&str, &str) = ("observer.rs", include_str!("observer.rs"));
+
+    for (name, source) in PURE_DATA {
+        let code = code_only(source);
+        for token in FRAMEWORK.iter().chain(&NAVIGATOR_EDGE) {
             assert!(
-                !source.contains(token),
+                !code.contains(token),
                 "{name} references `{token}`: the U2 route stack must stay pure data"
             );
         }
+    }
+
+    let (name, source) = OBSERVER;
+    let code = code_only(source);
+    for token in FRAMEWORK {
+        assert!(
+            !code.contains(token),
+            "{name} references `{token}`: an observer's only edge is the \
+             `NavigatorHandle` it is handed"
+        );
     }
 }

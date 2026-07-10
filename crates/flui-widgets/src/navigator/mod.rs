@@ -42,6 +42,7 @@ mod overlay_route;
 mod page_route;
 mod result;
 mod route;
+mod subtree;
 mod transition_route;
 
 pub use binding::RouteBindingSlot;
@@ -57,6 +58,8 @@ pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 
 #[cfg(test)]
 mod export_guard;
+#[cfg(test)]
+mod hero_seam_tests;
 #[cfg(test)]
 mod modal_route_tests;
 #[cfg(test)]

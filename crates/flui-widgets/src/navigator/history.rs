@@ -476,6 +476,12 @@ impl RouteHistory {
         self.observers.push(observer);
     }
 
+    /// The observers, cloned out in registration order. The caller notifies them
+    /// with no lock held; see `NavigatorObserver`'s re-entrancy note.
+    pub(crate) fn observers(&self) -> Vec<Arc<dyn NavigatorObserver>> {
+        self.observers.clone()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }

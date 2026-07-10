@@ -80,6 +80,7 @@ use super::overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
 };
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
+use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{TransitionHandle, TransitionRoute};
 use crate::{AbsorbPointer, ColoredBox, GestureDetector, Offstage, SizedBox, Stack, StackFit};
 
@@ -131,6 +132,10 @@ struct ModalInner {
     /// The relay's subscriptions to the two animations, opened in `install` and
     /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
     relay_subscriptions: Mutex<Vec<(RouteAnimation, ListenerId)>>,
+
+    /// `ModalRoute._subtreeKey` (`routes.dart:2268`) — owned from construction,
+    /// filled while the page is mounted. ADR-0021 U2, seam 4.
+    subtree: RouteSubtreeCell,
 }
 
 impl ModalInner {
@@ -188,6 +193,7 @@ impl ModalInner {
                 transitions: Arc::clone(&self.transitions.lock()),
                 transition: transition.clone(),
                 relay: Arc::clone(&self.relay),
+                subtree: self.subtree.clone(),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -247,6 +253,7 @@ struct ModalScope {
     transitions: RouteTransitionsBuilder,
     transition: TransitionHandle,
     relay: Arc<ChangeNotifier>,
+    subtree: RouteSubtreeCell,
 }
 
 impl_animated_view!(ModalScope);
@@ -271,11 +278,18 @@ pub(crate) struct ModalScopeState;
 impl ViewState<ModalScope> for ModalScopeState {
     /// `buildTransitions(context, animation, secondaryAnimation, buildPage(…))`
     /// (`routes.dart:1229-1240`, `:1656`).
+    ///
+    /// The [`RouteSubtreeAnchor`] wraps **only** the page, inside the transitions —
+    /// exactly where Flutter hangs `_subtreeKey`, on the `RepaintBoundary` around
+    /// `buildPage` and nothing else (`routes.dart:1229-1231`). Anchoring outside
+    /// the transitions would give `HeroController` the transition's coordinate
+    /// space (mid-slide, mid-scale) instead of the page's.
     fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
         let primary = view.transition.primary_animation();
         let secondary: RouteAnimation = view.transition.secondary_animation();
-        let child = (view.page)(ctx, &primary, &secondary);
-        (view.transitions)(ctx, &primary, &secondary, child)
+        let page = (view.page)(ctx, &primary, &secondary);
+        let anchored = RouteSubtreeAnchor::new(view.subtree.clone(), page).boxed();
+        (view.transitions)(ctx, &primary, &secondary, anchored)
     }
 }
 
@@ -305,6 +319,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
             transition: OnceLock::new(),
             relay: Arc::new(ChangeNotifier::new()),
             relay_subscriptions: Mutex::new(Vec::new()),
+            subtree: RouteSubtreeCell::new(),
         });
 
         let content = {
@@ -486,6 +501,16 @@ fn changed_internal_state(inner: &ModalInner) {
 // Route delegation
 // ============================================================================
 
+impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
+    /// This route's navigator capability, or `None` before it is pushed.
+    fn binding(&self) -> Option<super::binding::RouteBinding> {
+        self.inner
+            .transition
+            .get()
+            .and_then(TransitionHandle::binding)
+    }
+}
+
 impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     type Output = T;
 
@@ -514,13 +539,11 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         self.transition.install();
         self.inner
             .open_relay(self.inner.transition.get().expect("BUG: set in `new`"));
-        if let Some(binding) = self
-            .inner
-            .transition
-            .get()
-            .and_then(TransitionHandle::binding)
-        {
+        if let Some(binding) = self.binding() {
             binding.set_entry_maintain_state(self.inner.maintain_state.load(Ordering::Relaxed));
+            // Registered before the page has ever been built, so the registry
+            // knows the route exists; it resolves to `None` until the page mounts.
+            binding.publish_subtree(self.inner.subtree.clone());
         }
     }
 
@@ -563,7 +586,15 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// Close the relay **before** `TransitionRoute::dispose` drops the controller:
     /// a live listener on a disposed controller is a use-after-free of the
     /// notifier list.
+    ///
+    /// The subtree registration goes with it. The page's own `dispose`/`detach`
+    /// will empty the cell when the overlay entry is removed, but the *entry* must
+    /// go now: a disposed route that a `HeroController` can still name is a route
+    /// it can still measure.
     fn dispose(&mut self) {
+        if let Some(binding) = self.binding() {
+            binding.withdraw_subtree();
+        }
         self.inner.close_relay();
         self.transition.dispose();
     }

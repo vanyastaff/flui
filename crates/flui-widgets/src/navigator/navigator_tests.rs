@@ -181,11 +181,7 @@ fn navigator_push_builds_new_route_and_rearranges_overlay() {
 
     assert!(built.contains("second"), "the pushed route built");
     assert_eq!(layers(&mut harness).len(), 2);
-    assert_eq!(
-        handle.overlay_handle().len(),
-        2,
-        "the overlay holds both entries"
-    );
+    assert_eq!(handle.overlay().len(), 2, "the overlay holds both entries");
     assert_eq!(handle.route_ids().len(), 2);
 }
 
@@ -226,7 +222,7 @@ fn navigator_pop_removes_top_route_and_completes_result() {
 
     assert_eq!(result.try_take(), Some(Some(42)), "the future resolved");
     assert_eq!(handle.route_ids().len(), 1);
-    assert_eq!(handle.overlay_handle().len(), 1);
+    assert_eq!(handle.overlay().len(), 1);
     assert_eq!(layers(&mut harness).len(), 1, "the top layer is gone");
 }
 
@@ -247,7 +243,7 @@ fn navigator_remove_route_completes_result_and_rearranges_overlay() {
     harness.tick();
 
     assert_eq!(result.try_take(), Some(Some(7)));
-    assert_eq!(handle.overlay_handle().len(), 1);
+    assert_eq!(handle.overlay().len(), 1);
     assert_eq!(layers(&mut harness).len(), 1);
 }
 
@@ -494,13 +490,13 @@ fn navigator_flush_rearranges_overlay_after_disposal() {
     let (handle, mut harness) = navigator_with(&built);
     handle.push(page(&built, "second"));
     harness.tick();
-    assert_eq!(handle.overlay_handle().len(), 2);
+    assert_eq!(handle.overlay().len(), 2);
 
     handle.pop();
     harness.tick();
 
     assert_eq!(
-        handle.overlay_handle().len(),
+        handle.overlay().len(),
         1,
         "the disposed route's entry left the overlay"
     );
@@ -529,11 +525,7 @@ fn navigator_drops_overlay_entries_of_disposed_routes() {
     }
 
     assert_eq!(handle.route_ids().len(), 1);
-    assert_eq!(
-        handle.overlay_handle().len(),
-        1,
-        "no stale entries in the overlay"
-    );
+    assert_eq!(handle.overlay().len(), 1, "no stale entries in the overlay");
     assert_eq!(
         handle.tracked_entry_count(),
         1,
@@ -668,7 +660,7 @@ fn bound_zero_duration_route_settles_lifecycle_and_overlay() {
 
     assert!(built.contains("animated"), "the pushed route built");
     assert_eq!(handle.route_ids().len(), 2, "the push settled to Idle");
-    assert_eq!(handle.overlay_handle().len(), 2);
+    assert_eq!(handle.overlay().len(), 2);
     assert_eq!(layers(&mut harness).len(), 2);
 
     // `did_pop` raises `finalize()` mid-flush; the deferred pass disposes it and
@@ -679,7 +671,7 @@ fn bound_zero_duration_route_settles_lifecycle_and_overlay() {
     assert_eq!(result.try_take(), Some(Some(7)));
     assert_eq!(handle.route_ids().len(), 1);
     assert_eq!(
-        handle.overlay_handle().len(),
+        handle.overlay().len(),
         1,
         "the deferred disposal reached the overlay"
     );

@@ -70,6 +70,7 @@ use flui_animation::{Animation, Vsync};
 use parking_lot::Mutex;
 
 use super::route::RouteId;
+use super::subtree::RouteSubtreeCell;
 use crate::overlay::OverlayEntry;
 
 /// A lifecycle transition a route asks its navigator to make.
@@ -205,6 +206,13 @@ pub(crate) type RouteVsync = Arc<Mutex<Option<Vsync>>>;
 /// on the navigator instead (`overlay_route.rs`).
 pub(crate) type RouteEntries = Arc<Mutex<HashMap<RouteId, OverlayEntry>>>;
 
+/// `RouteId -> RouteSubtreeCell`, the navigator's answer to Flutter's
+/// `route.subtreeContext` (`routes.dart:1966`) — which reads a `GlobalKey` off the
+/// route object. FLUI's routes live behind `Box<dyn ErasedRoute>` inside the
+/// history's mutex, so the route publishes its cell into a registry the navigator
+/// owns instead. ADR-0021 U2, seam 4.
+pub(crate) type RouteSubtrees = Arc<Mutex<HashMap<RouteId, RouteSubtreeCell>>>;
+
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
 /// Its own mutex, deliberately: it must be lockable while the history's mutex is
@@ -233,6 +241,8 @@ pub(crate) struct RouteBinding {
     peers: TransitionRegistry,
     /// `RouteId -> OverlayEntry`. Likewise its own mutex (ADR-0020 U5.3).
     entries: RouteEntries,
+    /// `RouteId -> RouteSubtreeCell`. Likewise (ADR-0021 U2).
+    subtrees: RouteSubtrees,
 }
 
 impl RouteBinding {
@@ -243,6 +253,7 @@ impl RouteBinding {
         vsync: RouteVsync,
         peers: TransitionRegistry,
         entries: RouteEntries,
+        subtrees: RouteSubtrees,
     ) -> Self {
         Self {
             route,
@@ -251,6 +262,7 @@ impl RouteBinding {
             vsync,
             peers,
             entries,
+            subtrees,
         }
     }
 
@@ -304,6 +316,21 @@ impl RouteBinding {
     /// would hand out a disposed animation.
     pub(crate) fn withdraw_peer(&self) {
         self.peers.lock().remove(&self.route);
+    }
+
+    /// Publish where this route's page subtree *will* live — Flutter's
+    /// `_subtreeKey`, which a `ModalRoute` owns from construction (`routes.dart:2268`).
+    ///
+    /// The cell is registered at `install()`, before the page has ever been built,
+    /// and resolves to `None` until it mounts. See `subtree.rs`.
+    pub(crate) fn publish_subtree(&self, subtree: RouteSubtreeCell) {
+        self.subtrees.lock().insert(self.route, subtree);
+    }
+
+    /// Withdraw it. Called from `dispose`; a registry entry that outlives its route
+    /// would let `HeroController` resolve a disposed route's subtree.
+    pub(crate) fn withdraw_subtree(&self) {
+        self.subtrees.lock().remove(&self.route);
     }
 
     /// The route this binding drives. Test-facing: production code never needs it,

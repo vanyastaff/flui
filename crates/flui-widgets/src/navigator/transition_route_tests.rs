@@ -145,7 +145,7 @@ fn pop_transition_keeps_the_route_until_dismissed_but_completes_its_result_at_on
     let top = navigator_handle.current().expect("a top route");
     complete(&animation);
     harness.tick();
-    assert_eq!(navigator_handle.overlay_handle().len(), 2);
+    assert_eq!(navigator_handle.overlay().len(), 2);
 
     assert!(navigator_handle.pop_with(9_i32));
     harness.tick();
@@ -162,7 +162,7 @@ fn pop_transition_keeps_the_route_until_dismissed_but_completes_its_result_at_on
     );
     assert_eq!(navigator_handle.route_ids().len(), 2);
     assert_eq!(
-        navigator_handle.overlay_handle().len(),
+        navigator_handle.overlay().len(),
         2,
         "and its overlay entry is still shown"
     );
@@ -171,7 +171,7 @@ fn pop_transition_keeps_the_route_until_dismissed_but_completes_its_result_at_on
     harness.tick();
 
     assert_eq!(navigator_handle.route_ids().len(), 1, "now disposed");
-    assert_eq!(navigator_handle.overlay_handle().len(), 1);
+    assert_eq!(navigator_handle.overlay().len(), 1);
     assert_eq!(navigator_handle.tracked_entry_count(), 1);
 }
 
@@ -220,7 +220,7 @@ fn an_already_dismissed_controller_finalizes_synchronously_without_double_finali
 
     assert_eq!(navigator_handle.route_state(top), None, "disposed at once");
     assert_eq!(navigator_handle.route_ids().len(), 1);
-    assert_eq!(navigator_handle.overlay_handle().len(), 1);
+    assert_eq!(navigator_handle.overlay().len(), 1);
 }
 
 /// The status listener raises `finalize()` **once**, however many times the
@@ -286,7 +286,7 @@ fn dismissed_while_still_active_does_not_finalize() {
         "an active route survives a dismissed controller"
     );
     assert_eq!(navigator_handle.route_ids().len(), 2);
-    assert_eq!(navigator_handle.overlay_handle().len(), 2);
+    assert_eq!(navigator_handle.overlay().len(), 2);
     assert!(!animation.is_pop_finalized());
 }
 

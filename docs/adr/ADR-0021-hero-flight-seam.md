@@ -869,6 +869,78 @@ introspection, `RouteSubtree` and the overlay seam are all unbuilt.
 
 ---
 
+## 7e. U2 seams 2–5 landed (2026-07-10)
+
+Four seams, each pinned to the `heroes.dart` line that will consume it. No `Hero`
+widget, no `HeroController`, no flight, no public Hero API.
+
+| Seam | Shape | Flutter |
+|---|---|---|
+| 2. Observer attachment | `NavigatorObserver::did_attach(NavigatorHandle)` / `did_detach()`, driven from `NavigatorState`'s `init_state` / `activate` / `deactivate` / `dispose` | `NavigatorObserver.navigator`, an `Expando` written at `navigator.dart:3836`, `:4060`, `:4108`, `:4121` |
+| 3. Route introspection | `NavigatorHandle::{route_peer, route_subtree, is_current}`, `pub(crate)` | `route.animation`, `route is PageRoute`, `route.subtreeContext`, `route.isCurrent` |
+| 4. Route subtree | `RenderSubtreeAnchor` around `buildPage`'s output; `RouteSubtree { element_id, render_id }` published into a navigator-owned registry | `ModalRoute._subtreeKey` on the `RepaintBoundary` at `routes.dart:1229-1231` |
+| 5. Overlay access | `NavigatorHandle::overlay()`, `pub(crate)`; `Overlay`/`OverlayEntry` stay unexported | `navigator.overlay` (`heroes.dart:990`) |
+
+### Two facts this pass established, both load-bearing
+
+**1. Observers are notified while the history mutex is held.** `RouteHistory::flush`
+calls `did_push` / `did_pop` / `did_remove` / `did_replace` / `did_change_top` from
+inside `NavigatorShared::mutate`, which holds `history.lock()` for the whole walk.
+`parking_lot::Mutex` is not reentrant, so an observer that reads or mutates the
+*stack* through its `NavigatorHandle` from one of those callbacks **hangs**. Every
+other capability on the handle — `overlay()`, `route_subtree()`, `route_peer()`,
+`post_frame_handle` — is safe there, and that is exactly the set
+`HeroController.didPush` uses (`heroes.dart:964-973`): flip a route offstage, then
+schedule a post-frame callback and measure from it, outside the flush. Documented on
+the trait. `attach_observers` / `detach_observers` snapshot the observer list and
+notify with **no** lock held, so `did_attach` may use the handle freely.
+
+Deferring notification out of the lock entirely (so the constraint disappears) would
+mean moving the observer list and the route disposal onto `NavigatorShared` and
+returning both in `FlushOutcome`. That is a strictly better shape — it would also
+move `route.dispose()` out from under the lock — and it is **not** done here.
+Recorded as a follow-up, not as a limitation of U2's seams.
+
+**2. `subtreeContext` and its render object are two nodes in FLUI, not one.**
+Flutter's `_subtreeKey` sits on a `RepaintBoundary`, so `subtreeContext` and
+`subtreeContext.findRenderObject()` name the same node. FLUI's
+`BuildContext::find_render_object()` walks strict **ancestors** (it is
+`findAncestorRenderObjectOfType`), so a context can never yield the `RenderId` below
+it. `RouteSubtree` therefore carries two ids from two hooks: `element_id` from
+`ViewState::init_state`, `render_id` from `RenderBox::attach`. They bracket exactly
+the page subtree, so nothing observable depends on the offset — recorded, not claimed
+away. `RenderSubtreeAnchor` is also *not* a repaint boundary: identity without the
+compositing side effect.
+
+### The two-stage resolution rule
+
+`RouteSubtree` resolves from `attach`, which runs during **build**. Layout has not
+run then. `SubtreeAnchor::get()` is therefore **not** layout-readiness; geometry
+comes from `PipelineOwner::box_size`, which is `None` until the first layout commits
+(§7c / U1). `route_subtree_ids_are_published_before_layout_commits` reads the seam
+from inside the page's own `build` and asserts exactly that: ids `Some`, size `None`;
+the post-frame callback of the same frame then sees committed geometry.
+
+### Open question 2 (§7d) is answered
+
+`RenderSubtreeAnchor` lives in **`flui-objects`**, public and in the harness catalog
+(`RENDER_OBJECT_TYPES`, `harness_subtree_anchor_*`). It is a render-layer fact, not a
+widget-layer trick, and a private exception in `flui-widgets` would have put a render
+object outside the catalog guard.
+
+### Still not done, and not claimed
+
+* No `HeroControllerScope`, so **nested navigators are out of scope**: these seams
+  answer only about the navigator that owns them. B1.4 stays open.
+* `ModalHandle` (the `offstage` setter) is still `#[cfg(test)]`, and `offstage` still
+  does not swap the animation proxy to `kAlwaysComplete` (`routes.dart:1958-1962`).
+  D4 assigns both to U3; until then a `HeroController` could flip a route offstage
+  but would read its *in-flight* animation value, not `1.0`.
+* `route_peer` / `route_subtree` / `is_current` / `overlay` have no production caller
+  and carry `#[allow(dead_code)]` naming U3 as the first one.
+
+---
+
 ## 8. Deferred, each with its blocker
 
 | Deferred | Why |
