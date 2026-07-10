@@ -18,6 +18,11 @@ struct ControllerInner {
     text: String,
     /// Byte offset of the caret into `text`.  Always a valid UTF-8 char boundary.
     caret_byte_offset: usize,
+    /// The focus node of the [`EditableText`](super::EditableText) currently
+    /// driven by this controller — published in its `init_state`, cleared in
+    /// `dispose`. This is how a tap on the enclosing `TextField` focuses *its
+    /// own* field rather than a scope-walk guess (ADR-0022 U4).
+    focus_node_id: Option<flui_interaction::FocusNodeId>,
 }
 
 // ============================================================================
@@ -87,6 +92,7 @@ impl TextEditingController {
             inner: Arc::new(Mutex::new(ControllerInner {
                 text: String::new(),
                 caret_byte_offset: 0,
+                focus_node_id: None,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -101,6 +107,7 @@ impl TextEditingController {
             inner: Arc::new(Mutex::new(ControllerInner {
                 text,
                 caret_byte_offset,
+                focus_node_id: None,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -276,6 +283,24 @@ impl TextEditingController {
     // =========================================================================
     // Reactive integration
     // =========================================================================
+
+    /// The focus node of the `EditableText` this controller currently drives,
+    /// or `None` between mounts. Published by `EditableTextState::init_state`
+    /// and cleared by its `dispose` (ADR-0022 U4).
+    pub(crate) fn focus_node_id(&self) -> Option<flui_interaction::FocusNodeId> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .focus_node_id
+    }
+
+    /// Publish (or clear) the driving field's focus node.
+    pub(crate) fn set_focus_node_id(&self, id: Option<flui_interaction::FocusNodeId>) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .focus_node_id = id;
+    }
 
     /// Return a listenable that fires whenever the controller's text or caret
     /// changes.  Pass it to [`AnimatedBuilder`](crate::AnimatedBuilder) to

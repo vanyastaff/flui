@@ -13,6 +13,7 @@ mod offstage;
 mod visibility;
 
 pub use absorb_pointer::AbsorbPointer;
+pub(crate) use focus::enclosing_scope;
 pub use focus::{Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};

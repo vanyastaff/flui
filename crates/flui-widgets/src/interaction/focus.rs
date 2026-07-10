@@ -83,7 +83,7 @@ impl_inherited_view!(FocusScopeProvider);
 /// The scope a mounting/reparenting node belongs under: the nearest provider,
 /// else the manager's root scope (`FocusScope.of`'s fallback,
 /// `focus_scope.dart:843-850`).
-fn enclosing_scope(ctx: &dyn BuildContext) -> Arc<FocusScopeNode> {
+pub(crate) fn enclosing_scope(ctx: &dyn BuildContext) -> Arc<FocusScopeNode> {
     ctx.get::<FocusScopeProvider, _>(|provider| Arc::clone(&provider.scope))
         .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope()))
 }

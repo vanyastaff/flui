@@ -6,7 +6,7 @@ use std::sync::Arc;
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
 use flui_interaction::events::{Key, KeyState, NamedKey};
-use flui_interaction::routing::{FocusManager, FocusNode, KeyEventCallback};
+use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode, KeyEventCallback};
 use flui_objects::RenderEditable;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
@@ -100,6 +100,9 @@ impl EditableText {
 pub struct EditableTextState {
     /// Focus node representing this field in the global focus tree.
     focus_node: Arc<FocusNode>,
+    /// The scope the node hangs under — the nearest enclosing `FocusScope` at
+    /// mount, or the root scope. Detached from in `dispose`.
+    scope: Option<Arc<FocusScopeNode>>,
     /// Clone of the controller captured in `create_state`; used to register
     /// listeners in `init_state` without needing the `view` reference.
     controller: TextEditingController,
@@ -130,6 +133,7 @@ impl StatefulView for EditableText {
     fn create_state(&self) -> EditableTextState {
         EditableTextState {
             focus_node: FocusNode::with_debug_label("EditableText"),
+            scope: None,
             controller: self.controller.clone(),
             controller_listener_id: None,
             rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
@@ -139,12 +143,17 @@ impl StatefulView for EditableText {
 }
 
 impl ViewState<EditableText> for EditableTextState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
-        // 1. Attach our focus node to the global focus tree so it can receive
-        //    focus and be discovered by Tab traversal.
-        FocusManager::global()
-            .root_scope()
-            .attach_node(&self.focus_node);
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        // 1. Attach our focus node under the nearest enclosing `FocusScope` —
+        //    a `ModalRoute`'s per-route scope when this field sits in a page
+        //    (ADR-0022 U3/U4) — falling back to the root scope, and publish the
+        //    node on the controller so the enclosing `TextField`'s tap can
+        //    focus *this* field.
+        let scope = crate::interaction::enclosing_scope(ctx);
+        scope.attach_node(&self.focus_node);
+        self.controller
+            .set_focus_node_id(Some(self.focus_node.id()));
+        self.scope = Some(scope);
 
         // 2. Register a key handler with the FocusManager.  Only fires when
         //    this node is the primary-focused node.
@@ -193,14 +202,17 @@ impl ViewState<EditableText> for EditableTextState {
             FocusManager::global().remove_listener(id);
         }
 
-        // Unregister the key handler from the FocusManager.
+        // Unregister the key handler from the FocusManager, and withdraw the
+        // node from the controller — an unmounted field must not be a tap
+        // target.
         FocusManager::global().unregister_key_handler(self.focus_node.id());
+        self.controller.set_focus_node_id(None);
 
-        // Detach the focus node from the global tree (also clears primary focus
-        // if this node held it).
-        FocusManager::global()
-            .root_scope()
-            .detach_node(self.focus_node.id());
+        // Detach the focus node from wherever it hangs (also clears primary
+        // focus if this node held it).
+        if let Some(scope) = self.scope.take() {
+            scope.detach_node(self.focus_node.id());
+        }
 
         // Remove the controller listener we registered in init_state.
         if let Some(id) = self.controller_listener_id.take() {

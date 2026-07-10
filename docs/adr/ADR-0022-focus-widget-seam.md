@@ -1,6 +1,6 @@
 # ADR-0022 — The `Focus` / `FocusScope` widget seam
 
-- **Status:** **Accepted — U1–U3 landed 2026-07-10 (U1.2 is a recorded decision, not code); U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
+- **Status:** **Accepted — landed.** All four units shipped 2026-07-10 (U1.2 is a recorded decision, not code). Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
 - **Date:** 2026-07-10
 - **Deciders:** chief-architect; consult interaction owner (`flui-interaction` `FocusManager`/`FocusNode` API additions, U1), view owner (inherited reparenting contract, U2), repository owner (public API: `Focus`, `FocusScope`), qa-lead (traversal and key-routing tests).
 - **Relates to:** closes ADR-0020 §Seam 6 ("no `Focus`/`FocusScope` **widget**"); builds on tracker H4 (the node/manager layer, done 2026-06-30); unblocks `Actions`/`Shortcuts` (B1.1) and `ModalRoute`'s per-route focus scope; consumes ADR-0021's `HeroScope`/`GestureArenaScope` ambient-provider pattern.
@@ -80,7 +80,19 @@ follows.
 
 `ModalRoute` creates a `FocusScopeNode`, wraps the page subtree in `FocusScope::with_external_node`, and drives `FocusManager::set_active_scope` from the route lifecycle it already observes: the top route's scope becomes active when it becomes current, and the revealed route's scope is restored on pop (`navigator.dart:273`, `:311`). `traps_focus` — already a node-layer flag — becomes meaningful here: Tab traversal inside a modal stays inside it (`focus.rs` `active_scope` already scopes `focus_next`). Removes the `modal_route.rs:49-50` "No FocusScope" divergence note.
 
-### U4 — consumers, export, and the parity gate
+### U4 — consumers, export, and the parity gate — landed 2026-07-10
+
+`EditableText` attaches under the nearest enclosing scope (a route's, in a
+page) instead of the root, detaching from wherever it hangs on dispose, and
+publishes its focus node id on its `TextEditingController`. `TextField`'s tap
+focuses **that** node — the root-scope first-key-handler walk and its
+documented multi-field limitation are gone, replaced red-checked by a
+two-field disambiguation test (`a_tap_focuses_the_fields_own_node_not_the_first_registered`),
+which also pins that unmounting withdraws the node and a late tap is a no-op.
+`Focus`/`FocusScope` were exported in U2. The broader
+`focus_scope_test.dart` traversal oracles remain future work alongside
+`FocusTraversalGroup` (§4). Original design follows.
+
 
 `EditableText` owns a real `Focus` wiring (ambient scope, not root), `TextField` tap-to-focus targets **its own node** (closing `text_field.rs:85-96`), the export guard gains the new private types, and the gate re-verifies against `test/widgets/focus_scope_test.dart` oracles: focus follows request, unfocus, Tab order under a scope, scope isolation across routes, autofocus-once, and dispose-releases-focus.
 
