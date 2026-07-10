@@ -1564,6 +1564,132 @@ after mount is not picked up — the same read-once contract `VsyncScope` alread
 
 ---
 
+## 7n. Design: public `Hero` customization hooks (2026-07-10)
+
+The first advanced slice beyond `Hero::new(tag, child)`: `create_rect_tween`,
+`flight_shuttle_builder`, `placeholder_builder`. This section decides each hook's Rust
+shape **before** coding, and records where exact Flutter parity is impossible. Scope is
+these three only — `Hero.curve` / `reverseCurve`, `HeroMode`,
+`transitionOnUserGestures`, and cross-navigator flight parity stay deferred (§8).
+
+### Reference (source notes)
+
+`.flutter/packages/flutter/lib/src/widgets/heroes.dart`, master
+`3.33.0-0.0.pre-6280-g88e87cd963f`:
+
+| What | Source |
+|---|---|
+| `Hero` ctor fields (`createRectTween`, `flightShuttleBuilder`, `placeholderBuilder`) | `:174-184` |
+| `CreateRectTween = Tween<Rect?> Function(Rect?, Rect?)` | `:27` |
+| `HeroFlightShuttleBuilder = Widget Function(flightContext, animation, direction, fromHeroContext, toHeroContext)` | `:45-52` |
+| `HeroPlaceholderBuilder = Widget Function(context, Size heroSize, Widget child)` | `:40` |
+| `createHeroRectTween` — precedence `toHero.createRectTween ?? controller.createRectTween ?? RectTween` | `:494-497` |
+| shuttle build — `shuttle ??= manifest.shuttleBuilder(ctx, animation, type, fromHero.context, toHero.context)` | `:571-579` |
+| shuttleBuilder precedence — `toHero.flightShuttleBuilder ?? fromHero.flightShuttleBuilder ?? _default` | `:1039-1042` |
+| `_defaultHeroFlightShuttleBuilder` — returns `toHero.child` when no `MediaQuery` | `:1076-1108` |
+| `_HeroState.build` — `placeholderBuilder` branch, then `!_shouldIncludeChild`, then default | `:410-438` |
+| `_key` (`GlobalKey`) — declared `:363`, used **only** in the default branch's `KeyedSubtree` `:434` | `:363`, `:434` |
+| `flightShuttleBuilder` `GlobalKey` limitation | `:227-239` |
+| `placeholderBuilder` doc — default is empty `SizedBox` of the hero's size | `:242-249` |
+
+### FLUI audit — what is expressible today
+
+* **rect tween.** `FlightInner.rect: Mutex<RectTween>` (`hero_flight.rs:95`) is a concrete
+  linear `Tween<Rect<Pixels>>`. `on_tick` re-aims by mutating `rect.end`
+  (`hero_flight.rs:139-143`), preserving `rect.begin`; divert reads `rect.begin`/`.end`
+  and `current_rect()`. Flutter instead **re-creates** the tween through the factory on
+  every re-aim (`:685`). Expressible: yes, by threading a factory and re-invoking it.
+* **shuttle.** The default shuttle is `to_hero.shuttle_child()` — a cloned `BoxedView`
+  (`hero_flight.rs:577`), rendered by the private `Shuttle` view (`:687-714`). There is
+  **no foreign `BuildContext`** for the from/to heroes: the flight runs in the overlay
+  with its own context, and reaching into another route's element tree is exactly what
+  the registry design (S7) and FR-033 avoid. This is the open **UNKNOWN-3**.
+* **placeholder.** `HeroState::build` (`hero.rs:542-580`) is the **fixed chain**
+  `SizedBox → Offstage → child`; child state survives with no `GlobalKey` precisely
+  because the structure is *constant* (D2, §7k). An arbitrary placeholder subtree breaks
+  that constancy.
+
+### D-N.1 — `create_rect_tween`: **ship.**
+
+A per-`Hero` factory `Fn(Rect, Rect) -> impl Animatable<Rect<Pixels>>`, stored erased as
+`Arc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Rect<Pixels>> + Send + Sync> + Send + Sync>`
+(`Clone + Send + Sync + 'static` via `Arc`). Precedence matches Flutter `:495`:
+per-`Hero` hook, else a controller-level default (`HeroController::with_rect_tween`),
+else linear `RectTween`. The flight keeps `begin: Rect` / `end: Rect` and the optional
+factory; `current_rect()` and re-aim re-invoke the factory (linear `RectTween` when
+`None`, so the default path is byte-for-byte the current behavior). No foreign context,
+no `GlobalKey`, nothing faked. The hook travels `Hero` → `HeroHandle` (like
+`shuttle_child`) → `FlightPlan`.
+
+### D-N.2 — `flight_shuttle_builder`: **ship, with the UNKNOWN-3 divergence.**
+
+FLUI cannot hand the two foreign `BuildContext`s (`fromHeroContext`, `toHeroContext`) —
+they do not exist here and would violate the no-cross-route-reach contract. The honest
+divergence, and the answer to **UNKNOWN-3**: hand what those contexts are actually *used*
+for. In practice a shuttle builder reads `context.widget as Hero → .child` (the two hero
+children, which FLUI already clones as `BoxedView`) and, rarely, a foreign
+`InheritedWidget` such as `MediaQuery` (which FLUI does not have — the default shuttle's
+whole `MediaQuery` branch is already absent, §7 U4 note). So the FLUI signature is:
+
+```rust
+Fn(&Arc<dyn Animation<f32>>, FlightDirection, &BoxedView /* from */, &BoxedView /* to */)
+    -> impl IntoView
+```
+
+erased as `Arc<dyn Fn(...) -> BoxedView + Send + Sync>`. Precedence matches Flutter
+`:1040-1041`: `toHero ?? fromHero ?? default`. `FlightDirection` (today `pub(crate)`,
+`hero_controller.rs:119`) becomes public. No foreign context means the
+`GlobalKey`-collision limitation (`:227-239`) does not exist in FLUI — the shuttle builds
+fresh, nothing is reparented (D1). Divergence recorded, not hidden.
+
+### D-N.3 — `placeholder_builder`: **the premise is wrong; decision deferred to sign-off.**
+
+The task framed this as "ship only if source-child state is *preserved*." Re-reading the
+reference dissolves that premise: **Flutter does not preserve child state through a
+custom `placeholderBuilder`.** The `_key` `GlobalKey` (`:363`) lives *only* in the default
+branch's `KeyedSubtree` (`:434`); the `placeholderBuilder` branch (`:419-421`) returns the
+builder's output with no `_key`. Flutter's docs confirm the intent — the blessed use is to
+build "an empty `SizedBox`, keeping the Hero child's original size" to *avoid* a
+`GlobalKey` collision (`:233-239`), i.e. to **drop** the child, not keep it. Setting
+`placeholderBuilder` on a push-source hero *loses* the default path's preservation, in
+Flutter as it would in FLUI.
+
+So there is no silent-state-loss divergence to fear: FLUI dropping child state through a
+custom placeholder is **parity**. But the task tied "ship" to preservation, which is not a
+property this hook has in either framework, so the shape is a genuine fork for the user:
+
+* **Option A — ship at Flutter parity.** `Fn(Size, &BoxedView) -> impl IntoView`, replacing
+  the fixed chain while `show_placeholder`. Documented: a custom placeholder does **not**
+  preserve the child's state (parity with Flutter's non-`_key` branch). No stub, real
+  behavior, tested by asserting the builder's widget appears in the route while the shuttle
+  flies.
+* **Option B — ship the size-only honest-narrow form.** `Fn(Size) -> impl IntoView`, no
+  child param, so the "include the child and expect it kept" mistake is unrepresentable.
+  Covers the primary documented use (empty sized box) with zero preservation hazard.
+* **Option C — defer** with no public stub, as §7l already lists it.
+
+Recommendation: **A** (closest to Flutter, and the preservation caveat is real and
+documentable). Held for sign-off because it redefines the task's stated bar.
+
+### Bounds and non-leakage (all three)
+
+Every hook is `Clone + Send + Sync + 'static` (satisfied by `Arc<dyn Fn ...>`). Hooks
+receive only public/erased values — `Rect`, `Size`, `FlightDirection`,
+`Arc<dyn Animation<f32>>`, `BoxedView` — never `HeroTag`, `HeroHandle`,
+`HeroFlightManifest`, `HeroFlight`, or `OverlayEntry`. The `BoxedView` payloads are
+already-erased clones, so no hook adds a `Clone` bound to the caller's child type beyond
+what `Hero::new` requires. `public_no_internal_route_stack_exports` continues to guard the
+private names.
+
+### Gate outcome
+
+`create_rect_tween` and `flight_shuttle_builder` are honestly representable (the latter
+with the recorded UNKNOWN-3 divergence). `placeholder_builder`'s shape turns on a
+factual correction to the task's premise and is held for sign-off (A/B/C above). Per the
+task's stop-clause, this design commit lands and implementation waits on that decision.
+
+---
+
 ## 8. Deferred, each with its blocker
 
 | Deferred | Why |
@@ -1593,7 +1719,7 @@ after mount is not picked up — the same read-once contract `VsyncScope` alread
 
 1. **S4's scope.** Implement `transform_to` for the strict descendant→ancestor case only (all Hero needs), or the full `getTransformTo` with a common-ancestor search? The narrow one is a walk; the general one needs an inverse.
 2. **S3's anchor (new, §7d).** `RouteSubtree` needs a render object at the root of the route's page subtree to publish its `RenderId` on `attach`. Does it live in `flui-objects` as a public, harness-tested render object, or privately in `flui-widgets` (which defines none today and would sit outside the harness catalog guard)?
-3. **UNKNOWN-3.** What replaces `flightShuttleBuilder`'s two `BuildContext`s? This is the only public signature Hero cannot copy from Flutter.
+3. **UNKNOWN-3.** ~~What replaces `flightShuttleBuilder`'s two `BuildContext`s?~~ **Answered (§7n, D-N.2):** hand the two hero child views (`BoxedView`) plus the animation and `FlightDirection`, not foreign contexts — that is what the contexts are used for, and FLUI has no `MediaQuery` to need the rest.
 3. **D8.** Is log-and-drop the right answer for duplicate tags, or is a duplicate tag a *framework* invariant (Flutter asserts, and a wrong flight is very visible) that earns an `expect("BUG: …")`?
 4. **S7.** Registry over element walk trades a downcast for three enumerated narrowings. Is the nested-navigator narrowing acceptable to close B1.4, or must "Hero works" mean it works under a nested navigator?
 5. **D4 / UNKNOWN-2.** Does the primary animation proxy belong on `ModalRoute` (as in Flutter) or can `TransitionRoute` host it without disturbing the status listener that ADR-0020 U5.2 built?
