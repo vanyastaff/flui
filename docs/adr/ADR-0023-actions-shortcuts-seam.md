@@ -1,6 +1,6 @@
 # ADR-0023 — The `Shortcuts` / `Actions` seam, and bubbling key dispatch
 
-- **Status:** **Accepted — U1 + U2 landed 2026-07-10; U3–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI key-dispatch path.
+- **Status:** **Accepted — landed.** All four units shipped 2026-07-10. Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI key-dispatch path.
 - **Date:** 2026-07-10
 - **Deciders:** chief-architect; consult interaction owner (U1 changes `FocusManager::dispatch_key_event`'s contract), repository owner (public API: `CallbackShortcuts`, `SingleActivator`, later `Shortcuts`/`Actions`/`Intent`), qa-lead (dispatch-order and modifier-matching tests).
 - **Relates to:** builds on ADR-0022 (the `Focus` widget whose `on_key_event` this makes live); B1.1's `Actions`/`Shortcuts` line (`ROADMAP.md:217`); closes ADR-0022 §4's "bubbling up the ancestry is added when a widget needs interception, likely with `Shortcuts`".
@@ -142,7 +142,20 @@ fails the shortcut test; exact-modifier matching pinned per
 Intent layer, and it exercises U1 end-to-end (a shortcut above a focused
 `TextField` fires only for keys the field ignored — pinned by test).
 
-### U3 — `Intent` / `Action` / `Actions` (`flui-widgets`)
+### U3 — `Intent` / `Action` / `Actions` (`flui-widgets`) — landed 2026-07-10
+
+Shipped as designed, with one structural choice made concrete: instead of an
+invoke-time ancestor walk (which `BuildContext` cannot iterate), each `Actions`
+**layers its bindings over the enclosing chain at provide time** —
+`HashMap<TypeId, Vec<ErasedAction>>`, own actions prepended — so one
+nearest-provider lookup yields, per intent type, the same ordered candidates
+Flutter's `_visitActionsAncestors` walk visits: nearest first, first *enabled*
+wins, a disabled nearer action falls through (red-checked: dropping the
+layering fails the fall-through test). The `dyn Any` downcast lives inside the
+typed wrapper behind the intent's `TypeId` and carries the FR-033/widgets
+marker. Rust 1.86 trait upcasting (`dyn Intent: Any`) removes any `as_any`
+ceremony. Original design follows.
+
 
 The typed layer. Rust shape for Flutter's `Map<Type, Action<Intent>>`:
 
@@ -167,7 +180,15 @@ The typed layer. Rust shape for Flutter's `Map<Type, Action<Intent>>`:
   it needs a node→element registry (a `Focus`-widget concern, cheap once
   wanted).
 
-### U4 — `Shortcuts` (the Intent-mapped widget)
+### U4 — `Shortcuts` (the Intent-mapped widget) — landed 2026-07-10
+
+Shipped as designed: the first matching activator decides (`_find`,
+`shortcuts.dart:892-899`); the intent resolves through the chain captured —
+with a real dependency, so chain changes re-capture — from the widget's own
+position (O-1, recorded); a `consumes_key = false` action runs but returns
+`SkipRemainingHandlers` (`actions.dart:312-314`), pinned by test end to end
+from `dispatch_key_event` through a focused field. Original design follows.
+
 
 `Shortcuts { shortcuts: Vec<(SingleActivator, Box<dyn Intent>)>, child }`, a
 `Focus(can_request_focus: false).on_key_event` wrapper whose handler finds the
