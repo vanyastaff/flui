@@ -3,15 +3,17 @@
 //! ADR-0021 U3 (the controller) and U3.5 (the manifests). **Private**: nothing here
 //! is exported.
 //!
-//! This is the observer that decides *when* a flight would start, *where* its
-//! destination will be, and *which heroes* would fly. It produces
-//! [`HeroFlightManifest`] records and stops there. The flight itself — the overlay
-//! entry, `RectTween`, the shuttle, and the animation that drives them — is U4.
+//! This is the observer that decides *when* a flight starts, *where* its destination
+//! will be, and *which heroes* fly. It records [`HeroFlightManifest`] values for
+//! diagnostics/tests and hands valid ones to the private flight manager. The flight
+//! itself — the overlay entry, `RectTween`, shuttle, and driving animation — lives in
+//! `hero_flight.rs` (U4).
 //!
 //! The pieces it stands on already exist: the private [`Hero`] view, the per-route
 //! [`HeroRegistry`] behind an ambient [`HeroScope`], and [`HeroHandle`] with its
-//! `start_flight` / `end_flight` placeholder machinery (`hero.rs`, U3.5). This
-//! controller never calls `start_flight` — that is what a flight does.
+//! `start_flight` / `end_flight` placeholder machinery (`hero.rs`, U3.5). The
+//! controller still does not call `start_flight` directly — the private `HeroFlight`
+//! does that when launched.
 //!
 //! [`Hero`]: super::hero::Hero
 //! [`HeroRegistry`]: super::hero::HeroRegistry
@@ -58,15 +60,16 @@
 //!
 //! # What is deliberately absent
 //!
-//! **Nothing flies.** No `_HeroFlight`, no overlay flight entry, no `RectTween`, no
-//! `flightShuttleBuilder`, no `ProxyAnimation` driving a shuttle, no `onTick`
-//! re-measure, no divert. A [`HeroFlightManifest`] is *recorded*, never consumed.
+//! A private `_HeroFlight` analogue exists and consumes valid [`HeroFlightManifest`]
+//! values. What is still absent is the public/customizable surface: no
+//! `flightShuttleBuilder`, no `placeholderBuilder`, no `HeroMode`, no
+//! `transitionOnUserGestures`, no public `createRectTween`, and no divert. U4 ends an
+//! existing same-tag flight before starting the next one, where Flutter redirects it.
 //!
 //! No public API: `Hero`, `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`,
-//! `HeroState`, `HeroController` and `HeroFlightManifest` are all `pub(crate)`, and
-//! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported.
-//! No `HeroMode`, no `placeholderBuilder`, no `transitionOnUserGestures`, no
-//! `createRectTween`.
+//! `HeroState`, `HeroController`, `HeroFlightManifest`, and the flight machinery are
+//! all `pub(crate)`, and `navigator_tests::public_no_internal_route_stack_exports`
+//! fails if any is exported.
 //!
 //! No `HeroControllerScope` — and therefore **no nested-navigator support**. A
 //! `HeroController` observes exactly the one navigator that attached it, as Flutter's
@@ -82,11 +85,11 @@
 //! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
 //! [`RouteSubtree`]: super::subtree::RouteSubtree
 
-// `HeroController` measures; U4's `_HeroFlight` will fly. Nothing constructs a
+// `HeroController` measures and launches private flights, but nothing constructs a
 // controller in production yet — a `Navigator` gains one only when the public `Hero`
 // API lands — so the tests are this module's only callers, and `dead_code` cascades
 // from here into the `ModalHandle` / `RouteBinding` / `HeroRegistry` seams it is the
-// sole production consumer of. Deleting it and re-deriving it in U4 is how a seam
+// sole production consumer of. Deleting it and re-deriving it later is how a seam
 // stops matching the ADR that specified it.
 #![allow(dead_code)]
 
@@ -136,9 +139,9 @@ impl FlightDirection {
 
 /// What one post-frame measurement resolved.
 ///
-/// This is what U4's `_HeroFlightManifest` will be built from. Today it is only
-/// *recorded*, which is the point: it proves the U1/U1.5/U2/U3 seams compose into a
-/// destination rect, without yet flying anything into it.
+/// The route-level measurement that precedes manifest collection and flight launch.
+/// Keeping it recorded separately proves the U1/U1.5/U2/U3 seams still compose into a
+/// destination rect before U4 consumes matching hero pairs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Measurement {
     /// `None` when neither route was animating; see [`FlightDirection::classify`].
@@ -196,7 +199,7 @@ pub(crate) struct HeroFlightManifest {
     pub(crate) to_rect: Rect,
 }
 
-/// Watches a navigator and measures where a hero flight *would* land.
+/// Watches a navigator, measures where hero flights land, and launches private flights.
 ///
 /// Install with [`NavigatorHandle::add_observer`]. Holds no `GlobalKey`, reads no
 /// element tree, and never touches the render tree from an observer callback — the

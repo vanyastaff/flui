@@ -1,9 +1,9 @@
 //! The `Hero` view, its per-route registry, and the handle a `HeroController` drives.
 //!
-//! ADR-0021 U3.5. **Private.** No public `Hero`, no prelude export, no flight: a
-//! `Hero` is a pass-through that can be *told* to show a placeholder, and a registry
-//! that lets the controller find it by tag. Nothing animates yet — U4 owns the
-//! `_HeroFlight` that would call `start_flight`.
+//! ADR-0021 U3.5. **Private.** No public `Hero`, no prelude export. A `Hero` is a
+//! pass-through that can be *told* to show a placeholder, and a registry entry that
+//! lets the controller find it by tag. U4's private `_HeroFlight` now drives this
+//! placeholder machinery, but the public/customizable Hero API is still absent.
 //!
 //! # Flutter parity
 //!

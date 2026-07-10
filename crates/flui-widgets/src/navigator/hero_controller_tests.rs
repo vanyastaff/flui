@@ -5,7 +5,7 @@
 //! `PostFrameHandle`), §7f (notification outside the history lock) and U3 (the
 //! offstage animation proxies) **compose** into a destination rect.
 //!
-//! They do not prove that a hero flies. Nothing flies yet.
+//! They do not prove the flight overlay itself; `hero_flight_tests` owns that layer.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
