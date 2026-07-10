@@ -1459,6 +1459,88 @@ PageRoute gate) is complete and tested end-to-end.
 
 ---
 
+## 7m. Design: `HeroControllerScope` + automatic attach (2026-07-10)
+
+U6 shipped `Hero` with one divergence: an app author had to write
+`navigator.add_observer(HeroController::new())` by hand. This section decides the
+ambient-controller path that removes it, **before** coding.
+
+### Flutter's mechanism (verified)
+
+* `HeroControllerScope` is an `InheritedWidget` over an `Option<HeroController>`
+  (`navigator.dart:851-920`): `HeroControllerScope(controller:, child:)` hosts one,
+  `HeroControllerScope.none(child:)` provides `null` to block the subtree.
+* `NavigatorState.didChangeDependencies` (`:3957-3959`) and `initState` (`:3845`)
+  resolve `HeroControllerScope.maybeOf(context)` and add it to `_effectiveObservers`
+  (`:4041-4047`).
+* `NavigatorState.build` wraps its content in `HeroControllerScope.none`
+  (`:5955`) so a **nested** navigator does not pick up the outer controller.
+* A controller "can not be shared by multiple Navigators" — asserted in debug,
+  `reportError` in release (`:4010-4027`).
+* Flutter's Navigator does **not** auto-create a controller. `MaterialApp` does, via
+  `createMaterialHeroController()` + `HeroControllerScope(controller:, …)`
+  (`material/app.dart:808`, `:1163`).
+
+### Decisions
+
+**D-U6.1 — `HeroControllerScope` is public**, an `InheritedView` over
+`Option<Arc<HeroController>>`, mirroring the `VsyncScope` pattern
+(`Navigator::init_state` already reads `VsyncScope` the same way).
+`HeroControllerScope::new(controller, child)` and
+`HeroControllerScope::none(child)`.
+
+**D-U6.2 — the Navigator auto-creates a default `HeroController` when no scope is in
+scope.** This is a **deliberate divergence** from Flutter, and the reason is concrete:
+Flutter's automatic-ness comes from `MaterialApp` installing an app-level scope, and
+FLUI has no `MaterialApp`. Rather than require every app to build a scope by hand — the
+same boilerplate in a different shape — the outermost `Navigator` self-provides. The
+resolution in `init_state`:
+
+| `ctx.get::<HeroControllerScope>()` | Action |
+|---|---|
+| `None` (no scope ancestor) | auto-create a default `HeroController`, attach it |
+| `Some(Some(controller))` | attach that controller |
+| `Some(None)` (`.none`) | attach nothing — flights disabled |
+
+**D-U6.3 — nested navigators are isolated exactly as Flutter's are.** `Navigator::build`
+wraps its `Overlay` in `HeroControllerScope::none`, so a nested navigator resolves
+`Some(None)` and gets no controller (no auto-default either — a scope *is* present). A
+nested navigator flies heroes only if wrapped in its own `HeroControllerScope::new(…)`.
+Combined with D-U6.2, the **root** navigator auto-defaults and every navigator beneath
+it is isolated — the App-scope role, without an App.
+
+**D-U6.4 — manual `add_observer` keeps working, and suppresses the auto-default.** A
+new trait method `NavigatorObserver::observes_hero_flights() -> bool` (default `false`;
+`HeroController` returns `true`) lets `init_state` skip the auto-default when a hero
+observer was already attached by hand. No downcast (FR-033 untouched) — the observer
+declares itself, as Flutter tracks controllers through its `_navigators` Expando. A
+controller attached *after* mount coexists with the auto-default; documented as
+discouraged, use a scope.
+
+**D-U6.5 — a `HeroController` shared by two mounted navigators is rejected, keeping the
+first.** `did_attach` refuses to switch to a second navigator while the first is still
+mounted (logs; the controller stays with the first, whose heroes keep flying; the
+second's do not). Flutter `reportError`s and lets both proceed briefly; FLUI keeps the
+controller *sound* instead. `did_detach` frees it for reuse. Pinned by a test.
+
+### Constraints honoured
+
+No `GlobalKey` (an `InheritedView`, as `VsyncScope`). The scope is resolved in
+`init_state`, not from an observer callback, so no element-tree re-entry. Only
+`HeroControllerScope` joins the public surface; `Overlay`, `HeroFlight`, `HeroRegistry`
+stay private. `add_observer` is unchanged. **Not** closed: `create_rect_tween`,
+`flight_shuttle_builder`, `placeholder_builder`, `Hero.curve`, `HeroMode`, and full
+nested-navigator *flight* parity (a nested scope works, but the cross-navigator hero
+cases at `heroes_test.dart:2558` remain out of scope).
+
+### One baseline simplification, recorded
+
+FLUI resolves the scope **once** in `init_state`, not in a `did_change_dependencies`
+that re-resolves on scope change (Flutter does both). Swapping a scope's controller
+after mount is not picked up — the same read-once contract `VsyncScope` already has.
+
+---
+
 ## 8. Deferred, each with its blocker
 
 | Deferred | Why |
