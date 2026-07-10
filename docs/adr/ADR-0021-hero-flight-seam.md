@@ -6,7 +6,7 @@
 
 ---
 
-- **Status:** Proposed — **design only.** No code, no public export. `Hero` remains blocked (tracker B1.4).
+- **Status:** **Accepted — landed.** `Hero` + `HeroController` public since U6 (2026-07-10); baseline flight parity, advanced hooks deferred (§7l). Tracker B1.4 closed to a baseline.
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult rendering owner (**S4**, the ancestor-relative paint transform — the one seam that cannot be worked around), view owner (**S6**, post-frame callbacks from a view; **S7**, hero discovery without an element walk), animation owner (flight animation composition, `ProxyAnimation` re-parenting mid-flight), repository owner (public API: `Hero`, `HeroController`, tag type), qa-lead (deterministic flight tests through a real `Vsync`).
 - **Relates to:** consumes ADR-0019 (Navigator, Overlay, observers) and ADR-0020 (`PageRoute`, `ModalRoute.offstage`, `RenderOffstage`, `RenderTheater`). **Corrects** ADR-0019 §6 blocker (4) and tracker B1.4 precondition (4).
@@ -318,7 +318,7 @@ Each slice is independently mergeable. Nothing is public before U6.
 | **U4** ✅ | **Landed 2026-07-10 (§7i).** Private `HeroFlight` + `FlightManager`. `RectTween`, `ProxyAnimation` driving (reversed for a pop), overlay entry insert/remove, `on_tick` re-measure, `IgnorePointer` shuttle inside an inner `Stack` (S8). Push and pop; **no divert** — an existing flight for a tag is ended, not redirected. No `create_rect_tween` / `flight_shuttle_builder` hooks. | `cargo test -p flui-widgets hero`; `port-check`; export guard. |
 | **U5.1** ✅ | **Landed 2026-07-10 (§7j).** Flight divert — all three branches of `_HeroFlight.divert` (push↔pop and same-direction). In-place redirect: one flight, one overlay entry. | `cargo test -p flui-widgets hero`; the divert red-checks in §7j. |
 | **U5.2** ✅ | **Landed 2026-07-10 (§7k).** `onTick` fade-out now covered end-to-end (destination lost mid-flight via a rebuild, not offstage). Placeholder is the **fixed chain** — child state preserved with no `GlobalKey` (D2 verified). `placeholder_builder` + its `GlobalKey` deferred to the public API (U6), decision recorded. | `cargo test -p flui-widgets hero`. |
-| **U6** | **Parity + API sign-off gate.** Cross-check every claim against `.flutter/`; decide the public surface (Q8); export; public tests through the prelude; update `docs/PORT.md`, tracker B1.4. | Full battery: `just ci`; `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
+| **U6** ✅ | **Landed 2026-07-10 (§7l).** Parity re-checked against `heroes.dart`; exported the baseline surface — `Hero` (`tag: impl ViewKey`, `child`) and `HeroController` — through the crate root and prelude; `hero_public.rs` drives it end-to-end through a real `Vsync`. Advanced hooks and `HeroControllerScope` deferred. | `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
 
 ---
 
@@ -1396,6 +1396,66 @@ child-visible signal is now its real committed size, not the absence of an `Offs
 `Hero.curve` / `reverseCurve`, `HeroControllerScope`, `HeroMode`, and every public
 export. The export guard still rejects `Hero`, `HeroController`, `HeroFlight`,
 `FlightManager`, `Shuttle`, and the handle/registry types.
+
+---
+
+## 7l. U6: public baseline, and the parity sign-off (2026-07-10)
+
+### The exported surface, and nothing more
+
+Two names, through the crate root and `flui_widgets::prelude`:
+
+* **`Hero::new(tag: impl ViewKey, child: impl IntoView)`** — Flutter's `Hero(tag, child)`.
+  Any `ViewKey` is a tag (`ValueKey::new("photo")`, a domain newtype); `HeroTag` stays
+  private behind the `impl ViewKey`.
+* **`HeroController::new() -> Arc<Self>`** — attached by hand:
+  `navigator.add_observer(HeroController::new())`.
+
+`HeroState` is `pub` only because `StatefulView::State` demands it (as `NavigatorState`
+is); it is **not** re-exported. Everything else — `HeroFlight`, `FlightManager`,
+`FlightPlan`, `HeroFlightManifest`, `HeroRegistry`, `HeroScope`, `HeroHandle`, `HeroTag`,
+`FlightDirection`, `Measurement`, `Shuttle` — stays crate-private, and
+`public_no_internal_route_stack_exports` fails if any leaks (red-checked with
+`HeroFlight` and `HeroTag`).
+
+### The one divergence that ships with the baseline: manual controller attach
+
+Flutter's `MaterialApp` builds a `HeroController` and installs it via
+`HeroControllerScope` (`material/app.dart:921`, `:1163`), so heroes "just work". FLUI has
+neither `MaterialApp` nor `HeroControllerScope`, so an app author must attach a
+controller by hand. This is the **only** difference from Flutter in the baseline flow,
+and it is a documented consequence of D5 (no scope in this ADR), not a gap in the flight
+machinery. `HeroControllerScope` is the natural next slice.
+
+### Claims re-verified against `heroes.dart`
+
+Every implemented claim was re-checked against the reference and is covered by a test
+that red-checks:
+
+| Claim | Source | Test |
+|---|---|---|
+| no cross-overlay reparenting | shuttle is `toHero.child`, `:1089` | `a_stateful_hero_child_survives_the_default_placeholder` (child never moves) |
+| default shuttle is a fresh `toHero.child` | `_defaultHeroFlightShuttleBuilder`, `:1083` | `hero_flight_tests::the_to_hero_placeholder_drops_its_child…` |
+| placeholder preserves source child state | fixed chain, `:427-437` | `a_hero_child_keeps_its_state_across_a_flight_without_a_global_key` |
+| fade-out when destination disappears | `onTick`, `:687-692` | `a_destination_lost_mid_flight_fades_out…` |
+| divert (push↔pop, same-dir) | `_HeroFlight.divert`, `:740-816` | the four `hero_flight_tests` divert cases |
+| PageRoute-only gate | `is! PageRoute`, `:916-920` | `no_flight_over_a_popup_route` |
+| duplicate tag logs, keeps first | `assert`, `:287-305` (FLUI diverges: log, not throw) | `duplicate_tags_in_one_route_log_and_drop_the_second` |
+| no nested-navigator support | needs `HeroControllerScope`, `:3995-4046` | out of scope; a controller sees only its own navigator |
+
+### Deferred to a later slice (all named, none faked)
+
+`create_rect_tween`, `flight_shuttle_builder`, `placeholder_builder` (and the `GlobalKey`
+it forces — §7k), `Hero.curve` / `reverseCurve`, `HeroMode`, `HeroControllerScope`
+(automatic attach), and nested-navigator flights. None is exposed as a stub; each is
+absent, and the public `Hero`/`HeroController` surface does not name them.
+
+### Tracker
+
+B1.4 is closed to **"Hero baseline public; advanced hooks deferred"** — not an
+unqualified close, because the deferred hooks above are real Flutter surface a future
+slice will add. The baseline (push/pop flights, divert, fade-out, default placeholder,
+PageRoute gate) is complete and tested end-to-end.
 
 ---
 
