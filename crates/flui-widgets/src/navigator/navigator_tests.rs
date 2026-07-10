@@ -987,3 +987,101 @@ fn route_focus_scope_confines_and_restores_keyboard_focus() {
     manager.unfocus();
     manager.set_active_scope(None);
 }
+
+/// `PopScope` — ADR-0019's deferred veto, landed via the route's `PopEntry`
+/// registry (`routes.dart:1980`, `:2033-2050`). A `can_pop(false)` scope makes
+/// `maybe_pop` refuse-and-report-handled — the route stays, and every scope
+/// hears `on_pop_invoked(false)`. A programmatic `pop()` is **not** blocked
+/// (`canPop` guards the user's back navigation, not code) and reports `true`.
+/// Unmounting the scope deregisters it: the next `maybe_pop` pops normally.
+///
+/// Red-check: drop the `vetoes_pop` arm from `pop_disposition_of_top` — the
+/// first `maybe_pop` pops the route and the stays-put assertion fails.
+#[test]
+fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
+    use std::sync::atomic::AtomicBool;
+
+    use crate::PopScope;
+    use crate::navigator::PageRoute;
+
+    let outcomes: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let blocking = Arc::new(AtomicBool::new(true));
+
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
+
+    let outcomes_for_scope = Arc::clone(&outcomes);
+    let blocking_for_page = Arc::clone(&blocking);
+    let _guarded = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        let outcomes = Arc::clone(&outcomes_for_scope);
+        let scope = PopScope::new(SizedBox::new(10.0, 10.0))
+            .can_pop(!blocking_for_page.load(Ordering::SeqCst))
+            .on_pop_invoked(move |did_pop| outcomes.lock().push(did_pop));
+        scope.into_view().boxed()
+    }));
+    harness.tick();
+    assert_eq!(handle.route_ids().len(), 2);
+
+    // Vetoed: handled, refused, route stays.
+    assert!(handle.maybe_pop(), "a vetoed maybe_pop reports handled");
+    assert_eq!(
+        handle.route_ids().len(),
+        2,
+        "the vetoed route stays on the stack"
+    );
+    assert_eq!(
+        outcomes.lock().as_slice(),
+        [false],
+        "the scope heard the refusal"
+    );
+
+    // A programmatic pop is not blocked; the scope hears `true`.
+    assert!(handle.pop());
+    harness.tick();
+    assert_eq!(handle.route_ids().len(), 1, "pop() ignores can_pop");
+    assert_eq!(
+        outcomes.lock().as_slice(),
+        [false, true],
+        "the scope heard the successful pop"
+    );
+}
+
+/// A disposed `PopScope` deregisters (`unregisterPopEntry`, `routes.dart:2126`):
+/// after the guarded route pops, `maybe_pop` on what remains is not vetoed.
+#[test]
+fn a_disposed_pop_scope_stops_vetoing() {
+    use crate::PopScope;
+    use crate::navigator::PageRoute;
+
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
+    let _second = handle.push(page(&built, "second"));
+    harness.tick();
+
+    let _guarded = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        PopScope::new(SizedBox::new(10.0, 10.0))
+            .can_pop(false)
+            .into_view()
+            .boxed()
+    }));
+    harness.tick();
+    assert_eq!(handle.route_ids().len(), 3);
+
+    assert!(handle.maybe_pop(), "vetoed while the scope is mounted");
+    assert_eq!(handle.route_ids().len(), 3);
+
+    assert!(handle.pop(), "force the guarded route off");
+    harness.tick();
+    assert_eq!(handle.route_ids().len(), 2);
+
+    assert!(
+        handle.maybe_pop(),
+        "the second route's maybe_pop is handled"
+    );
+    harness.tick();
+    assert_eq!(
+        handle.route_ids().len(),
+        1,
+        "no stale veto survives the scope's dispose"
+    );
+}

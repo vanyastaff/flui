@@ -152,9 +152,10 @@ pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
 pub use navigator::{
     FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode, Navigator,
-    NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute, PopupRoute,
-    PushCompletion, Route, RouteAnimation, RouteBindingSlot, RouteContentBuilder, RouteId,
-    RoutePageBuilder, RouteResult, RouteSettings, RouteTransitionsBuilder, SimpleRoute,
+    NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
+    PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route, RouteAnimation,
+    RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteSettings,
+    RouteTransitionsBuilder, SimpleRoute,
 };
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
@@ -243,10 +244,10 @@ pub mod prelude {
         ImageProvider, IndexedStack, Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder,
         LayoutId, LimitedBox, ListBody, ListView, Listener, MediaQuery, MediaQueryData,
         MergeSemantics, MouseRegion, Navigator, NavigatorHandle, Offstage, Opacity, OverflowBox,
-        OverflowBoxFit, Padding, PageRoute, PopupRoute, Positioned, RepaintBoundary, RichText,
-        RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
-        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
+        OverflowBoxFit, Padding, PageRoute, PopScope, PopupRoute, Positioned, RepaintBoundary,
+        RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics,
+        Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView,
+        SizedBox, SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
         SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
         SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
         SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table,

@@ -479,9 +479,10 @@ impl RouteHistory {
     }
 
     /// The top present route's `popDisposition` (`navigator.dart:382-390`):
-    /// `isFirst ? bubble : pop`, unless the route handles the pop itself.
-    ///
-    /// `DoNotPop` has no producer until `PopScope` / page-based routing lands.
+    /// `isFirst ? bubble : pop`, unless the route handles the pop itself or a
+    /// `PopScope` vetoes it. Veto first, exactly as `ModalRoute.popDisposition`
+    /// checks its `_popEntries` before `super.popDisposition`
+    /// (`routes.dart:2033-2042` over the `LocalHistoryRoute` layer at `:940-946`).
     pub(crate) fn pop_disposition_of_top(&self) -> Option<RoutePopDisposition> {
         let present: Vec<&RouteEntry> = self
             .entries
@@ -489,6 +490,9 @@ impl RouteHistory {
             .filter(|entry| entry.state.is_present())
             .collect();
         let top = present.last()?;
+        if top.route.vetoes_pop() {
+            return Some(RoutePopDisposition::DoNotPop);
+        }
         if top.route.will_handle_pop_internally() {
             return Some(RoutePopDisposition::Pop);
         }

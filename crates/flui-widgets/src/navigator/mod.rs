@@ -45,6 +45,7 @@ mod navigator;
 mod observer;
 mod overlay_route;
 mod page_route;
+mod pop_scope;
 mod result;
 mod route;
 mod subtree;
@@ -61,6 +62,7 @@ pub use overlay_route::{
     SimpleRoute,
 };
 pub use page_route::{PageRoute, PopupRoute};
+pub use pop_scope::{PopInvokedCallback, PopScope};
 pub use result::RouteResult;
 pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 

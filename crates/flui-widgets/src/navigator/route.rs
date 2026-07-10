@@ -105,13 +105,9 @@ impl RouteSettings {
 /// What a back-gesture / `maybe_pop` should do. Flutter's `RoutePopDisposition`
 /// (`navigator.dart:117-136`).
 ///
-/// `DoNotPop` has no producer yet: it comes from `PopScope` / page-based
-/// `canPop`, both deferred (ADR-0019 §6). Modelled so `maybe_pop` transcribes
-/// Flutter's `switch` rather than a two-armed approximation of it.
-/// `DoNotPop` has no producer until `PopScope` / page-based `canPop` land
-/// (ADR-0019 §6); the variant exists so `maybe_pop` transcribes Flutter's
-/// three-armed `switch` rather than an approximation of it.
-#[allow(dead_code)]
+/// `DoNotPop`'s producer is [`Route::vetoes_pop`] — a mounted
+/// [`PopScope`](super::pop_scope::PopScope) with `can_pop = false`
+/// (2026-07-10; page-based `canPop` remains deferred with Navigator 2.0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoutePopDisposition {
     /// Pop the route.
@@ -189,6 +185,18 @@ pub trait Route: Send + Sync + 'static {
         false
     }
 
+    /// Whether this route currently vetoes being popped by `maybe_pop` /
+    /// back-navigation — the `PopEntry` half of `ModalRoute.popDisposition`
+    /// (`routes.dart:2033-2042`): any registered [`PopScope`] with
+    /// `can_pop = false`. The `isFirst ? bubble : pop` base stays in the
+    /// history, which owns the stack shape. A veto does **not** block a
+    /// programmatic `pop()`, exactly as in Flutter.
+    ///
+    /// [`PopScope`]: super::pop_scope::PopScope
+    fn vetoes_pop(&self) -> bool {
+        false
+    }
+
     /// Flutter's `Route.install()` (`navigator.dart:257`) — an empty default
     /// there too. `OverlayRoute` overrides it to create overlay entries (U3).
     fn install(&mut self) {}
@@ -252,6 +260,7 @@ pub(crate) trait ErasedRoute: Send + Sync {
 
     fn finished_when_popped(&self) -> bool;
     fn will_handle_pop_internally(&self) -> bool;
+    fn vetoes_pop(&self) -> bool;
 
     fn install(&mut self);
     fn did_push(&mut self) -> PushCompletion;
@@ -330,6 +339,10 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
 
     fn will_handle_pop_internally(&self) -> bool {
         self.route.will_handle_pop_internally()
+    }
+
+    fn vetoes_pop(&self) -> bool {
+        self.route.vetoes_pop()
     }
 
     fn install(&mut self) {

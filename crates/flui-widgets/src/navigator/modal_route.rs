@@ -86,6 +86,7 @@ use super::navigator::NavigatorHandle;
 use super::overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
 };
+use super::pop_scope::{PopEntryRegistry, PopEntryScope};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
@@ -172,6 +173,11 @@ struct ModalInner {
     /// no walk and no downcast is ever needed. ADR-0021 U4.
     heroes: HeroRegistry,
 
+    /// Every `PopScope` mounted in this route's page — Flutter's
+    /// `ModalRoute._popEntries` (`routes.dart:1980`). Consulted by
+    /// [`Route::vetoes_pop`] and notified from [`Route::on_pop_invoked`].
+    pop_entries: PopEntryRegistry,
+
     /// `_ModalScopeState.focusScopeNode` (`routes.dart:1095`): the per-route
     /// focus scope. The page is wrapped in a `FocusScope::with_external_node`
     /// over this, and the route lifecycle makes it the manager's **active
@@ -241,6 +247,7 @@ impl ModalInner {
                 relay: Arc::clone(&self.relay),
                 subtree: self.subtree.clone(),
                 heroes: self.heroes.clone(),
+                pop_entries: self.pop_entries.clone(),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -376,6 +383,8 @@ struct ModalScope {
     relay: Arc<ChangeNotifier>,
     subtree: RouteSubtreeCell,
     heroes: HeroRegistry,
+    /// The route's `PopScope` registry, provided to the page as an ambient.
+    pop_entries: PopEntryRegistry,
 }
 
 impl_animated_view!(ModalScope);
@@ -415,7 +424,10 @@ impl ViewState<ModalScope> for ModalScopeState {
         // `transform_to(hero, route_subtree)` needs (`heroes.dart:501-509`).
         let anchored = RouteSubtreeAnchor::new(
             view.subtree.clone(),
-            HeroScope::new(view.heroes.clone(), page),
+            HeroScope::new(
+                view.heroes.clone(),
+                PopEntryScope::new(view.pop_entries.clone(), page),
+            ),
         )
         .boxed();
         (view.transitions)(ctx, &primary, &secondary, anchored)
@@ -455,6 +467,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
             secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
             subtree: RouteSubtreeCell::new(),
             heroes: HeroRegistry::new(),
+            pop_entries: PopEntryRegistry::new(),
             focus_scope: FocusScopeNode::with_debug_label("ModalRoute Focus Scope"),
         });
 
@@ -767,7 +780,15 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         self.transition.did_change_previous(previous);
     }
 
+    /// `ModalRoute.popDisposition`'s `PopEntry` veto (`routes.dart:2033-2042`).
+    fn vetoes_pop(&self) -> bool {
+        self.inner.pop_entries.any_vetoes()
+    }
+
+    /// `ModalRoute.onPopInvokedWithResult` fans the outcome out to every
+    /// registered `PopScope` before the base behavior (`routes.dart:2045-2050`).
     fn on_pop_invoked(&mut self, did_pop: bool) {
+        self.inner.pop_entries.notify_pop_invoked(did_pop);
         self.transition.on_pop_invoked(did_pop);
     }
 

@@ -98,6 +98,10 @@ macro_rules! delegate_modal_route {
                 self.modal.will_handle_pop_internally()
             }
 
+            fn vetoes_pop(&self) -> bool {
+                self.modal.vetoes_pop()
+            }
+
             fn install(&mut self) {
                 self.modal.install();
             }
