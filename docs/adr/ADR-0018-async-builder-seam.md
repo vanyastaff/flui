@@ -534,3 +534,52 @@ re-enters `waiting` forever. The keyed form makes that unrepresentable: the fact
 per subscription, and a subscription is recreated exactly when the key changes.
 
 Migration cost if reversed: total. That is why it is recorded here before export.
+
+---
+
+## Correction (2026-07-10, ADR-0021 U1.5): the driver step moved into the `Scheduler`
+
+This ADR stated the mid-frame async-driver contract as *"exactly one driver step per
+frame, **owned by the binding**"* (`Scheduler::drive_async_tasks`'s doc comment, and
+`handle_begin_frame_does_not_poll_async_tasks`). Both bindings duly called
+`Scheduler::drive_async_tasks()` themselves — `HeadlessBinding::pump_frame` and
+`AppBinding::draw_frame`.
+
+**The ownership was never the contract.** The invariant that matters is:
+
+> exactly one mid-frame poll per frame, on the **right `Scheduler` instance**, after
+> the transient callbacks and before the persistent ones.
+
+Locating the *call* in the bindings was a way of achieving it, and it turned out to
+block a correctness fix. `AppBinding::draw_frame` **is** the pipeline, and the
+pipeline must run in the scheduler's `PersistentCallbacks` phase for post-frame
+callbacks to observe its committed layout (ADR-0021 §7b). But
+`drive_async_tasks` debug-asserts it is *never* called during `PersistentCallbacks`
+— the very phase the pipeline needs. A binding that both polls the driver and runs
+the pipeline cannot satisfy both.
+
+**Resolution.** `Scheduler::handle_begin_frame` now performs the poll itself, in the
+`MidFrameMicrotasks` slot, and the bindings no longer call it. The invariant is
+enforced *structurally* rather than by trusting two call sites:
+
+* one poll per frame — there is one call, in the scheduler;
+* on the right instance — `HeadlessBinding` drives its binding-local `Scheduler`,
+  the runners drive the `Scheduler::instance()` singleton, and each polls only its
+  own `AsyncDriver`;
+* still between transient and persistent — `handle_begin_frame` ends there.
+
+ADR-0017 U4's rule ("headless and production must share one frame-step
+implementation") is *strengthened*: both now go through `Scheduler::drive_frame`.
+
+**Tests changed.** `handle_begin_frame_does_not_poll_async_tasks` and
+`draw_frame_invokes_the_async_driver_step` pinned the old call site and are replaced
+by tests that pin the invariant instead:
+`handle_begin_frame_polls_async_tasks_once_in_the_mid_frame_phase`,
+`each_scheduler_instance_polls_only_its_own_async_driver`,
+`the_production_frame_polls_the_singletons_async_driver_once_before_the_pipeline`,
+`draw_frame_does_not_poll_the_async_driver_itself`, and
+`pump_frame_still_polls_the_async_driver_exactly_once_per_frame`.
+
+**Consequence, stated plainly.** Calling `AppBinding::draw_frame` *outside*
+`Scheduler::drive_frame` now polls no async tasks. Every frame driver goes through
+`drive_frame`; a caller that hand-rolls a frame does not get the driver step.

@@ -310,8 +310,8 @@ Each slice is independently mergeable. Nothing is public before U6.
 | Slice | Content | Gate |
 |---|---|---|
 | **U1** ✅ | **S4, alone.** Landed 2026-07-10 — see §7a for two corrections to this row. `RenderObject::apply_paint_transform` (default = `paint_transform` ∘ translate-by-committed-offset) + overrides on `RenderFractionalTranslation` and `RenderFlow` (**not** the four named here) + `PipelineOwner::transform_to(descendant, ancestor)` + production `box_size`. `local_to_global`/`global_to_local` moved **off** the `RenderBox` trait onto `PipelineOwner`. No Hero, no widgets. | `cargo test -p flui-rendering`; `cargo test -p flui-objects --test render_object_harness`; new `harness_*_paint_transform` assertions on `RenderTransform`, `RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`; `just clippy`; `port-check`. |
-| **U1.5** 🔴 | **New, discovered by U2's first rule (§7b).** Move the post-frame drain after the pipeline step in *both* frame drivers; give `HeadlessBinding::pump_frame` a scheduler frame. Touches `flui-scheduler`, `flui-binding`, `flui-app`. **Blocks U2.** |
-| **U2** 🔴 | **S1 + S2 + S3 + S5 + S6.** Observer↔navigator attachment; route introspection by id; `RouteSubtree` publication from `ModalScope::init_state`; `overlay_handle` reachable; `PostFrameHandle`. **Blocked on U1.5** — `PostFrameHandle` cannot be built on a queue no frame drains. Still no Hero. | `cargo test -p flui-widgets navigator`; the existing 98 navigator tests must not regress; new tests per §6. |
+| **U1.5** ✅ | **Landed 2026-07-10 (§7c).** `Scheduler::{drive_frame, end_frame, abort_frame}`; the async-driver poll moved into `handle_begin_frame` (ADR-0018 corrected). Both frame drivers share one ordering. |
+| **U2** | **S1 + S2 + S3 + S5 + S6.** Observer↔navigator attachment; route introspection by id; `RouteSubtree` publication from `ModalScope::init_state`; `overlay_handle` reachable; `PostFrameHandle`. **Unblocked by U1.5.** `PostFrameHandle` must resolve to the *binding's* scheduler, not a global (§7c). Still no Hero. | `cargo test -p flui-widgets navigator`; the existing 98 navigator tests must not regress; new tests per §6. |
 | **U3** | **D4 + S7 + S8.** `ModalRoute` primary animation proxy; `set_offstage` drives it. Private `HeroRegistry` + `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build). Verify S8's `Positioned` claim. No controller, no flight yet: a `Hero` is a pass-through that can be told to show a placeholder. | `cargo test -p flui-widgets hero`; `cargo test -p flui-widgets navigator`; port-check FR-036 entry for `Arc<dyn ViewKey>`. |
 | **U4** | Private `HeroController` + `HeroFlight` + `HeroFlightManifest`. Rect tween, `ProxyAnimation` driving, overlay entry insert/remove, `on_tick` re-measure, `create_rect_tween` and `flight_shuttle_builder` hooks (private). Push and pop only; no divert, no gestures. | `cargo test -p flui-widgets hero`; end-to-end through a real `Vsync` as `tests/routes.rs` does. |
 | **U5** | Flight divert (push interrupted by pop, and the three-way cases at `heroes.dart:739-813`), abort/fade-out (`onTick`'s `_heroOpacity` path), `placeholder_builder` + the `GlobalKey` D2 requires. | `cargo test -p flui-widgets hero`; the divert oracles in §6. |
@@ -639,6 +639,152 @@ U1 deliberately isolated for the geometry seam, and it deserves the same treatme
 - `Scheduler::handle_draw_frame`'s post-frame drain is not dead code — it fires for
   callbacks registered outside the tree path. The bug is its *position*, not its
   existence.
+
+---
+
+## 7c. U1.5 landed: the frame contract (2026-07-10)
+
+**Status: landed.** `Scheduler::{drive_frame, end_frame, abort_frame}`; the
+async-driver poll moved into `handle_begin_frame`. No Hero, no Navigator, no
+widget seams. **U2 is unblocked.**
+
+### The contract, now enforced in one place
+
+```text
+Scheduler::drive_frame(vsync_time, pipeline):
+    handle_begin_frame  → transient callbacks
+                        → MidFrameMicrotasks: flush microtasks
+                        → exactly ONE poll of *this* Scheduler's AsyncDriver
+    handle_draw_frame   → PersistentCallbacks: persistent callbacks + task queue
+    pipeline()          → build + layout + compositing + paint   (persistent slot)
+    end_frame           → PostFrameCallbacks: drain, timing, jank, notify
+                        → Idle
+```
+
+Every driver goes through `drive_frame`: `HeadlessBinding::pump_frame` on its
+binding-local scheduler, and the desktop / android / wasm runners on the
+`Scheduler::instance()` singleton. There is no second sequence to maintain.
+
+The pipeline **semantically occupies the persistent slot without being registered
+as an `Fn` callback**. That is what makes this possible at all: a `HeadlessBinding`
+owns its `ElementTree` by value, so no closure could ever have driven it the way
+Flutter's `drawFrame` does. §7b's Option C was rejected for exactly that reason.
+
+### Why the naive split (§7b's proposal) would have panicked on frame 1
+
+§7b proposed splitting `handle_draw_frame` and running the pipeline while the phase
+was `PersistentCallbacks`. An adversarial review of that plan, before any code, found
+it fatal: `AppBinding::draw_frame` called `Scheduler::instance().drive_async_tasks()`,
+which opens with
+
+```rust
+debug_assert_ne!(self.phase(), SchedulerPhase::PersistentCallbacks,
+    "BUG: the async driver must not poll during build/layout/paint");
+```
+
+The pipeline is not the persistent slot in FLUI — it *contains* FLUI's transient
+(`vsync.tick_all`) and mid-frame (`drive_async_tasks`) work. The desktop runner would
+have panicked on its first debug frame, and violated ADR-0018's slot contract in
+release.
+
+**Resolution: the driver poll moved into the scheduler** (`handle_begin_frame`'s
+mid-frame slot), and the bindings stopped calling it. ADR-0018's stated contract —
+*"the driver step is owned by the binding"* — was a mis-statement of its real
+invariant (*one mid-frame poll per frame, on the right instance*), and is corrected
+there. Holding the poll in the scheduler enforces both halves structurally.
+
+`RC5` reproduces the panic: putting `drive_async_tasks()` back into `draw_frame` makes
+`production_post_frame_callback_observes_this_frames_committed_layout` fail with that
+exact `BUG:` message.
+
+### Error and panic semantics, explicit
+
+* A pipeline that **returns an error value** is a completed frame. `end_frame` runs,
+  post-frame callbacks fire, exactly once, phase → `Idle`.
+  (`a_pipeline_returning_an_error_still_completes_the_frame`)
+* A pipeline that **panics** is an abandoned frame. `drive_frame` catches the panic,
+  calls **`abort_frame()`** — phase → `Idle`, **no** post-frame callbacks — and then
+  resumes the unwind unchanged. The queued callbacks survive to the next completed
+  frame. This mirrors Flutter, where a throwing persistent callback skips the
+  post-frame loop and `finally { _schedulerPhase = idle; }` still resets
+  (`scheduler/binding.dart:1341-1374`).
+  (`a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks`,
+  `a_frame_after_a_panicking_frame_starts_cleanly`)
+
+  **Review caught a regression here.** The first cut left the frame open and expected
+  the *caller* to call `abort_frame`. No caller did. Before U1.5 the phase was already
+  `Idle` when the pipeline ran, so a panicking `render_frame` was harmless; after the
+  split it would leave the frame at `PersistentCallbacks` and the **next**
+  `handle_begin_frame` would attempt the illegal
+  `PersistentCallbacks -> TransientCallbacks` transition. `drive_frame` now recovers.
+
+**No `Drop` guard.** Two reasons, both load-bearing. A guard would have to force
+`PersistentCallbacks -> Idle`, which `can_transition_to` forbids, so
+`set_scheduler_phase`'s `debug_assert!` would fire *while already panicking* — a
+double panic, i.e. `abort`. And running any user callback during unwind is a hazard
+for no benefit. The recovery instead runs **between** `catch_unwind` and
+`resume_unwind`: the payload is already captured, so nothing executes during
+unwinding. `abort_frame` bypasses the phase validator by design — the one sanctioned
+exit from a half-open frame — and notifies completion waiters, so `end_of_frame()`
+cannot hang on an aborted frame. Under `panic = "abort"` nothing is caught, which is
+moot.
+
+`Idle -> PostFrameCallbacks` was **not** added to the phase machine.
+
+### The divergence that remains, pinned not claimed
+
+In Flutter the pipeline **is** the first persistent callback
+(`rendering/binding.dart:61`, `:557-558`), so a persistent callback registered later
+runs *after* it. In FLUI the pipeline is a closure, so every registered persistent
+callback runs *before* it. Nothing in the framework registers one — only
+`flui-scheduler`'s own tests do — so nothing observes the difference today.
+`persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter` asserts it,
+so it cannot be forgotten.
+
+**Post-frame parity is claimed. Persistent-phase parity is not.**
+
+### What is proven, and by what
+
+| Claim | Evidence |
+|---|---|
+| Headless post-frame sees this frame's committed layout | `flui-binding`: `post_frame_callback_runs_after_layout_in_the_same_pumped_frame` — the callback reads `PipelineOwner::box_size` and is never invoked by the test |
+| Production post-frame sees this frame's committed layout | `flui-app`: `production_post_frame_callback_observes_this_frames_committed_layout` — drives the real `AppBinding::draw_frame` through `drive_frame` |
+| Headless and production use different `Scheduler` instances, on purpose | `pump_frame_drives_the_binding_local_scheduler_not_the_singleton`; `each_scheduler_instance_polls_only_its_own_async_driver` |
+| No runner site hand-rolls the sequence | `flui-app`: `every_runner_frame_site_uses_the_shared_drive_frame_helper` (source scan) |
+| Callback runs exactly once; a callback registered from one defers | `post_frame_callback_runs_exactly_once_across_two_frames`; `a_post_frame_callback_registered_from_a_post_frame_callback_defers_to_the_next_frame` |
+
+### Honest limits
+
+* The **android** runner site was **not compiled** — it needs the NDK. The wasm site
+  type-checks (`cargo check -p flui-app --target wasm32-unknown-unknown`); the desktop
+  site compiles and is exercised. The source-scan guard proves only that no site
+  hand-rolls begin/draw/end; it is a regression guard, not a proof of the android
+  body's runtime behavior.
+* The wasm site's early `return` (renderer not yet ready) used to run *after*
+  `handle_draw_frame` and would now have leaked a half-open frame. Inside the closure
+  it merely exits the closure and `end_frame` still runs. That is a fix, and it is
+  only type-checked, not executed.
+* **A first version of the "callback has not run during layout" test was a
+  tautology**, and review caught it. It sampled the flag from a *persistent*
+  callback, which precedes the pipeline in **both** the fixed and the broken
+  ordering — so it passed under the injected bug. It now samples from inside
+  `perform_layout`, the only vantage point that can tell the two apart, and it
+  red-checks.
+* **`EmbedderScheduler` (`flui-app/src/embedder/embedder_scheduler.rs`) leaks a
+  scheduler phase**: its `begin_frame()` opens a frame and its `end_frame()` calls
+  `Scheduler::end_of_frame()`, which only registers a completion future and never
+  closes the phase, despite a doc comment claiming it "executes post-frame
+  callbacks". **Pre-existing and untouched by U1.5** — the glue never called
+  `handle_draw_frame` either — and it is dead code with no caller. Its `end_frame`
+  now name-collides with `Scheduler::end_frame`, which is a trap for whoever wires
+  the embedder. Not fixed here; out of U1.5's scope.
+* **U2 is unblocked but not proven.** That a route forced offstage in frame *N* has
+  committed geometry by that frame's post-frame phase is a further claim, and belongs
+  to U2's `RouteSubtree`/`PostFrameHandle` tests. U1.5 proves only that *some*
+  committed geometry is visible to a post-frame callback in both paths.
+* `HeadlessBinding` and production drive **different `Scheduler` instances**. Any U2
+  `PostFrameHandle` must resolve to the *binding's* scheduler, not a global, or the
+  two paths silently wire different queues. This is now a tested property, not folklore.
 
 ---
 

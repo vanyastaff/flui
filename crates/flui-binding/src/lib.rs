@@ -436,58 +436,71 @@ impl HeadlessBinding {
         let now_secs = self.clock.elapsed().as_secs_f64();
         self.vsync.tick_all(now_secs);
 
-        // 3b. THE async-driver step (ADR-0018 U2). Flutter's
-        //     `SchedulerPhase.midFrameMicrotasks`: after the transient callbacks
-        //     (the vsync tick above), before the persistent ones (`build_scope` +
-        //     `run_frame` below). A future completing here calls
-        //     `RebuildHandle::schedule()`, whose id step 4's `build_scope` drains
-        //     — so a completion lands in THIS frame, not the next.
+        // 4-7. THE shared frame ordering (ADR-0021 U1.5):
         //
-        //     `AppBinding::draw_frame` calls the SAME `Scheduler::drive_async_tasks`
-        //     in the SAME slot. Neither binding hand-rolls a poll loop; a task that
-        //     ran headlessly but not on screen would be a silent divergence, the
-        //     lesson ADR-0017 U4 paid for.
-        self.scheduler.drive_async_tasks();
+        //      begin (transient + microtasks + ONE async-driver poll)
+        //   -> handle_draw_frame (persistent callbacks)
+        //   -> the pipeline, below, in the persistent slot
+        //   -> end_frame (post-frame callbacks, timing, notify)
+        //   -> Idle
+        //
+        // The desktop / android / wasm runners call the SAME `Scheduler::drive_frame`
+        // on the `Scheduler::instance()` singleton; this binding calls it on its
+        // binding-local scheduler. A post-frame callback therefore observes THIS
+        // frame's committed layout in both, which is what `HeroController` needs.
+        //
+        // `drive_async_tasks` is no longer called here: the scheduler owns that
+        // step now (ADR-0018 correction, ADR-0021 §7c). It still runs before
+        // `build_scope`, in `handle_begin_frame`'s mid-frame slot.
+        //
+        // `Scheduler` is `Arc`-backed and `Clone`, so the handle taken here shares
+        // the callback queues with `self.scheduler` — cloning it merely releases
+        // the borrow on `self` for the pipeline closure.
+        let scheduler = self.scheduler.clone();
+        let vsync_time = flui_scheduler::Instant::now();
+        scheduler.drive_frame(vsync_time, || self.run_pipeline());
+    }
 
-        // 4 + 5. Tree-bound only: drain the build inbox (filled by steps 2-3) and
-        //        run the render pipeline frame. The pipeline owner is shared via
-        //        `Arc<RwLock<…>>`, so take it out under the write lock, run the
-        //        frame by value, and restore — the production frame path.
-        if let Some(tree_binding) = self.tree.as_mut() {
-            tree_binding.build_owner.build_scope(&mut tree_binding.tree);
+    /// The pipeline step: build → layout (with the build-during-layout fixpoint)
+    /// → paint, plus the lazy-sliver service pass. Runs inside
+    /// [`Scheduler::drive_frame`]'s persistent slot.
+    fn run_pipeline(&mut self) {
+        let Some(tree_binding) = self.tree.as_mut() else {
+            return;
+        };
 
-            // ADR-0017 U1: `run_frame_with_layout_builders` is the shared
-            // layout<->build fixpoint — it settles every build-during-layout node
-            // before paint, then delegates to `PipelineOwner::run_frame`. It is a
-            // plain `run_frame` while the registry is empty. `AppBinding::draw_frame`
-            // calls the SAME helper: a builder that settles headlessly but not on
-            // screen would be a silent correctness bug, so neither path may
-            // hand-roll the loop.
-            //
-            // The owner is threaded by lock, not by value: the helper takes it out
-            // per layout pass and restores it before running the builders, whose
-            // `build_scope` mounts render objects through this same lock.
-            let result = tree_binding.build_owner.run_frame_with_layout_builders(
-                &mut tree_binding.tree,
-                &tree_binding.pipeline_owner,
-            );
-            // A headless frame over an already-mounted, rooted tree must succeed;
-            // a pipeline error here is a regression, surfaced loudly (the harness
-            // and production frame path expect the same).
-            result.expect("headless pump_frame: pipeline run_frame should succeed");
-            // The helper leaves the owner restored and the write-lock free for the
-            // service calls below.
+        // Drain the build inbox, filled by the vsync tick and the async-driver
+        // poll that ran before this closure.
+        tree_binding.build_owner.build_scope(&mut tree_binding.tree);
 
-            // 6. Service lazy-sliver child requests. Layout may have emitted
-            //    build requests for absent children and retain-band signals for
-            //    eviction. Drain both buffers, call each registered ChildManager
-            //    to build/evict, run a second build_scope for newly-built child
-            //    subtrees, mark slivers needing re-layout, and finalize evicted
-            //    elements. This is a no-op when no lazy slivers are mounted.
-            tree_binding
-                .build_owner
-                .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
-        }
+        // ADR-0017 U1: `run_frame_with_layout_builders` is the shared
+        // layout<->build fixpoint — it settles every build-during-layout node
+        // before paint, then delegates to `PipelineOwner::run_frame`. It is a
+        // plain `run_frame` while the registry is empty. `AppBinding::draw_frame`
+        // calls the SAME helper: a builder that settles headlessly but not on
+        // screen would be a silent correctness bug, so neither path may
+        // hand-roll the loop.
+        //
+        // The owner is threaded by lock, not by value: the helper takes it out
+        // per layout pass and restores it before running the builders, whose
+        // `build_scope` mounts render objects through this same lock.
+        let result = tree_binding
+            .build_owner
+            .run_frame_with_layout_builders(&mut tree_binding.tree, &tree_binding.pipeline_owner);
+        // A headless frame over an already-mounted, rooted tree must succeed;
+        // a pipeline error here is a regression, surfaced loudly (the harness
+        // and production frame path expect the same).
+        result.expect("headless pump_frame: pipeline run_frame should succeed");
+
+        // Service lazy-sliver child requests. Layout may have emitted build
+        // requests for absent children and retain-band signals for eviction.
+        // Drain both buffers, call each registered ChildManager to build/evict,
+        // run a second build_scope for newly-built child subtrees, mark slivers
+        // needing re-layout, and finalize evicted elements. This is a no-op when
+        // no lazy slivers are mounted.
+        tree_binding
+            .build_owner
+            .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
     }
 }
 

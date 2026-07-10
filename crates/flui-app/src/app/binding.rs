@@ -670,18 +670,20 @@ impl AppBinding {
             }
         }
 
-        // Phase 0b: THE async-driver step (ADR-0018 U2). Flutter's
-        // `SchedulerPhase.midFrameMicrotasks`: after the transient callbacks (the
-        // vsync tick above), before the persistent ones (Phase 1 build, then
-        // layout/paint). A future completing here calls `RebuildHandle::schedule()`,
-        // whose id Phase 1's `build_scope` drains — so a completion lands in THIS
-        // frame.
+        // The async-driver step used to live HERE (ADR-0018 U2). It moved into
+        // `Scheduler::handle_begin_frame`'s mid-frame slot in ADR-0021 U1.5.
         //
-        // `HeadlessBinding::pump_frame` calls the SAME `Scheduler::drive_async_tasks`
-        // in the SAME slot. Neither binding hand-rolls a poll loop; a task that ran
-        // headlessly but not on screen would be a silent divergence — the lesson
-        // ADR-0017 U4 paid for.
-        Scheduler::instance().drive_async_tasks();
+        // Why: this method is the pipeline, and the pipeline runs in the
+        // scheduler's `PersistentCallbacks` phase — where `drive_async_tasks`
+        // debug-asserts it must never poll. Keeping the call here made it
+        // impossible to run post-frame callbacks *after* the pipeline, which is
+        // the ordering `HeroController` needs. ADR-0018's real invariant — one
+        // mid-frame poll per frame, on the right `Scheduler` instance — is now
+        // enforced by the scheduler itself, for both bindings.
+        //
+        // Consequence, stated plainly: calling `draw_frame` **outside**
+        // `Scheduler::drive_frame` polls no async tasks. Every frame driver goes
+        // through `drive_frame`.
 
         // Phase 1: Build (WidgetsBinding)
         {
@@ -1280,35 +1282,92 @@ mod tests {
     }
 
     // ========================================================================
-    // ADR-0018 U2 — async-driver wiring test
+    // ADR-0018 U2 (corrected by ADR-0021 U1.5) — async-driver ownership
     // ========================================================================
 
-    /// Wiring test: `AppBinding::draw_frame` must run the shared async-driver
-    /// step (`Scheduler::drive_async_tasks`), in the slot before the build phase.
+    /// Serializes the tests that drive the process-global `Scheduler::instance()`.
     ///
-    /// `flui-binding` carries the mirror test for `HeadlessBinding::pump_frame`.
-    /// Both call the same `Scheduler` method; if either frame path stopped calling
-    /// it, exactly one of the two would fail — which is the headless↔production
-    /// divergence this pair exists to catch.
+    /// CI runs nextest, which gives each test its own process, so this is belt and
+    /// braces there. Plain `cargo test` (a stated gate for this crate) runs them on
+    /// threads in one process, where two tests each opening a scheduler frame on the
+    /// singleton would interleave — the same class of hazard `SEMANTICS_TEST_LOCK`
+    /// guards in `flui-app` (AGENTS.md, "Testing quirks").
+    static SINGLETON_FRAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The production frame path polls the async driver **exactly once**, on the
+    /// `Scheduler::instance()` singleton, in the mid-frame slot — and the pipeline
+    /// runs afterwards, in the persistent slot.
     ///
-    /// Production reaches the driver through the `Scheduler::instance()` singleton
-    /// (the same one `renderer_binding` already uses), so the task is spawned there.
+    /// Replaces `draw_frame_invokes_the_async_driver_step`, which pinned the poll
+    /// *inside* `draw_frame`. That location was the bug: `drive_async_tasks`
+    /// debug-asserts it never runs during `PersistentCallbacks`, which is exactly
+    /// the phase the pipeline must occupy for post-frame callbacks to observe its
+    /// layout (ADR-0021 §7b, §7c). The scheduler owns the step now; ADR-0018's
+    /// real invariant — one mid-frame poll per frame, on the right instance — is
+    /// what this asserts.
     #[test]
-    fn draw_frame_invokes_the_async_driver_step() {
-        use std::sync::atomic::AtomicBool;
+    fn the_production_frame_polls_the_singletons_async_driver_once_before_the_pipeline() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let binding = AppBinding::new();
+        let scheduler = flui_scheduler::Scheduler::instance();
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let polls_for_task = Arc::clone(&polls);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            polls_for_task.fetch_add(1, Ordering::Release);
+        }));
+        assert_eq!(
+            polls.load(Ordering::Acquire),
+            0,
+            "spawn must not poll inline"
+        );
+
+        let polled_before_pipeline = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&polled_before_pipeline);
+        let polls_probe = Arc::clone(&polls);
+
+        scheduler.drive_frame(flui_scheduler::Instant::now(), || {
+            // The pipeline's slot. The driver poll already happened, in
+            // `handle_begin_frame`'s mid-frame slot.
+            flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
+            let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+                flui_types::Size::new(
+                    flui_types::geometry::px(800.0),
+                    flui_types::geometry::px(600.0),
+                ),
+            ));
+        });
+
+        assert!(
+            polled_before_pipeline.load(Ordering::Acquire),
+            "the async driver must be polled before the pipeline runs"
+        );
+        assert_eq!(
+            polls.load(Ordering::Acquire),
+            1,
+            "exactly one driver poll per frame"
+        );
+    }
+
+    /// `draw_frame` no longer polls the driver itself. Stated as a test so the
+    /// call cannot quietly come back and re-break the phase invariant.
+    #[test]
+    fn draw_frame_does_not_poll_the_async_driver_itself() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let binding = AppBinding::new();
         let ran = Arc::new(AtomicBool::new(false));
         let ran_for_task = Arc::clone(&ran);
-
         let _token = flui_scheduler::Scheduler::instance().spawn_local(Box::pin(async move {
-            ran_for_task.store(true, std::sync::atomic::Ordering::Release);
+            ran_for_task.store(true, Ordering::Release);
         }));
-
-        assert!(
-            !ran.load(std::sync::atomic::Ordering::Acquire),
-            "spawn must not poll inline"
-        );
 
         let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
             flui_types::Size::new(
@@ -1318,9 +1377,91 @@ mod tests {
         ));
 
         assert!(
-            ran.load(std::sync::atomic::Ordering::Acquire),
-            "draw_frame must run Scheduler::drive_async_tasks — the same step \
-             HeadlessBinding::pump_frame runs"
+            !ran.load(Ordering::Acquire),
+            "the driver step belongs to Scheduler::handle_begin_frame, not to the pipeline"
+        );
+    }
+
+    /// **The U1.5 production-path acceptance test.** A post-frame callback on the
+    /// `Scheduler::instance()` singleton observes the geometry `AppBinding`'s real
+    /// pipeline committed **in the same frame**.
+    ///
+    /// This is the production twin of
+    /// `flui-binding`'s `post_frame_callback_runs_after_layout_in_the_same_pumped_frame`.
+    /// Before ADR-0021 U1.5 the runner drained the post-frame queue *before*
+    /// `render_frame`, so the callback saw the previous frame's layout.
+    ///
+    /// No GPU: `draw_frame(constraints)` is the pipeline; `render_frame` only adds
+    /// the raster submission on top of it.
+    #[test]
+    fn production_post_frame_callback_observes_this_frames_committed_layout() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use flui_rendering::prelude::Leaf;
+        use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, PaintCx, RenderBox};
+        use flui_types::Size;
+        use flui_types::geometry::px;
+
+        #[derive(Debug, Default)]
+        struct FixedBox;
+        impl flui_foundation::Diagnosticable for FixedBox {}
+        impl RenderBox for FixedBox {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> Size {
+                Size::new(px(40.0), px(24.0))
+            }
+            fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+        }
+
+        let binding = AppBinding::new();
+        let pipeline = binding.render_pipeline_arc();
+
+        let root = {
+            let mut owner = pipeline.write();
+            let root = owner.insert::<flui_rendering::protocol::BoxProtocol>(Box::new(FixedBox));
+            owner.set_root_id(Some(root));
+            root
+        };
+
+        assert_eq!(
+            pipeline.read().box_size(root),
+            None,
+            "nothing is laid out before the first frame"
+        );
+
+        let observed = Arc::new(RwLock::new(None));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed_cb = Arc::clone(&observed);
+        let calls_cb = Arc::clone(&calls);
+        let pipeline_cb = Arc::clone(&pipeline);
+
+        let scheduler = flui_scheduler::Scheduler::instance();
+        scheduler.add_post_frame_callback(Box::new(move |_timing| {
+            calls_cb.fetch_add(1, Ordering::SeqCst);
+            *observed_cb.write() = pipeline_cb.read().box_size(root);
+        }));
+
+        scheduler.drive_frame(flui_scheduler::Instant::now(), || {
+            let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::new(
+                px(0.0),
+                px(200.0),
+                px(0.0),
+                px(200.0),
+            ));
+        });
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *observed.read(),
+            Some(Size::new(px(40.0), px(24.0))),
+            "the production post-frame callback must observe THIS frame's layout"
         );
     }
 
