@@ -267,6 +267,13 @@ struct HeroInner {
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
     /// never from `build`/layout/paint (port-check trigger #22).
     rebuild: Mutex<Option<RebuildHandle>>,
+    /// The hero's current child, for the flight shuttle to inflate afresh.
+    ///
+    /// `_defaultHeroFlightShuttleBuilder` returns `toHero.widget.child`
+    /// (`heroes.dart:1083-1090`) — the *destination* hero's child, built anew in the
+    /// overlay. Nothing is reparented (ADR-0021 D1), so this is a `BoxedView` clone,
+    /// kept current through `did_update_view`.
+    shuttle_child: Mutex<BoxedView>,
 }
 
 /// An owned, `'static` capability to drive one mounted [`Hero`].
@@ -279,7 +286,7 @@ pub(crate) struct HeroHandle {
 }
 
 impl HeroHandle {
-    fn new(tag: HeroTag) -> Self {
+    fn new(tag: HeroTag, shuttle_child: BoxedView) -> Self {
         Self {
             inner: Arc::new(HeroInner {
                 tag,
@@ -288,6 +295,7 @@ impl HeroHandle {
                 include_child: AtomicBool::new(true),
                 owner: Mutex::new(None),
                 rebuild: Mutex::new(None),
+                shuttle_child: Mutex::new(shuttle_child),
             }),
         }
     }
@@ -319,6 +327,16 @@ impl HeroHandle {
     /// `_HeroState._placeholderSize` — `Some` exactly while in flight.
     pub(crate) fn placeholder_size(&self) -> Option<Size> {
         *self.inner.placeholder.lock()
+    }
+
+    /// What the flight's shuttle should show: a fresh inflation of this hero's child.
+    ///
+    /// `_defaultHeroFlightShuttleBuilder` (`heroes.dart:1076-1090`) returns
+    /// `toHero.widget.child`. Flutter's version also compensates for a `MediaQuery`
+    /// padding difference between the two heroes; FLUI has no `MediaQuery`, so the
+    /// `toMediaQueryData == null` early return (`:1089`) is the whole function.
+    pub(crate) fn shuttle_child(&self) -> BoxedView {
+        self.inner.shuttle_child.lock().clone()
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
@@ -447,7 +465,7 @@ impl StatefulView for Hero {
 
     fn create_state(&self) -> Self::State {
         HeroState {
-            handle: HeroHandle::new(self.tag.clone()),
+            handle: HeroHandle::new(self.tag.clone(), self.child.clone()),
             registry: None,
         }
     }
@@ -471,6 +489,12 @@ impl HeroState {
 }
 
 impl ViewState<Hero> for HeroState {
+    /// Keep the shuttle's source current: `_defaultHeroFlightShuttleBuilder` reads
+    /// `toHero.widget.child` at flight start, i.e. the *latest* configuration.
+    fn did_update_view(&mut self, _old: &Hero, new_view: &Hero) {
+        *self.handle.inner.shuttle_child.lock() = new_view.child.clone();
+    }
+
     /// Everything a hero needs from outside itself is acquired **here**, in the one
     /// lifecycle hook that has a `BuildContext` and is not a frame phase: the route's
     /// registry, the render tree, and the rebuild capability (port-check trigger #22).

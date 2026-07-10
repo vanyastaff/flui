@@ -314,7 +314,7 @@ Each slice is independently mergeable. Nothing is public before U6.
 | **U2** | **S1 + S2 + S3 + S5 + S6.** Observer↔navigator attachment; route introspection by id; `RouteSubtree` publication from `ModalScope::init_state`; `overlay_handle` reachable; `PostFrameHandle`. **Unblocked by U1.5.** `PostFrameHandle` must resolve to the *binding's* scheduler, not a global (§7c). Still no Hero. | `cargo test -p flui-widgets navigator`; the existing 98 navigator tests must not regress; new tests per §6. |
 | **U3** ✅ | **D4, and the controller skeleton — see §7g and §7h.** `ModalRoute` primary + secondary animation proxies; `set_offstage` drives them. Private `HeroController` (`didChangeTop` → offstage → post-frame → measure). **This row's original content was `HeroRegistry` + `Hero` + `HeroHandle`, with "no controller"; it landed the other way round.** §7h records why and what it cost. |
 | **U3.5** ✅ | **S7 + S8, the half U3 skipped.** Private `HeroTag(Arc<dyn ViewKey>)`, per-route `HeroRegistry` behind an ambient `HeroScope`, `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build), and `HeroFlightManifest` collection in the controller's post-frame callback. S8's `Positioned` claim **verified** (§7h). Still no flight. | `cargo test -p flui-widgets hero`; port-check FR-036 registry entry for `Arc<dyn ViewKey>`. |
-| **U4** | Private `HeroFlight`. Rect tween, `ProxyAnimation` driving, overlay entry insert/remove, `on_tick` re-measure, `create_rect_tween` and `flight_shuttle_builder` hooks (private). Push and pop only; no divert, no gestures. The manifest it consumes already exists. | `cargo test -p flui-widgets hero`; end-to-end through a real `Vsync` as `tests/routes.rs` does. |
+| **U4** ✅ | **Landed 2026-07-10 (§7i).** Private `HeroFlight` + `FlightManager`. `RectTween`, `ProxyAnimation` driving (reversed for a pop), overlay entry insert/remove, `on_tick` re-measure, `IgnorePointer` shuttle inside an inner `Stack` (S8). Push and pop; **no divert** — an existing flight for a tag is ended, not redirected. No `create_rect_tween` / `flight_shuttle_builder` hooks. | `cargo test -p flui-widgets hero`; `port-check`; export guard. |
 | **U5** | Flight divert (push interrupted by pop, and the three-way cases at `heroes.dart:739-813`), abort/fade-out (`onTick`'s `_heroOpacity` path), `placeholder_builder` + the `GlobalKey` D2 requires. | `cargo test -p flui-widgets hero`; the divert oracles in §6. |
 | **U6** | **Parity + API sign-off gate.** Cross-check every claim against `.flutter/`; decide the public surface (Q8); export; public tests through the prelude; update `docs/PORT.md`, tracker B1.4. | Full battery: `just ci`; `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
 
@@ -1214,6 +1214,66 @@ if `Hero`, `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`, `HeroState` or
 `HeroFlightManifest` is exported). No `HeroControllerScope`, no `HeroMode`, no
 `placeholderBuilder`, no `transitionOnUserGestures`, no `createRectTween`, no
 `flightShuttleBuilder`, no `TickerMode`, no nested-navigator support, no flight.
+
+---
+
+## 7i. U4: the flight (2026-07-10)
+
+A manifest becomes a shuttle. `FlightManager` keys one `HeroFlight` per `HeroTag`;
+each holds a `ProxyAnimation` over the driving route's primary animation, a
+`RectTween`, one overlay entry, and the two placeholders it froze.
+
+| Flutter | Here |
+|---|---|
+| `_HeroFlight.start` (`:698-736`) | `FlightManager::start` |
+| `_buildOverlay` (`:571-598`) | `Shuttle`, an `AnimatedView` over the proxy |
+| `_performAnimationUpdate` (`:600-618`) | `HeroFlight::finish` |
+| `onTick` (`:666-696`) | `FlightInner::on_tick` |
+| `_defaultHeroFlightShuttleBuilder` (`:1076-1090`) | `HeroHandle::shuttle_child` — `toHero.widget.child`, inflated afresh (D1: nothing reparents) |
+
+### Retire, do not drop
+
+A flight ends from inside its own `ProxyAnimation` status listener.
+`fan_out_status` snapshots the callbacks and then iterates them while holding `&self`,
+so dropping the last `Arc<FlightInner>` — and with it the proxy — *inside* that
+callback would free the animation the callback is running under. Dart's GC makes this
+a non-question; Rust does not. `FlightManager::finish` therefore moves the flight into
+`retired`, drained at the head of the next measurement pass, outside every listener.
+
+### Three things the tests found
+
+1. **A childless `RenderConstrainedBox` is not hit-testable.** The first version of
+   `the_flight_entry_is_ignore_pointer_not_hit_testable` used a `SizedBox` shuttle and
+   passed with `.ignoring(false)` — because nothing in the shuttle could ever enter the
+   hit path. The test now gives the hero a `ColoredBox` and asserts that fact before
+   asserting the flight's.
+2. **Flipping `offstage` mid-flight ends the flight**, in FLUI and in Flutter alike: the
+   `_proxyAnimation`'s parent *is* the route's animation proxy (`routes.dart:1958`,
+   `heroes.dart:719-724`), so `kAlwaysComplete`'s `Completed` status reaches
+   `_performAnimationUpdate` (`:601`). Discovered while trying to rebuild a route
+   mid-flight; the test drives a `RebuildHandle` instead.
+3. **`heroRectEnd = toHeroOrigin & heroRectTween.end!.size` (`:685`) is a no-op today.**
+   `startFlight` freezes the destination hero's box, so re-reading the size and
+   preserving it give the same answer. The code preserves it because Flutter does, and
+   because a U5 `placeholderBuilder` can hand back a differently-sized placeholder. The
+   assertion is labelled a regression guard, not a red-checkable proof — mutating
+   `on_tick` to re-read the size leaves it green.
+
+### Deferred, and named
+
+* **Divert (U5).** `_HeroFlight.divert` (`:738-813`) redirects an in-flight hero when a
+  second transition starts for its tag. U4 ends the old flight and starts a new one, so
+  shuttles never stack. The visible difference is a jump cut.
+* **`createRectTween` / `flightShuttleBuilder` / `placeholderBuilder` hooks**, and
+  `Hero.curve` / `reverseCurve`. The tween is a linear `RectTween`; Flutter's
+  `CurvedAnimation` (`:472-479`) defaults to linear for a `Hero`, so this is the same
+  curve, not a missing one.
+* **`userGestureInProgress`.** `_handleAnimationUpdate`'s deferral (`:620-648`) exists
+  only for the iOS back-swipe.
+* **`navigatorSize` / `RelativeRect`.** Flutter needs them because its `Positioned`
+  takes edge insets; FLUI's takes `left`/`top`/`width`/`height`.
+* **Public API (U6).** `HeroFlight`, `FlightManager`, `Shuttle` and `ShuttleState` join
+  the export guard.
 
 ---
 

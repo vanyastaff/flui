@@ -99,7 +99,8 @@ use flui_types::Size;
 use parking_lot::Mutex;
 
 use super::binding::TransitionGroup;
-use super::hero::HeroTag;
+use super::hero::{HeroHandle, HeroTag};
+use super::hero_flight::{FlightManager, FlightPlan};
 use super::modal_route::ModalHandle;
 use super::navigator::NavigatorHandle;
 use super::observer::NavigatorObserver;
@@ -213,6 +214,8 @@ pub(crate) struct HeroController {
     measurements: Arc<Mutex<Vec<Measurement>>>,
     /// One per tag that both routes share and that measured to a finite rect.
     manifests: Arc<Mutex<Vec<HeroFlightManifest>>>,
+    /// `HeroController._flights` (`heroes.dart:850`), one per tag in the air.
+    flights: Arc<FlightManager>,
 }
 
 impl HeroController {
@@ -235,9 +238,14 @@ impl HeroController {
         self.measurements.lock().clone()
     }
 
-    /// The flights that *would* start, one per shared tag. Recorded, never flown.
+    /// The flights that started, one per shared tag. Recorded even after they land.
     pub(crate) fn manifests(&self) -> Vec<HeroFlightManifest> {
         self.manifests.lock().clone()
+    }
+
+    /// The flights currently in the air.
+    pub(crate) fn flights(&self) -> &Arc<FlightManager> {
+        &self.flights
     }
 
     /// Flutter's `_maybeStartHeroTransition` (`heroes.dart:892-976`), reduced to the
@@ -310,6 +318,7 @@ impl HeroController {
         self.scheduled.fetch_add(1, Ordering::SeqCst);
         let measurements = Arc::clone(&self.measurements);
         let manifests = Arc::clone(&self.manifests);
+        let flights = Arc::clone(&self.flights);
         post_frame.schedule(move |_timing| {
             let pass = MeasurementPass {
                 navigator: &navigator,
@@ -318,6 +327,7 @@ impl HeroController {
                 from,
                 to,
                 direction,
+                flights: &flights,
             };
             pass.run(&measurements, &manifests);
         });
@@ -354,6 +364,7 @@ struct MeasurementPass<'a> {
     from: RouteId,
     to: RouteId,
     direction: Option<FlightDirection>,
+    flights: &'a Arc<FlightManager>,
 }
 
 impl MeasurementPass<'_> {
@@ -401,7 +412,51 @@ impl MeasurementPass<'_> {
             to_animation_while_offstage,
         });
 
-        manifests.lock().extend(self.collect_manifests());
+        // Retired flights are dropped here, outside every animation listener — see
+        // `FlightManager`'s type docs for why that matters.
+        self.flights.drain_retired();
+
+        let started = self.collect_manifests();
+        for (manifest, from_hero, to_hero) in &started {
+            self.launch(manifest, from_hero, to_hero);
+        }
+        manifests
+            .lock()
+            .extend(started.into_iter().map(|(manifest, ..)| manifest));
+    }
+
+    /// `_HeroFlight(_handleFlightEnded)..start(manifest)` (`heroes.dart:1054`).
+    ///
+    /// A manifest with **no direction** never flies: Flutter's `flightType == null`
+    /// arm builds no manifest at all (`:1030`). The measurement is still recorded,
+    /// because a manifest is what U3.5 promised and a flight is what U4 adds.
+    fn launch(&self, manifest: &HeroFlightManifest, from_hero: &HeroHandle, to_hero: &HeroHandle) {
+        let Some(direction) = manifest.direction else {
+            return;
+        };
+        let Some(to_subtree) = self.navigator.route_subtree(self.to) else {
+            return;
+        };
+
+        // `manifest.animation` (`:466-480`): the destination route's primary animation
+        // drives a push, the source route's drives a pop. The `ModalRoute` proxy, not
+        // the raw controller — so an offstage route reads `1.0`, as it must.
+        let animation = match direction {
+            FlightDirection::Push => self.destination.primary_animation(),
+            FlightDirection::Pop => self.source.primary_animation(),
+        };
+
+        self.flights.start(
+            manifest,
+            FlightPlan {
+                direction,
+                from_hero: from_hero.clone(),
+                to_hero: to_hero.clone(),
+                to_route_subtree: to_subtree.render_id,
+                overlay: self.navigator.overlay().clone(),
+                animation,
+            },
+        );
     }
 
     /// `_startHeroTransition`'s matching loop (`heroes.dart:1014-1060`), reduced to
@@ -411,7 +466,7 @@ impl MeasurementPass<'_> {
     /// Flutter walks `fromHeroes.entries` and looks each tag up in `toHeroes`; a tag
     /// on only one side has no flight (`:1044-1046` — `toHero == null` ⇒ `endFlight`).
     /// Nothing here depends on iteration order.
-    fn collect_manifests(&self) -> Vec<HeroFlightManifest> {
+    fn collect_manifests(&self) -> Vec<(HeroFlightManifest, HeroHandle, HeroHandle)> {
         let Some(from_subtree) = self.navigator.route_subtree(self.from) else {
             return Vec::new();
         };
@@ -444,14 +499,18 @@ impl MeasurementPass<'_> {
                 continue;
             }
 
-            manifests.push(HeroFlightManifest {
-                tag,
-                direction: self.direction,
-                from_route: self.from,
-                to_route: self.to,
-                from_rect,
-                to_rect,
-            });
+            manifests.push((
+                HeroFlightManifest {
+                    tag,
+                    direction: self.direction,
+                    from_route: self.from,
+                    to_route: self.to,
+                    from_rect,
+                    to_rect,
+                },
+                from_hero,
+                to_hero,
+            ));
         }
         manifests
     }

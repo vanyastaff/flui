@@ -34,6 +34,7 @@
 mod binding;
 mod hero;
 mod hero_controller;
+mod hero_flight;
 mod history;
 mod lifecycle;
 mod modal_route;
@@ -62,6 +63,8 @@ pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 mod export_guard;
 #[cfg(test)]
 mod hero_controller_tests;
+#[cfg(test)]
+mod hero_flight_tests;
 #[cfg(test)]
 mod hero_seam_tests;
 #[cfg(test)]

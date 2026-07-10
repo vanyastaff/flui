@@ -764,7 +764,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 26] = [
+    const INTERNAL: [&str; 31] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -800,6 +800,13 @@ fn public_no_internal_route_stack_exports() {
         "HeroState",
         "HeroFlightManifest",
         "Hero",
+        // ADR-0021 U4: the flight. `Hero` is the one name users will eventually
+        // import, and none of this is designed for them yet.
+        "HeroFlight",
+        "FlightManager",
+        "Shuttle",
+        "ShuttleState",
+        "FlightPlan",
     ];
 
     super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);
