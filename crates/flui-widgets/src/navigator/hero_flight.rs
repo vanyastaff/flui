@@ -364,8 +364,13 @@ impl HeroFlight {
                      (heroes.dart:766)"
                 );
                 // `_proxyAnimation.parent = newManifest.animation.drive(
-                //      Tween(begin: manifest.animation.value, end: 1.0))`.
-                let begin = self.inner.proxy.value();
+                //      Tween(begin: manifest.animation.value, end: 1.0))` (`:763-765`).
+                // The begin is the **old manifest animation's** value. A pop flight's
+                // proxy is a `ReverseAnimation` over it (every branch that sets
+                // `direction = Pop` does so), so that value is `1 − proxy` — using the
+                // proxy's own value here reads mirrored progress and teleports the
+                // shuttle unless the divert happens at exactly the halfway point.
+                let begin = 1.0 - self.inner.proxy.value();
                 new_parent = Arc::new(animate(Tween { begin, end: 1.0 }, new_anim));
 
                 if old_from.is_same(&new_to) {

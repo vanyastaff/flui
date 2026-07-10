@@ -1383,12 +1383,17 @@ fn a_push_eases_on_the_destination_hero_curve() {
 }
 
 /// A pop's easing mirrors the push's. The manifest's reverse curve defaults to the
-/// forward curve **flipped** (`heroes.dart:480`, `:484`) and the flight reverses the
-/// curved animation, so a pop parked at animation value 0.5 reads proxy value
-/// `1 - flipped(0.5) = fastOutSlowIn(0.5)` — the same fraction a push parks at.
+/// forward curve **flipped** — Flutter's 180° rotation `1 - curve(1 - t)`
+/// (`heroes.dart:480`, `:484`; `curves.dart:1247`) — and the flight reverses the
+/// curved animation, so a pop parked at animation value 0.7 (30% popped) reads proxy
+/// value `1 - flipped(0.7) = fastOutSlowIn(0.3)`: the same eased fraction a push
+/// 30% in sits at. Parked off-centre deliberately — at 0.5 the rotation and the
+/// vertical mirror `1 - curve(t)` coincide, and the mirror is the historical
+/// `FlippedCurve` bug this test would otherwise miss.
 ///
 /// Red-check: default the reverse curve to the forward curve **un-flipped** in
-/// `launch` — the proxy reads `1 - fastOutSlowIn(0.5)` and the shuttle point moves.
+/// `launch` (proxy reads `fastOutSlowIn(0.7)`), or regress `FlippedCurve` to the
+/// vertical mirror (same wrong value) — the shuttle point moves either way.
 #[test]
 fn a_default_pop_eases_symmetrically_with_the_push() {
     let navigator = seeded_navigator();
@@ -1407,7 +1412,7 @@ fn a_default_pop_eases_symmetrically_with_the_push() {
 
     assert!(navigator.pop());
     harness.tick();
-    transition.controller().expect("installed").set_value(0.5);
+    transition.controller().expect("installed").set_value(0.7);
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     let tween = RectTween {
@@ -1416,8 +1421,8 @@ fn a_default_pop_eases_symmetrically_with_the_push() {
     };
     assert_rect_close(
         flight.shuttle_rect(),
-        tween.transform(Curves::FastOutSlowIn.transform(0.5)),
-        "halfway through the pop, the shuttle sits at the same eased fraction as a push",
+        tween.transform(Curves::FastOutSlowIn.transform(0.3)),
+        "a pop 30% done sits at the same eased fraction as a push 30% done",
     );
 }
 
@@ -1614,5 +1619,69 @@ fn a_bare_hero_mode_changes_nothing() {
         controller.flights().len(),
         1,
         "an enabled scope still flies"
+    );
+}
+
+/// A pop→push divert resumes the proxy from the **old manifest animation's** value:
+/// `_proxyAnimation.parent = newManifest.animation.drive(Tween(begin:
+/// manifest.animation.value, end: 1.0))` (`heroes.dart:763-765`). For a pop flight the
+/// proxy is a `ReverseAnimation` over the manifest animation, so that begin is
+/// `1 − proxy.value` — **not** `proxy.value`. The two coincide only at exactly 0.5,
+/// which is where the older divert tests parked.
+///
+/// Linear hero curves throughout, so route-animation values read straight through.
+///
+/// Red-check (the shipped bug): seed the tween with `self.inner.proxy.value()` — at a
+/// pop parked at 0.7 the diverted proxy reads 0.3-based instead of 0.7-based values.
+#[test]
+fn a_pop_push_divert_resumes_from_the_old_manifest_animation_value() {
+    let linear_page =
+        |w: f32, h: f32| hero_page_with("shared", w, h, |hero| hero.curve(flui_animation::Linear));
+
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    // Push A, then B; settle the push flight.
+    let b = linear_page(60.0, 45.0);
+    let b_transition = b.transition_handle();
+    let _a = navigator.push(linear_page(30.0, 20.0));
+    harness.tick();
+    let _b = navigator.push(b);
+    harness.tick();
+    b_transition.controller().expect("installed").set_value(1.0);
+    harness.tick();
+    assert_eq!(controller.flights().len(), 0, "the push flight settled");
+
+    // Pop B, parked asymmetrically: manifest.animation.value = 0.7, proxy = 0.3.
+    assert!(navigator.pop());
+    harness.tick();
+    b_transition.controller().expect("installed").set_value(0.7);
+
+    // Push C while the pop flies: a pop→push divert to a new destination.
+    let c = linear_page(90.0, 70.0);
+    let c_transition = c.transition_handle();
+    let _c = navigator.push(c);
+    harness.tick();
+    // Park C's entrance at an interior value so nothing settles under the assertion.
+    c_transition.controller().expect("installed").set_value(0.1);
+
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    assert_eq!(
+        flight.direction(),
+        FlightDirection::Push,
+        "diverted to a push"
+    );
+
+    // proxy = begin + (1 − begin)·c, with begin = 0.7 and c = 0.1.
+    let expected_t = 0.7 + (1.0 - 0.7) * 0.1;
+    let tween = RectTween {
+        begin: flight.begin_rect(),
+        end: flight.target_rect(),
+    };
+    assert_rect_close(
+        flight.shuttle_rect(),
+        tween.transform(expected_t),
+        "the diverted push resumes from the old manifest animation's value",
     );
 }

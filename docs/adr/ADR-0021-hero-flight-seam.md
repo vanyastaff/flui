@@ -1789,6 +1789,30 @@ red: bypassing the wrap fails it), `a_push_eases_on_the_destination_hero_curve`
 `Hero.curve`'s interaction with user-gesture transitions (`:952-960`) — FLUI has no
 back-swipe (§8).
 
+### Addendum (same day): two mutually-masking bugs under the reverse-curve default
+
+Auditing the pop→push divert against `heroes.dart:763-765` found **two** parity bugs
+that cancelled exactly for linear curves and at the t = 0.5 park point every prior
+divert test used:
+
+1. **`flui_animation::FlippedCurve` was the vertical mirror `1 − curve(t)`**, not
+   Flutter's 180° rotation `1 − curve(1 − t)` (`curves.dart:1247`) — so §7o's
+   `curve.flipped()` reverse-curve default was upside-down (mapping 0 → 1), and any
+   future consumer of `Curve::flipped` would inherit the same inversion. Fixed in
+   `flui-animation`, with the rotation-vs-mirror distinction pinned in
+   `test_flipped_curve` on an asymmetric curve.
+2. **The pop→push divert seeded its resume tween with `proxy.value()`** where
+   Flutter uses `manifest.animation.value` — for a pop flight the proxy is a
+   `ReverseAnimation` over the manifest animation, so the correct begin is
+   `1 − proxy.value` (`hero_flight.rs`, divert's pop→push branch). The wrong begin
+   teleports the shuttle unless the divert lands at exactly halfway.
+
+With only bug 1 fixed, `a_pop_push_divert_resumes_from_the_old_manifest_animation_value`
+goes red; with both, green. `a_default_pop_eases_symmetrically_with_the_push` now
+parks at 0.7 (not 0.5) so it distinguishes the rotation from the mirror — both tests
+were verified red against each regression individually. The masking is exactly the
+Definition-of-Done failure mode: every gate was green while two behaviors diverged.
+
 ---
 
 ## 7p. `HeroMode` (2026-07-10)
