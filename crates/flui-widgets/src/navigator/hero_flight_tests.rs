@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationStatus};
+use flui_animation::{Animatable, Animation, AnimationStatus, Curve, Curves, RectTween, Threshold};
 use flui_foundation::ValueKey;
 use flui_geometry::Rect;
 use flui_rendering::pipeline::PipelineOwner;
@@ -1276,5 +1276,228 @@ fn a_faded_out_flight_still_removes_its_entry_when_the_animation_settles() {
     assert_eq!(
         navigator.overlay().entry_ids().len(),
         entries_with_flight - 1,
+    );
+}
+
+// ============================================================================
+// Flight easing — `Hero.curve` / `Hero.reverse_curve` (heroes.dart:472-491)
+// ============================================================================
+
+/// A `hero_page` whose `Hero` is customized by `configure` — a flight curve, say.
+fn hero_page_with(
+    tag_name: &'static str,
+    w: f32,
+    h: f32,
+    configure: impl Fn(Hero) -> Hero + Send + Sync + 'static,
+) -> PageRoute<i32> {
+    PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
+        Center::new()
+            .child(configure(Hero::new(
+                ValueKey::new(tag_name),
+                SizedBox::new(w, h),
+            )))
+            .into_view()
+            .boxed()
+    })
+    .transition_duration(TRANSITION)
+}
+
+/// All four extents of `actual` match `expected` to within a thousandth of a pixel.
+fn assert_rect_close(actual: Rect, expected: Rect, what: &str) {
+    for (got, want, edge) in [
+        (actual.min_x().0, expected.min_x().0, "left"),
+        (actual.min_y().0, expected.min_y().0, "top"),
+        (actual.width().0, expected.width().0, "width"),
+        (actual.height().0, expected.height().0, "height"),
+    ] {
+        assert!(
+            (got - want).abs() < 1e-3,
+            "{what}: {edge} is {got}, expected {want}"
+        );
+    }
+}
+
+/// The default flight easing is `Curves.fastOutSlowIn`, not linear: `launch` wraps the
+/// route animation in the manifest's `CurvedAnimation` (`heroes.dart:472-491`), and
+/// `Hero.curve` defaults to `Curves.fastOutSlowIn` (`:181`).
+///
+/// Red-check: hand `FlightPlan` the raw route animation in `MeasurementPass::launch` —
+/// the shuttle sits at the linear midpoint instead of the eased point.
+#[test]
+fn a_default_flight_eases_on_fast_out_slow_in() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page("shared", 60.0, 45.0),
+    );
+    transition.controller().expect("installed").set_value(0.5);
+
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    let tween = RectTween {
+        begin: flight.begin_rect(),
+        end: flight.target_rect(),
+    };
+    let eased = Curves::FastOutSlowIn.transform(0.5);
+    assert!(
+        (eased - 0.5).abs() > 0.2,
+        "sanity: fastOutSlowIn is visibly non-linear at t = 0.5 (got {eased})"
+    );
+    assert_rect_close(
+        flight.shuttle_rect(),
+        tween.transform(eased),
+        "halfway through the push, the shuttle sits at the fastOutSlowIn point",
+    );
+}
+
+/// `Hero::curve` shapes the flight, and a push eases on the **destination** hero's
+/// curve (`heroes.dart:479`). `Threshold(0.9)` reads 0.0 until 90% of the transition —
+/// so halfway through, the shuttle has not left its begin rect.
+///
+/// Red-check: resolve the curve from `from_hero` for a push in `MeasurementPass::launch`
+/// — the source's default fastOutSlowIn applies and the shuttle is mid-flight.
+#[test]
+fn a_push_eases_on_the_destination_hero_curve() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page_with("shared", 60.0, 45.0, |hero| hero.curve(Threshold::new(0.9))),
+    );
+    transition.controller().expect("installed").set_value(0.5);
+
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    assert_rect_close(
+        flight.shuttle_rect(),
+        flight.begin_rect(),
+        "below the destination hero's threshold curve, the shuttle has not moved",
+    );
+}
+
+/// A pop's easing mirrors the push's. The manifest's reverse curve defaults to the
+/// forward curve **flipped** (`heroes.dart:480`, `:484`) and the flight reverses the
+/// curved animation, so a pop parked at animation value 0.5 reads proxy value
+/// `1 - flipped(0.5) = fastOutSlowIn(0.5)` — the same fraction a push parks at.
+///
+/// Red-check: default the reverse curve to the forward curve **un-flipped** in
+/// `launch` — the proxy reads `1 - fastOutSlowIn(0.5)` and the shuttle point moves.
+#[test]
+fn a_default_pop_eases_symmetrically_with_the_push() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page("shared", 60.0, 45.0),
+    );
+    transition.controller().expect("installed").set_value(1.0);
+    harness.tick();
+    assert_eq!(controller.flights().len(), 0, "the push flight settled");
+
+    assert!(navigator.pop());
+    harness.tick();
+    transition.controller().expect("installed").set_value(0.5);
+
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    let tween = RectTween {
+        begin: flight.begin_rect(),
+        end: flight.target_rect(),
+    };
+    assert_rect_close(
+        flight.shuttle_rect(),
+        tween.transform(Curves::FastOutSlowIn.transform(0.5)),
+        "halfway through the pop, the shuttle sits at the same eased fraction as a push",
+    );
+}
+
+/// `Hero::reverse_curve` overrides the flipped default, and a pop reads it from the
+/// **source** hero (`heroes.dart:483-484`). `Threshold(0.9)` reads 0.0 at t = 0.5 and
+/// the flight reverses it, so the shuttle is parked exactly on its destination.
+///
+/// Red-check: ignore `reverse_curve()` in `MeasurementPass::launch` — the flipped
+/// fastOutSlowIn default applies and the shuttle is mid-flight.
+#[test]
+fn a_pop_eases_on_the_source_hero_reverse_curve() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page_with("shared", 60.0, 45.0, |hero| {
+            hero.reverse_curve(Threshold::new(0.9))
+        }),
+    );
+    transition.controller().expect("installed").set_value(1.0);
+    harness.tick();
+    assert_eq!(controller.flights().len(), 0, "the push flight settled");
+
+    assert!(navigator.pop());
+    harness.tick();
+    transition.controller().expect("installed").set_value(0.5);
+
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    assert_rect_close(
+        flight.shuttle_rect(),
+        flight.target_rect(),
+        "below the source hero's reverse-curve threshold, the reversed flight reads 1.0",
+    );
+}
+
+/// A manifest that diverts an airborne flight carries **no** reverse curve
+/// (`isDiverted ? null : reverseCurve`, `heroes.dart:490`): the diverted pop below
+/// eases on the forward fastOutSlowIn even though its parent runs in reverse.
+///
+/// Red-check: attach the reverse curve unconditionally in `MeasurementPass::launch` —
+/// the diverted pop eases on the flipped curve and the expected point moves.
+#[test]
+fn a_diverted_flight_drops_the_reverse_curve() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page("shared", 60.0, 45.0),
+    );
+    transition.controller().expect("installed").set_value(0.5);
+
+    // Pop while the push flight is airborne: a push→pop divert, same flight object.
+    assert!(navigator.pop());
+    harness.tick();
+    transition.controller().expect("installed").set_value(0.5);
+
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    assert_eq!(
+        flight.direction(),
+        FlightDirection::Pop,
+        "diverted to a pop"
+    );
+    let tween = RectTween {
+        begin: flight.begin_rect(),
+        end: flight.target_rect(),
+    };
+    // Without a reverse curve, the reversed parent still eases on the forward curve:
+    // proxy = 1 - fastOutSlowIn(0.5). With the (wrong) flipped reverse curve attached,
+    // it would read fastOutSlowIn(0.5) instead.
+    assert_rect_close(
+        flight.shuttle_rect(),
+        tween.transform(1.0 - Curves::FastOutSlowIn.transform(0.5)),
+        "the diverted pop eases on the forward curve, not the flipped reverse default",
     );
 }

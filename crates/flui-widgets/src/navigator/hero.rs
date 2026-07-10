@@ -53,7 +53,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_animation::{Animatable, Animation};
+use flui_animation::{Animatable, Animation, ArcCurve, Curve, Curves};
 use flui_foundation::{RenderId, ViewKey};
 use flui_geometry::Rect;
 use flui_objects::SubtreeAnchor;
@@ -300,6 +300,11 @@ struct HeroInner {
     /// `Hero.flightShuttleBuilder` (`heroes.dart:240`), or `None` for the default
     /// shuttle. Read by the controller when it builds a flight (§7n D-N.2).
     shuttle_builder: Mutex<Option<ShuttleBuilder>>,
+    /// `Hero.curve` (`heroes.dart:181`, `:266-269`): the flight's forward easing.
+    /// The default is `Curves::FastOutSlowIn`, as Flutter's is.
+    curve: Mutex<ArcCurve>,
+    /// `Hero.reverseCurve` (`:271-274`), or `None` for [`curve`](Self::curve) flipped.
+    reverse_curve: Mutex<Option<ArcCurve>>,
 }
 
 /// An owned, `'static` capability to drive one mounted [`Hero`].
@@ -312,23 +317,22 @@ pub(crate) struct HeroHandle {
 }
 
 impl HeroHandle {
-    fn new(
-        tag: HeroTag,
-        shuttle_child: BoxedView,
-        rect_factory: Option<RectTweenFactory>,
-        shuttle_builder: Option<ShuttleBuilder>,
-    ) -> Self {
+    /// A handle over `view`'s current configuration; [`ViewState::did_update_view`]
+    /// keeps the view-derived halves current afterwards.
+    fn new(view: &Hero) -> Self {
         Self {
             inner: Arc::new(HeroInner {
-                tag,
+                tag: view.tag.clone(),
                 anchor: SubtreeAnchor::new(),
                 placeholder: Mutex::new(None),
                 include_child: AtomicBool::new(true),
                 owner: Mutex::new(None),
                 rebuild: Mutex::new(None),
-                shuttle_child: Mutex::new(shuttle_child),
-                rect_factory: Mutex::new(rect_factory),
-                shuttle_builder: Mutex::new(shuttle_builder),
+                shuttle_child: Mutex::new(view.child.clone()),
+                rect_factory: Mutex::new(view.rect_factory.clone()),
+                shuttle_builder: Mutex::new(view.shuttle_builder.clone()),
+                curve: Mutex::new(view.curve.clone()),
+                reverse_curve: Mutex::new(view.reverse_curve.clone()),
             }),
         }
     }
@@ -380,6 +384,17 @@ impl HeroHandle {
     /// This hero's `flight_shuttle_builder`, if it set one (`heroes.dart:240`).
     pub(crate) fn shuttle_builder(&self) -> Option<ShuttleBuilder> {
         self.inner.shuttle_builder.lock().clone()
+    }
+
+    /// This hero's flight curve (`Hero.curve`, `heroes.dart:266-269`).
+    pub(crate) fn curve(&self) -> ArcCurve {
+        self.inner.curve.lock().clone()
+    }
+
+    /// This hero's reverse flight curve, if it set one (`Hero.reverseCurve`,
+    /// `heroes.dart:271-274`). `None` means "the forward curve, flipped".
+    pub(crate) fn reverse_curve(&self) -> Option<ArcCurve> {
+        self.inner.reverse_curve.lock().clone()
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
@@ -477,9 +492,11 @@ impl fmt::Debug for HeroHandle {
 /// `Navigator` now installs a default one, and `HeroControllerScope` customizes or
 /// disables that. The public surface includes the baseline `tag`/`child` plus the
 /// ADR-0021 §7n hooks: [`create_rect_tween`](Self::create_rect_tween),
-/// [`flight_shuttle_builder`](Self::flight_shuttle_builder), and FLUI's
-/// state-preserving [`placeholder`](Self::placeholder). `transitionOnUserGestures`,
-/// `HeroMode`, and full cross-navigator flight parity remain deferred.
+/// [`flight_shuttle_builder`](Self::flight_shuttle_builder), FLUI's
+/// state-preserving [`placeholder`](Self::placeholder), and the flight easing
+/// [`curve`](Self::curve) / [`reverse_curve`](Self::reverse_curve).
+/// `transitionOnUserGestures`, `HeroMode`, and full cross-navigator flight parity
+/// remain deferred.
 #[derive(Clone)]
 pub struct Hero {
     tag: HeroTag,
@@ -487,6 +504,8 @@ pub struct Hero {
     rect_factory: Option<RectTweenFactory>,
     shuttle_builder: Option<ShuttleBuilder>,
     placeholder: Option<PlaceholderBuilder>,
+    curve: ArcCurve,
+    reverse_curve: Option<ArcCurve>,
 }
 
 impl Hero {
@@ -501,7 +520,27 @@ impl Hero {
             rect_factory: None,
             shuttle_builder: None,
             placeholder: None,
+            curve: ArcCurve::new(Curves::FastOutSlowIn),
+            reverse_curve: None,
         }
+    }
+
+    /// The easing the flight animation runs with in the forward direction. Flutter's
+    /// `Hero.curve` (`heroes.dart:266-269`); the default is `Curves::FastOutSlowIn`
+    /// (`:181`). A push eases on the **destination** hero's curve, a pop on the
+    /// **source** hero's (`:474-485`).
+    #[must_use]
+    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+        self.curve = ArcCurve::new(curve);
+        self
+    }
+
+    /// The easing for the reverse direction. Flutter's `Hero.reverseCurve`
+    /// (`heroes.dart:271-274`): when unset, [`curve`](Self::curve) flipped.
+    #[must_use]
+    pub fn reverse_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+        self.reverse_curve = Some(ArcCurve::new(curve));
+        self
     }
 
     /// Shape the path the hero's shuttle flies along. Flutter's `Hero.createRectTween`
@@ -586,12 +625,7 @@ impl StatefulView for Hero {
 
     fn create_state(&self) -> Self::State {
         HeroState {
-            handle: HeroHandle::new(
-                self.tag.clone(),
-                self.child.clone(),
-                self.rect_factory.clone(),
-                self.shuttle_builder.clone(),
-            ),
+            handle: HeroHandle::new(self),
             registry: None,
         }
     }
@@ -618,8 +652,8 @@ impl std::fmt::Debug for HeroState {
 
 impl ViewState<Hero> for HeroState {
     /// Keep the handle's view-derived config current: the shuttle source, the rect-tween
-    /// factory, and the shuttle builder are all read at flight start, i.e. from the
-    /// *latest* `Hero` configuration.
+    /// factory, the shuttle builder, and the flight curves are all read at flight
+    /// start, i.e. from the *latest* `Hero` configuration.
     fn did_update_view(&mut self, _old: &Hero, new_view: &Hero) {
         self.handle
             .inner
@@ -636,6 +670,12 @@ impl ViewState<Hero> for HeroState {
             .shuttle_builder
             .lock()
             .clone_from(&new_view.shuttle_builder);
+        self.handle.inner.curve.lock().clone_from(&new_view.curve);
+        self.handle
+            .inner
+            .reverse_curve
+            .lock()
+            .clone_from(&new_view.reverse_curve);
     }
 
     /// Everything a hero needs from outside itself is acquired **here**, in the one

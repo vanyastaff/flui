@@ -61,10 +61,11 @@
 //! # What is deliberately absent
 //!
 //! The customization hooks landed in §7n: `Hero::create_rect_tween`,
-//! `Hero::flight_shuttle_builder` (with the no-foreign-`BuildContext` divergence), and
+//! `Hero::flight_shuttle_builder` (with the no-foreign-`BuildContext` divergence),
 //! FLUI's state-preserving `Hero::placeholder` (in place of Flutter's lossy
-//! `placeholderBuilder`). `FlightDirection` is public for the shuttle builder. Still
-//! absent: `HeroMode`, `transitionOnUserGestures`, and `Hero.curve` / `reverseCurve`.
+//! `placeholderBuilder`), and `Hero::curve` / `Hero::reverse_curve` with Flutter's
+//! `Curves.fastOutSlowIn` default (`heroes.dart:181`). `FlightDirection` is public
+//! for the shuttle builder. Still absent: `HeroMode` and `transitionOnUserGestures`.
 //!
 //! The private surface stays private: `HeroTag`, `HeroRegistry`, `HeroScope`,
 //! `HeroHandle`, `HeroFlightManifest`, and the flight machinery are `pub(crate)`, and
@@ -95,7 +96,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_animation::{Animatable, AnimationStatus};
+use flui_animation::{Animatable, Animation, AnimationStatus, ArcCurve, Curve, CurvedAnimation};
 use flui_geometry::{Matrix4, Rect};
 use flui_types::Size;
 use parking_lot::Mutex;
@@ -488,13 +489,30 @@ impl MeasurementPass<'_> {
             return;
         };
 
-        // `manifest.animation` (`:466-480`): the destination route's primary animation
+        // `manifest.animation` (`:472-491`): the destination route's primary animation
         // drives a push, the source route's drives a pop. The `ModalRoute` proxy, not
         // the raw controller — so an offstage route reads `1.0`, as it must.
-        let animation = match direction {
-            FlightDirection::Push => self.destination.primary_animation(),
-            FlightDirection::Pop => self.source.primary_animation(),
+        let (route_animation, curve_hero) = match direction {
+            FlightDirection::Push => (self.destination.primary_animation(), to_hero),
+            FlightDirection::Pop => (self.source.primary_animation(), from_hero),
         };
+
+        // Wrapped in a `CurvedAnimation` on the driving hero's `curve` — the
+        // destination's for a push, the source's for a pop (`:474-485`). The reverse
+        // curve defaults to the forward curve flipped (`:480`, `:484`), and a manifest
+        // that diverts an airborne flight carries none (`isDiverted ? null :
+        // reverseCurve`, `:490`).
+        let curve = curve_hero.curve();
+        let curved = CurvedAnimation::new(route_animation, curve.clone());
+        let curved = if self.flights.is_airborne(&manifest.tag) {
+            curved
+        } else {
+            let reverse_curve = curve_hero
+                .reverse_curve()
+                .unwrap_or_else(|| ArcCurve::new(curve.flipped()));
+            curved.with_reverse_curve(reverse_curve)
+        };
+        let animation: Arc<dyn Animation<f32>> = Arc::new(curved);
 
         // `toHero.widget.createRectTween ?? this.createRectTween` (`heroes.dart:495`):
         // the destination hero's factory wins, then the controller's default, then linear.

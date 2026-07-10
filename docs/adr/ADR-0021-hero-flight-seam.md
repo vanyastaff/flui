@@ -6,7 +6,7 @@
 
 ---
 
-- **Status:** **Accepted — landed.** `Hero`, `HeroController`, `HeroControllerScope`, and the first customization hooks are public (2026-07-10). Remaining gaps are `Hero.curve` / `reverseCurve`, `HeroMode`, user-gesture flights, and full cross-navigator flight parity.
+- **Status:** **Accepted — landed.** `Hero`, `HeroController`, `HeroControllerScope`, the first customization hooks, and `Hero::curve` / `reverse_curve` (§7o) are public (2026-07-10). Remaining gaps are `HeroMode`, user-gesture flights, and full cross-navigator flight parity.
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult rendering owner (**S4**, the ancestor-relative paint transform — the one seam that cannot be worked around), view owner (**S6**, post-frame callbacks from a view; **S7**, hero discovery without an element walk), animation owner (flight animation composition, `ProxyAnimation` re-parenting mid-flight), repository owner (public API: `Hero`, `HeroController`, tag type), qa-lead (deterministic flight tests through a real `Vsync`).
 - **Relates to:** consumes ADR-0019 (Navigator, Overlay, observers) and ADR-0020 (`PageRoute`, `ModalRoute.offstage`, `RenderOffstage`, `RenderTheater`). **Corrects** ADR-0019 §6 blocker (4) and tracker B1.4 precondition (4).
@@ -1281,7 +1281,9 @@ anyway).
 * **`createRectTween` / `flightShuttleBuilder` / `placeholderBuilder` hooks**, and
   `Hero.curve` / `reverseCurve`. The tween is a linear `RectTween`; Flutter's
   `CurvedAnimation` (`:472-479`) defaults to linear for a `Hero`, so this is the same
-  curve, not a missing one.
+  curve, not a missing one. **(Corrected by §7o: this claim was wrong — `Hero.curve`
+  defaults to `Curves.fastOutSlowIn`, `heroes.dart:181`, so the raw animation was a
+  real behavioral divergence until §7o closed it.)**
 * **`userGestureInProgress`.** `_handleAnimationUpdate`'s deferral (`:620-648`) exists
   only for the iOS back-swipe.
 * **`navigatorSize` / `RelativeRect`.** Flutter needs them because its `Positioned`
@@ -1725,6 +1727,67 @@ no-foreign-context divergence (D-N.2), proven by
 `flight_shuttle_builder_replaces_the_public_shuttle`; and `placeholder` as a
 state-preserving FLUI leapfrog rather than Flutter's lossy `placeholderBuilder` (D-N.3),
 proven by `custom_placeholder_preserves_hero_child_state_through_push_and_pop`.
+
+---
+
+## 7o. `Hero::curve` / `reverse_curve`, and a corrected default (2026-07-10)
+
+### The correction
+
+§7j deferred `Hero.curve` / `reverseCurve` with the claim that Flutter's flight
+`CurvedAnimation` "defaults to linear for a `Hero`, so this is the same curve, not a
+missing one". That claim is **wrong** against the reference: `Hero.curve` defaults to
+`Curves.fastOutSlowIn` (`heroes.dart:181`), and `_HeroFlightManifest.animation`
+(`:472-491`) always wraps the route animation in a `CurvedAnimation` on it. FLUI's raw
+(linear) flight was a real divergence, silently green because no test pinned the
+easing. This section closes both the gap and the coverage hole.
+
+### Reference
+
+`.flutter/packages/flutter/lib/src/widgets/heroes.dart`, master
+`3.33.0-0.0.pre-6280-g88e87cd963f`: `Hero.curve` / `Hero.reverseCurve` (`:181-182`,
+`:266-274`), `_HeroFlightManifest.animation` (`:470-491`).
+
+The reference facts, each now pinned by a test:
+
+* The wrap is `CurvedAnimation(parent, curve, reverseCurve: isDiverted ? null :
+  reverseCurve)` (`:487-491`).
+* A **push** reads the **destination** hero's `curve`; a **pop** reads the
+  **source** hero's (`:474-485`) — the hero on the route whose animation drives.
+* `reverseCurve` defaults to `curve.flipped` (`:480`, `:484`). Because a pop runs the
+  source route's animation in reverse, the reverse curve is what a default pop
+  actually eases on — and `1 − flipped(t)` makes the pop's shuttle progress mirror
+  the push's exactly.
+* A manifest that **diverts** an airborne flight carries no reverse curve (`:490`).
+* The shuttle builder receives `manifest.animation` — the **curved** animation
+  (`:573`), not the raw route animation.
+
+### The Rust shape
+
+`Hero` gains `curve: ArcCurve` (default `Curves::FastOutSlowIn`) and `reverse_curve:
+Option<ArcCurve>` with builder methods taking `impl Curve + Send + Sync + 'static`.
+`ArcCurve` is `flui-animation`'s existing type-erased curve — no new `dyn` boundary in
+`flui-widgets`. The wrap happens in `MeasurementPass::launch`, FLUI's analogue of the
+manifest's `animation` getter: `CurvedAnimation::new(route_animation, curve)` plus
+`.with_reverse_curve(reverse_curve ?? curve.flipped())`, skipped when
+`FlightManager::is_airborne(tag)` — Flutter's `isDiverted`. `CurvedAnimation` already
+ports `_curveDirection` (run-entry direction locking), so no new animation machinery
+was needed. `FlightPlan::animation` is now the curved animation, which also fixes the
+shuttle builder's argument to match `:573`.
+
+### Evidence (all red-checked in their doc comments)
+
+`hero_flight_tests.rs`: `a_default_flight_eases_on_fast_out_slow_in` (verified
+red: bypassing the wrap fails it), `a_push_eases_on_the_destination_hero_curve`
+(verified red), `a_default_pop_eases_symmetrically_with_the_push` (verified red),
+`a_pop_eases_on_the_source_hero_reverse_curve`, and
+`a_diverted_flight_drops_the_reverse_curve` (`isDiverted` branch).
+
+### Deliberately not ported here
+
+`CurvedAnimation`'s `assert(t >= 0.0 && t <= 1.0)` debug guard on curve output, and
+`Hero.curve`'s interaction with user-gesture transitions (`:952-960`) — FLUI has no
+back-swipe (§8).
 
 ---
 

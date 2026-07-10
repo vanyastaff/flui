@@ -33,12 +33,12 @@
 //! * **Divert is private and implemented (U5.1).** A second transition for the same tag
 //!   redirects the existing [`HeroFlight`] in place (`_HeroFlight.divert`, `:738-816`):
 //!   same flight object, same overlay entry, new manifest-derived state.
-//! * **`createRectTween` and `flightShuttleBuilder` are implemented** (ADR-0021 §7n).
-//!   `placeholderBuilder` is deliberately not ported; [`Hero`](super::hero::Hero)
-//!   exposes FLUI's state-preserving `placeholder` hook instead. `Hero.curve` /
-//!   `reverseCurve` remain deferred. The animation is otherwise used raw — Flutter
-//!   wraps it in a `CurvedAnimation` (`:472-479`) whose default for a `Hero` is linear,
-//!   so the default curve is not a missing behavior.
+//! * **`createRectTween`, `flightShuttleBuilder`, and `Hero.curve` / `reverseCurve`
+//!   are implemented** (ADR-0021 §7n). `placeholderBuilder` is deliberately not
+//!   ported; [`Hero`](super::hero::Hero) exposes FLUI's state-preserving
+//!   `placeholder` hook instead. The animation handed to this flight is already the
+//!   manifest's `CurvedAnimation` (`:472-491`), built by the controller's `launch` —
+//!   `Curves::FastOutSlowIn` by default, as Flutter's is (`:181`).
 //! * **No `userGestureInProgress`.** `_handleAnimationUpdate`'s delay (`:620-648`)
 //!   exists only for the iOS back-swipe. FLUI has none, so the status update is never
 //!   deferred.
@@ -199,7 +199,7 @@ impl FlightInner {
 /// manifest.animation, manifest.type, fromHero.context, toHero.context)` (`heroes.dart:573`)
 /// and `_defaultHeroFlightShuttleBuilder`'s `toHero.child` fallback (`:1089`). The two
 /// foreign `BuildContext`s become the two hero child views (ADR-0021 §7n D-N.2); `animation`
-/// is the raw route animation, not the proxy.
+/// is the manifest's curved route animation, not the (possibly reversed) proxy.
 fn inflate_shuttle(
     builder: Option<&ShuttleBuilder>,
     animation: &Arc<dyn Animation<f32>>,
@@ -475,8 +475,9 @@ pub(crate) struct FlightPlan {
     /// The destination route's coordinate root, for the per-tick re-measure.
     pub(crate) to_route_subtree: RenderId,
     pub(crate) overlay: OverlayHandle,
-    /// `manifest.animation` (`heroes.dart:466-480`): the destination route's primary
-    /// animation for a push, the source route's for a pop.
+    /// `manifest.animation` (`heroes.dart:472-491`): the destination route's primary
+    /// animation for a push, the source route's for a pop, already wrapped in the
+    /// manifest's `CurvedAnimation` on the driving hero's `curve`/`reverse_curve`.
     pub(crate) animation: Arc<dyn Animation<f32>>,
     /// The resolved `create_rect_tween` factory (`heroes.dart:495`): the destination
     /// hero's, else the controller's default, else `None` (linear). ADR-0021 §7n D-N.1.
@@ -590,6 +591,13 @@ impl FlightManager {
         self.flights.lock().get(tag).cloned()
     }
 
+    /// Whether a flight for `tag` is already in the air — Flutter's
+    /// `existingFlight != null`, the manifest's `isDiverted` (`heroes.dart:1027`,
+    /// `:1045`). A diverted manifest's animation carries no reverse curve (`:490`).
+    pub(crate) fn is_airborne(&self, tag: &HeroTag) -> bool {
+        self.flights.lock().contains_key(tag)
+    }
+
     /// `_HeroFlight.start` (`heroes.dart:698-736`), or — when a flight for this tag is
     /// already airborne — `_HeroFlight.divert` (`:1051-1052`).
     ///
@@ -615,8 +623,8 @@ impl FlightManager {
             shuttle_builder,
         } = plan;
 
-        // The shuttle builder gets `manifest.animation` — the raw route animation, not the
-        // (possibly reversed) proxy — so keep a clone before the proxy takes ownership.
+        // The shuttle builder gets `manifest.animation` — the curved route animation, not
+        // the (possibly reversed) proxy — so keep a clone before the proxy takes ownership.
         let shuttle_animation = Arc::clone(&animation);
 
         // `_proxyAnimation.parent = ReverseAnimation(manifest.animation)` for a pop,
