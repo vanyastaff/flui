@@ -1,7 +1,7 @@
 //! ADR-0021 U2 seams 2–5, the executable half.
 //!
-//! There is no `Hero` here, no `HeroController`, and no flight. These tests pin
-//! the four things a future `HeroController` reaches for, each against the
+//! These tests predate the public Hero baseline and still pin the four support seams
+//! `HeroController` reaches for, each against the
 //! `heroes.dart` line that reaches for it:
 //!
 //! | Seam | Flutter | Test group |

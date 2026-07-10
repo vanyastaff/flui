@@ -1,7 +1,8 @@
 //! [`Navigator`], [`NavigatorState`] and [`NavigatorHandle`].
 //!
-//! ADR-0019 U3. **Private**: nothing here is exported from the crate root or the
-//! prelude. U4's parity + sign-off gate decides what, if anything, becomes public.
+//! ADR-0019 U3 introduced the private widget. ADR-0019 U4 exported the signed-off
+//! `Navigator` baseline; ADR-0020 U5.4 added public page/popup routes; ADR-0021 U6
+//! added the public Hero baseline that rides on this navigator.
 //!
 //! # Flutter parity
 //!
@@ -29,11 +30,11 @@
 //!
 //! # Not implemented, and not claimed
 //!
-//! No `TransitionRoute` / `ModalRoute` / `PageRoute` (so: no animation, no
-//! barrier, no focus scope), no `Hero`, no page-based routing, no restoration, no
-//! named-route generation, no `PopScope`, no `LocalHistoryRoute`, no
-//! `HeroControllerScope` / `NavigationNotification` / pointer-cancelling wrapper
-//! that Flutter's `build` adds (`:5946-5998`). ADR-0019 §5–§6 owns the sequence.
+//! No Navigator 2.0/page-list API, restoration, named-route generation, `PopScope`,
+//! `LocalHistoryRoute`, `HeroControllerScope`, `NavigationNotification`,
+//! pointer-cancelling wrapper, or per-route focus scope that Flutter's `build` adds
+//! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay private implementation
+//! details behind public `PageRoute` / `PopupRoute`.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -556,18 +557,12 @@ impl NavigatorHandle {
 /// hands out a borrow into the trees, and nothing takes a second lock under a
 /// first.
 ///
-/// **Nested navigators are out of U2's scope.** A Flutter `HeroController` is
+/// **Nested navigators remain out of scope.** A Flutter `HeroController` is
 /// attached to exactly one navigator and only ever sees that navigator's routes;
 /// a nested navigator needs its own, hosted by a `HeroControllerScope`
-/// (`navigator.dart:3995-4046`). FLUI has no `HeroControllerScope` — ADR-0021 U3
-/// owns it — so these methods answer only about *this* navigator's stack, and no
-/// test claims otherwise.
-///
-/// `dead_code` on the block, not the methods: `HeroController` (U3) is the first
-/// production consumer, and until it lands the U2 tests are the only callers.
-/// Deleting them and re-deriving them in U3 is how a seam stops matching the ADR
-/// that specified it.
-#[allow(dead_code)]
+/// (`navigator.dart:3995-4046`). FLUI has no `HeroControllerScope` yet, so these
+/// methods answer only about *this* navigator's stack, and no test claims
+/// otherwise.
 impl NavigatorHandle {
     /// This navigator's overlay — Flutter's `NavigatorState.overlay`, read by
     /// `HeroController._startHeroTransition` (`heroes.dart:990`) to insert the

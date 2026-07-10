@@ -782,16 +782,14 @@ fn public_no_internal_route_stack_exports() {
         "RouteCommand",
         "TransitionRoute",
         "ModalRoute",
-        // ADR-0021 U2/U3: the Hero seams. There is no public `Hero` widget and no
-        // public `HeroController`; U4 owns that gate, and until it runs, exporting
-        // any of these would sign off a surface nobody reviewed.
+        // ADR-0021 U6 signed off the public `Hero` / `HeroController` baseline.
+        // The support seams below stay private implementation detail.
         "ModalHandle",
         "FlightDirection",
         "Measurement",
         "RouteSubtree",
-        // ADR-0021 U4: the Hero view and its registry. `Hero` is the one name users
-        // will eventually import, so exporting it early would sign off a surface
-        // (tag type, placeholder builder, shuttle) that has not been designed.
+        // ADR-0021 U3.5: the Hero registry and handles. The public widget hides these
+        // details behind `Hero::new(tag: impl ViewKey, child)`.
         "HeroTag",
         "HeroRegistry",
         "HeroScope",

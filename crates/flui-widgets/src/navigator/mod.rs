@@ -26,10 +26,11 @@
 //!
 //! # Not implemented, and not claimed
 //!
-//! No animation (`TransitionRoute`), no barrier or focus (`ModalRoute`), no
-//! `Hero`, no page-based routing, no restoration, no named-route generation, no
-//! `PopScope`, no `LocalHistoryRoute`. ADR-0019 §5–§6 owns the sequence and the
-//! deferrals. `can_pop` / `maybe_pop` landed in U3.
+//! The public baseline now includes `Navigator`, `PageRoute` / `PopupRoute`, and
+//! `Hero` / `HeroController`. Still deferred: Navigator 2.0, restoration,
+//! named-route generation, `PopScope`, `LocalHistoryRoute`, per-route focus scope,
+//! `HeroControllerScope`, nested-navigator hero flights, and the advanced Hero hooks
+//! named in ADR-0021 §7l.
 
 mod binding;
 mod hero;
