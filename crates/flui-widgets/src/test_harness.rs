@@ -26,6 +26,11 @@ pub(crate) struct Harness {
 }
 
 /// Mount `root` as the render-tree root and drive one frame.
+/// Serializes tests that drive the process-global `FocusManager` — nextest
+/// isolates test *binaries*, not the threads inside one, so two focus tests in
+/// this crate's lib binary would otherwise clobber each other's primary focus.
+pub(crate) static FOCUS_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 pub(crate) fn mount(root: impl View) -> Harness {
     mount_with_capabilities(root, PostFrameCapability::Installed)
 }

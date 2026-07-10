@@ -1,6 +1,6 @@
 # ADR-0022 — The `Focus` / `FocusScope` widget seam
 
-- **Status:** **Accepted — U1 landed 2026-07-10 (U1.2 is a recorded decision, not code); U2–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
+- **Status:** **Accepted — U1 + U2 landed 2026-07-10 (U1.2 is a recorded decision, not code); U3–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
 - **Date:** 2026-07-10
 - **Deciders:** chief-architect; consult interaction owner (`flui-interaction` `FocusManager`/`FocusNode` API additions, U1), view owner (inherited reparenting contract, U2), repository owner (public API: `Focus`, `FocusScope`), qa-lead (traversal and key-routing tests).
 - **Relates to:** closes ADR-0020 §Seam 6 ("no `Focus`/`FocusScope` **widget**"); builds on tracker H4 (the node/manager layer, done 2026-06-30); unblocks `Actions`/`Shortcuts` (B1.1) and `ModalRoute`'s per-route focus scope; consumes ADR-0021's `HeroScope`/`GestureArenaScope` ambient-provider pattern.
@@ -44,7 +44,20 @@ Four units, dependency-ordered. The ambient-provider pattern is `GestureArenaSco
 2. **Scope-relative attach for a plain node under a plain node**: today only `FocusScopeNode::attach_node` parents a node. A `Focus` widget nested under another non-scope `Focus` needs `FocusNode`-to-`FocusNode` parenting, or the documented decision that FLUI parents every widget-owned node to its nearest *scope* (flattening non-scope nesting). **Decision: flatten to the nearest scope for U2** — Flutter's traversal semantics only consult scopes and traversal flags, and FLUI's `ReadingOrderPolicy` sorts by rect, not tree shape; record the divergence and revisit when `FocusTraversalGroup` lands.
 3. **No reparent primitive** — **landed 2026-07-10**: `FocusScopeNode::adopt_node` moves a node (and its subtree) under a scope while preserving the primary focus, dropping the moved ids from the old scope's history and recording the focused id in the new scope's. `detach_node` + `attach_node` keeps its removal semantics. Red-checked at the node layer as required: the naive detach+attach implementation fails `adopt_preserves_primary_focus_across_a_reparent`. The test also establishes `GLOBAL_FOCUS_LOCK`, the serialization discipline for any future test that drives the process-global manager.
 
-### U2 — the `Focus` and `FocusScope` widgets (`flui-widgets`)
+### U2 — the `Focus` and `FocusScope` widgets (`flui-widgets`) — landed 2026-07-10
+
+Shipped as designed (`interaction/focus.rs`), with the divergences named in the
+module docs: nearest-scope flattening (U1.2), reparent in
+`did_change_dependencies` via `adopt_node`, synchronous focus application (no
+end-of-frame batch), and the not-ported list below. Config is captured in
+`create_state` (`init_state` has no view reference) and re-synced in
+`did_update_view`; swapping the node itself after mount is not supported and
+says so. Tests red-check the scope wiring (stubbing `enclosing_scope` to the
+root fails the attach-shape test), autofocus-yields, and the
+`on_focus_change` edges; `FOCUS_TEST_LOCK` in the test harness now serializes
+every lib-binary test that drives the global manager, including the
+previously-unserialized `text_field` ones. Original design follows.
+
 
 - `Focus`: a `StatefulView` owning an `Arc<FocusNode>` (or accepting an external one via `.focus_node(node)`); builders for `autofocus`, `can_request_focus`, `skip_traversal`, `descendants_are_focusable`, `on_focus_change`, `on_key_event`, `debug_label`. `includeSemantics` is deferred with the semantics layer; `onKey` (legacy) is not ported; `parentNode` is deferred until a caller exists.
 - `FocusScope`: the same over `Arc<FocusScopeNode>`, plus `FocusScope::with_external_node(node, child)` — the `ModalRoute` constructor.

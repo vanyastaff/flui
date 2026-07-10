@@ -203,6 +203,7 @@ mod tests {
 
     #[test]
     fn focus_first_text_node_in_root_scope_focuses_the_attached_node() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
         let attached = AttachedNode::new("text-field-under-test");
         assert!(!attached.node.has_primary_focus(), "not focused yet");
 
@@ -216,6 +217,7 @@ mod tests {
 
     #[test]
     fn focus_first_text_node_in_root_scope_is_a_no_op_with_no_attached_nodes() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
         // No AttachedNode constructed -- the root scope has no key-handler
         // children. Must not panic and must not focus anything.
         focus_first_text_node_in_root_scope(&TextEditingController::new());
