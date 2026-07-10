@@ -1,8 +1,9 @@
 //! The `Hero` view, its per-route registry, and the handle a `HeroController` drives.
 //!
-//! ADR-0021 U4. **Private.** No public `Hero`, no prelude export, no flight: a `Hero`
-//! is a pass-through that can be *told* to show a placeholder, and a registry that
-//! lets the controller find it by tag. Nothing animates yet.
+//! ADR-0021 U3.5. **Private.** No public `Hero`, no prelude export, no flight: a
+//! `Hero` is a pass-through that can be *told* to show a placeholder, and a registry
+//! that lets the controller find it by tag. Nothing animates yet — U4 owns the
+//! `_HeroFlight` that would call `start_flight`.
 //!
 //! # Flutter parity
 //!
@@ -45,8 +46,8 @@
 //! divergence a stable registry needs — "last wins" would make the surviving hero
 //! depend on mount order.
 
-// U4 is the registry + view + handle. `HeroController` reads the registry, but the
-// `Hero` view has no production constructor until a public API lands (U5), so
+// U3.5 is the registry + view + handle. `HeroController` reads the registry, but the
+// `Hero` view has no production constructor until the public API lands (U6), so
 // `dead_code` cascades from the view through the handle it owns. Deleting it and
 // re-deriving it later is how a seam stops matching the ADR that specified it.
 #![allow(dead_code)]

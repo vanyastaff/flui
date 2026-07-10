@@ -1,9 +1,22 @@
 //! [`HeroController`] — the measurement half of Flutter's hero machinery.
 //!
-//! ADR-0021 U3. **Private.** Nothing here is exported, and there is no `Hero`
-//! widget: this is the observer that decides *when* a flight would start and
-//! *where* its destination will be. The flight itself — hero discovery, the
-//! overlay entry, `RectTween`, `flightShuttleBuilder` — is U4.
+//! ADR-0021 U3 (the controller) and U3.5 (the manifests). **Private**: nothing here
+//! is exported.
+//!
+//! This is the observer that decides *when* a flight would start, *where* its
+//! destination will be, and *which heroes* would fly. It produces
+//! [`HeroFlightManifest`] records and stops there. The flight itself — the overlay
+//! entry, `RectTween`, the shuttle, and the animation that drives them — is U4.
+//!
+//! The pieces it stands on already exist: the private [`Hero`] view, the per-route
+//! [`HeroRegistry`] behind an ambient [`HeroScope`], and [`HeroHandle`] with its
+//! `start_flight` / `end_flight` placeholder machinery (`hero.rs`, U3.5). This
+//! controller never calls `start_flight` — that is what a flight does.
+//!
+//! [`Hero`]: super::hero::Hero
+//! [`HeroRegistry`]: super::hero::HeroRegistry
+//! [`HeroScope`]: super::hero::HeroScope
+//! [`HeroHandle`]: super::hero::HeroHandle
 //!
 //! # What this is a port of
 //!
@@ -31,22 +44,33 @@
 //!
 //! | Step | Seam | Landed in |
 //! |---|---|---|
-//! | `toRoute.offstage = …` (`:967`) | [`ModalHandle::set_offstage`] via the navigator's modal registry | U3 (this pass) |
+//! | `toRoute.offstage = …` (`:967`) | [`ModalHandle::set_offstage`] via the navigator's modal registry | U3 |
 //! | `didChangeTop` (`navigator.dart:4590-4596`) | `Notification::TopChanged`, delivered outside the history lock | U2 + §7f |
-//! | offstage ⇒ `animation.value == 1.0` (`routes.dart:1958`) | the `ModalRoute` animation proxies | U3 (this pass) |
+//! | offstage ⇒ `animation.value == 1.0` (`routes.dart:1958`) | the `ModalRoute` animation proxies | U3 |
 //! | `addPostFrameCallback` (`:968`) | [`PostFrameHandle`] | U2 |
 //! | the callback runs *after* layout commits | `Scheduler::drive_frame` | U1.5 |
 //! | `to.subtreeContext` (`:1014`) | [`RouteSubtree`] | U2 |
 //! | `subtreeContext.findRenderObject()!.size` (`:952`) | `PipelineOwner::box_size` | U1 |
 //! | `getTransformTo(navigatorRenderObject)` (`:1029`) | `PipelineOwner::transform_to` | U1 |
 //! | `navigator` on an observer (`navigator.dart:779`) | [`NavigatorObserver::did_attach`] | U2 |
+//! | `Hero._allHeroesFor(subtreeContext)` (`:1014`) | per-route `HeroRegistry`, filled by registration rather than an element walk | U3.5 |
+//! | `_boundingBoxFor(hero, route.subtreeContext)` (`:501-509`) | `HeroHandle::bounding_box_in` | U3.5 |
 //!
 //! # What is deliberately absent
 //!
-//! No `Hero` widget, no `_allHeroesFor`, no `_HeroFlight`, no overlay entry, no
-//! `RectTween`, no `flightShuttleBuilder`, no `HeroControllerScope` — and therefore
-//! **no nested-navigator support**. A `HeroController` observes exactly the one
-//! navigator that attached it, as Flutter's does (`navigator.dart:3995-4046`).
+//! **Nothing flies.** No `_HeroFlight`, no overlay flight entry, no `RectTween`, no
+//! `flightShuttleBuilder`, no `ProxyAnimation` driving a shuttle, no `onTick`
+//! re-measure, no divert. A [`HeroFlightManifest`] is *recorded*, never consumed.
+//!
+//! No public API: `Hero`, `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`,
+//! `HeroState`, `HeroController` and `HeroFlightManifest` are all `pub(crate)`, and
+//! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported.
+//! No `HeroMode`, no `placeholderBuilder`, no `transitionOnUserGestures`, no
+//! `createRectTween`.
+//!
+//! No `HeroControllerScope` — and therefore **no nested-navigator support**. A
+//! `HeroController` observes exactly the one navigator that attached it, as Flutter's
+//! does (`navigator.dart:3995-4046`).
 //!
 //! No `userGestureInProgress` either: FLUI has no back-swipe, so
 //! `isUserGestureTransition` is always `false`. That collapses `didStartUserGesture`
@@ -58,11 +82,12 @@
 //! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
 //! [`RouteSubtree`]: super::subtree::RouteSubtree
 
-// U3 is the measurement skeleton: `HeroController` measures, and U4's `Hero` widget
-// flies. Until that widget lands the tests are this module's only callers, and
-// `dead_code` cascades from here into the `ModalHandle` / `RouteBinding` seams it is
-// the sole production consumer of. Deleting it and re-deriving it in U4 is how a
-// seam stops matching the ADR that specified it.
+// `HeroController` measures; U4's `_HeroFlight` will fly. Nothing constructs a
+// controller in production yet — a `Navigator` gains one only when the public `Hero`
+// API lands — so the tests are this module's only callers, and `dead_code` cascades
+// from here into the `ModalHandle` / `RouteBinding` / `HeroRegistry` seams it is the
+// sole production consumer of. Deleting it and re-deriving it in U4 is how a seam
+// stops matching the ADR that specified it.
 #![allow(dead_code)]
 
 use std::sync::Arc;
