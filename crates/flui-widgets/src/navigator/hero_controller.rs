@@ -63,8 +63,9 @@
 //! A private `_HeroFlight` analogue exists and consumes valid [`HeroFlightManifest`]
 //! values. What is still absent is the public/customizable surface: no
 //! `flightShuttleBuilder`, no `placeholderBuilder`, no `HeroMode`, no
-//! `transitionOnUserGestures`, no public `createRectTween`, and no divert. U4 ends an
-//! existing same-tag flight before starting the next one, where Flutter redirects it.
+//! `transitionOnUserGestures`, and no public `createRectTween`. Divert is implemented
+//! privately in U5.1: an existing same-tag flight is redirected in place, but users
+//! still cannot customize it.
 //!
 //! No public API: `Hero`, `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`,
 //! `HeroState`, `HeroController`, `HeroFlightManifest`, and the flight machinery are
@@ -166,9 +167,9 @@ pub(crate) struct Measurement {
 /// late final bool isValid = toHeroLocation.isFinite && (isDiverted || fromHeroLocation.isFinite);
 /// ```
 ///
-/// There is no diversion yet, so both rects must be finite. A non-finite rect would
-/// make the future `RectTween` interpolate `NaN`/`Infinity` and paint the shuttle
-/// nowhere.
+/// This manifest type still carries concrete route-pair geometry, so both rects must be
+/// finite. A non-finite rect would make the future `RectTween` interpolate
+/// `NaN`/`Infinity` and paint the shuttle nowhere.
 ///
 /// **Defensive, and known to be so.** Every rect here is built from
 /// `PipelineOwner::box_size` and `transform_to`, and no reachable FLUI configuration

@@ -30,13 +30,9 @@
 //!
 //! # Deferred, and named
 //!
-//! * **No divert (U5).** Flutter redirects an in-flight hero when a second transition
-//!   starts for the same tag (`_HeroFlight.divert`, `:738-813`). This slice does the
-//!   conservative thing instead: [`FlightManager::start`] ends the existing flight
-//!   before starting the new one, so a shuttle never stacks. Both heroes are released
-//!   with `keep_placeholder: false`, which is what `_HeroFlight.abort` +
-//!   `_performAnimationUpdate` would leave behind for a dismissed flight. The visible
-//!   difference is a jump cut where Flutter would redirect.
+//! * **Divert is private and implemented (U5.1).** A second transition for the same tag
+//!   redirects the existing [`HeroFlight`] in place (`_HeroFlight.divert`, `:738-816`):
+//!   same flight object, same overlay entry, new manifest-derived state.
 //! * **No `createRectTween` / `flightShuttleBuilder` hooks**, no `placeholderBuilder`,
 //!   no `Hero.curve` / `reverseCurve`. The tween is a linear `RectTween`, and the
 //!   animation is used raw — Flutter wraps it in a `CurvedAnimation` (`:472-479`)
