@@ -19,7 +19,7 @@ use flui_view::ViewExt;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::hero::{Hero, HeroHandle, HeroTag};
+use super::hero::{Hero, HeroHandle, HeroMode, HeroTag};
 use super::hero_controller::{FlightDirection, HeroController};
 use super::navigator::{Navigator, NavigatorHandle};
 use super::observer::NavigatorObserver;
@@ -1499,5 +1499,120 @@ fn a_diverted_flight_drops_the_reverse_curve() {
         flight.shuttle_rect(),
         tween.transform(1.0 - Curves::FastOutSlowIn.transform(0.5)),
         "the diverted pop eases on the forward curve, not the flipped reverse default",
+    );
+}
+
+// ============================================================================
+// HeroMode (heroes.dart:1124-1152, :335-337)
+// ============================================================================
+
+/// A `hero_page` under a chain of `HeroMode` scopes, outermost first.
+fn hero_mode_page(
+    tag_name: &'static str,
+    w: f32,
+    h: f32,
+    modes: &'static [bool],
+) -> PageRoute<i32> {
+    PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
+        let mut view = Center::new()
+            .child(Hero::new(ValueKey::new(tag_name), SizedBox::new(w, h)))
+            .into_view()
+            .boxed();
+        for &enabled in modes.iter().rev() {
+            view = HeroMode::new(view).enabled(enabled).into_view().boxed();
+        }
+        view
+    })
+    .transition_duration(TRANSITION)
+}
+
+/// A destination hero under `HeroMode(enabled: false)` does not fly: Flutter's
+/// flight-time walk never visits it (`heroes.dart:335-337`), so its tag is missing
+/// from the destination map and no manifest is built (`:1044-1046`).
+///
+/// Red-check: drop the `hero_mode_enabled` filter from `collect_manifests`.
+#[test]
+fn a_hero_under_a_disabled_hero_mode_does_not_fly() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_mode_page("shared", 60.0, 45.0, &[false]),
+    );
+
+    assert_eq!(controller.flights().len(), 0, "the disabled hero stays put");
+    assert!(controller.manifests().is_empty(), "no manifest was built");
+}
+
+/// The source side grounds a flight the same way: a disabled *from* hero is missing
+/// from its route's map, and a tag on only one side is not a flight.
+///
+/// Red-check: filter only `to_hero` in `collect_manifests`.
+#[test]
+fn a_disabled_source_hero_mode_grounds_the_flight_too() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _transition = fly(
+        &navigator,
+        &mut harness,
+        hero_mode_page("shared", 30.0, 20.0, &[false]),
+        hero_page("shared", 60.0, 45.0),
+    );
+
+    assert_eq!(controller.flights().len(), 0, "the disabled hero stays put");
+    assert!(controller.manifests().is_empty(), "no manifest was built");
+}
+
+/// Flutter's visitor stops at a disabled `HeroMode` and never descends
+/// (`heroes.dart:335-337`), so a nested **enabled** scope cannot re-enable a disabled
+/// subtree: the effective flag is the AND of every enclosing scope.
+///
+/// Red-check: in `HeroMode::build`, provide `self.enabled` without ANDing the
+/// ancestor scope — the inner `HeroMode(true)` re-enables the hero and it flies.
+#[test]
+fn a_nested_enabled_hero_mode_cannot_re_enable_a_disabled_subtree() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_mode_page("shared", 60.0, 45.0, &[false, true]),
+    );
+
+    assert_eq!(
+        controller.flights().len(),
+        0,
+        "disabled wins over nested enabled"
+    );
+}
+
+/// A bare `HeroMode` defaults to `enabled: true` (`heroes.dart:1131`) and changes
+/// nothing: the flight runs exactly as without the scope.
+#[test]
+fn a_bare_hero_mode_changes_nothing() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_mode_page("shared", 60.0, 45.0, &[true]),
+    );
+
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "an enabled scope still flies"
     );
 }

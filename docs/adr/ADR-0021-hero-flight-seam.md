@@ -6,7 +6,7 @@
 
 ---
 
-- **Status:** **Accepted — landed.** `Hero`, `HeroController`, `HeroControllerScope`, the first customization hooks, and `Hero::curve` / `reverse_curve` (§7o) are public (2026-07-10). Remaining gaps are `HeroMode`, user-gesture flights, and full cross-navigator flight parity.
+- **Status:** **Accepted — landed.** `Hero`, `HeroController`, `HeroControllerScope`, the customization hooks, `Hero::curve` / `reverse_curve` (§7o), and `HeroMode` (§7p) are public (2026-07-10). Remaining gaps are user-gesture flights and full cross-navigator flight parity.
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult rendering owner (**S4**, the ancestor-relative paint transform — the one seam that cannot be worked around), view owner (**S6**, post-frame callbacks from a view; **S7**, hero discovery without an element walk), animation owner (flight animation composition, `ProxyAnimation` re-parenting mid-flight), repository owner (public API: `Hero`, `HeroController`, tag type), qa-lead (deterministic flight tests through a real `Vsync`).
 - **Relates to:** consumes ADR-0019 (Navigator, Overlay, observers) and ADR-0020 (`PageRoute`, `ModalRoute.offstage`, `RenderOffstage`, `RenderTheater`). **Corrects** ADR-0019 §6 blocker (4) and tracker B1.4 precondition (4).
@@ -1791,6 +1791,52 @@ back-swipe (§8).
 
 ---
 
+## 7p. `HeroMode` (2026-07-10)
+
+### Reference
+
+`HeroMode` (`heroes.dart:1124-1152`): a widget with `enabled` (default `true`) whose
+disabled subtree takes no part in hero flights. The mechanism is `_allHeroesFor`'s
+visitor, which **stops at a disabled `HeroMode` and never descends** (`:335-337`) —
+so a nested enabled scope cannot re-enable a disabled subtree; the effective flag is
+the AND of every enclosing scope.
+
+### The Rust shape
+
+FLUI has no flight-time element walk (§3 S7 replaced it with per-route registries),
+so the flag travels the other way:
+
+* **`HeroMode`** (public) is a `StatelessView` that reads its enclosing scope with
+  `depend_on` and provides a private **`HeroModeScope`** (`InheritedView<Data = bool>`,
+  notifying on change) carrying `ancestor && self.enabled` — the AND composed at
+  provide time, which is what "never descends" reduces to.
+* **`HeroState::build`** reads the scope with `depend_on` — a real dependency, so a
+  scope flip rebuilds the hero — and stores the flag on the `HeroHandle`
+  (`hero_mode_enabled: AtomicBool`, `true` with no scope above, `:1142`).
+* **`MeasurementPass::collect_manifests`** skips a tag when either side's hero is
+  disabled — Flutter's "missing from the map", and a tag missing on either side is
+  not a flight (`:1044-1046`). The hero stays registered; registration is identity,
+  participation is the flag.
+
+### Evidence
+
+`hero_flight_tests.rs`: `a_hero_under_a_disabled_hero_mode_does_not_fly` and
+`a_disabled_source_hero_mode_grounds_the_flight_too` (both verified red by dropping
+the `collect_manifests` filter), `a_nested_enabled_hero_mode_cannot_re_enable_a_disabled_subtree`
+(verified red by dropping the AND in `HeroMode::build`), `a_bare_hero_mode_changes_nothing`.
+Public surface: `hero_public.rs::a_hero_under_a_disabled_hero_mode_does_not_fly_publicly`.
+
+### Scope note, stated
+
+Dynamic toggling (`enabled` flipping after mount) rides on the inherited-dependency
+machinery: both reads use `depend_on`, so a notifying scope rebuilds its dependents
+and the handle's flag follows. That machinery is tested in `flui-view`; no end-to-end
+mid-transition toggle test is claimed here. Flutter's `TickerMode(enabled:
+!showPlaceholder)` inside `_HeroState.build` (`:433`) is TickerMode, not HeroMode,
+and stays deferred with TickerMode itself (§8).
+
+---
+
 ## 8. Deferred, each with its blocker
 
 | Deferred | Why |
@@ -1798,7 +1844,7 @@ back-swipe (§8).
 | **Full nested-navigator flight parity** (`heroes.dart:322-332`, `HeroControllerScope`) | `HeroControllerScope` exists and nested navigators are isolated by `.none`, but the cross-navigator hero cases at `heroes_test.dart:2558` remain out of scope. A **narrowing**, stated in §3 S7, not a silent gap. |
 | **User-gesture flights** — `transitionOnUserGestures`, `didStartUserGesture`, `didStopUserGesture`, `userGestureInProgressNotifier`, `didStartUserGesture` (`:872`) / `didStopUserGesture` (`:882`), and the delayed `_performAnimationUpdate` (`:620-650`) | FLUI has no back-swipe / predictive back (ADR-0020 §7e defers it). Every gesture path in `HeroController` is unreachable without it. |
 | **`TickerMode`** (`heroes.dart:433`) | Does not exist in FLUI (`visibility.rs:29` already records the gap). An offstage hero's animations keep running. Cost, not correctness. |
-| **`HeroMode`** (`heroes.dart:1129`) | Needs the registry to honour an inherited disable (S7). Cheap once the registry exists; not U1–U5. |
+| ~~**`HeroMode`** (`heroes.dart:1129`)~~ | **Landed 2026-07-10 (§7p).** The registry honours the inherited disable exactly as S7 predicted. |
 | **Hero semantics** | Flutter's shuttle and placeholders have no special semantics handling worth porting yet; FLUI's `RenderTheater` does not skip semantics for offstage children at all (ADR-0020 §7d). Fixing that is `RenderTheater`'s problem, not Hero's. |
 | **Duplicate-tag `assert`** | Replaced by log-and-drop (D8). Divergence, recorded. |
 | **`MediaQuery` padding compensation in the default shuttle** (`heroes.dart:1092-1116`) | Needs `MediaQueryData.padding` interpolation; adds nothing to the flight contract. The default shuttle returns `toHero.child`. |

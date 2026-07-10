@@ -305,6 +305,11 @@ struct HeroInner {
     curve: Mutex<ArcCurve>,
     /// `Hero.reverseCurve` (`:271-274`), or `None` for [`curve`](Self::curve) flipped.
     reverse_curve: Mutex<Option<ArcCurve>>,
+    /// Whether the ambient [`HeroMode`] allows this hero to fly — the AND of the `enabled` flags
+    /// of every enclosing scope, sampled each build. `true` with no scope above.
+    /// Flutter never *visits* a disabled hero (`heroes.dart:335-337`); FLUI registers
+    /// it and the measurement pass skips it instead.
+    hero_mode_enabled: AtomicBool,
 }
 
 /// An owned, `'static` capability to drive one mounted [`Hero`].
@@ -333,6 +338,7 @@ impl HeroHandle {
                 shuttle_builder: Mutex::new(view.shuttle_builder.clone()),
                 curve: Mutex::new(view.curve.clone()),
                 reverse_curve: Mutex::new(view.reverse_curve.clone()),
+                hero_mode_enabled: AtomicBool::new(true),
             }),
         }
     }
@@ -395,6 +401,11 @@ impl HeroHandle {
     /// `heroes.dart:271-274`). `None` means "the forward curve, flipped".
     pub(crate) fn reverse_curve(&self) -> Option<ArcCurve> {
         self.inner.reverse_curve.lock().clone()
+    }
+
+    /// Whether the ambient [`HeroMode`] allows this hero to fly.
+    pub(crate) fn hero_mode_enabled(&self) -> bool {
+        self.inner.hero_mode_enabled.load(Ordering::Relaxed)
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
@@ -494,9 +505,9 @@ impl fmt::Debug for HeroHandle {
 /// ADR-0021 §7n hooks: [`create_rect_tween`](Self::create_rect_tween),
 /// [`flight_shuttle_builder`](Self::flight_shuttle_builder), FLUI's
 /// state-preserving [`placeholder`](Self::placeholder), and the flight easing
-/// [`curve`](Self::curve) / [`reverse_curve`](Self::reverse_curve).
-/// `transitionOnUserGestures`, `HeroMode`, and full cross-navigator flight parity
-/// remain deferred.
+/// [`curve`](Self::curve) / [`reverse_curve`](Self::reverse_curve). A subtree is
+/// grounded with [`HeroMode`]. `transitionOnUserGestures` and full cross-navigator
+/// flight parity remain deferred.
 #[derive(Clone)]
 pub struct Hero {
     tag: HeroTag,
@@ -715,7 +726,19 @@ impl ViewState<Hero> for HeroState {
     /// The [`AnchoredBox`] is always present, in flight or not: it is what publishes
     /// the `RenderId` a controller measures, and a node that came and went would make
     /// `render_id()` flicker.
-    fn build(&self, view: &Hero, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &Hero, ctx: &dyn BuildContext) -> impl IntoView {
+        // The ambient `HeroMode`, re-sampled every build with a real dependency: a
+        // scope that flips `enabled` rebuilds this hero, so the measurement pass
+        // always reads the current value — as Flutter's flight-time element walk
+        // does (`heroes.dart:335-337`). `true` with no scope above (`:1142`).
+        let hero_mode_enabled = ctx
+            .depend_on::<HeroModeScope, _>(|scope| scope.enabled)
+            .unwrap_or(true);
+        self.handle
+            .inner
+            .hero_mode_enabled
+            .store(hero_mode_enabled, Ordering::Relaxed);
+
         let anchor = self.handle.inner.anchor.clone();
         let placeholder = self.handle.placeholder_size();
         let show_placeholder = placeholder.is_some();
@@ -780,3 +803,104 @@ impl ViewState<Hero> for HeroState {
         )
     }
 }
+
+// ============================================================================
+// HeroMode
+// ============================================================================
+
+/// Enables or disables [`Hero`] flights for a subtree. Flutter's `HeroMode`
+/// (`heroes.dart:1124-1152`).
+///
+/// While [`enabled`](Self::enabled) is `false`, no hero in the subtree participates
+/// in a flight — it stays put during route transitions, whichever route carries its
+/// matching tag. Flutter's flight-time element walk stops at a disabled `HeroMode`
+/// and never descends (`heroes.dart:335-337`), so a nested *enabled* scope cannot
+/// re-enable a disabled subtree: the effective value is the AND of every enclosing
+/// scope.
+#[derive(Clone)]
+pub struct HeroMode {
+    enabled: bool,
+    child: BoxedView,
+}
+
+impl HeroMode {
+    /// A scope that allows hero flights — `enabled` defaults to `true`
+    /// (`heroes.dart:1131`), so a bare `HeroMode` changes nothing.
+    pub fn new(child: impl IntoView) -> Self {
+        Self {
+            enabled: true,
+            child: BoxedView(Box::new(child.into_view())),
+        }
+    }
+
+    /// Whether [`Hero`]es in this subtree may fly (`heroes.dart:1136-1142`).
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
+impl fmt::Debug for HeroMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeroMode")
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+
+impl View for HeroMode {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for HeroMode {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // AND with the enclosing scope, so `HeroMode(false) > HeroMode(true) > Hero`
+        // stays disabled — the never-descends contract (`heroes.dart:335-337`).
+        // `depend_on`, not `get`: an outer scope flipping re-derives this one.
+        let ancestor_enabled = ctx
+            .depend_on::<HeroModeScope, _>(|scope| scope.enabled)
+            .unwrap_or(true);
+        HeroModeScope {
+            enabled: ancestor_enabled && self.enabled,
+            child: self.child.clone(),
+        }
+    }
+}
+
+/// The inherited carrier of [`HeroMode`]'s effective flag: what a [`Hero`] actually
+/// reads. Private — the public surface is `HeroMode`, which composes the AND.
+#[derive(Clone)]
+struct HeroModeScope {
+    /// The AND of this scope's `enabled` and every scope's above it.
+    enabled: bool,
+    child: BoxedView,
+}
+
+impl fmt::Debug for HeroModeScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeroModeScope")
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for HeroModeScope {
+    type Data = bool;
+
+    fn data(&self) -> &Self::Data {
+        &self.enabled
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self.enabled != old.enabled
+    }
+}
+
+impl_inherited_view!(HeroModeScope);

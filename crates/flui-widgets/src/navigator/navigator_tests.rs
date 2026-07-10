@@ -767,7 +767,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 28] = [
+    const INTERNAL: [&str; 29] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -796,6 +796,9 @@ fn public_no_internal_route_stack_exports() {
         "HeroTag",
         "HeroRegistry",
         "HeroScope",
+        // ADR-0021 §7p: `HeroMode` is public; the inherited carrier of its AND-composed
+        // `enabled` flag stays private.
+        "HeroModeScope",
         "HeroHandle",
         "HeroState",
         "HeroFlightManifest",

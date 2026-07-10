@@ -26,11 +26,11 @@
 //!
 //! # Not implemented, and not claimed
 //!
-//! The public baseline now includes `Navigator`, `PageRoute` / `PopupRoute`, and
-//! `Hero` / `HeroController`. Still deferred: Navigator 2.0, restoration,
-//! named-route generation, `PopScope`, `LocalHistoryRoute`, per-route focus scope,
-//! `HeroControllerScope`, nested-navigator hero flights, and the advanced Hero hooks
-//! named in ADR-0021 §7l.
+//! The public baseline now includes `Navigator`, `PageRoute` / `PopupRoute`,
+//! `Hero` / `HeroController` / `HeroControllerScope` / `HeroMode`, and the Hero
+//! customization hooks (ADR-0021 §7n/§7o). Still deferred: Navigator 2.0,
+//! restoration, named-route generation, `PopScope`, `LocalHistoryRoute`, per-route
+//! focus scope, and nested-navigator hero flights.
 
 mod binding;
 mod hero;
@@ -51,7 +51,7 @@ mod subtree;
 mod transition_route;
 
 pub use binding::RouteBindingSlot;
-pub use hero::Hero;
+pub use hero::{Hero, HeroMode};
 pub use hero_controller::{FlightDirection, HeroController};
 pub use hero_controller_scope::HeroControllerScope;
 pub use navigator::{Navigator, NavigatorHandle, NavigatorState};

@@ -798,3 +798,34 @@ fn a_nested_navigator_does_not_fly_heroes_by_default() {
     );
     assert_eq!(inner.route_ids().len(), 2, "though the inner push happened");
 }
+
+/// **`HeroMode` grounds a subtree, through the public API** (`heroes.dart:1124-1152`).
+/// A destination hero under `HeroMode::new(…).enabled(false)` never raises a shuttle;
+/// the transition still runs and settles.
+///
+/// Red-check: drop the `hero_mode_enabled` filter from
+/// `MeasurementPass::collect_manifests` — a shuttle flies and `max` reads 1.
+#[test]
+fn a_hero_under_a_disabled_hero_mode_does_not_fly_publicly() {
+    let vsync = Vsync::new();
+    let navigator = seeded();
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+
+    let _push = navigator.push(
+        PageRoute::<i32>::new(|_ctx, _p, _s| {
+            HeroMode::new(Center::new().child(Hero::new(
+                ValueKey::new("shared"),
+                SizedBox::new(30.0, 20.0),
+            )))
+            .enabled(false)
+            .into_view()
+            .boxed()
+        })
+        .transition_duration(TRANSITION),
+    );
+
+    let (max, end) = run(&mut laid, &owner, SETTLE);
+    assert_eq!(max, 0, "a disabled HeroMode grounds the hero");
+    assert_eq!(end, 0, "and the transition still settles cleanly");
+}

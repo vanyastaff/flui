@@ -65,7 +65,8 @@
 //! FLUI's state-preserving `Hero::placeholder` (in place of Flutter's lossy
 //! `placeholderBuilder`), and `Hero::curve` / `Hero::reverse_curve` with Flutter's
 //! `Curves.fastOutSlowIn` default (`heroes.dart:181`). `FlightDirection` is public
-//! for the shuttle builder. Still absent: `HeroMode` and `transitionOnUserGestures`.
+//! for the shuttle builder, and `HeroMode` grounds a subtree (§7p). Still absent:
+//! `transitionOnUserGestures`.
 //!
 //! The private surface stays private: `HeroTag`, `HeroRegistry`, `HeroScope`,
 //! `HeroHandle`, `HeroFlightManifest`, and the flight machinery are `pub(crate)`, and
@@ -566,6 +567,14 @@ impl MeasurementPass<'_> {
             else {
                 continue; // A tag on only one route is not a flight.
             };
+
+            // `_allHeroesFor` never visits a hero under a disabled `HeroMode`
+            // (`heroes.dart:335-337`), so a disabled hero is missing from its route's
+            // map — and a tag missing on either side is not a flight (`:1044-1046`).
+            // FLUI registers the hero and skips it here instead.
+            if !from_hero.hero_mode_enabled() || !to_hero.hero_mode_enabled() {
+                continue;
+            }
 
             let (Some(from_rect), Some(to_rect)) = (
                 from_hero.bounding_box_in(from_subtree.render_id),
