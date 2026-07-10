@@ -485,6 +485,19 @@ impl BuildContext for ElementBuildContext {
         })
     }
 
+    /// See [`BuildContext::pipeline_owner`]. The owner is on this element's own
+    /// node — no ancestor walk.
+    fn pipeline_owner(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+        let tree = self.tree.read();
+        tree.get(self.element_id)?
+            .element()
+            .pipeline_owner_any()?
+            .downcast::<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>()
+            .ok()
+    }
+
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
         let tree = self.tree.read();
 
@@ -602,6 +615,25 @@ pub(crate) struct DependentRecord {
 /// so they are buffered into `dep_sink` and applied by `build_scope` after
 /// the element is restored. `mark_needs_build` during build is a
 /// Flutter-forbidden no-op.
+/// The three things a `BuildContext` is handed that it did not compute itself: two
+/// owned frame capabilities the binding installed, and the render tree the element is
+/// mounted in.
+///
+/// A bundle rather than three parameters, because every one of them is minted at the
+/// same place (`make_build_ctx`) from the same two sources, and threading them
+/// separately made `BuildCtx::new` an eight-argument function.
+#[derive(Clone, Default)]
+pub(crate) struct BuildCapabilities {
+    /// The binding's async task driver.
+    pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
+    /// The binding's post-frame capability.
+    pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    /// The render tree this element is mounted in, cloned from its own
+    /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
+    pub(crate) pipeline_owner:
+        Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>,
+}
+
 pub(crate) struct BuildCtx<'b> {
     element_id: ElementId,
     depth: usize,
@@ -612,10 +644,8 @@ pub(crate) struct BuildCtx<'b> {
     /// [`BuildContext::rebuild_handle`]; the build itself never schedules —
     /// port-check trigger #22 forbids even acquiring it here.
     rebuild: crate::RebuildHandle,
-    /// The binding's async task driver, cloned from the `ElementOwner`.
-    async_driver: Option<flui_scheduler::AsyncDriver>,
-    /// The binding's post-frame capability, cloned from the `ElementOwner`.
-    post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    /// What the binding and the element's core handed this context.
+    capabilities: BuildCapabilities,
 }
 
 impl<'b> BuildCtx<'b> {
@@ -628,8 +658,7 @@ impl<'b> BuildCtx<'b> {
         tree: &'b ElementTree,
         dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
         rebuild: crate::RebuildHandle,
-        async_driver: Option<flui_scheduler::AsyncDriver>,
-        post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+        capabilities: BuildCapabilities,
     ) -> Self {
         Self {
             element_id,
@@ -637,8 +666,7 @@ impl<'b> BuildCtx<'b> {
             tree,
             dep_sink,
             rebuild,
-            async_driver,
-            post_frame_handle,
+            capabilities,
         }
     }
 
@@ -697,11 +725,11 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
-        self.async_driver.clone()
+        self.capabilities.async_driver.clone()
     }
 
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
-        self.post_frame_handle.clone()
+        self.capabilities.post_frame_handle.clone()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -838,6 +866,16 @@ impl BuildContext for BuildCtx<'_> {
             Some(id) => std::ops::ControlFlow::Break(id),
             None => std::ops::ControlFlow::Continue(()),
         })
+    }
+
+    /// Cloned at construction from the element's own `ElementCore`: during
+    /// `build_scope` the element is *extracted* from its tree node, so a
+    /// `BuildContext` cannot look itself up (`ElementNode::element` panics in that
+    /// window). See `make_build_ctx`.
+    fn pipeline_owner(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+        self.capabilities.pipeline_owner.clone()
     }
 
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
@@ -1133,8 +1171,7 @@ mod tests {
             &tree,
             &dep_sink,
             crate::RebuildHandle::inert(),
-            None,
-            None,
+            BuildCapabilities::default(),
         );
         ctx.visit_child_elements(&mut |_| {});
     }

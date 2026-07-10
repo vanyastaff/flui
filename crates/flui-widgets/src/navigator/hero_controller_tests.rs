@@ -1,0 +1,497 @@
+//! ADR-0021 U3, Tasks B+C: the `HeroController` measurement skeleton.
+//!
+//! These tests prove that the seams built in U1 (`box_size` / `transform_to`), U1.5
+//! (post-frame after layout), U2 (observer attachment, `RouteSubtree`,
+//! `PostFrameHandle`), §7f (notification outside the history lock) and U3 (the
+//! offstage animation proxies) **compose** into a destination rect.
+//!
+//! They do not prove that a hero flies. Nothing flies yet.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use flui_view::ViewExt;
+use flui_view::prelude::*;
+
+use super::hero_controller::{FlightDirection, HeroController};
+use super::navigator::{Navigator, NavigatorHandle};
+use super::observer::NavigatorObserver;
+use super::overlay_route::SimpleRoute;
+use super::page_route::{PageRoute, PopupRoute};
+use crate::SizedBox;
+use crate::test_harness::{Harness, mount};
+
+/// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
+/// its `Stack(fit: expand)` — so a route's subtree measures the screen.
+const SCREEN: flui_types::Size = flui_types::Size::new(
+    flui_types::geometry::px(800.0),
+    flui_types::geometry::px(600.0),
+);
+
+const TRANSITION: Duration = Duration::from_millis(300);
+
+fn seeded_navigator() -> NavigatorHandle {
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    navigator
+}
+
+fn page_route() -> PageRoute<i32> {
+    PageRoute::<i32>::new(|_ctx, _primary, _secondary| {
+        SizedBox::new(30.0, 18.0).into_view().boxed()
+    })
+    .transition_duration(TRANSITION)
+}
+
+/// A root that can drop its `Navigator`, so a controller can be left holding a
+/// detached handle.
+#[derive(Clone)]
+struct Root {
+    navigator: NavigatorHandle,
+    show: bool,
+}
+
+impl View for Root {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for Root {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        if self.show {
+            Navigator::new(self.navigator.clone()).boxed()
+        } else {
+            crate::Text::new("gone").boxed()
+        }
+    }
+}
+
+fn mount_navigator(navigator: &NavigatorHandle) -> Harness {
+    mount(Root {
+        navigator: navigator.clone(),
+        show: true,
+    })
+}
+
+fn unmount_navigator(harness: &mut Harness, navigator: &NavigatorHandle) {
+    harness.swap_root(Root {
+        navigator: navigator.clone(),
+        show: false,
+    });
+}
+
+fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
+    let controller = HeroController::new();
+    navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    controller
+}
+
+// ============================================================================
+// Attachment
+// ============================================================================
+
+/// The controller stores its `NavigatorHandle` at `did_attach` and drops it at
+/// `did_detach` — Flutter's `NavigatorObserver._navigators` Expando
+/// (`navigator.dart:3836`, `:4108`), which is what `HeroController.navigator` reads.
+///
+/// Red-check: delete `*self.navigator.lock() = None;` from
+/// `HeroController::did_detach`.
+#[test]
+fn the_controller_holds_its_navigator_only_while_attached() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    assert!(controller.navigator().is_none(), "not mounted yet");
+
+    let mut harness = mount_navigator(&navigator);
+    assert!(controller.navigator().is_some());
+
+    unmount_navigator(&mut harness, &navigator);
+    assert!(controller.navigator().is_none(), "detached");
+}
+
+// ============================================================================
+// Scheduling
+// ============================================================================
+
+/// `didChangeTop` schedules **one** post-frame measurement and reads nothing
+/// (`heroes.dart:968`). The measurement list stays empty until a frame completes:
+/// that is the difference between "scheduled" and "ran", and the reason
+/// `HeroController` can afford to be an observer at all.
+///
+/// Red-check: call `HeroController::measure` directly from `maybe_start` instead of
+/// scheduling it — `measurements()` is non-empty before `tick()`.
+#[test]
+fn a_top_change_schedules_exactly_one_post_frame_measurement() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    // The seeded `SimpleRoute` is not a `PageRoute`, so pushing over it is not a
+    // flight: `fromRoute is! PageRoute` (`heroes.dart:916-920`).
+    let _first = navigator.push(page_route());
+    assert_eq!(controller.scheduled_count(), 0);
+
+    // PageRoute -> PageRoute: eligible.
+    let _second = navigator.push(page_route());
+    assert_eq!(
+        controller.scheduled_count(),
+        1,
+        "one schedule per eligible top change"
+    );
+    assert!(
+        controller.measurements().is_empty(),
+        "scheduled, not run: the observer callback read no geometry"
+    );
+
+    harness.tick();
+    assert_eq!(controller.measurements().len(), 1, "the frame ran it");
+}
+
+/// A `PopupRoute` is not a `PageRoute` (`pages.dart:58-61`, encoded as
+/// `TransitionGroup`), so no flight is prepared over one.
+///
+/// Red-check: drop the `is_page_route` guard from `HeroController::maybe_start`.
+#[test]
+fn a_non_page_route_schedules_nothing() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _page = navigator.push(page_route());
+    harness.tick();
+
+    let popup = PopupRoute::<i32>::new(|_ctx, _a, _s| SizedBox::new(5.0, 5.0).into_view().boxed());
+    let _popup = navigator.push(popup);
+    harness.tick();
+
+    assert_eq!(controller.scheduled_count(), 0);
+    assert!(controller.measurements().is_empty());
+}
+
+// ============================================================================
+// Measurement — the whole point
+// ============================================================================
+
+/// **The composition test.** In one frame:
+///
+/// 1. `did_change_top` forces the destination offstage (`heroes.dart:967`), which
+///    swaps its primary animation to `kAlwaysComplete` (`routes.dart:1958`) and
+///    marks its overlay entry dirty;
+/// 2. the frame rebuilds the route's page with that completed animation, lays it out,
+///    and commits;
+/// 3. the post-frame callback of *that same frame* (ADR-0021 §7c) resolves the
+///    route's `RouteSubtree` (U2) and reads `box_size` / `transform_to` (U1).
+///
+/// So the measurement is the destination's **final** geometry, taken before its
+/// entrance transition has moved a pixel.
+///
+/// Red-check (each fails on its own):
+/// * delete `sync_animation_proxies`'s primary arm — `to_animation_while_offstage`
+///   is the live `0.0`, not `1.0`;
+/// * delete `sync_animation_proxies` from `set_offstage` — nothing notifies the
+///   scope's relay, so the page is never rebuilt with the completed animation;
+/// * call `measure` inline instead of scheduling — `measurements()` is non-empty
+///   before the frame runs.
+///
+/// Note `mark_entry_needs_build` is *not* on that list. It rebuilds the overlay
+/// **entry** (the `Offstage` wrapper and the barrier), not the scope, so deleting it
+/// leaves this measurement intact — the route is measured correctly while still
+/// being painted. `modal_route_tests::modal_offstage_keeps_the_page_but_drops_the_barrier`
+/// is what guards it.
+#[test]
+fn the_post_frame_callback_measures_the_offstage_destination_in_the_same_frame() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(page_route());
+    harness.tick();
+    let from = navigator.current().expect("pushed");
+
+    let _second = navigator.push(page_route());
+    let to = navigator.current().expect("pushed");
+    assert_eq!(controller.scheduled_count(), 1);
+
+    harness.tick();
+
+    let measurements = controller.measurements();
+    assert_eq!(measurements.len(), 1);
+    let measurement = measurements[0];
+
+    assert_eq!(measurement.from, from);
+    assert_eq!(measurement.to, to);
+    assert_eq!(
+        measurement.direction,
+        Some(FlightDirection::Push),
+        "the destination is running forward (heroes.dart:928-929)"
+    );
+    assert_eq!(
+        measurement.to_animation_while_offstage, 1.0,
+        "the offstage frame laid the destination out at its FINAL position — \
+         without the proxy swap this is the live controller's 0.0"
+    );
+    assert_eq!(
+        measurement.to_size,
+        Some(SCREEN),
+        "committed layout, read after the pipeline ran"
+    );
+    assert!(
+        measurement.to_transform.is_some(),
+        "transform_to resolved against the render root"
+    );
+}
+
+/// `_startHeroTransition` puts the destination back onstage before it measures
+/// (`heroes.dart:987`); the geometry stays committed until the next layout, so the
+/// route is visible again on the very next frame.
+///
+/// Red-check: delete `destination.set_offstage(false)` from `HeroController::measure`
+/// — the route is stranded offstage forever.
+#[test]
+fn the_destination_is_restored_onstage_by_the_measurement() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(page_route());
+    harness.tick();
+
+    let second = page_route();
+    let modal = second.modal_handle();
+    let _second = navigator.push(second);
+    assert!(modal.offstage(), "forced offstage by did_change_top");
+
+    harness.tick();
+
+    assert!(!modal.offstage(), "and restored by the post-frame callback");
+    assert_eq!(controller.measurements().len(), 1);
+}
+
+/// A pop is classified from the **source** route running backwards
+/// (`heroes.dart:926-927`), not from `didPop` — which `HeroController` does not even
+/// override.
+///
+/// The source is parked mid-entrance first. The harness mounts no `VsyncScope`, so a
+/// route's controller never advances on its own (ADR-0020 U5.2); `reverse()` from a
+/// resting `0.0` snaps straight to `Dismissed`, and a `Dismissed` source is not a
+/// pop — it is a route that never entered. Parking it at `0.5` is what makes the
+/// reversal observable, and it is what a real 300 ms transition would look like when
+/// the user pops mid-flight.
+///
+/// Red-check: swap the two arms of `FlightDirection::classify`.
+#[test]
+fn popping_classifies_the_flight_as_a_pop() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(page_route());
+    harness.tick();
+
+    let second = page_route();
+    let transition = second.transition_handle();
+    let _second = navigator.push(second);
+    harness.tick();
+
+    // Park the source mid-entrance, so popping it reverses rather than snapping to
+    // dismissed.
+    let source = transition
+        .controller()
+        .expect("install() created the controller");
+    source.set_value(0.5);
+    source.forward().expect("a parked controller can resume");
+
+    assert!(navigator.pop());
+    harness.tick();
+
+    let directions: Vec<_> = controller
+        .measurements()
+        .iter()
+        .map(|measurement| measurement.direction)
+        .collect();
+    assert_eq!(
+        directions,
+        vec![Some(FlightDirection::Push), Some(FlightDirection::Pop)],
+        "the push, then the pop"
+    );
+}
+
+// ============================================================================
+// Staleness and safety
+// ============================================================================
+
+/// A controller whose navigator has left the tree schedules nothing — Flutter's
+/// `if (navigator == null) return;` (`heroes.dart:970-972`).
+///
+/// Two independent layers, asserted separately because either alone would let this
+/// test pass while the other rotted:
+///
+/// 1. the controller dropped its handle at `did_detach`;
+/// 2. the navigator's own capabilities died with the tree, so even a controller that
+///    somehow still held a handle could not schedule or measure through it.
+///
+/// Red-check: delete `*self.navigator.lock() = None;` from `did_detach` (layer 1),
+/// or delete the `post_frame`/`render_tree` teardown from `NavigatorState::dispose`
+/// (layer 2).
+#[test]
+fn a_detached_controller_is_inert() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(page_route());
+    harness.tick();
+    let before = controller.scheduled_count();
+
+    unmount_navigator(&mut harness, &navigator);
+
+    // Layer 2: the capabilities are gone with the tree that named them.
+    assert!(navigator.post_frame_handle().is_none());
+    assert!(navigator.render_tree().is_none());
+
+    // Layer 1: and the controller no longer holds the navigator at all.
+    assert!(controller.navigator().is_none());
+
+    // The stack still exists — `NavigatorHandle` owns it — so this pushes for real.
+    let _second = navigator.push(page_route());
+    harness.tick();
+
+    assert_eq!(
+        controller.scheduled_count(),
+        before,
+        "a detached controller schedules nothing"
+    );
+}
+
+/// A measurement scheduled while the navigator was mounted, whose frame arrives after
+/// it is gone, must **not** record anything — `if (navigator == null || overlay ==
+/// null) return;` at the top of `_startHeroTransition` (`heroes.dart:993-997`).
+///
+/// This is the callback-side guard, distinct from the scheduling-side one above: the
+/// controller was attached and did schedule, and only then did the tree go away.
+///
+/// Red-check: delete the `if !navigator.is_mounted() { return; }` guard from
+/// `HeroController::measure` — a `Measurement` lands with `to_size: None`, which a
+/// future `RectTween` would happily interpolate from.
+#[test]
+fn a_measurement_whose_navigator_vanished_before_the_frame_records_nothing() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(page_route());
+    harness.tick();
+
+    let _second = navigator.push(page_route());
+    assert_eq!(controller.scheduled_count(), 1, "the measurement is queued");
+    assert!(controller.measurements().is_empty(), "but has not run");
+
+    // The frame that would have run it also unmounts the navigator.
+    unmount_navigator(&mut harness, &navigator);
+
+    assert!(
+        controller.measurements().is_empty(),
+        "a measurement must not record against a navigator that has left the tree"
+    );
+}
+
+/// The measurement is scheduled from an observer callback, which since ADR-0021 §7f
+/// runs with no navigator lock held. Installing a `HeroController` — which reaches
+/// back through its `NavigatorHandle` for `route_modal`, `route_peer` and
+/// `post_frame_handle` from inside `did_change_top` — must not deadlock.
+///
+/// A deadlock hangs rather than fails, so the body runs on a worker thread.
+///
+/// Red-check: in `NavigatorShared::mutate`, call `apply(outcome)` inside the
+/// `history.lock()` scope; this times out.
+#[test]
+fn a_hero_controller_does_not_deadlock_the_observer_callback() {
+    const BUDGET: Duration = Duration::from_secs(10);
+
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+
+    let navigator_for_worker = navigator.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut harness = mount_navigator(&navigator_for_worker);
+        let _first = navigator_for_worker.push(page_route());
+        harness.tick();
+        let _second = navigator_for_worker.push(page_route());
+        harness.tick();
+        assert!(navigator_for_worker.pop());
+        harness.tick();
+        let _ = done.send(());
+    });
+
+    assert!(
+        finished.recv_timeout(BUDGET).is_ok(),
+        "a HeroController reaching back through its NavigatorHandle from \
+         did_change_top deadlocked the flush"
+    );
+    assert_eq!(controller.measurements().len(), 2);
+}
+
+/// Nested navigators are **out of scope**: a controller answers only about the
+/// navigator that attached it. Flutter needs a `HeroControllerScope` for this
+/// (`navigator.dart:3995-4046`) and FLUI has none.
+///
+/// The controller must never reach for a root navigator — `NavigatorHandle::maybe_of_root`
+/// exists, and using it here would silently make an inner controller measure outer
+/// routes. This pins that an inner navigator's pushes are invisible to an outer
+/// navigator's controller.
+///
+/// Red-check: make `HeroController::maybe_start` resolve its navigator from anywhere
+/// but `self.navigator`.
+#[test]
+fn a_controller_observes_only_the_navigator_that_attached_it() {
+    let outer = seeded_navigator();
+    let inner = seeded_navigator();
+    let outer_controller = install(&outer);
+    let inner_controller = install(&inner);
+
+    let mut harness = mount_navigator(&outer);
+    let mut inner_harness = mount_navigator(&inner);
+
+    let _outer_push = outer.push(page_route());
+    let _outer_push2 = outer.push(page_route());
+    harness.tick();
+
+    assert_eq!(outer_controller.scheduled_count(), 1);
+    assert_eq!(
+        inner_controller.scheduled_count(),
+        0,
+        "the inner controller heard nothing about the outer navigator"
+    );
+
+    let _inner_push = inner.push(page_route());
+    let _inner_push2 = inner.push(page_route());
+    inner_harness.tick();
+
+    assert_eq!(inner_controller.scheduled_count(), 1);
+    assert_eq!(outer_controller.scheduled_count(), 1, "and vice versa");
+}
+
+/// Two eligible top changes in one frame schedule two measurements, and both run.
+/// A counter that deduplicated would be a silent behavior change.
+#[test]
+fn every_eligible_top_change_gets_its_own_measurement() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(page_route());
+    let _second = navigator.push(page_route());
+    let _third = navigator.push(page_route());
+    assert_eq!(controller.scheduled_count(), 2, "page->page, page->page");
+
+    harness.tick();
+    assert_eq!(controller.measurements().len(), 2);
+
+    let counted = Arc::new(AtomicUsize::new(controller.measurements().len()));
+    assert_eq!(counted.load(Ordering::SeqCst), 2);
+}

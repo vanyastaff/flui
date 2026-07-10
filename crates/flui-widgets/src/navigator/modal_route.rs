@@ -68,6 +68,7 @@ use std::time::Duration;
 
 use std::sync::OnceLock;
 
+use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use flui_types::Color;
 use flui_view::prelude::*;
@@ -81,7 +82,9 @@ use super::overlay_route::{
 };
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
-use super::transition_route::{TransitionHandle, TransitionRoute};
+use super::transition_route::{
+    TransitionHandle, TransitionRoute, always_complete, always_dismissed,
+};
 use crate::{AbsorbPointer, ColoredBox, GestureDetector, Offstage, SizedBox, Stack, StackFit};
 
 /// `_defaultTransitionsBuilder` (`pages.dart:68-75`): a jump cut.
@@ -132,6 +135,22 @@ struct ModalInner {
     /// The relay's subscriptions to the two animations, opened in `install` and
     /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
     relay_subscriptions: Mutex<Vec<(RouteAnimation, ListenerId)>>,
+
+    /// `ModalRoute._animationProxy` (`routes.dart:1685`, `:1969-1970`).
+    ///
+    /// **This — not the controller — is what `buildPage` and `buildTransitions`
+    /// see.** Its parent is the `TransitionRoute` controller normally, and
+    /// `kAlwaysCompleteAnimation` while the route is [`offstage`](Self::offstage)
+    /// (`:1958`). That swap is the entire reason an offstage route lays out at its
+    /// *final* geometry rather than wherever its entrance transition happens to be:
+    /// `HeroController` measures the destination one frame before the flight.
+    primary: Arc<ProxyAnimation<f32>>,
+    /// `ModalRoute._secondaryAnimationProxy` (`:1686`, `:1973-1974`).
+    ///
+    /// Parent is the `TransitionRoute` secondary train, or
+    /// `kAlwaysDismissedAnimation` while offstage (`:1959-1961`) — an offstage route
+    /// must not be pushed aside by whatever sits above it either.
+    secondary: Arc<ProxyAnimation<f32>>,
 
     /// `ModalRoute._subtreeKey` (`routes.dart:2268`) — owned from construction,
     /// filled while the page is mounted. ADR-0021 U2, seam 4.
@@ -188,10 +207,11 @@ impl ModalInner {
     /// nothing of it paints.
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
-            Some(transition) => ModalScope {
+            Some(_transition) => ModalScope {
                 page: Arc::clone(&self.page),
                 transitions: Arc::clone(&self.transitions.lock()),
-                transition: transition.clone(),
+                primary: Arc::clone(&self.primary),
+                secondary: Arc::clone(&self.secondary),
                 relay: Arc::clone(&self.relay),
                 subtree: self.subtree.clone(),
             }
@@ -207,12 +227,44 @@ impl ModalInner {
             .boxed()
     }
 
-    /// Point the relay at both animations. Called from `install()`, once the
-    /// controller exists.
-    fn open_relay(self: &Arc<Self>, transition: &TransitionHandle) {
+    /// Repoint both proxies at whatever [`offstage`](Self::offstage) currently
+    /// implies — Flutter's two lines in the `offstage` setter (`routes.dart:1958-1961`),
+    /// hoisted so `install()` can run them too.
+    ///
+    /// `install()` needs them because a route may be forced offstage before it is
+    /// pushed: `ModalHandle` is minted from the *unpushed* route, and
+    /// `changed_internal_state` returns early when there is no binding yet. Without
+    /// this call the proxies would be seeded from the controller and never swapped.
+    fn sync_animation_proxies(&self) {
+        let offstage = self.offstage.load(Ordering::Relaxed);
+        let transition = self.transition.get();
+
+        self.primary.set_parent(if offstage {
+            always_complete()
+        } else {
+            transition.map_or_else(always_dismissed, TransitionHandle::primary_animation)
+        });
+
+        self.secondary.set_parent(if offstage {
+            always_dismissed()
+        } else {
+            transition.map_or_else(always_dismissed, |transition| {
+                transition.secondary_animation() as Arc<dyn Animation<f32>>
+            })
+        });
+    }
+
+    /// Point the relay at both **proxies**. Called from `install()`.
+    ///
+    /// The proxies, not the controller: `ProxyAnimation::set_parent` moves the
+    /// listeners with it *and* notifies them, so an offstage swap rebuilds the scope
+    /// by itself. That is what carries the completed animation into `buildPage`
+    /// within the same frame. (Nothing ticks an offstage route afterwards — its
+    /// parent is a constant — which is fine: there is nothing left to animate.)
+    fn open_relay(self: &Arc<Self>) {
         let animations: [RouteAnimation; 2] = [
-            transition.primary_animation(),
-            transition.secondary_animation(),
+            Arc::clone(&self.primary) as RouteAnimation,
+            Arc::clone(&self.secondary) as RouteAnimation,
         ];
         let mut subscriptions = self.relay_subscriptions.lock();
         for animation in animations {
@@ -251,7 +303,11 @@ impl ModalInner {
 struct ModalScope {
     page: RoutePageBuilder,
     transitions: RouteTransitionsBuilder,
-    transition: TransitionHandle,
+    /// `widget.route.animation` (`routes.dart:1234`) — the **proxy**, so an offstage
+    /// route's builders see `kAlwaysCompleteAnimation`.
+    primary: Arc<ProxyAnimation<f32>>,
+    /// `widget.route.secondaryAnimation` (`:1235`).
+    secondary: Arc<ProxyAnimation<f32>>,
     relay: Arc<ChangeNotifier>,
     subtree: RouteSubtreeCell,
 }
@@ -285,8 +341,8 @@ impl ViewState<ModalScope> for ModalScopeState {
     /// the transitions would give `HeroController` the transition's coordinate
     /// space (mid-slide, mid-scale) instead of the page's.
     fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
-        let primary = view.transition.primary_animation();
-        let secondary: RouteAnimation = view.transition.secondary_animation();
+        let primary: RouteAnimation = Arc::clone(&view.primary) as RouteAnimation;
+        let secondary: RouteAnimation = Arc::clone(&view.secondary) as RouteAnimation;
         let page = (view.page)(ctx, &primary, &secondary);
         let anchored = RouteSubtreeAnchor::new(view.subtree.clone(), page).boxed();
         (view.transitions)(ctx, &primary, &secondary, anchored)
@@ -319,6 +375,11 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
             transition: OnceLock::new(),
             relay: Arc::new(ChangeNotifier::new()),
             relay_subscriptions: Mutex::new(Vec::new()),
+            // Both rest at `kAlwaysDismissedAnimation` until `install()` points them
+            // at the controller — Flutter builds them there too (`routes.dart:1685`),
+            // and an unpushed route has no animation to proxy.
+            primary: Arc::new(ProxyAnimation::new(always_dismissed())),
+            secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
             subtree: RouteSubtreeCell::new(),
         });
 
@@ -409,11 +470,8 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
     /// A cloneable view of this route's modal state, obtainable **before** the
     /// route is moved into `NavigatorHandle::push`.
     ///
-    /// The `offstage` half of [`ModalHandle`] is the seam `Hero` will drive
-    /// (B1.4); no production caller exists yet, so the whole handle is reachable
-    /// only from tests. It is kept — not deleted — because U5.3 verified it
-    /// against `routes.dart:1949-1962` and B1.4 names it as a precondition.
-    #[cfg(test)]
+    /// Production since ADR-0021 U3: `HeroController` drives `set_offstage` through
+    /// the copy this route publishes into the navigator's registry at `install()`.
     pub(crate) fn handle(&self) -> ModalHandle {
         ModalHandle {
             inner: Arc::clone(&self.inner),
@@ -443,14 +501,16 @@ impl<T> fmt::Debug for ModalRoute<T> {
 /// state — the ADR-0019 §3.2 pattern, again: the route itself lives behind
 /// `Box<dyn ErasedRoute>` inside the history's mutex and cannot be reached.
 ///
-/// Reachable only from tests until `Hero` (B1.4) drives `offstage`.
-#[cfg(test)]
+/// This is FLUI's `route.offstage = …` (`routes.dart:1951`). `HeroController` holds
+/// one per route, looked up by [`RouteId`] through the navigator's registry.
 #[derive(Clone)]
 pub(crate) struct ModalHandle {
     inner: Arc<ModalInner>,
 }
 
-#[cfg(test)]
+/// `dead_code` in the lib target: `HeroController` is this handle's only production
+/// caller, and it is itself dead until U4's `Hero` widget. See `hero_controller.rs`.
+#[allow(dead_code)]
 impl ModalHandle {
     /// `ModalRoute.offstage = value` (`routes.dart:1951-1962`), minus the
     /// animation-proxy swap.
@@ -458,6 +518,11 @@ impl ModalHandle {
         if self.inner.offstage.swap(offstage, Ordering::Relaxed) == offstage {
             return; // `if (_offstage == value) return;`
         }
+        // `_animationProxy!.parent = _offstage ? kAlwaysCompleteAnimation : super.animation;`
+        // `_secondaryAnimationProxy!.parent = _offstage ? kAlwaysDismissedAnimation : …`
+        // (`routes.dart:1958-1961`) — before `changedInternalState`, so the rebuild it
+        // schedules already sees the swapped animations.
+        self.inner.sync_animation_proxies();
         changed_internal_state(&self.inner);
     }
 
@@ -465,10 +530,22 @@ impl ModalHandle {
         self.inner.offstage.load(Ordering::Relaxed)
     }
 
+    /// What the route's builders currently see as `route.animation`
+    /// (`routes.dart:1969`) — the proxy, so `1.0`/completed while offstage.
+    pub(crate) fn primary_animation(&self) -> RouteAnimation {
+        Arc::clone(&self.inner.primary) as RouteAnimation
+    }
+
+    /// `route.secondaryAnimation` (`:1973`) — `0.0`/dismissed while offstage.
+    pub(crate) fn secondary_animation(&self) -> RouteAnimation {
+        Arc::clone(&self.inner.secondary) as RouteAnimation
+    }
+
     /// There is no `maintainState` setter in Flutter — it is an abstract getter a
     /// subclass overrides, and `changedInternalState` republishes it. This is the
     /// same thing with a cell behind it, which is what lets a test observe the
     /// republish.
+    #[cfg(test)]
     pub(crate) fn set_maintain_state(&self, maintain_state: bool) {
         if self
             .inner
@@ -488,7 +565,13 @@ impl ModalHandle {
 /// `schedulerPhase != persistentCallbacks` guard has no analogue: FLUI's
 /// `mark_needs_build` only inserts an id into an inbox the next `build_scope`
 /// drains, so it is already safe from any phase (`entry.rs` module docs).
-#[cfg(test)]
+///
+/// **What `mark_entry_needs_build` actually rebuilds** is this route's *overlay
+/// entry* — `Stack[barrier, Offstage[scope]]` — so a flipped `offstage` reaches the
+/// `Offstage` wrapper and the barrier. It is **not** what propagates the animation
+/// swap: `ProxyAnimation::set_parent` notifies the relay, and the `ModalScope`
+/// rebuilds itself. Delete this call and an offstage route measures correctly while
+/// still painting; delete the swap and it paints correctly while measuring wrong.
 fn changed_internal_state(inner: &ModalInner) {
     let Some(binding) = inner.transition.get().and_then(TransitionHandle::binding) else {
         return;
@@ -537,13 +620,18 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// `createOverlayEntries` (`:2353-2355`).
     fn install(&mut self) {
         self.transition.install();
-        self.inner
-            .open_relay(self.inner.transition.get().expect("BUG: set in `new`"));
+        // Order: the controller must exist before the proxies can point at it
+        // (`routes.dart:1684-1688` — `super.install()` then the two `ProxyAnimation`s),
+        // and the relay subscribes to the proxies, so it goes last.
+        self.inner.sync_animation_proxies();
+        self.inner.open_relay();
         if let Some(binding) = self.binding() {
             binding.set_entry_maintain_state(self.inner.maintain_state.load(Ordering::Relaxed));
             // Registered before the page has ever been built, so the registry
             // knows the route exists; it resolves to `None` until the page mounts.
             binding.publish_subtree(self.inner.subtree.clone());
+            // `HeroController` reaches `route.offstage` through this, by id.
+            binding.publish_modal(self.handle());
         }
     }
 
@@ -594,6 +682,7 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     fn dispose(&mut self) {
         if let Some(binding) = self.binding() {
             binding.withdraw_subtree();
+            binding.withdraw_modal();
         }
         self.inner.close_relay();
         self.transition.dispose();

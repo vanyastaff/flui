@@ -32,6 +32,7 @@
 //! deferrals. `can_pop` / `maybe_pop` landed in U3.
 
 mod binding;
+mod hero_controller;
 mod history;
 mod lifecycle;
 mod modal_route;
@@ -59,6 +60,8 @@ pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 #[cfg(test)]
 mod export_guard;
 #[cfg(test)]
+mod hero_controller_tests;
+#[cfg(test)]
 mod hero_seam_tests;
 #[cfg(test)]
 mod modal_route_tests;
@@ -66,6 +69,8 @@ mod modal_route_tests;
 mod navigator_tests;
 #[cfg(test)]
 mod offstage_measurement_tests;
+#[cfg(test)]
+mod offstage_proxy_tests;
 #[cfg(test)]
 mod page_route_tests;
 #[cfg(test)]

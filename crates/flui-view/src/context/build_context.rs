@@ -252,6 +252,30 @@ pub trait BuildContext: Send + Sync {
     /// The RenderObject ID if found, None otherwise.
     fn find_render_object(&self) -> Option<flui_foundation::RenderId>;
 
+    /// The render tree this element is mounted in.
+    ///
+    /// [`find_render_object`](Self::find_render_object) hands out a `RenderId`, and
+    /// a `RenderId` alone answers nothing: geometry lives in the
+    /// [`PipelineOwner`](flui_rendering::pipeline::PipelineOwner) that owns the
+    /// node. Flutter has no equivalent because a Dart `RenderObject` *is* the
+    /// handle — `renderObject.size`, `renderObject.getTransformTo(ancestor)`
+    /// (`heroes.dart:952`, `:999`, `:1014-1018`). This is that reference,
+    /// reified.
+    ///
+    /// # This is not a frame capability
+    ///
+    /// It schedules nothing, so port-check trigger #22 does not guard it and
+    /// acquiring it inside `build` is harmless — a `PipelineOwner` read during build
+    /// simply answers `None` for every un-laid-out node (ADR-0021 U1). What it is
+    /// *for* is the opposite direction: code outside the tree (a routing observer, a
+    /// `HeroController`) holding an owned handle so it can resolve a `RenderId` to
+    /// geometry from a post-frame callback, after layout commits.
+    ///
+    /// `None` before the element is mounted under a pipeline owner.
+    fn pipeline_owner(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>;
+
     // ========================================================================
     // Tree Traversal
     // ========================================================================

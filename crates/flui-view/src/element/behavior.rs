@@ -86,14 +86,21 @@ where
     // which already holds the `ExternalBuildScheduler` installed at mount — the
     // same channel `AnimatedView` rides. `build` must not call `schedule()`;
     // port-check trigger #22 enforces that a handle is not even acquired there.
+    // The pipeline owner comes off the core, not off the tree node: `build_scope`
+    // has the element *extracted* from its node for the duration of the build
+    // (`ElementNode::element` panics in that window), so a `BuildContext` cannot
+    // look itself up. `ElementCore` holds the same `Arc` the node would have.
     BuildCtxChoice::Live(BuildCtx::new(
         element_id,
         tree_depth,
         handle.tree,
         handle.dep_sink,
         core.rebuild_handle(),
-        owner.async_driver.clone(),
-        owner.post_frame_handle.clone(),
+        crate::context::BuildCapabilities {
+            async_driver: owner.async_driver.clone(),
+            post_frame_handle: owner.post_frame_handle.clone(),
+            pipeline_owner: core.pipeline_owner().map(std::sync::Arc::clone),
+        },
     ))
 }
 

@@ -26,6 +26,10 @@ flui-objects = { path = "../flui-objects", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Animation primitives (`Animation<T>`) for transition widgets (`FadeTransition`).
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
+# ADR-0021 U3: `NavigatorState::init_state` stores a `PostFrameHandle` so a
+# `HeroController` can schedule its measurement. No cycle: flui-view already
+# depends on flui-scheduler.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # `Listenable` — the subscription `AnimatedView`/`FadeTransition` returns.
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 # Gesture recognizers + arena that `GestureDetector` drives.

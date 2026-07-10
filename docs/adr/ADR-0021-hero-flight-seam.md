@@ -1015,6 +1015,93 @@ so reordering production's `apply` left it green.
 
 ---
 
+## 7g. U3: the offstage animation proxies and the measurement skeleton (2026-07-10)
+
+### Task A — `ModalRoute.offstage` swaps the animations, not just the visibility
+
+ADR-0020 §7d deferred this as tidy-up. It is not. `RenderOffstage` keeps a route laid
+out while hiding it — but a route half-way through its entrance transition *lays out*
+half-way through its entrance transition, offstage or not. Flutter's setter therefore
+does two more things (`routes.dart:1958-1961`):
+
+```dart
+_animationProxy!.parent = _offstage ? kAlwaysCompleteAnimation : super.animation;
+_secondaryAnimationProxy!.parent = _offstage ? kAlwaysDismissedAnimation : super.secondaryAnimation;
+```
+
+`ModalRoute` now owns two `ProxyAnimation`s, seeded in `install()` exactly as Flutter
+seeds them (`:1685-1686`), and **they — not the controller — are what `buildPage` and
+`buildTransitions` receive**. Without them every hero flight would have started from
+the wrong rect, and no test in the tree would have noticed.
+
+**A correction to what this pass first claimed.** `mark_entry_needs_build` was
+documented as "the only thing that rebuilds the scope with the swapped animations".
+That is false, and a red-check proved it: deleting the call left every offstage test
+green. `ProxyAnimation::set_parent` *notifies* its listeners, the `ModalScope`'s relay
+is one of them, and the scope rebuilds itself. What `mark_entry_needs_build` actually
+rebuilds is the overlay **entry** — `Stack[barrier, Offstage[scope]]` — so the flipped
+flag reaches the `Offstage` wrapper and the barrier. Two mechanisms, two tests:
+delete the swap and the route paints correctly while measuring wrong; delete
+`mark_entry_needs_build` and it measures correctly while still painting.
+
+### Task B — `HeroController`, and the hook a port gets wrong
+
+Flutter's `HeroController` overrides **`didChangeTop`** (`heroes.dart:854`) — never
+`didPush`/`didPop`. This pass started with `didPush`/`didPop` and was wrong: those
+fire for routes that never become the top one, and do not fire when a route becomes
+top by having its cover popped. `assert(topRoute.isCurrent)` (`:855`) says as much.
+The flight direction likewise comes from the two routes' animation **statuses**
+(`:924-932`), not from which navigator call happened.
+
+The controller composes every seam this ADR built, and adds nothing of its own:
+
+| Step | Seam | Landed |
+|---|---|---|
+| `didChangeTop` outside the history lock | `Notification::TopChanged` | §7f |
+| `toRoute.offstage = …` (`:967`) | `ModalHandle` via the navigator's modal registry | U3 |
+| offstage ⇒ `animation.value == 1.0` | the `ModalRoute` proxies | U3 |
+| `addPostFrameCallback` (`:968`) | `PostFrameHandle` | U2 |
+| callback runs after layout commits | `Scheduler::drive_frame` | U1.5 |
+| `to.subtreeContext` (`:1014`) | `RouteSubtree` | U2 |
+| `…findRenderObject()!.size` (`:952`) | `PipelineOwner::box_size` | U1 |
+| `getTransformTo(…)` (`:1029`) | `PipelineOwner::transform_to` | U1 |
+
+### The one capability that was missing: `BuildContext::pipeline_owner()`
+
+`find_render_object()` hands out a `RenderId`, and a `RenderId` alone answers nothing —
+geometry lives in the `PipelineOwner`. Flutter has no equivalent because a Dart
+`RenderObject` *is* the handle. Nothing in FLUI exposed the owner to a
+`BuildContext`, so `HeroController` could not resolve what `RouteSubtree` handed it.
+
+Rather than reach around it, this pass added the capability and says so. It is **not**
+a frame capability: it schedules nothing, so trigger #22 does not guard it, and a
+read during `build` simply answers `None` for every un-laid-out node (U1). Its purpose
+is the opposite direction — code *outside* the tree holding an owned handle so it can
+measure from a post-frame callback. `NavigatorState::init_state` captures it, and the
+`PostFrameHandle`, into `NavigatorShared`; `dispose` clears both, which is what makes
+a stale `HeroController` inert.
+
+It is cloned from the element's own `ElementCore`, not looked up in the tree:
+`build_scope` has the element *extracted* from its node, and `ElementNode::element`
+panics in that window.
+
+### Still not implemented, and not claimed
+
+* **No `Hero` widget, no public API.** `HeroController`, `ModalHandle`,
+  `FlightDirection`, `Measurement` and `RouteSubtree` are `pub(crate)`, and
+  `public_no_internal_route_stack_exports` now fails if any is exported.
+* **No flight.** No `_allHeroesFor`, no `_HeroFlight`, no overlay entry, no
+  `RectTween`, no `flightShuttleBuilder`. `Measurement` is *recorded*, never used.
+* **No `userGestureInProgress`.** FLUI has no back-swipe, so `didStartUserGesture` /
+  `didStopUserGesture` (`heroes.dart:871-889`) and the `hasValidSize` fast path
+  (`:952-960`) — which only ever runs for a gesture-driven pop — are absent, not done.
+* **No nested navigators.** No `HeroControllerScope`; a controller answers only about
+  the navigator that attached it. B1.4 stays open.
+* The four introspection methods and `ModalHandle` carry `#[allow(dead_code)]` naming
+  U4's `Hero` widget as the first production consumer.
+
+---
+
 ## 8. Deferred, each with its blocker
 
 | Deferred | Why |

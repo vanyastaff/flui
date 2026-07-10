@@ -1241,9 +1241,12 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
         history.command_queue(),
         inert_wake(),
         Arc::new(Mutex::new(None)),
-        Arc::new(Mutex::new(std::collections::HashMap::new())),
-        Arc::new(Mutex::new(std::collections::HashMap::new())),
-        Arc::new(Mutex::new(std::collections::HashMap::new())),
+        super::binding::RouteRegistries {
+            peers: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            entries: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            subtrees: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            modals: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        },
     )
 }
 

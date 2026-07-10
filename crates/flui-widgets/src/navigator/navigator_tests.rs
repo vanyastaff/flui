@@ -764,7 +764,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 12] = [
+    const INTERNAL: [&str; 19] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -772,14 +772,24 @@ fn public_no_internal_route_stack_exports() {
         "AnyResult",
         "FlushOutcome",
         "Observation",
+        "Notification",
         "RoutePopDisposition",
         // ADR-0020: the route-animation seam stays private. U5.4 exports the
         // opaque `RouteBindingSlot`, *not* the `RouteBinding` inside it — which is
         // why this check matches whole identifiers.
         "RouteBinding",
+        "RouteRegistries",
         "RouteCommand",
         "TransitionRoute",
         "ModalRoute",
+        // ADR-0021 U2/U3: the Hero seams. There is no public `Hero` widget and no
+        // public `HeroController`; U4 owns that gate, and until it runs, exporting
+        // any of these would sign off a surface nobody reviewed.
+        "ModalHandle",
+        "HeroController",
+        "FlightDirection",
+        "Measurement",
+        "RouteSubtree",
     ];
 
     super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);

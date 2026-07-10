@@ -73,8 +73,8 @@ use std::time::Duration;
 use std::{fmt, marker::PhantomData};
 
 use flui_animation::{
-    ALWAYS_DISMISSED, Animation, AnimationController, AnimationStatus, AnimationSwitch,
-    ConstantAnimation, ProxyAnimation, Scheduler, VsyncRegistration,
+    ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationController, AnimationStatus,
+    AnimationSwitch, ConstantAnimation, ProxyAnimation, Scheduler, VsyncRegistration,
 };
 use parking_lot::Mutex;
 
@@ -84,9 +84,17 @@ use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
 /// The always-dismissed animation a `secondary_animation` rests at.
 ///
-/// Flutter's `kAlwaysDismissedAnimation` (`routes.dart:198`, `:491`).
-fn always_dismissed() -> Arc<dyn Animation<f32>> {
+/// Flutter's `kAlwaysDismissedAnimation` (`routes.dart:198`, `:491`;
+/// `animation/animations.dart:56-86` — `value == 0.0`, `status == dismissed`).
+pub(crate) fn always_dismissed() -> Arc<dyn Animation<f32>> {
     Arc::new(ConstantAnimation::dismissed(ALWAYS_DISMISSED.value()))
+}
+
+/// Flutter's `kAlwaysCompleteAnimation` (`animation/animations.dart:26-54` —
+/// `value == 1.0`, `status == completed`). What an **offstage** `ModalRoute`'s
+/// primary animation points at (`routes.dart:1958`).
+pub(crate) fn always_complete() -> Arc<dyn Animation<f32>> {
+    Arc::new(ConstantAnimation::completed(ALWAYS_COMPLETE.value()))
 }
 
 /// What the `secondary_animation` proxy currently points at.

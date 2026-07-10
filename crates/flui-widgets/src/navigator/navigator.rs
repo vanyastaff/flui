@@ -45,10 +45,9 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::binding::{
-    RouteBinding, RouteEntries, RouteSubtrees, RouteVsync, TransitionPeer, TransitionRegistry,
-};
+use super::binding::{RouteBinding, RouteRegistries, RouteVsync, TransitionPeer};
 use super::history::{FlushOutcome, RouteHistory};
+use super::modal_route::ModalHandle;
 use super::observer::{NavigatorObserver, deliver};
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
@@ -70,37 +69,29 @@ struct NavigatorShared {
     /// capability directly.
     overlay: OverlayHandle,
 
-    /// `RouteId -> OverlayEntry`. Flutter stores these on the route
-    /// (`OverlayRoute.overlayEntries`); see `overlay_route.rs` for why FLUI cannot.
-    ///
-    /// `Arc`-shared with every [`RouteBinding`], so a route can reach its own
-    /// entry to write `opaque` / `maintainState` (ADR-0020 U5.3).
-    entries: RouteEntries,
+    /// The `RouteId`-keyed maps every binding shares: overlay entries, transition
+    /// peers, page subtrees and modal (`offstage`) controls. Flutter reads all four
+    /// straight off the `Route` object; FLUI's routes live behind
+    /// `Box<dyn ErasedRoute>` inside the history's mutex, so they publish here
+    /// instead (ADR-0019 §7b).
+    registries: RouteRegistries,
 
-    /// The clock this navigator's route transitions register with (ADR-0020
-    /// U5.2). Resolved from an ambient `VsyncScope` in `init_state`; `None` when
-    /// there is none, in which case each controller falls back to its own
-    /// wall-clock ticker, as `AnimatedSize` does.
+    /// The clock this navigator's route transitions register with (ADR-0020 U5.2).
+    /// Resolved from an ambient `VsyncScope` in `init_state`; `None` when there is
+    /// none, in which case each controller falls back to its own wall-clock ticker.
     vsync: RouteVsync,
 
-    /// `RouteId -> TransitionPeer`, the lookup handle ADR-0019 §7b said U5 would
-    /// need: a route names its neighbours by id and cannot reach their objects.
-    peers: TransitionRegistry,
-
-    /// `RouteId -> RouteSubtreeCell` (ADR-0021 U2, seam 4). Flutter reads
-    /// `route.subtreeContext` off the route object; FLUI's routes are unreachable,
-    /// so each publishes its cell here at `install()`.
-    subtrees: RouteSubtrees,
-
-    /// Flutter's `_effectiveObservers` (`navigator.dart:3769`).
+    /// The binding's post-frame capability and render tree, both read **once** from
+    /// `NavigatorState::init_state` — a lifecycle hook, as port-check trigger #22
+    /// requires. `HeroController` reaches them through its `NavigatorHandle`, which
+    /// is how it schedules its measurement (`heroes.dart:968`) and then resolves the
+    /// geometry that measurement was waiting for.
     ///
-    /// **Not on `RouteHistory`.** An observer holds a [`NavigatorHandle`], so
-    /// notifying one is re-entrant by construction; the route stack must therefore
-    /// neither own observers nor call them, and `route_stack_flush_is_pure_data`
-    /// now forbids it from even naming the trait. The flush returns `Notification`s
-    /// as owned data and [`NavigatorShared::apply`] delivers them here, with the
-    /// history mutex released.
-    observers: Mutex<Vec<Arc<dyn NavigatorObserver>>>,
+    /// `None` when the navigator is unmounted, or when the binding installed no
+    /// post-frame handle — a `HeroController` then simply never measures, which is
+    /// Flutter's `if (navigator == null) return;` (`heroes.dart:970`).
+    post_frame: Mutex<Option<flui_scheduler::PostFrameHandle>>,
+    render_tree: Mutex<Option<Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>>,
 
     /// Whether the mounted `NavigatorState` currently holds the observers
     /// attached. Flutter's `NavigatorObserver._navigators[observer] != null`
@@ -108,6 +99,13 @@ struct NavigatorShared {
     /// has no way to ask the navigator; here it is one flag, because every
     /// observer of one navigator attaches and detaches together.
     observers_attached: AtomicBool,
+
+    /// Flutter's `_effectiveObservers` (`navigator.dart:3769`).
+    ///
+    /// **Not on `RouteHistory`.** An observer holds a [`NavigatorHandle`], so
+    /// notifying one is re-entrant by construction; the route stack must therefore
+    /// neither own observers nor call them (ADR-0021 §7f).
+    observers: Mutex<Vec<Arc<dyn NavigatorObserver>>>,
 }
 
 impl NavigatorShared {
@@ -129,7 +127,7 @@ impl NavigatorShared {
         // 2. Each disposed route's overlay entries, then the route itself —
         //    Flutter's `_disposeRouteEntry` order (`navigator.dart:3978-3987`).
         {
-            let mut entries = self.entries.lock();
+            let mut entries = self.registries.entries.lock();
             for id in &outcome.disposed {
                 if let Some(entry) = entries.remove(id)
                     && entry.is_attached()
@@ -148,7 +146,7 @@ impl NavigatorShared {
         // order, bottom → top (`navigator.dart:4151-4153`).
         let ordered: Vec<OverlayEntry> = {
             let ids = self.history.lock().ids();
-            let entries = self.entries.lock();
+            let entries = self.registries.entries.lock();
             ids.iter()
                 .filter_map(|id| entries.get(id).cloned())
                 .collect()
@@ -250,10 +248,15 @@ impl NavigatorHandle {
             shared: Arc::new(NavigatorShared {
                 history: Mutex::new(RouteHistory::new()),
                 overlay: OverlayHandle::new(),
-                entries: Arc::new(Mutex::new(HashMap::new())),
                 vsync: Arc::new(Mutex::new(None)),
-                peers: Arc::new(Mutex::new(HashMap::new())),
-                subtrees: Arc::new(Mutex::new(HashMap::new())),
+                registries: RouteRegistries {
+                    peers: Arc::new(Mutex::new(HashMap::new())),
+                    entries: Arc::new(Mutex::new(HashMap::new())),
+                    subtrees: Arc::new(Mutex::new(HashMap::new())),
+                    modals: Arc::new(Mutex::new(HashMap::new())),
+                },
+                post_frame: Mutex::new(None),
+                render_tree: Mutex::new(None),
                 observers: Mutex::new(Vec::new()),
                 observers_attached: AtomicBool::new(false),
             }),
@@ -294,6 +297,7 @@ impl NavigatorHandle {
         self.bind(&route, id);
         let builder = route.content_builder();
         self.shared
+            .registries
             .entries
             .lock()
             .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
@@ -326,9 +330,7 @@ impl NavigatorHandle {
                 }
             }),
             Arc::clone(&self.shared.vsync),
-            Arc::clone(&self.shared.peers),
-            Arc::clone(&self.shared.entries),
-            Arc::clone(&self.shared.subtrees),
+            self.shared.registries.clone(),
         )
     }
 
@@ -346,6 +348,7 @@ impl NavigatorHandle {
 
         let builder = route.content_builder();
         self.shared
+            .registries
             .entries
             .lock()
             .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
@@ -482,7 +485,7 @@ impl NavigatorHandle {
     /// way to read back what a route actually wrote.
     #[cfg(test)]
     pub(crate) fn entry_of(&self, id: RouteId) -> Option<OverlayEntry> {
-        self.shared.entries.lock().get(&id).cloned()
+        self.shared.registries.entries.lock().get(&id).cloned()
     }
 
     /// How many `RouteId -> OverlayEntry` pairs the navigator is holding.
@@ -492,7 +495,7 @@ impl NavigatorHandle {
     /// list) but leaks here, forever.
     #[cfg(test)]
     pub(crate) fn tracked_entry_count(&self) -> usize {
-        self.shared.entries.lock().len()
+        self.shared.registries.entries.lock().len()
     }
 
     /// How many `RouteId -> RouteSubtreeCell` pairs the navigator is holding.
@@ -502,7 +505,7 @@ impl NavigatorHandle {
     /// the leak is invisible through `route_subtree` and visible only here.
     #[cfg(test)]
     pub(crate) fn tracked_subtree_count(&self) -> usize {
-        self.shared.subtrees.lock().len()
+        self.shared.registries.subtrees.lock().len()
     }
 
     /// `id`'s subtree cell, half by half. Test-facing; see
@@ -510,6 +513,7 @@ impl NavigatorHandle {
     #[cfg(test)]
     pub(crate) fn route_subtree_parts(&self, id: RouteId) -> Option<super::subtree::SubtreeParts> {
         self.shared
+            .registries
             .subtrees
             .lock()
             .get(&id)
@@ -583,7 +587,7 @@ impl NavigatorHandle {
     /// `TransitionRoute`, matching `nextRoute is TransitionRoute`
     /// (`routes.dart:429`).
     pub(crate) fn route_peer(&self, id: RouteId) -> Option<TransitionPeer> {
-        self.shared.peers.lock().get(&id).cloned()
+        self.shared.registries.peers.lock().get(&id).cloned()
     }
 
     /// Where `id`'s page subtree lives — Flutter's `route.subtreeContext`
@@ -596,13 +600,41 @@ impl NavigatorHandle {
     ///
     /// [`PipelineOwner::box_size`]: flui_rendering::pipeline::PipelineOwner::box_size
     pub(crate) fn route_subtree(&self, id: RouteId) -> Option<RouteSubtree> {
-        self.shared.subtrees.lock().get(&id)?.resolve()
+        self.shared.registries.subtrees.lock().get(&id)?.resolve()
     }
 
     /// Flutter's `Route.isCurrent` (`routes.dart:196-201`), read by
     /// `Hero._allHeroesFor`'s route guard (`heroes.dart:331`).
     pub(crate) fn is_current(&self, id: RouteId) -> bool {
         self.current() == Some(id)
+    }
+
+    /// `id`'s `offstage` control and animation proxies — Flutter reads them off the
+    /// `Route` object (`routes.dart:1951`, `:1969`, `:1973`).
+    ///
+    /// `None` for a route that is not a `ModalRoute`, or one already disposed.
+    pub(crate) fn route_modal(&self, id: RouteId) -> Option<ModalHandle> {
+        self.shared.registries.modals.lock().get(&id).cloned()
+    }
+
+    /// The binding's post-frame capability — `WidgetsBinding.instance
+    /// .addPostFrameCallback` (`heroes.dart:968`), as an owned handle.
+    ///
+    /// `None` before mount and after unmount, so a stale `HeroController` schedules
+    /// nothing. Acquired in `init_state`; never in `build`/layout/paint (trigger #22).
+    pub(crate) fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.shared.post_frame.lock().clone()
+    }
+
+    /// The render tree this navigator is mounted in, for resolving the `RenderId`s
+    /// [`route_subtree`](Self::route_subtree) hands out — Flutter reaches it through
+    /// `navigator.context.findRenderObject()` (`heroes.dart:999`).
+    ///
+    /// `None` before mount and after unmount.
+    pub(crate) fn render_tree(
+        &self,
+    ) -> Option<Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+        self.shared.render_tree.lock().clone()
     }
 }
 
@@ -708,6 +740,11 @@ impl ViewState<Navigator> for NavigatorState {
         // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.
         *self.shared.vsync.lock() = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
 
+        // ADR-0021 U3. Both are *lifecycle-only* acquisitions: a `HeroController`
+        // fires them from a post-frame callback, never from a frame phase.
+        *self.shared.post_frame.lock() = ctx.post_frame_handle();
+        *self.shared.render_tree.lock() = ctx.pipeline_owner();
+
         // Before the seeded flush, so the first `did_push` an observer sees is
         // already one it can act on — Flutter attaches at `:3834-3837` and only
         // then calls `restoreState` → `_flushHistoryUpdates` (`:3922-3934`).
@@ -750,5 +787,9 @@ impl ViewState<Navigator> for NavigatorState {
     /// path notifies exactly once.
     fn dispose(&mut self) {
         self.shared.detach_observers();
+        // The capabilities die with the tree they name, so a `HeroController` that
+        // outlives its navigator schedules nothing and measures nothing.
+        *self.shared.post_frame.lock() = None;
+        *self.shared.render_tree.lock() = None;
     }
 }

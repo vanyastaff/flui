@@ -69,6 +69,7 @@ use std::sync::Arc;
 use flui_animation::{Animation, Vsync};
 use parking_lot::Mutex;
 
+use super::modal_route::ModalHandle;
 use super::route::RouteId;
 use super::subtree::RouteSubtreeCell;
 use crate::overlay::OverlayEntry;
@@ -213,11 +214,35 @@ pub(crate) type RouteEntries = Arc<Mutex<HashMap<RouteId, OverlayEntry>>>;
 /// owns instead. ADR-0021 U2, seam 4.
 pub(crate) type RouteSubtrees = Arc<Mutex<HashMap<RouteId, RouteSubtreeCell>>>;
 
+/// `RouteId -> ModalHandle`, the navigator's answer to Flutter's
+/// `toRoute.offstage = …` (`routes.dart:1951`, driven from `heroes.dart:967`) —
+/// which writes straight to the `Route` object. FLUI's routes are unreachable, so a
+/// `ModalRoute` publishes its handle here at `install()`. ADR-0021 U3.
+pub(crate) type RouteModals = Arc<Mutex<HashMap<RouteId, ModalHandle>>>;
+
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
 /// Its own mutex, deliberately: it must be lockable while the history's mutex is
 /// held by an in-progress flush.
 pub(crate) type RouteCommandQueue = Arc<Mutex<VecDeque<RouteCommand>>>;
+
+/// The four `RouteId`-keyed maps a navigator owns and every binding shares.
+///
+/// A bundle rather than four parameters: they are created together in
+/// `NavigatorHandle::new`, cloned together into every binding, and each is a
+/// `RouteId -> _` map Flutter reads straight off the `Route` object.
+#[derive(Clone)]
+pub(crate) struct RouteRegistries {
+    /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
+    /// route may consult it from inside a flush.
+    pub(crate) peers: TransitionRegistry,
+    /// `RouteId -> OverlayEntry` (ADR-0020 U5.3).
+    pub(crate) entries: RouteEntries,
+    /// `RouteId -> RouteSubtreeCell` (ADR-0021 U2).
+    pub(crate) subtrees: RouteSubtrees,
+    /// `RouteId -> ModalHandle` (ADR-0021 U3).
+    pub(crate) modals: RouteModals,
+}
 
 /// An owned, `'static` capability, pre-bound to one [`RouteId`].
 ///
@@ -236,13 +261,10 @@ pub(crate) struct RouteBinding {
     /// The navigator's clock. `Mutex` because `NavigatorState::init_state`
     /// resolves it after the handle (and therefore any seeded binding) exists.
     vsync: RouteVsync,
-    /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
-    /// route may consult it from inside a flush.
-    peers: TransitionRegistry,
-    /// `RouteId -> OverlayEntry`. Likewise its own mutex (ADR-0020 U5.3).
-    entries: RouteEntries,
-    /// `RouteId -> RouteSubtreeCell`. Likewise (ADR-0021 U2).
-    subtrees: RouteSubtrees,
+    /// The navigator's `RouteId`-keyed maps, each behind its own mutex — a
+    /// different one from the history's, so a route may consult them from inside a
+    /// flush.
+    registries: RouteRegistries,
 }
 
 impl RouteBinding {
@@ -251,18 +273,14 @@ impl RouteBinding {
         queue: RouteCommandQueue,
         wake: Arc<dyn Fn() + Send + Sync>,
         vsync: RouteVsync,
-        peers: TransitionRegistry,
-        entries: RouteEntries,
-        subtrees: RouteSubtrees,
+        registries: RouteRegistries,
     ) -> Self {
         Self {
             route,
             queue,
             wake,
             vsync,
-            peers,
-            entries,
-            subtrees,
+            registries,
         }
     }
 
@@ -272,7 +290,7 @@ impl RouteBinding {
     /// Cloned **out** of the map, so the caller never holds the `entries` lock
     /// while touching the overlay.
     fn entry(&self) -> Option<OverlayEntry> {
-        self.entries.lock().get(&self.route).cloned()
+        self.registries.entries.lock().get(&self.route).cloned()
     }
 
     /// `overlayEntries.first.opaque = value` (`routes.dart:296`, `:304`).
@@ -292,9 +310,12 @@ impl RouteBinding {
     /// `_modalBarrier.markNeedsBuild()` (`routes.dart:2228`) — rebuild **this
     /// route's** overlay entry, not the navigator.
     ///
-    /// Reached only through `ModalRoute::changed_internal_state`, whose sole
-    /// caller is `ModalHandle` — the `Hero` seam (B1.4), test-only for now.
-    #[cfg(test)]
+    /// Reached only through `ModalRoute::changed_internal_state`, whose caller is
+    /// `ModalHandle::set_offstage` — the `HeroController` seam (ADR-0021 U3).
+    ///
+    /// `dead_code` because that consumer is itself dead until U4's `Hero` widget
+    /// gives it a production caller; see `hero_controller.rs`.
+    #[allow(dead_code)]
     pub(crate) fn mark_entry_needs_build(&self) {
         if let Some(entry) = self.entry() {
             entry.mark_needs_build();
@@ -309,13 +330,13 @@ impl RouteBinding {
     /// Publish this route's primary animation so the route below can drive its
     /// `secondary_animation` from it.
     pub(crate) fn publish_peer(&self, peer: TransitionPeer) {
-        self.peers.lock().insert(self.route, peer);
+        self.registries.peers.lock().insert(self.route, peer);
     }
 
     /// Withdraw it. Called from `dispose`; a peer that outlives its controller
     /// would hand out a disposed animation.
     pub(crate) fn withdraw_peer(&self) {
-        self.peers.lock().remove(&self.route);
+        self.registries.peers.lock().remove(&self.route);
     }
 
     /// Publish where this route's page subtree *will* live — Flutter's
@@ -324,13 +345,24 @@ impl RouteBinding {
     /// The cell is registered at `install()`, before the page has ever been built,
     /// and resolves to `None` until it mounts. See `subtree.rs`.
     pub(crate) fn publish_subtree(&self, subtree: RouteSubtreeCell) {
-        self.subtrees.lock().insert(self.route, subtree);
+        self.registries.subtrees.lock().insert(self.route, subtree);
     }
 
     /// Withdraw it. Called from `dispose`; a registry entry that outlives its route
     /// would let `HeroController` resolve a disposed route's subtree.
     pub(crate) fn withdraw_subtree(&self) {
-        self.subtrees.lock().remove(&self.route);
+        self.registries.subtrees.lock().remove(&self.route);
+    }
+
+    /// Publish this route's `offstage` control — Flutter's `route.offstage` setter,
+    /// reachable off the `Route` object it hands `HeroController` (`heroes.dart:967`).
+    pub(crate) fn publish_modal(&self, modal: ModalHandle) {
+        self.registries.modals.lock().insert(self.route, modal);
+    }
+
+    /// Withdraw it. A disposed route must not be forced offstage.
+    pub(crate) fn withdraw_modal(&self) {
+        self.registries.modals.lock().remove(&self.route);
     }
 
     /// The route this binding drives. Test-facing: production code never needs it,
@@ -343,7 +375,7 @@ impl RouteBinding {
     /// The peer for `route`, or `None` when it is not a transition route —
     /// Flutter's `nextRoute is TransitionRoute` test (`routes.dart:429`).
     pub(crate) fn peer(&self, route: RouteId) -> Option<TransitionPeer> {
-        self.peers.lock().get(&route).cloned()
+        self.registries.peers.lock().get(&route).cloned()
     }
 
     /// The entrance transition finished — Flutter's `whenCompleteOrCancel`.
