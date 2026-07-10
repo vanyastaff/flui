@@ -60,16 +60,14 @@
 //!
 //! # What is deliberately absent
 //!
-//! A private `_HeroFlight` analogue exists and consumes valid [`HeroFlightManifest`]
-//! values. What is still absent is the public/customizable surface: no
-//! `flightShuttleBuilder`, no `placeholderBuilder`, no `HeroMode`, no
-//! `transitionOnUserGestures`, and no public `createRectTween`. Divert is implemented
-//! privately in U5.1: an existing same-tag flight is redirected in place, but users
-//! still cannot customize it.
+//! The customization hooks landed in §7n: `Hero::create_rect_tween`,
+//! `Hero::flight_shuttle_builder` (with the no-foreign-`BuildContext` divergence), and
+//! FLUI's state-preserving `Hero::placeholder` (in place of Flutter's lossy
+//! `placeholderBuilder`). `FlightDirection` is public for the shuttle builder. Still
+//! absent: `HeroMode`, `transitionOnUserGestures`, and `Hero.curve` / `reverseCurve`.
 //!
-//! Public API is deliberately narrow: `Hero`, `HeroController`, and
-//! `HeroControllerScope`. `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`,
-//! `HeroFlightManifest`, and the flight machinery stay `pub(crate)`, and
+//! The private surface stays private: `HeroTag`, `HeroRegistry`, `HeroScope`,
+//! `HeroHandle`, `HeroFlightManifest`, and the flight machinery are `pub(crate)`, and
 //! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported.
 //!
 //! Full nested-navigator flight parity remains deferred. `HeroControllerScope::none`
