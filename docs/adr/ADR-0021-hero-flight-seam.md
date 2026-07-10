@@ -318,7 +318,7 @@ Each slice is independently mergeable. Nothing is public before U6.
 | **U4** ✅ | **Landed 2026-07-10 (§7i).** Private `HeroFlight` + `FlightManager`. `RectTween`, `ProxyAnimation` driving (reversed for a pop), overlay entry insert/remove, `on_tick` re-measure, `IgnorePointer` shuttle inside an inner `Stack` (S8). Push and pop; **no divert** — an existing flight for a tag is ended, not redirected. No `create_rect_tween` / `flight_shuttle_builder` hooks. | `cargo test -p flui-widgets hero`; `port-check`; export guard. |
 | **U5.1** ✅ | **Landed 2026-07-10 (§7j).** Flight divert — all three branches of `_HeroFlight.divert` (push↔pop and same-direction). In-place redirect: one flight, one overlay entry. | `cargo test -p flui-widgets hero`; the divert red-checks in §7j. |
 | **U5.2** ✅ | **Landed 2026-07-10 (§7k).** `onTick` fade-out now covered end-to-end (destination lost mid-flight via a rebuild, not offstage). Placeholder is the **fixed chain** — child state preserved with no `GlobalKey` (D2 verified). `placeholder_builder` + its `GlobalKey` deferred to the public API (U6), decision recorded. | `cargo test -p flui-widgets hero`. |
-| **U6** ✅ | **Landed 2026-07-10 (§7l).** Parity re-checked against `heroes.dart`; exported the baseline surface — `Hero` (`tag: impl ViewKey`, `child`) and `HeroController` — through the crate root and prelude; `hero_public.rs` drives it end-to-end through a real `Vsync`. Advanced hooks and `HeroControllerScope` deferred. | `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
+| **U6** ✅ | **Landed 2026-07-10 (§7l), then follow-up §7m.** Parity re-checked against `heroes.dart`; exported the baseline surface — `Hero` (`tag: impl ViewKey`, `child`) and `HeroController` — through the crate root and prelude. §7m then added public `HeroControllerScope` and automatic default attach, removing the manual-attach divergence. Advanced hooks remain deferred. | `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
 
 ---
 
@@ -1403,13 +1403,14 @@ export. The export guard still rejects `Hero`, `HeroController`, `HeroFlight`,
 
 ### The exported surface, and nothing more
 
-Two names, through the crate root and `flui_widgets::prelude`:
+Originally two names, through the crate root and `flui_widgets::prelude`; §7m adds
+`HeroControllerScope` as the ambient attach surface:
 
 * **`Hero::new(tag: impl ViewKey, child: impl IntoView)`** — Flutter's `Hero(tag, child)`.
   Any `ViewKey` is a tag (`ValueKey::new("photo")`, a domain newtype); `HeroTag` stays
   private behind the `impl ViewKey`.
-* **`HeroController::new() -> Arc<Self>`** — attached by hand:
-  `navigator.add_observer(HeroController::new())`.
+* **`HeroController::new() -> Arc<Self>`** — still public for explicit scopes and
+  compatibility with `NavigatorHandle::add_observer`.
 
 `HeroState` is `pub` only because `StatefulView::State` demands it (as `NavigatorState`
 is); it is **not** re-exported. Everything else — `HeroFlight`, `FlightManager`,
@@ -1418,14 +1419,14 @@ is); it is **not** re-exported. Everything else — `HeroFlight`, `FlightManager
 `public_no_internal_route_stack_exports` fails if any leaks (red-checked with
 `HeroFlight` and `HeroTag`).
 
-### The one divergence that ships with the baseline: manual controller attach
+### Superseded divergence: manual controller attach
 
-Flutter's `MaterialApp` builds a `HeroController` and installs it via
-`HeroControllerScope` (`material/app.dart:921`, `:1163`), so heroes "just work". FLUI has
-neither `MaterialApp` nor `HeroControllerScope`, so an app author must attach a
-controller by hand. This is the **only** difference from Flutter in the baseline flow,
-and it is a documented consequence of D5 (no scope in this ADR), not a gap in the flight
-machinery. `HeroControllerScope` is the natural next slice.
+At U6, Flutter's `MaterialApp` installed `HeroControllerScope` (`material/app.dart:921`,
+`:1163`) and FLUI did not, so app authors had to attach a controller by hand. §7m
+supersedes this: `HeroControllerScope` is public, and a bare `Navigator` auto-creates a
+default controller when no scope is present. The remaining divergence is not manual
+attach; it is the deliberate FLUI auto-default, because there is still no `MaterialApp`
+host for the scope.
 
 ### Claims re-verified against `heroes.dart`
 
@@ -1441,14 +1442,14 @@ that red-checks:
 | divert (push↔pop, same-dir) | `_HeroFlight.divert`, `:740-816` | the four `hero_flight_tests` divert cases |
 | PageRoute-only gate | `is! PageRoute`, `:916-920` | `no_flight_over_a_popup_route` |
 | duplicate tag logs, keeps first | `assert`, `:287-305` (FLUI diverges: log, not throw) | `duplicate_tags_in_one_route_log_and_drop_the_second` |
-| no nested-navigator support | needs `HeroControllerScope`, `:3995-4046` | out of scope; a controller sees only its own navigator |
+| no cross-navigator flight parity | needs `HeroControllerScope`, `:3995-4046` plus nested flight semantics | out of scope; a controller sees only its own navigator |
 
 ### Deferred to a later slice (all named, none faked)
 
 `create_rect_tween`, `flight_shuttle_builder`, `placeholder_builder` (and the `GlobalKey`
-it forces — §7k), `Hero.curve` / `reverseCurve`, `HeroMode`, `HeroControllerScope`
-(automatic attach), and nested-navigator flights. None is exposed as a stub; each is
-absent, and the public `Hero`/`HeroController` surface does not name them.
+it forces — §7k), `Hero.curve` / `reverseCurve`, `HeroMode`, and full nested-navigator
+flight parity. None is exposed as a stub; each is absent, and the public surface does not
+name them.
 
 ### Tracker
 
@@ -1555,6 +1556,11 @@ after mount is not picked up — the same read-once contract `VsyncScope` alread
   (`a_manual_controller_suppresses_the_auto_default`: exactly one hero observer), which
   is the honest signal — the marker prevents a redundant *second controller*, not a
   visible second flight.
+* **Review follow-up:** the first implementation only suppressed the auto-default when
+  a manual `HeroController` was registered before mount. `NavigatorHandle::add_observer`
+  also supports already-mounted navigators, so a post-mount manual controller doubled
+  the hero observer count. The auto-created controller is now tracked separately and
+  detached/replaced by a later manual hero observer.
 
 ---
 

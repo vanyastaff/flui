@@ -850,6 +850,39 @@ fn a_manual_controller_suppresses_the_auto_default() {
     );
 }
 
+/// The same suppression holds when a controller is hand-attached **after** mount.
+/// `NavigatorHandle::add_observer` documents that already-mounted observers attach at
+/// once, so the auto-default must be replaced rather than left beside the manual
+/// controller.
+///
+/// Red-check: delete `take_auto_hero_observer()` from `NavigatorHandle::add_observer` —
+/// the count stays 2 and the old auto-controller is still attached.
+#[test]
+fn a_manual_controller_added_after_mount_replaces_the_auto_default() {
+    let navigator = seeded_navigator();
+    let _harness = mount_navigator(&navigator);
+    assert_eq!(
+        navigator.hero_observer_count(),
+        1,
+        "mount created the default hero controller"
+    );
+
+    let manual = HeroController::new();
+    navigator.add_observer(Arc::clone(&manual) as Arc<dyn NavigatorObserver>);
+
+    assert_eq!(
+        navigator.hero_observer_count(),
+        1,
+        "the manual controller replaced the auto-default instead of doubling it"
+    );
+    assert!(
+        manual
+            .navigator()
+            .is_some_and(|handle| handle.is_same(&navigator)),
+        "the newly-added controller attached immediately to the mounted navigator"
+    );
+}
+
 /// `HeroControllerScope::none` attaches nothing and suppresses the auto-default: zero
 /// controllers, no flights.
 ///

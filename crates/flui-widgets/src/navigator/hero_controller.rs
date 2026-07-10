@@ -67,14 +67,14 @@
 //! privately in U5.1: an existing same-tag flight is redirected in place, but users
 //! still cannot customize it.
 //!
-//! No public API: `Hero`, `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`,
-//! `HeroState`, `HeroController`, `HeroFlightManifest`, and the flight machinery are
-//! all `pub(crate)`, and `navigator_tests::public_no_internal_route_stack_exports`
-//! fails if any is exported.
+//! Public API is deliberately narrow: `Hero`, `HeroController`, and
+//! `HeroControllerScope`. `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`,
+//! `HeroFlightManifest`, and the flight machinery stay `pub(crate)`, and
+//! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported.
 //!
-//! No `HeroControllerScope` — and therefore **no nested-navigator support**. A
-//! `HeroController` observes exactly the one navigator that attached it, as Flutter's
-//! does (`navigator.dart:3995-4046`).
+//! Full nested-navigator flight parity remains deferred. `HeroControllerScope::none`
+//! isolates nested navigators by default, and a nested navigator can host its own
+//! controller, but cross-navigator hero matching is still out of scope.
 //!
 //! No `userGestureInProgress` either: FLUI has no back-swipe, so
 //! `isUserGestureTransition` is always `false`. That collapses `didStartUserGesture`
@@ -231,10 +231,13 @@ impl std::fmt::Debug for HeroController {
 }
 
 impl HeroController {
-    /// A hero controller, ready to attach to a `Navigator` as an observer:
-    /// `navigator.add_observer(HeroController::new())`. Flutter installs one
-    /// automatically via `MaterialApp`; FLUI has no `HeroControllerScope` yet, so this
-    /// is attached by hand (ADR-0021 §7l).
+    /// A hero controller.
+    ///
+    /// Most apps do not construct one: a bare `Navigator` auto-creates a default
+    /// controller, and [`HeroControllerScope`](super::hero_controller_scope::HeroControllerScope)
+    /// hosts an explicit controller when needed. `NavigatorHandle::add_observer` still
+    /// accepts one by hand for compatibility and replaces the auto-default if it was
+    /// already installed.
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())

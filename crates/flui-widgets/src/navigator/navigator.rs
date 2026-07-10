@@ -109,6 +109,10 @@ struct NavigatorShared {
     /// notifying one is re-entrant by construction; the route stack must therefore
     /// neither own observers nor call them (ADR-0021 §7f).
     observers: Mutex<Vec<Arc<dyn NavigatorObserver>>>,
+    /// The controller the navigator auto-created when no `HeroControllerScope` was
+    /// present. Kept separate so a later hand-attached `HeroController` can replace
+    /// it instead of doubling the flight observer count (ADR-0021 §7m, D-U6.4).
+    auto_hero_observer: Mutex<Option<Arc<dyn NavigatorObserver>>>,
 }
 
 impl NavigatorShared {
@@ -192,6 +196,20 @@ impl NavigatorShared {
         self.observers.lock().clone()
     }
 
+    /// Remove the auto-created hero controller, if one exists.
+    ///
+    /// Returns the removed observer so the caller can run `did_detach` with no
+    /// `observers` lock held. Flutter's observer callbacks are user code; holding the
+    /// lock would reintroduce the deadlock class ADR-0021 §7f removed.
+    fn take_auto_hero_observer(&self) -> Option<Arc<dyn NavigatorObserver>> {
+        let mut auto = self.auto_hero_observer.lock();
+        let removed = auto.take()?;
+        self.observers
+            .lock()
+            .retain(|observer| !Arc::ptr_eq(observer, &removed));
+        Some(removed)
+    }
+
     /// Flutter's `initState` / `activate` loop (`navigator.dart:3834-3837`,
     /// `:4118-4122`): hand every observer, in registration order, the capability
     /// it observes.
@@ -261,6 +279,7 @@ impl NavigatorHandle {
                 post_frame: Mutex::new(None),
                 render_tree: Mutex::new(None),
                 observers: Mutex::new(Vec::new()),
+                auto_hero_observer: Mutex::new(None),
                 observers_attached: AtomicBool::new(false),
             }),
         }
@@ -286,6 +305,17 @@ impl NavigatorHandle {
     /// before mount, it is attached by `init_state` instead. Either way it holds a
     /// handle exactly while the navigator is mounted.
     pub fn add_observer(&self, observer: Arc<dyn NavigatorObserver>) {
+        let replaced_auto = if observer.observes_hero_flights() {
+            self.shared.take_auto_hero_observer()
+        } else {
+            None
+        };
+        if let Some(auto) = replaced_auto
+            && self.shared.observers_attached.load(Ordering::Relaxed)
+        {
+            auto.did_detach();
+        }
+
         self.shared.observers.lock().push(Arc::clone(&observer));
         if self.shared.observers_attached.load(Ordering::Relaxed) {
             observer.did_attach(self.clone());
@@ -579,12 +609,12 @@ impl NavigatorHandle {
 /// hands out a borrow into the trees, and nothing takes a second lock under a
 /// first.
 ///
-/// **Nested navigators remain out of scope.** A Flutter `HeroController` is
+/// **Cross-navigator hero flights remain out of scope.** A Flutter `HeroController` is
 /// attached to exactly one navigator and only ever sees that navigator's routes;
 /// a nested navigator needs its own, hosted by a `HeroControllerScope`
-/// (`navigator.dart:3995-4046`). FLUI has no `HeroControllerScope` yet, so these
-/// methods answer only about *this* navigator's stack, and no test claims
-/// otherwise.
+/// (`navigator.dart:3995-4046`). FLUI has `HeroControllerScope` for isolation/custom
+/// controllers, but these methods still answer only about *this* navigator's stack,
+/// and no test claims otherwise.
 impl NavigatorHandle {
     /// This navigator's overlay — Flutter's `NavigatorState.overlay`, read by
     /// `HeroController._startHeroTransition` (`heroes.dart:990`) to insert the
@@ -780,10 +810,13 @@ impl ViewState<Navigator> for NavigatorState {
             Some(Some(controller)) => self.shared.observers.lock().push(controller),
             Some(None) => {}
             None => {
+                let mut auto = self.shared.auto_hero_observer.lock();
                 let mut observers = self.shared.observers.lock();
                 let already_manual = observers.iter().any(|o| o.observes_hero_flights());
                 if !already_manual {
-                    observers.push(HeroController::new());
+                    let controller: Arc<dyn NavigatorObserver> = HeroController::new();
+                    *auto = Some(Arc::clone(&controller));
+                    observers.push(controller);
                 }
             }
         }

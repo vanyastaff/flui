@@ -428,10 +428,11 @@ impl fmt::Debug for HeroHandle {
 /// A subtree that animates between two routes when it appears in both under the same
 /// tag — Flutter's `Hero` (`heroes.dart:180`).
 ///
-/// A `HeroController` must be attached to the `Navigator` for flights to run; see the
-/// crate-level docs. Baseline surface only: `tag` and `child`. `create_rect_tween`,
-/// `flight_shuttle_builder`, `placeholder_builder`, `HeroMode` and automatic
-/// controller attachment (`HeroControllerScope`) are deferred (ADR-0021 §7k, §7l).
+/// A `HeroController` must observe the `Navigator` for flights to run; a bare
+/// `Navigator` now installs a default one, and `HeroControllerScope` customizes or
+/// disables that. Baseline surface only: `tag` and `child`. `create_rect_tween`,
+/// `flight_shuttle_builder`, `placeholder_builder`, and `HeroMode` are deferred
+/// (ADR-0021 §7k–§7m).
 #[derive(Clone)]
 pub struct Hero {
     tag: HeroTag,
