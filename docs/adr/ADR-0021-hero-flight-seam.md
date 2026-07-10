@@ -251,7 +251,7 @@ Scope note: `getTransformTo` between two nodes with a common ancestor (rather th
 
 **Proposed:** a `PostFrameHandle` capability, published exactly like `RebuildHandle` (acquired in `init_state` by whatever view hosts the controller, or handed to the observer at `did_attach`). Trigger #22's rule generalises: acquire in a lifecycle hook, fire later.
 
-**UNKNOWN-1:** whether `HeadlessBinding::pump_frame` runs post-frame callbacks in the same frame it drains the build inbox. If it does not, the `to`-route offstage measurement lands a frame late and every flight starts from a stale rect. **Must be answered by an experiment before U3.**
+**UNKNOWN-1 — ANSWERED `NO`, see §7b.** `pump_frame` never drains the post-frame queue (and never opens a scheduler frame); the production runner drains it **before** build/layout. Both paths are wrong, in different ways. U2 is blocked on a scheduler/binding fix (proposed as **U1.5** in §7b).
 
 ### S7 — Hero discovery: element walk vs. registry
 
@@ -310,7 +310,8 @@ Each slice is independently mergeable. Nothing is public before U6.
 | Slice | Content | Gate |
 |---|---|---|
 | **U1** ✅ | **S4, alone.** Landed 2026-07-10 — see §7a for two corrections to this row. `RenderObject::apply_paint_transform` (default = `paint_transform` ∘ translate-by-committed-offset) + overrides on `RenderFractionalTranslation` and `RenderFlow` (**not** the four named here) + `PipelineOwner::transform_to(descendant, ancestor)` + production `box_size`. `local_to_global`/`global_to_local` moved **off** the `RenderBox` trait onto `PipelineOwner`. No Hero, no widgets. | `cargo test -p flui-rendering`; `cargo test -p flui-objects --test render_object_harness`; new `harness_*_paint_transform` assertions on `RenderTransform`, `RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`; `just clippy`; `port-check`. |
-| **U2** | **S1 + S2 + S3 + S5 + S6.** Observer↔navigator attachment; route introspection by id; `RouteSubtree` publication from `ModalScope::init_state`; `overlay_handle` reachable; `PostFrameHandle`. Answer **UNKNOWN-1** first. Still no Hero. | `cargo test -p flui-widgets navigator`; the existing 98 navigator tests must not regress; new tests per §6. |
+| **U1.5** 🔴 | **New, discovered by U2's first rule (§7b).** Move the post-frame drain after the pipeline step in *both* frame drivers; give `HeadlessBinding::pump_frame` a scheduler frame. Touches `flui-scheduler`, `flui-binding`, `flui-app`. **Blocks U2.** |
+| **U2** 🔴 | **S1 + S2 + S3 + S5 + S6.** Observer↔navigator attachment; route introspection by id; `RouteSubtree` publication from `ModalScope::init_state`; `overlay_handle` reachable; `PostFrameHandle`. **Blocked on U1.5** — `PostFrameHandle` cannot be built on a queue no frame drains. Still no Hero. | `cargo test -p flui-widgets navigator`; the existing 98 navigator tests must not regress; new tests per §6. |
 | **U3** | **D4 + S7 + S8.** `ModalRoute` primary animation proxy; `set_offstage` drives it. Private `HeroRegistry` + `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build). Verify S8's `Positioned` claim. No controller, no flight yet: a `Hero` is a pass-through that can be told to show a placeholder. | `cargo test -p flui-widgets hero`; `cargo test -p flui-widgets navigator`; port-check FR-036 entry for `Arc<dyn ViewKey>`. |
 | **U4** | Private `HeroController` + `HeroFlight` + `HeroFlightManifest`. Rect tween, `ProxyAnimation` driving, overlay entry insert/remove, `on_tick` re-measure, `create_rect_tween` and `flight_shuttle_builder` hooks (private). Push and pop only; no divert, no gestures. | `cargo test -p flui-widgets hero`; end-to-end through a real `Vsync` as `tests/routes.rs` does. |
 | **U5** | Flight divert (push interrupted by pop, and the three-way cases at `heroes.dart:739-813`), abort/fade-out (`onTick`'s `_heroOpacity` path), `placeholder_builder` + the `GlobalKey` D2 requires. | `cargo test -p flui-widgets hero`; the divert oracles in §6. |
@@ -395,7 +396,7 @@ Every row names the **red-check**: a change to the implementation that must turn
 - **D-3.** `Positioned` inside an overlay entry is handled by an inner `Stack` (S8). **A paper argument.** Must be checked before U3.
 
 **Unknown — each must be answered by an experiment, not an assumption:**
-- **UNKNOWN-1.** Does `HeadlessBinding::pump_frame` run post-frame callbacks after layout within the same frame? If not, `_maybeStartHeroTransition`'s deferral lands a frame late and every flight begins from a stale rect. *Blocks U2.*
+- ~~**UNKNOWN-1.**~~ **Answered `NO` (§7b).** `pump_frame` never drains post-frame callbacks at all; the runner drains them *before* build/layout/paint. Nothing registers the pipeline as a persistent frame callback, where Flutter registers exactly that (`rendering/binding.dart:61`, `:557-558`). **Blocks U2** until the proposed **U1.5** binding seam lands.
 - **UNKNOWN-2.** Does `ModalRoute` swapping its primary animation to `ALWAYS_COMPLETE` while offstage disturb `TransitionRoute`'s status listener, which writes `overlayEntries.first.opaque` and raises `finalize()` on `dismissed` (ADR-0020 §7d)? The proxy must sit **above** the controller, not replace it. *Blocks U3.*
 - **UNKNOWN-3.** Flutter's `flightShuttleBuilder` receives both heroes' `BuildContext`s (`heroes.dart:1081-1087`). FLUI cannot hand out a foreign element's `&dyn BuildContext` outside its own build. What replaces it — the two `HeroHandle`s? the two tags plus their sizes? — decides the public signature at U4/U6. *Blocks the Q8 sign-off.*
 - **UNKNOWN-4.** Whether `RenderStack`'s positioned pass composes correctly under `RenderTheater`'s `tight` constraints for a `RelativeRect`-style four-edge `Positioned`. Cheap to check; do it in U3 alongside D-3.
@@ -529,6 +530,115 @@ produces, but **not** Flutter's un-projection onto the local z = 0 plane
 arriving must revisit that method. Sliver render objects get the default
 `apply_paint_transform` with no override point, since `RenderSliver` does not
 forward the hook.
+
+---
+
+## 7b. UNKNOWN-1 answered: **no**, on both paths. U2 is blocked (2026-07-10)
+
+**Status: U2 not started.** Per its own first rule, the frame-order question was
+closed experimentally before any seam was designed. The answer is negative, so
+nothing else in U2 was built. No `PostFrameHandle`, no observer attachment, no
+route introspection. This section records the actual frame order and proposes the
+minimal seam that would unblock U2.
+
+### What Flutter does
+
+`RendererBinding` registers the render pipeline as a **persistent frame callback**
+(`rendering/binding.dart:61`, `:557-558` — `_handlePersistentFrameCallback` calls
+`drawFrame()`). `SchedulerBinding.handleDrawFrame` then runs, in one frame and in
+this order (`scheduler/binding.dart:1338-1358`):
+
+1. `SchedulerPhase.persistentCallbacks` → **the whole pipeline: build, layout, paint.**
+2. `SchedulerPhase.postFrameCallbacks` → the post-frame queue, drained once.
+
+So a post-frame callback registered during frame *N* runs at the end of frame *N*,
+after layout has committed. That is precisely what `heroes.dart:968` depends on:
+`toRoute.offstage = …; WidgetsBinding.instance.addPostFrameCallback(…)` measures
+the destination hero *in the frame it just forced offstage*.
+
+### What FLUI does
+
+**Nothing registers the pipeline as a persistent callback.** Grep for
+`add_persistent_callback` across `flui-app`, `flui-binding` and `flui-view`
+returns nothing. The pipeline is driven by the *bindings*, beside the scheduler
+rather than inside it. The two paths then diverge from Flutter in two different
+ways:
+
+| Path | Order | Consequence |
+|---|---|---|
+| `AppBinding` / runner (`app/runner.rs:279+283`, `:559+562`, `:755+764` — all three sites) | `handle_begin_frame` → **`handle_draw_frame()`** → `binding.render_frame()` | The post-frame queue is drained (`scheduler.rs:685-706`) **before** build/layout/paint. A callback sees the *previous* frame's geometry. **One frame stale.** |
+| `HeadlessBinding::pump_frame` (`flui-binding/src/lib.rs:424-490`) | clock → gestures → `vsync.tick_all` → `drive_async_tasks` → `build_scope` → `run_frame_with_layout_builders` → `service_child_requests` | It never calls `handle_draw_frame` or `handle_begin_frame` at all. The post-frame queue is **never drained**, and no scheduler frame is ever opened, so even calling the drain would be a no-op — `handle_draw_frame` guards on `current_frame` being `Some` (`scheduler.rs:687`). |
+
+### The experiment
+
+Reading three call sites is not an experiment, so a throwaway probe was run against
+the real `HeadlessBinding` frame path: register one post-frame callback, pump two
+frames, then call `Scheduler::execute_frame()` directly.
+
+```text
+PROBE after 1 pump_frame:  fired=0
+PROBE after 2 pump_frame:  fired=0
+PROBE after execute_frame: fired=1
+```
+
+The callback is well-formed and the queue works — `pump_frame` simply does not
+drive it. (The probe was deleted; it is reproduced here as evidence, not shipped.)
+
+### Consequence for the design
+
+`post_frame_callback_runs_after_layout_in_the_same_pumped_frame` **cannot be made
+to pass** without a binding change. Per U2's own instruction, no `PostFrameHandle`
+was written, no seam was designed around the assumption, and nothing was papered
+over with a second `pump_frame`. **U2 is blocked on a scheduler/binding fix that
+this ADR did not anticipate**, and which is not a widgets change at all.
+
+`§3 S6`'s claim — *"`Scheduler::add_post_frame_callback` exists … `BuildContext`
+exposes `rebuild_handle()` and `async_driver()` and nothing else"* — was right
+about the missing capability and wrong to imply the callback machinery underneath
+it works. It does not.
+
+### Proposed minimal common seam (**U1.5**, needs sign-off)
+
+Flutter's arrangement — the pipeline *is* a persistent callback — cannot be copied
+directly: `flui-scheduler` sits below `flui-view` and cannot name a tree, and
+`HeadlessBinding` owns its `ElementTree` by value, so no `Fn` closure can drive it.
+The minimal change that gives both paths Flutter's *observable* ordering:
+
+1. Split `Scheduler::handle_draw_frame` (`scheduler.rs:649`). It keeps the
+   persistent-callback and task-queue phases; its tail — take the frame timing,
+   record jank, drain the post-frame queue, notify completion, return to `Idle`
+   (`scheduler.rs:685-725`) — moves into a new `Scheduler::end_frame()`.
+2. Every frame driver becomes: `handle_begin_frame` → `handle_draw_frame`
+   (persistent) → **its own pipeline step** → `end_frame()` (post-frame).
+3. `HeadlessBinding::pump_frame` opens and closes a scheduler frame, which today
+   it never does. This is what makes the headless path drive the *same* seam as
+   production rather than a parallel one.
+4. `Scheduler::execute_frame()` becomes `begin + draw + end` so its current
+   post-frame behavior is preserved for existing callers.
+
+Divergence to state plainly if this lands: a FLUI *persistent* callback runs
+**before** the pipeline, where Flutter's pipeline is itself the first persistent
+callback. Post-frame callbacks are unaffected — they see committed geometry in
+both — and post-frame is the only phase Hero needs. Nothing else in the framework
+registers a persistent callback today, so nothing observes the difference.
+
+**Cost:** touches `flui-scheduler`, `flui-binding`, `flui-app` (three runner call
+sites), and the `handle_draw_frame` tests. It is the kind of cross-crate change §5
+U1 deliberately isolated for the geometry seam, and it deserves the same treatment:
+**its own slice, before U2, with its own gate.**
+
+### Honest limits of this finding
+
+- It is **not** established that moving the drain is *sufficient* for Hero — only
+  that the current order makes the U2 seam impossible to build correctly. Whether
+  a route forced offstage in frame *N* has committed geometry by the post-frame
+  phase of frame *N* is a further claim, testable only once the drain moves.
+- The three runner call sites are the *desktop*, *web*, and one further path; each
+  was read, none was executed. A `production_and_headless_paths_drive_the_same_post_frame_seam`
+  test does not exist and cannot exist until they share a step.
+- `Scheduler::handle_draw_frame`'s post-frame drain is not dead code — it fires for
+  callbacks registered outside the tree path. The bug is its *position*, not its
+  existence.
 
 ---
 
