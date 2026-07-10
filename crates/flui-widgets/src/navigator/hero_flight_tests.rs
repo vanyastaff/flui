@@ -20,7 +20,7 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use super::hero::{Hero, HeroHandle, HeroTag};
-use super::hero_controller::HeroController;
+use super::hero_controller::{FlightDirection, HeroController};
 use super::navigator::{Navigator, NavigatorHandle};
 use super::observer::NavigatorObserver;
 use super::overlay_route::SimpleRoute;
@@ -564,64 +564,215 @@ fn rect_origin(rect: Rect) -> (f32, f32) {
 }
 
 // ============================================================================
-// No divert (U5)
+// Divert (U5.1) — a same-tag flight interrupted mid-air is redirected in place
 // ============================================================================
 
-/// **U4 does not divert.** Flutter redirects an in-flight hero when a second transition
-/// starts for the same tag (`_HeroFlight.divert`, `heroes.dart:738-813`). This slice
-/// ends the existing flight first, so a second flight never stacks a second shuttle in
-/// the overlay.
+/// **push interrupted by pop.** Open a page, then immediately go back while its hero
+/// is still flying. Flutter's `_HeroFlight.divert` (`heroes.dart:742-757`) reuses the
+/// *same* flight and its *same* overlay entry, repoints the proxy at
+/// `ReverseAnimation(newAnimation)`, and reverses the rect tween — the pop retraces
+/// the push path backwards, no jump cut.
 ///
-/// The visible difference from Flutter is a jump cut where it would redirect. That is a
-/// documented U4 limitation, not a bug, and U5 replaces it.
+/// Observable: one flight, the **same** `entry_id` as before the pop, and the tween's
+/// begin/end swapped (the shuttle now heads back to where it came from).
 ///
-/// Red-check: delete the `if let Some(existing) = self.flights.lock().remove(&…)` arm
-/// from `FlightManager::start` — two shuttles ride in the overlay at once.
+/// Red-check: in `FlightManager::start`, replace the `existing.divert(…); return;`
+/// with the U4 end-and-restart (`self.flights.lock().remove(&tag)` + `finish` + a fresh
+/// `start`). The entry id then changes and the begin/end are the fresh push tween.
 #[test]
-fn existing_flight_same_tag_is_not_stacked() {
+fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    harness.tick();
+    let b = hero_page("shared", 60.0, 45.0);
+    let b_transition = b.transition_handle();
+    let _b = navigator.push(b);
+    harness.tick();
+
+    // The push flight is airborne, parked mid-entrance so the pop genuinely reverses.
+    b_transition.controller().expect("installed").set_value(0.5);
+    let push_flight = controller.flights().get(&tag("shared")).expect("airborne");
+    let push_entry = push_flight.entry_id();
+    let push_begin = push_flight.begin_rect();
+    let push_end = push_flight.target_rect();
+
+    // Go back: B pops while its hero is still in flight.
+    assert!(navigator.pop());
+    harness.tick();
+
+    assert_eq!(controller.flights().len(), 1, "still exactly one flight");
+    let pop_flight = controller
+        .flights()
+        .get(&tag("shared"))
+        .expect("still airborne");
+    assert_eq!(
+        pop_flight.entry_id(),
+        push_entry,
+        "the SAME overlay entry — diverted in place, not restarted"
+    );
+    assert_eq!(navigator.overlay().entry_ids().last().copied(), push_entry);
+
+    // The reverse retraces the push: begin/end swapped. `on_tick` re-reads the
+    // destination *origin* after the swap, so compare on size, which it preserves.
+    assert_eq!(
+        (
+            pop_flight.begin_rect().width().0,
+            pop_flight.begin_rect().height().0
+        ),
+        (push_end.width().0, push_end.height().0),
+        "the tween now begins where the push was heading"
+    );
+    assert_eq!(
+        (
+            pop_flight.target_rect().width().0,
+            pop_flight.target_rect().height().0
+        ),
+        (push_begin.width().0, push_begin.height().0),
+        "and ends where the push began"
+    );
+}
+
+/// A divert keeps **exactly one** active flight and **one** overlay entry for the tag —
+/// the whole point of reusing the flight object. This is the same-direction branch
+/// (`heroes.dart:781-815`): a third push over an airborne push flight.
+///
+/// Red-check: same as above — swap `divert` for end-and-restart; a *new* entry appears
+/// and the old one is removed, so `entry_id` changes.
+#[test]
+fn a_same_tag_divert_keeps_one_active_flight_and_one_overlay_entry() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
     let entries_before = navigator.overlay().entry_ids().len();
-    let first = fly(
+    let _first = fly(
         &navigator,
         &mut harness,
         hero_page("shared", 30.0, 20.0),
         hero_page("shared", 60.0, 45.0),
     );
-    let first_flight = controller
-        .flights()
-        .get(&tag("shared"))
-        .expect("in the air");
-    let first_entry = first_flight.entry_id();
+    let airborne = controller.flights().get(&tag("shared")).expect("airborne");
+    let entry_before = airborne.entry_id();
     assert_eq!(controller.flights().len(), 1);
-    let _ = first;
 
-    // A third page route, same tag, pushed while the first flight is still airborne.
+    // A third page, same tag, pushed while the first flight is still airborne.
     let _third = navigator.push(hero_page("shared", 90.0, 70.0));
     harness.tick();
 
     assert_eq!(
         controller.flights().len(),
         1,
-        "one flight per tag; the old one was ended, not stacked"
+        "still one flight for the tag"
     );
-    let second_flight = controller
+    let diverted = controller
         .flights()
         .get(&tag("shared"))
-        .expect("in the air");
-    assert_ne!(second_flight.entry_id(), first_entry, "a new shuttle");
-
-    let entries = navigator.overlay().entry_ids();
+        .expect("still airborne");
     assert_eq!(
-        entries.len(),
-        entries_before + 3 + 1,
-        "three routes and exactly one shuttle: {entries:?}"
+        diverted.entry_id(),
+        entry_before,
+        "the same overlay entry was redirected, not replaced"
     );
+    assert_eq!(
+        navigator.overlay().entry_ids().len(),
+        entries_before + 3 + 1,
+        "three routes and exactly ONE shuttle: {:?}",
+        navigator.overlay().entry_ids()
+    );
+}
+
+/// A divert reaches back through the flight's `NavigatorHandle`, mutates the flight,
+/// and repoints its `ProxyAnimation` — whose `set_parent` fires `on_tick`
+/// synchronously. `on_tick` locks the same flight state `divert` just wrote, so the
+/// lock discipline (release every flight lock before `set_parent`) is load-bearing: get
+/// it wrong and this hangs.
+///
+/// A deadlock hangs rather than fails, so the body runs on a worker thread.
+///
+/// Red-check: hold `self.inner.rect.lock()` across `self.inner.proxy.set_parent(...)`
+/// in `HeroFlight::divert` — `on_tick` then blocks on `rect` and this times out.
+#[test]
+fn a_divert_does_not_deadlock() {
+    const BUDGET: Duration = Duration::from_secs(10);
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let navigator = seeded_navigator();
+        let controller = install(&navigator);
+        let mut harness = mount_navigator(&navigator);
+
+        let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+        harness.tick();
+        let b = hero_page("shared", 60.0, 45.0);
+        let b_transition = b.transition_handle();
+        let _b = navigator.push(b);
+        harness.tick();
+        b_transition.controller().expect("installed").set_value(0.5);
+
+        assert!(navigator.pop());
+        harness.tick();
+
+        assert_eq!(controller.flights().len(), 1);
+        let _ = done.send(());
+    });
+
     assert!(
-        !entries.contains(&first_entry.expect("the first flight had an entry")),
-        "the superseded shuttle left the overlay"
+        finished.recv_timeout(BUDGET).is_ok(),
+        "a divert deadlocked — a flight lock was held across ProxyAnimation::set_parent"
+    );
+}
+
+/// The retired-flight discipline from `f7cb228c` survives divert: a **diverted** flight
+/// is never parked in `retired` (it stays airborne, same object), and when it finally
+/// settles it retires and drains at end-of-frame like any other — not inside a listener.
+///
+/// Red-check: in `FlightManager::start`, push the existing flight into `retired` before
+/// diverting — `retired_count()` is then non-zero while a flight is still airborne.
+#[test]
+fn a_diverted_flight_retires_only_after_it_finally_settles() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    harness.tick();
+    let b = hero_page("shared", 60.0, 45.0);
+    let b_transition = b.transition_handle();
+    let _b = navigator.push(b);
+    harness.tick();
+    b_transition.controller().expect("installed").set_value(0.5);
+
+    assert!(navigator.pop());
+    harness.tick();
+
+    assert_eq!(controller.flights().len(), 1, "airborne after the divert");
+    assert_eq!(
+        controller.flights().retired_count(),
+        0,
+        "a diverted flight is redirected, never retired"
+    );
+
+    // Let the pop settle: B's animation runs to dismissed.
+    b_transition.controller().expect("installed").set_value(0.0);
+    assert_eq!(
+        controller.flights().len(),
+        0,
+        "the settled flight left the active set"
+    );
+    assert_eq!(
+        controller.flights().retired_count(),
+        1,
+        "parked, awaiting a safe drop"
+    );
+
+    harness.tick();
+    assert_eq!(
+        controller.flights().retired_count(),
+        0,
+        "and drained at end-of-frame, exactly as an undiverted flight"
     );
 }
 
@@ -800,5 +951,121 @@ fn many_flights_landing_in_one_frame_schedule_one_drain() {
         controller.flights().retired_count(),
         0,
         "both drained together"
+    );
+}
+
+/// **pop interrupted by push.** A back-navigation's hero is still flying when a new
+/// page is pushed. Flutter's `_HeroFlight.divert` pop→push branch (`heroes.dart:758-780`)
+/// keeps the same flight and entry, drives the proxy from
+/// `newAnimation.drive(Tween(begin: oldValue, end: 1.0))`, hands the old source its
+/// placeholder back, and re-aims from the old end to the new destination.
+///
+/// Observable: one flight, the same entry, and the direction flipped `Pop → Push`.
+///
+/// Red-check: in `FlightManager::start`, end-and-restart instead of diverting — the
+/// entry id changes and the flight is a brand-new pop... er, push, losing continuity.
+#[test]
+fn a_pop_flight_interrupted_by_a_push_diverts_in_place() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    // Push A, then B, and settle B so the push flight ends cleanly.
+    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    harness.tick();
+    let b = hero_page("shared", 60.0, 45.0);
+    let b_transition = b.transition_handle();
+    let _b = navigator.push(b);
+    harness.tick();
+    b_transition.controller().expect("installed").set_value(1.0);
+    harness.tick();
+    assert_eq!(controller.flights().len(), 0, "the push flight settled");
+
+    // Pop B: a fresh pop flight B→A. Keep it airborne, mid-reverse.
+    assert!(navigator.pop());
+    harness.tick();
+    b_transition.controller().expect("installed").set_value(0.5);
+    let pop_flight = controller
+        .flights()
+        .get(&tag("shared"))
+        .expect("pop airborne");
+    assert_eq!(pop_flight.direction(), FlightDirection::Pop);
+    let pop_entry = pop_flight.entry_id();
+
+    // Push C while the pop is still flying.
+    let _c = navigator.push(hero_page("shared", 90.0, 70.0));
+    harness.tick();
+
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "still one flight for the tag"
+    );
+    let diverted = controller
+        .flights()
+        .get(&tag("shared"))
+        .expect("still airborne");
+    assert_eq!(
+        diverted.entry_id(),
+        pop_entry,
+        "the pop flight was redirected in place, keeping its overlay entry"
+    );
+    assert_eq!(
+        diverted.direction(),
+        FlightDirection::Push,
+        "and now runs as a push toward the new route"
+    );
+    assert_eq!(
+        navigator.overlay().entry_ids().last().copied(),
+        pop_entry,
+        "one shuttle, still on top"
+    );
+}
+
+/// The same-direction divert (`heroes.dart:781-812`) **transfers the placeholders**:
+/// the old pair get their `endFlight(keepPlaceholder: true)`, and the new pair are
+/// frozen by `startFlight`. A push→push divert (third page over an airborne push)
+/// leaves the *new* source hero holding a with-child placeholder and the new
+/// destination a bare one.
+///
+/// Red-check: delete the `new_from.start_flight(new_dir == Push)` /
+/// `new_to.start_flight(false)` calls from the same-direction branch of
+/// `HeroFlight::divert` — the new heroes never freeze, so `placeholder_size()` is `None`.
+#[test]
+fn a_same_direction_divert_transfers_the_placeholders() {
+    let navigator = seeded_navigator();
+    let _controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    harness.tick();
+    let _b = navigator.push(hero_page("shared", 60.0, 45.0));
+    harness.tick();
+
+    // A third page diverts the airborne A→B push into A→C.
+    let _c = navigator.push(hero_page("shared", 90.0, 70.0));
+    harness.tick();
+
+    // Routes: 0 seeded, 1 = A, 2 = B (new source), 3 = C (new destination).
+    let b_hero = hero_of(&navigator, 2, "shared");
+    let c_hero = hero_of(&navigator, 3, "shared");
+
+    assert_eq!(
+        b_hero.placeholder_size().map(|s| (s.width.0, s.height.0)),
+        Some((60.0, 45.0)),
+        "B is now the flight's source, frozen at its size"
+    );
+    assert!(
+        b_hero.includes_child(),
+        "and keeps its child offstage — it is the *from* hero of a push"
+    );
+    assert_eq!(
+        c_hero.placeholder_size().map(|s| (s.width.0, s.height.0)),
+        Some((90.0, 70.0)),
+        "C is the new destination, a bare hole"
+    );
+    assert!(
+        !c_hero.includes_child(),
+        "the destination drops its child — the shuttle carries it"
     );
 }

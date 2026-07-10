@@ -60,7 +60,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_animation::{
     Animatable, Animation, AnimationStatus, Curve, Interval, ProxyAnimation, RectTween,
-    ReverseAnimation,
+    ReverseAnimation, Tween, animate,
 };
 use flui_foundation::{Listenable, ListenerId, RenderId};
 use flui_geometry::Rect;
@@ -74,19 +74,31 @@ use super::hero_controller::{FlightDirection, HeroFlightManifest};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
 
-/// Everything one in-flight hero shares between its overlay entry, its animation
-/// listeners, and the manager that owns it.
-struct FlightInner {
-    tag: HeroTag,
+/// The `_HeroFlightManifest`-derived facts a divert can replace: which way the
+/// flight runs, which two heroes it connects, and the coordinate space its
+/// destination lives in (`heroes.dart:815` — `manifest = newManifest`).
+///
+/// Behind one `Mutex` so `on_tick`, `finish`, and `divert` all see a coherent set.
+struct FlightState {
     direction: FlightDirection,
     from_hero: HeroHandle,
     to_hero: HeroHandle,
     /// The destination route's coordinate root, for the per-tick re-measure.
     to_route_subtree: RenderId,
+}
+
+/// Everything one in-flight hero shares between its overlay entry, its animation
+/// listeners, and the manager that owns it.
+struct FlightInner {
+    tag: HeroTag,
     overlay: OverlayHandle,
 
+    /// The half a divert rewrites in place — Flutter's `manifest = newManifest`.
+    state: Mutex<FlightState>,
+
     /// `_HeroFlight._proxyAnimation` (`heroes.dart:557`): the animation the shuttle
-    /// reads, already reversed for a pop.
+    /// reads, already reversed for a pop. Its **parent** is repointed by a divert;
+    /// the proxy object itself, and the listeners on it, never change.
     proxy: Arc<ProxyAnimation<f32>>,
     /// `_HeroFlight.heroRectTween` (`:553`). Re-aimed by [`FlightInner::on_tick`].
     rect: Mutex<RectTween>,
@@ -123,7 +135,10 @@ impl FlightInner {
         let destination = if self.aborted.load(Ordering::Relaxed) {
             None
         } else {
-            self.to_hero.bounding_box_in(self.to_route_subtree)
+            let state = self.state.lock();
+            let (to_hero, subtree) = (state.to_hero.clone(), state.to_route_subtree);
+            drop(state);
+            to_hero.bounding_box_in(subtree)
         };
         let origin = destination
             .map(|rect| (rect.min_x(), rect.min_y()))
@@ -204,6 +219,12 @@ impl HeroFlight {
         *self.inner.opacity.lock()
     }
 
+    /// Which way the flight currently runs — a divert can flip it.
+    #[cfg(test)]
+    pub(crate) fn direction(&self) -> FlightDirection {
+        self.inner.state.lock().direction
+    }
+
     /// `_HeroFlight._performAnimationUpdate` (`heroes.dart:600-618`), minus the
     /// `onFlightEnded` callback — the manager does that half.
     ///
@@ -229,8 +250,158 @@ impl HeroFlight {
         //  fromHero hidden. If [AnimationStatus.dismissed], the animation is triggered
         //  but canceled before it finishes. In this case, we keep toHero hidden
         //  instead." (`:608-614`)
-        self.inner.from_hero.end_flight(status.is_completed());
-        self.inner.to_hero.end_flight(status.is_dismissed());
+        let (from_hero, to_hero) = {
+            let state = self.inner.state.lock();
+            (state.from_hero.clone(), state.to_hero.clone())
+        };
+        from_hero.end_flight(status.is_completed());
+        to_hero.end_flight(status.is_dismissed());
+    }
+
+    /// `_HeroFlight.divert` (`heroes.dart:740-816`): a second transition for this tag
+    /// started while the flight was airborne. Redirect the **same** flight — same
+    /// object, same overlay entry — rather than end it and start a fresh one.
+    ///
+    /// Called from `FlightManager::start`, i.e. from the measurement pass, never from a
+    /// status listener. It still must not hold a flight lock across
+    /// [`ProxyAnimation::set_parent`], which fires `on_tick` synchronously; so every
+    /// branch computes first, mutates the guarded fields, and repoints the proxy
+    /// **last** with no lock held.
+    fn divert(&self, new: &HeroFlightManifest, plan: FlightPlan) {
+        let FlightPlan {
+            direction: new_dir,
+            from_hero: new_from,
+            to_hero: new_to,
+            to_route_subtree: new_subtree,
+            overlay: _,
+            animation: new_anim,
+        } = plan;
+
+        let (old_dir, old_from, old_to) = {
+            let state = self.inner.state.lock();
+            (
+                state.direction,
+                state.from_hero.clone(),
+                state.to_hero.clone(),
+            )
+        };
+
+        // The new parent for `_proxyAnimation`, the new rect endpoints, and whether the
+        // shuttle is rebuilt — decided per branch, applied afterwards.
+        let new_parent: Arc<dyn Animation<f32>>;
+        let (new_begin, new_end): (Rect, Rect);
+        let mut new_shuttle: Option<BoxedView> = None;
+
+        match (old_dir, new_dir) {
+            // "A push flight was interrupted by a pop." (`heroes.dart:742-757`)
+            (FlightDirection::Push, FlightDirection::Pop) => {
+                debug_assert!(
+                    old_from.is_same(&new_to) && old_to.is_same(&new_from),
+                    "BUG: a push→pop divert must reverse the same two heroes \
+                     (heroes.dart:744-745)"
+                );
+                // `_proxyAnimation.parent = ReverseAnimation(newManifest.animation)`.
+                new_parent = Arc::new(ReverseAnimation::new(new_anim));
+                // `heroRectTween = ReverseTween<Rect?>(heroRectTween)`. FLUI has only a
+                // **linear** `RectTween`, for which reversing the tween and swapping
+                // begin/end are identical (`lerp(a,b,1-t) == lerp(b,a,t)`). Flutter uses
+                // `ReverseTween` only to keep a non-linear path (`MaterialRectArcTween`)
+                // symmetric; when an arc tween lands, this must become a real
+                // `ReverseTween`. Divergence recorded in ADR-0021 §7j.
+                let rect = self.inner.rect.lock();
+                new_begin = rect.end;
+                new_end = rect.begin;
+                // Same heroes keep flying: no placeholder changes.
+            }
+
+            // "A pop flight was interrupted by a push." (`heroes.dart:758-780`)
+            (FlightDirection::Pop, FlightDirection::Push) => {
+                debug_assert!(
+                    old_to.is_same(&new_from),
+                    "BUG: a pop→push divert keeps the old destination as the new source \
+                     (heroes.dart:766)"
+                );
+                // `_proxyAnimation.parent = newManifest.animation.drive(
+                //      Tween(begin: manifest.animation.value, end: 1.0))`.
+                let begin = self.inner.proxy.value();
+                new_parent = Arc::new(animate(Tween { begin, end: 1.0 }, new_anim));
+
+                if old_from.is_same(&new_to) {
+                    // "same hero" (`:772-777`): begin from the old end, end at the old
+                    // begin — the reverse of the reverse, without a new destination.
+                    let rect = self.inner.rect.lock();
+                    new_begin = rect.end;
+                    new_end = rect.begin;
+                } else {
+                    // `:767-771`: hand the old source its placeholder back and freeze the
+                    // new destination, then aim from the old end at the new location.
+                    old_from.end_flight(true);
+                    new_to.start_flight(false);
+                    new_begin = self.inner.rect.lock().end;
+                    new_end = new.to_rect;
+                }
+            }
+
+            // "A push or a pop flight is heading to a new route." (`heroes.dart:781-815`)
+            // push→push or pop→pop, all four heroes distinct.
+            (_, _) => {
+                debug_assert!(
+                    !old_from.is_same(&new_from) && !old_to.is_same(&new_to),
+                    "BUG: a same-direction divert connects four distinct heroes \
+                     (heroes.dart:786-787)"
+                );
+                // `begin: heroRectTween.evaluate(_proxyAnimation)` — from where the
+                // shuttle is right now — `end: newManifest.toHeroLocation`.
+                new_begin = self.inner.current_rect();
+                new_end = new.to_rect;
+
+                new_parent = match new_dir {
+                    FlightDirection::Pop => Arc::new(ReverseAnimation::new(new_anim)),
+                    FlightDirection::Push => new_anim,
+                };
+
+                // `manifest.fromHero.endFlight(keepPlaceholder: true)` + `toHero`, then
+                // `newManifest.fromHero.startFlight(push?)` + `toHero.startFlight()`.
+                old_from.end_flight(true);
+                old_to.end_flight(true);
+                new_from.start_flight(new_dir == FlightDirection::Push);
+                new_to.start_flight(false);
+
+                // `shuttle = null; overlayEntry!.markNeedsBuild();` — rebuild the shuttle
+                // from the new destination's child.
+                new_shuttle = Some(new_to.shuttle_child());
+            }
+        }
+
+        // Apply the guarded fields — locks released before the proxy repoint below.
+        {
+            let mut rect = self.inner.rect.lock();
+            rect.begin = new_begin;
+            rect.end = new_end;
+        }
+        *self.inner.fade_from.lock() = None;
+        self.inner.aborted.store(false, Ordering::Relaxed);
+        if let Some(shuttle) = new_shuttle.take() {
+            *self.inner.shuttle.lock() = Some(shuttle);
+        }
+        {
+            let mut state = self.inner.state.lock();
+            state.direction = new_dir;
+            state.from_hero = new_from;
+            state.to_hero = new_to;
+            state.to_route_subtree = new_subtree;
+        }
+
+        // `manifest = newManifest` is the last line of `divert`; the proxy repoint is
+        // the visible effect. No flight lock is held here, so the `on_tick` it fires
+        // reads the state just written.
+        self.inner.proxy.set_parent(new_parent);
+
+        // `overlayEntry!.markNeedsBuild()` for the cleared shuttle (`:813`). Harmless
+        // for the other branches, but only the same-direction branch changed it.
+        if let Some(entry) = self.inner.entry.lock().as_ref() {
+            entry.mark_needs_build();
+        }
     }
 }
 
@@ -354,11 +525,20 @@ impl FlightManager {
         self.flights.lock().get(tag).cloned()
     }
 
-    /// `_HeroFlight.start` (`heroes.dart:698-736`), plus the no-divert decision.
+    /// `_HeroFlight.start` (`heroes.dart:698-736`), or — when a flight for this tag is
+    /// already airborne — `_HeroFlight.divert` (`:1051-1052`).
     ///
-    /// `animation` is `manifest.animation` (`:466-480`): the **destination** route's
-    /// primary animation for a push, the **source** route's for a pop.
+    /// `plan.animation` is `manifest.animation` (`:466-480`): the **destination**
+    /// route's primary animation for a push, the **source** route's for a pop.
     pub(crate) fn start(self: &Arc<Self>, manifest: &HeroFlightManifest, plan: FlightPlan) {
+        // `if (existingFlight != null) existingFlight.divert(manifest)` (`:1051-1052`):
+        // U5.1 redirects the airborne flight in place, keeping its one overlay entry,
+        // rather than the U4 end-and-restart. The flight stays in the map under its tag.
+        if let Some(existing) = self.flights.lock().get(&manifest.tag).cloned() {
+            existing.divert(manifest, plan);
+            return;
+        }
+
         let FlightPlan {
             direction,
             from_hero,
@@ -367,17 +547,6 @@ impl FlightManager {
             overlay,
             animation,
         } = plan;
-
-        // No divert in U4: end the flight already in the air for this tag before
-        // starting another, so shuttles never stack. Flutter would `divert` it.
-        //
-        // `start` runs in the measurement pass, not in `existing`'s status listener, so
-        // dropping it here is safe — `finish` just removed its listeners. No retired
-        // detour is needed for this path.
-        if let Some(existing) = self.flights.lock().remove(&manifest.tag) {
-            existing.finish(AnimationStatus::Dismissed);
-            drop(existing);
-        }
 
         // `_proxyAnimation.parent = ReverseAnimation(manifest.animation)` for a pop,
         // `manifest.animation` for a push (`:719-724`).
@@ -388,11 +557,13 @@ impl FlightManager {
 
         let inner = Arc::new(FlightInner {
             tag: manifest.tag.clone(),
-            direction,
-            from_hero: from_hero.clone(),
-            to_hero: to_hero.clone(),
-            to_route_subtree,
             overlay: overlay.clone(),
+            state: Mutex::new(FlightState {
+                direction,
+                from_hero: from_hero.clone(),
+                to_hero: to_hero.clone(),
+                to_route_subtree,
+            }),
             proxy: Arc::new(ProxyAnimation::new(parent)),
             rect: Mutex::new(RectTween {
                 begin: manifest.from_rect,

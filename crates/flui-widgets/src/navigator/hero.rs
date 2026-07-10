@@ -305,9 +305,9 @@ impl HeroHandle {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// [`is`](Self::is), for tests that must distinguish "the same tag" from "the same
-    /// hero" — which is the whole duplicate-tag contract.
-    #[cfg(test)]
+    /// Whether both handles name the same mounted hero — the "same tag" vs "same
+    /// hero" distinction the duplicate-tag contract and the flight-divert logic both
+    /// turn on (`heroes.dart:744-745`, `:766`).
     pub(crate) fn is_same(&self, other: &Self) -> bool {
         self.is(other)
     }

@@ -315,7 +315,8 @@ Each slice is independently mergeable. Nothing is public before U6.
 | **U3** ✅ | **D4, and the controller skeleton — see §7g and §7h.** `ModalRoute` primary + secondary animation proxies; `set_offstage` drives them. Private `HeroController` (`didChangeTop` → offstage → post-frame → measure). **This row's original content was `HeroRegistry` + `Hero` + `HeroHandle`, with "no controller"; it landed the other way round.** §7h records why and what it cost. |
 | **U3.5** ✅ | **S7 + S8, the half U3 skipped.** Private `HeroTag(Arc<dyn ViewKey>)`, per-route `HeroRegistry` behind an ambient `HeroScope`, `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build), and `HeroFlightManifest` collection in the controller's post-frame callback. S8's `Positioned` claim **verified** (§7h). Still no flight. | `cargo test -p flui-widgets hero`; port-check FR-036 registry entry for `Arc<dyn ViewKey>`. |
 | **U4** ✅ | **Landed 2026-07-10 (§7i).** Private `HeroFlight` + `FlightManager`. `RectTween`, `ProxyAnimation` driving (reversed for a pop), overlay entry insert/remove, `on_tick` re-measure, `IgnorePointer` shuttle inside an inner `Stack` (S8). Push and pop; **no divert** — an existing flight for a tag is ended, not redirected. No `create_rect_tween` / `flight_shuttle_builder` hooks. | `cargo test -p flui-widgets hero`; `port-check`; export guard. |
-| **U5** | Flight divert (push interrupted by pop, and the three-way cases at `heroes.dart:739-813`), abort/fade-out (`onTick`'s `_heroOpacity` path), `placeholder_builder` + the `GlobalKey` D2 requires. | `cargo test -p flui-widgets hero`; the divert oracles in §6. |
+| **U5.1** ✅ | **Landed 2026-07-10 (§7j).** Flight divert — all three branches of `_HeroFlight.divert` (push↔pop and same-direction). In-place redirect: one flight, one overlay entry. | `cargo test -p flui-widgets hero`; the divert red-checks in §7j. |
+| **U5.2** | Abort/fade-out (`onTick`'s `_heroOpacity` path — the primitive exists but is untested end-to-end, §7i), `placeholder_builder` + the `GlobalKey` D2 requires. | `cargo test -p flui-widgets hero`. |
 | **U6** | **Parity + API sign-off gate.** Cross-check every claim against `.flutter/`; decide the public surface (Q8); export; public tests through the prelude; update `docs/PORT.md`, tracker B1.4. | Full battery: `just ci`; `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
 
 ---
@@ -1273,9 +1274,9 @@ anyway).
 
 ### Deferred, and named
 
-* **Divert (U5).** `_HeroFlight.divert` (`:738-813`) redirects an in-flight hero when a
-  second transition starts for its tag. U4 ends the old flight and starts a new one, so
-  shuttles never stack. The visible difference is a jump cut.
+* **Divert — done in U5.1 (§7j).** `_HeroFlight.divert` (`:738-816`) redirects an
+  in-flight hero when a second transition starts for its tag. U4 ended the old flight
+  and started a new one (a jump cut); U5.1 replaces that with in-place divert.
 * **`createRectTween` / `flightShuttleBuilder` / `placeholderBuilder` hooks**, and
   `Hero.curve` / `reverseCurve`. The tween is a linear `RectTween`; Flutter's
   `CurvedAnimation` (`:472-479`) defaults to linear for a `Hero`, so this is the same
@@ -1286,6 +1287,65 @@ anyway).
   takes edge insets; FLUI's takes `left`/`top`/`width`/`height`.
 * **Public API (U6).** `HeroFlight`, `FlightManager`, `Shuttle` and `ShuttleState` join
   the export guard.
+
+---
+
+## 7j. U5.1: flight divert (2026-07-10)
+
+U4 ended an airborne flight and started a fresh one when a second transition hit the
+same tag — a jump cut. U5.1 ports `_HeroFlight.divert` (`heroes.dart:740-816`): the
+**same** `HeroFlight`, the **same** overlay entry, redirected in place. `FlightManager::
+start` now calls `existing.divert(manifest, plan)` and returns, leaving the flight in
+the map under its tag.
+
+### The three branches, verified against source
+
+| Old → new | Proxy parent | Rect tween | Placeholders |
+|---|---|---|---|
+| push → pop (`:742-757`) | `ReverseAnimation(new.animation)` | reverse of the old tween | none — same two heroes, reversed |
+| pop → push (`:758-780`) | `new.animation.drive(Tween(old.value, 1.0))` | `begin = old.end`, `end = new.to` (or old.begin, same hero) | old source gets its placeholder back; new dest frozen |
+| same direction (`:781-815`) | new (or `ReverseAnimation` for pop) | `begin = shuttle now`, `end = new.to` | both old released (keep), both new frozen; shuttle rebuilt |
+
+`manifest.animation.drive(Tween(begin, 1.0))` is FLUI's `animate(Tween { begin, end: 1.0 }, parent)` — the same `TweenAnimation` the framework already ships.
+
+### One recorded divergence: reverse tween is a begin/end swap
+
+Flutter's push→pop uses `ReverseTween<Rect?>(heroRectTween)` rather than swapping
+`begin`/`end`, *"because tweens like `MaterialRectArcTween` may create a different path
+for swapped begin and end"* (`:750-753`). FLUI has only a **linear** `RectTween`, for
+which `lerp(a, b, 1-t) == lerp(b, a, t)` — reversing the tween and swapping its
+endpoints are identical. So the swap is used, and this is correct until an arc tween
+lands, at which point it must become a real `ReverseTween`. Recorded here, not hidden.
+
+### The sharp edge: `set_parent` fires `on_tick` synchronously
+
+`divert` runs in the measurement pass, so it may lock the flight freely — **except**
+across `ProxyAnimation::set_parent`, which calls `notify_listeners()` and thus runs the
+flight's own `on_tick`, which locks the same `state`/`rect`/`fade` fields. Every branch
+therefore computes first, writes the guarded fields, and repoints the proxy **last**
+with no flight lock held. `a_divert_does_not_deadlock` guards it (a lock held across
+`set_parent` times the test out).
+
+### Entry preservation, pinned
+
+Flutter keeps `overlayEntry` across a divert; only the same-direction branch clears the
+*shuttle* and `markNeedsBuild`s the entry (`:813`). FLUI matches: the entry id is
+unchanged across a divert, asserted in both `a_push_flight_interrupted_by_a_pop_diverts_in_place`
+and `a_same_tag_divert_keeps_one_active_flight_and_one_overlay_entry`.
+
+### Retired discipline (f7cb228c) intact
+
+A diverted flight is **never** retired — it stays airborne, same object. Only when it
+finally settles does it retire and drain at end-of-frame, exactly as an undiverted one.
+`a_diverted_flight_retires_only_after_it_finally_settles` pins both halves.
+
+### Still deferred
+
+The `onTick` fade-out (`_heroOpacity`) is implemented (§7i) but has no end-to-end test —
+reaching it means losing the destination mid-flight, which the harness cannot yet drive
+without ending the flight. `placeholderBuilder`, `createRectTween` / `flightShuttleBuilder`
+hooks, `Hero.curve`, `userGestureInProgress`, `HeroControllerScope`, and the public API
+remain out of scope.
 
 ---
 
