@@ -222,10 +222,23 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// path. Nothing in FLUI needs that yet (ADR-0021 §3, S4), and the narrow
     /// walk needs no inverse, so it cannot fail on a singular matrix.
     ///
-    /// Returns `Some(IDENTITY)` when `descendant == ancestor`, and `None` when
-    /// `ancestor` is not an ancestor of `descendant` — including when either id
-    /// is missing or the two live in different trees. **A `None` here is not a
-    /// "no transform"; it is "the question was malformed".**
+    /// # When this returns `None`
+    ///
+    /// **Never as "no transform".** A `None` means the question cannot be
+    /// answered, for one of two reasons:
+    ///
+    /// 1. `ancestor` is not an ancestor of `descendant` — including a missing id,
+    ///    or two nodes in different trees. Flutter throws here
+    ///    (`object.dart:3708`).
+    /// 2. Some node on the path has **not been laid out**. Every step needs its
+    ///    parent's committed size, and a size-dependent object — a `FittedBox`, a
+    ///    rotation about its centre, a `RenderFractionalTranslation`, a
+    ///    `RenderFlow` — yields a different, entirely plausible matrix if that
+    ///    size is assumed to be `Size::ZERO`. Flutter asserts `hasSize` at the
+    ///    call sites instead (`box.dart:3016`).
+    ///
+    /// `Some(IDENTITY)` when `descendant == ancestor`: a node's own space maps to
+    /// itself whatever its size, and no step runs.
     ///
     /// # Composition
     ///
@@ -280,7 +293,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 .get(child)
                 .expect("BUG: transform_to walked through a node that is not in the render tree")
                 .offset();
-            parent_node.apply_paint_transform(child_index, child_offset, &mut transform);
+            // `None` when `parent` has not been laid out. Not "no transform":
+            // a size-dependent object produces a different, plausible matrix at
+            // `Size::ZERO`. See `RenderNode::apply_paint_transform`.
+            parent_node.apply_paint_transform(child_index, child_offset, &mut transform)?;
             parent = child;
         }
         Some(transform)

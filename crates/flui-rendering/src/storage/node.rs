@@ -685,35 +685,62 @@ impl RenderNode {
         }
     }
 
+    /// This node's committed laid-out size, or `None` before its first layout.
+    ///
+    /// Box → committed `Size`. Sliver → absolute paint size, which needs **both**
+    /// a committed geometry and committed constraints; `absolute_paint_size`
+    /// silently returns `Size::ZERO` when either is missing, so the presence
+    /// check happens here instead.
+    #[inline]
+    pub fn laid_out_size(&self) -> Option<flui_types::Size> {
+        match self {
+            Self::Box(entry) => entry.state().geometry(),
+            Self::Sliver(entry) => {
+                let state = entry.state();
+                (state.geometry().is_some() && state.constraints().is_some())
+                    .then(|| state.absolute_paint_size())
+            }
+        }
+    }
+
     /// Composes onto `transform` the mapping from child `child`'s local space
     /// into this node's local space.
     ///
-    /// Resolves the node's laid-out size the same way [`paint_transform`] does —
-    /// box → committed `Size`, sliver → absolute paint size — and forwards to
+    /// `None` when this node has **not been laid out**, and the caller must not
+    /// treat that as "no transform": a size-dependent object — a `FittedBox`, a
+    /// rotation about its centre, a `RenderFractionalTranslation`, a `RenderFlow`
+    /// — produces a *different, plausible-looking* matrix at `Size::ZERO`.
+    /// Substituting zero here made [`PipelineOwner::transform_to`] quietly wrong
+    /// before the first layout (ADR-0021 §7a). Flutter asserts `box.hasSize` at
+    /// the corresponding call sites (`heroes.dart:380`, `box.dart:3016`) rather
+    /// than inventing a size.
+    ///
+    /// Forwards to
     /// [`crate::traits::RenderObject::apply_paint_transform`].
     ///
-    /// [`paint_transform`]: RenderNode::paint_transform
+    /// [`PipelineOwner::transform_to`]: crate::pipeline::PipelineOwner::transform_to
     #[inline]
+    #[must_use]
     pub fn apply_paint_transform(
         &self,
         child: usize,
         child_offset: flui_types::Offset,
         transform: &mut flui_types::Matrix4,
-    ) {
+    ) -> Option<()> {
+        let size = self.laid_out_size()?;
         match self {
             Self::Box(entry) => {
-                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
                 entry
                     .render_object()
                     .apply_paint_transform(child, child_offset, size, transform);
             }
             Self::Sliver(entry) => {
-                let size = entry.state().absolute_paint_size();
                 entry
                     .render_object()
                     .apply_paint_transform(child, child_offset, size, transform);
             }
         }
+        Some(())
     }
 
     /// Records this node's paint fragment through the protocol blanket.

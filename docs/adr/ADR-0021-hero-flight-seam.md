@@ -458,10 +458,11 @@ For the same reason `apply_paint_transform` takes two parameters Flutter's does
 not — the child's committed paint offset and this node's laid-out size. A Dart
 render object reads both off itself; a FLUI one cannot.
 
-### `transform_to` is narrow, and `None` means malformed
+### `transform_to` is narrow, and `None` means "cannot answer"
 
 Strict descendant → ancestor only, as §5 U1 scoped it. `Some(IDENTITY)` for a node
-and itself; `None` when `ancestor` is not an ancestor. Because the walk never
+and itself; `None` when `ancestor` is not an ancestor, **or when any node on the
+path has not been laid out** (see the defect below). Because the walk never
 inverts, it cannot fail on a singular matrix — only `global_to_local` can, and it
 returns `None` where Flutter returns `Offset.zero` (`box.dart:3079-3081`) rather
 than inventing an answer.
@@ -473,6 +474,41 @@ for it. A `None` from a corrupt parent/child link would have masqueraded as "not
 ancestor". The index lookup is now an `expect("BUG: …")` (the tree's own
 invariant, per [`PANIC-POLICY`](../PANIC-POLICY.md)), so exactly one check answers
 the question and deleting it goes red.
+
+### A defect that shipped in the first U1 commit: `unwrap_or(Size::ZERO)`
+
+`RenderNode::apply_paint_transform` resolved the parent's size with
+`geometry().unwrap_or(Size::ZERO)`, copying the shape of the neighbouring
+`RenderNode::paint_transform` (where a pre-layout node is never reached, because
+paint runs after layout). `transform_to` has no such guarantee, and the
+substitution made it **plausibly wrong before the first layout**: a `FittedBox`, a
+rotation about its centre, a `RenderFractionalTranslation` and a `RenderFlow` are
+all size-dependent, so `Size::ZERO` relocates the pivot and returns a *well-formed
+matrix for a layout that never happened*. Meanwhile the doc promised `None` only
+for a malformed ancestor relation.
+
+Flutter does not substitute: it asserts `hasSize` at the call sites
+(`box.dart:3016`, `heroes.dart:380`).
+
+**Fixed** by threading the absence through: `RenderNode::laid_out_size()` returns
+`Option<Size>` (for slivers, `absolute_paint_size` needs *both* geometry and
+constraints, and silently zeroes when either is missing — the presence check moved
+out of it), `RenderNode::apply_paint_transform` returns `Option<()>`, and
+`transform_to` propagates. A public API returning `None` beats a `BUG:` panic here:
+"has this subtree been laid out yet" is a legitimate question a caller may not know
+the answer to, not a framework invariant.
+
+So `transform_to` now returns `None` for **two** reasons, both meaning *the
+question cannot be answered*: not an ancestor, or not laid out. `Some(IDENTITY)`
+for a node and itself stays — no step runs, so no size is needed.
+
+Pinned by `transform_to_before_layout_returns_none`, whose fixture scales about its
+own centre. Red-check: restoring `unwrap_or(Size::ZERO)` turns it red, as does
+swallowing the `Option` in `transform_to`. A third red-check corrected the test's
+own doc: a *size-independent* parent would also have caught the `None`, because the
+old code returned `Some` either way — the size-dependent fixture earns its place by
+letting the test show *what* the old code returned, not by being necessary for
+detection.
 
 ### One footgun, documented rather than fixed
 

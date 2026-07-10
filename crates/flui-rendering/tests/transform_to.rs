@@ -14,6 +14,7 @@
 
 #![cfg(feature = "testing")]
 
+use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::prelude::*;
 use flui_rendering::testing::{Probe, RenderTester, box_node};
 use flui_tree::{Leaf, Single};
@@ -72,6 +73,35 @@ impl RenderBox for MatrixBox {
     }
     fn paint_transform(&self, _size: Size) -> Option<Matrix4> {
         Some(self.0)
+    }
+}
+
+/// A single-child box that scales about **its own centre**, like
+/// `RenderTransform::uniform_scale`. Size-dependent by construction: the pivot
+/// moves with the box's size, so a wrong size yields a wrong-but-plausible matrix
+/// rather than an obviously broken one.
+#[derive(Debug)]
+struct CenterScaleBox(f32);
+impl flui_foundation::Diagnosticable for CenterScaleBox {}
+impl RenderBox for CenterScaleBox {
+    type Arity = Single;
+    type ParentData = BoxParentData;
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+        let constraints = *ctx.constraints();
+        ctx.layout_child(0, constraints.loosen());
+        ctx.position_child(0, Offset::ZERO);
+        constraints.biggest()
+    }
+    fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+        ctx.paint_child();
+    }
+    fn paint_transform(&self, size: Size) -> Option<Matrix4> {
+        let (cx, cy) = (size.width.0 / 2.0, size.height.0 / 2.0);
+        Some(
+            Matrix4::translation(cx, cy, 0.0)
+                * Matrix4::scaling(self.0, self.0, 1.0)
+                * Matrix4::translation(-cx, -cy, 0.0),
+        )
     }
 }
 
@@ -359,4 +389,83 @@ fn box_size_reads_committed_geometry() {
         owner.box_size(run.id("leaf")),
         Some(Size::new(px(20.0), px(20.0)))
     );
+}
+
+/// **Before the first layout there is no answer, and `transform_to` must say so.**
+///
+/// Every step needs its parent's committed size. The first cut of
+/// `RenderNode::apply_paint_transform` substituted `Size::ZERO`, which does not
+/// merely lose precision — for a size-dependent object it *relocates the pivot*
+/// and hands back a well-formed matrix describing a layout that never happened.
+/// Flutter asserts `box.hasSize` rather than inventing a size (`box.dart:3016`).
+///
+/// The fixture scales about its own centre on purpose. A size-independent parent
+/// would still make the `None` assertion below go red (red-checked), but only a
+/// size-dependent one lets the test *show* what the old code returned instead —
+/// which is the part worth pinning.
+#[test]
+fn transform_to_before_layout_returns_none() {
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert::<BoxProtocol>(Box::new(CenterScaleBox(2.0)));
+    owner.set_root_id(Some(root));
+    let leaf = owner
+        .insert_child_render_object(root, Box::new(FixedBox))
+        .expect("root exists");
+
+    // Nothing has been laid out: no committed geometry anywhere.
+    assert_eq!(owner.box_size(root), None);
+    assert_eq!(owner.box_size(leaf), None);
+
+    assert_eq!(
+        owner.transform_to(leaf, root),
+        None,
+        "an un-laid-out ancestor cannot contribute a transform",
+    );
+    assert_eq!(
+        owner.local_to_global(leaf, point(0.0, 0.0), None),
+        None,
+        "and neither conversion can be answered"
+    );
+    assert_eq!(owner.global_to_local(leaf, point(0.0, 0.0), None), None);
+
+    // The answer the old code produced, for contrast: scaling ×2 about a
+    // *zero-size* box's centre pins the origin at the origin — a perfectly
+    // plausible matrix for a layout that never ran. Once laid out at 20×20 the
+    // same box maps that origin to (-10, -10); see the test below.
+    let mut degenerate = Matrix4::IDENTITY;
+    RenderBox::apply_paint_transform(
+        &CenterScaleBox(2.0),
+        0,
+        Offset::ZERO,
+        Size::ZERO,
+        &mut degenerate,
+    );
+    let (x, y) = degenerate.transform_point(px(0.0), px(0.0));
+    assert_point_eq(Point::new(x, y), point(0.0, 0.0));
+
+    // A node's own space maps to itself regardless — no step runs, no size needed.
+    assert_eq!(owner.transform_to(root, root), Some(Matrix4::IDENTITY));
+}
+
+/// The same tree, once laid out, does answer — so the `None` above is about
+/// layout, not about the tree being hand-built or the fixture being unusable.
+#[test]
+fn transform_to_answers_once_layout_has_committed_geometry() {
+    let run = RenderTester::mount(
+        box_node(CenterScaleBox(2.0))
+            .label("root")
+            .child(box_node(FixedBox).label("leaf")),
+    )
+    .with_constraints(tight(20.0, 20.0))
+    .run_layout();
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("leaf"), run.id("root"))
+        .expect("laid out");
+
+    // ×2 about the centre of a 20×20 box: the origin lands at (-10, -10), not at
+    // (0, 0) as the zero-size substitution would have said.
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_point_eq(Point::new(x, y), point(-10.0, -10.0));
 }
