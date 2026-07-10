@@ -566,6 +566,19 @@ impl Scheduler {
             .store(new_phase as u8, Ordering::Release);
     }
 
+    /// Whether `self` and `other` are clones of the **same** scheduler — the same
+    /// callback queues, the same async driver, the same frame.
+    ///
+    /// `Scheduler` is `Arc`-backed, so this is pointer identity on the shared
+    /// callback state. It exists because `HeadlessBinding` owns a binding-local
+    /// scheduler while production drives the `Scheduler::instance()` singleton
+    /// (ADR-0021 §7c), and a capability handed to a widget must be provably
+    /// pointed at the right one.
+    #[must_use]
+    pub fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.callbacks, &other.callbacks)
+    }
+
     /// Check if currently in a frame
     pub fn is_in_frame(&self) -> bool {
         self.phase().is_in_frame()

@@ -176,6 +176,9 @@ pub struct ElementOwner<'a> {
     /// binding installed one. Cloned into the live `BuildCtx` so a
     /// `ViewState::init_state` can spawn a subscription.
     pub(crate) async_driver: &'a Option<flui_scheduler::AsyncDriver>,
+    /// The binding's post-frame capability (ADR-0021 U2), threaded into every
+    /// `BuildCtx` so a `ViewState` can acquire it from a lifecycle hook.
+    pub(crate) post_frame_handle: &'a Option<flui_scheduler::PostFrameHandle>,
 }
 
 impl ElementOwner<'_> {

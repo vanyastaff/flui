@@ -106,6 +106,14 @@ pub trait BuildContext: Send + Sync {
     /// singleton's tasks would never run headlessly.
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver>;
 
+    /// The binding's post-frame capability — schedule work that must observe this
+    /// frame's committed layout (ADR-0021 U2).
+    ///
+    /// `None` when no binding installed one. Acquire it in a lifecycle hook
+    /// (`init_state` / `did_change_dependencies`), never in `build`/layout/paint —
+    /// the same rule `rebuild_handle` follows (port-check trigger #22).
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle>;
+
     // ========================================================================
     // Inherited Data (Dependency Injection)
     // ========================================================================

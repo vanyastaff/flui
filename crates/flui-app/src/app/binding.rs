@@ -195,6 +195,11 @@ impl AppBinding {
         // know which.
         widgets.with_build_owner_mut(|owner| {
             owner.set_async_driver(Scheduler::instance().async_driver().clone());
+            // ADR-0021 U2: production drives the singleton's frames, so the
+            // post-frame capability names the singleton. `HeadlessBinding`
+            // installs its binding-local scheduler instead.
+            owner
+                .set_post_frame_handle(flui_scheduler::PostFrameHandle::new(Scheduler::instance()));
         });
 
         Self {

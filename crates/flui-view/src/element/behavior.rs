@@ -93,6 +93,7 @@ where
         handle.dep_sink,
         core.rebuild_handle(),
         owner.async_driver.clone(),
+        owner.post_frame_handle.clone(),
     ))
 }
 

@@ -32,7 +32,7 @@ pub(crate) fn mount(root: impl View) -> Harness {
     let mut tree = flui_view::ElementTree::new();
 
     let mut binding = HeadlessBinding::new();
-    build_owner.set_async_driver(binding.scheduler().async_driver().clone());
+    binding.install_build_capabilities(&mut build_owner);
 
     let root_element = tree.mount_root_with_pipeline_owner(
         &root,

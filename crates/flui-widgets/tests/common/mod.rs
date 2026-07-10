@@ -67,7 +67,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     // `StreamBuilder` subscribe in `init_state`, which runs inside that pass — with
     // no driver installed they would silently never poll (ADR-0018 U4/U6).
     let mut binding = HeadlessBinding::new();
-    build_owner.set_async_driver(binding.scheduler().async_driver().clone());
+    binding.install_build_capabilities(&mut build_owner);
 
     let root_id = tree.mount_root_with_pipeline_owner(
         &root,
@@ -248,6 +248,20 @@ impl LaidOut {
     /// build inbox), drains it, and re-runs layout/paint. No root dirtying.
     pub fn pump_for(&mut self, dt: Duration) {
         self.binding.pump_frame(dt);
+    }
+
+    /// The binding's **own** scheduler — never `Scheduler::instance()`.
+    ///
+    /// `pump_for` drives this one; a post-frame callback parked anywhere else is
+    /// never drained (ADR-0021 §7c).
+    pub fn binding_scheduler(&self) -> flui_scheduler::Scheduler {
+        self.binding.scheduler().clone()
+    }
+
+    /// The shared pipeline owner, so a post-frame callback can read committed
+    /// geometry from inside the frame.
+    pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
+        Arc::clone(&self.pipeline_owner)
     }
 
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a

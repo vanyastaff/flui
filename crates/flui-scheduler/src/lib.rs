@@ -151,9 +151,12 @@ pub use config::{
     PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, SchedulingStrategy,
     TimingsCallback, default_scheduling_strategy, set_time_dilation, time_dilation,
 };
+pub use post_frame::PostFrameHandle;
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
 /// name `Scheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
+mod post_frame;
+
 pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};

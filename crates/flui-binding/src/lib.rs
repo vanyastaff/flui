@@ -165,6 +165,24 @@ impl HeadlessBinding {
         }
     }
 
+    /// Install this binding's build-time capabilities on `build_owner`.
+    ///
+    /// The **one** place a headless caller wires the two capabilities a view can
+    /// acquire from its `BuildContext`, both naming *this* binding's scheduler:
+    /// the async driver (ADR-0018) and the post-frame handle (ADR-0021 U2).
+    ///
+    /// Must run **before** the root is mounted: a `ViewState::init_state` during
+    /// that first `build_scope` already asks for them. `bind_tree` re-installs for
+    /// owners bound afterwards.
+    ///
+    /// Naming the `Scheduler::instance()` singleton here would leave every headless
+    /// post-frame callback undrained — nothing drives the singleton's frames in a
+    /// headless process (ADR-0021 §7c).
+    pub fn install_build_capabilities(&self, build_owner: &mut flui_view::BuildOwner) {
+        build_owner.set_async_driver(self.scheduler.async_driver().clone());
+        build_owner.set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
+    }
+
     /// The binding's scheduler, which owns the frame-driven async task driver.
     ///
     /// Binding-local: two `HeadlessBinding`s never share a task set, so async
@@ -233,6 +251,10 @@ impl HeadlessBinding {
         // installing it again is a no-op if the caller already did.
         let mut build_owner = build_owner;
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
+        // ADR-0021 U2: the post-frame capability must name THIS binding's
+        // scheduler — the one `pump_frame`'s `drive_frame` drains — never the
+        // `Scheduler::instance()` singleton, which nothing drives headlessly.
+        build_owner.set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
         self.tree = Some(TreeBinding {
             build_owner,
             tree,

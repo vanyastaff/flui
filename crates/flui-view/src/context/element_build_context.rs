@@ -229,6 +229,10 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().async_driver().cloned()
     }
 
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.owner.read().post_frame_handle().cloned()
+    }
+
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
@@ -610,6 +614,8 @@ pub(crate) struct BuildCtx<'b> {
     rebuild: crate::RebuildHandle,
     /// The binding's async task driver, cloned from the `ElementOwner`.
     async_driver: Option<flui_scheduler::AsyncDriver>,
+    /// The binding's post-frame capability, cloned from the `ElementOwner`.
+    post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
 }
 
 impl<'b> BuildCtx<'b> {
@@ -623,6 +629,7 @@ impl<'b> BuildCtx<'b> {
         dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
         rebuild: crate::RebuildHandle,
         async_driver: Option<flui_scheduler::AsyncDriver>,
+        post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
     ) -> Self {
         Self {
             element_id,
@@ -631,6 +638,7 @@ impl<'b> BuildCtx<'b> {
             dep_sink,
             rebuild,
             async_driver,
+            post_frame_handle,
         }
     }
 
@@ -690,6 +698,10 @@ impl BuildContext for BuildCtx<'_> {
 
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.async_driver.clone()
+    }
+
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.post_frame_handle.clone()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -1121,6 +1133,7 @@ mod tests {
             &tree,
             &dep_sink,
             crate::RebuildHandle::inert(),
+            None,
             None,
         );
         ctx.visit_child_elements(&mut |_| {});

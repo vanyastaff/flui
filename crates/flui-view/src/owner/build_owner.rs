@@ -256,6 +256,11 @@ pub struct BuildOwner {
     /// `Scheduler::instance()`. Reaching for the singleton from a widget would
     /// make headless tests spawn into a driver that never runs.
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
+
+    /// The binding's post-frame capability (ADR-0021 U2). `None` when no binding
+    /// installed one, which makes `BuildContext::post_frame_handle` report the
+    /// absence rather than silently scheduling onto a global.
+    pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
 }
 
 /// An element that has been deactivated and is pending unmount.
@@ -312,6 +317,7 @@ impl BuildOwner {
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
             layout_builder_registry: Arc::new(Mutex::new(HashMap::new())),
             async_driver: None,
+            post_frame_handle: None,
         }
     }
 
@@ -327,6 +333,22 @@ impl BuildOwner {
     #[must_use]
     pub fn async_driver(&self) -> Option<&flui_scheduler::AsyncDriver> {
         self.async_driver.as_ref()
+    }
+
+    /// Install the binding's post-frame capability (ADR-0021 U2).
+    ///
+    /// Called once, at wiring time, by `HeadlessBinding` and `AppBinding`. It must
+    /// name **that binding's** scheduler — the one whose `drive_frame` drains the
+    /// queue. Headless owns a binding-local `Scheduler`; production drives the
+    /// `Scheduler::instance()` singleton.
+    pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
+        self.post_frame_handle = Some(handle);
+    }
+
+    /// The binding's post-frame capability, if one was installed.
+    #[must_use]
+    pub fn post_frame_handle(&self) -> Option<&flui_scheduler::PostFrameHandle> {
+        self.post_frame_handle.as_ref()
     }
 
     /// Set the callback for when a build is scheduled.
@@ -436,6 +458,7 @@ impl BuildOwner {
             child_manager_registry: &self.child_manager_registry,
             layout_builder_registry: &self.layout_builder_registry,
             async_driver: &self.async_driver,
+            post_frame_handle: &self.post_frame_handle,
         }
     }
 
@@ -638,6 +661,7 @@ impl BuildOwner {
                     child_manager_registry: &self.child_manager_registry,
                     layout_builder_registry: &self.layout_builder_registry,
                     async_driver: &self.async_driver,
+                    post_frame_handle: &self.post_frame_handle,
                 };
                 if needs_did_change {
                     element
@@ -688,6 +712,7 @@ impl BuildOwner {
                 child_manager_registry: &self.child_manager_registry,
                 layout_builder_registry: &self.layout_builder_registry,
                 async_driver: &self.async_driver,
+                post_frame_handle: &self.post_frame_handle,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -850,6 +875,7 @@ impl BuildOwner {
                 child_manager_registry: &self.child_manager_registry,
                 layout_builder_registry: &self.layout_builder_registry,
                 async_driver: &self.async_driver,
+                post_frame_handle: &self.post_frame_handle,
             };
 
             let did_work = manager_arc.lock().service(
@@ -974,6 +1000,7 @@ impl BuildOwner {
             child_manager_registry: &self.child_manager_registry,
             layout_builder_registry: &self.layout_builder_registry,
             async_driver: &self.async_driver,
+            post_frame_handle: &self.post_frame_handle,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).
