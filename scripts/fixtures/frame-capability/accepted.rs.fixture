@@ -1,14 +1,17 @@
 // Fixture for port-check trigger #22 — MUST pass.
 //
-// The sanctioned shape: acquire in a lifecycle hook, store, fire later.
+// The sanctioned shape for every lifecycle-only frame capability: acquire in a
+// lifecycle hook, store, fire later.
 
 impl ViewState<Async> for AsyncState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.handle = Some(ctx.rebuild_handle());
+        self.post_frame = ctx.post_frame_handle();
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         self.handle = Some(ctx.rebuild_handle());
+        self.post_frame = ctx.post_frame_handle();
     }
 
     // `build` only READS state the callback wrote. It never acquires a handle.
@@ -25,10 +28,19 @@ impl AsyncState {
         if let Some(handle) = &self.handle {
             handle.schedule();
         }
+        if let Some(post_frame) = &self.post_frame {
+            post_frame.schedule(|_timing| {});
+        }
     }
 }
 
 // The framework itself mints handles outside any guarded body.
 fn make_build_ctx(core: &ElementCore, owner: &ElementOwner) -> BuildCtx<'_> {
-    BuildCtx::new(core.self_id(), core.depth(), owner.tree(), core.rebuild_handle())
+    BuildCtx::new(
+        core.self_id(),
+        core.depth(),
+        owner.tree(),
+        core.rebuild_handle(),
+        owner.post_frame_handle.clone(),
+    )
 }

@@ -339,19 +339,28 @@ The two sentinel patterns are `"is not supported by the"` and `"rendering as Src
 
 **Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/wgpu/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/wgpu/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
 
-### 22. `rebuild_handle()` acquired inside a `build` / layout / paint body
+### 22. A **lifecycle-only frame capability** acquired inside a `build` / layout / paint body
 
-**Why:** `RebuildHandle::schedule()` marks its element dirty for the next frame ([`ADR-0018`](adr/ADR-0018-async-builder-seam.md) U1). Acquiring a handle inside `build` and scheduling from it is an unbounded rebuild loop; acquiring one inside `perform_layout`, `paint`, or a compositing walk would dirty the tree *after* `build_scope` has already run for this frame, so the dirty element would be laid out and painted stale.
+**The capabilities.** A *frame capability* lets code reach into a frame from outside one. Two exist, and both are guarded by this trigger:
 
-[`FOUNDATIONS.md`](FOUNDATIONS.md) permits an out-of-catalog `mark_needs_build` driver **only** when "gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`". This is that gate, and it ships in the same PR as the capability.
+| Capability | Introduced | What it does |
+|---|---|---|
+| `rebuild_handle()` | [`ADR-0018`](adr/ADR-0018-async-builder-seam.md) U1 | `RebuildHandle::schedule()` marks its element dirty for the **next** frame. |
+| `post_frame_handle()` | [`ADR-0021`](adr/ADR-0021-hero-flight-seam.md) U2 | `PostFrameHandle::schedule()` queues work for the **end of the current** frame. |
 
-**Sanctioned shape:** acquire the handle in `ViewState::init_state` or `did_change_dependencies`, store it in the state, and fire it later from a completion callback (any thread). The framework's own `make_build_ctx` mints one outside any guarded body, which is why the trigger scopes to function bodies rather than to the token.
+**Why:** acquiring a handle inside `build` and scheduling from it is an unbounded rebuild loop (rebuild) or a callback fired against the very frame that is still building (post-frame). Acquiring one inside `perform_layout`, `paint`, or a compositing walk would touch the tree *after* `build_scope` has already run for this frame, so the dirty element would be laid out and painted stale.
+
+[`FOUNDATIONS.md`](FOUNDATIONS.md) permits an out-of-catalog `mark_needs_build` driver **only** when "gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`". This is that gate.
+
+**Sanctioned shape:** acquire the handle in `ViewState::init_state` or `did_change_dependencies`, store it in the state, and fire it later from a completion callback (any thread). The framework's own `make_build_ctx` mints both outside any guarded body, which is why the trigger scopes to function bodies rather than to the token.
 
 **Guarded functions:** `build`, `build_into_views`, `perform_layout`, `layout_node_with_children`, `paint`, `paint_raw`, `run_paint`, `run_layout`, `run_compositing`, `compose`, `composite`.
 
-**Implementation:** a line regex cannot express "inside a function body", so this trigger delegates to [`scripts/check-rebuild-handle-scope.sh`](../scripts/check-rebuild-handle-scope.sh) — a brace-depth scanner that enters a guarded function at its opening `{`, leaves at the matching `}`, strips line comments, and flags any `rebuild_handle` token in between. The scanner has its own accept/reject fixtures under `scripts/fixtures/rebuild-handle/`; run `scripts/check-rebuild-handle-scope.sh --self-test` to verify the scanner itself.
+**Implementation:** a line regex cannot express "inside a function body", so this trigger delegates to [`scripts/check-frame-capability-scope.sh`](../scripts/check-frame-capability-scope.sh) — a brace-depth scanner that enters a guarded function at its opening `{`, leaves at the matching `}`, strips line comments, and flags **any capability token** in between. Adding a new capability is one entry in the scanner's `capabilities` list plus a fixture case. The scanner has its own accept/reject fixtures under `scripts/fixtures/frame-capability/`; run `scripts/check-frame-capability-scope.sh --self-test` to verify the scanner itself.
 
-**Allowlist:** none. Nothing in `crates/` acquires a handle in a guarded body today.
+> **How this trigger nearly shipped a hole.** ADR-0021 U2 added `post_frame_handle()` and documented it as following the same lifecycle-only rule — but the scanner only ever matched the `rebuild_handle` token, so a `ctx.post_frame_handle()` inside `build()` passed port-check. The rule was prose, not a guard. A capability added to `BuildContext` must be added to `capabilities` in the same change; the self-test now asserts that **both** tokens are reported by the rejected fixture, so a scanner that silently matched only one would fail its own self-test.
+
+**Allowlist:** none. Nothing in `crates/` acquires a frame capability in a guarded body today.
 
 ### Reactive lint promotion
 

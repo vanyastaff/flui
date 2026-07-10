@@ -345,7 +345,7 @@ or widget dependency, and this keeps `flui-material` from re-declaring them late
   `owner() -> None` stub, which is deleted rather than left as a second fake path.
   `ElementCore::create_mark_dirty_callback` is now a thin wrapper over the same handle,
   so `AnimatedView` and a future async builder ride one channel. Trigger **#22**
-  (`scripts/check-rebuild-handle-scope.sh`, a brace-depth scanner with accept/reject
+  (`scripts/check-frame-capability-scope.sh`, a brace-depth scanner with accept/reject
   fixtures) rejects acquiring a handle in `build`/`perform_layout`/`paint`/composite
   bodies. **One latent bug found:** the `build_scope` external-inbox drain never marked
   the drained element dirty — `AnimatedView` masked it by setting the flag inside its own

@@ -1479,9 +1479,13 @@ check "21" \
 # -----------------------------------------------------------------------------
 # Trigger 22 (ADR-0018 U1) — `rebuild_handle()` never acquired in a frame phase.
 #
-# `RebuildHandle::schedule()` dirties an element for the next frame. Acquiring a
-# handle inside `build` and scheduling from it is an unbounded rebuild loop;
-# inside `perform_layout` / `paint` / compositing it would dirty the tree after
+# A *frame capability* lets code reach into a frame from outside one:
+# `rebuild_handle()` (ADR-0018 U1) dirties an element for the next frame;
+# `post_frame_handle()` (ADR-0021 U2) queues work for the end of the current one.
+#
+# Acquiring either inside `build` and scheduling from it is an unbounded rebuild
+# loop, or a callback fired against the frame still running; inside
+# `perform_layout` / `paint` / compositing either would touch the tree after
 # `build_scope` has already run for this frame. FOUNDATIONS.md permits an
 # out-of-catalog `mark_needs_build` driver ONLY when "gated by a refusal trigger
 # barring signal subscriptions from `build`/`layout`/`paint`" — this is it.
@@ -1490,19 +1494,20 @@ check "21" \
 # `did_change_dependencies`, store it, fire it later from a callback.
 #
 # A line grep cannot express "inside a function body", so this trigger delegates
-# to a brace-depth scanner. Run `scripts/check-rebuild-handle-scope.sh
+# to a brace-depth scanner. Run `scripts/check-frame-capability-scope.sh
 # --self-test` to verify the scanner against its own accept/reject fixtures.
 # -----------------------------------------------------------------------------
-rebuild_handle_hits=$("${repo_root}/scripts/check-rebuild-handle-scope.sh" crates 2>/dev/null || true)
-if [[ -n "${rebuild_handle_hits}" ]]; then
-  echo "VIOLATION 22: rebuild_handle() acquired inside a build/layout/paint body (ADR-0018 U1)"
+frame_capability_hits=$("${repo_root}/scripts/check-frame-capability-scope.sh" crates 2>/dev/null || true)
+if [[ -n "${frame_capability_hits}" ]]; then
+  echo "VIOLATION 22: a lifecycle-only frame capability (rebuild_handle / post_frame_handle)"
+  echo "             was acquired inside a build/layout/paint body (ADR-0018 U1, ADR-0021 U2)"
   echo "see ${trigger_doc} (trigger 22)"
-  echo "${rebuild_handle_hits}"
+  echo "${frame_capability_hits}"
   echo ""
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    22: rebuild_handle() acquired in build/layout/paint (must be a lifecycle hook)"
+    echo "ok    22: rebuild_handle()/post_frame_handle() acquired in build/layout/paint (must be a lifecycle hook)"
   fi
 fi
 

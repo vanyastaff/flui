@@ -1,17 +1,23 @@
 // Fixture for port-check trigger #22 — MUST be rejected.
 //
 // Not compiled: the `.fixture` extension keeps it out of `cargo` and out of the
-// scanner's own `*.rs` sweep over `crates/`. Each of the three bodies below is
-// a distinct way to dirty the tree from inside a frame phase.
+// scanner's own `*.rs` sweep over `crates/`.
 //
-// Prose mentioning rebuild_handle in a comment must NOT count as a violation;
-// this line exists to prove the comment filter works.
+// Every body below acquires a LIFECYCLE-ONLY FRAME CAPABILITY from inside a
+// frame phase. Both capabilities appear, because a scanner that only matched
+// `rebuild_handle` would let `post_frame_handle` through — which is exactly the
+// gap ADR-0021 U2 shipped with.
+//
+// Prose mentioning rebuild_handle or post_frame_handle in a comment must NOT
+// count as a violation; this line exists to prove the comment filter works.
 
 impl StatelessView for Loop {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // Unbounded rebuild loop: schedule from the very phase that is building.
         let handle = ctx.rebuild_handle();
         handle.schedule();
+        // Queues work against the frame that is still building.
+        let post = ctx.post_frame_handle();
         Text::new("boom")
     }
 }
@@ -30,5 +36,6 @@ impl RenderBox for Bad {
 
     fn paint(&self, ctx: &mut PaintContext<'_>) {
         self.ctx.rebuild_handle().schedule();
+        self.ctx.post_frame_handle().unwrap().schedule(|_| {});
     }
 }

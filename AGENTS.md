@@ -153,7 +153,7 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 | **Sanctioned `dyn` boundaries only** — see the allowlist in port-check.sh trigger #9 | FR-036 registry |
 | **No locks in public API** (`pub fn -> MutexGuard`, `pub field: Mutex<...>`) | SP-6: locks behind private fields |
 | **No `println!`/`eprintln!`/`dbg!`** in foundation/tree/macros crates | Use `tracing` macros |
-| **No `rebuild_handle()` inside `build`/`perform_layout`/`paint`** — acquire it in `ViewState::init_state` / `did_change_dependencies` and fire it later | Trigger #22: scheduling from a frame phase is an unbounded rebuild loop (ADR-0018) |
+| **No lifecycle-only frame capability inside `build`/`perform_layout`/`paint`** — `rebuild_handle()` (ADR-0018) and `post_frame_handle()` (ADR-0021) are acquired in `ViewState::init_state` / `did_change_dependencies` and fired later | Trigger #22: scheduling from a frame phase is an unbounded rebuild loop, or a callback against the frame still running. Adding a capability to `BuildContext` means adding its token to `scripts/check-frame-capability-scope.sh` in the same change |
 
 ## Testing Quirks
 
