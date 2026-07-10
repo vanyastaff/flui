@@ -56,21 +56,21 @@ impl View for Stage {
 impl StatelessView for Stage {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let inside: BoxedView = match self.content {
-            Content::OneHero => Hero::new(tag("a"), SizedBox::new(30.0, 20.0)).boxed(),
+            Content::OneHero => Hero::new(ValueKey::new("a"), SizedBox::new(30.0, 20.0)).boxed(),
             Content::DuplicateTags => Column::new(vec![
-                Hero::new(tag("a"), SizedBox::new(30.0, 20.0)).boxed(),
-                Hero::new(tag("a"), SizedBox::new(11.0, 12.0)).boxed(),
+                Hero::new(ValueKey::new("a"), SizedBox::new(30.0, 20.0)).boxed(),
+                Hero::new(ValueKey::new("a"), SizedBox::new(11.0, 12.0)).boxed(),
             ])
             .main_axis_size(MainAxisSize::Min)
             .boxed(),
-            Content::DuplicateTagsLoserRemoved => {
-                Column::new(vec![Hero::new(tag("a"), SizedBox::new(30.0, 20.0)).boxed()])
-                    .main_axis_size(MainAxisSize::Min)
-                    .boxed()
-            }
+            Content::DuplicateTagsLoserRemoved => Column::new(vec![
+                Hero::new(ValueKey::new("a"), SizedBox::new(30.0, 20.0)).boxed(),
+            ])
+            .main_axis_size(MainAxisSize::Min)
+            .boxed(),
             Content::TwoTags => Column::new(vec![
-                Hero::new(tag("a"), SizedBox::new(30.0, 20.0)).boxed(),
-                Hero::new(tag("b"), SizedBox::new(11.0, 12.0)).boxed(),
+                Hero::new(ValueKey::new("a"), SizedBox::new(30.0, 20.0)).boxed(),
+                Hero::new(ValueKey::new("b"), SizedBox::new(11.0, 12.0)).boxed(),
             ])
             .main_axis_size(MainAxisSize::Min)
             .boxed(),
@@ -500,7 +500,7 @@ fn a_hero_bounding_box_is_none_before_layout_commits() {
             HeroScope::new(
                 self.registry.clone(),
                 Center::new().child(Hero::new(
-                    tag("probe"),
+                    ValueKey::new("probe"),
                     Probe {
                         registry: self.registry.clone(),
                         seen: Arc::clone(&self.seen),
@@ -550,7 +550,7 @@ fn a_hero_outside_any_route_registers_with_nothing_and_still_builds() {
     }
     impl StatelessView for Bare {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-            Center::new().child(Hero::new(tag("orphan"), SizedBox::new(5.0, 5.0)))
+            Center::new().child(Hero::new(ValueKey::new("orphan"), SizedBox::new(5.0, 5.0)))
         }
     }
 
@@ -620,7 +620,10 @@ fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key() {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             HeroScope::new(
                 self.registry.clone(),
-                Center::new().child(Hero::new(tag("a"), Counter(Arc::clone(&self.creations)))),
+                Center::new().child(Hero::new(
+                    ValueKey::new("a"),
+                    Counter(Arc::clone(&self.creations)),
+                )),
             )
         }
     }

@@ -150,9 +150,10 @@ pub use flui_objects::OverflowBoxFit;
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
 pub use navigator::{
-    Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
-    PopupRoute, PushCompletion, Route, RouteAnimation, RouteBindingSlot, RouteContentBuilder,
-    RouteId, RoutePageBuilder, RouteResult, RouteSettings, RouteTransitionsBuilder, SimpleRoute,
+    Hero, HeroController, Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute,
+    NavigatorState, PageRoute, PopupRoute, PushCompletion, Route, RouteAnimation, RouteBindingSlot,
+    RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteSettings,
+    RouteTransitionsBuilder, SimpleRoute,
 };
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
@@ -232,18 +233,19 @@ pub mod prelude {
         CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox, EditableText,
         EditableTextState, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
         FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
-        GestureDetector, GridView, Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image,
-        ImageAlignment, ImageFit, ImageProvider, IndexedStack, IntrinsicHeight, IntrinsicWidth,
-        LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, MediaQuery,
-        MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle, Offstage, Opacity,
-        OverflowBox, OverflowBoxFit, Padding, PageRoute, PopupRoute, Positioned, RepaintBoundary,
-        RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics,
-        ShrinkWrappingViewport, SimpleRoute, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table, TableCell, TableRow, Text,
-        TextEditingController, TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
+        GestureDetector, GridView, Hero, HeroController, Icon, IconData, IconTheme, IconThemeData,
+        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedStack,
+        IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView,
+        Listener, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator,
+        NavigatorHandle, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, PageRoute,
+        PopupRoute, Positioned, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
+        ScrollController, Scrollable, Scrollbar, Semantics, ShrinkWrappingViewport, SimpleRoute,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
+        StreamBuilder, Table, TableCell, TableRow, Text, TextEditingController, TextField, Theme,
+        ThemeData, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

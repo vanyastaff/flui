@@ -46,12 +46,6 @@
 //! divergence a stable registry needs — "last wins" would make the surviving hero
 //! depend on mount order.
 
-// U3.5 is the registry + view + handle. `HeroController` reads the registry, but the
-// `Hero` view has no production constructor until the public API lands (U6), so
-// `dead_code` cascades from the view through the handle it owns. Deleting it and
-// re-deriving it later is how a seam stops matching the ADR that specified it.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -431,16 +425,27 @@ impl fmt::Debug for HeroHandle {
 /// `createRectTween`, no `flightShuttleBuilder`, no `placeholderBuilder`, no
 /// `transitionOnUserGestures`, no `HeroMode`. Its `build` is a pass-through until a
 /// controller tells it otherwise.
+/// A subtree that animates between two routes when it appears in both under the same
+/// tag — Flutter's `Hero` (`heroes.dart:180`).
+///
+/// A `HeroController` must be attached to the `Navigator` for flights to run; see the
+/// crate-level docs. Baseline surface only: `tag` and `child`. `create_rect_tween`,
+/// `flight_shuttle_builder`, `placeholder_builder`, `HeroMode` and automatic
+/// controller attachment (`HeroControllerScope`) are deferred (ADR-0021 §7k, §7l).
 #[derive(Clone)]
-pub(crate) struct Hero {
+pub struct Hero {
     tag: HeroTag,
     child: BoxedView,
 }
 
 impl Hero {
-    pub(crate) fn new(tag: HeroTag, child: impl IntoView) -> Self {
+    /// A hero identified by `tag`. Any [`ViewKey`] works — `ValueKey::new("photo")`,
+    /// a domain newtype — and two heroes fly together iff their tags compare equal.
+    /// Flutter takes any `Object`; this takes anything the framework can already
+    /// compare and hash.
+    pub fn new(tag: impl ViewKey, child: impl IntoView) -> Self {
         Self {
-            tag,
+            tag: HeroTag::new(tag),
             child: BoxedView(Box::new(child.into_view())),
         }
     }
@@ -471,8 +476,10 @@ impl StatefulView for Hero {
     }
 }
 
-/// `_HeroState` (`heroes.dart:362`).
-pub(crate) struct HeroState {
+/// `_HeroState` (`heroes.dart:362`). `pub` only because `StatefulView::State` requires
+/// it (as `NavigatorState` is); **not** re-exported, so it is reachable only as
+/// `<Hero as StatefulView>::State` and carries no public API of its own.
+pub struct HeroState {
     handle: HeroHandle,
     /// The route's registry, resolved once from the ambient [`HeroScope`]. `None` for
     /// a `Hero` mounted outside any route, which is inert rather than an error —
@@ -480,11 +487,11 @@ pub(crate) struct HeroState {
     registry: Option<HeroRegistry>,
 }
 
-impl HeroState {
-    /// Test-facing: the handle a controller would drive.
-    #[cfg(test)]
-    pub(crate) fn handle(&self) -> HeroHandle {
-        self.handle.clone()
+impl std::fmt::Debug for HeroState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeroState")
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
     }
 }
 

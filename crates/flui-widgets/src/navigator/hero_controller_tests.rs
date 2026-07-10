@@ -568,10 +568,7 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
 fn hero_page_route(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
-            .child(Hero::new(
-                HeroTag::new(ValueKey::new(tag_name)),
-                SizedBox::new(w, h),
-            ))
+            .child(Hero::new(ValueKey::new(tag_name), SizedBox::new(w, h)))
             .into_view()
             .boxed()
     })
@@ -706,7 +703,7 @@ fn controller_skips_a_hero_that_left_its_route_before_the_measuring_frame() {
         if keep_for_page.load(Ordering::SeqCst) {
             Center::new()
                 .child(Hero::new(
-                    HeroTag::new(ValueKey::new("shared")),
+                    ValueKey::new("shared"),
                     SizedBox::new(30.0, 20.0),
                 ))
                 .into_view()

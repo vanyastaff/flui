@@ -764,7 +764,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 31] = [
+    const INTERNAL: [&str; 29] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -786,7 +786,6 @@ fn public_no_internal_route_stack_exports() {
         // public `HeroController`; U4 owns that gate, and until it runs, exporting
         // any of these would sign off a surface nobody reviewed.
         "ModalHandle",
-        "HeroController",
         "FlightDirection",
         "Measurement",
         "RouteSubtree",
@@ -799,9 +798,9 @@ fn public_no_internal_route_stack_exports() {
         "HeroHandle",
         "HeroState",
         "HeroFlightManifest",
-        "Hero",
-        // ADR-0021 U4: the flight. `Hero` is the one name users will eventually
-        // import, and none of this is designed for them yet.
+        // ADR-0021 U6: `Hero` and `HeroController` are the signed-off public surface;
+        // everything else stays crate-private (or, for `HeroState`, `pub` but never
+        // re-exported — reachable only as `<Hero as StatefulView>::State`).
         "HeroFlight",
         "FlightManager",
         "Shuttle",

@@ -45,11 +45,6 @@
 //!   (`:591-592`) because its `Positioned` takes edge insets; FLUI's takes
 //!   `left`/`top`/`width`/`height` directly, so the size is not needed.
 
-// U4 is the flight. Nothing constructs a `HeroController` in production until the
-// public `Hero` API lands (U6), so `dead_code` cascades from there into everything
-// here. The tests are this module's only callers.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,7 +82,6 @@ struct FlightState {
 /// listeners, and the manager that owns it.
 struct FlightInner {
     tag: HeroTag,
-    overlay: OverlayHandle,
 
     /// The half a divert rewrites in place — Flutter's `manifest = newManifest`.
     state: Mutex<FlightState>,
@@ -553,7 +547,6 @@ impl FlightManager {
 
         let inner = Arc::new(FlightInner {
             tag: manifest.tag.clone(),
-            overlay: overlay.clone(),
             state: Mutex::new(FlightState {
                 direction,
                 from_hero: from_hero.clone(),

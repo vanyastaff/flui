@@ -49,6 +49,8 @@ mod subtree;
 mod transition_route;
 
 pub use binding::RouteBindingSlot;
+pub use hero::Hero;
+pub use hero_controller::HeroController;
 pub use navigator::{Navigator, NavigatorHandle, NavigatorState};
 pub use observer::NavigatorObserver;
 pub use overlay_route::{

@@ -83,7 +83,7 @@ fn hittable_hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> 
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
             .child(Hero::new(
-                tag(tag_name),
+                ValueKey::new(tag_name),
                 SizedBox::new(w, h).child(ColoredBox::new(Color::RED)),
             ))
             .into_view()
@@ -96,7 +96,7 @@ fn hittable_hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> 
 fn hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
-            .child(Hero::new(tag(tag_name), SizedBox::new(w, h)))
+            .child(Hero::new(ValueKey::new(tag_name), SizedBox::new(w, h)))
             .into_view()
             .boxed()
     })
@@ -185,7 +185,10 @@ fn no_flight_when_only_one_route_is_a_page_route() {
 
     let popup = PopupRoute::<i32>::new(|_ctx, _a, _s| {
         Center::new()
-            .child(Hero::new(tag("shared"), SizedBox::new(60.0, 45.0)))
+            .child(Hero::new(
+                ValueKey::new("shared"),
+                SizedBox::new(60.0, 45.0),
+            ))
             .into_view()
             .boxed()
     });
@@ -500,7 +503,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
             .child(
                 Column::new(vec![
                     mover_for_page.clone().into_view().boxed(),
-                    Hero::new(tag("shared"), SizedBox::new(60.0, 45.0))
+                    Hero::new(ValueKey::new("shared"), SizedBox::new(60.0, 45.0))
                         .into_view()
                         .boxed(),
                 ])
@@ -912,10 +915,10 @@ fn many_flights_landing_in_one_frame_schedule_one_drain() {
     let two_heroes = |a: &'static str, b: &'static str, wa: f32, wb: f32| {
         PageRoute::<i32>::new(move |_ctx, _p, _s| {
             Column::new(vec![
-                Hero::new(tag(a), SizedBox::new(wa, 20.0))
+                Hero::new(ValueKey::new(a), SizedBox::new(wa, 20.0))
                     .into_view()
                     .boxed(),
-                Hero::new(tag(b), SizedBox::new(wb, 20.0))
+                Hero::new(ValueKey::new(b), SizedBox::new(wb, 20.0))
                     .into_view()
                     .boxed(),
             ])
@@ -1127,7 +1130,7 @@ impl ViewState<HeroGate> for HeroGateState {
     }
     fn build(&self, _view: &HeroGate, _ctx: &dyn BuildContext) -> impl IntoView {
         if self.present.load(Ordering::SeqCst) {
-            Hero::new(tag(self.tag_name), SizedBox::new(60.0, 45.0))
+            Hero::new(ValueKey::new(self.tag_name), SizedBox::new(60.0, 45.0))
                 .into_view()
                 .boxed()
         } else {

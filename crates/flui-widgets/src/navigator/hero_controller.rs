@@ -207,7 +207,7 @@ pub(crate) struct HeroFlightManifest {
 /// measurement happens in a post-frame callback, which is the only moment a route's
 /// geometry is both committed and offstage.
 #[derive(Default)]
-pub(crate) struct HeroController {
+pub struct HeroController {
     /// Flutter's `NavigatorObserver.navigator` (`navigator.dart:779`). `None` before
     /// attach and after detach, which is what makes a stale controller inert.
     navigator: Mutex<Option<NavigatorHandle>>,
@@ -222,8 +222,21 @@ pub(crate) struct HeroController {
     flights: Arc<FlightManager>,
 }
 
+impl std::fmt::Debug for HeroController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeroController")
+            .field("attached", &self.navigator.lock().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl HeroController {
-    pub(crate) fn new() -> Arc<Self> {
+    /// A hero controller, ready to attach to a `Navigator` as an observer:
+    /// `navigator.add_observer(HeroController::new())`. Flutter installs one
+    /// automatically via `MaterialApp`; FLUI has no `HeroControllerScope` yet, so this
+    /// is attached by hand (ADR-0021 §7l).
+    #[must_use]
+    pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
