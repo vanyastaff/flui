@@ -39,6 +39,7 @@
 //! | `RenderPhysicalModel` | `harness_physical_model_*` | yes | yes | yes | yes | — |
 //! | `RenderPhysicalShape` | `harness_physical_shape_*` | yes | yes | yes | yes | — |
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
+//! | `RenderSubtreeAnchor` | `harness_subtree_anchor_*` | yes | yes | yes | yes | attach/detach identity |
 //! | `RenderSemanticsAnnotations` | `harness_semantics_annotations_*` | yes | — | — | yes | semantics |
 //! | `RenderMergeSemantics` | `harness_merge_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderExcludeSemantics` | `harness_exclude_semantics_*` | yes | — | — | yes | semantics |
@@ -174,6 +175,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderPhysicalModel",
     "RenderPhysicalShape",
     "RenderRepaintBoundary",
+    "RenderSubtreeAnchor",
     "RenderSemanticsAnnotations",
     "RenderMergeSemantics",
     "RenderExcludeSemantics",
@@ -8097,4 +8099,185 @@ fn assert_transform_point(
         x.0,
         y.0,
     );
+}
+
+// ── RenderSubtreeAnchor (ADR-0021 U2) ────────────────────────────────────────
+//
+// The anchor's whole job is identity: publish its own `RenderId` while mounted,
+// clear it when it leaves. `attach(RepaintHandle)` is the first — and only —
+// hook where that id exists (`RepaintHandle::id()`); `detach()` is its mirror.
+// Everything else must be invisible.
+
+/// `attach` publishes the render object's **real** id — the one the pipeline
+/// knows it by, not a fabricated or zeroed placeholder.
+#[test]
+fn harness_subtree_anchor_attach_publishes_the_real_render_id() {
+    let anchor = SubtreeAnchor::new();
+    assert_eq!(anchor.get(), None, "an anchor names nothing before mount");
+    assert!(!anchor.is_anchored());
+
+    let run = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(anchor.clone()))
+            .label("anchor")
+            .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        anchor.get(),
+        Some(run.id("anchor")),
+        "the published id must be the anchor node's own RenderId"
+    );
+    assert!(anchor.is_anchored());
+}
+
+/// `detach` clears it. A published id that outlived its node would let a caller
+/// resolve — and measure — a subtree that has left the tree.
+#[test]
+fn harness_subtree_anchor_detach_clears_the_published_id() {
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+
+    let anchor = SubtreeAnchor::new();
+    let mut owner = PipelineOwner::new();
+
+    let root = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    owner.set_root_id(Some(root));
+    assert_eq!(anchor.get(), Some(root), "mounted");
+
+    owner.remove_render_object(root);
+    assert_eq!(anchor.get(), None, "a stale anchor must resolve to nothing");
+    assert!(!anchor.is_anchored());
+}
+
+/// Re-anchoring updates the published id rather than keeping the first one —
+/// a route rebuilt into a new render node must not hand out the old node's id.
+#[test]
+fn harness_subtree_anchor_reattach_updates_the_published_id() {
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+
+    let anchor = SubtreeAnchor::new();
+    let mut owner = PipelineOwner::new();
+
+    let first = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    assert_eq!(anchor.get(), Some(first));
+
+    owner.remove_render_object(first);
+    assert_eq!(anchor.get(), None);
+
+    let second = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    assert_eq!(anchor.get(), Some(second));
+    assert_ne!(first, second, "the fixture must actually mint a new id");
+}
+
+/// Two anchors never cross-talk: each render object publishes only into the cell
+/// it was constructed with.
+#[test]
+fn harness_subtree_anchor_publishes_only_into_its_own_cell() {
+    let (first, second) = (SubtreeAnchor::new(), SubtreeAnchor::new());
+    let run = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(first.clone()))
+            .label("outer")
+            .child(
+                box_node(RenderSubtreeAnchor::new(second.clone()))
+                    .label("inner")
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("leaf")),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(first.get(), Some(run.id("outer")));
+    assert_eq!(second.get(), Some(run.id("inner")));
+    assert_ne!(first.get(), second.get());
+}
+
+/// **Transparency.** Inserting an anchor changes no geometry, no paint, and no
+/// hit-test outcome. Asserted against the identical tree without one.
+#[test]
+fn harness_subtree_anchor_is_layout_paint_and_hit_test_transparent() {
+    let anchored = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(SubtreeAnchor::new()))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let plain = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 24.0)).label("child"))
+        .with_constraints(loose(200.0))
+        .run_frame();
+
+    assert_eq!(
+        anchored.box_geometry(anchored.root()),
+        plain.box_geometry(plain.root()),
+        "the anchor adopts its child's size",
+    );
+    assert_eq!(
+        anchored.box_geometry(anchored.id("child")),
+        plain.box_geometry(plain.id("child")),
+        "and lays the child out under its own constraints",
+    );
+    assert_eq!(
+        anchored.offset(anchored.id("child")),
+        Offset::ZERO,
+        "no shift"
+    );
+
+    let painted = |run: &flui_rendering::testing::FrameRun| {
+        run.display_commands()
+            .into_iter()
+            .map(|cmd| cmd.line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(
+        painted(&anchored),
+        painted(&plain),
+        "the anchor paints nothing of its own"
+    );
+
+    assert_eq!(
+        anchored.hit_first(10.0, 10.0),
+        Some(anchored.id("child")),
+        "hits pass through to the child, not absorbed by the anchor"
+    );
+    assert_eq!(
+        anchored.hit_first(100.0, 100.0),
+        None,
+        "and a miss stays a miss"
+    );
+}
+
+/// A childless anchor must not absorb hits, and must not pretend to have size.
+#[test]
+fn harness_subtree_anchor_without_a_child_takes_the_smallest_size_and_absorbs_no_hits() {
+    let run = RenderTester::mount(box_node(RenderSubtreeAnchor::new(SubtreeAnchor::new())))
+        .with_constraints(loose(200.0))
+        .run_frame();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+    assert_eq!(run.hit_first(0.0, 0.0), None);
+}
+
+/// It is deliberately **not** a repaint boundary — that is the one thing it does
+/// differently from `RenderRepaintBoundary`, which Flutter is forced to use for
+/// this job (`routes.dart:1229`).
+#[test]
+fn harness_subtree_anchor_is_not_a_repaint_boundary() {
+    let run = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(SubtreeAnchor::new()))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        !run.structure().contains(&"Transform"),
+        "no layer effect of its own"
+    );
+    assert_descendant_properties(&run.diagnostics(), "RenderSubtreeAnchor", &["render_id"]);
 }
