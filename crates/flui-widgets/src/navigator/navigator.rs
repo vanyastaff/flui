@@ -396,6 +396,70 @@ impl NavigatorHandle {
     /// same order, since `OverlayRoute.install` creates the entries and *then*
     /// calls `super.install()` (`routes.dart:69-71`).
     pub fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        self.push_prepared(route, |history, id, route| {
+            history.push_with_id(id, route).1
+        })
+    }
+
+    /// Flutter's `NavigatorState.pushReplacement` (`navigator.dart:5245-5268`):
+    /// push `route` and complete the current top **as replaced** — observers see
+    /// `did_replace`, never `did_remove`, and the replaced route's future resolves
+    /// with `None`.
+    pub fn push_replacement<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        self.push_replacement_erased(route, None)
+    }
+
+    /// [`push_replacement`](Self::push_replacement), delivering `result` to
+    /// whoever awaits the **replaced** route's [`RouteResult`] — Flutter's
+    /// `pushReplacement(newRoute, result: …)`. Same delivery-time type contract as
+    /// [`pop_with`](Self::pop_with).
+    pub fn push_replacement_with<R: NavigatorRoute, T: Send + 'static>(
+        &self,
+        route: R,
+        result: T,
+    ) -> RouteResult<R::Output> {
+        self.push_replacement_erased(route, Some(Box::new(result)))
+    }
+
+    fn push_replacement_erased<R: NavigatorRoute>(
+        &self,
+        route: R,
+        result: Option<AnyResult>,
+    ) -> RouteResult<R::Output> {
+        self.push_prepared(route, |history, id, route| {
+            history.push_replacement_with_id(id, route, result).1
+        })
+    }
+
+    /// Flutter's `NavigatorState.pushAndRemoveUntil` (`navigator.dart:5347-5371`):
+    /// push `route`, then walk downward from the old top completing every present
+    /// route until `keep` answers `true` — the addition and all removals share one
+    /// flush. Removed routes complete their futures with `None` (`:5360`) and
+    /// observers see `did_remove` for each.
+    ///
+    /// `keep` receives each route's [`RouteId`]; `|_| false` clears everything
+    /// beneath the new route. Flutter's `RoutePredicate` is handed the `Route`
+    /// object itself — FLUI routes name each other by id (ADR-0019).
+    pub fn push_and_remove_until<R: NavigatorRoute>(
+        &self,
+        route: R,
+        keep: impl Fn(RouteId) -> bool,
+    ) -> RouteResult<R::Output> {
+        self.push_prepared(route, |history, id, route| {
+            history.push_and_remove_until_with_id(id, route, keep).1
+        })
+    }
+
+    /// The shared push shape: mint the id, fill the route's binding slot, insert
+    /// its overlay entry, then `commit` against the locked history and apply the
+    /// flush outcome. The route is bound and its entry inserted **before** the
+    /// flush — `install()` and a zero-duration route's first status change both
+    /// reach for the entry (`routes.dart:69-71`).
+    fn push_prepared<R: NavigatorRoute, O>(
+        &self,
+        route: R,
+        commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
+    ) -> O {
         let id = RouteId::next();
         self.bind(&route, id);
 
@@ -408,7 +472,7 @@ impl NavigatorHandle {
 
         let (result, outcome) = {
             let mut history = self.shared.history.lock();
-            let (_, result) = history.push_with_id(id, route);
+            let result = commit(&mut history, id, route);
             (result, history.take_outcome())
         };
 

@@ -38,8 +38,11 @@
 //! - **`didReplace`'s controller-value inheritance** (`:363-374`). It needs the
 //!   *replaced* route's controller, and FLUI's routes are named by `RouteId`; the
 //!   `TransitionPeer` registry publishes the primary `Animation`, not the
-//!   `AnimationController`. `pushReplacement` is also not exported (ADR-0019 U4),
-//!   so this has no reachable caller. Recorded, not faked.
+//!   `AnimationController`. Its only producer is the `Replace` lifecycle —
+//!   Flutter's `replace()` / `replaceRouteBelow()`, which are not exported.
+//!   (`push_replacement` **is** exported, but its `PushReplace` lifecycle runs
+//!   `did_push`, a full entrance animation, exactly as Flutter's `handlePush`
+//!   does — it never reaches `didReplace`.) Recorded, not faked.
 //! # `didPopNext` and `completed` — two claims this file first got wrong
 //!
 //! An early draft made `did_pop_next` a no-op and skipped the `completed` signal,

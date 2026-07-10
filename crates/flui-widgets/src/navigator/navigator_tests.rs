@@ -844,3 +844,71 @@ fn overlay_stays_private_after_u4() {
         }
     }
 }
+
+/// `NavigatorHandle::push_replacement` — Flutter's `pushReplacement`
+/// (`navigator.dart:5245-5268`): the top is swapped in place, so the stack depth and
+/// overlay layer count are unchanged, and the **replaced** route's future resolves
+/// with the delivered result (`complete(result, isReplaced: true)`).
+///
+/// Red-check: route `push_replacement_erased` through `push_with_id` — a third layer
+/// appears and the replaced future never resolves.
+#[test]
+fn navigator_push_replacement_swaps_the_top_in_place() {
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
+
+    let second = handle.push(page(&built, "second"));
+    harness.tick();
+    assert_eq!(layers(&mut harness).len(), 2);
+
+    let _third = handle.push_replacement_with(page(&built, "third"), 7_i32);
+    harness.tick();
+
+    assert!(built.contains("third"), "the replacement route built");
+    assert_eq!(
+        layers(&mut harness).len(),
+        2,
+        "replaced in place, not stacked"
+    );
+    assert_eq!(handle.route_ids().len(), 2);
+    assert_eq!(
+        second.try_take(),
+        Some(Some(7)),
+        "the replaced route's future resolves with the delivered result"
+    );
+}
+
+/// `NavigatorHandle::push_and_remove_until` — Flutter's `pushAndRemoveUntil`
+/// (`navigator.dart:5347-5371`): one flush pushes the new route and removes every
+/// present route beneath the old top until `keep` answers `true`. Removed routes'
+/// futures complete with `None` (`:5360`).
+///
+/// Red-check: skip the downward walk in `push_and_remove_until_with_id` — four
+/// routes remain and `second` stays pending.
+#[test]
+fn navigator_push_and_remove_until_clears_down_to_the_kept_route() {
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
+    let root = handle.route_ids()[0];
+
+    let second = handle.push(page(&built, "second"));
+    let _third = handle.push(page(&built, "third"));
+    harness.tick();
+    assert_eq!(layers(&mut harness).len(), 3);
+
+    let _home = handle.push_and_remove_until(page(&built, "home"), |id| id == root);
+    harness.tick();
+
+    assert_eq!(
+        handle.route_ids().len(),
+        2,
+        "only the kept root and the new route survive"
+    );
+    assert_eq!(handle.route_ids()[0], root, "the kept route is untouched");
+    assert_eq!(layers(&mut harness).len(), 2);
+    assert_eq!(
+        second.try_take(),
+        Some(None),
+        "a removed route's future completes with None"
+    );
+}

@@ -605,20 +605,28 @@ impl RouteHistory {
     /// Flutter's `NavigatorState.pushReplacement` (`:5245-5268`): complete the
     /// current top with `is_replaced = true` (so it emits **no** `did_remove`),
     /// append the new route in `PushReplace`, then a single flush.
-    /// Not exported: `NavigatorHandle` does not surface `pushReplacement` yet, and
-    /// widening the U4 surface needs its own sign-off. The algorithm is ported and
-    /// tested; only the public front door is missing.
     #[cfg(test)]
     pub(crate) fn push_replacement<R: Route>(
         &mut self,
         route: R,
         result: Option<AnyResult>,
     ) -> (RouteId, RouteResult<R::Output>) {
+        self.push_replacement_with_id(RouteId::next(), route, result)
+    }
+
+    /// `push_replacement`, under an id the caller minted —
+    /// the [`push_with_id`](Self::push_with_id) split, so `NavigatorHandle` can bind
+    /// the route and insert its overlay entry before the flush.
+    pub(crate) fn push_replacement_with_id<R: Route>(
+        &mut self,
+        id: RouteId,
+        route: R,
+        result: Option<AnyResult>,
+    ) -> (RouteId, RouteResult<R::Output>) {
         if let Some(top) = self.last_present_index() {
             self.entries[top].arm_complete(result, true);
         }
-        let (erased, route_result) = RouteRecord::erase(route);
-        let id = erased.id();
+        let (erased, route_result) = RouteRecord::erase_with_id(id, route);
         self.entries
             .push(RouteEntry::new(erased, RouteLifecycle::PushReplace));
         self.flush(true);
@@ -633,17 +641,26 @@ impl RouteHistory {
     /// This is the one Flutter API that puts an addition and several deletions in
     /// one flush, which is what makes the additions-before-deletions ordering and
     /// the deletions' FIFO drain observable.
-    /// Not exported, for the same reason as [`push_replacement`](Self::push_replacement).
     #[cfg(test)]
     pub(crate) fn push_and_remove_until<R: Route>(
         &mut self,
         route: R,
         keep: impl Fn(RouteId) -> bool,
     ) -> (RouteId, RouteResult<R::Output>) {
+        self.push_and_remove_until_with_id(RouteId::next(), route, keep)
+    }
+
+    /// `push_and_remove_until`, under an id the
+    /// caller minted — the [`push_with_id`](Self::push_with_id) split.
+    pub(crate) fn push_and_remove_until_with_id<R: Route>(
+        &mut self,
+        id: RouteId,
+        route: R,
+        keep: impl Fn(RouteId) -> bool,
+    ) -> (RouteId, RouteResult<R::Output>) {
         let mut index = self.entries.len() as isize - 1;
 
-        let (erased, result) = RouteRecord::erase(route);
-        let id = erased.id();
+        let (erased, result) = RouteRecord::erase_with_id(id, route);
         self.entries
             .push(RouteEntry::new(erased, RouteLifecycle::Push));
 

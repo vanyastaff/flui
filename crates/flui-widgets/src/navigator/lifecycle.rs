@@ -43,11 +43,12 @@
 /// Ordered by Flutter's declaration order (`navigator.dart:3139-3168`), minus
 /// `staging` and `disposing` — see the module docs. `Ord` is derived so the
 /// predicates below are the reference's index comparisons, spelled as ranges.
-/// `PushReplace` and `Replace` have no *production* producer after U4:
-/// `pushReplacement` / `replace` are ported and tested but not exported, pending
-/// their own sign-off. The states are kept because the flush's arms and the range
-/// predicates are transcribed from Flutter's declaration order, and deleting a
-/// variant would silently shift four predicates.
+/// `PushReplace` gained its production producer when
+/// `NavigatorHandle::push_replacement` was exported (2026-07-10). `Replace` still
+/// has none: `replace` / `replaceRouteBelow` are ported and tested but not
+/// exported, pending their own sign-off. The state is kept because the flush's
+/// arms and the range predicates are transcribed from Flutter's declaration
+/// order, and deleting a variant would silently shift four predicates.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum RouteLifecycle {

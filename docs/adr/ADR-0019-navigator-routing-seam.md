@@ -506,6 +506,8 @@ Plus the one this ADR exists for: **a wrong `pop` result type logs and completes
 
 Not exported, though ported and tested: `pushReplacement`, `pushAndRemoveUntil`, `replace`. Widening the surface to them needs its own sign-off; their `#[cfg(test)]` gating is what keeps `RouteLifecycle::PushReplace`/`Replace` from being dead code in a production build.
 
+**Update (2026-07-10):** `NavigatorHandle::push_replacement` / `push_replacement_with` and `push_and_remove_until` are now exported. The shape is fully dictated by the existing U4 surface (the `pop`/`pop_with` result-erasure pattern, an id-taking `keep` predicate mirroring `remove_route`'s id-based naming) and the algorithms were already ported, red-checked and oracle-tested at the history level (§7c items 11–13) — only the front door was added, sharing `push`'s bind-then-insert-then-flush body (`push_prepared`). Handle-level tests pin the wiring: `navigator_push_replacement_swaps_the_top_in_place`, `navigator_push_and_remove_until_clears_down_to_the_kept_route`. `replace` / `replaceRouteBelow` remain unexported — the `Replace` lifecycle, and with it `TransitionRoute.didReplace`'s controller-value inheritance (`routes.dart:363-374`), still has no production producer. (`push_replacement`'s `PushReplace` runs `did_push` — a full entrance animation — exactly as Flutter's `handlePush` does.)
+
 ---
 
 ## 7e. Public API and sign-off (U4, 2026-07-09)
