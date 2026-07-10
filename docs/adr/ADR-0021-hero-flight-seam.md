@@ -156,7 +156,7 @@ Deferred to the **U6 sign-off gate**; the *proposal*, to be argued then:
 | `HeroTag` (= `Arc<dyn ViewKey>` alias) | public | Q6. |
 | `create_rect_tween` | public, **U4** | `Fn(Rect, Rect) -> Box<dyn Animatable<Rect>>`. Flutter puts it on both `Hero` and `HeroController`; keep both. |
 | `flight_shuttle_builder` | public, **U4** | Q7's signature, minus the two `BuildContext`s Flutter passes (FLUI cannot hand out a foreign element's context safely — see §7 UNKNOWN-3). |
-| `placeholder_builder` | public, **U5** | Forces the `GlobalKey` in `_HeroState` (§4 D2). |
+| `placeholder_builder` | public, **U6** | No private consumer. Flutter's `_key` only matters when a caller-supplied placeholder changes wrapper shape; U5.2 verified the default path needs no key (§7k). |
 | `HeroControllerScope` | **not exported** | Nested navigators deferred. |
 | `HeroMode` | **not exported** in U1 | Cheap to add later; needs the registry to honour it (S7). |
 
@@ -372,14 +372,14 @@ Every row names the **red-check**: a change to the implementation that must turn
 | `an_invalid_manifest_aborts_rather_than_flies` | `isValid` (`:529`) | Drop the finiteness check; a `NaN` rect must not reach the tween. |
 | `hero_flight_end_to_end_through_a_real_vsync` | — | The `tests/routes.rs` posture: no hand-driven controller. |
 
-### U5 — divert
+### U5 — divert, fade-out, placeholder identity
 
 | Test | Flutter oracle |
 |---|---|
 | `a_push_flight_interrupted_by_a_pop_reverses_the_same_rect_path` | `'Pop interrupts push, reverses flight'` (`:2012`), and the comment at `heroes.dart:751-755` explaining why `ReverseTween` is used rather than a fresh tween with swapped ends |
 | `overlapping_flights_for_the_same_tag_divert_rather_than_stack` | `'Overlapping starting and ending a hero transition works ok'` (`:969`) |
-| `an_aborted_flight_ends_both_heroes` | `'Aborted flight'` (`:1543`) |
-| `hero_child_state_survives_a_placeholder_shape_change` | D2's `GlobalKey` guard |
+| `a_destination_lost_mid_flight_fades_out_without_ending_the_flight` | `'Destination hero disappears mid-flight'` (`:1233`) |
+| `a_hero_child_keeps_its_state_across_a_flight_without_a_global_key` | D2's fixed-chain decision (§7k) |
 
 ### U6 — public
 
@@ -1269,7 +1269,7 @@ anyway).
 3. **`heroRectEnd = toHeroOrigin & heroRectTween.end!.size` (`:685`) is a no-op today.**
    `startFlight` freezes the destination hero's box, so re-reading the size and
    preserving it give the same answer. The code preserves it because Flutter does, and
-   because a U5 `placeholderBuilder` can hand back a differently-sized placeholder. The
+   because a future `placeholderBuilder` can hand back a differently-sized placeholder. The
    assertion is labelled a regression guard, not a red-checkable proof — mutating
    `on_tick` to re-read the size leaves it green.
 
@@ -1342,11 +1342,9 @@ finally settles does it retire and drain at end-of-frame, exactly as an undivert
 
 ### Still deferred
 
-The `onTick` fade-out (`_heroOpacity`) is implemented (§7i) but has no end-to-end test —
-reaching it means losing the destination mid-flight, which the harness cannot yet drive
-without ending the flight. `placeholderBuilder`, `createRectTween` / `flightShuttleBuilder`
-hooks, `Hero.curve`, `userGestureInProgress`, `HeroControllerScope`, and the public API
-remain out of scope.
+The `onTick` fade-out (`_heroOpacity`) now has end-to-end coverage in U5.2 (§7k).
+`placeholderBuilder`, `createRectTween` / `flightShuttleBuilder` hooks, `Hero.curve`,
+`userGestureInProgress`, `HeroControllerScope`, and the public API remain out of scope.
 
 ---
 
