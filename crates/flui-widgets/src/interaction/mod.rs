@@ -10,10 +10,11 @@ mod ignore_pointer;
 mod listener;
 mod mouse_region;
 mod offstage;
+mod shortcuts;
 mod visibility;
 
 pub use absorb_pointer::AbsorbPointer;
-pub(crate) use focus::enclosing_scope;
+pub(crate) use focus::enclosing_focus_parent;
 pub use focus::{Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
@@ -21,4 +22,5 @@ pub use ignore_pointer::IgnorePointer;
 pub use listener::Listener;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
+pub use shortcuts::{CallbackShortcuts, ShortcutCallback, SingleActivator};
 pub use visibility::Visibility;

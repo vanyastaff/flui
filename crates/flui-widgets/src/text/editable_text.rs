@@ -6,7 +6,7 @@ use std::sync::Arc;
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
 use flui_interaction::events::{Key, KeyState, NamedKey};
-use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode, KeyEventCallback};
+use flui_interaction::routing::{FocusManager, FocusNode, KeyEventCallback};
 use flui_objects::RenderEditable;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
@@ -100,9 +100,10 @@ impl EditableText {
 pub struct EditableTextState {
     /// Focus node representing this field in the global focus tree.
     focus_node: Arc<FocusNode>,
-    /// The scope the node hangs under — the nearest enclosing `FocusScope` at
-    /// mount, or the root scope. Detached from in `dispose`.
-    scope: Option<Arc<FocusScopeNode>>,
+    /// The node this field's node hangs under — the nearest enclosing focus
+    /// parent at mount, or the root scope's backing node. Detached from in
+    /// `dispose`.
+    parent: Option<Arc<FocusNode>>,
     /// Clone of the controller captured in `create_state`; used to register
     /// listeners in `init_state` without needing the `view` reference.
     controller: TextEditingController,
@@ -133,7 +134,7 @@ impl StatefulView for EditableText {
     fn create_state(&self) -> EditableTextState {
         EditableTextState {
             focus_node: FocusNode::with_debug_label("EditableText"),
-            scope: None,
+            parent: None,
             controller: self.controller.clone(),
             controller_listener_id: None,
             rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
@@ -149,11 +150,11 @@ impl ViewState<EditableText> for EditableTextState {
         //    (ADR-0022 U3/U4) — falling back to the root scope, and publish the
         //    node on the controller so the enclosing `TextField`'s tap can
         //    focus *this* field.
-        let scope = crate::interaction::enclosing_scope(ctx);
-        scope.attach_node(&self.focus_node);
+        let parent = crate::interaction::enclosing_focus_parent(ctx);
+        parent.attach_node(&self.focus_node);
         self.controller
             .set_focus_node_id(Some(self.focus_node.id()));
-        self.scope = Some(scope);
+        self.parent = Some(parent);
 
         // 2. Register a key handler with the FocusManager.  Only fires when
         //    this node is the primary-focused node.
@@ -210,8 +211,11 @@ impl ViewState<EditableText> for EditableTextState {
 
         // Detach the focus node from wherever it hangs (also clears primary
         // focus if this node held it).
-        if let Some(scope) = self.scope.take() {
-            scope.detach_node(self.focus_node.id());
+        if let Some(parent) = self.parent.take() {
+            match parent.as_scope() {
+                Some(scope) => scope.detach_node(self.focus_node.id()),
+                None => parent.detach_node(self.focus_node.id()),
+            }
         }
 
         // Remove the controller listener we registered in init_state.

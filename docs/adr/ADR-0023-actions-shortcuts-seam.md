@@ -1,6 +1,6 @@
 # ADR-0023 — The `Shortcuts` / `Actions` seam, and bubbling key dispatch
 
-- **Status:** **Accepted — U1 landed 2026-07-10; U2–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI key-dispatch path.
+- **Status:** **Accepted — U1 + U2 landed 2026-07-10; U3–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI key-dispatch path.
 - **Date:** 2026-07-10
 - **Deciders:** chief-architect; consult interaction owner (U1 changes `FocusManager::dispatch_key_event`'s contract), repository owner (public API: `CallbackShortcuts`, `SingleActivator`, later `Shortcuts`/`Actions`/`Intent`), qa-lead (dispatch-order and modifier-matching tests).
 - **Relates to:** builds on ADR-0022 (the `Focus` widget whose `on_key_event` this makes live); B1.1's `Actions`/`Shortcuts` line (`ROADMAP.md:217`); closes ADR-0022 §4's "bubbling up the ancestry is added when a widget needs interception, likely with `Shortcuts`".
@@ -108,7 +108,21 @@ child that returns `Handled` starves the ancestor's handler; one that returns
 `Ignored` feeds it; `SkipRemainingHandlers` starves the ancestor *and* reports
 unconsumed.
 
-### U2 — `SingleActivator` + `CallbackShortcuts` (`flui-widgets`)
+### U2 — `SingleActivator` + `CallbackShortcuts` (`flui-widgets`) — landed 2026-07-10
+
+Shipped as designed, plus one design correction the end-to-end test forced:
+ADR-0022 U1.2's flatten-to-nearest-scope parenting made a non-scope `Focus`
+(the shortcut wrapper) a **sibling** of the field instead of an ancestor, so
+the bubbled key never reached it — the test failed exactly there. Superseded:
+`FocusNode` gained public `attach_node`/`detach_node`/`adopt_node` (the adopt
+generalized from U1.3, recording into the *nearest* scope), and both `Focus`
+and `FocusScope` now provide one `FocusParentProvider` carrying their **node**
+— Flutter's `_FocusInheritedScope` shape — so the node tree mirrors the widget
+tree and route-scope history/restore still works through plain-node parents
+(`enclosing_scope` walks past them). Red-checks: the flat pre-U1 dispatch
+fails the shortcut test; exact-modifier matching pinned per
+`shortcuts.dart:560-581`. Original design follows.
+
 
 - `SingleActivator`: `new(key: impl Into<Key>)` plus `.control()`, `.shift()`,
   `.alt()`, `.meta()`, `.allow_repeats(bool)` builders. `matches(&KeyEvent)`

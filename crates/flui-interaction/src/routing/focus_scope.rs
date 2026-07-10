@@ -477,6 +477,72 @@ impl FocusNode {
         node.attached.store(true, AtomicOrdering::Release);
     }
 
+    /// Attach `child` under **this node** — scope or not. The node-tree edge
+    /// the leaf→root key-dispatch walk follows (ADR-0023 U2): a non-scope
+    /// `Focus` in the widget tree nests here so keys the focused descendant
+    /// ignores bubble through it, Flutter's node-tree shape.
+    pub fn attach_node(self: &Arc<Self>, child: &Arc<FocusNode>) {
+        self.attach_child(child);
+    }
+
+    /// Detach `child_id` from this node — **removal** semantics: the subtree
+    /// is marked detached and loses the primary focus if it held it. For a
+    /// scope parent, prefer [`FocusScopeNode::detach_node`], which also cleans
+    /// the focused-child history.
+    pub fn detach_node(&self, child_id: FocusNodeId) {
+        self.detach_child(child_id);
+    }
+
+    /// Move `node` — with its whole subtree — under this node, **preserving
+    /// focus** (ADR-0022 U1.3, generalized to plain-node parents for
+    /// ADR-0023). A moved subtree that holds the primary focus keeps it, the
+    /// old enclosing scope's history forgets the moved ids, and the *nearest*
+    /// scope at the new location records the focused id. A node already under
+    /// this parent is a no-op.
+    pub fn adopt_node(self: &Arc<Self>, node: &Arc<FocusNode>) {
+        let old_parent = node.parent();
+        if old_parent
+            .as_ref()
+            .is_some_and(|parent| parent.id == self.id)
+        {
+            return;
+        }
+
+        if let Some(old_parent) = old_parent {
+            // Lift the node out of the old parent's child list *without*
+            // `detach_child`'s removal semantics (recursive detached-marking
+            // and primary-focus clearing).
+            old_parent
+                .children
+                .write()
+                .retain(|child| child.id != node.id);
+            // The old scope's focused-child history forgets every id that
+            // moved away with the subtree.
+            if let Some(old_scope) = old_parent
+                .as_scope()
+                .or_else(|| old_parent.enclosing_scope())
+            {
+                old_scope
+                    .focus_history
+                    .lock()
+                    .retain(|&id| id != node.id && !node.has_descendant(id));
+            }
+        }
+
+        self.attach_child(node);
+
+        // A moved subtree that holds the primary focus keeps it — and the
+        // nearest scope's history learns about it, exactly as
+        // `set_primary_focus` would have recorded had the focus been
+        // requested here.
+        if let Some(focused) = crate::FocusManager::global().primary_focus()
+            && (node.id == focused || node.has_descendant(focused))
+            && let Some(scope) = self.as_scope().or_else(|| self.enclosing_scope())
+        {
+            scope.record_focus(focused);
+        }
+    }
+
     fn attach_child(self: &Arc<Self>, child: &Arc<FocusNode>) {
         // Set parent
         *child.parent.write() = Some(Arc::downgrade(self));
@@ -750,42 +816,7 @@ impl FocusScopeNode {
     /// A node with no current parent is simply attached; adopting a node already
     /// under this scope is a no-op.
     pub fn adopt_node(self: &Arc<Self>, node: &Arc<FocusNode>) {
-        let old_parent = node.parent();
-        if old_parent
-            .as_ref()
-            .is_some_and(|parent| parent.id == self.inner.id)
-        {
-            return;
-        }
-
-        if let Some(old_parent) = old_parent {
-            // Lift the node out of the old parent's child list *without*
-            // `detach_child`'s removal semantics (recursive detached-marking
-            // and primary-focus clearing).
-            old_parent
-                .children
-                .write()
-                .retain(|child| child.id != node.id);
-            // The old scope's focused-child history forgets every id that
-            // moved away with the subtree.
-            if let Some(old_scope) = old_parent.as_scope() {
-                old_scope
-                    .focus_history
-                    .lock()
-                    .retain(|&id| id != node.id && !node.has_descendant(id));
-            }
-        }
-
-        self.inner.attach_child(node);
-
-        // A moved subtree that holds the primary focus keeps it — and the new
-        // scope's history learns about it, exactly as `set_primary_focus`
-        // would have recorded had the focus been requested here.
-        if let Some(focused) = crate::FocusManager::global().primary_focus()
-            && (node.id == focused || node.has_descendant(focused))
-        {
-            self.record_focus(focused);
-        }
+        self.inner.adopt_node(node);
     }
 
     /// Sets focus to the first focusable child via the singleton.

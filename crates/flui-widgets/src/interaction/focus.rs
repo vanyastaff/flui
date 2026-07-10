@@ -15,10 +15,10 @@
 //!
 //! # Divergences, each named (ADR-0022 §3-§4)
 //!
-//! * **Nodes parent to the nearest *scope*** (U1.2): a `Focus` nested under a
-//!   non-scope `Focus` hangs beside it, not beneath it. FLUI's traversal
-//!   consults scopes and per-node flags, never the node tree's shape, so the
-//!   flattening is unobservable today; revisit with `FocusTraversalGroup`.
+//! * **Nodes parent to the nearest focus *node*** — scope or plain `Focus` —
+//!   through one provider, Flutter's `_FocusInheritedScope` shape. (ADR-0022
+//!   U1.2 originally flattened to the nearest scope; ADR-0023's key bubbling
+//!   made the node tree's shape observable and superseded that decision.)
 //! * **Reparenting happens in `did_change_dependencies`**, not on every build
 //!   as Flutter's `_focusAttachment.reparent()` does — the provider notifying
 //!   is the only way the enclosing scope changes without a remount. Observable
@@ -46,27 +46,34 @@ pub type FocusChangeHandler = Arc<dyn Fn(bool) + Send + Sync>;
 // The ambient scope
 // ============================================================================
 
-/// Provides the nearest enclosing [`FocusScopeNode`] to descendants — the
-/// `GestureArenaScope` pattern. Private: [`FocusScope`] is the public surface.
+/// Provides the nearest enclosing focus **node** — scope or plain `Focus` —
+/// to descendants: Flutter's `_FocusInheritedScope`, which every `Focus`
+/// widget provides (`focus_scope.dart:946`). Private: [`Focus`] and
+/// [`FocusScope`] are the public surface.
+///
+/// The parent being a *node*, not always a scope, is what makes the
+/// leaf→root key-dispatch walk (ADR-0023 U1) match the widget tree: a
+/// `Shortcuts`-style non-scope `Focus` above a field is a node **ancestor**
+/// of the field, so keys the field ignores bubble through it.
 #[derive(Clone)]
-struct FocusScopeProvider {
-    scope: Arc<FocusScopeNode>,
+struct FocusParentProvider {
+    parent: Arc<FocusNode>,
     child: BoxedView,
 }
 
-impl std::fmt::Debug for FocusScopeProvider {
+impl std::fmt::Debug for FocusParentProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FocusScopeProvider")
-            .field("scope_id", &self.scope.as_focus_node().id())
+        f.debug_struct("FocusParentProvider")
+            .field("parent_id", &self.parent.id())
             .finish_non_exhaustive()
     }
 }
 
-impl InheritedView for FocusScopeProvider {
-    type Data = Arc<FocusScopeNode>;
+impl InheritedView for FocusParentProvider {
+    type Data = Arc<FocusNode>;
 
     fn data(&self) -> &Self::Data {
-        &self.scope
+        &self.parent
     }
 
     fn child(&self) -> &dyn View {
@@ -74,17 +81,27 @@ impl InheritedView for FocusScopeProvider {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        !Arc::ptr_eq(&self.scope, &old.scope)
+        !Arc::ptr_eq(&self.parent, &old.parent)
     }
 }
 
-impl_inherited_view!(FocusScopeProvider);
+impl_inherited_view!(FocusParentProvider);
 
-/// The scope a mounting/reparenting node belongs under: the nearest provider,
-/// else the manager's root scope (`FocusScope.of`'s fallback,
-/// `focus_scope.dart:843-850`).
+/// The node a mounting/reparenting focus node hangs under: the nearest
+/// provider's node, else the root scope's backing node.
+pub(crate) fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Arc<FocusNode> {
+    ctx.get::<FocusParentProvider, _>(|provider| Arc::clone(&provider.parent))
+        .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope().as_focus_node()))
+}
+
+/// The nearest enclosing **scope** — `FocusScope.of`'s fallback contract
+/// (`focus_scope.dart:843-850`): the nearest provider node when it is itself a
+/// scope, else that node's enclosing scope, else the root scope.
 pub(crate) fn enclosing_scope(ctx: &dyn BuildContext) -> Arc<FocusScopeNode> {
-    ctx.get::<FocusScopeProvider, _>(|provider| Arc::clone(&provider.scope))
+    let parent = enclosing_focus_parent(ctx);
+    parent
+        .as_scope()
+        .or_else(|| parent.enclosing_scope())
         .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope()))
 }
 
@@ -253,7 +270,7 @@ impl StatefulView for Focus {
         self.configure(&node);
         FocusState {
             node,
-            scope: None,
+            parent: None,
             focus_listener_id: None,
             autofocus: self.autofocus,
             on_focus_change: self.on_focus_change.clone(),
@@ -265,9 +282,9 @@ impl StatefulView for Focus {
 /// `StatefulView::State` requires it; not re-exported.
 pub struct FocusState {
     node: Arc<FocusNode>,
-    /// The scope this node currently hangs under; `did_change_dependencies`
+    /// The node this one currently hangs under; `did_change_dependencies`
     /// moves it when the provider changes.
-    scope: Option<Arc<FocusScopeNode>>,
+    parent: Option<Arc<FocusNode>>,
     focus_listener_id: Option<ListenerId>,
     /// Captured at `create_state`: `init_state` has no view reference.
     autofocus: bool,
@@ -313,36 +330,33 @@ impl ViewState<Focus> for FocusState {
     /// (`_FocusState.initState` + `didChangeDependencies`,
     /// `focus_scope.dart:565-630`).
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        let scope = enclosing_scope(ctx);
-        scope.attach_node(&self.node);
-        self.scope = Some(scope);
+        let parent = enclosing_focus_parent(ctx);
+        parent.attach_node(&self.node);
+        self.parent = Some(parent);
 
         let on_focus_change = self.on_focus_change.clone();
         self.install_focus_listener(ctx.rebuild_handle(), on_focus_change);
 
-        // `_handleAutofocus` (`:625-630`): only when the scope has nothing
-        // focused yet. Synchronous — FLUI has no end-of-frame focus batch
-        // (module docs).
-        if self.autofocus
-            && let Some(scope) = &self.scope
-            && scope.focused_child().is_none()
-        {
+        // `_handleAutofocus` (`:625-630`): only when the enclosing scope has
+        // nothing focused yet. Synchronous — FLUI has no end-of-frame focus
+        // batch (module docs).
+        if self.autofocus && enclosing_scope(ctx).focused_child().is_none() {
             self.node.request_focus();
         }
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         // The provider changed: move the node — with focus — under the new
-        // scope. `_focusAttachment.reparent()` in `didChangeDependencies`
+        // parent. `_focusAttachment.reparent()` in `didChangeDependencies`
         // (`focus_scope.dart:618-623`), via ADR-0022 U1.3's adopt.
-        let scope = enclosing_scope(ctx);
+        let parent = enclosing_focus_parent(ctx);
         if self
-            .scope
+            .parent
             .as_ref()
-            .is_none_or(|held| !Arc::ptr_eq(held, &scope))
+            .is_none_or(|held| !Arc::ptr_eq(held, &parent))
         {
-            scope.adopt_node(&self.node);
-            self.scope = Some(scope);
+            parent.adopt_node(&self.node);
+            self.parent = Some(parent);
         }
     }
 
@@ -362,19 +376,29 @@ impl ViewState<Focus> for FocusState {
         }
         // Detach from wherever the node currently hangs — this is the
         // *removal* path, so a focused node releases the primary focus
-        // (`dispose`, `:605-616`).
-        if let Some(scope) = self
-            .node
-            .parent()
-            .and_then(|parent| parent.as_scope())
-            .or(self.scope.take())
-        {
-            scope.detach_node(self.node.id());
+        // (`dispose`, `:605-616`). A scope parent also cleans its history.
+        if let Some(parent) = self.node.parent().or(self.parent.take()) {
+            detach_from(&parent, self.node.id());
         }
     }
 
+    /// Every `Focus` provides itself as the parent for descendants —
+    /// Flutter's `_FocusInheritedScope` in `_FocusState.build`
+    /// (`focus_scope.dart:714-741`).
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
-        view.child.clone()
+        FocusParentProvider {
+            parent: Arc::clone(&self.node),
+            child: view.child.clone(),
+        }
+    }
+}
+
+/// Detach `child` from `parent`, routing through the scope API when the
+/// parent is one so the focused-child history is cleaned too.
+fn detach_from(parent: &Arc<FocusNode>, child: flui_interaction::FocusNodeId) {
+    match parent.as_scope() {
+        Some(scope) => scope.detach_node(child),
+        None => parent.detach_node(child),
     }
 }
 
@@ -446,8 +470,8 @@ impl StatefulView for FocusScope {
 /// requires it; not re-exported.
 pub struct FocusScopeState {
     scope: Arc<FocusScopeNode>,
-    /// The scope this scope's backing node hangs under.
-    parent: Option<Arc<FocusScopeNode>>,
+    /// The node this scope's backing node hangs under.
+    parent: Option<Arc<FocusNode>>,
 }
 
 impl std::fmt::Debug for FocusScopeState {
@@ -460,7 +484,7 @@ impl std::fmt::Debug for FocusScopeState {
 
 impl ViewState<FocusScope> for FocusScopeState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        let parent = enclosing_scope(ctx);
+        let parent = enclosing_focus_parent(ctx);
         parent.attach_node(self.scope.as_focus_node());
         self.parent = Some(parent);
     }
@@ -468,7 +492,7 @@ impl ViewState<FocusScope> for FocusScopeState {
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         // An enclosing provider changed: move this scope — subtree, focus and
         // all — under the new parent (ADR-0022 U1.3).
-        let parent = enclosing_scope(ctx);
+        let parent = enclosing_focus_parent(ctx);
         if self
             .parent
             .as_ref()
@@ -480,20 +504,14 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 
     fn dispose(&mut self) {
-        if let Some(parent) = self
-            .scope
-            .as_focus_node()
-            .parent()
-            .and_then(|node| node.as_scope())
-            .or(self.parent.take())
-        {
-            parent.detach_node(self.scope.as_focus_node().id());
+        if let Some(parent) = self.scope.as_focus_node().parent().or(self.parent.take()) {
+            detach_from(&parent, self.scope.as_focus_node().id());
         }
     }
 
     fn build(&self, view: &FocusScope, _ctx: &dyn BuildContext) -> impl IntoView {
-        FocusScopeProvider {
-            scope: Arc::clone(&self.scope),
+        FocusParentProvider {
+            parent: Arc::clone(self.scope.as_focus_node()),
             child: view.child.clone(),
         }
     }
