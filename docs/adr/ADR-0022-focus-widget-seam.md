@@ -1,6 +1,6 @@
 # ADR-0022 — The `Focus` / `FocusScope` widget seam
 
-- **Status:** **Proposed — design only.** No code lands with this ADR; the units below are the implementation plan. Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
+- **Status:** **Accepted — U1.1 landed 2026-07-10; U1.2–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
 - **Date:** 2026-07-10
 - **Deciders:** chief-architect; consult interaction owner (`flui-interaction` `FocusManager`/`FocusNode` API additions, U1), view owner (inherited reparenting contract, U2), repository owner (public API: `Focus`, `FocusScope`), qa-lead (traversal and key-routing tests).
 - **Relates to:** closes ADR-0020 §Seam 6 ("no `Focus`/`FocusScope` **widget**"); builds on tracker H4 (the node/manager layer, done 2026-06-30); unblocks `Actions`/`Shortcuts` (B1.1) and `ModalRoute`'s per-route focus scope; consumes ADR-0021's `HeroScope`/`GestureArenaScope` ambient-provider pattern.
@@ -40,7 +40,7 @@ Four units, dependency-ordered. The ambient-provider pattern is `GestureArenaSco
 
 ### U1 — `flui-interaction` prerequisites (no widgets yet)
 
-1. **Per-listener removal on `FocusManager`**: `add_listener` returns a `ListenerId` (the `flui-foundation` type every other notifier uses) and `remove_listener(ListenerId)` exists. Migrate `EditableText`'s disposed-flag workaround to it in the same unit — the workaround is the test that the API is sufficient.
+1. **Per-listener removal on `FocusManager`** — **landed 2026-07-10**: `add_listener` returns a `ListenerId` (minted per manager, the `ChangeNotifier` convention) and `remove_listener(ListenerId)` removes exactly one registration (idempotent). `EditableText`'s disposed-flag workaround is migrated to it in the same commit — the workaround was the proof the API was needed, and the migration is the proof it suffices. Pinned by `a_removed_listener_stops_firing_while_others_keep_firing`.
 2. **Scope-relative attach for a plain node under a plain node**: today only `FocusScopeNode::attach_node` parents a node. A `Focus` widget nested under another non-scope `Focus` needs `FocusNode`-to-`FocusNode` parenting, or the documented decision that FLUI parents every widget-owned node to its nearest *scope* (flattening non-scope nesting). **Decision: flatten to the nearest scope for U2** — Flutter's traversal semantics only consult scopes and traversal flags, and FLUI's `ReadingOrderPolicy` sorts by rect, not tree shape; record the divergence and revisit when `FocusTraversalGroup` lands.
 3. **No reparent primitive**: FLUI reparents by `detach_node` + `attach_node`. `detach_child` clears `primary_focus` if the moved subtree held focus (`focus_scope.rs:494-499`), so a naive detach+attach **drops focus on reparent** where Flutter's `FocusAttachment.reparent` preserves it. U1 adds `FocusScopeNode::adopt_node` (attach that preserves an existing primary focus and history entry) or narrows `detach_child`'s clearing to genuinely-removed subtrees. This is the one behavioral seam that must be red-checked at the node layer before any widget exists.
 

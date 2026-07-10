@@ -51,7 +51,10 @@
 //! FocusManager::global().unfocus();
 //! ```
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, sync::Arc};
+
+use flui_foundation::ListenerId;
 
 use parking_lot::RwLock;
 
@@ -135,8 +138,10 @@ pub struct FocusManager {
     /// Currently focused element (if any) — Flutter's `_primaryFocus`.
     primary_focus: RwLock<Option<FocusNodeId>>,
 
-    /// Listeners for focus changes.
-    listeners: RwLock<Vec<FocusChangeCallback>>,
+    /// Listeners for focus changes, keyed so a caller can remove its own.
+    listeners: RwLock<Vec<(ListenerId, FocusChangeCallback)>>,
+    /// Mint for [`ListenerId`]s, per manager — the `ChangeNotifier` convention.
+    next_listener_id: AtomicUsize,
 
     /// Key event handlers registered per node.
     key_handlers: RwLock<HashMap<FocusNodeId, KeyEventCallback>>,
@@ -173,6 +178,7 @@ impl Default for FocusManager {
             root_scope,
             primary_focus: RwLock::new(None),
             listeners: RwLock::new(Vec::new()),
+            next_listener_id: AtomicUsize::new(1),
             key_handlers: RwLock::new(HashMap::new()),
             global_key_handlers: RwLock::new(Vec::new()),
             active_scope: RwLock::new(None),
@@ -326,12 +332,23 @@ impl FocusManager {
     /// # Example
     ///
     /// ```rust,ignore
-    /// FocusManager::global().add_listener(Arc::new(|prev, new| {
+    /// let id = FocusManager::global().add_listener(Arc::new(|prev, new| {
     ///     println!("Focus changed from {:?} to {:?}", prev, new);
     /// }));
+    /// // … later, from the owner's teardown:
+    /// FocusManager::global().remove_listener(id);
     /// ```
-    pub fn add_listener(&self, callback: FocusChangeCallback) {
-        self.listeners.write().push(callback);
+    pub fn add_listener(&self, callback: FocusChangeCallback) -> ListenerId {
+        let id = ListenerId::new(self.next_listener_id.fetch_add(1, Ordering::Relaxed));
+        self.listeners.write().push((id, callback));
+        id
+    }
+
+    /// Remove the listener registered under `id`. A no-op for an id that was
+    /// already removed — teardown paths may race shutdown's
+    /// [`clear_listeners`](Self::clear_listeners).
+    pub fn remove_listener(&self, id: ListenerId) {
+        self.listeners.write().retain(|(held, _)| *held != id);
     }
 
     /// Remove all listeners. Useful for cleanup during shutdown.
@@ -342,10 +359,10 @@ impl FocusManager {
     /// Notify all listeners of a focus change.
     fn notify_listeners(&self, previous: Option<FocusNodeId>, new: Option<FocusNodeId>) {
         // Clone the listener Vec so listener invocations can call
-        // `add_listener` / `clear_listeners` without deadlocking on
+        // `add_listener` / `remove_listener` without deadlocking on
         // our read lock (Flutter ChangeNotifier reentrancy semantics).
         let listeners = self.listeners.read().clone();
-        for listener in &listeners {
+        for (_, listener) in &listeners {
             listener(previous, new);
         }
     }
@@ -558,6 +575,51 @@ mod tests {
         assert_eq!(manager.focused(), Some(node2));
         assert!(!manager.has_focus(node1));
         assert!(manager.has_focus(node2));
+    }
+
+    #[test]
+    fn a_removed_listener_stops_firing_while_others_keep_firing() {
+        // ADR-0022 U1: per-listener removal. Before this API a widget could
+        // only gate its closure with a disposed flag — the dead callback
+        // stayed registered on the process-global manager forever.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let manager = FocusManager::new_for_test();
+        let removed_hits = Arc::new(AtomicUsize::new(0));
+        let surviving_hits = Arc::new(AtomicUsize::new(0));
+
+        let removed = {
+            let hits = Arc::clone(&removed_hits);
+            manager.add_listener(Arc::new(move |_, _| {
+                hits.fetch_add(1, Ordering::SeqCst);
+            }))
+        };
+        let survivor_hits = Arc::clone(&surviving_hits);
+        let _survivor = manager.add_listener(Arc::new(move |_, _| {
+            survivor_hits.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        manager.request_focus(FocusNodeId::new(1));
+        assert_eq!(removed_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(surviving_hits.load(Ordering::SeqCst), 1);
+
+        manager.remove_listener(removed);
+        manager.request_focus(FocusNodeId::new(2));
+        assert_eq!(
+            removed_hits.load(Ordering::SeqCst),
+            1,
+            "a removed listener must not fire again"
+        );
+        assert_eq!(
+            surviving_hits.load(Ordering::SeqCst),
+            2,
+            "removal must not disturb other listeners"
+        );
+
+        // Removing twice is a harmless no-op.
+        manager.remove_listener(removed);
+        manager.request_focus(FocusNodeId::new(3));
+        assert_eq!(surviving_hits.load(Ordering::SeqCst), 3);
     }
 
     #[test]

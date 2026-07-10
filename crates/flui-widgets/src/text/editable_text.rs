@@ -1,10 +1,7 @@
 //! [`EditableText`] — single-line editable text backed by a
 //! [`TextEditingController`].
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering as AtomicOrdering},
-};
+use std::sync::Arc;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
@@ -114,12 +111,9 @@ pub struct EditableTextState {
     /// text changes (forwarded from the controller listener) **and** on focus
     /// changes (forwarded from the FocusManager listener).
     rebuild_notifier: flui_foundation::notifier::ChangeNotifier,
-    /// Gate to silence the FocusManager listener after dispose.
-    ///
-    /// `FocusManager::add_listener` has no per-listener removal API; we use
-    /// this flag instead so the closure becomes a no-op once the widget is
-    /// unmounted.
-    is_disposed: Arc<AtomicBool>,
+    /// ID for the focus-change listener we added to the [`FocusManager`], so
+    /// dispose removes exactly ours (ADR-0022 U1).
+    focus_listener_id: Option<ListenerId>,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -139,7 +133,7 @@ impl StatefulView for EditableText {
             controller: self.controller.clone(),
             controller_listener_id: None,
             rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
-            is_disposed: Arc::new(AtomicBool::new(false)),
+            focus_listener_id: None,
         }
     }
 }
@@ -167,22 +161,19 @@ impl ViewState<EditableText> for EditableTextState {
 
         // 4. Forward FocusManager focus-change events into the rebuild notifier
         //    so the caret appears / disappears immediately when this field
-        //    gains or loses focus.  A disposed-flag gates the closure since
-        //    FocusManager has no per-listener remove API.
+        //    gains or loses focus. Removed by id in `dispose`.
         let rebuild_notifier_for_focus = self.rebuild_notifier.clone();
-        let is_disposed = Arc::clone(&self.is_disposed);
         let node_id = self.focus_node.id();
-        FocusManager::global().add_listener(Arc::new(move |previous, current| {
-            if is_disposed.load(AtomicOrdering::Acquire) {
-                return;
-            }
-            // Only rebuild when this node's focus state actually changed.
-            let was_focused = previous == Some(node_id);
-            let now_focused = current == Some(node_id);
-            if was_focused != now_focused {
-                rebuild_notifier_for_focus.notify_listeners();
-            }
-        }));
+        self.focus_listener_id = Some(FocusManager::global().add_listener(Arc::new(
+            move |previous, current| {
+                // Only rebuild when this node's focus state actually changed.
+                let was_focused = previous == Some(node_id);
+                let now_focused = current == Some(node_id);
+                if was_focused != now_focused {
+                    rebuild_notifier_for_focus.notify_listeners();
+                }
+            },
+        )));
     }
 
     fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -197,8 +188,10 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn dispose(&mut self) {
-        // Signal the focus listener closure to become a no-op.
-        self.is_disposed.store(true, AtomicOrdering::Release);
+        // Remove the focus-change listener we registered in init_state.
+        if let Some(id) = self.focus_listener_id.take() {
+            FocusManager::global().remove_listener(id);
+        }
 
         // Unregister the key handler from the FocusManager.
         FocusManager::global().unregister_key_handler(self.focus_node.id());
