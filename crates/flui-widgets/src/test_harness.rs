@@ -108,6 +108,20 @@ impl Harness {
         kids.into_iter().map(|(_, id)| id).collect()
     }
 
+    /// The binding's **own** scheduler — never `Scheduler::instance()`.
+    ///
+    /// A post-frame callback registered here is drained by `pump_frame`'s
+    /// `Scheduler::drive_frame`, after the pipeline commits layout (ADR-0021 §7c).
+    pub(crate) fn scheduler(&self) -> &flui_scheduler::Scheduler {
+        self.binding.scheduler()
+    }
+
+    /// The shared pipeline owner, so a post-frame callback can read committed
+    /// geometry from inside the frame.
+    pub(crate) fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
+        Arc::clone(&self.pipeline_owner)
+    }
+
     /// The `debug_name()` of every render object currently in the tree.
     ///
     /// The one structural probe a widget-level test has: it says *which* render

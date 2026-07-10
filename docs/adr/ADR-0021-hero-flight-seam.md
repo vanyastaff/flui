@@ -201,7 +201,7 @@ pub(crate) fn route_subtree(&self, id: RouteId) -> Option<RouteSubtree>;  // S3
 ```
 `route_animation` can read the existing private `TransitionRegistry` (`binding.rs`), which already maps `RouteId -> TransitionPeer { animation, group, … }`. `TransitionGroup::Page` is already exactly "is a `PageRoute`" — the flight's route gate is a `group == Page` check, not a type test. That is a pleasant consequence of ADR-0020 §7e.
 
-### S3 — A route has no addressable page subtree
+### S3 — A route has no addressable page subtree  *(this section's `init_state` claim is WRONG — see §7d)*
 
 Flutter: `ModalRoute._subtreeKey` (`routes.dart:2268`) → `subtreeContext` (`:1966`), used for hero discovery **and** as the coordinate space of both hero rects.
 
@@ -788,6 +788,87 @@ so it cannot be forgotten.
 
 ---
 
+## 7d. U2 acceptance gate passed; §3 S3 is wrong (2026-07-10)
+
+### The gate: **yes**, with a caveat
+
+U2's first rule was to prove, executably, that a route forced offstage in frame *N*
+has committed geometry visible from that frame's post-frame callback. It does.
+Three tests in `flui-widgets/src/navigator/offstage_measurement_tests.rs`, all
+driven through the real `HeadlessBinding::pump_frame` — no callback is ever invoked
+by hand:
+
+| Claim | Test | Red-check |
+|---|---|---|
+| A **newly pushed** route, forced offstage between frames, is built, laid out, and its geometry committed before the post-frame callback | `a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_callback` | reorder `drive_frame` to `end_frame()` before `pipeline()` → red |
+| That geometry is **real**, not a zero-sized placeholder | `the_offstage_routes_committed_geometry_is_real_not_zero` | same |
+| Setting `offstage` on an **already-mounted** route rebuilds it before the callback | `setting_offstage_on_a_mounted_route_rebuilds_it_before_the_post_frame_callback` | delete `mark_entry_needs_build()` from `changed_internal_state` → red |
+
+The route under test is *newly pushed* on purpose: a route laid out by an earlier
+frame has committed geometry whatever this frame's ordering, so such a test would
+pass for the wrong reason.
+
+**The third test exists because a red-check exposed a hole.** Deleting
+`mark_entry_needs_build()` left the first test green — the `push` alone was
+building the route, so that test said nothing about the offstage *dirty*. The
+`HeroController` pop path has no push to lean on.
+
+**Caveat, and it is not small.** This proves the geometry is *committed*. It does
+**not** prove it is the *final* hero position. Flutter's `offstage` setter also
+points the route's animation proxy at `kAlwaysCompleteAnimation`
+(`routes.dart:1958-1962`), which is what puts the heroes where they will land.
+ADR-0020 §7d deferred that swap and **D4** assigns it to U3. Until D4 lands, an
+offstage route is laid out at `animation == 0` — the *entry* position. U2's seams
+are unblocked; Hero's measurement is not correct yet, and U3 owes it.
+
+### Correction to §3 S3: `ModalScope::init_state` cannot publish a `RenderId`
+
+S3 said: *"`ModalScope` … publishes its own `ElementId` and `RenderId` at
+`init_state` — the same owned-capability move as `RebuildHandle`."* Both halves of
+the `RenderId` claim are wrong:
+
+1. **`ModalScope` is a stateful view. It owns no render object at all.** Only a
+   `RenderView`'s element carries a `RenderId`
+   (`flui-view/src/element/behavior.rs`: `RenderBehavior` is the sole override of
+   `ElementBase::render_id`).
+2. **`BuildContext::find_render_object()` walks strict *ancestors*, not
+   descendants** (`context/element_build_context.rs:459-471`, `:824-825`). It is
+   Flutter's `findAncestorRenderObjectOfType`, **not** `context.findRenderObject()`.
+   Calling it from `ModalScope` returns the enclosing `RenderTheater`/`RenderStack`
+   — the overlay's coordinate space, not the route's.
+
+Flutter has no such problem: `_subtreeKey` is a `GlobalKey` on a **`RepaintBoundary`**
+(`routes.dart:1229`), a render-object widget, so `subtreeContext.findRenderObject()`
+returns that boundary's own render object. The route's subtree root is a render
+object *by construction*.
+
+**The first lifecycle hook where a `RenderId` is guaranteed** is
+`RenderObject::attach(RepaintHandle)` — `RepaintHandle::id()` returns it
+(`flui-rendering/src/pipeline/handle.rs:216`, `:231`), and `detach()` is its exact
+mirror. That is mount/unmount-driven, needs no `GlobalKey`, no element walk, and no
+acquisition during build/layout/paint (port-check trigger #22).
+
+So `RouteSubtree` publication requires a **render object** at the root of the
+route's page subtree, which publishes its own id on `attach` and clears it on
+`detach`. No fake id, no zero placeholder. **Where that render object lives is an
+open decision** (see the open questions), because `flui-widgets` defines none today
+and `flui-objects`' harness catalog guard requires every exported `RenderBox` to
+carry `harness_*` tests.
+
+### Landed in this pass
+
+* `Scheduler::abort_frame`'s doc comment corrected: `drive_frame` **does** catch a
+  panicking pipeline (`catch_unwind` → `abort_frame` → `resume_unwind`); the reset
+  runs between catch and resume, not during unwinding. Text only; no behavior change,
+  and the scheduler suite is unchanged.
+* The three acceptance tests above, plus the test-only accessors they need
+  (`Harness::{scheduler, pipeline_owner}`, `PageRoute::modal_handle`).
+
+**No U2 seam is implemented.** `PostFrameHandle`, observer attachment, route
+introspection, `RouteSubtree` and the overlay seam are all unbuilt.
+
+---
+
 ## 8. Deferred, each with its blocker
 
 | Deferred | Why |
@@ -816,7 +897,8 @@ so it cannot be forgotten.
 ## Open questions for the deciders
 
 1. **S4's scope.** Implement `transform_to` for the strict descendant→ancestor case only (all Hero needs), or the full `getTransformTo` with a common-ancestor search? The narrow one is a walk; the general one needs an inverse.
-2. **UNKNOWN-3.** What replaces `flightShuttleBuilder`'s two `BuildContext`s? This is the only public signature Hero cannot copy from Flutter.
+2. **S3's anchor (new, §7d).** `RouteSubtree` needs a render object at the root of the route's page subtree to publish its `RenderId` on `attach`. Does it live in `flui-objects` as a public, harness-tested render object, or privately in `flui-widgets` (which defines none today and would sit outside the harness catalog guard)?
+3. **UNKNOWN-3.** What replaces `flightShuttleBuilder`'s two `BuildContext`s? This is the only public signature Hero cannot copy from Flutter.
 3. **D8.** Is log-and-drop the right answer for duplicate tags, or is a duplicate tag a *framework* invariant (Flutter asserts, and a wrong flight is very visible) that earns an `expect("BUG: …")`?
 4. **S7.** Registry over element walk trades a downcast for three enumerated narrowings. Is the nested-navigator narrowing acceptable to close B1.4, or must "Hero works" mean it works under a nested navigator?
 5. **D4 / UNKNOWN-2.** Does the primary animation proxy belong on `ModalRoute` (as in Flutter) or can `TransitionRoute` host it without disturbing the status listener that ADR-0020 U5.2 built?

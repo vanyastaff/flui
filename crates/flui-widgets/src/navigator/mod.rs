@@ -62,6 +62,8 @@ mod modal_route_tests;
 #[cfg(test)]
 mod navigator_tests;
 #[cfg(test)]
+mod offstage_measurement_tests;
+#[cfg(test)]
 mod page_route_tests;
 #[cfg(test)]
 mod tests;

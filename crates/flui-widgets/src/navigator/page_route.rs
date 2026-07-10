@@ -286,6 +286,14 @@ impl<T: Send + Sync + Clone + 'static> PageRoute<T> {
 }
 
 impl<T: Send + Sync + Clone + 'static> PageRoute<T> {
+    /// The modal handle, whose `set_offstage` is the seam `HeroController` drives
+    /// to measure a route's final hero geometry (`heroes.dart:967`). Test-facing
+    /// until U3 gives it a production caller.
+    #[cfg(test)]
+    pub(crate) fn modal_handle(&self) -> super::modal_route::ModalHandle {
+        self.modal.handle()
+    }
+
     /// The animation handle, for driving a transition by hand. Test-facing:
     /// FLUI's controller returns no `TickerFuture`, so a unit test cannot await
     /// one. `tests/routes.rs` drives the real clock instead.

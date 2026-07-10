@@ -791,17 +791,22 @@ impl Scheduler {
     /// post-frame loop is skipped but the phase is still reset. The queued
     /// callbacks survive and run on the next completed frame.
     ///
-    /// # Why this is not a `Drop` guard
+    /// # Who calls this, and why it is not a `Drop` guard
     ///
-    /// [`drive_frame`](Self::drive_frame) does **not** catch panics, and this is
-    /// not called during unwinding. Two reasons. A guard would have to force
+    /// [`drive_frame`](Self::drive_frame) **does** catch a panicking pipeline: it
+    /// `catch_unwind`s, calls this, then `resume_unwind`s. So this runs *between*
+    /// the catch and the resume — the panic payload is already captured and nothing
+    /// here executes during unwinding. A caller that drives a frame by hand
+    /// (`handle_begin_frame` + `handle_draw_frame`) and panics must call this itself.
+    ///
+    /// A `Drop` guard would be wrong twice. It would have to force
     /// `PersistentCallbacks -> Idle`, which
     /// [`can_transition_to`](crate::SchedulerPhase::can_transition_to) forbids, so
-    /// the validated setter's `debug_assert!` would fire *while already panicking*
-    /// — a double panic, i.e. `abort`. And running any user callback during unwind
-    /// is a second hazard for no benefit. So the reset is an explicit, non-panicking
-    /// call the recovering caller makes, and it bypasses the phase validator by
-    /// design (this is the one legal way out of a half-open frame).
+    /// the validated setter's `debug_assert!` would fire *while already panicking* —
+    /// a double panic, i.e. `abort`. And running any user callback during unwind is a
+    /// second hazard for no benefit. Hence an explicit, non-panicking call that
+    /// bypasses the phase validator by design: the one sanctioned way out of a
+    /// half-open frame.
     ///
     /// Completion waiters **are** notified: an aborted frame is a frame that
     /// finished, badly. Leaving them queued would hang `end_of_frame()` forever.
