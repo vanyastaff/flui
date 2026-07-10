@@ -26,6 +26,14 @@
 //! queues are simply cleared (`:4623-4626`), so registering an observer never
 //! changes route lifecycle — only whether anyone hears about it.
 //!
+//! # Nothing here is notified under a lock
+//!
+//! [`ObservationQueues::drain`] returns the delivery order as **owned data**.
+//! `RouteHistory::flush` puts it into `FlushOutcome`, and `NavigatorShared::apply`
+//! hands it to [`deliver`] *after* releasing the history mutex. That is what makes
+//! the [`NavigatorHandle`] an observer holds usable from `did_push`: it can read the
+//! stack, and it can mutate it (ADR-0021 §7f).
+//!
 //! Oracles: `test/widgets/navigator_test.dart` — `'initial route trigger observer
 //! in the right order'`, `'Push and pop should trigger the observers'`.
 //!
@@ -53,7 +61,7 @@ use super::route::RouteId;
 /// flush. Implementations that accumulate use interior mutability, exactly as the
 /// rest of the framework does behind private fields.
 ///
-/// # The handle, and the one thing you must not do with it
+/// # The handle
 ///
 /// [`did_attach`](Self::did_attach) hands over an owned [`NavigatorHandle`], the
 /// FLUI shape of Flutter's `NavigatorObserver.navigator` getter
@@ -61,15 +69,20 @@ use super::route::RouteId;
 /// lookup: the navigator pushes the capability at the observer, in registration
 /// order, from its own `init_state`.
 ///
-/// **The stack is locked while `did_push` / `did_pop` / `did_remove` /
-/// `did_replace` / `did_change_top` run.** They are called from inside
-/// `RouteHistory::flush`, which holds the history's mutex, and
-/// `parking_lot::Mutex` is not reentrant. Reading or mutating the stack through
-/// the handle from one of those callbacks — `pop`, `current`, `route_ids`,
-/// `can_pop` — **hangs**. Everything else on the handle is safe there, which is
-/// exactly what `HeroController.didPush` needs (`heroes.dart:964-973`): flip a
-/// route offstage, then schedule a post-frame callback and do the real work from
-/// it, outside the flush.
+/// **Every callback here runs with no navigator lock held.** The flush computes its
+/// notifications as owned data and `NavigatorShared::apply` delivers them once the
+/// history mutex is released, so `current()`, `route_ids()`, `can_pop()` — and even
+/// `push()` / `pop()` — are all safe from `did_push` and friends. A mutation raised
+/// from a callback runs a *fresh* flush whose notifications are delivered after this
+/// one finishes draining; Flutter would `assert(!_debugLocked)` on the same move
+/// (`navigator.dart:4452`), so treat it as defined but unusual.
+///
+/// The one ordering divergence: `Route::did_change_next` / `did_change_previous`
+/// (Flutter's `_flushRouteAnnouncement`) now run *before* these callbacks rather
+/// than between them and `did_change_top`, because they need the history borrow.
+/// They are route-internal — they drive secondary animations, which no observer
+/// surface exposes — so an observer sees a strictly more settled stack, never a
+/// different one. ADR-0021 §7f.
 #[allow(unused_variables)]
 pub trait NavigatorObserver: Send + Sync {
     /// This observer was registered on a navigator that is now mounted.
@@ -151,7 +164,47 @@ impl Observation {
     }
 }
 
-/// The pair of queues, drained together by [`ObservationQueues::flush`].
+/// One thing a flush decided to tell the observers, in delivery order.
+///
+/// `didChangeTop` is not an [`Observation`]: it never enters either queue, and it
+/// fires *after* both have drained (`navigator.dart:4590-4596`). Keeping it a
+/// separate variant rather than a fifth `Observation` makes enqueueing it
+/// unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Notification {
+    /// A queued observation, already ordered by [`ObservationQueues::drain`].
+    Observed(Observation),
+    /// Flutter's `didChangeTop` (`navigator.dart:4590-4596`).
+    TopChanged {
+        top: RouteId,
+        previous_top: Option<RouteId>,
+    },
+}
+
+impl Notification {
+    fn notify(self, observer: &dyn NavigatorObserver) {
+        match self {
+            Self::Observed(observation) => observation.notify(observer),
+            Self::TopChanged { top, previous_top } => observer.did_change_top(top, previous_top),
+        }
+    }
+}
+
+/// Fire `notifications` at every observer, in order.
+///
+/// **The caller must hold no navigator lock.** `NavigatorShared::apply` is the one
+/// production call site, and it runs after `history.lock()` is released — which is
+/// the whole point: an observer holds a `NavigatorHandle` and would otherwise
+/// deadlock on `parking_lot::Mutex` the moment it read the stack it was told about.
+pub(crate) fn deliver(notifications: &[Notification], observers: &[Arc<dyn NavigatorObserver>]) {
+    for notification in notifications {
+        for observer in observers {
+            notification.notify(observer.as_ref());
+        }
+    }
+}
+
+/// The pair of queues, emptied together by [`ObservationQueues::drain`].
 #[derive(Default)]
 pub(crate) struct ObservationQueues {
     additions: VecDeque<Observation>,
@@ -168,25 +221,18 @@ impl ObservationQueues {
     }
 
     /// Flutter's `_flushObserverNotifications` (`navigator.dart:4621-4636`),
-    /// transcribed: additions LIFO, then deletions FIFO; both cleared without
-    /// notification when there are no observers.
-    pub(crate) fn flush(&mut self, observers: &[Arc<dyn NavigatorObserver>]) {
-        if observers.is_empty() {
-            self.additions.clear();
-            self.deletions.clear();
-            return;
-        }
-
+    /// transcribed — but as *ordering*, not as delivery: additions LIFO, then
+    /// deletions FIFO, returned as owned data so the caller can notify with no
+    /// lock held. Both queues are emptied either way, so registering an observer
+    /// still never changes route lifecycle (`:4623-4626`).
+    pub(crate) fn drain(&mut self) -> Vec<Observation> {
+        let mut ordered = Vec::with_capacity(self.additions.len() + self.deletions.len());
         while let Some(observation) = self.additions.pop_back() {
-            for observer in observers {
-                observation.notify(observer.as_ref());
-            }
+            ordered.push(observation);
         }
-
         while let Some(observation) = self.deletions.pop_front() {
-            for observer in observers {
-                observation.notify(observer.as_ref());
-            }
+            ordered.push(observation);
         }
+        ordered
     }
 }

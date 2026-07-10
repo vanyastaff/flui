@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use super::binding::{RouteBinding, RouteCommand};
 use super::history::RouteHistory;
 use super::lifecycle::RouteLifecycle;
-use super::observer::NavigatorObserver;
+use super::observer::{NavigatorObserver, Notification, Observation};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
 // ============================================================================
@@ -206,10 +206,34 @@ fn boxed(value: i32) -> super::route::AnyResult {
     Box::new(value)
 }
 
-fn spy(history: &mut RouteHistory) -> Arc<Spy> {
-    let spy = Arc::new(Spy::default());
-    history.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
-    spy
+fn spy() -> Arc<Spy> {
+    Arc::new(Spy::default())
+}
+
+/// The observer list a `NavigatorShared` would hold.
+fn watching(spy: &Arc<Spy>) -> Vec<Arc<dyn NavigatorObserver>> {
+    vec![Arc::clone(spy) as Arc<dyn NavigatorObserver>]
+}
+
+/// The other half of a flush: `NavigatorShared::apply`, minus the overlay.
+///
+/// `RouteHistory` walks the stack and *decides*; it no longer notifies observers or
+/// disposes routes, because both run arbitrary code that reaches back through a
+/// `NavigatorHandle` and would deadlock under the history's mutex (ADR-0021 §7f).
+/// A test that drives the history directly must therefore settle it, and settling
+/// with **no** observers is how the production path drops the observations of a
+/// flush nobody was listening to.
+fn settle(history: &mut RouteHistory, observers: &[Arc<dyn NavigatorObserver>]) {
+    let Some(mut outcome) = history.take_outcome() else {
+        return;
+    };
+    super::observer::deliver(&outcome.notifications, observers);
+    outcome.dispose_routes();
+}
+
+/// Settle a flush nobody is observing — the routes still die.
+fn settle_unobserved(history: &mut RouteHistory) {
+    settle(history, &[]);
 }
 
 // ============================================================================
@@ -319,9 +343,10 @@ fn lifecycle_order_matches_flush_ranges() {
 fn push_installs_then_pushes_then_notifies_observer() {
     let log: Log = Log::default();
     let mut history = RouteHistory::new();
-    let spy = spy(&mut history);
+    let spy = spy();
 
     let (id, _result) = history.push(Probe::new(&log));
+    settle(&mut history, &watching(&spy));
 
     assert_eq!(
         *log.lock(),
@@ -358,13 +383,14 @@ fn push_installs_then_pushes_then_notifies_observer() {
 fn push_adds_route_and_notifies_observer_lifo() {
     let log: Log = Log::default();
     let mut history = RouteHistory::new();
-    let spy = spy(&mut history);
+    let spy = spy();
 
     // Three `Add` entries, one flush — the deep-link back-stack.
     let (bottom, _r0) = history.seed_initial(Probe::new(&log));
     let (middle, _r1) = history.seed_initial(Probe::new(&log));
     let (top, _r2) = history.seed_initial(Probe::new(&log));
     history.flush(true);
+    settle(&mut history, &watching(&spy));
 
     assert_eq!(
         spy.notes(),
@@ -436,6 +462,9 @@ fn remove_route_still_completes_its_future() {
     let (top, result) = history.push(Probe::new(&log));
 
     assert!(history.remove_route(top, Some(boxed(9))));
+    // `Route::dispose` runs at settle, not inside the flush — the history hands the
+    // dying route to its caller so teardown never runs under the mutex.
+    settle_unobserved(&mut history);
 
     assert_eq!(result.try_take(), Some(Some(9)));
     assert!(log.lock().contains(&Event::Dispose));
@@ -604,8 +633,9 @@ fn remove_route_on_an_already_removing_route_is_a_noop() {
     let mut history = RouteHistory::new();
     history.add_initial(Probe::new(&log));
     let (old, _r1) = history.push(Probe::new(&log));
+    settle_unobserved(&mut history);
 
-    let spy = spy(&mut history);
+    let spy = spy();
 
     let mut incoming = Probe::new(&log);
     incoming.push = PushCompletion::Animating;
@@ -615,6 +645,7 @@ fn remove_route_on_an_already_removing_route_is_a_noop() {
     assert_eq!(history.state_of(new_top), Some(RouteLifecycle::Pushing));
 
     history.remove_route(old, Some(boxed(1)));
+    settle(&mut history, &watching(&spy));
 
     assert_eq!(
         history.state_of(old),
@@ -696,12 +727,14 @@ fn delete_notifications_are_fifo() {
     let (bottom, _r0) = history.add_initial(Probe::new(&log));
     let (middle, _r1) = history.push(Probe::new(&log));
     let (top, _r2) = history.push(Probe::new(&log));
+    settle_unobserved(&mut history);
 
-    let spy = spy(&mut history);
+    let spy = spy();
 
     // `pushAndRemoveUntil(keep: bottom)` arms two removals and one push, then
     // flushes exactly once — the only Flutter API that batches deletions.
     let (pushed, _r3) = history.push_and_remove_until(Probe::new(&log), |id| id == bottom);
+    settle(&mut history, &watching(&spy));
 
     let removed: Vec<RouteId> = spy
         .notes()
@@ -732,9 +765,11 @@ fn additions_precede_deletions_within_one_flush() {
     let (bottom, _r0) = history.add_initial(Probe::new(&log));
     let (_middle, _r1) = history.push(Probe::new(&log));
     let (_top, _r2) = history.push(Probe::new(&log));
+    settle_unobserved(&mut history);
 
-    let spy = spy(&mut history);
+    let spy = spy();
     history.push_and_remove_until(Probe::new(&log), |id| id == bottom);
+    settle(&mut history, &watching(&spy));
 
     let kinds = spy.kinds();
     let last_addition = kinds
@@ -752,21 +787,32 @@ fn additions_precede_deletions_within_one_flush() {
     );
 }
 
-/// With no observers registered, both queues are cleared and nothing is
-/// delivered — but route lifecycle is unchanged (`navigator.dart:4623-4626`).
+/// A flush nobody observed still **drains** its queues, so its observations cannot
+/// resurface in the next one (`navigator.dart:4623-4626`). Route lifecycle is
+/// unchanged either way: registering an observer never changes what the stack does,
+/// only who hears about it.
 ///
-/// Red-check: `return` early from `ObservationQueues::flush` without clearing;
-/// the notes leak into the next flush once an observer is added.
+/// `ObservationQueues::drain` returns owned data now, so "delivered" and "emptied"
+/// are the same operation and cannot drift apart. What *can* still break is drain
+/// itself — copying instead of consuming.
+///
+/// Red-check: make `drain` build its `Vec` from `self.additions.iter().rev()` and
+/// `self.deletions.iter()` without popping. The two pushes from the unobserved
+/// flushes reappear in the pop's notifications, and the spy hears them.
 #[test]
 fn queues_are_cleared_when_there_are_no_observers() {
     let log: Log = Log::default();
     let mut history = RouteHistory::new();
     let (first, _r0) = history.add_initial(Probe::new(&log));
     let (_second, _r1) = history.push(Probe::new(&log));
+    // The navigator settles every flush, observed or not; that is what drops the
+    // observations nobody was listening to.
+    settle_unobserved(&mut history);
 
     // Only now attach an observer: the earlier observations must be gone.
-    let spy = spy(&mut history);
+    let spy = spy();
     history.pop(None);
+    settle(&mut history, &watching(&spy));
 
     assert!(
         !spy.notes()
@@ -852,8 +898,13 @@ fn pop_announces_did_pop_next_not_a_redundant_did_change_next() {
 /// announcements (`navigator.dart:4571`, `:4585`, `:4589`, `:4609`), so a dying
 /// route still receives its final announcements.
 ///
-/// Red-check: dispose inside the `Dispose` arm instead of collecting into
-/// `to_be_disposed`; `Dispose` then precedes the observer's `pop` note.
+/// Red-check: dispose inside the `Dispose` arm instead of collecting into `dying`;
+/// `Dispose` then precedes the observer's `pop` note.
+///
+/// This drives `settle`, the test-side twin of `NavigatorShared::apply` — so it
+/// pins the *rule*, and would stay green if production's `apply` reordered.
+/// `hero_seam_tests::observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down`
+/// pins `apply` itself.
 #[test]
 fn flush_disposes_removed_routes_after_notifications() {
     let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
@@ -882,9 +933,9 @@ fn flush_disposes_removed_routes_after_notifications() {
     }
 
     let mut history = RouteHistory::new();
-    history.add_observer(Arc::new(OrderSpy {
+    let observers: Vec<Arc<dyn NavigatorObserver>> = vec![Arc::new(OrderSpy {
         order: Arc::clone(&order),
-    }));
+    })];
     history.add_initial(Tracer {
         settings: RouteSettings::default(),
         order: Arc::clone(&order),
@@ -893,9 +944,11 @@ fn flush_disposes_removed_routes_after_notifications() {
         settings: RouteSettings::default(),
         order: Arc::clone(&order),
     });
+    settle(&mut history, &observers);
 
     order.lock().clear();
     history.pop(None);
+    settle(&mut history, &observers);
 
     assert_eq!(
         *order.lock(),
@@ -961,12 +1014,14 @@ fn animating_push_defers_disposal_of_the_replaced_route_until_it_completes() {
     // flush above never enters it, because the entry is handled by the
     // `PushReplace` arm on the way in.
     history.flush(true);
+    settle_unobserved(&mut history);
     assert_eq!(history.len(), 3, "still deferred after a redundant flush");
     assert!(!old_log.lock().contains(&Event::Dispose));
 
     // The seam's only path: raise the command, then settle.
     binding_for(&history, new_top).notify_push_completed();
     history.flush(true);
+    settle_unobserved(&mut history);
 
     assert_eq!(history.state_of(new_top), Some(RouteLifecycle::Idle));
     assert_eq!(history.len(), 2, "now the replaced route is disposed");
@@ -984,9 +1039,11 @@ fn push_replacement_reports_did_replace_not_did_remove() {
     let mut history = RouteHistory::new();
     let (bottom, _r0) = history.add_initial(Probe::new(&log));
     let (old, _r1) = history.push(Probe::new(&log));
+    settle_unobserved(&mut history);
 
-    let spy = spy(&mut history);
+    let spy = spy();
     let (new_top, _r2) = history.push_replacement(Probe::new(&log), None);
+    settle(&mut history, &watching(&spy));
 
     assert!(
         spy.notes()
@@ -1262,12 +1319,19 @@ fn route_binding_notify_push_completed_during_flush_is_deferred() {
 }
 
 /// A zero-duration push **and** a synchronous pop, end to end: the lifecycle and
-/// the overlay outcome must both settle. `FlushOutcome` accumulates across passes,
-/// so the caller (the navigator) removes every disposed route's overlay entry.
+/// the overlay outcome must both settle. `FlushOutcome` accumulates — across the
+/// passes of one `flush`, and across flushes the caller has not yet settled — so
+/// nothing a flush decided can be lost by batching.
 ///
-/// Red-check: drop `FlushOutcome::absorb`'s `disposed.extend` — the route
-/// disposed on the *second* pass never reaches the caller, and its overlay entry
-/// leaks.
+/// That second half is what `last_outcome`'s `absorb` buys, and it is not a nicety:
+/// an outcome owns the dying routes and the notifications, so overwriting it would
+/// silently skip a `Route::dispose` and swallow a `did_pop`.
+///
+/// Red-check (each half fails on its own):
+/// * drop `FlushOutcome::absorb`'s `disposed.extend` — the route disposed on the
+///   *second* pass never reaches the caller, and its overlay entry leaks;
+/// * drop its `notifications.extend` — the observations of every flush but the last
+///   vanish.
 #[test]
 fn zero_duration_push_then_pop_settles_lifecycle_and_overlay_outcome() {
     let log: Log = Log::default();
@@ -1288,6 +1352,41 @@ fn zero_duration_push_then_pop_settles_lifecycle_and_overlay_outcome() {
         "the deferred disposal must reach the caller: {:?}",
         outcome.disposed
     );
+
+    // Three un-settled flushes — `add_initial`, `push_with_id`, `pop` — folded into
+    // one outcome, in the order they happened.
+    let bottom = history.ids()[0];
+    assert_eq!(
+        outcome.notifications,
+        vec![
+            Notification::Observed(Observation::Push {
+                route: bottom,
+                previous: None
+            }),
+            Notification::TopChanged {
+                top: bottom,
+                previous_top: None
+            },
+            Notification::Observed(Observation::Push {
+                route: top,
+                previous: Some(bottom)
+            }),
+            Notification::TopChanged {
+                top,
+                previous_top: Some(bottom)
+            },
+            Notification::Observed(Observation::Pop {
+                route: top,
+                previous: Some(bottom)
+            }),
+            Notification::TopChanged {
+                top: bottom,
+                previous_top: Some(top)
+            },
+        ],
+        "every flush's observations survive to the caller"
+    );
+
     assert_eq!(history.len(), 1);
     assert!(result.is_completed());
     assert!(!history.has_pending_commands());
@@ -1385,8 +1484,9 @@ fn route_commands_are_pre_bound_to_one_route() {
 /// edge to the navigator, the overlay, the scheduler, or either tree — which is
 /// what `PURE_DATA` now forbids by name, and did not before.
 ///
-/// Red-check: add `use crate::overlay::OverlayEntry;` to `history.rs`, or
-/// `use super::navigator::NavigatorHandle;` to `route.rs`.
+/// Red-check: add `use crate::overlay::OverlayEntry;` to `history.rs`,
+/// `use super::navigator::NavigatorHandle;` to `route.rs`, or give `RouteHistory`
+/// back its `observers: Vec<Arc<dyn NavigatorObserver>>` field.
 #[test]
 fn route_stack_flush_is_pure_data() {
     /// Tokens that would mean this layer had grown a dependency on the framework.
@@ -1402,9 +1502,15 @@ fn route_stack_flush_is_pure_data() {
     ];
     /// …and, for the four files that are pure *data*, anything that reaches the
     /// navigator, the scheduler, or an id minted by either tree.
-    const NAVIGATOR_EDGE: [&str; 7] = [
+    ///
+    /// `NavigatorObserver` joined this list in ADR-0021 §7f: an observer holds a
+    /// `NavigatorHandle`, so a `RouteHistory` that could *call* one could deadlock
+    /// on its own mutex. It now computes `Notification`s and hands them to the
+    /// navigator, which delivers them with the lock released.
+    const NAVIGATOR_EDGE: [&str; 8] = [
         "super::navigator",
         "NavigatorHandle",
+        "NavigatorObserver",
         "OverlayHandle",
         "flui_scheduler",
         "PostFrameHandle",

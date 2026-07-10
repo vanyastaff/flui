@@ -12,7 +12,8 @@
 //! | 5. Overlay access | `navigator.overlay` (`heroes.dart:990`) | `overlay_*` |
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use flui_foundation::RenderId;
 use flui_rendering::pipeline::PipelineOwner;
@@ -707,5 +708,239 @@ fn inserting_into_a_stale_navigators_overlay_is_inert() {
         builds.load(Ordering::SeqCst),
         0,
         "an unmounted overlay builds nothing"
+    );
+}
+
+// ============================================================================
+// Seam 2, continued — the handle is usable from inside a callback
+// ============================================================================
+
+/// A deadlock is the failure mode these tests exist to catch, and a deadlocked test
+/// *hangs* rather than fails. So the body runs on a worker thread and the assertion
+/// is on the clock.
+///
+/// The stuck thread is deliberately not joined on timeout — joining it would hang
+/// too. nextest gives every test its own process, so it dies with the failure.
+fn must_finish(what: &str, body: impl FnOnce() + Send + 'static) {
+    const BUDGET: Duration = Duration::from_secs(10);
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        body();
+        let _ = done.send(());
+    });
+    assert!(
+        finished.recv_timeout(BUDGET).is_ok(),
+        "{what} did not finish within {BUDGET:?} — a navigator lock is held across \
+         an observer callback"
+    );
+}
+
+/// Reads the stack from every callback it receives, through the handle it was
+/// handed at `did_attach`.
+#[derive(Default)]
+struct StackReader {
+    handle: Mutex<Option<NavigatorHandle>>,
+    reads: Mutex<Vec<(&'static str, usize, bool)>>,
+}
+
+impl StackReader {
+    /// The three reads that take `history.lock()`.
+    fn read(&self, from: &'static str) {
+        let Some(navigator) = self.handle.lock().clone() else {
+            return;
+        };
+        let depth = navigator.route_ids().len();
+        let can_pop = navigator.can_pop();
+        let _current = navigator.current();
+        self.reads.lock().push((from, depth, can_pop));
+    }
+}
+
+impl NavigatorObserver for StackReader {
+    fn did_attach(&self, navigator: NavigatorHandle) {
+        *self.handle.lock() = Some(navigator);
+        self.read("did_attach");
+    }
+    fn did_push(&self, _route: RouteId, _previous: Option<RouteId>) {
+        self.read("did_push");
+    }
+    fn did_pop(&self, _route: RouteId, _previous: Option<RouteId>) {
+        self.read("did_pop");
+    }
+    fn did_change_top(&self, _top: RouteId, _previous_top: Option<RouteId>) {
+        self.read("did_change_top");
+    }
+}
+
+/// **The U2 defect, fixed.** An observer stores the `NavigatorHandle` it is handed
+/// and reads the stack from `did_push` / `did_pop` / `did_change_top`. Every one of
+/// those reads takes `history.lock()`; `parking_lot::Mutex` is not reentrant, so
+/// this hangs the moment a notification fires under the lock.
+///
+/// The reads also see a **settled** stack: notifications are delivered after the
+/// flush completes, so `route_ids().len()` is the post-flush depth, never a
+/// half-walked one.
+///
+/// Red-check: in `NavigatorShared::mutate` / `push`, call `apply(outcome)` inside
+/// the `history.lock()` scope instead of after it. This test then times out.
+#[test]
+fn an_observer_reads_the_stack_from_its_callbacks_without_deadlocking() {
+    let navigator = seeded_navigator();
+    let reader = Arc::new(StackReader::default());
+    navigator.add_observer(Arc::clone(&reader) as Arc<dyn NavigatorObserver>);
+
+    let navigator_for_worker = navigator.clone();
+    let reader_for_worker = Arc::clone(&reader);
+    must_finish("an observer reading the stack", move || {
+        // Mount inside the worker: `did_attach` fires from `init_state`, which is
+        // where the handle comes from.
+        let mut harness = mount_navigator(&navigator_for_worker);
+        let _result = navigator_for_worker.push(PageRoute::<i32>::new(page));
+        harness.tick();
+        assert!(navigator_for_worker.pop());
+        harness.tick();
+        assert!(!reader_for_worker.reads.lock().is_empty());
+    });
+
+    let reads = reader.reads.lock().clone();
+    let from: Vec<&str> = reads.iter().map(|(from, ..)| *from).collect();
+    assert!(
+        from.contains(&"did_attach")
+            && from.contains(&"did_push")
+            && from.contains(&"did_pop")
+            && from.contains(&"did_change_top"),
+        "every callback must have read the stack: {from:?}"
+    );
+
+    // The seeded route is the only one on the stack when `did_attach` runs, and
+    // `can_pop()` is false for a lone route.
+    assert_eq!(
+        reads.first().copied(),
+        Some(("did_attach", 1, false)),
+        "did_attach sees the seeded stack"
+    );
+
+    // Every `did_push` read the depth *after* the flush settled, never mid-walk.
+    for (from, depth, _) in &reads {
+        assert!(*depth >= 1, "{from} saw an empty stack: {reads:?}");
+    }
+}
+
+/// Mutating the stack from `did_push` is **defined** in FLUI, where Flutter would
+/// `assert(!_debugLocked)` (`navigator.dart:4452`): notifications are delivered
+/// after the flush that produced them has fully settled and released the mutex, so
+/// a push raised from a callback simply runs a fresh flush, and *its* notifications
+/// are delivered after the outer drain finishes.
+///
+/// This test pins that it terminates and that the extra route lands — not that
+/// anyone should do it. The re-entrant push fires from the **seeded** route's
+/// `did_push`, i.e. from inside `NavigatorState::init_state`'s own flush, which is
+/// the earliest and tightest moment a callback can reach back into the navigator.
+///
+/// Red-check: deliver notifications under the history lock (as above); this times
+/// out instead of failing an assertion.
+#[test]
+fn an_observer_may_push_from_did_push_without_deadlocking() {
+    /// Pushes exactly one extra route, the first time it hears about a push.
+    #[derive(Default)]
+    struct Reentrant {
+        handle: Mutex<Option<NavigatorHandle>>,
+        pushed_once: AtomicBool,
+        depths: Mutex<Vec<usize>>,
+    }
+    impl NavigatorObserver for Reentrant {
+        fn did_attach(&self, navigator: NavigatorHandle) {
+            *self.handle.lock() = Some(navigator);
+        }
+        fn did_push(&self, _route: RouteId, _previous: Option<RouteId>) {
+            let Some(navigator) = self.handle.lock().clone() else {
+                return;
+            };
+            self.depths.lock().push(navigator.route_ids().len());
+            if self.pushed_once.swap(true, Ordering::SeqCst) {
+                return; // Guard the recursion this test is exercising.
+            }
+            let _result = navigator.push(PageRoute::<i32>::new(page));
+        }
+    }
+
+    let navigator = seeded_navigator();
+    let observer = Arc::new(Reentrant::default());
+    navigator.add_observer(Arc::clone(&observer) as Arc<dyn NavigatorObserver>);
+
+    let navigator_for_worker = navigator.clone();
+    must_finish("an observer pushing from did_push", move || {
+        let mut harness = mount_navigator(&navigator_for_worker);
+        let _result = navigator_for_worker.push(PageRoute::<i32>::new(page));
+        harness.tick();
+    });
+
+    assert_eq!(
+        navigator.route_ids().len(),
+        3,
+        "the seeded route, the one the observer pushed, and the one the test pushed"
+    );
+
+    let depths = observer.depths.lock().clone();
+    assert_eq!(
+        depths,
+        vec![1, 2, 3],
+        "one did_push per route, each reading a settled stack: the seeded route \
+         (depth 1), the observer's own re-entrant push (2), then the test's (3)"
+    );
+}
+
+/// `flush_disposes_removed_routes_after_notifications` pins the order through the
+/// test-side `settle` helper, which means it pins the *helper*. This one goes
+/// through the real `NavigatorShared::apply`.
+///
+/// Flutter notifies observers (`navigator.dart:4585`) and only then reaches
+/// `_disposeRouteEntry` (`:4607`), which removes the route's overlay entries and
+/// disposes it. So an observer's `did_pop` must still see the dying route's entry
+/// on the navigator's books.
+///
+/// Red-check: in `NavigatorShared::apply`, move `deliver(…)` below the overlay-entry
+/// removal and `outcome.dispose_routes()`.
+#[test]
+fn observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down() {
+    /// Counts the navigator's tracked overlay entries at the moment `did_pop` fires.
+    #[derive(Default)]
+    struct EntryWatcher {
+        handle: Mutex<Option<NavigatorHandle>>,
+        entries_at_pop: Mutex<Option<usize>>,
+    }
+    impl NavigatorObserver for EntryWatcher {
+        fn did_attach(&self, navigator: NavigatorHandle) {
+            *self.handle.lock() = Some(navigator);
+        }
+        fn did_pop(&self, _route: RouteId, _previous: Option<RouteId>) {
+            if let Some(navigator) = self.handle.lock().clone() {
+                *self.entries_at_pop.lock() = Some(navigator.tracked_entry_count());
+            }
+        }
+    }
+
+    let navigator = seeded_navigator();
+    let watcher = Arc::new(EntryWatcher::default());
+    navigator.add_observer(Arc::clone(&watcher) as Arc<dyn NavigatorObserver>);
+
+    let mut harness = mount_navigator(&navigator);
+    let _result = navigator.push(PageRoute::<i32>::new(page));
+    harness.tick();
+    assert_eq!(navigator.tracked_entry_count(), 2);
+
+    assert!(navigator.pop());
+    harness.tick();
+
+    assert_eq!(
+        *watcher.entries_at_pop.lock(),
+        Some(2),
+        "did_pop must run before the popped route's overlay entry is removed"
+    );
+    assert_eq!(
+        navigator.tracked_entry_count(),
+        1,
+        "and the entry is gone by the time the flush has been applied"
     );
 }

@@ -34,11 +34,12 @@
 //!    needs the *next route's animation*, so it will need a lookup handle — noted
 //!    in ADR-0019 §7a.
 
+use std::fmt;
 use std::sync::Arc;
 
 use super::binding::{RouteCommand, RouteCommandQueue};
 use super::lifecycle::RouteLifecycle;
-use super::observer::{NavigatorObserver, Observation, ObservationQueues};
+use super::observer::{Notification, Observation, ObservationQueues};
 use super::result::RouteResult;
 use super::route::{
     AnyResult, ErasedRoute, PushCompletion, Route, RouteId, RoutePopDisposition, RouteRecord,
@@ -305,28 +306,67 @@ impl RouteEntry {
 /// ADR-0017's `MAX_LAYOUT_BUILD_PASSES`.
 const MAX_FLUSH_PASSES: usize = 10;
 
-/// What one flush did that its caller must still act on.
+/// Everything one flush decided but did **not** do, because doing it means leaving
+/// the history's mutex.
 ///
-/// U2 has no overlay; U3's `Navigator` reads this and performs the overlay work
-/// Flutter does at the tail of `_flushHistoryUpdates` (`navigator.dart:4609-4613`):
-/// remove each disposed route's overlay entries, then rearrange.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// Flutter runs all of this inline at the tail of `_flushHistoryUpdates`
+/// (`navigator.dart:4583-4613`). FLUI cannot: a `NavigatorObserver` holds a
+/// `NavigatorHandle` and `parking_lot::Mutex` is not reentrant, so notifying an
+/// observer under `history.lock()` deadlocks the moment it reads the stack it was
+/// just told about. `route.dispose()` has the same shape — it runs arbitrary route
+/// teardown. So the flush computes owned data and `NavigatorShared::apply` performs
+/// it once the lock is released.
+///
+/// Not `Clone`/`PartialEq`: it owns the dying routes.
+#[derive(Default)]
 pub(crate) struct FlushOutcome {
     /// Flutter's `rearrangeOverlay` argument (`navigator.dart:4451`). `pop` and
     /// `remove_route` pass `false`, because `OverlayEntry.remove()` has already
     /// updated the overlay's own list.
     pub(crate) rearrange_overlay: bool,
-    /// The routes disposed at the end of this flush. Their overlay entries must
-    /// be removed by the caller.
+    /// What to tell the observers, in delivery order: additions LIFO, then
+    /// deletions FIFO, then `did_change_top` — per pass.
+    pub(crate) notifications: Vec<Notification>,
+    /// The routes disposed by this flush. Their overlay entries must be removed by
+    /// the caller, **before** [`dispose_routes`](Self::dispose_routes) runs —
+    /// Flutter's `_disposeRouteEntry` does both in that order (`:3978-3987`).
     pub(crate) disposed: Vec<RouteId>,
+    /// The dying entries themselves, moved out of the history so the caller can
+    /// run `Route::dispose` outside the lock.
+    dying: Vec<RouteEntry>,
 }
 
 impl FlushOutcome {
     /// Fold a follow-up pass's outcome into this one, so the caller applies the
-    /// union of everything a single `flush` did.
+    /// union of everything a single `flush` did. Notifications keep pass order.
     fn absorb(&mut self, later: Self) {
         self.rearrange_overlay |= later.rearrange_overlay;
+        self.notifications.extend(later.notifications);
         self.disposed.extend(later.disposed);
+        self.dying.extend(later.dying);
+    }
+
+    /// `entry.route.dispose()` for every route this flush killed — Flutter's
+    /// `_disposeRouteEntry` tail (`navigator.dart:3978-3987`).
+    ///
+    /// Must run **after** the observers have been notified (`observer:pop` precedes
+    /// `dispose`, `:4585` vs `:4608`) and after the caller has removed each route's
+    /// overlay entries.
+    pub(crate) fn dispose_routes(&mut self) {
+        for mut entry in self.dying.drain(..) {
+            entry.route.dispose();
+            entry.state = RouteLifecycle::Disposed;
+        }
+    }
+}
+
+impl fmt::Debug for FlushOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FlushOutcome")
+            .field("rearrange_overlay", &self.rearrange_overlay)
+            .field("notifications", &self.notifications)
+            .field("disposed", &self.disposed)
+            .finish_non_exhaustive()
     }
 }
 
@@ -334,7 +374,6 @@ impl FlushOutcome {
 #[derive(Default)]
 pub(crate) struct RouteHistory {
     entries: Vec<RouteEntry>,
-    observers: Vec<Arc<dyn NavigatorObserver>>,
     queues: ObservationQueues,
     last_topmost: Option<RouteId>,
     /// Flutter's `_flushingHistory` + `_debugLocked` (`:4453`).
@@ -470,16 +509,6 @@ impl RouteHistory {
         {
             entry.route.on_pop_invoked(false);
         }
-    }
-
-    pub(crate) fn add_observer(&mut self, observer: Arc<dyn NavigatorObserver>) {
-        self.observers.push(observer);
-    }
-
-    /// The observers, cloned out in registration order. The caller notifies them
-    /// with no lock held; see `NavigatorObserver`'s re-entrancy note.
-    pub(crate) fn observers(&self) -> Vec<Arc<dyn NavigatorObserver>> {
-        self.observers.clone()
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -699,7 +728,7 @@ impl RouteHistory {
     /// `_flushingHistory` (`:4452-4453`). A route's transition callback firing
     /// mid-flush is the way in (U5), so this is a framework invariant and
     /// `PANIC-POLICY` permits the panic.
-    pub(crate) fn flush(&mut self, rearrange_overlay: bool) -> FlushOutcome {
+    pub(crate) fn flush(&mut self, rearrange_overlay: bool) {
         // A *recursive* `flush` is still forbidden and still loud. Route callbacks
         // no longer reach this path: they enqueue a `RouteCommand` instead
         // (ADR-0020 U5.1, `binding.rs` Correction 1), so this assert now guards
@@ -740,8 +769,12 @@ impl RouteHistory {
             self.last_flush_passes = passes;
         }
 
-        self.last_outcome = Some(outcome.clone());
-        outcome
+        // Absorb rather than overwrite: an outcome that was never taken owns dying
+        // routes, and dropping it would skip their `dispose()`.
+        match &mut self.last_outcome {
+            Some(pending) => pending.absorb(outcome),
+            None => self.last_outcome = Some(outcome),
+        }
     }
 
     /// One walk of the history, with `flushing` held for its duration.
@@ -900,38 +933,45 @@ impl RouteHistory {
             }
         }
 
-        // Informs navigator observers about route changes.
-        self.queues.flush(&self.observers);
+        // What to tell the observers about route changes — computed, not sent.
+        // Flutter's `_flushObserverNotifications` (`navigator.dart:4584-4585`).
+        let mut notifications: Vec<Notification> = self
+            .queues
+            .drain()
+            .into_iter()
+            .map(Notification::Observed)
+            .collect();
 
         // Now that the list is clean, send the didChangeNext/didChangePrevious
-        // notifications.
+        // notifications. These stay here: they take `&mut` on the entries, so they
+        // cannot leave the borrow. See `observer.rs` for the ordering divergence
+        // this buys — they precede the observer callbacks rather than following
+        // them, and are invisible through the observer surface.
         self.flush_route_announcement();
 
         let last = self.current();
         if let Some(top) = last
             && self.last_topmost != Some(top)
         {
-            for observer in &self.observers {
-                observer.did_change_top(top, self.last_topmost);
-            }
+            notifications.push(Notification::TopChanged {
+                top,
+                previous_top: self.last_topmost,
+            });
         }
         self.last_topmost = last;
 
-        // Lastly, dispose everything marked. Flutter also removes each route's
-        // overlay entries here (`_disposeRouteEntry`); U3 owns that.
-        // The caller removes each route's overlay entries; Flutter does it here,
-        // before `entry.dispose()` (`_disposeRouteEntry`, `:3978-3987`). U3's
-        // routes hold no overlay entry themselves, so nothing observes the order.
-        let mut disposed = Vec::with_capacity(to_be_disposed.len());
-        for mut entry in to_be_disposed {
-            disposed.push(entry.id());
-            entry.route.dispose();
-            entry.state = RouteLifecycle::Disposed;
-        }
+        // Lastly, hand the marked entries to the caller. Flutter disposes them here
+        // (`_disposeRouteEntry`, `:4607-4609`), inline; `Route::dispose` runs
+        // arbitrary teardown — an animation controller, a vsync unregistration, a
+        // route below releasing its secondary animation — and none of it belongs
+        // under the history's mutex.
+        let disposed = to_be_disposed.iter().map(RouteEntry::id).collect();
 
         FlushOutcome {
             rearrange_overlay,
+            notifications,
             disposed,
+            dying: to_be_disposed,
         }
     }
 

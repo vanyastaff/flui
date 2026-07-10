@@ -49,7 +49,7 @@ use super::binding::{
     RouteBinding, RouteEntries, RouteSubtrees, RouteVsync, TransitionPeer, TransitionRegistry,
 };
 use super::history::{FlushOutcome, RouteHistory};
-use super::observer::NavigatorObserver;
+use super::observer::{NavigatorObserver, deliver};
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
 use super::route::{AnyResult, RouteId, RoutePopDisposition};
@@ -92,6 +92,16 @@ struct NavigatorShared {
     /// so each publishes its cell here at `install()`.
     subtrees: RouteSubtrees,
 
+    /// Flutter's `_effectiveObservers` (`navigator.dart:3769`).
+    ///
+    /// **Not on `RouteHistory`.** An observer holds a [`NavigatorHandle`], so
+    /// notifying one is re-entrant by construction; the route stack must therefore
+    /// neither own observers nor call them, and `route_stack_flush_is_pure_data`
+    /// now forbids it from even naming the trait. The flush returns `Notification`s
+    /// as owned data and [`NavigatorShared::apply`] delivers them here, with the
+    /// history mutex released.
+    observers: Mutex<Vec<Arc<dyn NavigatorObserver>>>,
+
     /// Whether the mounted `NavigatorState` currently holds the observers
     /// attached. Flutter's `NavigatorObserver._navigators[observer] != null`
     /// (`navigator.dart:779`, `:3836`), which is per-observer only because Dart
@@ -109,7 +119,15 @@ impl NavigatorShared {
     ///    flush asked for it. `pop` and `remove_route` pass `rearrangeOverlay:
     ///    false` (`:5671`, `:5747`) precisely because step 1 already updated the
     ///    overlay's list.
-    fn apply(&self, outcome: &FlushOutcome) {
+    fn apply(&self, mut outcome: FlushOutcome) {
+        // 1. Observers, with **no lock held** — this is the whole reason the flush
+        //    returns data instead of calling them. An observer may read the stack
+        //    through its `NavigatorHandle`, and may mutate it (which runs a fresh
+        //    flush whose notifications land after this loop drains).
+        deliver(&outcome.notifications, &self.observers());
+
+        // 2. Each disposed route's overlay entries, then the route itself —
+        //    Flutter's `_disposeRouteEntry` order (`navigator.dart:3978-3987`).
         {
             let mut entries = self.entries.lock();
             for id in &outcome.disposed {
@@ -120,6 +138,7 @@ impl NavigatorShared {
                 }
             }
         }
+        outcome.dispose_routes();
 
         if !outcome.rearrange_overlay {
             return;
@@ -159,18 +178,17 @@ impl NavigatorShared {
             history.take_outcome()
         };
         if let Some(outcome) = outcome {
-            self.apply(&outcome);
+            self.apply(outcome);
         }
     }
 
-    /// The observers, cloned out in registration order **with no lock held**.
+    /// The observers, cloned out in registration order.
     ///
-    /// Every notification below runs outside `history`'s mutex, because an
-    /// observer holds a [`NavigatorHandle`] and `parking_lot::Mutex` is not
-    /// reentrant: `did_attach` reaching for `route_ids()` under the lock would
-    /// hang, not panic.
+    /// Cloned, not borrowed: every notification runs with this lock released too,
+    /// so an observer may register another one — or drop its own `Arc` — from a
+    /// callback without deadlocking on `observers`.
     fn observers(&self) -> Vec<Arc<dyn NavigatorObserver>> {
-        self.history.lock().observers()
+        self.observers.lock().clone()
     }
 
     /// Flutter's `initState` / `activate` loop (`navigator.dart:3834-3837`,
@@ -207,7 +225,7 @@ impl NavigatorShared {
             (value, history.take_outcome())
         };
         if let Some(outcome) = outcome {
-            self.apply(&outcome);
+            self.apply(outcome);
         }
         value
     }
@@ -236,6 +254,7 @@ impl NavigatorHandle {
                 vsync: Arc::new(Mutex::new(None)),
                 peers: Arc::new(Mutex::new(HashMap::new())),
                 subtrees: Arc::new(Mutex::new(HashMap::new())),
+                observers: Mutex::new(Vec::new()),
                 observers_attached: AtomicBool::new(false),
             }),
         }
@@ -248,10 +267,7 @@ impl NavigatorHandle {
     /// before mount, it is attached by `init_state` instead. Either way it holds a
     /// handle exactly while the navigator is mounted.
     pub fn add_observer(&self, observer: Arc<dyn NavigatorObserver>) {
-        self.shared
-            .history
-            .lock()
-            .add_observer(Arc::clone(&observer));
+        self.shared.observers.lock().push(Arc::clone(&observer));
         if self.shared.observers_attached.load(Ordering::Relaxed) {
             observer.did_attach(self.clone());
         }
@@ -341,7 +357,7 @@ impl NavigatorHandle {
         };
 
         if let Some(outcome) = outcome {
-            self.shared.apply(&outcome);
+            self.shared.apply(outcome);
         }
         result
     }

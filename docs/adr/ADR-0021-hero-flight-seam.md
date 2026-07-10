@@ -941,6 +941,80 @@ object outside the catalog guard.
 
 ---
 
+## 7f. Observers are notified outside the history mutex (2026-07-10)
+
+§7e shipped seam 2 with a documented restriction: an observer's `did_push` must not
+read the stack through the `NavigatorHandle` it was handed, because
+`RouteHistory::flush` ran the callbacks while `NavigatorShared::mutate` held
+`history.lock()`, and `parking_lot::Mutex` is not reentrant. That was the wrong call.
+`NavigatorObserver` is public, the handle is the *point* of seam 2, and
+`HeroController` is the first consumer — a doc-only restriction on a hang is not a
+contract anyone can build on.
+
+### The shape
+
+`RouteHistory` now **decides** and the navigator **performs**. The flush walks the
+stack and returns owned data; `NavigatorShared::apply` acts on it with the mutex
+released:
+
+| | Under `history.lock()` | After it is released |
+|---|---|---|
+| walk, `handle_push`/`handle_pop`, entry removal | ✅ | |
+| `_flushRouteAnnouncement` (`did_change_next`/`did_change_previous`) | ✅ | |
+| observer notifications, `did_change_top` | | ✅ |
+| `Route::dispose` | | ✅ |
+| overlay entry removal, `rearrange` | | ✅ |
+
+`FlushOutcome` grew `notifications: Vec<Notification>` (additions LIFO, then
+deletions FIFO, then `TopChanged` — per pass) and `dying: Vec<RouteEntry>`, so it
+owns the routes it killed. It is no longer `Clone`/`PartialEq`. `last_outcome`
+**absorbs** rather than overwrites: an un-taken outcome owns dying routes, and
+dropping it would silently skip a `Route::dispose`.
+
+`RouteHistory` no longer holds observers at all — they moved to `NavigatorShared`,
+and `route_stack_flush_is_pure_data` now forbids the pure files from even naming
+`NavigatorObserver`. A stack that cannot call an observer cannot deadlock on one.
+
+### What this buys, and what it costs
+
+**Buys.** `current()`, `route_ids()`, `can_pop()` — and `push()` / `pop()` — are all
+safe from any observer callback. Notifications are delivered against a *settled*
+stack, never a half-walked one. `Route::dispose` (an animation controller, a vsync
+unregistration, a route below releasing its secondary animation) no longer runs
+under the mutex.
+
+**Costs, both recorded.**
+
+1. **`_flushRouteAnnouncement` now precedes the observer callbacks** rather than
+   sitting between them and `did_change_top` (`navigator.dart:4584-4596`). It takes
+   `&mut` on the entries, so it cannot leave the borrow. `did_change_next` /
+   `did_change_previous` are route-internal — they drive secondary animations, which
+   no observer surface exposes — so an observer sees a strictly more settled stack,
+   never a different one.
+2. **Mutating the stack from a callback is defined here, where Flutter asserts.**
+   `_flushHistoryUpdates` guards with `_debugLocked` (`:4452`); FLUI's callback runs
+   after the flush has settled and released the mutex, so a re-entrant `push` simply
+   runs a fresh flush whose notifications are delivered after the outer drain.
+   `an_observer_may_push_from_did_push_without_deadlocking` pins that it terminates.
+   Defined, not encouraged.
+
+### Evidence
+
+A deadlock hangs rather than fails, so the two regression tests run their body on a
+worker thread and assert on the clock (`must_finish`, 10 s). Restoring the U2 shape —
+`apply(outcome)` inside the `history.lock()` scope — times both out. Nine other
+mutations cover queue order (additions LIFO, deletions FIFO, additions-before-
+deletions), `absorb`'s two `extend`s, `drain`'s consume-not-copy, notify-before-
+overlay-teardown, and the purity edge.
+
+One test was found to pin the harness rather than the code:
+`flush_disposes_removed_routes_after_notifications` drives the test-side `settle`,
+so reordering production's `apply` left it green.
+`observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down` now pins
+`apply` itself, through the real navigator.
+
+---
+
 ## 8. Deferred, each with its blocker
 
 | Deferred | Why |
