@@ -416,6 +416,12 @@ impl MeasurementPass<'_> {
         // `FlightManager`'s type docs for why that matters.
         self.flights.drain_retired();
 
+        // Hand the flight manager the capability it needs to drain finished flights at
+        // end-of-frame, before any of them can finish. Same handle the pass itself was
+        // scheduled through, so it targets the binding's scheduler (ADR-0021 §7c).
+        self.flights
+            .set_post_frame(self.navigator.post_frame_handle());
+
         let started = self.collect_manifests();
         for (manifest, from_hero, to_hero) in &started {
             self.launch(manifest, from_hero, to_hero);

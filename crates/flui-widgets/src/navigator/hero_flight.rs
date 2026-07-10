@@ -64,6 +64,7 @@ use flui_animation::{
 };
 use flui_foundation::{Listenable, ListenerId, RenderId};
 use flui_geometry::Rect;
+use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
@@ -260,21 +261,85 @@ pub(crate) struct FlightPlan {
 /// proxy, *inside* that callback would free the animation the callback is running
 /// under. Dart's GC makes this a non-question.
 ///
-/// So `finish` never drops: it moves the flight into [`retired`](Self::retired), which
-/// is drained the next time the controller runs a measurement pass — outside every
-/// listener.
+/// So `finish` never drops: it moves the flight into [`retired`](Self::retired) and
+/// schedules a drain through the binding's [`PostFrameHandle`]. That runs at
+/// **end-of-frame** — after the status listener has returned and `fan_out_status` has
+/// unwound, but within the same turn — so a single transition cleans up after itself
+/// without waiting for an unrelated hero measurement. The drain is coalesced: many
+/// flights landing in one frame schedule exactly one.
+///
+/// [`drain_retired`](Self::drain_retired) is still called at the head of every
+/// measurement pass, as a backstop for the case where no post-frame capability was
+/// captured (an unmounted navigator, which is being torn down anyway).
 #[derive(Default)]
 pub(crate) struct FlightManager {
     flights: Mutex<HashMap<HeroTag, HeroFlight>>,
     retired: Mutex<Vec<HeroFlight>>,
+    /// The binding's post-frame capability, captured from the controller. A finished
+    /// flight schedules its own end-of-frame drain through this, so cleanup does not
+    /// wait for the next transition. `None` before the first launch or on an unmounted
+    /// navigator — then the measurement-head backstop is the only path.
+    post_frame: Mutex<Option<PostFrameHandle>>,
+    /// One drain per frame: set when a drain is scheduled, cleared when it runs.
+    drain_scheduled: AtomicBool,
+    /// How many drains this manager has actually scheduled — for the coalescing test.
+    #[cfg(test)]
+    drains_scheduled: std::sync::atomic::AtomicUsize,
 }
 
 impl FlightManager {
-    /// Free everything a finished flight was holding. Called from the post-frame
-    /// measurement pass, never from an animation listener.
+    /// Free everything the retired flights were holding. Runs from the end-of-frame
+    /// drain a landing flight scheduled, and as a backstop from the measurement pass —
+    /// never from an animation listener.
     pub(crate) fn drain_retired(&self) {
         let retired = std::mem::take(&mut *self.retired.lock());
         drop(retired);
+    }
+
+    /// Capture the binding's post-frame capability, so a finished flight can schedule
+    /// its own drain. Set from the controller's measurement pass, where the navigator
+    /// still resolves it.
+    pub(crate) fn set_post_frame(&self, handle: Option<PostFrameHandle>) {
+        *self.post_frame.lock() = handle;
+    }
+
+    /// How many flights are parked awaiting a safe drop.
+    #[cfg(test)]
+    pub(crate) fn retired_count(&self) -> usize {
+        self.retired.lock().len()
+    }
+
+    /// How many end-of-frame drains have been scheduled — coalescing must keep this at
+    /// one per frame no matter how many flights land.
+    #[cfg(test)]
+    pub(crate) fn drains_scheduled(&self) -> usize {
+        self.drains_scheduled.load(Ordering::SeqCst)
+    }
+
+    /// Queue a single end-of-frame drain of [`retired`](Self::retired).
+    ///
+    /// **Not re-entrant.** `PostFrameHandle::schedule` only pushes onto the scheduler's
+    /// post-frame queue; the closure runs at `end_frame`, long after `fan_out_status`
+    /// has returned, so nothing here drops a flight while its listener is still on the
+    /// stack. The closure holds a `Weak`: a manager dropped before the frame ends
+    /// simply takes its retired flights with it.
+    fn schedule_drain(self: &Arc<Self>) {
+        let Some(post_frame) = self.post_frame.lock().clone() else {
+            return; // No binding capability; the measurement-head drain is the backstop.
+        };
+        if self.drain_scheduled.swap(true, Ordering::SeqCst) {
+            return; // Already scheduled this frame — coalesce.
+        }
+        #[cfg(test)]
+        self.drains_scheduled.fetch_add(1, Ordering::SeqCst);
+
+        let weak = Arc::downgrade(self);
+        post_frame.schedule(move |_timing| {
+            if let Some(this) = weak.upgrade() {
+                this.drain_scheduled.store(false, Ordering::SeqCst);
+                this.drain_retired();
+            }
+        });
     }
 
     /// How many flights are in the air.
@@ -305,9 +370,13 @@ impl FlightManager {
 
         // No divert in U4: end the flight already in the air for this tag before
         // starting another, so shuttles never stack. Flutter would `divert` it.
+        //
+        // `start` runs in the measurement pass, not in `existing`'s status listener, so
+        // dropping it here is safe — `finish` just removed its listeners. No retired
+        // detour is needed for this path.
         if let Some(existing) = self.flights.lock().remove(&manifest.tag) {
             existing.finish(AnimationStatus::Dismissed);
-            self.retired.lock().push(existing);
+            drop(existing);
         }
 
         // `_proxyAnimation.parent = ReverseAnimation(manifest.animation)` for a pop,
@@ -398,11 +467,14 @@ impl FlightManager {
     /// `HeroController._handleFlightEnded` (`heroes.dart:1069-1071`): drop the flight
     /// from the registry. Called from the flight's own status listener, so the flight
     /// is *retired*, not dropped — see the type docs.
-    fn finish(&self, flight: &HeroFlight, status: AnimationStatus) {
+    fn finish(self: &Arc<Self>, flight: &HeroFlight, status: AnimationStatus) {
         flight.finish(status);
         let removed = self.flights.lock().remove(flight.tag());
         if let Some(removed) = removed {
+            // Park it — we are inside its status listener — and schedule the drop for
+            // the end of this frame.
             self.retired.lock().push(removed);
+            self.schedule_drain();
         }
     }
 }

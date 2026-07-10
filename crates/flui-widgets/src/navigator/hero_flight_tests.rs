@@ -680,3 +680,125 @@ impl ViewState<Mover> for MoverState {
         SizedBox::new(1.0, height)
     }
 }
+
+// ============================================================================
+// Cleanup — retired flights are drained deterministically
+// ============================================================================
+
+/// **The retention fix.** A flight ends from inside its own `ProxyAnimation` status
+/// listener, where dropping it would free the animation the listener is running under.
+/// So `FlightManager::finish` parks it in `retired` and schedules a drain — and that
+/// drain must run at **end-of-frame**, not at the next hero measurement. Otherwise a
+/// single transition with no follow-up leaks the whole flight graph (`HeroHandle`s,
+/// the shuttle `BoxedView`, the animation, and via `HeroHandle::owner` the
+/// `PipelineOwner`) until some unrelated hero activity happens.
+///
+/// The middle assertions pin the retire-not-drop discipline itself: the moment the
+/// status listener runs, the flight is out of the active set but still parked.
+///
+/// Red-check: in `FlightManager::finish`, delete the `self.schedule_drain()` call — the
+/// only remaining drain is `MeasurementPass`'s head, and with no second transition
+/// `retired_count()` stays `1` forever. This test then fails on the final assertion.
+#[test]
+fn a_completed_flight_is_drained_after_its_frame_without_another_transition() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page("shared", 60.0, 45.0),
+    );
+    assert_eq!(controller.flights().len(), 1, "airborne");
+    assert_eq!(
+        controller.flights().retired_count(),
+        0,
+        "nothing retired yet"
+    );
+
+    // Land it. The status listener runs synchronously inside `set_value`.
+    let animation = transition.controller().expect("installed");
+    animation.set_value(1.0);
+
+    assert_eq!(
+        controller.flights().len(),
+        0,
+        "removed from the active set the instant its listener runs"
+    );
+    assert_eq!(
+        controller.flights().retired_count(),
+        1,
+        "parked in `retired`, not yet dropped — we were inside its listener"
+    );
+
+    // One frame later, and **no second hero transition**, `retired` is empty.
+    harness.tick();
+
+    assert_eq!(
+        controller.flights().retired_count(),
+        0,
+        "the end-of-frame drain ran; the flight graph was released without waiting \
+         for another measurement pass"
+    );
+}
+
+/// Coalescing: many flights finishing in one frame schedule exactly **one** drain
+/// (`FlightManager::schedule_drain`'s `drain_scheduled` guard).
+///
+/// Two shared tags fly on one push; the destination route's single animation lands
+/// both at once, so both status listeners fire in the same turn.
+///
+/// Red-check: remove the `if self.drain_scheduled.swap(true, …) { return; }` guard from
+/// `schedule_drain` — two flights then schedule two drains.
+#[test]
+fn many_flights_landing_in_one_frame_schedule_one_drain() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let two_heroes = |a: &'static str, b: &'static str, wa: f32, wb: f32| {
+        PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            Column::new(vec![
+                Hero::new(tag(a), SizedBox::new(wa, 20.0))
+                    .into_view()
+                    .boxed(),
+                Hero::new(tag(b), SizedBox::new(wb, 20.0))
+                    .into_view()
+                    .boxed(),
+            ])
+            .main_axis_size(MainAxisSize::Min)
+            .into_view()
+            .boxed()
+        })
+        .transition_duration(TRANSITION)
+    };
+
+    let _source = navigator.push(two_heroes("one", "two", 30.0, 40.0));
+    harness.tick();
+    let destination = two_heroes("one", "two", 60.0, 80.0);
+    let transition = destination.transition_handle();
+    let _destination = navigator.push(destination);
+    harness.tick();
+
+    assert_eq!(controller.flights().len(), 2, "two tags, two flights");
+    assert_eq!(controller.flights().drains_scheduled(), 0);
+
+    let animation = transition.controller().expect("installed");
+    animation.set_value(1.0);
+
+    assert_eq!(controller.flights().retired_count(), 2, "both parked");
+    assert_eq!(
+        controller.flights().drains_scheduled(),
+        1,
+        "two flights, one coalesced drain"
+    );
+
+    harness.tick();
+    assert_eq!(
+        controller.flights().retired_count(),
+        0,
+        "both drained together"
+    );
+}

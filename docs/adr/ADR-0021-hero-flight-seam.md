@@ -1231,14 +1231,26 @@ each holds a `ProxyAnimation` over the driving route's primary animation, a
 | `onTick` (`:666-696`) | `FlightInner::on_tick` |
 | `_defaultHeroFlightShuttleBuilder` (`:1076-1090`) | `HeroHandle::shuttle_child` — `toHero.widget.child`, inflated afresh (D1: nothing reparents) |
 
-### Retire, do not drop
+### Retire, do not drop — but drain at end-of-frame
 
 A flight ends from inside its own `ProxyAnimation` status listener.
 `fan_out_status` snapshots the callbacks and then iterates them while holding `&self`,
 so dropping the last `Arc<FlightInner>` — and with it the proxy — *inside* that
 callback would free the animation the callback is running under. Dart's GC makes this
 a non-question; Rust does not. `FlightManager::finish` therefore moves the flight into
-`retired`, drained at the head of the next measurement pass, outside every listener.
+`retired` and drops it later, outside every listener.
+
+The *later* is load-bearing. The first cut drained `retired` only at the head of the
+next measurement pass — which never comes if the app runs one transition and no
+further hero activity. That retains the `HeroHandle`s, the shuttle `BoxedView`, the
+animation, and via `HeroHandle::owner` the `PipelineOwner`, indefinitely (review of
+`f18d71f8`). So `finish` now **schedules an end-of-frame drain** through the same
+`PostFrameHandle` the measurement pass rides: it runs after the listener returns and
+`fan_out_status` unwinds, within the same frame, and is coalesced so many flights
+landing together schedule one drain. `PostFrameHandle::schedule` only enqueues, so it
+cannot run re-entrantly inside the listener. The measurement-head `drain_retired`
+stays as a backstop for the no-capability case (an unmounted navigator, torn down
+anyway).
 
 ### Three things the tests found
 
