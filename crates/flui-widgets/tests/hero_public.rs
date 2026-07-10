@@ -546,6 +546,173 @@ fn custom_placeholder_preserves_hero_child_state_through_push_and_pop() {
     );
 }
 
+/// A hero page whose shuttle builder records the flight `direction` it is handed and
+/// draws a `ColoredBox` so the flight is observable. Both routes carry it, so the pop —
+/// where the seeded hero is the destination — resolves its builder too.
+fn direction_recording_page(seen: Arc<Mutex<Vec<FlightDirection>>>) -> PageRoute<i32> {
+    PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        let seen = Arc::clone(&seen);
+        Center::new()
+            .child(
+                Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+                    .flight_shuttle_builder(move |_animation, direction, _from, _to| {
+                        seen.lock().push(direction);
+                        ColoredBox::new(Color::RED)
+                    }),
+            )
+            .into_view()
+            .boxed()
+    })
+    .transition_duration(TRANSITION)
+}
+
+/// Both a push and a pop hand the shuttle builder the matching [`FlightDirection`]
+/// (`heroes.dart:466-480`). A push runs 0→1 (`Push`); a pop runs the source in reverse
+/// (`Pop`).
+///
+/// Red-check: swap the arms of `FlightDirection::classify` — the push flight reports
+/// `Pop` and the first assertion fails.
+#[test]
+fn push_and_pop_hand_the_matching_direction_to_the_shuttle_builder() {
+    let seen = Arc::new(Mutex::new(Vec::<FlightDirection>::new()));
+    let vsync = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(direction_recording_page(Arc::clone(&seen)));
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+
+    let _push = navigator.push(direction_recording_page(Arc::clone(&seen)));
+    assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "the push settled");
+    assert_eq!(
+        seen.lock().as_slice(),
+        [FlightDirection::Push],
+        "the push flight is handed Push"
+    );
+
+    assert!(navigator.pop());
+    assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "the pop settled");
+    assert_eq!(
+        seen.lock().last(),
+        Some(&FlightDirection::Pop),
+        "the pop flight is handed Pop"
+    );
+}
+
+/// A same-tag transition that interrupts an airborne flight **diverts** it, and the
+/// divert rebuilds the shuttle through the hook — not the default child
+/// (`heroes.dart:793`, `:573`).
+///
+/// Red-check: in `HeroFlight::divert`'s same-direction branch, replace the
+/// `inflate_shuttle(...)` call with `new_to.shuttle_child()` — the builder is not
+/// re-invoked on the divert and the count does not grow.
+#[test]
+fn a_divert_rebuilds_the_shuttle_through_the_hook() {
+    let builds = Arc::new(AtomicUsize::new(0));
+    let make_page = {
+        let builds = Arc::clone(&builds);
+        move || {
+            let builds = Arc::clone(&builds);
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                let builds = Arc::clone(&builds);
+                Center::new()
+                    .child(
+                        Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+                            .flight_shuttle_builder(move |_animation, _direction, _from, _to| {
+                                builds.fetch_add(1, Ordering::SeqCst);
+                                ColoredBox::new(Color::RED)
+                            }),
+                    )
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(TRANSITION)
+        }
+    };
+
+    let vsync = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(make_page());
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+
+    let _b = navigator.push(make_page());
+    assert_eq!(
+        run(&mut laid, &owner, 3).0,
+        1,
+        "the first flight is airborne"
+    );
+    let after_first = builds.load(Ordering::SeqCst);
+    assert!(
+        after_first >= 1,
+        "the first shuttle was built through the hook"
+    );
+
+    // A third same-tag page mid-flight diverts the airborne flight.
+    let _c = navigator.push(make_page());
+    run(&mut laid, &owner, SETTLE);
+    assert!(
+        builds.load(Ordering::SeqCst) > after_first,
+        "the divert rebuilt the shuttle through the hook, not the default child"
+    );
+}
+
+/// The custom placeholder is actually shown in the hero's vacated place during flight —
+/// not merely constructed — and is cleared once the hero is home. The placeholder is on
+/// the **destination** (pushed) hero, which clears its placeholder on a completed push
+/// (`to_hero.end_flight(status.is_dismissed())` = clear; `heroes.dart:615`). A source
+/// hero would instead *keep* its placeholder while covered (`:614`), so this uses the
+/// destination to observe the placeholder appearing and then disappearing. The seeded
+/// page is a plain hero with the default (non-decorated) shuttle, so the only decorated
+/// box in the tree is the placeholder.
+///
+/// Red-check: in `HeroState::build`'s placeholder branch, gate the `layers.push(...)` on
+/// `placeholder.is_none()` (show it only when *not* in flight) — nothing decorated
+/// appears mid-flight and the airborne assertion fails.
+#[test]
+fn a_custom_placeholder_is_shown_during_the_flight() {
+    let vsync = Vsync::new();
+    let navigator = seeded();
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+    laid.pump_for(FRAME);
+    assert_eq!(
+        render_count(&owner, "RenderDecoratedBox"),
+        0,
+        "no placeholder is shown before the flight"
+    );
+
+    let _push = navigator.push(
+        PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            Center::new()
+                .child(
+                    Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0)).placeholder(
+                        |size| {
+                            SizedBox::new(size.width.0, size.height.0)
+                                .child(ColoredBox::new(Color::GREEN))
+                        },
+                    ),
+                )
+                .into_view()
+                .boxed()
+        })
+        .transition_duration(TRANSITION),
+    );
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    assert!(shuttles(&owner) >= 1, "a flight is airborne");
+    assert!(
+        render_count(&owner, "RenderDecoratedBox") >= 1,
+        "the custom placeholder occupies the destination hero's place during flight"
+    );
+
+    assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "the flight landed");
+    assert_eq!(
+        render_count(&owner, "RenderDecoratedBox"),
+        0,
+        "the placeholder is gone once the destination hero is home"
+    );
+}
+
 // ============================================================================
 // U6 follow-up (§7m) — automatic attach, scope.none, nested isolation, manual path
 // ============================================================================
