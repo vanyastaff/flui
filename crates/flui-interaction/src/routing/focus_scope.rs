@@ -91,17 +91,34 @@ fn allocate_focus_node_id() -> FocusNodeId {
 /// Callback for handling key events.
 ///
 /// Returns `true` if the event was handled (stops propagation).
-pub type KeyEventHandler = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
+pub type KeyEventHandler = Arc<dyn Fn(&KeyEvent) -> KeyEventResult + Send + Sync>;
 
-/// Result of key event processing.
+/// Result of key event processing — Flutter's `KeyEventResult`
+/// (`focus_manager.dart:73-88`), consumed by the leaf→root dispatch walk
+/// (ADR-0023 U1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEventResult {
-    /// Event was handled, stop propagation.
+    /// Event was handled; the walk stops and the event counts as consumed.
     Handled,
-    /// Event was ignored, continue to parent.
+    /// Event was ignored; the walk continues to the parent node.
     Ignored,
-    /// Skip to next focus node (for traversal).
+    /// The walk stops, but the event does **not** count as consumed.
     SkipRemainingHandlers,
+}
+
+impl KeyEventResult {
+    /// Flutter's `combineKeyEventResults` (`focus_manager.dart:98-110`), for
+    /// one node's several handler channels: any `Handled` wins; else any
+    /// `SkipRemainingHandlers`; else `Ignored`.
+    #[must_use]
+    pub fn combine(self, other: KeyEventResult) -> KeyEventResult {
+        use KeyEventResult::{Handled, Ignored, SkipRemainingHandlers};
+        match (self, other) {
+            (Handled, _) | (_, Handled) => Handled,
+            (SkipRemainingHandlers, _) | (_, SkipRemainingHandlers) => SkipRemainingHandlers,
+            (Ignored, Ignored) => Ignored,
+        }
+    }
 }
 
 // ============================================================================
@@ -416,16 +433,18 @@ impl FocusNode {
         false
     }
 
-    /// Handles a key event.
+    /// Handles a key event through this node's [`on_key_event`] handler.
     ///
-    /// Returns the result indicating whether the event was handled.
+    /// The handler's [`KeyEventResult`] passes through verbatim —
+    /// `SkipRemainingHandlers` included — so the dispatch walk can honor it
+    /// (`focus_manager.dart:2288-2301`). `Ignored` when no handler is set.
+    ///
+    /// [`on_key_event`]: Self::set_on_key_event
     pub fn handle_key_event(&self, event: &KeyEvent) -> KeyEventResult {
-        if let Some(handler) = self.on_key_event.read().as_ref()
-            && handler(event)
-        {
-            return KeyEventResult::Handled;
+        match self.on_key_event.read().as_ref() {
+            Some(handler) => handler(event),
+            None => KeyEventResult::Ignored,
         }
-        KeyEventResult::Ignored
     }
 
     /// Iterates over all ancestors (parent, grandparent, etc.).

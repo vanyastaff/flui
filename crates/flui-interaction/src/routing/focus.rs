@@ -61,7 +61,7 @@ use parking_lot::RwLock;
 use crate::{
     events::KeyEvent,
     ids::FocusNodeId,
-    routing::focus_scope::{FocusNode, FocusScopeNode},
+    routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
 };
 
 // ============================================================================
@@ -478,11 +478,22 @@ impl FocusManager {
 
     /// Dispatch a key event to the appropriate handler(s).
     ///
-    /// Event routing order:
-    /// 1. Global handlers (in order added) — stop if any returns `true`
-    /// 2. Focused node's handler (if any)
+    /// Event routing order (ADR-0023 U1; Flutter's `handleKeyMessage` walk,
+    /// `focus_manager.dart:2278-2302`):
+    /// 1. Global handlers (in order added) — stop if any returns `true`.
+    /// 2. A **leaf→root walk** from the primary-focused node up its ancestors.
+    ///    Each node's two channels — its [`FocusNode::set_on_key_event`]
+    ///    handler and its [`register_key_handler`](Self::register_key_handler)
+    ///    map entry — are both invoked and combined
+    ///    ([`KeyEventResult::combine`]): `Ignored` continues to the parent,
+    ///    `Handled` stops the walk and consumes the event, and
+    ///    `SkipRemainingHandlers` stops the walk **without** consuming it.
     ///
-    /// Returns `true` if the event was handled.
+    /// A focused id that resolves to no attached node (a bare id in tests, or
+    /// a stale id) has no ancestry: only its map entry is consulted — the
+    /// pre-walk behavior.
+    ///
+    /// Returns `true` if the event was consumed.
     ///
     /// # Example
     ///
@@ -503,14 +514,44 @@ impl FocusManager {
             }
         }
 
-        // Then, try focused node's handler
-        let focused = *self.primary_focus.read();
-        if let Some(node_id) = focused
-            && let Some(handler) = self.key_handlers.read().get(&node_id).cloned()
-            && handler(event)
-        {
-            tracing::trace!(node = node_id.get(), "Key event handled by focused node");
-            return true;
+        let Some(node_id) = *self.primary_focus.read() else {
+            tracing::trace!("Key event not handled: nothing focused");
+            return false;
+        };
+
+        // Map an id's `key_handlers` entry onto the walk's result type.
+        let consult_map = |id: FocusNodeId| -> KeyEventResult {
+            match self.key_handlers.read().get(&id).cloned() {
+                Some(handler) if handler(event) => KeyEventResult::Handled,
+                _ => KeyEventResult::Ignored,
+            }
+        };
+
+        let Some(focused) = self.find_node(node_id) else {
+            // No attached node, no ancestry: the map entry alone.
+            let handled = consult_map(node_id) == KeyEventResult::Handled;
+            tracing::trace!(handled, "Key event dispatched to detached focused id");
+            return handled;
+        };
+
+        for node in std::iter::once(Arc::clone(&focused)).chain(focused.ancestors()) {
+            // Both channels are invoked and combined, as Flutter invokes both
+            // `onKeyEvent` and legacy `onKey` per node (`:2282-2287`).
+            let result = node.handle_key_event(event).combine(consult_map(node.id()));
+            match result {
+                KeyEventResult::Ignored => {}
+                KeyEventResult::Handled => {
+                    tracing::trace!(node = node.id().get(), "Key event handled");
+                    return true;
+                }
+                KeyEventResult::SkipRemainingHandlers => {
+                    tracing::trace!(
+                        node = node.id().get(),
+                        "Key event propagation stopped, unconsumed"
+                    );
+                    return false;
+                }
+            }
         }
 
         tracing::trace!("Key event not handled");
@@ -918,6 +959,114 @@ mod tests {
         let result = manager.dispatch_key_event(&event);
         assert!(result);
         assert!(handled.load(Ordering::Relaxed));
+    }
+
+    /// ADR-0023 U1 — the leaf→root walk. A focused child that **ignores** a
+    /// key feeds the enclosing scope's `on_key_event`; one that **handles** it
+    /// starves the scope; `SkipRemainingHandlers` starves the scope *and*
+    /// reports the event unconsumed (`focus_manager.dart:2278-2302`).
+    ///
+    /// Red-check (the pre-U1 flat dispatch): consult only the focused node —
+    /// the bubbling arm's ancestor never fires and the first assertion fails.
+    #[test]
+    fn a_focused_child_key_bubbles_by_result_through_its_ancestors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use crate::routing::focus_scope::KeyEventResult;
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
+
+        let manager = FocusManager::new_for_test();
+        let scope = FocusScopeNode::with_debug_label("bubbling-scope");
+        manager.root_scope().attach_node(scope.as_focus_node());
+        let child = FocusNode::with_debug_label("bubbling-child");
+        scope.attach_node(&child);
+
+        let scope_hits = Arc::new(AtomicUsize::new(0));
+        {
+            let hits = Arc::clone(&scope_hits);
+            scope
+                .as_focus_node()
+                .set_on_key_event(Arc::new(move |_event| {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    KeyEventResult::Handled
+                }));
+        }
+
+        // `set_primary_focus` needs the node reachable from this manager's
+        // root, which it is; focus the child directly.
+        manager.request_focus(child.id());
+        let event = KeyEventBuilder::new(Code::KeyA).build();
+
+        // 1. The child ignores (no handler): the event bubbles, the scope
+        //    handles, and the dispatch reports consumed.
+        assert!(manager.dispatch_key_event(&event), "the scope consumed it");
+        assert_eq!(scope_hits.load(Ordering::SeqCst), 1, "the ancestor fired");
+
+        // 2. The child handles: the walk stops at the leaf.
+        child.set_on_key_event(Arc::new(|_event| KeyEventResult::Handled));
+        assert!(manager.dispatch_key_event(&event));
+        assert_eq!(
+            scope_hits.load(Ordering::SeqCst),
+            1,
+            "a handled key never reaches the ancestor"
+        );
+
+        // 3. The child skips: the walk stops AND the event is unconsumed.
+        child.set_on_key_event(Arc::new(|_event| KeyEventResult::SkipRemainingHandlers));
+        assert!(
+            !manager.dispatch_key_event(&event),
+            "SkipRemainingHandlers reports the event unconsumed"
+        );
+        assert_eq!(
+            scope_hits.load(Ordering::SeqCst),
+            1,
+            "SkipRemainingHandlers starves the ancestor too"
+        );
+
+        manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
+
+    /// Both per-node channels — the `on_key_event` field and the
+    /// `register_key_handler` map entry — are invoked and combined per node,
+    /// as Flutter invokes `onKeyEvent` and legacy `onKey` (`:2282-2287`): a
+    /// map-`false` plus field-`Ignored` node lets the key bubble to an
+    /// ancestor's map entry.
+    #[test]
+    fn the_map_channel_participates_in_the_walk() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
+
+        let manager = FocusManager::new_for_test();
+        let scope = FocusScopeNode::with_debug_label("map-walk-scope");
+        manager.root_scope().attach_node(scope.as_focus_node());
+        let child = FocusNode::with_debug_label("map-walk-child");
+        scope.attach_node(&child);
+
+        let scope_hits = Arc::new(AtomicUsize::new(0));
+        {
+            let hits = Arc::clone(&scope_hits);
+            manager.register_key_handler(
+                scope.as_focus_node().id(),
+                Arc::new(move |_event| {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    true
+                }),
+            );
+        }
+        manager.register_key_handler(child.id(), Arc::new(|_event| false));
+
+        manager.request_focus(child.id());
+        let event = KeyEventBuilder::new(Code::KeyA).build();
+        assert!(manager.dispatch_key_event(&event));
+        assert_eq!(
+            scope_hits.load(Ordering::SeqCst),
+            1,
+            "the ancestor's map entry fired after the child's declined"
+        );
+
+        manager.unregister_key_handler(scope.as_focus_node().id());
+        manager.root_scope().detach_node(scope.as_focus_node().id());
     }
 
     #[test]

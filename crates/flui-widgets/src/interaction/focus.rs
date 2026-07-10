@@ -180,10 +180,14 @@ impl Focus {
         self
     }
 
-    /// Key handler invoked while this node holds the primary focus; return
-    /// `true` to mark the event handled — Flutter's `onKeyEvent` (`:170-180`),
-    /// minus the ancestor bubbling FLUI's flat dispatch does not do yet
-    /// (ADR-0022 §4).
+    /// Key handler invoked during the leaf→root dispatch walk while this
+    /// node — or a descendant — holds the primary focus: Flutter's
+    /// `onKeyEvent` (`:170-180`). Return
+    /// [`Handled`](flui_interaction::KeyEventResult::Handled) to consume the
+    /// event, [`Ignored`](flui_interaction::KeyEventResult::Ignored) to let it
+    /// bubble to the enclosing `Focus`, or
+    /// [`SkipRemainingHandlers`](flui_interaction::KeyEventResult::SkipRemainingHandlers)
+    /// to stop the bubbling without consuming (ADR-0023 U1).
     #[must_use]
     pub fn on_key_event(mut self, handler: KeyEventHandler) -> Self {
         self.on_key_event = Some(handler);

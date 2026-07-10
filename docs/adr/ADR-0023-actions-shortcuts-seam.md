@@ -1,6 +1,6 @@
 # ADR-0023 — The `Shortcuts` / `Actions` seam, and bubbling key dispatch
 
-- **Status:** **Proposed — design.** Units land incrementally; the header is updated as they do. Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI key-dispatch path.
+- **Status:** **Accepted — U1 landed 2026-07-10; U2–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI key-dispatch path.
 - **Date:** 2026-07-10
 - **Deciders:** chief-architect; consult interaction owner (U1 changes `FocusManager::dispatch_key_event`'s contract), repository owner (public API: `CallbackShortcuts`, `SingleActivator`, later `Shortcuts`/`Actions`/`Intent`), qa-lead (dispatch-order and modifier-matching tests).
 - **Relates to:** builds on ADR-0022 (the `Focus` widget whose `on_key_event` this makes live); B1.1's `Actions`/`Shortcuts` line (`ROADMAP.md:217`); closes ADR-0022 §4's "bubbling up the ancestry is added when a widget needs interception, likely with `Shortcuts`".
@@ -71,7 +71,18 @@ Four units, dependency-ordered. The FLUI-side primitives already on the shelf:
 `Modifiers` bitflags with `ctrl()/shift()/alt()/meta()` accessors, and
 ADR-0022's `Focus::on_key_event`.
 
-### U1 — bubbling key dispatch (`flui-interaction`)
+### U1 — bubbling key dispatch (`flui-interaction`) — landed 2026-07-10
+
+Shipped as designed. `KeyEventHandler` now returns `KeyEventResult` (the type
+finally has producers), `KeyEventResult::combine` ports
+`combineKeyEventResults`, and `dispatch_key_event` walks leaf→root consulting
+both channels per node. A focused id with no attached node keeps the pre-walk
+map-only behavior, which is also what keeps the pre-existing bare-id tests
+honest rather than rewritten. Red-checked: truncating the walk to the leaf
+fails both new tests (field-channel bubbling with all three results, and
+map-channel participation). `Focus::on_key_event` is live. Original design
+follows.
+
 
 `dispatch_key_event` becomes Flutter's walk:
 
