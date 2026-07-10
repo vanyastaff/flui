@@ -46,8 +46,11 @@
 //!
 //! # Divergences — none of this is parity
 //!
-//! * **No `FocusScope`.** FLUI has no `FocusScopeNode`, so `_modalScope`'s focus
-//!   trapping, `requestFocus`, and `traversalEdgeBehavior` are absent.
+//! * **Per-route `FocusScope` — landed (ADR-0022 U3).** The page is wrapped in
+//!   `FocusScope::with_external_node` (`routes.dart:1201-1202`) and the current
+//!   route's scope is the `FocusManager`'s *active scope* — FLUI's analogue of
+//!   `setFirstFocus` chaining. Still absent: `traversalEdgeBehavior` (no
+//!   node-layer flag) and `requestFocus = false` opt-out.
 //! * **No `BlockSemantics`, no barrier semantics.** No `semanticsDismissible`, no
 //!   `barrierLabel`, no `Semantics(sortKey: OrdinalSortKey(1.0))`. A covered
 //!   route's semantics are still announced. The barrier absorbs *pointers* only.
@@ -88,7 +91,11 @@ use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
     TransitionHandle, TransitionRoute, always_complete, always_dismissed,
 };
-use crate::{AbsorbPointer, ColoredBox, GestureDetector, Offstage, SizedBox, Stack, StackFit};
+use flui_interaction::routing::{FocusManager, FocusScopeNode};
+
+use crate::{
+    AbsorbPointer, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox, Stack, StackFit,
+};
 
 /// `_defaultTransitionsBuilder` (`pages.dart:68-75`): a jump cut.
 pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
@@ -164,6 +171,12 @@ struct ModalInner {
     /// (`heroes.dart:279-345`); FLUI's heroes register themselves into this one, so
     /// no walk and no downcast is ever needed. ADR-0021 U4.
     heroes: HeroRegistry,
+
+    /// `_ModalScopeState.focusScopeNode` (`routes.dart:1095`): the per-route
+    /// focus scope. The page is wrapped in a `FocusScope::with_external_node`
+    /// over this, and the route lifecycle makes it the manager's **active
+    /// scope** while the route is current — ADR-0022 U3.
+    focus_scope: Arc<FocusScopeNode>,
 }
 
 impl ModalInner {
@@ -208,12 +221,16 @@ impl ModalInner {
             .boxed()
     }
 
-    /// `_buildModalScope` (`routes.dart:2333-2345`), minus `Semantics`,
-    /// `PrimaryScrollController` and `FocusScope`.
+    /// `_buildModalScope` (`routes.dart:2333-2345`), minus `Semantics` and
+    /// `PrimaryScrollController`.
     ///
     /// The `Offstage` wraps the whole scope, as Flutter's does — so an offstage
     /// route's transitions still run, its page still lays out at real size, and
-    /// nothing of it paints.
+    /// nothing of it paints. Inside it, `FocusScope::with_external_node` over
+    /// [`focus_scope`](Self::focus_scope) is Flutter's
+    /// `FocusScope.withExternalFocusNode` (`routes.dart:1201-1202`): heroes,
+    /// text fields and `Focus` widgets in the page attach under the route's own
+    /// scope, so traversal stays within the route (ADR-0022 U3).
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
             Some(_transition) => ModalScope {
@@ -233,8 +250,46 @@ impl ModalInner {
 
         Offstage::new()
             .offstage(self.offstage.load(Ordering::Relaxed))
-            .child(scope)
+            .child(FocusScope::with_external_node(
+                Arc::clone(&self.focus_scope),
+                scope,
+            ))
             .boxed()
+    }
+
+    /// Make this route's scope the traversal boundary and move the keyboard
+    /// focus into it — FLUI's analogue of
+    /// `navigator.focusNode.enclosingScope?.setFirstFocus(focusScopeNode)`
+    /// (`routes.dart:1692`, `:1137`). Flutter chains focused children so focus
+    /// lands in the current route; FLUI sets the manager's **active scope**
+    /// (which confines `focus_next`/`focus_previous` the same way), then
+    /// restores the scope's remembered focused child, or unfocuses a field
+    /// left focused on a now-covered route so it stops receiving keys.
+    fn activate_focus_scope(&self) {
+        let manager = FocusManager::global();
+        manager.set_active_scope(Some(Arc::clone(&self.focus_scope)));
+        match self.focus_scope.focused_child() {
+            Some(remembered) => manager.request_focus(remembered),
+            None => {
+                if manager.primary_focus().is_some()
+                    && !self.focus_scope.as_focus_node().has_focus()
+                {
+                    manager.unfocus();
+                }
+            }
+        }
+    }
+
+    /// On dispose: release the active scope **only if it is still ours**. A
+    /// popped route's dispose runs when its exit transition ends — after the
+    /// revealed route claimed the active scope via `did_change_next(None)` at
+    /// pop time — so this fires only for a route torn down while current
+    /// (navigator unmount, `remove_route` of the top).
+    fn release_focus_scope(&self) {
+        let manager = FocusManager::global();
+        if Arc::ptr_eq(&manager.active_scope(), &self.focus_scope) {
+            manager.set_active_scope(None);
+        }
     }
 
     /// Repoint both proxies at whatever [`offstage`](Self::offstage) currently
@@ -400,6 +455,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
             secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
             subtree: RouteSubtreeCell::new(),
             heroes: HeroRegistry::new(),
+            focus_scope: FocusScopeNode::with_debug_label("ModalRoute Focus Scope"),
         });
 
         let content = {
@@ -664,11 +720,15 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         }
     }
 
+    /// `ModalRoute.didPush` moves the focus into the route's scope
+    /// (`routes.dart:1690-1695`); so does `didAdd` (`:1698-1703`).
     fn did_push(&mut self) -> PushCompletion {
+        self.inner.activate_focus_scope();
         self.transition.did_push()
     }
 
     fn did_add(&mut self) {
+        self.inner.activate_focus_scope();
         self.transition.did_add();
     }
 
@@ -684,11 +744,22 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         self.transition.did_complete(result);
     }
 
+    /// The route above popped: this one is current again, and Flutter
+    /// re-focuses it through `changedInternalState` → `_routeSetState`
+    /// (`routes.dart:1731-1736`).
     fn did_pop_next(&mut self, popped: RouteId) {
+        self.inner.activate_focus_scope();
         self.transition.did_pop_next(popped);
     }
 
     fn did_change_next(&mut self, next: Option<RouteId>) {
+        // Becoming topmost re-activates this route's scope — Flutter's
+        // `_routeSetState` re-`setFirstFocus`es whenever `isCurrent` flips
+        // (`routes.dart:1731-1736`); a pop announces `did_change_next(None)`
+        // to the revealed route.
+        if next.is_none() {
+            self.inner.activate_focus_scope();
+        }
         self.transition.did_change_next(next);
     }
 
@@ -709,6 +780,7 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// go now: a disposed route that a `HeroController` can still name is a route
     /// it can still measure.
     fn dispose(&mut self) {
+        self.inner.release_focus_scope();
         if let Some(binding) = self.binding() {
             binding.withdraw_subtree();
             binding.withdraw_modal();

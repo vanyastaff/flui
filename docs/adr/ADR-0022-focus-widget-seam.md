@@ -1,6 +1,6 @@
 # ADR-0022 — The `Focus` / `FocusScope` widget seam
 
-- **Status:** **Accepted — U1 + U2 landed 2026-07-10 (U1.2 is a recorded decision, not code); U3–U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
+- **Status:** **Accepted — U1–U3 landed 2026-07-10 (U1.2 is a recorded decision, not code); U4 open.** Written 2026-07-10 from a fresh read of `.flutter/` and the FLUI focus layer.
 - **Date:** 2026-07-10
 - **Deciders:** chief-architect; consult interaction owner (`flui-interaction` `FocusManager`/`FocusNode` API additions, U1), view owner (inherited reparenting contract, U2), repository owner (public API: `Focus`, `FocusScope`), qa-lead (traversal and key-routing tests).
 - **Relates to:** closes ADR-0020 §Seam 6 ("no `Focus`/`FocusScope` **widget**"); builds on tracker H4 (the node/manager layer, done 2026-06-30); unblocks `Actions`/`Shortcuts` (B1.1) and `ModalRoute`'s per-route focus scope; consumes ADR-0021's `HeroScope`/`GestureArenaScope` ambient-provider pattern.
@@ -65,7 +65,18 @@ previously-unserialized `text_field` ones. Original design follows.
 - Lifecycle: `init_state` = resolve scope + attach + autofocus-once + focus-listener (via U1's `ListenerId`); `dispose` = remove listener + detach (+ nothing for an external node, which its owner disposes). Trigger #22 is untouched: no frame capability is acquired anywhere near `build`.
 - `Focus::of`-style lookups stay Rust-shaped: descendants use `ctx.depend_on::<FocusScopeProvider, _>` directly; no static `of(context)` API is added until a consumer (Actions/Shortcuts) wants one.
 
-### U3 — the per-route focus scope (`ModalRoute`)
+### U3 — the per-route focus scope (`ModalRoute`) — landed 2026-07-10
+
+Shipped as designed, with one contract correction found red-green: the reveal
+signal on pop is `did_pop_next`, not `did_change_next(None)` — the end-to-end
+test failed until activation hooked both (plus `did_push`/`did_add`).
+`activate_focus_scope` sets the manager's active scope, then restores the
+scope's remembered focused child or unfocuses a field stranded on a now-covered
+route; `dispose` releases the active scope only if still ours. `traps_focus`
+stays unused: active-scope confinement already bounds `focus_next`. The
+`modal_route.rs` "No FocusScope" divergence note is gone. Original design
+follows.
+
 
 `ModalRoute` creates a `FocusScopeNode`, wraps the page subtree in `FocusScope::with_external_node`, and drives `FocusManager::set_active_scope` from the route lifecycle it already observes: the top route's scope becomes active when it becomes current, and the revealed route's scope is restored on pop (`navigator.dart:273`, `:311`). `traps_focus` — already a node-layer flag — becomes meaningful here: Tab traversal inside a modal stays inside it (`focus.rs` `active_scope` already scopes `focus_next`). Removes the `modal_route.rs:49-50` "No FocusScope" divergence note.
 

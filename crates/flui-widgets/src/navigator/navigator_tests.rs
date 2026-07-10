@@ -912,3 +912,78 @@ fn navigator_push_and_remove_until_clears_down_to_the_kept_route() {
         "a removed route's future completes with None"
     );
 }
+
+/// ADR-0022 U3 — the per-route focus scope. Each `ModalRoute` wraps its page in
+/// `FocusScope::with_external_node` (`routes.dart:1201-1202`) and, while current,
+/// holds the manager's **active scope** (FLUI's analogue of `setFirstFocus`
+/// chaining, `routes.dart:1692`, `:1137`): pushing a cover unfocuses a field left
+/// focused on the covered route, and popping back restores both the active scope
+/// and the remembered field focus.
+///
+/// Red-check: drop the `activate_focus_scope` call from `did_change_next(None)`
+/// — the pop neither reclaims the scope nor restores the field.
+#[test]
+fn route_focus_scope_confines_and_restores_keyboard_focus() {
+    use flui_interaction::routing::{FocusManager, FocusNode};
+
+    use crate::navigator::PageRoute;
+    use crate::{Focus, SizedBox as SizedBoxW};
+
+    let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+    let manager = FocusManager::global();
+    manager.unfocus();
+    manager.set_active_scope(None);
+
+    let field = FocusNode::with_debug_label("page-a-field");
+    let field_for_page = Arc::clone(&field);
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Focus::new(SizedBoxW::new(10.0, 10.0))
+            .focus_node(Arc::clone(&field_for_page))
+            .into_view()
+            .boxed()
+    }));
+    let mut harness = mount(Navigator::new(handle.clone()));
+
+    let scope_a = manager.active_scope();
+    assert_ne!(
+        scope_a.as_focus_node().id(),
+        manager.root_scope().as_focus_node().id(),
+        "the seeded route's scope became the active scope"
+    );
+
+    field.request_focus();
+    assert!(field.has_primary_focus(), "sanity: the field took focus");
+
+    // Cover A: its field must stop receiving keys, and B's scope activates.
+    let _b = handle.push(PageRoute::<i32>::new(|_ctx, _p, _s| {
+        SizedBoxW::new(10.0, 10.0).into_view().boxed()
+    }));
+    harness.tick();
+    assert!(
+        !field.has_primary_focus(),
+        "a covered route's field is unfocused"
+    );
+    let scope_b = manager.active_scope();
+    assert_ne!(
+        scope_b.as_focus_node().id(),
+        scope_a.as_focus_node().id(),
+        "the pushed route's scope became the active scope"
+    );
+
+    // Pop back: A reclaims the active scope AND the remembered field focus.
+    assert!(handle.pop());
+    harness.tick();
+    assert_eq!(
+        manager.active_scope().as_focus_node().id(),
+        scope_a.as_focus_node().id(),
+        "the revealed route reclaimed the active scope"
+    );
+    assert!(
+        field.has_primary_focus(),
+        "the remembered field focus is restored on pop"
+    );
+
+    manager.unfocus();
+    manager.set_active_scope(None);
+}
