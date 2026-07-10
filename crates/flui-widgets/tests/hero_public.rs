@@ -28,7 +28,7 @@ use common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_widgets::prelude::*;
-use flui_widgets::{HeroController, PopupRoute, VsyncScope};
+use flui_widgets::{HeroController, HeroControllerScope, PopupRoute, VsyncScope};
 use parking_lot::{Mutex, RwLock};
 
 const TRANSITION: Duration = Duration::from_millis(100);
@@ -36,11 +36,11 @@ const FRAME: Duration = Duration::from_millis(16);
 /// Enough 16 ms frames to run a 100 ms transition to completion, twice over.
 const SETTLE: usize = 16;
 
-/// A `Navigator` whose route transitions tick against `vsync`, with a `HeroController`
-/// attached — exactly what an app author writes. Flutter's `MaterialApp` installs one
-/// automatically; FLUI has no `HeroControllerScope`, so it is attached by hand.
+/// A `Navigator` whose route transitions tick against `vsync` — and **nothing else**.
+/// No `HeroControllerScope`, no manual `add_observer`: the Navigator creates its own
+/// default `HeroController`, so heroes fly with zero boilerplate (ADR-0021 §7m). This
+/// is exactly what an app author writes.
 fn app(vsync: &Vsync, navigator: &NavigatorHandle) -> impl View {
-    navigator.add_observer(HeroController::new());
     VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone()))
 }
 
@@ -91,8 +91,11 @@ fn seeded() -> NavigatorHandle {
 /// **A push flight runs and settles, through the public API.** Pushing a second hero
 /// page raises a shuttle in the overlay; running the transition to completion lands it.
 ///
-/// Red-check: attach no controller (drop `navigator.add_observer(...)` in `app`) — no
-/// shuttle ever appears and `max == 0`.
+/// This is the **automatic** path: no controller is attached by hand. A shuttle proves
+/// the Navigator created its own default controller.
+///
+/// Red-check: delete the `None => { … observers.push(HeroController::new()) }` arm from
+/// `NavigatorState::init_state` — no controller, no shuttle, `max == 0`.
 #[test]
 fn a_hero_push_flight_runs_and_settles() {
     let vsync = Vsync::new();
@@ -328,4 +331,90 @@ fn no_flight_over_a_popup_route() {
     );
     let (max, _end) = run(&mut laid, &owner, SETTLE);
     assert_eq!(max, 0, "a popup is not a PageRoute: no hero flight ever");
+}
+
+// ============================================================================
+// U6 follow-up (§7m) — automatic attach, scope.none, nested isolation, manual path
+// ============================================================================
+
+/// `HeroControllerScope::none` blocks the auto-default: no controller under it, so no
+/// flights — Flutter's `HeroControllerScope.none` (`navigator.dart:861`).
+///
+/// Red-check: treat `Some(None)` like `None` in `NavigatorState::init_state` (fall
+/// through to the auto-default) — a shuttle then appears and `max == 1`.
+#[test]
+fn a_hero_controller_scope_none_disables_flights() {
+    let vsync = Vsync::new();
+    let navigator = seeded();
+    // `.none` wraps the `VsyncScope`+`Navigator`, so it is the Navigator's ancestor and
+    // resolves in its `init_state`.
+    let root = HeroControllerScope::none(app(&vsync, &navigator));
+    let mut laid = lay_out_animated(root, tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+
+    let _push = navigator.push(hero_page());
+    let (max, _end) = run(&mut laid, &owner, SETTLE);
+
+    assert_eq!(max, 0, "HeroControllerScope::none disables hero flights");
+    assert_eq!(
+        navigator.route_ids().len(),
+        2,
+        "the push still happens — just no flight"
+    );
+}
+
+/// A **custom** controller supplied through `HeroControllerScope::new` flies heroes.
+/// This is the manual path in its blessed, ambient form.
+///
+/// Red-check: drop the `Some(Some(controller)) => …` arm from
+/// `NavigatorState::init_state` — the scope's controller is never attached and no
+/// shuttle appears.
+#[test]
+fn a_controller_from_a_scope_flies_heroes() {
+    let vsync = Vsync::new();
+    let navigator = seeded();
+    let root = HeroControllerScope::new(HeroController::new(), app(&vsync, &navigator));
+    let mut laid = lay_out_animated(root, tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+
+    let _push = navigator.push(hero_page());
+    let (max, end) = run(&mut laid, &owner, SETTLE);
+
+    assert_eq!(max, 1, "the scope's controller flies exactly one shuttle");
+    assert_eq!(end, 0, "and it lands");
+}
+
+/// A **nested** navigator does not inherit the outer navigator's controller.
+/// `Navigator::build` wraps its overlay in `HeroControllerScope::none`, so a navigator
+/// mounted inside an outer route resolves `Some(None)` — no controller, no auto-default
+/// — and its heroes do not fly (matching Flutter's `:5955`; nested flights need an
+/// explicit scope, which stays deferred).
+///
+/// Red-check: drop the `HeroControllerScope::none(...)` wrap from `Navigator::build` —
+/// the inner navigator then auto-defaults and its heroes fly, so `max == 1`.
+#[test]
+fn a_nested_navigator_does_not_fly_heroes_by_default() {
+    let vsync = Vsync::new();
+    let inner = NavigatorHandle::new();
+    inner.seed_initial(hero_page());
+    let inner_for_page = inner.clone();
+
+    let outer = NavigatorHandle::new();
+    outer.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Navigator::new(inner_for_page.clone()).into_view().boxed()
+    }));
+
+    let mut laid = lay_out_animated(app(&vsync, &outer), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+    laid.pump_for(FRAME);
+
+    // Push a matching hero page onto the INNER navigator.
+    let _inner_push = inner.push(hero_page());
+    let (max, _end) = run(&mut laid, &owner, SETTLE);
+
+    assert_eq!(
+        max, 0,
+        "the nested navigator is isolated — its heroes do not fly on the outer controller"
+    );
+    assert_eq!(inner.route_ids().len(), 2, "though the inner push happened");
 }

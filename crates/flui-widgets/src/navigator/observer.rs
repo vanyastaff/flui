@@ -104,6 +104,18 @@ pub trait NavigatorObserver: Send + Sync {
     /// (`navigator.dart:4034`, `:4056`, `:4108`). Drop the handle here.
     fn did_detach(&self) {}
 
+    /// Whether this observer is a hero controller — i.e. whether it drives hero
+    /// flights off `did_change_top`.
+    ///
+    /// The default is `false`. `HeroController` overrides it to `true`, and a
+    /// `Navigator` reads it to decide whether to auto-create its own default
+    /// controller (ADR-0021 §7m, D-U6.4): a hand-attached controller suppresses the
+    /// auto-default, so `add_observer` and automatic attach never double up. This is a
+    /// self-declaration, **not** a downcast — FR-033 is untouched.
+    fn observes_hero_flights(&self) -> bool {
+        false
+    }
+
     /// A route was pushed (or an initial route added).
     fn did_push(&self, route: RouteId, previous: Option<RouteId>) {}
     /// A route was popped.

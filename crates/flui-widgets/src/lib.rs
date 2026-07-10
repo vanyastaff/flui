@@ -150,9 +150,9 @@ pub use flui_objects::OverflowBoxFit;
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
 pub use navigator::{
-    Hero, HeroController, Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute,
-    NavigatorState, PageRoute, PopupRoute, PushCompletion, Route, RouteAnimation, RouteBindingSlot,
-    RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteSettings,
+    Hero, HeroController, HeroControllerScope, Navigator, NavigatorHandle, NavigatorObserver,
+    NavigatorRoute, NavigatorState, PageRoute, PopupRoute, PushCompletion, Route, RouteAnimation,
+    RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteSettings,
     RouteTransitionsBuilder, SimpleRoute,
 };
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};

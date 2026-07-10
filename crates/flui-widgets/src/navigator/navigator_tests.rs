@@ -112,7 +112,10 @@ fn navigator_with(built: &Built) -> (NavigatorHandle, Harness) {
 /// The overlay's layer elements, bottom → top. `Navigator → Overlay → Stack → …`.
 fn layers(harness: &mut Harness) -> Vec<ElementId> {
     let root = harness.root();
-    let overlay = harness.only_child(root);
+    // ADR-0021 §7m: `Navigator::build` wraps its `Overlay` in a `HeroControllerScope`
+    // (a `.none`), so the overlay is now one level below the navigator's element.
+    let scope = harness.only_child(root);
+    let overlay = harness.only_child(scope);
     let stack = harness.only_child(overlay);
     harness.children_of(stack)
 }

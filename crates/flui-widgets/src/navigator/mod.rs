@@ -35,6 +35,7 @@
 mod binding;
 mod hero;
 mod hero_controller;
+mod hero_controller_scope;
 mod hero_flight;
 mod history;
 mod lifecycle;
@@ -52,6 +53,7 @@ mod transition_route;
 pub use binding::RouteBindingSlot;
 pub use hero::Hero;
 pub use hero_controller::HeroController;
+pub use hero_controller_scope::HeroControllerScope;
 pub use navigator::{Navigator, NavigatorHandle, NavigatorState};
 pub use observer::NavigatorObserver;
 pub use overlay_route::{

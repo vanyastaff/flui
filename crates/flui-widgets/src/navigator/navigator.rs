@@ -47,6 +47,8 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use super::binding::{RouteBinding, RouteRegistries, RouteVsync, TransitionPeer};
+use super::hero_controller::HeroController;
+use super::hero_controller_scope::HeroControllerScope;
 use super::history::{FlushOutcome, RouteHistory};
 use super::modal_route::ModalHandle;
 use super::observer::{NavigatorObserver, deliver};
@@ -264,6 +266,19 @@ impl NavigatorHandle {
         }
     }
 
+    /// How many attached observers drive hero flights — the auto-default plus any
+    /// hand-attached `HeroController`s. Test-facing: pins that automatic attach adds
+    /// exactly one, and that a manual controller suppresses it (ADR-0021 §7m).
+    #[cfg(test)]
+    pub(crate) fn hero_observer_count(&self) -> usize {
+        self.shared
+            .observers
+            .lock()
+            .iter()
+            .filter(|observer| observer.observes_hero_flights())
+            .count()
+    }
+
     /// Register an observer. Flutter's `Navigator.observers`.
     ///
     /// If the navigator is already mounted the observer is attached at once —
@@ -285,6 +300,13 @@ impl NavigatorHandle {
     #[must_use]
     pub fn is_mounted(&self) -> bool {
         self.shared.overlay.is_mounted()
+    }
+
+    /// Whether both handles name the same navigator — an `Arc` identity check, for the
+    /// shared-`HeroController` guard (ADR-0021 §7m, D-U6.5).
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
     }
 
     /// Seed an initial route **without flushing** — Flutter's `restoreState`
@@ -600,6 +622,10 @@ impl NavigatorHandle {
 
     /// Flutter's `Route.isCurrent` (`routes.dart:196-201`), read by
     /// `Hero._allHeroesFor`'s route guard (`heroes.dart:331`).
+    ///
+    /// Test-facing: `did_change_top` no longer asserts on it (ADR-0021 §7m removed the
+    /// over-strict `is_current` check that FLUI's re-entrant notification model breaks).
+    #[cfg(test)]
     pub(crate) fn is_current(&self, id: RouteId) -> bool {
         self.current() == Some(id)
     }
@@ -740,6 +766,28 @@ impl ViewState<Navigator> for NavigatorState {
         *self.shared.post_frame.lock() = ctx.post_frame_handle();
         *self.shared.render_tree.lock() = ctx.pipeline_owner();
 
+        // ADR-0021 §7m: resolve the ambient `HeroControllerScope` and settle which
+        // controller (if any) observes this navigator — before `attach_observers`, so
+        // it is attached with the rest.
+        //
+        // * a scope with a controller → that controller;
+        // * `HeroControllerScope::none` → nothing (flights disabled);
+        // * no scope at all → a fresh default, unless one was attached by hand
+        //   (D-U6.4). This is the auto-default that removes the `add_observer`
+        //   boilerplate; `Navigator::build` re-wraps its subtree in `.none`, so a
+        //   nested navigator sees a scope and never auto-defaults.
+        match ctx.get::<HeroControllerScope, _>(HeroControllerScope::controller) {
+            Some(Some(controller)) => self.shared.observers.lock().push(controller),
+            Some(None) => {}
+            None => {
+                let mut observers = self.shared.observers.lock();
+                let already_manual = observers.iter().any(|o| o.observes_hero_flights());
+                if !already_manual {
+                    observers.push(HeroController::new());
+                }
+            }
+        }
+
         // Before the seeded flush, so the first `did_push` an observer sees is
         // already one it can act on — Flutter attaches at `:3834-3837` and only
         // then calls `restoreState` → `_flushHistoryUpdates` (`:3922-3934`).
@@ -760,7 +808,10 @@ impl ViewState<Navigator> for NavigatorState {
     /// `NavigationNotification` listener, pointer-cancelling `Listener` and
     /// `FocusTraversalGroup` all belong to features deferred by ADR-0019 §6.
     fn build(&self, _view: &Navigator, _ctx: &dyn BuildContext) -> impl IntoView {
-        Overlay::new(self.shared.overlay.clone())
+        // `HeroControllerScope.none` (`navigator.dart:5955`): a nested navigator under
+        // this one must not pick up this navigator's controller. It resolves the
+        // `.none` in its own `init_state` and attaches nothing (ADR-0021 §7m D-U6.3).
+        HeroControllerScope::none(Overlay::new(self.shared.overlay.clone()))
     }
 
     /// Flutter's `NavigatorState.deactivate` (`navigator.dart:4105-4111`).

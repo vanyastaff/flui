@@ -771,3 +771,98 @@ fn a_non_finite_rect_is_never_flown() {
     );
     assert!(!is_valid_flight(nan, finite), "a NaN origin");
 }
+
+/// **A `HeroController` cannot be shared by two mounted navigators** (ADR-0021 §7m,
+/// D-U6.5; Flutter's "can not be shared", `navigator.dart:4010-4027`). The second
+/// navigator's attach is refused: the controller stays with the first, sound, rather
+/// than silently pointing at the second.
+///
+/// Red-check: drop the shared-controller guard in `HeroController::did_attach` (let it
+/// overwrite) — the controller then names the *second* navigator and this fails.
+#[test]
+fn a_hero_controller_shared_by_two_mounted_navigators_keeps_the_first() {
+    let controller = HeroController::new();
+
+    let first = seeded_navigator();
+    first.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    let mut first_harness = mount_navigator(&first);
+    assert!(
+        controller
+            .navigator()
+            .is_some_and(|nav| nav.is_same(&first)),
+        "the controller attaches to the first navigator"
+    );
+
+    // A second, still-mounted navigator tries to take the same controller.
+    let second = seeded_navigator();
+    second.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    let mut second_harness = mount_navigator(&second);
+
+    assert!(
+        controller
+            .navigator()
+            .is_some_and(|nav| nav.is_same(&first)),
+        "the second attach was refused; the controller still names the first navigator"
+    );
+    assert!(
+        !controller
+            .navigator()
+            .is_some_and(|nav| nav.is_same(&second)),
+        "and never the second"
+    );
+
+    // When the first unmounts, the controller is freed and the second can claim it.
+    unmount_navigator(&mut first_harness, &first);
+    let _ = &mut second_harness;
+}
+
+/// **Automatic attach adds exactly one controller** (ADR-0021 §7m, D-U6.2): a bare
+/// `Navigator` with no `HeroControllerScope` creates its own default `HeroController`.
+///
+/// Red-check: delete the `None => { … observers.push(HeroController::new()) }` arm from
+/// `NavigatorState::init_state` — the count is 0.
+#[test]
+fn a_bare_navigator_auto_defaults_exactly_one_controller() {
+    let navigator = seeded_navigator();
+    let _harness = mount_navigator(&navigator);
+    assert_eq!(
+        navigator.hero_observer_count(),
+        1,
+        "the Navigator created its own default hero controller"
+    );
+}
+
+/// **A hand-attached controller suppresses the auto-default** (D-U6.4): the marker
+/// `NavigatorObserver::observes_hero_flights` lets `init_state` skip the default, so
+/// there is exactly one controller — not the manual one plus a default.
+///
+/// Red-check: make `HeroController::observes_hero_flights` return `false` — the
+/// auto-default is added too and the count is 2.
+#[test]
+fn a_manual_controller_suppresses_the_auto_default() {
+    let navigator = seeded_navigator();
+    navigator.add_observer(HeroController::new() as Arc<dyn NavigatorObserver>);
+    let _harness = mount_navigator(&navigator);
+    assert_eq!(
+        navigator.hero_observer_count(),
+        1,
+        "the manual controller suppressed the auto-default — exactly one, not two"
+    );
+}
+
+/// `HeroControllerScope::none` attaches nothing and suppresses the auto-default: zero
+/// controllers, no flights.
+///
+/// Red-check: treat `Some(None)` like `None` in `init_state` (auto-default) — count is 1.
+#[test]
+fn a_scope_none_leaves_no_controller() {
+    use super::hero_controller_scope::HeroControllerScope;
+
+    let navigator = seeded_navigator();
+    let _harness = mount(HeroControllerScope::none(Navigator::new(navigator.clone())));
+    assert_eq!(
+        navigator.hero_observer_count(),
+        0,
+        "HeroControllerScope::none blocks the auto-default"
+    );
+}

@@ -1539,6 +1539,23 @@ FLUI resolves the scope **once** in `init_state`, not in a `did_change_dependenc
 that re-resolves on scope change (Flutter does both). Swapping a scope's controller
 after mount is not picked up — the same read-once contract `VsyncScope` already has.
 
+### Landed 2026-07-10 — two realities the design did not foresee
+
+* **The `did_change_top` `is_current` assert was removed, not relaxed.** With a
+  controller now on *every* navigator, the re-entrant-push test (§7f) fires
+  `did_change_top` for a route that is transiently not-current at delivery time —
+  which the `debug_assert(topRoute.isCurrent)` (a faithful port of `heroes.dart:855`)
+  flagged as a bug it is not. FLUI's §7f model breaks that Flutter invariant, so the
+  assert is gone; the flight path is guarded downstream (`route_peer`/`route_modal`
+  return `None` for a superseded route), so a stale top measures nothing.
+* **The `observes_hero_flights` marker manifests as controller *count*, not as a
+  double shuttle.** Two `HeroController`s observing one navigator turn out to produce a
+  single shuttle (they share the route registries and freeze the same heroes), so the
+  marker's effect is not observable as stacking. It is pinned at the count level
+  (`a_manual_controller_suppresses_the_auto_default`: exactly one hero observer), which
+  is the honest signal — the marker prevents a redundant *second controller*, not a
+  visible second flight.
+
 ---
 
 ## 8. Deferred, each with its blocker

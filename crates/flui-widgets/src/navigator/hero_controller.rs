@@ -540,9 +540,32 @@ impl MeasurementPass<'_> {
 }
 
 impl NavigatorObserver for HeroController {
+    /// This observer drives hero flights; see [`NavigatorObserver::observes_hero_flights`].
+    fn observes_hero_flights(&self) -> bool {
+        true
+    }
+
     /// `NavigatorObserver._navigators[this] = navigator` (`navigator.dart:3836`).
+    ///
+    /// **A controller cannot be shared by two mounted navigators** (ADR-0021 §7m,
+    /// D-U6.5; Flutter's "can not be shared", `:4010-4027`). If it is already attached
+    /// to a still-mounted navigator, the second attach is refused and logged: the
+    /// controller stays with the first (whose heroes keep flying), and the second
+    /// navigator's heroes do not fly rather than the controller silently pointing at
+    /// the wrong one. `did_detach` frees it for reuse.
     fn did_attach(&self, navigator: NavigatorHandle) {
-        *self.navigator.lock() = Some(navigator);
+        let mut slot = self.navigator.lock();
+        if let Some(existing) = slot.as_ref()
+            && existing.is_mounted()
+            && !existing.is_same(&navigator)
+        {
+            tracing::warn!(
+                "a HeroController cannot be shared by two Navigators; the second attach \
+                 is ignored. Give each Navigator its own HeroControllerScope."
+            );
+            return;
+        }
+        *slot = Some(navigator);
     }
 
     /// `… = null` (`:4108`). A controller that keeps observing a detached navigator
@@ -559,12 +582,12 @@ impl NavigatorObserver for HeroController {
     /// do not fire when a route becomes top by having its cover popped. Flutter's
     /// `assert(topRoute.isCurrent)` says as much.
     fn did_change_top(&self, top: RouteId, previous_top: Option<RouteId>) {
-        debug_assert!(
-            self.navigator()
-                .is_none_or(|navigator| navigator.is_current(top)),
-            "BUG: did_change_top named a route that is not the current one — \
-             `assert(topRoute.isCurrent)` (heroes.dart:855)"
-        );
+        // Flutter asserts `topRoute.isCurrent` here (`heroes.dart:855`). FLUI cannot:
+        // ADR-0021 §7f delivers notifications *outside* the history lock and permits an
+        // observer to mutate the stack from a callback, so a re-entrant push can leave
+        // `top` transiently not-current by the time this fires. The flight path is
+        // guarded downstream anyway (`route_peer`/`route_modal` return `None` for a
+        // superseded route), so a stale top simply measures nothing.
         self.maybe_start(previous_top, Some(top));
     }
 }
