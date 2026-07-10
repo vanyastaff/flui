@@ -767,7 +767,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 29] = [
+    const INTERNAL: [&str; 28] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -785,10 +785,10 @@ fn public_no_internal_route_stack_exports() {
         "RouteCommand",
         "TransitionRoute",
         "ModalRoute",
-        // ADR-0021 U6 signed off the public `Hero` / `HeroController` baseline.
+        // ADR-0021 U6 signed off the public `Hero` / `HeroController` baseline; §7n
+        // additionally exports `FlightDirection` because `flight_shuttle_builder` takes it.
         // The support seams below stay private implementation detail.
         "ModalHandle",
-        "FlightDirection",
         "Measurement",
         "RouteSubtree",
         // ADR-0021 U3.5: the Hero registry and handles. The public widget hides these

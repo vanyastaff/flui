@@ -97,13 +97,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_animation::AnimationStatus;
+use flui_animation::{Animatable, AnimationStatus};
 use flui_geometry::{Matrix4, Rect};
 use flui_types::Size;
 use parking_lot::Mutex;
 
 use super::binding::TransitionGroup;
-use super::hero::{HeroHandle, HeroTag};
+use super::hero::{HeroHandle, HeroTag, RectTweenFactory};
 use super::hero_flight::{FlightManager, FlightPlan};
 use super::modal_route::ModalHandle;
 use super::navigator::NavigatorHandle;
@@ -116,7 +116,7 @@ use super::route::RouteId;
 /// call happened (`heroes.dart:924-932`) — a pop and a push both arrive here as a
 /// change of top route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FlightDirection {
+pub enum FlightDirection {
     /// `to` is arriving on top of `from`: the destination is running forward.
     Push,
     /// `from` is leaving, revealing `to` beneath it: the source is running backward.
@@ -220,6 +220,9 @@ pub struct HeroController {
     manifests: Arc<Mutex<Vec<HeroFlightManifest>>>,
     /// `HeroController._flights` (`heroes.dart:850`), one per tag in the air.
     flights: Arc<FlightManager>,
+    /// `HeroController.createRectTween` (`heroes.dart:847`): the fallback rect-tween
+    /// factory for heroes that set none of their own. `None` = linear. ADR-0021 §7n D-N.1.
+    default_rect_factory: Option<RectTweenFactory>,
 }
 
 impl std::fmt::Debug for HeroController {
@@ -241,6 +244,24 @@ impl HeroController {
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// A hero controller whose flights use `factory` for any hero that sets no
+    /// `create_rect_tween` of its own. Flutter's `HeroController({this.createRectTween})`
+    /// (`heroes.dart:840`); the `MaterialApp`-installed controller passes a
+    /// `MaterialRectArcTween`. A per-`Hero` factory still overrides this (`:495`).
+    #[must_use]
+    pub fn with_rect_tween<F, A>(factory: F) -> Arc<Self>
+    where
+        F: Fn(Rect, Rect) -> A + Send + Sync + 'static,
+        A: Animatable<Rect> + Send + Sync + 'static,
+    {
+        Arc::new(Self {
+            default_rect_factory: Some(Arc::new(move |begin, end| {
+                Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
+            })),
+            ..Self::default()
+        })
     }
 
     /// The navigator this controller observes, or `None` when detached.
@@ -339,6 +360,7 @@ impl HeroController {
         let measurements = Arc::clone(&self.measurements);
         let manifests = Arc::clone(&self.manifests);
         let flights = Arc::clone(&self.flights);
+        let default_rect_factory = self.default_rect_factory.clone();
         post_frame.schedule(move |_timing| {
             let pass = MeasurementPass {
                 navigator: &navigator,
@@ -348,6 +370,7 @@ impl HeroController {
                 to,
                 direction,
                 flights: &flights,
+                default_rect_factory: &default_rect_factory,
             };
             pass.run(&measurements, &manifests);
         });
@@ -385,6 +408,9 @@ struct MeasurementPass<'a> {
     to: RouteId,
     direction: Option<FlightDirection>,
     flights: &'a Arc<FlightManager>,
+    /// The controller-level `create_rect_tween` fallback (`heroes.dart:847`), used for a
+    /// hero that set none of its own.
+    default_rect_factory: &'a Option<RectTweenFactory>,
 }
 
 impl MeasurementPass<'_> {
@@ -472,6 +498,19 @@ impl MeasurementPass<'_> {
             FlightDirection::Pop => self.source.primary_animation(),
         };
 
+        // `toHero.widget.createRectTween ?? this.createRectTween` (`heroes.dart:495`):
+        // the destination hero's factory wins, then the controller's default, then linear.
+        let rect_factory = to_hero
+            .rect_factory()
+            .or_else(|| self.default_rect_factory.clone());
+
+        // `toHero.widget.flightShuttleBuilder ?? fromHero.widget.flightShuttleBuilder`
+        // (`heroes.dart:1040-1041`): the destination's wins, then the source's, then the
+        // default shuttle.
+        let shuttle_builder = to_hero
+            .shuttle_builder()
+            .or_else(|| from_hero.shuttle_builder());
+
         self.flights.start(
             manifest,
             FlightPlan {
@@ -481,6 +520,8 @@ impl MeasurementPass<'_> {
                 to_route_subtree: to_subtree.render_id,
                 overlay: self.navigator.overlay().clone(),
                 animation,
+                rect_factory,
+                shuttle_builder,
             },
         );
     }

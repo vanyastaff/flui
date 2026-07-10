@@ -25,10 +25,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{LaidOut, lay_out_animated, tight};
-use flui_animation::Vsync;
+use flui_animation::{Animatable, Vsync};
+use flui_geometry::Rect;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_types::Size;
 use flui_widgets::prelude::*;
-use flui_widgets::{HeroController, HeroControllerScope, PopupRoute, VsyncScope};
+use flui_widgets::{FlightDirection, HeroController, HeroControllerScope, PopupRoute, VsyncScope};
 use parking_lot::{Mutex, RwLock};
 
 const TRANSITION: Duration = Duration::from_millis(100);
@@ -46,11 +48,15 @@ fn app(vsync: &Vsync, navigator: &NavigatorHandle) -> impl View {
 
 /// How many shuttle `RenderIgnorePointer`s are currently airborne.
 fn shuttles(owner: &Arc<RwLock<PipelineOwner>>) -> usize {
+    render_count(owner, "RenderIgnorePointer")
+}
+
+fn render_count(owner: &Arc<RwLock<PipelineOwner>>, suffix: &str) -> usize {
     owner
         .read()
         .render_tree()
         .iter()
-        .filter(|(_, node)| node.debug_name().ends_with("RenderIgnorePointer"))
+        .filter(|(_, node)| node.debug_name().ends_with(suffix))
         .count()
 }
 
@@ -331,6 +337,213 @@ fn no_flight_over_a_popup_route() {
     );
     let (max, _end) = run(&mut laid, &owner, SETTLE);
     assert_eq!(max, 0, "a popup is not a PageRoute: no hero flight ever");
+}
+
+// ============================================================================
+// Advanced hooks (§7n) — public surface, better-than-Flutter placeholder shape
+// ============================================================================
+
+#[derive(Clone)]
+struct CountingRectTween {
+    begin: Rect,
+    end: Rect,
+    transforms: Arc<AtomicUsize>,
+}
+
+impl Animatable<Rect> for CountingRectTween {
+    fn transform(&self, t: f32) -> Rect {
+        self.transforms.fetch_add(1, Ordering::SeqCst);
+        flui_animation::RectTween::new(self.begin, self.end).transform(t)
+    }
+}
+
+/// `Hero::create_rect_tween` is the path the flight actually samples, not just a
+/// stored callback. The custom tween counts `transform` calls while the shuttle is
+/// airborne.
+///
+/// Red-check: ignore `rect_factory` in `FlightInner::current_rect` — the shuttle still
+/// flies, but `transforms == 0`.
+#[test]
+fn create_rect_tween_shapes_the_public_flight() {
+    let transforms = Arc::new(AtomicUsize::new(0));
+    let transforms_for_route = Arc::clone(&transforms);
+    let vsync = Vsync::new();
+    let navigator = seeded();
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+
+    let _push = navigator.push(
+        PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            let transforms_for_tween = Arc::clone(&transforms_for_route);
+            Center::new()
+                .child(
+                    Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+                        .create_rect_tween(move |begin, end| CountingRectTween {
+                            begin,
+                            end,
+                            transforms: Arc::clone(&transforms_for_tween),
+                        }),
+                )
+                .into_view()
+                .boxed()
+        })
+        .transition_duration(TRANSITION),
+    );
+
+    let (max, _end) = run(&mut laid, &owner, 3);
+
+    assert_eq!(max, 1, "the custom tween was attached to a real flight");
+    assert!(
+        transforms.load(Ordering::SeqCst) > 0,
+        "the flight sampled the custom Rect tween"
+    );
+}
+
+/// `Hero::flight_shuttle_builder` replaces the default destination-child shuttle.
+/// The builder returns a `ColoredBox`, so the overlay contains a `RenderDecoratedBox`
+/// while the flight is airborne.
+///
+/// Red-check: always use `to_hero.shuttle_child()` in `FlightManager::start` — the
+/// builder call count stays zero and no decorated shuttle appears.
+#[test]
+fn flight_shuttle_builder_replaces_the_public_shuttle() {
+    let builds = Arc::new(AtomicUsize::new(0));
+    let builds_for_route = Arc::clone(&builds);
+    let vsync = Vsync::new();
+    let navigator = seeded();
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+
+    let _push = navigator.push(
+        PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            let builds_for_builder = Arc::clone(&builds_for_route);
+            Center::new()
+                .child(
+                    Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+                        .flight_shuttle_builder(move |_animation, direction, _from, _to| {
+                            assert_eq!(direction, FlightDirection::Push);
+                            builds_for_builder.fetch_add(1, Ordering::SeqCst);
+                            ColoredBox::new(Color::RED)
+                        }),
+                )
+                .into_view()
+                .boxed()
+        })
+        .transition_duration(TRANSITION),
+    );
+
+    let (max, _end) = run(&mut laid, &owner, 3);
+
+    assert_eq!(max, 1, "the flight is airborne");
+    assert!(
+        builds.load(Ordering::SeqCst) > 0,
+        "the custom shuttle builder ran"
+    );
+    assert!(
+        render_count(&owner, "RenderDecoratedBox") > 0,
+        "the custom ColoredBox shuttle reached the overlay"
+    );
+}
+
+/// FLUI's `Hero::placeholder` deliberately does **not** expose the child. The real
+/// child stays offstage in a stable slot and the custom visual is a sibling, so the
+/// child's state survives both becoming the push source and the pop destination.
+///
+/// Red-check: make the placeholder branch return only `build_placeholder(size)` while
+/// in flight — `create_state` runs again when the child is reinserted.
+#[test]
+fn custom_placeholder_preserves_hero_child_state_through_push_and_pop() {
+    #[derive(Clone)]
+    struct Counter {
+        creations: Arc<AtomicUsize>,
+        live: Arc<AtomicUsize>,
+    }
+    impl View for Counter {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+    impl StatefulView for Counter {
+        type State = CounterState;
+        fn create_state(&self) -> Self::State {
+            self.creations.fetch_add(1, Ordering::SeqCst);
+            self.live.fetch_add(1, Ordering::SeqCst);
+            CounterState {
+                live: Arc::clone(&self.live),
+            }
+        }
+    }
+    struct CounterState {
+        live: Arc<AtomicUsize>,
+    }
+    impl Drop for CounterState {
+        fn drop(&mut self) {
+            self.live.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    impl ViewState<Counter> for CounterState {
+        fn build(&self, _v: &Counter, _c: &dyn BuildContext) -> impl IntoView {
+            SizedBox::new(30.0, 20.0)
+        }
+    }
+
+    fn hold_space(size: Size) -> impl IntoView {
+        SizedBox::new(size.width.0, size.height.0).child(ColoredBox::new(Color::GREEN))
+    }
+
+    let creations = Arc::new(AtomicUsize::new(0));
+    let live = Arc::new(AtomicUsize::new(0));
+    let creations_for_page = Arc::clone(&creations);
+    let live_for_page = Arc::clone(&live);
+    let vsync = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Center::new()
+            .child(
+                Hero::new(
+                    ValueKey::new("shared"),
+                    Counter {
+                        creations: Arc::clone(&creations_for_page),
+                        live: Arc::clone(&live_for_page),
+                    },
+                )
+                .placeholder(hold_space),
+            )
+            .into_view()
+            .boxed()
+    }));
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+    laid.pump_for(FRAME);
+    assert_eq!(creations.load(Ordering::SeqCst), 1, "initial child");
+    assert_eq!(live.load(Ordering::SeqCst), 1, "one route child is mounted");
+
+    let _push = navigator.push(hero_page());
+    assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "push landed");
+    assert_eq!(
+        creations.load(Ordering::SeqCst),
+        1,
+        "the custom placeholder preserved the push source"
+    );
+    assert_eq!(
+        live.load(Ordering::SeqCst),
+        1,
+        "the route child stayed mounted"
+    );
+
+    assert!(navigator.pop());
+    assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "pop landed");
+    assert_eq!(
+        creations.load(Ordering::SeqCst),
+        2,
+        "the returning destination also becomes the fresh shuttle; preserving the \
+         route child means there is no third state"
+    );
+    assert_eq!(
+        live.load(Ordering::SeqCst),
+        1,
+        "the temporary shuttle child was dropped and the original route child remains"
+    );
 }
 
 // ============================================================================

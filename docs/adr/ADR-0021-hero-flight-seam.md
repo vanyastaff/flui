@@ -6,7 +6,7 @@
 
 ---
 
-- **Status:** **Accepted — landed.** `Hero` + `HeroController` public since U6 (2026-07-10); baseline flight parity, advanced hooks deferred (§7l). Tracker B1.4 closed to a baseline.
+- **Status:** **Accepted — landed.** `Hero`, `HeroController`, `HeroControllerScope`, and the first customization hooks are public (2026-07-10). Remaining gaps are `Hero.curve` / `reverseCurve`, `HeroMode`, user-gesture flights, and full cross-navigator flight parity.
 - **Date:** 2026-07-09
 - **Deciders:** chief-architect; consult rendering owner (**S4**, the ancestor-relative paint transform — the one seam that cannot be worked around), view owner (**S6**, post-frame callbacks from a view; **S7**, hero discovery without an element walk), animation owner (flight animation composition, `ProxyAnimation` re-parenting mid-flight), repository owner (public API: `Hero`, `HeroController`, tag type), qa-lead (deterministic flight tests through a real `Vsync`).
 - **Relates to:** consumes ADR-0019 (Navigator, Overlay, observers) and ADR-0020 (`PageRoute`, `ModalRoute.offstage`, `RenderOffstage`, `RenderTheater`). **Corrects** ADR-0019 §6 blocker (4) and tracker B1.4 precondition (4).
@@ -283,10 +283,10 @@ Gains: no downcast, no FR-033 change, discovery is `O(heroes in route)`.
 **D1 — Hero does not reparent. The shuttle is a fresh inflation.**
 Loyal to `heroes.dart:1089`. The offstage preservation of the *from* hero's subtree is the contract that matters, and ADR-0020 U5.0's `RenderOffstage` already provides it. Any implementation that instead moves the hero's element into the overlay is a **divergence** and must be rejected in review.
 
-**D2 — No `GlobalKey`; `placeholder_builder` deferred to the public API (was "U5"). Verified in U5.2 (§7k).**
+**D2 — No `GlobalKey`; Flutter's lossy `placeholderBuilder` is not ported. Verified in U5.2 (§7k) and §7n.**
 `_HeroState._key` exists to survive arbitrary wrapper-shape changes. The claim that FLUI needs no key was *aspirational* through U4: `HeroState::build` actually **toggled** shape (pass-through out of flight, `SizedBox → Offstage → child` in flight), which rebuilt a stateful hero child. U5.2 made the claim true — `HeroState::build` now emits the fixed chain `SizedBox(size?) → Offstage(show) → child` in both the not-in-flight and keep-child cases, and `a_hero_child_keeps_its_state_across_a_flight_without_a_global_key` proves reconciliation migrates the child element in place (red-checked by reverting to the toggling shape).
 
-So **no `GlobalKey` is introduced, and none is needed** for the default placeholder. Flutter's `_key` guards only the *caller-supplied `placeholderBuilder`* shape (`heroes.dart:419-420`), which can restructure the tree arbitrarily. `placeholder_builder` is a public-API convenience with no private consumer, so it — and the `GlobalKey` it would force — are deferred to the public-API slice (U6). The future red-check stands: once `placeholder_builder` lands and its `GlobalKey` is removed, a placeholder-shape-change child-state test must fail.
+So **no `GlobalKey` is introduced, and none is needed** for the default placeholder. Flutter's `_key` guards only the *caller-supplied `placeholderBuilder`* shape (`heroes.dart:419-420`), which can restructure the tree arbitrarily and drop state. §7n deliberately rejects that shape and ships `Hero::placeholder(Size -> View)` instead: FLUI owns the preserved child offstage and renders the custom visual as a sibling. The red-check is now `custom_placeholder_preserves_hero_child_state_through_push_and_pop`.
 
 **D3 — The geometry seam (S4) lands first, alone, in `flui-rendering`.**
 It is the only blocker with no widget-layer workaround, it is independently valuable, and it carries render-harness obligations that must not be smuggled into a widget PR.
@@ -317,8 +317,8 @@ Each slice is independently mergeable. Nothing is public before U6.
 | **U3.5** ✅ | **S7 + S8, the half U3 skipped.** Private `HeroTag(Arc<dyn ViewKey>)`, per-route `HeroRegistry` behind an ambient `HeroScope`, `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build), and `HeroFlightManifest` collection in the controller's post-frame callback. S8's `Positioned` claim **verified** (§7h). Still no flight. | `cargo test -p flui-widgets hero`; port-check FR-036 registry entry for `Arc<dyn ViewKey>`. |
 | **U4** ✅ | **Landed 2026-07-10 (§7i).** Private `HeroFlight` + `FlightManager`. `RectTween`, `ProxyAnimation` driving (reversed for a pop), overlay entry insert/remove, `on_tick` re-measure, `IgnorePointer` shuttle inside an inner `Stack` (S8). Push and pop; **no divert** — an existing flight for a tag is ended, not redirected. No `create_rect_tween` / `flight_shuttle_builder` hooks. | `cargo test -p flui-widgets hero`; `port-check`; export guard. |
 | **U5.1** ✅ | **Landed 2026-07-10 (§7j).** Flight divert — all three branches of `_HeroFlight.divert` (push↔pop and same-direction). In-place redirect: one flight, one overlay entry. | `cargo test -p flui-widgets hero`; the divert red-checks in §7j. |
-| **U5.2** ✅ | **Landed 2026-07-10 (§7k).** `onTick` fade-out now covered end-to-end (destination lost mid-flight via a rebuild, not offstage). Placeholder is the **fixed chain** — child state preserved with no `GlobalKey` (D2 verified). `placeholder_builder` + its `GlobalKey` deferred to the public API (U6), decision recorded. | `cargo test -p flui-widgets hero`. |
-| **U6** ✅ | **Landed 2026-07-10 (§7l), then follow-up §7m.** Parity re-checked against `heroes.dart`; exported the baseline surface — `Hero` (`tag: impl ViewKey`, `child`) and `HeroController` — through the crate root and prelude. §7m then added public `HeroControllerScope` and automatic default attach, removing the manual-attach divergence. Advanced hooks remain deferred. | `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
+| **U5.2** ✅ | **Landed 2026-07-10 (§7k).** `onTick` fade-out now covered end-to-end (destination lost mid-flight via a rebuild, not offstage). Placeholder is the **fixed chain** — child state preserved with no `GlobalKey` (D2 verified). At that point `placeholder_builder` was deferred; §7n later rejected Flutter's lossy shape and shipped FLUI's state-preserving `placeholder`. | `cargo test -p flui-widgets hero`. |
+| **U6** ✅ | **Landed 2026-07-10 (§7l), then follow-ups §7m and §7n.** Parity re-checked against `heroes.dart`; exported the baseline surface — `Hero` (`tag: impl ViewKey`, `child`) and `HeroController` — through the crate root and prelude. §7m then added public `HeroControllerScope` and automatic default attach, removing the manual-attach divergence. §7n added `create_rect_tween`, `flight_shuttle_builder`, and FLUI's state-preserving `placeholder`. | `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
 
 ---
 
@@ -1364,7 +1364,7 @@ destination hero unmounts, its `RenderSubtreeAnchor` detaches, `bounding_box_in`
 `a_faded_out_flight_still_removes_its_entry_when_the_animation_settles` pin both halves
 (entry survives the loss; entry removed only when the driver settles).
 
-### The decision gate: no `GlobalKey`, `placeholder_builder` deferred
+### The decision gate then: no `GlobalKey`; Flutter `placeholderBuilder` not copied
 
 The task asked whether the placeholder needs stable subtree identity *beyond* the
 current `Offstage` placeholder — and if so, a `GlobalKey`. Ground truth from source:
@@ -1446,17 +1446,18 @@ that red-checks:
 
 ### Deferred to a later slice (all named, none faked)
 
-`create_rect_tween`, `flight_shuttle_builder`, `placeholder_builder` (and the `GlobalKey`
-it forces — §7k), `Hero.curve` / `reverseCurve`, `HeroMode`, and full nested-navigator
-flight parity. None is exposed as a stub; each is absent, and the public surface does not
-name them.
+At U6 this still included `create_rect_tween`, `flight_shuttle_builder`, and
+`placeholder_builder`; §7n later closed that slice with `create_rect_tween`,
+`flight_shuttle_builder`, and FLUI's state-preserving `placeholder`. Still deferred:
+`Hero.curve` / `reverseCurve`, `HeroMode`, user-gesture flights, and full nested-navigator
+flight parity. None is exposed as a stub.
 
 ### Tracker
 
-B1.4 is closed to **"Hero baseline public; advanced hooks deferred"** — not an
-unqualified close, because the deferred hooks above are real Flutter surface a future
-slice will add. The baseline (push/pop flights, divert, fade-out, default placeholder,
-PageRoute gate) is complete and tested end-to-end.
+B1.4 is closed to **"Hero baseline + first advanced hooks public"** — not an
+unqualified close, because the deferred behaviors above remain real Flutter surface a
+future slice may add. The baseline (push/pop flights, divert, fade-out, default
+placeholder, PageRoute gate) and §7n hooks are tested end-to-end.
 
 ---
 
@@ -1529,10 +1530,11 @@ controller *sound* instead. `did_detach` frees it for reuse. Pinned by a test.
 No `GlobalKey` (an `InheritedView`, as `VsyncScope`). The scope is resolved in
 `init_state`, not from an observer callback, so no element-tree re-entry. Only
 `HeroControllerScope` joins the public surface; `Overlay`, `HeroFlight`, `HeroRegistry`
-stay private. `add_observer` is unchanged. **Not** closed: `create_rect_tween`,
-`flight_shuttle_builder`, `placeholder_builder`, `Hero.curve`, `HeroMode`, and full
-nested-navigator *flight* parity (a nested scope works, but the cross-navigator hero
-cases at `heroes_test.dart:2558` remain out of scope).
+stay private. `add_observer` is unchanged. At this point (before §7n) the customization
+hooks were still open; §7n later closes `create_rect_tween`, `flight_shuttle_builder`,
+and FLUI's state-preserving `placeholder`. **Still not closed:** `Hero.curve`, `HeroMode`,
+and full nested-navigator *flight* parity (a nested scope works, but the cross-navigator
+hero cases at `heroes_test.dart:2558` remain out of scope).
 
 ### One baseline simplification, recorded
 
@@ -1564,12 +1566,12 @@ after mount is not picked up — the same read-once contract `VsyncScope` alread
 
 ---
 
-## 7n. Design: public `Hero` customization hooks (2026-07-10)
+## 7n. Public `Hero` customization hooks (2026-07-10)
 
 The first advanced slice beyond `Hero::new(tag, child)`: `create_rect_tween`,
-`flight_shuttle_builder`, `placeholder_builder`. This section decides each hook's Rust
-shape **before** coding, and records where exact Flutter parity is impossible. Scope is
-these three only — `Hero.curve` / `reverseCurve`, `HeroMode`,
+`flight_shuttle_builder`, and FLUI's state-preserving `placeholder`. This section records
+the signed-off Rust shape and the implementation evidence. Scope is these three only —
+`Hero.curve` / `reverseCurve`, `HeroMode`,
 `transitionOnUserGestures`, and cross-navigator flight parity stay deferred (§8).
 
 ### Reference (source notes)
@@ -1642,34 +1644,67 @@ erased as `Arc<dyn Fn(...) -> BoxedView + Send + Sync>`. Precedence matches Flut
 `GlobalKey`-collision limitation (`:227-239`) does not exist in FLUI — the shuttle builds
 fresh, nothing is reparented (D1). Divergence recorded, not hidden.
 
-### D-N.3 — `placeholder_builder`: **the premise is wrong; decision deferred to sign-off.**
+### D-N.3 — `placeholder`: **not Flutter's shape; a state-preserving FLUI leapfrog.** (signed off 2026-07-10)
 
-The task framed this as "ship only if source-child state is *preserved*." Re-reading the
-reference dissolves that premise: **Flutter does not preserve child state through a
-custom `placeholderBuilder`.** The `_key` `GlobalKey` (`:363`) lives *only* in the default
-branch's `KeyedSubtree` (`:434`); the `placeholderBuilder` branch (`:419-421`) returns the
-builder's output with no `_key`. Flutter's docs confirm the intent — the blessed use is to
-build "an empty `SizedBox`, keeping the Hero child's original size" to *avoid* a
-`GlobalKey` collision (`:233-239`), i.e. to **drop** the child, not keep it. Setting
-`placeholderBuilder` on a push-source hero *loses* the default path's preservation, in
-Flutter as it would in FLUI.
+We deliberately **do not** port Flutter's `placeholderBuilder`. Re-reading the reference
+shows why it is not worth copying: **Flutter does not preserve child state through a custom
+`placeholderBuilder`.** The `_key` `GlobalKey` (`:363`) lives *only* in the default branch's
+`KeyedSubtree` (`:434`); the `placeholderBuilder` branch (`:419-421`) returns the builder's
+output with no `_key`. Its blessed use is to build "an empty `SizedBox`… to avoid a
+`GlobalKey` collision" (`:233-239`) — i.e. to **drop** the child. Shipping that shape would
+be a lossy API with a name that lies about its state semantics.
 
-So there is no silent-state-loss divergence to fear: FLUI dropping child state through a
-custom placeholder is **parity**. But the task tied "ship" to preservation, which is not a
-property this hook has in either framework, so the shape is a genuine fork for the user:
+Instead, FLUI leapfrogs (AGENTS Prime Directive rule 2 — Flutter has no strong contract
+here, only a `GlobalKey` workaround): a custom placeholder that **preserves the source
+child's state by construction.**
 
-* **Option A — ship at Flutter parity.** `Fn(Size, &BoxedView) -> impl IntoView`, replacing
-  the fixed chain while `show_placeholder`. Documented: a custom placeholder does **not**
-  preserve the child's state (parity with Flutter's non-`_key` branch). No stub, real
-  behavior, tested by asserting the builder's widget appears in the route while the shuttle
-  flies.
-* **Option B — ship the size-only honest-narrow form.** `Fn(Size) -> impl IntoView`, no
-  child param, so the "include the child and expect it kept" mistake is unrepresentable.
-  Covers the primary documented use (empty sized box) with zero preservation hazard.
-* **Option C — defer** with no public stub, as §7l already lists it.
+**The inverted mapping (the key finding).** The task and the sign-off both reached for
+`Fn(Size, preserved_child) -> View` as the state-*preserving* shape. In FLUI's
+reconciliation model it is the opposite. Handing the user the child lets them place it at an
+arbitrary depth; when the flight toggles the placeholder on, that depth changes, the child's
+element is rebuilt, and — with no `GlobalKey` — its state is lost. So the child-param shape
+is the **dangerous** one (exactly what the sign-off's rule 4 forbids), and the **no-child**
+shape is the safe one.
 
-Recommendation: **A** (closest to Flutter, and the preservation caveat is real and
-documentable). Held for sign-off because it redefines the task's stated bar.
+**The design.** FLUI already keeps the real child *offstage* during a flight (the default
+fixed chain, D2 §7k). A custom placeholder is rendered as a **sibling** of that offstage
+child, in the space the `SizedBox` holds:
+
+```rust
+Hero::new(tag, child).placeholder(|size: Size| -> impl IntoView { … })
+//                     ^ Arc<dyn Fn(Size) -> BoxedView + Send + Sync>
+```
+
+For a hero configured with a placeholder, `HeroState::build` uses one **constant** structure
+in and out of flight — so the child's ancestor path never changes and its element (and
+state) survives, no `GlobalKey`:
+
+```
+SizedBox(size?) → Stack(loose)[
+    Offstage(show) → child,          // slot 0 — constant path, always present, preserved
+    if show { placeholder(size) },    // slot 1 — the custom visual, only while in flight
+]
+```
+
+The user's closure never receives the child, so it **cannot** drop it (rule 4). Appending
+the placeholder at slot 1 does not disturb slot 0's element (rule "preserve by
+construction"). Default heroes (no placeholder) keep the exact current fixed chain, no
+`Stack` (rule "default unchanged"). No new seam — `Stack` + `Offstage` already exist (rule
+5). This is FLUI's Option A ("FLUI owns the preserved child; the user only supplies the
+placeholder visual"); Option B's child-param form is rejected as the lossy one.
+
+**Name.** `placeholder`, not `placeholder_builder` — the semantics differ (better, and
+preserving), so reusing Flutter's exact name would mislead (rule 3). A future intentionally
+lossy `replacement_placeholder(Fn(Size) -> View)` could be added if a use case appears; not
+this slice.
+
+**Implementation gate (rule).** Shipped only because a red-checked public test proves a
+stateful route hero child survives a full push *and* pop flight with the custom placeholder
+enabled. The precise oracle matters: on pop the destination hero's child is also inflated
+fresh as the shuttle, so `create_state` runs twice total (the original route child + the
+temporary shuttle copy), not once. The preservation proof is "no third state" plus the live
+state count returning to one after the shuttle lands. If that proof had failed, the seam
+would be documented and the hook deferred rather than shipped lossy.
 
 ### Bounds and non-leakage (all three)
 
@@ -1681,12 +1716,15 @@ already-erased clones, so no hook adds a `Clone` bound to the caller's child typ
 what `Hero::new` requires. `public_no_internal_route_stack_exports` continues to guard the
 private names.
 
-### Gate outcome
+### Gate outcome (signed off 2026-07-10)
 
-`create_rect_tween` and `flight_shuttle_builder` are honestly representable (the latter
-with the recorded UNKNOWN-3 divergence). `placeholder_builder`'s shape turns on a
-factual correction to the task's premise and is held for sign-off (A/B/C above). Per the
-task's stop-clause, this design commit lands and implementation waits on that decision.
+All three shipped. `create_rect_tween` as designed (D-N.1), with
+`tests/hero_public.rs::create_rect_tween_shapes_the_public_flight` proving the flight
+samples the custom `Animatable<Rect>`; `flight_shuttle_builder` with the recorded UNKNOWN-3
+no-foreign-context divergence (D-N.2), proven by
+`flight_shuttle_builder_replaces_the_public_shuttle`; and `placeholder` as a
+state-preserving FLUI leapfrog rather than Flutter's lossy `placeholderBuilder` (D-N.3),
+proven by `custom_placeholder_preserves_hero_child_state_through_push_and_pop`.
 
 ---
 
@@ -1694,14 +1732,14 @@ task's stop-clause, this design commit lands and implementation waits on that de
 
 | Deferred | Why |
 |---|---|
-| **Nested navigators** (`heroes.dart:322-332`, `HeroControllerScope`) | FLUI has `maybe_of_root` but no nested-navigator semantics, and the registry design (S7) scopes heroes to the nearest route. A **narrowing**, stated in §3 S7, not a silent gap. |
+| **Full nested-navigator flight parity** (`heroes.dart:322-332`, `HeroControllerScope`) | `HeroControllerScope` exists and nested navigators are isolated by `.none`, but the cross-navigator hero cases at `heroes_test.dart:2558` remain out of scope. A **narrowing**, stated in §3 S7, not a silent gap. |
 | **User-gesture flights** — `transitionOnUserGestures`, `didStartUserGesture`, `didStopUserGesture`, `userGestureInProgressNotifier`, `didStartUserGesture` (`:872`) / `didStopUserGesture` (`:882`), and the delayed `_performAnimationUpdate` (`:620-650`) | FLUI has no back-swipe / predictive back (ADR-0020 §7e defers it). Every gesture path in `HeroController` is unreachable without it. |
 | **`TickerMode`** (`heroes.dart:433`) | Does not exist in FLUI (`visibility.rs:29` already records the gap). An offstage hero's animations keep running. Cost, not correctness. |
 | **`HeroMode`** (`heroes.dart:1129`) | Needs the registry to honour an inherited disable (S7). Cheap once the registry exists; not U1–U5. |
 | **Hero semantics** | Flutter's shuttle and placeholders have no special semantics handling worth porting yet; FLUI's `RenderTheater` does not skip semantics for offstage children at all (ADR-0020 §7d). Fixing that is `RenderTheater`'s problem, not Hero's. |
 | **Duplicate-tag `assert`** | Replaced by log-and-drop (D8). Divergence, recorded. |
 | **`MediaQuery` padding compensation in the default shuttle** (`heroes.dart:1092-1116`) | Needs `MediaQueryData.padding` interpolation; adds nothing to the flight contract. The default shuttle returns `toHero.child`. |
-| **Placeholder sizing subtleties** — `_shouldIncludeChild` for the *pop* direction, `keepPlaceholder` across diverts | Lands with U5, where the divert cases make them observable. Implementing them earlier would ship untested code. |
+| **Placeholder sizing subtleties beyond §7n** — `keepPlaceholder` across future custom placeholder variants | The shipped `placeholder` hook preserves state by construction and the existing divert cases cover current behavior. Future placeholder variants must add their own red-checked sizing/state tests. |
 
 ---
 

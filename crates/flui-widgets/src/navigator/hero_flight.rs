@@ -33,11 +33,12 @@
 //! * **Divert is private and implemented (U5.1).** A second transition for the same tag
 //!   redirects the existing [`HeroFlight`] in place (`_HeroFlight.divert`, `:738-816`):
 //!   same flight object, same overlay entry, new manifest-derived state.
-//! * **No `createRectTween` / `flightShuttleBuilder` hooks**, no `placeholderBuilder`,
-//!   no `Hero.curve` / `reverseCurve`. The tween is a linear `RectTween`, and the
-//!   animation is used raw — Flutter wraps it in a `CurvedAnimation` (`:472-479`)
-//!   whose default for a `Hero` is linear, so this is the same curve, not a missing
-//!   one.
+//! * **`createRectTween` and `flightShuttleBuilder` are implemented** (ADR-0021 §7n).
+//!   `placeholderBuilder` is deliberately not ported; [`Hero`](super::hero::Hero)
+//!   exposes FLUI's state-preserving `placeholder` hook instead. `Hero.curve` /
+//!   `reverseCurve` remain deferred. The animation is otherwise used raw — Flutter
+//!   wraps it in a `CurvedAnimation` (`:472-479`) whose default for a `Hero` is linear,
+//!   so the default curve is not a missing behavior.
 //! * **No `userGestureInProgress`.** `_handleAnimationUpdate`'s delay (`:620-648`)
 //!   exists only for the iOS back-swipe. FLUI has none, so the status update is never
 //!   deferred.
@@ -60,7 +61,7 @@ use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
 
-use super::hero::{HeroHandle, HeroTag};
+use super::hero::{HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
 use super::hero_controller::{FlightDirection, HeroFlightManifest};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
@@ -90,8 +91,14 @@ struct FlightInner {
     /// reads, already reversed for a pop. Its **parent** is repointed by a divert;
     /// the proxy object itself, and the listeners on it, never change.
     proxy: Arc<ProxyAnimation<f32>>,
-    /// `_HeroFlight.heroRectTween` (`:553`). Re-aimed by [`FlightInner::on_tick`].
+    /// `_HeroFlight.heroRectTween` (`:553`) endpoints. Re-aimed by
+    /// [`FlightInner::on_tick`]; interpolated through [`rect_factory`](Self::rect_factory).
     rect: Mutex<RectTween>,
+    /// The `create_rect_tween` factory this flight interpolates with, or `None` for the
+    /// linear default (ADR-0021 §7n D-N.1). Behind a lock because a divert can swap the
+    /// destination hero, and with it the factory — Flutter re-creates the tween through
+    /// the new manifest's `createHeroRectTween` (`heroes.dart:684`).
+    rect_factory: Mutex<Option<RectTweenFactory>>,
     /// `_HeroFlight._heroOpacity` (`:556`), evaluated eagerly. `1.0` until the
     /// destination is lost.
     opacity: Mutex<f32>,
@@ -105,8 +112,15 @@ struct FlightInner {
 
     entry: Mutex<Option<OverlayEntry>>,
     subscriptions: Mutex<Option<(ListenerId, ListenerId)>>,
-    /// `_defaultHeroFlightShuttleBuilder`'s result (`:1089`), inflated once at start.
+    /// The in-flight widget (`:553` / `:571-579`), inflated once at start and rebuilt on
+    /// a divert. Either the resolved `flight_shuttle_builder`'s output or, when none is
+    /// set, a fresh copy of the destination hero's child.
     shuttle: Mutex<Option<BoxedView>>,
+    /// The resolved `flight_shuttle_builder` (§7n D-N.2), retained so a divert can rebuild
+    /// the shuttle from the new destination — Flutter re-invokes `manifest.shuttleBuilder`
+    /// after clearing `shuttle` (`heroes.dart:793`, `:573`). Behind a lock because a
+    /// divert can swap it for the new manifest's builder.
+    shuttle_builder: Mutex<Option<ShuttleBuilder>>,
 }
 
 impl FlightInner {
@@ -163,8 +177,44 @@ impl FlightInner {
     }
 
     /// The rect the shuttle occupies right now, in the theater's coordinate space.
+    ///
+    /// Interpolated through the `create_rect_tween` factory when one is set (§7n D-N.1),
+    /// re-created each read from the current endpoints — exactly as Flutter re-creates
+    /// the tween through `createHeroRectTween` (`heroes.dart:494-497`). `None` is the
+    /// linear default and byte-for-byte the pre-hook behavior.
     fn current_rect(&self) -> Rect {
-        self.rect.lock().transform(self.proxy.value())
+        let endpoints = *self.rect.lock();
+        let t = self.proxy.value();
+        match self.rect_factory.lock().as_ref() {
+            Some(make) => make(endpoints.begin, endpoints.end).transform(t),
+            None => endpoints.transform(t),
+        }
+    }
+}
+
+/// The in-flight widget: the resolved `flight_shuttle_builder`'s output, or — when none
+/// is set — a fresh copy of the destination hero's child.
+///
+/// `_HeroFlight._buildOverlay`'s `shuttle ??= manifest.shuttleBuilder(context,
+/// manifest.animation, manifest.type, fromHero.context, toHero.context)` (`heroes.dart:573`)
+/// and `_defaultHeroFlightShuttleBuilder`'s `toHero.child` fallback (`:1089`). The two
+/// foreign `BuildContext`s become the two hero child views (ADR-0021 §7n D-N.2); `animation`
+/// is the raw route animation, not the proxy.
+fn inflate_shuttle(
+    builder: Option<&ShuttleBuilder>,
+    animation: &Arc<dyn Animation<f32>>,
+    direction: FlightDirection,
+    from_hero: &HeroHandle,
+    to_hero: &HeroHandle,
+) -> BoxedView {
+    match builder {
+        Some(build) => build(
+            animation,
+            direction,
+            &from_hero.shuttle_child(),
+            &to_hero.shuttle_child(),
+        ),
+        None => to_hero.shuttle_child(),
     }
 }
 
@@ -265,6 +315,8 @@ impl HeroFlight {
             to_route_subtree: new_subtree,
             overlay: _,
             animation: new_anim,
+            rect_factory: new_rect_factory,
+            shuttle_builder: new_shuttle_builder,
         } = plan;
 
         let (old_dir, old_from, old_to) = {
@@ -345,6 +397,9 @@ impl HeroFlight {
                 new_begin = self.inner.current_rect();
                 new_end = new.to_rect;
 
+                // The shuttle builder wants the raw route animation, so clone before the
+                // proxy parent takes ownership below.
+                let shuttle_animation = Arc::clone(&new_anim);
                 new_parent = match new_dir {
                     FlightDirection::Pop => Arc::new(ReverseAnimation::new(new_anim)),
                     FlightDirection::Push => new_anim,
@@ -358,8 +413,15 @@ impl HeroFlight {
                 new_to.start_flight(false);
 
                 // `shuttle = null; overlayEntry!.markNeedsBuild();` — rebuild the shuttle
-                // from the new destination's child.
-                new_shuttle = Some(new_to.shuttle_child());
+                // from the new destination (`:793`), through the new manifest's shuttle
+                // builder if it set one, else the default fresh child.
+                new_shuttle = Some(inflate_shuttle(
+                    new_shuttle_builder.as_ref(),
+                    &shuttle_animation,
+                    new_dir,
+                    &new_from,
+                    &new_to,
+                ));
             }
         }
 
@@ -371,6 +433,13 @@ impl HeroFlight {
         }
         *self.inner.fade_from.lock() = None;
         self.inner.aborted.store(false, Ordering::Relaxed);
+        // Re-read the new manifest's hooks (`manifest = newManifest`, `:815`): a divert
+        // can swap the destination hero and, with it, its `create_rect_tween` /
+        // `flight_shuttle_builder`. The same-direction branch above already rebuilt the
+        // shuttle with the new builder; the other branches keep the existing shuttle (as
+        // Flutter does), so the stored builder only matters for a later same-tag divert.
+        *self.inner.rect_factory.lock() = new_rect_factory;
+        *self.inner.shuttle_builder.lock() = new_shuttle_builder;
         if let Some(shuttle) = new_shuttle.take() {
             *self.inner.shuttle.lock() = Some(shuttle);
         }
@@ -409,6 +478,12 @@ pub(crate) struct FlightPlan {
     /// `manifest.animation` (`heroes.dart:466-480`): the destination route's primary
     /// animation for a push, the source route's for a pop.
     pub(crate) animation: Arc<dyn Animation<f32>>,
+    /// The resolved `create_rect_tween` factory (`heroes.dart:495`): the destination
+    /// hero's, else the controller's default, else `None` (linear). ADR-0021 §7n D-N.1.
+    pub(crate) rect_factory: Option<RectTweenFactory>,
+    /// The resolved `flight_shuttle_builder` (`heroes.dart:1040`): the destination
+    /// hero's, else the source hero's, else `None` (default shuttle). §7n D-N.2.
+    pub(crate) shuttle_builder: Option<ShuttleBuilder>,
 }
 
 /// `HeroController._flights` (`heroes.dart:850`) plus the deferred-drop discipline
@@ -536,7 +611,13 @@ impl FlightManager {
             to_route_subtree,
             overlay,
             animation,
+            rect_factory,
+            shuttle_builder,
         } = plan;
+
+        // The shuttle builder gets `manifest.animation` — the raw route animation, not the
+        // (possibly reversed) proxy — so keep a clone before the proxy takes ownership.
+        let shuttle_animation = Arc::clone(&animation);
 
         // `_proxyAnimation.parent = ReverseAnimation(manifest.animation)` for a pop,
         // `manifest.animation` for a push (`:719-724`).
@@ -558,6 +639,7 @@ impl FlightManager {
                 begin: manifest.from_rect,
                 end: manifest.to_rect,
             }),
+            rect_factory: Mutex::new(rect_factory),
             opacity: Mutex::new(1.0),
             fade_from: Mutex::new(None),
             aborted: AtomicBool::new(false),
@@ -565,6 +647,7 @@ impl FlightManager {
             entry: Mutex::new(None),
             subscriptions: Mutex::new(None),
             shuttle: Mutex::new(None),
+            shuttle_builder: Mutex::new(shuttle_builder),
         });
 
         // `shouldIncludeChildInPlaceholder` is `true` only for the *from* hero of a
@@ -572,9 +655,15 @@ impl FlightManager {
         from_hero.start_flight(direction == FlightDirection::Push);
         to_hero.start_flight(false);
 
-        // `_defaultHeroFlightShuttleBuilder` returns the **destination** hero's child,
-        // inflated afresh (`:1083`, `:1089`). Nothing is reparented (D1).
-        *inner.shuttle.lock() = Some(to_hero.shuttle_child());
+        // The resolved `flight_shuttle_builder`'s output, or — the default — a fresh copy
+        // of the **destination** hero's child (`:1083`, `:1089`). Nothing is reparented (D1).
+        *inner.shuttle.lock() = Some(inflate_shuttle(
+            inner.shuttle_builder.lock().as_ref(),
+            &shuttle_animation,
+            direction,
+            &from_hero,
+            &to_hero,
+        ));
 
         let entry = {
             let inner = Arc::clone(&inner);

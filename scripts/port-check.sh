@@ -1127,6 +1127,10 @@ fi
 #   provides `key_eq` / `key_hash`, so `HeroTag` derives its `Eq`/`Hash` from the
 #   trait and NEVER calls `ViewKey::as_any` — no downcast, so FR-033 is untouched.
 #   Registered under the pre-existing `ViewKey` surface rather than a new one.
+#   ADR-0021 §7n: `Hero::create_rect_tween` stores a user-provided
+#   `Box<dyn Animatable<Rect>>`, the same erased animation-transform boundary as
+#   Flutter's `CreateRectTween`. It is value-only (no tree access), Send+Sync, and the
+#   public test proves the flight samples it.
 #   Framework trait surfaces (gesture / focus / delegate / parent-data /
 #   clipper / binding patterns — widely-used reference shapes; their
 #   owned-storage uses sit on sanctioned FR-029 categories):
@@ -1138,7 +1142,7 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(

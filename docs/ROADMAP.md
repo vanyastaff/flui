@@ -221,7 +221,11 @@ Each phase states: **Goal**, **Builds** (crates/subsystems), **Entry** (objectiv
 
 **Exit.**
 - A non-trivial sample app builds entirely from `flui-widgets` (no raw render objects): scrolling list, gesture button, implicit animation, navigated route.
-- `Hero` + `GlobalKey` reparenting works end-to-end (keyed reconciliation under real load).
+- `Hero` works end-to-end without cross-overlay `GlobalKey` reparenting: push/pop
+  flights, divert, fade-out, default placeholder, `HeroControllerScope` auto-attach,
+  and the first customization hooks (`create_rect_tween`, `flight_shuttle_builder`,
+  FLUI's state-preserving `placeholder`) are public. Advanced parity gaps stay named
+  in `ROADMAP-TRACKER.md` B1.4 / ADR-0021.
 - `flui-widgets` coverage ≥ 85% (Constitution Widget requirement).
 
 **Parity delta.** `widgets` catalog → ~95%.

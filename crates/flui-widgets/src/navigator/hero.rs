@@ -1,9 +1,10 @@
 //! The `Hero` view, its per-route registry, and the handle a `HeroController` drives.
 //!
-//! ADR-0021 U3.5. **Private.** No public `Hero`, no prelude export. A `Hero` is a
-//! pass-through that can be *told* to show a placeholder, and a registry entry that
-//! lets the controller find it by tag. U4's private `_HeroFlight` now drives this
-//! placeholder machinery, but the public/customizable Hero API is still absent.
+//! ADR-0021 U3.5 through §7n. `Hero` is public; its registry, handle and tag
+//! storage stay private. A `Hero` registers with its route, can be *told* to show a
+//! placeholder, and exposes the signed-off customization hooks:
+//! `create_rect_tween`, `flight_shuttle_builder`, and FLUI's state-preserving
+//! `placeholder`.
 //!
 //! # Flutter parity
 //!
@@ -33,8 +34,8 @@
 //! * **A `Hero` under a nested `Navigator` registers with its own route**, because it
 //!   finds *its* nearest `HeroScope`. Flutter reaches the same answer through
 //!   `Navigator.of(hero) == navigator` (`:322`) plus a `ModalRoute.of` fallback
-//!   (`:330-333`). Nested navigators remain out of scope either way — no
-//!   `HeroControllerScope` exists — so the outer controller simply never sees them.
+//!   (`:330-333`). A nested navigator is isolated by `HeroControllerScope::none`;
+//!   full cross-navigator flights remain out of scope.
 //!
 //! # Duplicate tags
 //!
@@ -52,6 +53,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use flui_animation::{Animatable, Animation};
 use flui_foundation::{RenderId, ViewKey};
 use flui_geometry::Rect;
 use flui_objects::SubtreeAnchor;
@@ -63,8 +65,32 @@ use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
 use parking_lot::{Mutex, RwLock};
 
+use super::hero_controller::FlightDirection;
 use super::subtree::AnchoredBox;
-use crate::{Offstage, SizedBox};
+use crate::{Offstage, SizedBox, Stack};
+
+/// Builds the [`RectTween`](flui_animation::RectTween)-like path a hero's shuttle
+/// follows. Flutter's `CreateRectTween` (`heroes.dart:27`); the default is a linear
+/// `RectTween`. Erased and `Arc`-shared so it is `Clone + Send + Sync + 'static`.
+pub(crate) type RectTweenFactory =
+    Arc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Rect> + Send + Sync> + Send + Sync>;
+
+/// Builds the widget shown in flight instead of the default (a fresh copy of the
+/// destination hero's child). Flutter's `HeroFlightShuttleBuilder` (`heroes.dart:45`),
+/// minus the two foreign `BuildContext`s FLUI cannot hand out (ADR-0021 §7n D-N.2): the
+/// builder receives the flight animation, the direction, and the source and destination
+/// hero child views directly.
+pub(crate) type ShuttleBuilder = Arc<
+    dyn Fn(&Arc<dyn Animation<f32>>, FlightDirection, &BoxedView, &BoxedView) -> BoxedView
+        + Send
+        + Sync,
+>;
+
+/// Builds the widget left in the hero's place while it is in flight. FLUI's
+/// state-preserving alternative to Flutter's lossy `placeholderBuilder` (ADR-0021 §7n
+/// D-N.3): it takes only the frozen [`Size`], never the child, so it *cannot* drop the
+/// child — the real child stays offstage and its state survives.
+pub(crate) type PlaceholderBuilder = Arc<dyn Fn(Size) -> BoxedView + Send + Sync>;
 
 /// What identifies a hero across two routes. Flutter's `Hero.tag`, an `Object`
 /// compared with `==` (`heroes.dart:286-309`).
@@ -268,6 +294,12 @@ struct HeroInner {
     /// overlay. Nothing is reparented (ADR-0021 D1), so this is a `BoxedView` clone,
     /// kept current through `did_update_view`.
     shuttle_child: Mutex<BoxedView>,
+    /// `Hero.createRectTween` (`heroes.dart:202`), or `None` for the linear default.
+    /// Read by the controller when it builds a flight (ADR-0021 §7n D-N.1).
+    rect_factory: Mutex<Option<RectTweenFactory>>,
+    /// `Hero.flightShuttleBuilder` (`heroes.dart:240`), or `None` for the default
+    /// shuttle. Read by the controller when it builds a flight (§7n D-N.2).
+    shuttle_builder: Mutex<Option<ShuttleBuilder>>,
 }
 
 /// An owned, `'static` capability to drive one mounted [`Hero`].
@@ -280,7 +312,12 @@ pub(crate) struct HeroHandle {
 }
 
 impl HeroHandle {
-    fn new(tag: HeroTag, shuttle_child: BoxedView) -> Self {
+    fn new(
+        tag: HeroTag,
+        shuttle_child: BoxedView,
+        rect_factory: Option<RectTweenFactory>,
+        shuttle_builder: Option<ShuttleBuilder>,
+    ) -> Self {
         Self {
             inner: Arc::new(HeroInner {
                 tag,
@@ -290,6 +327,8 @@ impl HeroHandle {
                 owner: Mutex::new(None),
                 rebuild: Mutex::new(None),
                 shuttle_child: Mutex::new(shuttle_child),
+                rect_factory: Mutex::new(rect_factory),
+                shuttle_builder: Mutex::new(shuttle_builder),
             }),
         }
     }
@@ -331,6 +370,16 @@ impl HeroHandle {
     /// `toMediaQueryData == null` early return (`:1089`) is the whole function.
     pub(crate) fn shuttle_child(&self) -> BoxedView {
         self.inner.shuttle_child.lock().clone()
+    }
+
+    /// This hero's `create_rect_tween` factory, if it set one (`heroes.dart:202`).
+    pub(crate) fn rect_factory(&self) -> Option<RectTweenFactory> {
+        self.inner.rect_factory.lock().clone()
+    }
+
+    /// This hero's `flight_shuttle_builder`, if it set one (`heroes.dart:240`).
+    pub(crate) fn shuttle_builder(&self) -> Option<ShuttleBuilder> {
+        self.inner.shuttle_builder.lock().clone()
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
@@ -421,22 +470,23 @@ impl fmt::Debug for HeroHandle {
 
 /// Marks a subtree as a hero: the thing that flies between two routes.
 ///
-/// **Private.** This slice gives it `tag` and `child` and nothing else — no
-/// `createRectTween`, no `flightShuttleBuilder`, no `placeholderBuilder`, no
-/// `transitionOnUserGestures`, no `HeroMode`. Its `build` is a pass-through until a
-/// controller tells it otherwise.
 /// A subtree that animates between two routes when it appears in both under the same
 /// tag — Flutter's `Hero` (`heroes.dart:180`).
 ///
 /// A `HeroController` must observe the `Navigator` for flights to run; a bare
 /// `Navigator` now installs a default one, and `HeroControllerScope` customizes or
-/// disables that. Baseline surface only: `tag` and `child`. `create_rect_tween`,
-/// `flight_shuttle_builder`, `placeholder_builder`, and `HeroMode` are deferred
-/// (ADR-0021 §7k–§7m).
+/// disables that. The public surface includes the baseline `tag`/`child` plus the
+/// ADR-0021 §7n hooks: [`create_rect_tween`](Self::create_rect_tween),
+/// [`flight_shuttle_builder`](Self::flight_shuttle_builder), and FLUI's
+/// state-preserving [`placeholder`](Self::placeholder). `transitionOnUserGestures`,
+/// `HeroMode`, and full cross-navigator flight parity remain deferred.
 #[derive(Clone)]
 pub struct Hero {
     tag: HeroTag,
     child: BoxedView,
+    rect_factory: Option<RectTweenFactory>,
+    shuttle_builder: Option<ShuttleBuilder>,
+    placeholder: Option<PlaceholderBuilder>,
 }
 
 impl Hero {
@@ -448,7 +498,72 @@ impl Hero {
         Self {
             tag: HeroTag::new(tag),
             child: BoxedView(Box::new(child.into_view())),
+            rect_factory: None,
+            shuttle_builder: None,
+            placeholder: None,
         }
+    }
+
+    /// Shape the path the hero's shuttle flies along. Flutter's `Hero.createRectTween`
+    /// (`heroes.dart:202`): `factory(begin, end)` returns the tween the flight
+    /// interpolates as its animation runs 0→1. The default is a linear
+    /// [`RectTween`](flui_animation::RectTween). When both this and the
+    /// [`HeroController`](super::hero_controller::HeroController)'s default are set, this
+    /// one wins (`heroes.dart:495`).
+    #[must_use]
+    pub fn create_rect_tween<F, A>(mut self, factory: F) -> Self
+    where
+        F: Fn(Rect, Rect) -> A + Send + Sync + 'static,
+        A: Animatable<Rect> + Send + Sync + 'static,
+    {
+        self.rect_factory = Some(Arc::new(move |begin, end| {
+            Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
+        }));
+        self
+    }
+
+    /// Replace the default in-flight widget. Flutter's `Hero.flightShuttleBuilder`
+    /// (`heroes.dart:240`), with FLUI's divergence (ADR-0021 §7n D-N.2): the builder
+    /// receives the flight `animation`, the `direction`, and the source and destination
+    /// hero child views — not Flutter's two foreign `BuildContext`s, which FLUI has no
+    /// way to hand out. When both heroes of a pair supply one, the destination's wins
+    /// (`heroes.dart:1040`).
+    #[must_use]
+    pub fn flight_shuttle_builder<F, V>(mut self, builder: F) -> Self
+    where
+        F: Fn(&Arc<dyn Animation<f32>>, FlightDirection, &BoxedView, &BoxedView) -> V
+            + Send
+            + Sync
+            + 'static,
+        V: IntoView,
+    {
+        self.shuttle_builder = Some(Arc::new(move |animation, direction, from, to| {
+            BoxedView(Box::new(
+                builder(animation, direction, from, to).into_view(),
+            ))
+        }));
+        self
+    }
+
+    /// Show a custom widget in the hero's place while it is in flight, **without**
+    /// losing the child's state.
+    ///
+    /// FLUI's state-preserving alternative to Flutter's lossy `placeholderBuilder`
+    /// (ADR-0021 §7n D-N.3). The closure takes only the frozen [`Size`] the space must
+    /// hold; it never receives the child, so it cannot drop it. FLUI keeps the real
+    /// child offstage at a constant tree position, so its state survives the flight with
+    /// no `GlobalKey`. The default (no placeholder) leaves an empty box of that size, as
+    /// Flutter does.
+    #[must_use]
+    pub fn placeholder<F, V>(mut self, builder: F) -> Self
+    where
+        F: Fn(Size) -> V + Send + Sync + 'static,
+        V: IntoView,
+    {
+        self.placeholder = Some(Arc::new(move |size| {
+            BoxedView(Box::new(builder(size).into_view()))
+        }));
+        self
     }
 }
 
@@ -471,7 +586,12 @@ impl StatefulView for Hero {
 
     fn create_state(&self) -> Self::State {
         HeroState {
-            handle: HeroHandle::new(self.tag.clone(), self.child.clone()),
+            handle: HeroHandle::new(
+                self.tag.clone(),
+                self.child.clone(),
+                self.rect_factory.clone(),
+                self.shuttle_builder.clone(),
+            ),
             registry: None,
         }
     }
@@ -497,10 +617,25 @@ impl std::fmt::Debug for HeroState {
 }
 
 impl ViewState<Hero> for HeroState {
-    /// Keep the shuttle's source current: `_defaultHeroFlightShuttleBuilder` reads
-    /// `toHero.widget.child` at flight start, i.e. the *latest* configuration.
+    /// Keep the handle's view-derived config current: the shuttle source, the rect-tween
+    /// factory, and the shuttle builder are all read at flight start, i.e. from the
+    /// *latest* `Hero` configuration.
     fn did_update_view(&mut self, _old: &Hero, new_view: &Hero) {
-        *self.handle.inner.shuttle_child.lock() = new_view.child.clone();
+        self.handle
+            .inner
+            .shuttle_child
+            .lock()
+            .clone_from(&new_view.child);
+        self.handle
+            .inner
+            .rect_factory
+            .lock()
+            .clone_from(&new_view.rect_factory);
+        self.handle
+            .inner
+            .shuttle_builder
+            .lock()
+            .clone_from(&new_view.shuttle_builder);
     }
 
     /// Everything a hero needs from outside itself is acquired **here**, in the one
@@ -527,14 +662,15 @@ impl ViewState<Hero> for HeroState {
         }
     }
 
-    /// `_HeroState.build` (`heroes.dart:410-438`), minus `placeholderBuilder` and
-    /// `TickerMode`, plus the anchor.
+    /// `_HeroState.build` (`heroes.dart:410-438`), minus `TickerMode`, plus the anchor
+    /// and FLUI's state-preserving custom placeholder (§7n D-N.3).
     ///
     /// | Flutter | here |
     /// |---|---|
+    /// | `placeholderBuilder != null` ⇒ builder output, child dropped, no `_key` | custom `placeholder`: child kept **offstage** at a constant path, placeholder shown as a sibling — state preserved |
     /// | `SizedBox(width: _placeholderSize?.width, …)` | `SizedBox` only while in flight |
     /// | `Offstage(offstage: showPlaceholder, child: KeyedSubtree(key: _key, …))` | `Offstage`, no key: nothing reparents (ADR-0021 D1) |
-    /// | `showPlaceholder && !_shouldIncludeChild` ⇒ bare `SizedBox` | same |
+    /// | `showPlaceholder && !_shouldIncludeChild` ⇒ bare `SizedBox` | same, in the default (no-placeholder) path |
     ///
     /// The [`AnchoredBox`] is always present, in flight or not: it is what publishes
     /// the `RenderId` a controller measures, and a node that came and went would make
@@ -543,6 +679,31 @@ impl ViewState<Hero> for HeroState {
         let anchor = self.handle.inner.anchor.clone();
         let placeholder = self.handle.placeholder_size();
         let show_placeholder = placeholder.is_some();
+
+        // Custom placeholder (§7n D-N.3): a hero configured with one uses **one constant
+        // structure** in and out of flight — `SizedBox → Stack[ Offstage→child, … ]` —
+        // so the child's element (slot 0) is never reparented and its state survives with
+        // no `GlobalKey`. The placeholder visual is appended at slot 1 only while in
+        // flight; the closure never sees the child, so it cannot drop it. This preserves
+        // state uniformly (both flight directions), where Flutter's `placeholderBuilder`
+        // drops it. Default heroes (below) keep the exact fixed chain, no `Stack`.
+        if let Some(build_placeholder) = &view.placeholder {
+            let mut layers: Vec<BoxedView> = vec![
+                Offstage::new()
+                    .offstage(show_placeholder)
+                    .child(view.child.clone())
+                    .into_view()
+                    .boxed(),
+            ];
+            if let Some(size) = placeholder {
+                layers.push(build_placeholder(size));
+            }
+            let sized = match placeholder {
+                Some(size) => SizedBox::new(size.width.0, size.height.0),
+                None => SizedBox::default(),
+            };
+            return AnchoredBox::new(anchor, sized.child(Stack::new(layers)));
+        }
 
         // `if (showPlaceholder && !_shouldIncludeChild) return SizedBox(w, h);`
         // (`heroes.dart:423-425`): the destination hero drops its child — the shuttle
