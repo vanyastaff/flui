@@ -1069,3 +1069,209 @@ fn a_same_direction_divert_transfers_the_placeholders() {
         "the destination drops its child — the shuttle carries it"
     );
 }
+
+// ============================================================================
+// U5.2 — onTick fade-out when the destination is lost mid-flight
+// ============================================================================
+
+/// A page whose hero can be removed from outside the tree, without touching the route
+/// animation — the harness capability the fade-out test needs. Flipping `present` and
+/// firing the stored `RebuildHandle` rebuilds the page without its `Hero`, so the
+/// destination hero unmounts while its route (and its animation) keep running.
+#[derive(Clone, Default)]
+struct HeroGate {
+    present: Arc<AtomicBool>,
+    rebuild: Arc<parking_lot::Mutex<Option<flui_view::RebuildHandle>>>,
+    tag_name: &'static str,
+}
+
+impl HeroGate {
+    fn showing(tag_name: &'static str) -> Self {
+        Self {
+            present: Arc::new(AtomicBool::new(true)),
+            rebuild: Arc::new(parking_lot::Mutex::new(None)),
+            tag_name,
+        }
+    }
+    fn remove_hero(&self) {
+        self.present.store(false, Ordering::SeqCst);
+        if let Some(rebuild) = self.rebuild.lock().as_ref() {
+            rebuild.schedule();
+        }
+    }
+}
+
+impl View for HeroGate {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+impl StatefulView for HeroGate {
+    type State = HeroGateState;
+    fn create_state(&self) -> Self::State {
+        HeroGateState {
+            present: Arc::clone(&self.present),
+            rebuild: Arc::clone(&self.rebuild),
+            tag_name: self.tag_name,
+        }
+    }
+}
+struct HeroGateState {
+    present: Arc<AtomicBool>,
+    rebuild: Arc<parking_lot::Mutex<Option<flui_view::RebuildHandle>>>,
+    tag_name: &'static str,
+}
+impl ViewState<HeroGate> for HeroGateState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        *self.rebuild.lock() = Some(ctx.rebuild_handle());
+    }
+    fn build(&self, _view: &HeroGate, _ctx: &dyn BuildContext) -> impl IntoView {
+        if self.present.load(Ordering::SeqCst) {
+            Hero::new(tag(self.tag_name), SizedBox::new(60.0, 45.0))
+                .into_view()
+                .boxed()
+        } else {
+            // Same footprint, no hero — the destination is *lost*, not merely resized.
+            SizedBox::new(60.0, 45.0).into_view().boxed()
+        }
+    }
+}
+
+/// **The `onTick` fade-out, end to end** (`heroes.dart:687-692`): *"The toHero no longer
+/// exists or it's no longer the flight's destination. Continue flying while fading
+/// out."* When `toHero.context.findRenderObject()` yields nothing, the flight keeps its
+/// overlay entry and drives `_heroOpacity` down instead of aborting.
+///
+/// The destination hero is removed with a `HeroGate` — a rebuild that drops the `Hero`
+/// without advancing the route animation — so the flight's driver stays mid-air. Ticks
+/// after that find no destination and begin the fade. The entry survives; only the
+/// driving animation settling removes it.
+///
+/// Red-check (each fails on its own):
+/// * delete the `else { fade_from = Some(...) }` arm from `FlightInner::on_tick` — the
+///   opacity stays `1.0` after the destination is lost;
+/// * in `on_tick`, set `fade_from` but leave the `opacity` computation at `1.0`.
+#[test]
+fn a_destination_lost_mid_flight_fades_out_without_ending_the_flight() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    harness.tick();
+
+    let gate = HeroGate::showing("shared");
+    let gate_for_page = gate.clone();
+    let b = PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Center::new()
+            .child(gate_for_page.clone())
+            .into_view()
+            .boxed()
+    })
+    .transition_duration(TRANSITION);
+    let b_transition = b.transition_handle();
+    let _b = navigator.push(b);
+    harness.tick();
+
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    let entry = flight.entry_id().expect("has an overlay entry");
+
+    let controller_b = b_transition.controller().expect("installed");
+    controller_b.set_value(0.5);
+    assert_eq!(
+        flight.opacity(),
+        1.0,
+        "opaque while the destination is present"
+    );
+
+    // Remove the destination hero. The route — and its animation — stay.
+    gate.remove_hero();
+    harness.tick();
+
+    // Advance: the first post-loss tick arms the fade; the next drives it down.
+    controller_b.set_value(0.6);
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "the destination was lost, not the animation — the flight lives on"
+    );
+    controller_b.set_value(0.8);
+
+    let faded = flight.opacity();
+    assert!(
+        faded > 0.0 && faded < 1.0,
+        "the shuttle is fading, not gone: opacity = {faded}"
+    );
+
+    // The overlay entry is still present — only a settled animation removes it.
+    let still = controller
+        .flights()
+        .get(&tag("shared"))
+        .expect("still airborne");
+    assert_eq!(still.entry_id(), Some(entry), "same entry, still flying");
+    assert!(
+        navigator.overlay().entry_ids().contains(&entry),
+        "the flight entry outlives the lost destination"
+    );
+}
+
+/// The other half: a fade-out still ends the flight — and removes the entry — once the
+/// **driving animation** settles, not when the destination is lost.
+///
+/// Red-check: in `HeroFlight::finish`, guard on `fade_from.is_some()` and skip the
+/// `entry.remove()` — a faded-out flight then leaks its overlay entry forever.
+#[test]
+fn a_faded_out_flight_still_removes_its_entry_when_the_animation_settles() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    harness.tick();
+
+    let gate = HeroGate::showing("shared");
+    let gate_for_page = gate.clone();
+    let b = PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Center::new()
+            .child(gate_for_page.clone())
+            .into_view()
+            .boxed()
+    })
+    .transition_duration(TRANSITION);
+    let b_transition = b.transition_handle();
+    let _b = navigator.push(b);
+    harness.tick();
+
+    let entry = controller
+        .flights()
+        .get(&tag("shared"))
+        .expect("airborne")
+        .entry_id()
+        .expect("entry");
+    let entries_with_flight = navigator.overlay().entry_ids().len();
+
+    let controller_b = b_transition.controller().expect("installed");
+    controller_b.set_value(0.5);
+    gate.remove_hero();
+    harness.tick();
+    controller_b.set_value(0.8);
+    assert_eq!(controller.flights().len(), 1, "fading");
+
+    // Settle the driver: B's entrance completes.
+    controller_b.set_value(1.0);
+    harness.tick();
+
+    assert_eq!(
+        controller.flights().len(),
+        0,
+        "the settled animation ended the flight"
+    );
+    assert!(
+        !navigator.overlay().entry_ids().contains(&entry),
+        "and removed its overlay entry"
+    );
+    assert_eq!(
+        navigator.overlay().entry_ids().len(),
+        entries_with_flight - 1,
+    );
+}

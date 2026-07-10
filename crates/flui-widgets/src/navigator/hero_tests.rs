@@ -5,6 +5,7 @@
 //! it can be *told* to show a placeholder.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ValueKey;
 use flui_types::Size;
@@ -328,15 +329,14 @@ fn end_flight_restores_child() {
     harness.tick();
 
     assert_eq!(hero.placeholder_size(), None);
-    let names = harness.render_debug_names();
-    assert!(
-        !names.iter().any(|name| name.ends_with("RenderOffstage")),
-        "the pass-through build wraps the child in nothing: {names:?}"
-    );
+    // The fixed chain (ADR-0021 §7k) keeps a transparent `Offstage(offstage: false)`
+    // around the child even out of flight, so its *presence* is no longer the signal.
+    // What matters is that the child is **visible**: an `Offstage` that were still
+    // hiding it would zero the anchor, so the real size is the honest check.
     assert_eq!(
         hero_box_size(&harness, &hero),
         Size::new(px(30.0), px(20.0)),
-        "the child is back, at its own size"
+        "the child is back, at its own size — the Offstage is off, not hiding it"
     );
 }
 
@@ -562,4 +562,115 @@ fn a_hero_outside_any_route_registers_with_nothing_and_still_builds() {
             .any(|name| name.ends_with("RenderSubtreeAnchor")),
         "the hero built, anchor and all: {names:?}"
     );
+}
+
+// ============================================================================
+// U5.2 — the placeholder preserves the child element without a GlobalKey
+// ============================================================================
+
+/// **The D2 decision, made concrete.** A stateful hero child must keep its state when
+/// the hero enters and leaves a flight — Flutter guarantees this with `_HeroState._key`
+/// (`heroes.dart:363`, `:434`), a `GlobalKey`.
+///
+/// FLUI needs no key: `HeroState::build` emits the fixed chain
+/// `SizedBox(size?) → Offstage(show) → child` in **both** the not-in-flight and the
+/// in-flight-keep-child cases (ADR-0021 §7k). The child sits at the same depth under
+/// the same two view types throughout, so reconciliation migrates its element in place
+/// rather than rebuilding it. `create_state` therefore runs exactly once across a whole
+/// flight.
+///
+/// Red-check: revert `HeroState::build` to the old toggling shape (pass-through out of
+/// flight, `SizedBox → Offstage → child` in flight) — the child's depth changes, its
+/// element is rebuilt, and `create_state` runs again.
+#[test]
+fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key() {
+    /// Counts how many times its state is created.
+    #[derive(Clone)]
+    struct Counter(Arc<AtomicUsize>);
+    impl View for Counter {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+    impl StatefulView for Counter {
+        type State = CounterState;
+        fn create_state(&self) -> Self::State {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            CounterState
+        }
+    }
+    struct CounterState;
+    impl ViewState<Counter> for CounterState {
+        fn build(&self, _view: &Counter, _ctx: &dyn BuildContext) -> impl IntoView {
+            SizedBox::new(30.0, 20.0)
+        }
+    }
+
+    #[derive(Clone)]
+    struct Stage {
+        registry: HeroRegistry,
+        creations: Arc<AtomicUsize>,
+    }
+    impl View for Stage {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+    impl StatelessView for Stage {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            HeroScope::new(
+                self.registry.clone(),
+                Center::new().child(Hero::new(tag("a"), Counter(Arc::clone(&self.creations)))),
+            )
+        }
+    }
+
+    let registry = HeroRegistry::new();
+    let creations = Arc::new(AtomicUsize::new(0));
+    let mut harness = mount(Stage {
+        registry: registry.clone(),
+        creations: Arc::clone(&creations),
+    });
+    assert_eq!(creations.load(Ordering::SeqCst), 1, "built once on mount");
+
+    let hero = registry.get(&tag("a")).expect("registered");
+
+    // Into flight, keeping the child (the *from* hero of a push).
+    hero.start_flight(true).expect("measured");
+    harness.tick();
+    assert_eq!(
+        creations.load(Ordering::SeqCst),
+        1,
+        "the child's element migrated into the placeholder — not rebuilt"
+    );
+
+    // And back out.
+    hero.end_flight(false);
+    harness.tick();
+    assert_eq!(
+        creations.load(Ordering::SeqCst),
+        1,
+        "…and migrated back out again, state intact, with no GlobalKey"
+    );
+}
+
+/// A `HeroHandle` kept past its hero's unmount is inert: it names no render node, has
+/// no committed size to freeze, and every driver call is a harmless no-op — the same
+/// stale-capability contract every owned handle in this crate honours.
+///
+/// Red-check: delete `fn detach` from `RenderSubtreeAnchor` — the stale handle keeps a
+/// live `render_id` and `start_flight` on a gone hero returns `Some`.
+#[test]
+fn a_stale_hero_handle_is_inert_after_unmount() {
+    let registry = HeroRegistry::new();
+    let mut harness = mount_stage(&registry, Content::OneHero);
+    let hero = registry.get(&tag("a")).expect("registered");
+    assert!(hero.render_id().is_some());
+
+    harness.swap_root(stage(&registry, Content::Empty));
+
+    assert_eq!(hero.render_id(), None, "no render node");
+    assert_eq!(hero.start_flight(true), None, "nothing to freeze");
+    assert_eq!(hero.placeholder_size(), None, "and it never entered flight");
+    hero.end_flight(false); // must not panic
 }

@@ -283,9 +283,10 @@ Gains: no downcast, no FR-033 change, discovery is `O(heroes in route)`.
 **D1 — Hero does not reparent. The shuttle is a fresh inflation.**
 Loyal to `heroes.dart:1089`. The offstage preservation of the *from* hero's subtree is the contract that matters, and ADR-0020 U5.0's `RenderOffstage` already provides it. Any implementation that instead moves the hero's element into the overlay is a **divergence** and must be rejected in review.
 
-**D2 — No `GlobalKey` in U1–U4; introduce it only with `placeholder_builder` (U5).**
-`_HeroState._key` exists to survive arbitrary wrapper-shape changes. Without `placeholder_builder`, FLUI's `HeroState::build` emits one fixed chain — `SizedBox → Offstage(flag) → child` — whose reconciliation preserves the child without any key. The moment a caller-supplied placeholder can restructure the tree, the `GlobalKey` becomes load-bearing.
-**Red-check that will prove it:** with `placeholder_builder` supported and the `GlobalKey` removed, `hero_child_state_survives_a_placeholder_shape_change` must fail.
+**D2 — No `GlobalKey`; `placeholder_builder` deferred to the public API (was "U5"). Verified in U5.2 (§7k).**
+`_HeroState._key` exists to survive arbitrary wrapper-shape changes. The claim that FLUI needs no key was *aspirational* through U4: `HeroState::build` actually **toggled** shape (pass-through out of flight, `SizedBox → Offstage → child` in flight), which rebuilt a stateful hero child. U5.2 made the claim true — `HeroState::build` now emits the fixed chain `SizedBox(size?) → Offstage(show) → child` in both the not-in-flight and keep-child cases, and `a_hero_child_keeps_its_state_across_a_flight_without_a_global_key` proves reconciliation migrates the child element in place (red-checked by reverting to the toggling shape).
+
+So **no `GlobalKey` is introduced, and none is needed** for the default placeholder. Flutter's `_key` guards only the *caller-supplied `placeholderBuilder`* shape (`heroes.dart:419-420`), which can restructure the tree arbitrarily. `placeholder_builder` is a public-API convenience with no private consumer, so it — and the `GlobalKey` it would force — are deferred to the public-API slice (U6). The future red-check stands: once `placeholder_builder` lands and its `GlobalKey` is removed, a placeholder-shape-change child-state test must fail.
 
 **D3 — The geometry seam (S4) lands first, alone, in `flui-rendering`.**
 It is the only blocker with no widget-layer workaround, it is independently valuable, and it carries render-harness obligations that must not be smuggled into a widget PR.
@@ -316,7 +317,7 @@ Each slice is independently mergeable. Nothing is public before U6.
 | **U3.5** ✅ | **S7 + S8, the half U3 skipped.** Private `HeroTag(Arc<dyn ViewKey>)`, per-route `HeroRegistry` behind an ambient `HeroScope`, `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build), and `HeroFlightManifest` collection in the controller's post-frame callback. S8's `Positioned` claim **verified** (§7h). Still no flight. | `cargo test -p flui-widgets hero`; port-check FR-036 registry entry for `Arc<dyn ViewKey>`. |
 | **U4** ✅ | **Landed 2026-07-10 (§7i).** Private `HeroFlight` + `FlightManager`. `RectTween`, `ProxyAnimation` driving (reversed for a pop), overlay entry insert/remove, `on_tick` re-measure, `IgnorePointer` shuttle inside an inner `Stack` (S8). Push and pop; **no divert** — an existing flight for a tag is ended, not redirected. No `create_rect_tween` / `flight_shuttle_builder` hooks. | `cargo test -p flui-widgets hero`; `port-check`; export guard. |
 | **U5.1** ✅ | **Landed 2026-07-10 (§7j).** Flight divert — all three branches of `_HeroFlight.divert` (push↔pop and same-direction). In-place redirect: one flight, one overlay entry. | `cargo test -p flui-widgets hero`; the divert red-checks in §7j. |
-| **U5.2** | Abort/fade-out (`onTick`'s `_heroOpacity` path — the primitive exists but is untested end-to-end, §7i), `placeholder_builder` + the `GlobalKey` D2 requires. | `cargo test -p flui-widgets hero`. |
+| **U5.2** ✅ | **Landed 2026-07-10 (§7k).** `onTick` fade-out now covered end-to-end (destination lost mid-flight via a rebuild, not offstage). Placeholder is the **fixed chain** — child state preserved with no `GlobalKey` (D2 verified). `placeholder_builder` + its `GlobalKey` deferred to the public API (U6), decision recorded. | `cargo test -p flui-widgets hero`. |
 | **U6** | **Parity + API sign-off gate.** Cross-check every claim against `.flutter/`; decide the public surface (Q8); export; public tests through the prelude; update `docs/PORT.md`, tracker B1.4. | Full battery: `just ci`; `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
 
 ---
@@ -1346,6 +1347,57 @@ reaching it means losing the destination mid-flight, which the harness cannot ye
 without ending the flight. `placeholderBuilder`, `createRectTween` / `flightShuttleBuilder`
 hooks, `Hero.curve`, `userGestureInProgress`, `HeroControllerScope`, and the public API
 remain out of scope.
+
+---
+
+## 7k. U5.2: fade-out end-to-end, and the placeholder/GlobalKey decision (2026-07-10)
+
+### The `onTick` fade-out is now covered end-to-end
+
+§7i shipped the fade-out (`_heroOpacity`, `heroes.dart:687-692`) but could only unit-test
+its primitive: the harness had no way to *lose the destination mid-flight* without
+ending the flight, because flipping the route offstage settles the driving animation.
+
+The seam is a `HeroGate` — a stateful page child that drops its `Hero` on a rebuild
+driven by a stored `RebuildHandle`, leaving the route and its animation untouched. The
+destination hero unmounts, its `RenderSubtreeAnchor` detaches, `bounding_box_in` goes
+`None`, and the next tick arms the fade while the flight lives on.
+`a_destination_lost_mid_flight_fades_out_without_ending_the_flight` and
+`a_faded_out_flight_still_removes_its_entry_when_the_animation_settles` pin both halves
+(entry survives the loss; entry removed only when the driver settles).
+
+### The decision gate: no `GlobalKey`, `placeholder_builder` deferred
+
+The task asked whether the placeholder needs stable subtree identity *beyond* the
+current `Offstage` placeholder — and if so, a `GlobalKey`. Ground truth from source:
+
+* **Nothing crosses an overlay entry** (§1.1, re-confirmed): the shuttle is a fresh
+  inflation of `toHero.child`; the original stays in its route. No cross-overlay
+  reparenting, so no cross-overlay `GlobalKey`.
+* Flutter's `_HeroState._key` (`heroes.dart:363`) preserves the child element across
+  `build` returning different wrapper shapes — but that only bites when a
+  **caller-supplied `placeholderBuilder`** (`:419-420`) restructures the tree. The
+  *default* placeholder (`:427-437`) is a constant chain, and the key is defensive.
+
+So FLUI matches the default by emitting the same constant chain — `SizedBox(size?) →
+Offstage(show) → child` — and preserves the child element **by position, with no key**.
+This was aspirational in D2 until U5.2; it is now real and tested. `placeholder_builder`
+is a public-API convenience with no private consumer, so it and the `GlobalKey` it would
+force are deferred to U6, and D2 is corrected to say exactly that.
+
+### Cost recorded
+
+The fixed chain adds a transparent `SizedBox(unconstrained) → Offstage(offstage: false)`
+around **every** hero child, even at rest — two render nodes per hero, matching
+Flutter's own structure (`:427-437`). `end_flight_restores_child` was updated: the
+child-visible signal is now its real committed size, not the absence of an `Offstage`.
+
+### Still deferred (U6, public API)
+
+`placeholder_builder`, `create_rect_tween` / `flight_shuttle_builder` hooks,
+`Hero.curve` / `reverseCurve`, `HeroControllerScope`, `HeroMode`, and every public
+export. The export guard still rejects `Hero`, `HeroController`, `HeroFlight`,
+`FlightManager`, `Shuttle`, and the handle/registry types.
 
 ---
 

@@ -533,23 +533,41 @@ impl ViewState<Hero> for HeroState {
     /// `render_id()` flicker.
     fn build(&self, view: &Hero, _ctx: &dyn BuildContext) -> impl IntoView {
         let anchor = self.handle.inner.anchor.clone();
-        let Some(size) = self.handle.placeholder_size() else {
-            // Not in flight: a pass-through. Flutter still wraps in an unconstrained
-            // `SizedBox`; that box constrains nothing, so it is omitted.
-            return AnchoredBox::new(anchor, view.child.clone());
-        };
+        let placeholder = self.handle.placeholder_size();
+        let show_placeholder = placeholder.is_some();
 
-        if !self.handle.includes_child() {
-            // `return SizedBox(width: …, height: …);` (`:424`)
+        // `if (showPlaceholder && !_shouldIncludeChild) return SizedBox(w, h);`
+        // (`heroes.dart:423-425`): the destination hero drops its child — the shuttle
+        // carries it — so this branch legitimately changes shape, and the child's
+        // state is not preserved (as in Flutter).
+        if show_placeholder && !self.handle.includes_child() {
+            let size = placeholder.expect("show_placeholder implies a size");
             return AnchoredBox::new(anchor, SizedBox::new(size.width.0, size.height.0));
         }
 
-        // `SizedBox(…, child: Offstage(offstage: true, child: child))` (`:427-437`) —
-        // the source subtree keeps its state while the shuttle flies.
+        // The **fixed chain** — Flutter's `:427-437`, minus `TickerMode` (FLUI has no
+        // ticker gating) and minus the `KeyedSubtree(_key)`:
+        //
+        //   SizedBox(size?) → Offstage(showPlaceholder) → child
+        //
+        // The structure is constant across "not in flight" (`SizedBox::default()`,
+        // unconstrained, `Offstage(false)`) and "in flight, keep child"
+        // (`SizedBox(size)`, `Offstage(true)`). Because the child sits at the same
+        // depth under the same two view types either way, reconciliation preserves its
+        // element — and therefore its state — with **no `GlobalKey`** (ADR-0021 D2).
+        // Flutter's `_key` guards the *caller-supplied `placeholderBuilder`* shape,
+        // which this slice does not support (deferred to the public API, §7k).
+        let sized = match placeholder {
+            Some(size) => SizedBox::new(size.width.0, size.height.0),
+            None => SizedBox::default(),
+        };
         AnchoredBox::new(
             anchor,
-            SizedBox::new(size.width.0, size.height.0)
-                .child(Offstage::new().offstage(true).child(view.child.clone())),
+            sized.child(
+                Offstage::new()
+                    .offstage(show_placeholder)
+                    .child(view.child.clone()),
+            ),
         )
     }
 }
