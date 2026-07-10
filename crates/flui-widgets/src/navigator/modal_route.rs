@@ -78,6 +78,7 @@ use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
 
 use super::binding::{RouteBindingSlot, TransitionGroup};
+use super::hero::{HeroRegistry, HeroScope};
 use super::navigator::NavigatorHandle;
 use super::overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
@@ -157,6 +158,12 @@ struct ModalInner {
     /// `ModalRoute._subtreeKey` (`routes.dart:2268`) — owned from construction,
     /// filled while the page is mounted. ADR-0021 U2, seam 4.
     subtree: RouteSubtreeCell,
+
+    /// Every `Hero` mounted in this route's page, by tag. Flutter builds the
+    /// equivalent map on demand by walking `subtreeContext`'s elements
+    /// (`heroes.dart:279-345`); FLUI's heroes register themselves into this one, so
+    /// no walk and no downcast is ever needed. ADR-0021 U4.
+    heroes: HeroRegistry,
 }
 
 impl ModalInner {
@@ -216,6 +223,7 @@ impl ModalInner {
                 secondary: Arc::clone(&self.secondary),
                 relay: Arc::clone(&self.relay),
                 subtree: self.subtree.clone(),
+                heroes: self.heroes.clone(),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -312,6 +320,7 @@ struct ModalScope {
     secondary: Arc<ProxyAnimation<f32>>,
     relay: Arc<ChangeNotifier>,
     subtree: RouteSubtreeCell,
+    heroes: HeroRegistry,
 }
 
 impl_animated_view!(ModalScope);
@@ -346,7 +355,14 @@ impl ViewState<ModalScope> for ModalScopeState {
         let primary: RouteAnimation = Arc::clone(&view.primary) as RouteAnimation;
         let secondary: RouteAnimation = Arc::clone(&view.secondary) as RouteAnimation;
         let page = (view.page)(ctx, &primary, &secondary);
-        let anchored = RouteSubtreeAnchor::new(view.subtree.clone(), page).boxed();
+        // The `HeroScope` sits **inside** the subtree anchor, so the anchor stays the
+        // route's coordinate root and every hero is a descendant of it — which is what
+        // `transform_to(hero, route_subtree)` needs (`heroes.dart:501-509`).
+        let anchored = RouteSubtreeAnchor::new(
+            view.subtree.clone(),
+            HeroScope::new(view.heroes.clone(), page),
+        )
+        .boxed();
         (view.transitions)(ctx, &primary, &secondary, anchored)
     }
 }
@@ -383,6 +399,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
             primary: Arc::new(ProxyAnimation::new(always_dismissed())),
             secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
             subtree: RouteSubtreeCell::new(),
+            heroes: HeroRegistry::new(),
         });
 
         let content = {
@@ -545,6 +562,12 @@ impl ModalHandle {
     /// `route.secondaryAnimation` (`:1973`) — `0.0`/dismissed while offstage.
     pub(crate) fn secondary_animation(&self) -> RouteAnimation {
         Arc::clone(&self.inner.secondary) as RouteAnimation
+    }
+
+    /// The heroes mounted in this route's page — FLUI's `Hero._allHeroesFor(route)`
+    /// (`heroes.dart:279`), as a registry rather than an element walk.
+    pub(crate) fn heroes(&self) -> HeroRegistry {
+        self.inner.heroes.clone()
     }
 
     /// There is no `maintainState` setter in Flutter — it is an abstract getter a

@@ -764,7 +764,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 19] = [
+    const INTERNAL: [&str; 26] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -790,6 +790,16 @@ fn public_no_internal_route_stack_exports() {
         "FlightDirection",
         "Measurement",
         "RouteSubtree",
+        // ADR-0021 U4: the Hero view and its registry. `Hero` is the one name users
+        // will eventually import, so exporting it early would sign off a surface
+        // (tag type, placeholder builder, shuttle) that has not been designed.
+        "HeroTag",
+        "HeroRegistry",
+        "HeroScope",
+        "HeroHandle",
+        "HeroState",
+        "HeroFlightManifest",
+        "Hero",
     ];
 
     super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);

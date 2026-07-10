@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
+use flui_types::geometry::px;
 use flui_view::prelude::*;
 
 use super::{InsertPosition, OnstagePlan, Overlay, OverlayEntry, OverlayHandle, onstage_plan};
@@ -793,5 +794,98 @@ fn overlay_build_plan_matches_flutters_onstage_loop() {
             build: vec![],
             skip_count: 0
         },
+    );
+}
+
+// ============================================================================
+// ADR-0021 S8 — `Positioned` inside an overlay entry
+// ============================================================================
+
+/// **S8's verification.** ADR-0021 S8 argues, on paper, that a `Positioned` at the
+/// root of an `OverlayEntry` builder must be wrapped in its own `Stack`, because
+/// [`RenderTheater`] deliberately does not run `RenderStack`'s positioned split
+/// (`theater.rs` module docs) — so a bare `Positioned` would have its
+/// `StackParentData` silently dropped and be laid out at the origin.
+///
+/// Flutter's hero flight entry *is* a `Positioned` (`heroes.dart:588`). If this
+/// paper argument were wrong in either direction, the flight entry would land in the
+/// wrong place, so it is checked here before anything relies on it.
+///
+/// Both halves are asserted, because only the pair distinguishes "the inner `Stack`
+/// is doing the work" from "everything positions things anyway":
+///
+/// * inside an inner `Stack`, the `Positioned` is honoured;
+/// * as the entry's direct child, it is **not** — it sits at the origin.
+///
+/// Red-check, as ADR-0021 §5 specifies it: *"remove the inner `Stack`; if it still
+/// passes, the theater is honouring `Positioned` and the ADR is wrong."* Dropping the
+/// `Stack` from case 1 makes its assertion fail — which is the whole content of S8.
+///
+/// Case 2 is the converse, and has no mutation short of giving `RenderTheater` the
+/// full `RenderStack` positioned split; if that ever lands, this test and S8 must be
+/// rewritten rather than the theater reverted.
+#[test]
+fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
+    use crate::{Positioned, Stack, StackFit};
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_types::Point;
+
+    /// The offset of the one `RenderConstrainedBox` (a `SizedBox`) in the tree,
+    /// relative to the render root.
+    fn sized_box_origin(owner: &PipelineOwner) -> Point {
+        let target = owner
+            .render_tree()
+            .iter()
+            .find(|(_, node)| node.debug_name().ends_with("RenderConstrainedBox"))
+            .map(|(id, _)| id)
+            .expect("the entry built a SizedBox");
+        owner
+            .local_to_global(target, Point::ZERO, None)
+            .expect("committed layout")
+    }
+
+    // 1. Wrapped in an inner Stack — S8's proposed shape.
+    let overlay = OverlayHandle::new();
+    let inner_stack = OverlayEntry::new(|_ctx| {
+        Stack::new(vec![
+            Positioned::new(SizedBox::new(20.0, 10.0))
+                .left(40.0)
+                .top(25.0)
+                .into_view()
+                .boxed(),
+        ])
+        .fit(StackFit::Expand)
+        .into_view()
+        .boxed()
+    });
+    overlay.insert(&inner_stack, &InsertPosition::Top);
+    let harness = mount(Overlay::new(overlay.clone()));
+    let positioned = sized_box_origin(&harness.pipeline_owner().read());
+
+    assert_eq!(
+        positioned,
+        Point::new(px(40.0), px(25.0)),
+        "an inner Stack runs the positioned split, so the entry lands where it asked"
+    );
+
+    // 2. The same `Positioned` as the entry's direct child, under the theater.
+    let bare_overlay = OverlayHandle::new();
+    let bare = OverlayEntry::new(|_ctx| {
+        Positioned::new(SizedBox::new(20.0, 10.0))
+            .left(40.0)
+            .top(25.0)
+            .into_view()
+            .boxed()
+    });
+    bare_overlay.insert(&bare, &InsertPosition::Top);
+    let bare_harness = mount(Overlay::new(bare_overlay.clone()));
+    let dropped = sized_box_origin(&bare_harness.pipeline_owner().read());
+
+    assert_eq!(
+        dropped,
+        Point::ZERO,
+        "RenderTheater ignores positioned children (ADR-0020 U5.3), so a bare \
+         Positioned is silently dropped to the origin — this is why S8 requires \
+         the inner Stack, and it is now a fact rather than a paper argument"
     );
 }

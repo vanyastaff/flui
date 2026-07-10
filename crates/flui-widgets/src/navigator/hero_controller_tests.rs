@@ -14,13 +14,16 @@ use std::time::Duration;
 use flui_view::ViewExt;
 use flui_view::prelude::*;
 
+use flui_foundation::ValueKey;
+
+use super::hero::{Hero, HeroTag};
 use super::hero_controller::{FlightDirection, HeroController};
 use super::navigator::{Navigator, NavigatorHandle};
 use super::observer::NavigatorObserver;
 use super::overlay_route::SimpleRoute;
 use super::page_route::{PageRoute, PopupRoute};
-use crate::SizedBox;
 use crate::test_harness::{Harness, PostFrameCapability, mount, mount_with_capabilities};
+use crate::{Center, SizedBox};
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
 /// its `Stack(fit: expand)` — so a route's subtree measures the screen.
@@ -551,4 +554,223 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
     harness.tick();
     assert!(!modal.offstage());
     assert!(controller.measurements().is_empty());
+}
+
+// ============================================================================
+// ADR-0021 U4 — hero discovery and manifests
+// ============================================================================
+
+/// A `PageRoute` whose page is a single `Hero` with `tag_name`, sized `w`x`h`.
+///
+/// `Center` because a `ModalRoute`'s page fills the screen under `Stack(fit: expand)`;
+/// without it every hero would measure 800x600 and the two rects would be
+/// indistinguishable.
+fn hero_page_route(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
+    PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
+        Center::new()
+            .child(Hero::new(
+                HeroTag::new(ValueKey::new(tag_name)),
+                SizedBox::new(w, h),
+            ))
+            .into_view()
+            .boxed()
+    })
+    .transition_duration(TRANSITION)
+}
+
+/// **The composition, end to end.** Two `PageRoute`s share a tag; the post-frame
+/// callback finds both heroes through their routes' registries, measures each in its
+/// own route's coordinate space, and records one manifest.
+///
+/// This is `_startHeroTransition`'s matching loop (`heroes.dart:1014-1060`) with the
+/// flight removed: no overlay entry, no `RectTween`, no shuttle.
+///
+/// The destination's rect is the one that matters: it is measured **while the route is
+/// offstage**, so its animation reads `1.0` and its layout is where the page will
+/// finally rest — not where its entrance transition currently has it.
+///
+/// Red-check (each fails on its own):
+/// * delete `manifests.lock().extend(self.collect_manifests())` from `MeasurementPass::run`;
+/// * make `collect_manifests` fall back to the other route's hero on a tag miss — the
+///   shared tag still resolves here, so this one is pinned by
+///   `controller_ignores_tags_present_on_only_one_route` instead;
+/// * swap the arguments of `transform_to` in `HeroHandle::bounding_box_in` — both rects
+///   collapse to the origin.
+#[test]
+fn controller_collects_matching_tags_and_records_one_manifest() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(hero_page_route("shared", 30.0, 20.0));
+    harness.tick();
+    let from = navigator.current().expect("pushed");
+
+    let _second = navigator.push(hero_page_route("shared", 60.0, 45.0));
+    let to = navigator.current().expect("pushed");
+    harness.tick();
+
+    let manifests = controller.manifests();
+    assert_eq!(manifests.len(), 1, "one shared tag, one manifest");
+
+    let manifest = &manifests[0];
+    assert_eq!(manifest.tag, HeroTag::new(ValueKey::new("shared")));
+    assert_eq!((manifest.from_route, manifest.to_route), (from, to));
+    assert_eq!(manifest.direction, Some(FlightDirection::Push));
+
+    assert_eq!(
+        (manifest.from_rect.width().0, manifest.from_rect.height().0),
+        (30.0, 20.0),
+        "the source hero, in the source route's space"
+    );
+    assert_eq!(
+        (manifest.to_rect.width().0, manifest.to_rect.height().0),
+        (60.0, 45.0),
+        "the destination hero, in the destination route's space"
+    );
+    assert!(manifest.from_rect.is_finite() && manifest.to_rect.is_finite());
+
+    // Both heroes are centred in their own 800x600 route, so neither sits at the
+    // origin — which is what a swapped `transform_to` would produce.
+    assert!(manifest.from_rect.min.x.0 > 0.0 && manifest.from_rect.min.y.0 > 0.0);
+    assert!(manifest.to_rect.min.x.0 > 0.0 && manifest.to_rect.min.y.0 > 0.0);
+}
+
+/// `final toHero = toHeroes[tag]; if (toHero == null) …` (`heroes.dart:1044-1046`) — a
+/// tag on only one route is not a flight.
+///
+/// Red-check: make `collect_manifests` fall back to the other route's hero when a tag
+/// misses (`from_heroes.get(&tag).or_else(|| to_heroes.get(&tag))`, and the mirror) —
+/// an unpaired tag then flies from its own rect to its own rect.
+#[test]
+fn controller_ignores_tags_present_on_only_one_route() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = navigator.push(hero_page_route("only-here", 30.0, 20.0));
+    harness.tick();
+
+    let _second = navigator.push(hero_page_route("only-there", 60.0, 45.0));
+    harness.tick();
+
+    assert_eq!(
+        controller.measurements().len(),
+        1,
+        "the top change was eligible and measured"
+    );
+    assert!(
+        controller.manifests().is_empty(),
+        "but no tag is shared, so nothing would fly: {:?}",
+        controller.manifests()
+    );
+}
+
+/// A hero that leaves its route before the measuring frame takes its tag with it, so
+/// no flight is prepared for it.
+///
+/// The source route is rebuilt without its hero between the top change and the frame
+/// that measures; `HeroState::dispose` deregisters it, and the route's registry — the
+/// thing `collect_manifests` reads — is empty by the time the post-frame callback runs.
+///
+/// The assertion is on the **registry**, not only on `manifests()`. Two independent
+/// guards keep an absent hero from flying (the tag lookup, and `bounding_box_in`
+/// answering `None` for a detached node), so no single mutation reddens
+/// `manifests().is_empty()` — a test that asserted only that would pass with the
+/// deregistration deleted.
+///
+/// # What is *not* claimed
+///
+/// `collect_manifests` also bails when a route has no `RouteSubtree` and when
+/// `bounding_box_in` answers `None`. Neither is reachable end-to-end today: by the time
+/// the post-frame callback runs, both routes have built and laid out in that same
+/// frame, and an unmounted hero has already deregistered. Both are ported because
+/// Flutter's `_boundingBoxFor` asserts `box.hasSize` there and would crash, and both
+/// are pinned where they *are* testable —
+/// `hero_tests::{an_unmounted_hero_measures_to_none, a_hero_bounding_box_is_none_before_layout_commits}`
+/// and `a_non_finite_rect_is_never_flown`.
+///
+/// Red-check: delete `registry.deregister(…)` from `HeroState::dispose`.
+#[test]
+fn controller_skips_a_hero_that_left_its_route_before_the_measuring_frame() {
+    use std::sync::atomic::AtomicBool;
+
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    // The source page shows its hero only while `keep_hero` is set.
+    let keep_hero = Arc::new(AtomicBool::new(true));
+    let keep_for_page = Arc::clone(&keep_hero);
+    let source = PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
+        if keep_for_page.load(Ordering::SeqCst) {
+            Center::new()
+                .child(Hero::new(
+                    HeroTag::new(ValueKey::new("shared")),
+                    SizedBox::new(30.0, 20.0),
+                ))
+                .into_view()
+                .boxed()
+        } else {
+            Center::new()
+                .child(SizedBox::new(30.0, 20.0))
+                .into_view()
+                .boxed()
+        }
+    })
+    .transition_duration(TRANSITION);
+    let source_modal = source.modal_handle();
+    let _first = navigator.push(source);
+    harness.tick();
+
+    // Drop the hero, and dirty the source's overlay entry so the same frame that
+    // measures also rebuilds it without the hero.
+    keep_hero.store(false, Ordering::SeqCst);
+    source_modal.set_maintain_state(false);
+
+    let _second = navigator.push(hero_page_route("shared", 60.0, 45.0));
+    harness.tick();
+
+    assert_eq!(controller.measurements().len(), 1, "it still measured");
+    let source_registry = navigator
+        .route_modal(navigator.route_ids()[1])
+        .expect("the source is a ModalRoute")
+        .heroes();
+    assert_eq!(
+        source_registry.len(),
+        0,
+        "the departed hero deregistered from its route"
+    );
+    assert!(
+        controller.manifests().is_empty(),
+        "so the tag is unpaired and nothing would fly: {:?}",
+        controller.manifests()
+    );
+}
+
+/// `_HeroFlightManifest.isValid` (`heroes.dart:530`):
+/// `toHeroLocation.isFinite && (isDiverted || fromHeroLocation.isFinite)`.
+///
+/// Unit-tested directly, because no reachable FLUI configuration produces a non-finite
+/// rect today — every rect comes from `box_size` and `transform_to`. Asserting it
+/// end-to-end would assert nothing. See `is_valid_flight`'s docs.
+///
+/// Red-check: `to_rect.is_finite() || from_rect.is_finite()` in `is_valid_flight`.
+#[test]
+fn a_non_finite_rect_is_never_flown() {
+    use super::hero_controller::is_valid_flight;
+    use flui_geometry::Rect;
+    use flui_types::geometry::px;
+
+    let finite = Rect::from_ltwh(px(0.0), px(0.0), px(10.0), px(10.0));
+    let infinite = Rect::from_ltwh(px(0.0), px(0.0), px(f32::INFINITY), px(10.0));
+    let nan = Rect::from_ltwh(px(f32::NAN), px(0.0), px(10.0), px(10.0));
+
+    assert!(is_valid_flight(finite, finite));
+    assert!(!is_valid_flight(infinite, finite), "an infinite source");
+    assert!(
+        !is_valid_flight(finite, infinite),
+        "an infinite destination"
+    );
+    assert!(!is_valid_flight(nan, finite), "a NaN origin");
 }

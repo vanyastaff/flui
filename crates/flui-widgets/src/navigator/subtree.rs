@@ -205,10 +205,24 @@ impl ViewState<RouteSubtreeAnchor> for RouteSubtreeAnchorState {
 }
 
 /// The render half: a transparent proxy whose only job is to have a `RenderId`.
+///
+/// `pub(crate)` since ADR-0021 U4: a `Hero` needs exactly this — a render node it can
+/// name — and duplicating it would mean a second `RenderSubtreeAnchor` wrapper with
+/// the same body and a different name.
 #[derive(Debug, Clone)]
-struct AnchoredBox {
+pub(crate) struct AnchoredBox {
     anchor: SubtreeAnchor,
     child: Child,
+}
+
+impl AnchoredBox {
+    /// Anchor `child` into `anchor`, publishing the render node's id while mounted.
+    pub(crate) fn new(anchor: SubtreeAnchor, child: impl IntoView) -> Self {
+        Self {
+            anchor,
+            child: Child::some(child.into_view()),
+        }
+    }
 }
 
 impl RenderView for AnchoredBox {

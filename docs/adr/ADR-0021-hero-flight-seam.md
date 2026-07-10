@@ -312,8 +312,9 @@ Each slice is independently mergeable. Nothing is public before U6.
 | **U1** ✅ | **S4, alone.** Landed 2026-07-10 — see §7a for two corrections to this row. `RenderObject::apply_paint_transform` (default = `paint_transform` ∘ translate-by-committed-offset) + overrides on `RenderFractionalTranslation` and `RenderFlow` (**not** the four named here) + `PipelineOwner::transform_to(descendant, ancestor)` + production `box_size`. `local_to_global`/`global_to_local` moved **off** the `RenderBox` trait onto `PipelineOwner`. No Hero, no widgets. | `cargo test -p flui-rendering`; `cargo test -p flui-objects --test render_object_harness`; new `harness_*_paint_transform` assertions on `RenderTransform`, `RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`; `just clippy`; `port-check`. |
 | **U1.5** ✅ | **Landed 2026-07-10 (§7c).** `Scheduler::{drive_frame, end_frame, abort_frame}`; the async-driver poll moved into `handle_begin_frame` (ADR-0018 corrected). Both frame drivers share one ordering. |
 | **U2** | **S1 + S2 + S3 + S5 + S6.** Observer↔navigator attachment; route introspection by id; `RouteSubtree` publication from `ModalScope::init_state`; `overlay_handle` reachable; `PostFrameHandle`. **Unblocked by U1.5.** `PostFrameHandle` must resolve to the *binding's* scheduler, not a global (§7c). Still no Hero. | `cargo test -p flui-widgets navigator`; the existing 98 navigator tests must not regress; new tests per §6. |
-| **U3** | **D4 + S7 + S8.** `ModalRoute` primary animation proxy; `set_offstage` drives it. Private `HeroRegistry` + `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build). Verify S8's `Positioned` claim. No controller, no flight yet: a `Hero` is a pass-through that can be told to show a placeholder. | `cargo test -p flui-widgets hero`; `cargo test -p flui-widgets navigator`; port-check FR-036 entry for `Arc<dyn ViewKey>`. |
-| **U4** | Private `HeroController` + `HeroFlight` + `HeroFlightManifest`. Rect tween, `ProxyAnimation` driving, overlay entry insert/remove, `on_tick` re-measure, `create_rect_tween` and `flight_shuttle_builder` hooks (private). Push and pop only; no divert, no gestures. | `cargo test -p flui-widgets hero`; end-to-end through a real `Vsync` as `tests/routes.rs` does. |
+| **U3** ✅ | **D4, and the controller skeleton — see §7g and §7h.** `ModalRoute` primary + secondary animation proxies; `set_offstage` drives them. Private `HeroController` (`didChangeTop` → offstage → post-frame → measure). **This row's original content was `HeroRegistry` + `Hero` + `HeroHandle`, with "no controller"; it landed the other way round.** §7h records why and what it cost. |
+| **U3.5** ✅ | **S7 + S8, the half U3 skipped.** Private `HeroTag(Arc<dyn ViewKey>)`, per-route `HeroRegistry` behind an ambient `HeroScope`, `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build), and `HeroFlightManifest` collection in the controller's post-frame callback. S8's `Positioned` claim **verified** (§7h). Still no flight. | `cargo test -p flui-widgets hero`; port-check FR-036 registry entry for `Arc<dyn ViewKey>`. |
+| **U4** | Private `HeroFlight`. Rect tween, `ProxyAnimation` driving, overlay entry insert/remove, `on_tick` re-measure, `create_rect_tween` and `flight_shuttle_builder` hooks (private). Push and pop only; no divert, no gestures. The manifest it consumes already exists. | `cargo test -p flui-widgets hero`; end-to-end through a real `Vsync` as `tests/routes.rs` does. |
 | **U5** | Flight divert (push interrupted by pop, and the three-way cases at `heroes.dart:739-813`), abort/fade-out (`onTick`'s `_heroOpacity` path), `placeholder_builder` + the `GlobalKey` D2 requires. | `cargo test -p flui-widgets hero`; the divert oracles in §6. |
 | **U6** | **Parity + API sign-off gate.** Cross-check every claim against `.flutter/`; decide the public surface (Q8); export; public tests through the prelude; update `docs/PORT.md`, tracker B1.4. | Full battery: `just ci`; `cargo test -p flui-widgets --test hero_public`; `RUSTDOCFLAGS="-D warnings" cargo doc`; `port-check -v`. |
 
@@ -393,7 +394,7 @@ Every row names the **red-check**: a change to the implementation that must turn
 **Derived, not yet proven:**
 - **D-1.** Cross-overlay-entry `GlobalKey` migration works, because overlay entries are ordinary siblings in one `ElementTree` (Q1). Not needed by Hero; test named if it ever is.
 - **D-2.** The shuttle's `ViewState` will not be shared with the original child, so a stateful hero child resets inside the flight (Q2). Flutter behaves the same way; worth an explicit test at U4.
-- **D-3.** `Positioned` inside an overlay entry is handled by an inner `Stack` (S8). **A paper argument.** Must be checked before U3.
+- **D-3.** `Positioned` inside an overlay entry is handled by an inner `Stack` (S8). ~~**A paper argument.** Must be checked before U3.~~ **Verified 2026-07-10** (§7h): both halves hold — the inner `Stack` positions, and a bare `Positioned` under `RenderTheater` is dropped to the origin. No longer a paper argument.
 
 **Unknown — each must be answered by an experiment, not an assumption:**
 - ~~**UNKNOWN-1.**~~ **Answered `NO` (§7b).** `pump_frame` never drains post-frame callbacks at all; the runner drains them *before* build/layout/paint. Nothing registers the pipeline as a persistent frame callback, where Flutter registers exactly that (`rendering/binding.dart:61`, `:557-558`). **Blocks U2** until the proposed **U1.5** binding seam lands.
@@ -1114,6 +1115,105 @@ reachable configuration, not a mock — and pins that a fully eligible `PageRout
   the navigator that attached it. B1.4 stays open.
 * The four introspection methods and `ModalHandle` carry `#[allow(dead_code)]` naming
   U4's `Hero` widget as the first production consumer.
+
+---
+
+## 7h. U3.5: the hero registry, the `Hero` view, and manifests (2026-07-10)
+
+### The sequencing in §5 was wrong, and this records it rather than quietly reordering
+
+§5's **U3** row read: *"Private `HeroRegistry` + `Hero` view + `HeroHandle` … **No controller**, no flight yet."* and **U4** read: *"Private `HeroController` + `HeroFlight` + `HeroFlightManifest`."*
+
+U3 landed the animation proxies and the **controller**, and no registry at all. The
+controller was buildable first because everything it needed — `PostFrameHandle`,
+`RouteSubtree`, `route_modal`, notification outside the history lock — had landed in
+U2 and §7f, while the registry needed nothing from them. So the dependency arrow the
+ADR drew (registry → controller) did not exist; the real one (seams → controller) did.
+
+The cost was a controller that could measure a *route* and not a *hero*: §7g's
+`Measurement` records the destination route's size and transform, which is exactly the
+prologue of `_startHeroTransition` and none of its body. This slice fills the gap, and
+§5 now carries a **U3.5** row rather than pretending U3 did what it said.
+
+### Registration inverts `_allHeroesFor`
+
+`Hero._allHeroesFor` (`heroes.dart:279-345`) walks a route's element subtree, tests
+`widget is Hero`, and reads `hero.state as _HeroState`. FLUI can do neither half: the
+downcast from `&dyn View` is what FR-033 forbids, and an element walk from an observer
+callback is what §7f spent a commit removing.
+
+So each `Hero` **registers itself** with the nearest enclosing `HeroScope` — an
+`InheritedView`, the same ambient pattern `VsyncScope` uses — in `init_state`, and
+deregisters in `dispose`. The registry lives on `ModalInner`, so the controller reaches
+it by `RouteId` through `ModalHandle::heroes()` and reads it as pure data. No
+`GlobalKey`, no tree re-entry, no downcast.
+
+Two consequences, recorded rather than hidden:
+
+* **Registration order, not tree order.** Nothing in the flight algorithm iterates
+  positionally — it looks tags up — so this is a difference without an observable.
+* **Flutter's `Navigator.of(hero) == navigator` check (`:322`) is structural here.** A
+  hero finds *its* nearest `HeroScope`, so it cannot register with another route.
+
+### `HeroTag` is `Arc<dyn ViewKey>`, and adds no downcast
+
+A tag is Flutter's `Object`, compared with `==` and used as a map key. `ViewKey` is the
+framework's existing erased key trait and already provides `key_eq` / `key_hash`, so
+`HeroTag` delegates `Eq`/`Hash` to the trait and **never calls `ViewKey::as_any`**.
+FR-033 is untouched; the `Arc<dyn ViewKey>` boundary is documented in port-check trigger
+#9's registry under the pre-existing `ViewKey` surface. Verified by mutation: renaming
+the trait to an unsanctioned one makes trigger #9 fire.
+
+### Duplicate tags: log, keep the **first**, never panic (D8, answered)
+
+Flutter throws inside an `assert` (`:287-305`) — debug-only — and in release
+`result[tag] = heroState` silently keeps the **last**. FLUI logs and keeps the first: a
+duplicate tag is a *caller* mistake, so PANIC-POLICY forbids the `expect("BUG: …")` D8
+floated, and last-wins would make the survivor depend on mount order. The rejected
+duplicate is also inert on unmount — `deregister` checks `Arc::ptr_eq`, not tag
+equality, so the loser cannot evict the winner. That second half is the one a naive port
+gets wrong, and it has its own red-check.
+
+### S8 verified, in both directions
+
+`positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack`:
+
+* wrapped in an inner `Stack`, a `Positioned` lands at `(40, 25)`;
+* as the entry's **direct child**, it lands at the origin — `RenderTheater` drops its
+  `StackParentData`, exactly as ADR-0020 U5.3 said it would.
+
+D-3 is no longer a paper argument. The flight entry must wrap its `Positioned` in a
+`Stack`.
+
+### What the manifests are, and what they are not
+
+`HeroFlightManifest` carries `tag`, `direction`, both `RouteId`s, and both bounding
+boxes — each in its **own route's** coordinate space, as `fromHeroLocation` /
+`toHeroLocation` are (`:514`, `:520`), via `transform_to(hero, route_subtree)`. The
+destination rect is measured while the route is offstage, so it is where the page will
+finally rest.
+
+They are **recorded, never flown**. There is no `RectTween`, no overlay entry, no
+shuttle, no `ProxyAnimation` driving, no `HeroFlight`.
+
+### Two guards that are defensive, and are labelled as such
+
+`collect_manifests` skips a tag when a route has no `RouteSubtree`, and when
+`bounding_box_in` answers `None`; `is_valid_flight` skips a non-finite rect
+(`isValid`, `:530`). None of the three is reachable end-to-end today — by the time the
+post-frame callback runs both routes have built and laid out, an unmounted hero has
+already deregistered, and every rect comes from `box_size`. They are ported because
+Flutter asserts in those places and would crash, and they are pinned where they *are*
+testable: at the `HeroHandle` and `is_valid_flight` level. Claiming an end-to-end
+red-check for them would have been claiming a test that asserts nothing.
+
+### Still not implemented, not claimed
+
+No public `Hero`, no prelude export (`public_no_internal_route_stack_exports` now fails
+if `Hero`, `HeroTag`, `HeroRegistry`, `HeroScope`, `HeroHandle`, `HeroState` or
+`HeroFlightManifest` is exported). No `HeroControllerScope`, no `HeroMode`, no
+`placeholderBuilder`, no `transitionOnUserGestures`, no `createRectTween`, no
+`flightShuttleBuilder`, no `TickerMode`, no nested-navigator support, no flight.
 
 ---
 

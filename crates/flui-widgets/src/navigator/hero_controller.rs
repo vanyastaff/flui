@@ -15,7 +15,8 @@
 //!   port is tempted to reach for and which fire for routes that never become the
 //!   top one;
 //! * `_maybeStartHeroTransition` (`:911-976`) → [`HeroController::maybe_start`];
-//! * `_startHeroTransition`'s prologue (`:979-1012`) → [`HeroController::measure`].
+//! * `_startHeroTransition`'s prologue and matching loop (`:979-1060`) →
+//!   [`MeasurementPass`].
 //!
 //! The whole design rests on one comment (`:964-966`):
 //!
@@ -68,11 +69,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_animation::AnimationStatus;
-use flui_geometry::Matrix4;
+use flui_geometry::{Matrix4, Rect};
 use flui_types::Size;
 use parking_lot::Mutex;
 
 use super::binding::TransitionGroup;
+use super::hero::HeroTag;
 use super::modal_route::ModalHandle;
 use super::navigator::NavigatorHandle;
 use super::observer::NavigatorObserver;
@@ -129,6 +131,45 @@ pub(crate) struct Measurement {
     pub(crate) to_animation_while_offstage: f32,
 }
 
+/// `_HeroFlightManifest.isValid` (`heroes.dart:530`):
+///
+/// ```dart
+/// late final bool isValid = toHeroLocation.isFinite && (isDiverted || fromHeroLocation.isFinite);
+/// ```
+///
+/// There is no diversion yet, so both rects must be finite. A non-finite rect would
+/// make the future `RectTween` interpolate `NaN`/`Infinity` and paint the shuttle
+/// nowhere.
+///
+/// **Defensive, and known to be so.** Every rect here is built from
+/// `PipelineOwner::box_size` and `transform_to`, and no reachable FLUI configuration
+/// produces a non-finite one today — an unlaid-out hero is `None`, not infinite. The
+/// guard is ported because `isValid` exists in Flutter and because a future
+/// `RenderTransform` with a degenerate matrix would reach it. It is unit-tested
+/// directly rather than pretended to be exercised end-to-end.
+pub(crate) fn is_valid_flight(from_rect: Rect, to_rect: Rect) -> bool {
+    to_rect.is_finite() && from_rect.is_finite()
+}
+
+/// Everything known about a flight that *would* start, for one tag.
+///
+/// Flutter's `_HeroFlightManifest` (`heroes.dart:442-455`), minus everything a flight
+/// needs and a measurement does not: no `overlay`, no `createRectTween`, no
+/// `shuttleBuilder`, no `isDiverted`. Both rects are in their own route's coordinate
+/// space, as `fromHeroLocation` / `toHeroLocation` are (`:514`, `:520`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HeroFlightManifest {
+    pub(crate) tag: HeroTag,
+    /// `None` when neither route was animating; see [`FlightDirection::classify`].
+    pub(crate) direction: Option<FlightDirection>,
+    pub(crate) from_route: RouteId,
+    pub(crate) to_route: RouteId,
+    /// `fromHero`'s bounding box in `fromRoute`'s coordinate space (`:514`).
+    pub(crate) from_rect: Rect,
+    /// `toHero`'s bounding box in `toRoute`'s coordinate space (`:520`).
+    pub(crate) to_rect: Rect,
+}
+
 /// Watches a navigator and measures where a hero flight *would* land.
 ///
 /// Install with [`NavigatorHandle::add_observer`]. Holds no `GlobalKey`, reads no
@@ -145,6 +186,8 @@ pub(crate) struct HeroController {
     scheduled: Arc<AtomicUsize>,
     /// What those callbacks resolved, in order.
     measurements: Arc<Mutex<Vec<Measurement>>>,
+    /// One per tag that both routes share and that measured to a finite rect.
+    manifests: Arc<Mutex<Vec<HeroFlightManifest>>>,
 }
 
 impl HeroController {
@@ -165,6 +208,11 @@ impl HeroController {
     /// Everything the post-frame callbacks resolved, in order.
     pub(crate) fn measurements(&self) -> Vec<Measurement> {
         self.measurements.lock().clone()
+    }
+
+    /// The flights that *would* start, one per shared tag. Recorded, never flown.
+    pub(crate) fn manifests(&self) -> Vec<HeroFlightManifest> {
+        self.manifests.lock().clone()
     }
 
     /// Flutter's `_maybeStartHeroTransition` (`heroes.dart:892-976`), reduced to the
@@ -236,8 +284,17 @@ impl HeroController {
 
         self.scheduled.fetch_add(1, Ordering::SeqCst);
         let measurements = Arc::clone(&self.measurements);
+        let manifests = Arc::clone(&self.manifests);
         post_frame.schedule(move |_timing| {
-            Self::measure(&navigator, &destination, from, to, direction, &measurements);
+            let pass = MeasurementPass {
+                navigator: &navigator,
+                source: &source,
+                destination: &destination,
+                from,
+                to,
+                direction,
+            };
+            pass.run(&measurements, &manifests);
         });
     }
 
@@ -250,40 +307,54 @@ impl HeroController {
             .route_peer(route)
             .is_some_and(|peer| peer.group == TransitionGroup::Page)
     }
+}
 
-    /// The prologue of `_startHeroTransition` (`heroes.dart:978-1030`): put the
-    /// destination back onstage, then read the geometry the offstage frame committed.
-    ///
-    /// This runs in the **post-frame** phase of the frame the offstage flip dirtied,
-    /// so `box_size` and `transform_to` answer against committed layout (ADR-0021
-    /// §7c). Reading them from `did_push` instead would answer `None`, or worse,
-    /// answer with the *previous* frame's geometry.
-    fn measure(
-        navigator: &NavigatorHandle,
-        destination: &ModalHandle,
-        from: RouteId,
-        to: RouteId,
-        direction: Option<FlightDirection>,
+/// One scheduled measurement, with everything it captured at schedule time.
+///
+/// This is the prologue of `_startHeroTransition` (`heroes.dart:979-1060`): put the
+/// destination back onstage, read the geometry the offstage frame committed, and match
+/// the two routes' heroes by tag.
+///
+/// It runs in the **post-frame** phase of the frame the offstage flip dirtied, so
+/// `box_size` and `transform_to` answer against committed layout (ADR-0021 §7c).
+/// Reading them from `did_change_top` instead would answer `None`, or worse, answer
+/// with the *previous* frame's geometry.
+///
+/// A struct rather than a seven-argument function: it is the closure's payload, and
+/// each field is one thing Flutter reads off `_HeroFlightManifest`.
+struct MeasurementPass<'a> {
+    navigator: &'a NavigatorHandle,
+    source: &'a ModalHandle,
+    destination: &'a ModalHandle,
+    from: RouteId,
+    to: RouteId,
+    direction: Option<FlightDirection>,
+}
+
+impl MeasurementPass<'_> {
+    fn run(
+        &self,
         measurements: &Mutex<Vec<Measurement>>,
+        manifests: &Mutex<Vec<HeroFlightManifest>>,
     ) {
         // `if (fromRoute.navigator == null || toRoute.navigator == null) return;`
         // (`:969-972`) — the navigator may have left the tree while we waited.
-        if !navigator.is_mounted() {
+        if !self.navigator.is_mounted() {
             return;
         }
 
         // Read before restoring: this is the value the frame under measurement
         // actually laid out with.
-        let to_animation_while_offstage = destination.primary_animation().value();
+        let to_animation_while_offstage = self.destination.primary_animation().value();
 
         // `to.offstage = false;` (`:987`). Geometry stays committed until the next
         // layout, so measuring after this is safe — and it is what Flutter does.
-        destination.set_offstage(false);
+        self.destination.set_offstage(false);
 
-        let subtree = navigator.route_subtree(to);
-        let owner = navigator.render_tree();
+        let to_subtree = self.navigator.route_subtree(self.to);
+        let owner = self.navigator.render_tree();
 
-        let (to_size, to_transform) = match (subtree, owner) {
+        let (to_size, to_transform) = match (to_subtree, owner) {
             (Some(subtree), Some(owner)) => {
                 let owner = owner.read();
                 let transform = owner
@@ -297,13 +368,67 @@ impl HeroController {
         };
 
         measurements.lock().push(Measurement {
-            direction,
-            from,
-            to,
+            direction: self.direction,
+            from: self.from,
+            to: self.to,
             to_size,
             to_transform,
             to_animation_while_offstage,
         });
+
+        manifests.lock().extend(self.collect_manifests());
+    }
+
+    /// `_startHeroTransition`'s matching loop (`heroes.dart:1014-1060`), reduced to
+    /// what a measurement needs: every tag both routes carry, with both bounding boxes
+    /// resolved in their own route's coordinate space.
+    ///
+    /// Flutter walks `fromHeroes.entries` and looks each tag up in `toHeroes`; a tag
+    /// on only one side has no flight (`:1044-1046` — `toHero == null` ⇒ `endFlight`).
+    /// Nothing here depends on iteration order.
+    fn collect_manifests(&self) -> Vec<HeroFlightManifest> {
+        let Some(from_subtree) = self.navigator.route_subtree(self.from) else {
+            return Vec::new();
+        };
+        let Some(to_subtree) = self.navigator.route_subtree(self.to) else {
+            return Vec::new();
+        };
+
+        let from_heroes = self.source.heroes();
+        let to_heroes = self.destination.heroes();
+
+        let mut manifests = Vec::new();
+        for tag in from_heroes.tags() {
+            let (Some(from_hero), Some(to_hero)) = (from_heroes.get(&tag), to_heroes.get(&tag))
+            else {
+                continue; // A tag on only one route is not a flight.
+            };
+
+            let (Some(from_rect), Some(to_rect)) = (
+                from_hero.bounding_box_in(from_subtree.render_id),
+                to_hero.bounding_box_in(to_subtree.render_id),
+            ) else {
+                // Unmounted, or never laid out. Flutter asserts `box.hasSize` here and
+                // crashes; a hero on a route that never built simply does not fly.
+                tracing::debug!(?tag, "hero is not measurable; no flight");
+                continue;
+            };
+
+            if !is_valid_flight(from_rect, to_rect) {
+                tracing::warn!(?tag, "hero flight rect is not finite; skipping");
+                continue;
+            }
+
+            manifests.push(HeroFlightManifest {
+                tag,
+                direction: self.direction,
+                from_route: self.from,
+                to_route: self.to,
+                from_rect,
+                to_rect,
+            });
+        }
+        manifests
     }
 }
 

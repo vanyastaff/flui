@@ -1121,6 +1121,12 @@ fi
 #      perform_layout_raw API per-protocol.
 #   Pre-existing surfaces: ViewKey, BuildContext, Notification,
 #                          NotifiableElement, RenderObject, RenderObjectTrait
+#   ADR-0021 U4: `HeroTag(Arc<dyn ViewKey>)` in flui-widgets. A hero's tag is
+#   Flutter's `Object` tag (`heroes.dart:286-309`), compared with `==` and used as a
+#   map key. `ViewKey` is the framework's existing erased key trait and already
+#   provides `key_eq` / `key_hash`, so `HeroTag` derives its `Eq`/`Hash` from the
+#   trait and NEVER calls `ViewKey::as_any` — no downcast, so FR-033 is untouched.
+#   Registered under the pre-existing `ViewKey` surface rather than a new one.
 #   Framework trait surfaces (gesture / focus / delegate / parent-data /
 #   clipper / binding patterns — widely-used reference shapes; their
 #   owned-storage uses sit on sanctioned FR-029 categories):
