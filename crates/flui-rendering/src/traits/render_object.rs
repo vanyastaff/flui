@@ -479,6 +479,61 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         None
     }
 
+    /// Composes onto `transform` the mapping from child `child`'s local
+    /// coordinate space into **this** object's local coordinate space.
+    ///
+    /// Flutter's `RenderObject.applyPaintTransform` (`object.dart:3639`), whose
+    /// `RenderBox` override translates by the child's `BoxParentData.offset`
+    /// (`box.dart:3014`). It is what [`PipelineOwner::transform_to`] composes at
+    /// every step of an ancestor walk.
+    ///
+    /// # Why the extra parameters
+    ///
+    /// A Flutter render object owns its children and their parent data, so
+    /// `applyPaintTransform(child, transform)` can read the offset off the child.
+    /// A FLUI render object owns neither: children live in the
+    /// [`RenderTree`](crate::storage::RenderTree) and geometry lives in
+    /// [`RenderState`](crate::storage::RenderState). The pipeline therefore hands
+    /// in what the object cannot reach — the child's committed paint offset and
+    /// this node's own laid-out size.
+    ///
+    /// # The default is the paint pipeline's own composition
+    ///
+    /// `paint_subtree_impl` wraps children in [`paint_transform`]'s layer and then
+    /// paints each child at its committed offset, so child-local → parent-local is
+    /// `paint_transform · translate(child_offset)`. The default body is exactly
+    /// that, which means every object whose paint follows the pipeline's default
+    /// path gets a correct transform **without overriding anything**.
+    ///
+    /// Override only when paint *deviates*: an object that calls
+    /// `PaintCx::paint_child_at` (an `offset_override`, so the committed offset is
+    /// not what paints) or that pushes a per-child transform scope. In this
+    /// repository that is `RenderFractionalTranslation` and `RenderFlow`.
+    ///
+    /// # Convention
+    ///
+    /// Compose on the **right**: `*transform *= step`. `transform`
+    /// maps this object's local space into some outer ancestor's; the step maps
+    /// the child's into this object's. Do **not** use [`Matrix4::translate`],
+    /// which pre-multiplies.
+    ///
+    /// [`paint_transform`]: RenderObject::paint_transform
+    /// [`PipelineOwner::transform_to`]: crate::pipeline::PipelineOwner::transform_to
+    /// [`Matrix4::translate`]: flui_types::Matrix4::translate
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        let _ = child;
+        if let Some(matrix) = self.paint_transform(size) {
+            *transform *= matrix;
+        }
+        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+    }
+
     /// Returns the transform matrix for hit testing.
     ///
     /// If `Some(matrix)`, the hit-test pipeline pushes this transform

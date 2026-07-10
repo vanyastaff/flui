@@ -103,7 +103,7 @@ What exists:
 - `Matrix4::transform_rect` (`flui-geometry/src/matrix4.rs:456`).
 
 What is missing:
-- **No per-render-object `applyPaintTransform`.** The only `apply_paint_transform` in the tree is on `RenderView` (`view/render_view.rs:411`) — the root. A parent that paints its child through a matrix (`RenderTransform`, `RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`) contributes nothing to any accumulation today.
+- **No per-render-object `applyPaintTransform`.** The only `apply_paint_transform` in the tree is on `RenderView` (`view/render_view.rs:411`) — the root. A parent that paints its child through a matrix (`RenderTransform`, `RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`) contributes nothing to any accumulation today. *(U1 correction, §7a: three of those four already expose `paint_transform`, which the new default consults; the real overrides are `RenderFractionalTranslation` and `RenderFlow`.)*
 - **`RenderBox::local_to_global` / `global_to_local` are identity stubs** (`traits/render_box.rs:192-199`): they return the point unchanged.
 - **No `getTransformTo(ancestor)`** in any form.
 - `box_geometry(owner, id)` — the only size reader — lives in `flui_rendering::testing`, which is `#[cfg(any(test, feature = "testing"))]` (`lib.rs:103-104`). Production code cannot call it.
@@ -309,7 +309,7 @@ Each slice is independently mergeable. Nothing is public before U6.
 
 | Slice | Content | Gate |
 |---|---|---|
-| **U1** | **S4, alone.** `RenderObject::apply_paint_transform` (default = translate by committed offset) + overrides on the four transforming box objects + `PipelineOwner::transform_to(descendant, ancestor)` + production `box_size`. Real `RenderBox::{local_to_global, global_to_local}`. No Hero, no widgets. | `cargo test -p flui-rendering`; `cargo test -p flui-objects --test render_object_harness`; new `harness_*_paint_transform` assertions on `RenderTransform`, `RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`; `just clippy`; `port-check`. |
+| **U1** ✅ | **S4, alone.** Landed 2026-07-10 — see §7a for two corrections to this row. `RenderObject::apply_paint_transform` (default = `paint_transform` ∘ translate-by-committed-offset) + overrides on `RenderFractionalTranslation` and `RenderFlow` (**not** the four named here) + `PipelineOwner::transform_to(descendant, ancestor)` + production `box_size`. `local_to_global`/`global_to_local` moved **off** the `RenderBox` trait onto `PipelineOwner`. No Hero, no widgets. | `cargo test -p flui-rendering`; `cargo test -p flui-objects --test render_object_harness`; new `harness_*_paint_transform` assertions on `RenderTransform`, `RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`; `just clippy`; `port-check`. |
 | **U2** | **S1 + S2 + S3 + S5 + S6.** Observer↔navigator attachment; route introspection by id; `RouteSubtree` publication from `ModalScope::init_state`; `overlay_handle` reachable; `PostFrameHandle`. Answer **UNKNOWN-1** first. Still no Hero. | `cargo test -p flui-widgets navigator`; the existing 98 navigator tests must not regress; new tests per §6. |
 | **U3** | **D4 + S7 + S8.** `ModalRoute` primary animation proxy; `set_offstage` drives it. Private `HeroRegistry` + `Hero` view + `HeroHandle` (`start_flight`/`end_flight`, placeholder-`Offstage` build). Verify S8's `Positioned` claim. No controller, no flight yet: a `Hero` is a pass-through that can be told to show a placeholder. | `cargo test -p flui-widgets hero`; `cargo test -p flui-widgets navigator`; port-check FR-036 entry for `Arc<dyn ViewKey>`. |
 | **U4** | Private `HeroController` + `HeroFlight` + `HeroFlightManifest`. Rect tween, `ProxyAnimation` driving, overlay entry insert/remove, `on_tick` re-measure, `create_rect_tween` and `flight_shuttle_builder` hooks (private). Push and pop only; no divert, no gestures. | `cargo test -p flui-widgets hero`; end-to-end through a real `Vsync` as `tests/routes.rs` does. |
@@ -399,6 +399,100 @@ Every row names the **red-check**: a change to the implementation that must turn
 - **UNKNOWN-2.** Does `ModalRoute` swapping its primary animation to `ALWAYS_COMPLETE` while offstage disturb `TransitionRoute`'s status listener, which writes `overlayEntries.first.opaque` and raises `finalize()` on `dismissed` (ADR-0020 §7d)? The proxy must sit **above** the controller, not replace it. *Blocks U3.*
 - **UNKNOWN-3.** Flutter's `flightShuttleBuilder` receives both heroes' `BuildContext`s (`heroes.dart:1081-1087`). FLUI cannot hand out a foreign element's `&dyn BuildContext` outside its own build. What replaces it — the two `HeroHandle`s? the two tags plus their sizes? — decides the public signature at U4/U6. *Blocks the Q8 sign-off.*
 - **UNKNOWN-4.** Whether `RenderStack`'s positioned pass composes correctly under `RenderTheater`'s `tight` constraints for a `RelativeRect`-style four-edge `Positioned`. Cheap to check; do it in U3 alongside D-3.
+
+---
+
+## 7a. Implementation findings (U1, 2026-07-10)
+
+**Status: landed.** `RenderObject::apply_paint_transform`,
+`PipelineOwner::{transform_to, local_to_global, global_to_local, box_size}`. No
+Hero, no widget changes.
+
+### Correction to §3 S4: the overrides are not the four this ADR named
+
+S4 said the overrides were required "at minimum on `RenderTransform`,
+`RenderRotatedBox`, `RenderFittedBox`, `RenderFractionalTranslation`". Reading the
+code shows **three of those need none, and a fifth object does.**
+
+FLUI's paint pipeline already composes two things per level
+(`pipeline/owner/paint.rs:291-367`): it wraps children in the layer of
+`RenderObject::paint_transform(size)` — **a hook this repository already had** —
+and then paints each child at its committed offset. Child-local → parent-local is
+therefore `paint_transform · translate(child_offset)`, and that is what
+`apply_paint_transform`'s default body does. `RenderTransform`,
+`RenderRotatedBox` and `RenderFittedBox` all report a `paint_transform`, so the
+default already carries them; adding overrides would have duplicated the truth and
+invited drift.
+
+An override is needed exactly where **paint deviates from that default path**:
+
+| Object | Why the default is wrong |
+|---|---|
+| `RenderFractionalTranslation` | Lays the child out at `Offset::ZERO` and shifts it at paint time with `PaintCx::paint_child_at` — an `offset_override`. The committed offset says nothing. |
+| `RenderFlow` | Paints each child under a per-child transform scope the delegate chooses. **This ADR never mentioned `RenderFlow`.** Flutter overrides `applyPaintTransform` for it too (`flow.dart:456-462`). |
+
+`RenderFlow` was the near-miss: shipping `transform_to` without it would have
+produced a *silently wrong* rect under a flow — precisely the failure mode §3 S4
+raises against a naive offset-only accumulation. FLUI caches no per-child flow
+matrix (by design, see `flow.rs` module docs), so the override replays
+`paint_children`, exactly as `hit_test` already does.
+
+The red-checks: deleting either override turns `harness_transform_to_respects_*`
+red; deleting `RenderRotatedBox::paint_transform` turns the rotated-box test red,
+which is what proves the default consults it.
+
+### Correction to §3 S4 / U1 item 5: `local_to_global` cannot live on the trait
+
+U1's instruction allowed for this, and it is the case. `RenderBox::local_to_global`
+and `global_to_local` were `&self` identity stubs. They could not have been
+anything else: a FLUI render object has **no parent link and no owner** — the tree
+lives in `RenderTree`, geometry in `RenderState`. Flutter's live on `RenderBox`
+only because a Dart render object holds `parent` and `owner` (`box.dart:3113`,
+implemented via `getTransformTo`).
+
+Both stubs are **deleted**. The real methods are on `PipelineOwner`, which owns the
+tree. Nothing called the stubs, so nothing broke; `flow.rs`'s module docs, which
+recorded the gap, are updated.
+
+For the same reason `apply_paint_transform` takes two parameters Flutter's does
+not — the child's committed paint offset and this node's laid-out size. A Dart
+render object reads both off itself; a FLUI one cannot.
+
+### `transform_to` is narrow, and `None` means malformed
+
+Strict descendant → ancestor only, as §5 U1 scoped it. `Some(IDENTITY)` for a node
+and itself; `None` when `ancestor` is not an ancestor. Because the walk never
+inverts, it cannot fail on a singular matrix — only `global_to_local` can, and it
+returns `None` where Flutter returns `Offset.zero` (`box.dart:3079-3081`) rather
+than inventing an answer.
+
+**A red-check found a redundant guard.** The first draft returned `None` from two
+places: running out of parents, *and* a child-index lookup that could not find the
+child. Removing the first left every test green — the second was silently covering
+for it. A `None` from a corrupt parent/child link would have masqueraded as "not an
+ancestor". The index lookup is now an `expect("BUG: …")` (the tree's own
+invariant, per [`PANIC-POLICY`](../PANIC-POLICY.md)), so exactly one check answers
+the question and deleting it goes red.
+
+### One footgun, documented rather than fixed
+
+`Matrix4::translate` **pre**-multiplies (`*self = translation * *self`), where
+Flutter's post-multiplies. So does `scale`, and `rotate_z`. Composition here is
+written explicitly as `*transform = *transform * step`. Changing those methods is
+out of U1's scope — they have other callers — but any future
+`apply_paint_transform` override that reaches for `Matrix4::translate` will be
+silently wrong, and the trait's doc comment says so.
+
+### Not done, not claimed
+
+`getTransformTo` for two nodes sharing a *common ancestor* (Flutter's general
+form, which needs an inverse). Perspective transforms: `global_to_local` takes a
+plain inverse, exact for the affine 2-D matrices every render object here
+produces, but **not** Flutter's un-projection onto the local z = 0 plane
+(`box.dart:3062-3095`). No perspective transform exists in this repository; one
+arriving must revisit that method. Sliver render objects get the default
+`apply_paint_transform` with no override point, since `RenderSliver` does not
+forward the hook.
 
 ---
 

@@ -685,6 +685,37 @@ impl RenderNode {
         }
     }
 
+    /// Composes onto `transform` the mapping from child `child`'s local space
+    /// into this node's local space.
+    ///
+    /// Resolves the node's laid-out size the same way [`paint_transform`] does —
+    /// box → committed `Size`, sliver → absolute paint size — and forwards to
+    /// [`crate::traits::RenderObject::apply_paint_transform`].
+    ///
+    /// [`paint_transform`]: RenderNode::paint_transform
+    #[inline]
+    pub fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        match self {
+            Self::Box(entry) => {
+                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+                entry
+                    .render_object()
+                    .apply_paint_transform(child, child_offset, size, transform);
+            }
+            Self::Sliver(entry) => {
+                let size = entry.state().absolute_paint_size();
+                entry
+                    .render_object()
+                    .apply_paint_transform(child, child_offset, size, transform);
+            }
+        }
+    }
+
     /// Records this node's paint fragment through the protocol blanket.
     ///
     /// The node's laid-out paint size is resolved from

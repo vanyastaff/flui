@@ -23,10 +23,10 @@
 //! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes | — |
 //! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes | — |
 //! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes | queries |
-//! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | — |
-//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | — |
+//! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
+//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
 //! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
-//! | `RenderFractionalTranslation` | `harness_fractional_translation_*` | yes | — | — | yes | — |
+//! | `RenderFractionalTranslation` | `harness_fractional_translation_*` | yes | — | — | yes | paint transform |
 //! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
 //! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes | — |
 //! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
@@ -48,7 +48,7 @@
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
 //! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
-//! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order |
+//! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order, paint transform |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
@@ -75,7 +75,7 @@
 //! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | — |
 //! | `RenderConstrainedOverflowBox` | `harness_constrained_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
-//! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | — |
+//! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | paint transform |
 //! | `RenderAnimatedSize` | `harness_render_animated_size_*` | yes | — | yes | yes | state machine |
 //! | `RenderSliverScrollingPersistentHeader` | `harness_sliver_persistent_header_scrolling_*` | yes | — | — | — | — |
 //! | `RenderSliverPinnedPersistentHeader` | `harness_sliver_persistent_header_pinned_*` | yes | — | — | — | viewport wiring |
@@ -7903,5 +7903,198 @@ fn harness_theater_intrinsics_ignore_offstage_children() {
         run.dry_layout(run.root(), loose(200.0)),
         Size::new(px(200.0), px(200.0)),
         "dry layout is constraints.biggest, exactly as performLayout sizes",
+    );
+}
+
+// ── Ancestor paint transforms (ADR-0021 U1) ───────────────────────────────────
+//
+// `PipelineOwner::transform_to` composes one
+// `RenderObject::apply_paint_transform` per level. The default body is the paint
+// pipeline's own composition — `paint_transform(size)` then a translation by the
+// child's committed offset — so `RenderTransform`, `RenderRotatedBox` and
+// `RenderFittedBox` need **no override**: their existing `paint_transform` feeds
+// it. `RenderFractionalTranslation` and `RenderFlow` do need one, because their
+// paint bypasses the committed offset (`paint_child_at` / a per-child transform
+// scope). These tests pin both halves.
+
+/// `RenderTransform::uniform_scale(2.0)` pivots about the box's centre, so on a
+/// 20×20 box the child's local origin lands at (-10, -10) and its centre stays
+/// put. A transform_to that ignored `paint_transform` would report (0, 0).
+#[test]
+fn harness_transform_to_respects_a_render_transform_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderTransform::uniform_scale(2.0))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("child is a descendant of root");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, -10.0, -10.0, "the scaled child's origin");
+    let (x, y) = transform.transform_point(px(10.0), px(10.0));
+    assert_transform_point(x, y, 10.0, 10.0, "the centre is the scale pivot");
+}
+
+/// One quarter turn maps a 30×20 child into a 20×30 box: the child's local
+/// origin lands at the box's top-right, and its far corner at the bottom-left.
+#[test]
+fn harness_transform_to_respects_a_rotated_box_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(1))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(20.0), px(30.0)));
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, 20.0, 0.0, "the rotated child's origin");
+    let (x, y) = transform.transform_point(px(30.0), px(20.0));
+    assert_transform_point(x, y, 0.0, 30.0, "the rotated child's far corner");
+}
+
+/// `BoxFit::Contain` scales a 20×10 child by 4 into an 80×80 box and centres the
+/// 80×40 result vertically.
+#[test]
+fn harness_transform_to_respects_a_fitted_box_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderFittedBox::new(
+            BoxFit::Contain,
+            Alignment::CENTER,
+            Clip::None,
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(20.0, 10.0)).label("child")),
+    )
+    .with_size(Size::new(px(80.0), px(80.0)))
+    .run_layout();
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, 0.0, 20.0, "the fitted child's origin");
+    let (x, y) = transform.transform_point(px(20.0), px(10.0));
+    assert_transform_point(x, y, 80.0, 60.0, "the fitted child's far corner");
+}
+
+/// **The override case.** `RenderFractionalTranslation` lays its child out at the
+/// origin and shifts it at paint time through `paint_child_at`, so the child's
+/// *committed* offset is `Offset::ZERO` and the default composition would report
+/// no shift at all. Flutter's `applyPaintTransform` translates by
+/// `translation * size` (`proxy_box.dart`); on a 40×40 box a (-0.5, 0.25)
+/// fraction is (-20, 10).
+#[test]
+fn harness_transform_to_respects_fractional_translation() {
+    let run = RenderTester::mount(
+        box_node(RenderFractionalTranslation::translated(
+            TranslationFraction::new(-0.5, 0.25),
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::ZERO,
+        "the child is laid out at the origin — the shift is paint-time only, \
+         which is exactly why the default composition is wrong here",
+    );
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, -20.0, 10.0, "the fractionally translated origin");
+}
+
+/// **The other override case.** A flow paints each child under a per-child
+/// transform the delegate chooses, never at its committed offset. FLUI caches no
+/// per-child matrix, so `apply_paint_transform` replays `paint_children` — the
+/// same replay `hit_test` already does. `StepFlowDelegate` steps 30px per child.
+#[test]
+fn harness_transform_to_respects_a_flow_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderFlow::new(Arc::new(StepFlowDelegate { step: 30.0 })))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("c")),
+    )
+    .with_size(Size::new(px(200.0), px(50.0)))
+    .run_layout();
+
+    for (label, expected_x) in [("a", 0.0), ("b", 30.0), ("c", 60.0)] {
+        let transform = run
+            .owner()
+            .transform_to(run.id(label), run.root())
+            .expect("descendant");
+        let (x, y) = transform.transform_point(px(0.0), px(0.0));
+        assert_transform_point(x, y, expected_x, 0.0, label);
+    }
+}
+
+/// Nesting the two override cases inside a transforming ancestor: the walk must
+/// compose every level, outermost first.
+#[test]
+fn harness_transform_to_composes_a_whole_chain() {
+    let run = RenderTester::mount(
+        box_node(RenderTransform::uniform_scale(2.0))
+            .label("root")
+            .child(
+                box_node(RenderFractionalTranslation::translated(
+                    TranslationFraction::new(0.5, 0.0),
+                ))
+                .label("shift")
+                .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    // `shift` is 20×20, so it moves the child +10 in x. `root` is 20×20 and
+    // scales ×2 about its centre: x' = 2·(10) − 10 = 10, y' = 2·0 − 10 = −10.
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, 10.0, -10.0, "scale ∘ fractional translation");
+}
+
+/// Asserts a transformed point, with the tolerance a 4×4 float matrix needs
+/// (a quarter turn leaves ~2e-6 of residue on the zeroed axis).
+fn assert_transform_point(
+    x: flui_types::Pixels,
+    y: flui_types::Pixels,
+    expected_x: f32,
+    expected_y: f32,
+    what: &str,
+) {
+    assert!(
+        (x.0 - expected_x).abs() < 1e-4 && (y.0 - expected_y).abs() < 1e-4,
+        "{what}: expected ({expected_x}, {expected_y}), got ({}, {})",
+        x.0,
+        y.0,
     );
 }

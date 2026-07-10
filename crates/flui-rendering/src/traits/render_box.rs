@@ -1,7 +1,7 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
 use flui_tree::Arity;
-use flui_types::{Point, Size};
+use flui_types::Size;
 
 use crate::{
     constraints::BoxConstraints,
@@ -185,18 +185,22 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     }
 
     // ========================================================================
-    // Coordinate Conversion
+    // Coordinate Conversion — see `PipelineOwner`, not here
     // ========================================================================
-
-    /// Converts a point from global coordinates to local coordinates.
-    fn global_to_local(&self, point: Point) -> Point {
-        point
-    }
-
-    /// Converts a point from local coordinates to global coordinates.
-    fn local_to_global(&self, point: Point) -> Point {
-        point
-    }
+    //
+    // `local_to_global` / `global_to_local` used to live here as `&self`
+    // methods returning `point` unchanged. They were identity stubs, and they
+    // could not be anything else: a FLUI render object has no parent link and no
+    // owner, so `self` cannot know where it is. Flutter's live on `RenderBox`
+    // precisely because a Dart render object *does* hold `parent` and `owner`
+    // (`box.dart:3062`, `:3113`, both implemented via `getTransformTo`).
+    //
+    // ADR-0021 U1 removed them and put the real thing on the pipeline, which
+    // does own the tree:
+    //
+    //   PipelineOwner::transform_to(descendant, ancestor)
+    //   PipelineOwner::local_to_global(id, point, ancestor)
+    //   PipelineOwner::global_to_local(id, point, ancestor)
 
     // ========================================================================
     // Intrinsic Dimensions
@@ -399,6 +403,27 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         let _ = size;
         None
+    }
+
+    /// Composes onto `transform` the mapping from child `child`'s local space
+    /// into this box's local space.
+    ///
+    /// Default: [`paint_transform`](Self::paint_transform) followed by a
+    /// translation by the child's committed paint offset — the paint pipeline's
+    /// own composition. See [`RenderObject::apply_paint_transform`] for when to
+    /// override, and for the right-multiplication convention.
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        let _ = child;
+        if let Some(matrix) = <Self as RenderBox>::paint_transform(self, size) {
+            *transform *= matrix;
+        }
+        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
     }
 
     /// Returns the transform matrix for hit testing.
@@ -706,6 +731,16 @@ where
 
     fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         <T as RenderBox>::paint_transform(self, size)
+    }
+
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        <T as RenderBox>::apply_paint_transform(self, child, child_offset, size, transform);
     }
 
     fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
