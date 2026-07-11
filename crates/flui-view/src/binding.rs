@@ -39,8 +39,8 @@
 //! ```rust,ignore
 //! use flui_view::WidgetsBinding;
 //!
-//! // Get the singleton instance
-//! let binding = WidgetsBinding::instance();
+//! // The UiRealm owns the binding (ADR-0027 §1); construct it directly.
+//! let binding = WidgetsBinding::new();
 //!
 //! // Attach root widget
 //! binding.attach_root_widget(&MyApp);
@@ -58,7 +58,7 @@ use std::{
     },
 };
 
-use flui_foundation::{BindingBase, ElementId, impl_binding_singleton};
+use flui_foundation::ElementId;
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
@@ -390,12 +390,14 @@ pub enum AppLifecycleState {
 /// - Lifecycle observers
 /// - First frame tracking
 ///
-/// # Singleton Pattern
+/// # Ownership (ADR-0027 §1)
 ///
-/// Access via `WidgetsBinding::instance()`:
+/// Not a singleton: the binding is owned by its `UiRealm` (one per UI
+/// session; `HeadlessBinding` owns its own for tests). Construct via
+/// [`WidgetsBinding::new`]:
 ///
 /// ```rust,ignore
-/// let binding = WidgetsBinding::instance();
+/// let binding = WidgetsBinding::new();
 /// binding.attach_root_widget(&my_view);
 /// ```
 ///
@@ -403,8 +405,16 @@ pub enum AppLifecycleState {
 ///
 /// WidgetsBinding uses internal RwLock for thread-safe mutable access.
 pub struct WidgetsBinding {
-    /// Inner mutable state protected by RwLock
-    inner: RwLock<WidgetsBindingInner>,
+    /// Inner mutable state. `Arc` so the GlobalKey registry closures can
+    /// hold a `Weak` back-reference to *this* binding's tree (a dead
+    /// binding's keys resolve to `None` — the weak-callback pattern);
+    /// the lock itself is the pre-lease interior-mutability shape (C5
+    /// endgame removes it once `&mut self` threading lands).
+    inner: Arc<RwLock<WidgetsBindingInner>>,
+
+    /// This binding's installed GlobalKey lookup handle; used by `Drop`
+    /// to vacate the ambient slot only if it still holds *our* handle.
+    global_key_registry: crate::key::registry::GlobalKeyRegistryHandle,
 
     /// Callback when a frame is needed.
     #[allow(clippy::type_complexity)]
@@ -480,16 +490,14 @@ struct WidgetsBindingInner {
     need_to_report_first_frame: bool,
 }
 
-// Implement BindingBase trait
-impl BindingBase for WidgetsBinding {
-    fn init_instances(&mut self) {
-        // WidgetsBinding initialization is done in new()
-        tracing::debug!("WidgetsBinding initialized");
+impl Drop for WidgetsBinding {
+    fn drop(&mut self) {
+        // Vacate the ambient GlobalKey slot only if it still holds OUR
+        // handle — a later binding (or a test shim) that replaced it must
+        // not lose its installation to our teardown.
+        let _vacated = crate::key::registry::take_registry_if(&self.global_key_registry);
     }
 }
-
-// Implement singleton pattern via macro
-impl_binding_singleton!(WidgetsBinding);
 
 impl Default for WidgetsBinding {
     fn default() -> Self {
@@ -507,31 +515,37 @@ pub enum AttachError {
 }
 
 impl WidgetsBinding {
-    /// Create a new WidgetsBinding.
-    ///
-    /// Note: Prefer using `WidgetsBinding::instance()` for singleton access.
+    /// Create a new WidgetsBinding (owned by its `UiRealm` in production,
+    /// by `HeadlessBinding` or the test harness otherwise — ADR-0027 §1).
     ///
     /// # GlobalKey registry installation
     ///
-    /// Constructing the binding also installs a process-wide
-    /// [`GlobalKey`](crate::GlobalKey) lookup handle pointed at this
-    /// binding's singleton instance (`WidgetsBinding::instance()`), so
-    /// `GlobalKey::current_element` / `with_current_state` resolve to
-    /// the actively-mounted element tree in production. Tests that
-    /// bypass the binding install their own handle via the explicit
-    /// `crate::test_only_set_global_key_registry` shim.
+    /// Constructing the binding installs a process-wide
+    /// [`GlobalKey`](crate::GlobalKey) lookup handle whose closures hold a
+    /// `Weak` reference to **this** binding's element tree, so
+    /// `GlobalKey::current_element` / `with_current_state` resolve against
+    /// the tree that actually hosts the elements. (The previous shape
+    /// captured the `WidgetsBinding::instance()` singleton lazily, so
+    /// production lookups resolved against an empty tree the moment a
+    /// non-singleton binding drove the frames.) Dropping the binding
+    /// vacates the slot if it still holds this binding's handle. Tests may
+    /// still override via `crate::test_only_set_global_key_registry`.
     pub fn new() -> Self {
-        let mut binding = Self {
-            inner: RwLock::new(WidgetsBindingInner {
-                build_owner: BuildOwner::new(),
-                element_tree: ElementTree::new(),
-                root_element: None,
-                pipeline_owner: None,
-                observers: Vec::new(),
-                back_gesture_observers: Vec::new(),
-                build_scheduled: false,
-                need_to_report_first_frame: true,
-            }),
+        let inner = Arc::new(RwLock::new(WidgetsBindingInner {
+            build_owner: BuildOwner::new(),
+            element_tree: ElementTree::new(),
+            root_element: None,
+            pipeline_owner: None,
+            observers: Vec::new(),
+            back_gesture_observers: Vec::new(),
+            build_scheduled: false,
+            need_to_report_first_frame: true,
+        }));
+        let global_key_registry = Self::make_global_key_registry(&inner);
+        let _previous = crate::key::registry::install_registry(global_key_registry.clone());
+        Self {
+            inner,
+            global_key_registry,
             on_need_frame: RwLock::new(None),
             first_frame_rasterized: AtomicBool::new(false),
             first_frame_deferred_count: AtomicU32::new(0),
@@ -539,41 +553,37 @@ impl WidgetsBinding {
             ready_to_produce_frames: AtomicBool::new(false),
             #[cfg(debug_assertions)]
             debug_building_dirty_elements: AtomicBool::new(false),
-        };
-        binding.init_instances();
-        Self::install_global_key_registry();
-        binding
+        }
     }
 
-    /// Install a closure-based `GlobalKey` registry handle pointing at
-    /// the singleton `WidgetsBinding::instance()`.
+    /// Build the `GlobalKey` registry handle for one binding.
     ///
-    /// The handle's `lookup` and `visit` closures capture the binding's
-    /// `&'static` singleton reference (produced by
-    /// `impl_binding_singleton!`) and acquire the binding's
-    /// `RwLock<WidgetsBindingInner>` read-lock per call. No additional
-    /// `Arc<RwLock<_>>` wrapping is needed on the binding's storage —
-    /// the singleton lifetime carries the registry's reachability.
-    ///
-    /// Idempotent: the registry slot is a `RwLock<Option<…>>`, so calls
-    /// past the first replace the previous handle with an equivalent
-    /// one.
-    fn install_global_key_registry() {
-        let handle = crate::key::registry::GlobalKeyRegistryHandle::new(
-            |hash| {
-                let binding = <WidgetsBinding as flui_foundation::HasInstance>::instance();
-                let inner = binding.inner.read();
+    /// The `lookup`/`visit` closures hold a `Weak` reference to the
+    /// binding's inner state: lookups resolve against **this** binding's
+    /// element tree while it lives, and become inert `None`s once it
+    /// drops (the weak-callback pattern — a dead tree is a miss, never a
+    /// dangle and never a panic).
+    fn make_global_key_registry(
+        inner: &Arc<RwLock<WidgetsBindingInner>>,
+    ) -> crate::key::registry::GlobalKeyRegistryHandle {
+        let lookup_inner = Arc::downgrade(inner);
+        let visit_inner = Arc::downgrade(inner);
+        crate::key::registry::GlobalKeyRegistryHandle::new(
+            move |hash| {
+                let inner = lookup_inner.upgrade()?;
+                let inner = inner.read();
                 inner.build_owner.element_for_global_key(hash)
             },
-            |id, f| {
-                let binding = <WidgetsBinding as flui_foundation::HasInstance>::instance();
-                let inner = binding.inner.read();
+            move |id, f| {
+                let Some(inner) = visit_inner.upgrade() else {
+                    return;
+                };
+                let inner = inner.read();
                 if let Some(node) = inner.element_tree.get(id) {
                     f(node.element());
                 }
             },
-        );
-        let _ = crate::key::registry::install_registry(handle);
+        )
     }
 
     /// Set the PipelineOwner for render tree management.
@@ -1493,7 +1503,6 @@ mod tests {
     use crate::view::ViewExt;
     use std::any::TypeId;
 
-    use flui_foundation::HasInstance;
     use flui_objects::RenderSizedBox;
     use flui_rendering::protocol::BoxProtocol;
 
@@ -1541,21 +1550,13 @@ mod tests {
     }
 
     #[test]
-    fn test_binding_singleton() {
-        let binding1 = WidgetsBinding::instance();
-        let binding2 = WidgetsBinding::instance();
-
-        // Should be the same instance
-        assert!(std::ptr::eq(binding1, binding2));
-    }
-
-    #[test]
-    fn test_binding_is_initialized() {
-        // Ensure instance exists
-        let _ = WidgetsBinding::instance();
-
-        // Should be initialized
-        assert!(WidgetsBinding::is_initialized());
+    fn binding_is_not_a_singleton_two_instances_are_independent() {
+        // ADR-0027 §1: the binding is realm-owned; two bindings are two
+        // independent trees (HeadlessBinding's "many can exist" contract,
+        // now true of the widgets binding itself).
+        let binding1 = WidgetsBinding::new();
+        let binding2 = WidgetsBinding::new();
+        assert!(!Arc::ptr_eq(&binding1.inner, &binding2.inner));
     }
 
     #[test]

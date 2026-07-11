@@ -144,6 +144,20 @@ pub(crate) fn take_registry() -> Option<GlobalKeyRegistryHandle> {
     REGISTRY.write().take()
 }
 
+/// Remove the installed handle only if it is `handle` (pointer identity):
+/// a dropping `WidgetsBinding` must not steal a slot that a later binding
+/// (or a test shim) has since claimed. Returns whether it was taken.
+pub(crate) fn take_registry_if(handle: &GlobalKeyRegistryHandle) -> bool {
+    let mut slot = REGISTRY.write();
+    match slot.as_ref() {
+        Some(current) if Arc::ptr_eq(&current.inner, &handle.inner) => {
+            slot.take();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Run `f` against the currently-installed handle, returning the
 /// closure's result. Returns `None` when no handle is installed
 /// (the quiescent state — e.g. unit tests that bypass the binding).
