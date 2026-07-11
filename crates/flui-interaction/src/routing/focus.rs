@@ -724,7 +724,7 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        manager.add_listener(Arc::new(move |_prev, _new| {
+        let _listener = manager.add_listener(Arc::new(move |_prev, _new| {
             called_clone.store(true, Ordering::Relaxed);
         }));
 
@@ -894,7 +894,7 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        manager.add_listener(Arc::new(move |_prev, _new| {
+        let _listener = manager.add_listener(Arc::new(move |_prev, _new| {
             called_clone.store(true, Ordering::Relaxed);
         }));
 

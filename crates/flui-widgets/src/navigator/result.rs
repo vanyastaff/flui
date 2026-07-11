@@ -69,6 +69,12 @@ pub(crate) struct Completer<T> {
 /// `current_result()` fallback, or `None`. **Dropping it does not cancel
 /// anything**: the route completes regardless, exactly as a Dart `Future` that
 /// nobody awaits still completes.
+// Deliberately **not** `#[must_use]` (raised in the 2026-07-11 API review,
+// rejected with evidence): ignoring the handle is the *documented* contract
+// above — the route completes regardless, exactly as an unawaited Dart
+// `Future` does — and it is what 169 of this crate's own call sites correctly
+// do (`seed_initial` for a bootstrap route, a `push` whose result nobody
+// wants). A `must_use` here would be a false positive by construction.
 pub struct RouteResult<T> {
     shared: Arc<Mutex<Shared<T>>>,
 }

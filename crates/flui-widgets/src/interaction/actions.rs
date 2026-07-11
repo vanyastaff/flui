@@ -90,6 +90,12 @@ pub trait Action<T: Intent>: Send + Sync {
     /// (`:297`): `false` maps to
     /// [`SkipRemainingHandlers`](flui_interaction::KeyEventResult::SkipRemainingHandlers)
     /// in `Shortcuts` (`:312-314`).
+    ///
+    /// **Only the default [`to_key_event_result`](Self::to_key_event_result)
+    /// reads this.** An action that overrides that method (because its key
+    /// result depends on what `invoke` did — the focus-traversal actions)
+    /// answers the question there instead, and whatever `consumes_key` says is
+    /// then dead. Override both or neither.
     fn consumes_key(&self, intent: &T) -> bool {
         let _ = intent;
         true

@@ -113,7 +113,8 @@ impl StatefulView for TickerMode {
 }
 
 /// The state behind [`TickerMode`]: the subtree's nested [`Vsync`] registry.
-/// `pub` only because `StatefulView::State` requires it; not re-exported.
+/// `pub` because `StatefulView::State` requires it; re-exported with the rest of
+/// the crate's widget states.
 pub struct TickerModeState {
     registry: Vsync,
     /// The ambient registry this one is nested under, and the id it holds

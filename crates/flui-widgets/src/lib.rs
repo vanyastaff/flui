@@ -112,7 +112,7 @@ pub use flui_types::platform::Brightness;
 pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedSize, AnimatedSizeState,
-    TickerMode, VsyncScope,
+    TickerMode, TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 // `Image` widget over `RenderImage`; provider types live in the same module.
@@ -133,10 +133,10 @@ pub use image::{
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, CallbackAction, CallbackShortcuts, Focus,
-    FocusChangeHandler, FocusScope, GestureArenaScope, GestureDetector, GestureDetectorState,
-    IgnorePointer, Intent, Listener, MouseRegion, NextFocusAction, NextFocusIntent, Offstage,
-    PreviousFocusAction, PreviousFocusIntent, ShortcutCallback, Shortcuts, SingleActivator,
-    Visibility,
+    FocusChangeHandler, FocusScope, FocusScopeState, FocusState, GestureArenaScope,
+    GestureDetector, GestureDetectorState, IgnorePointer, Intent, Listener, MouseRegion,
+    NextFocusAction, NextFocusIntent, Offstage, PreviousFocusAction, PreviousFocusIntent,
+    ShortcutCallback, Shortcuts, SingleActivator, Visibility,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,

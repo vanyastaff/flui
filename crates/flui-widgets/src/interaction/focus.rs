@@ -41,6 +41,7 @@ use flui_types::geometry::px;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
+use parking_lot::Mutex;
 
 use crate::navigator::AnchoredBox;
 
@@ -231,21 +232,26 @@ impl Focus {
         }
     }
 
-    /// Push the view-configured flags and handlers onto `node`. Only the
-    /// properties the view actually sets are written, so an external node
-    /// keeps its own configuration elsewhere.
+    /// Push the view-configured flags and handlers onto `node` — the **full**
+    /// configuration, written on every mount and rebuild.
+    ///
+    /// Each property is set unconditionally; an unset (`None`) property is written
+    /// as its FLUI/Flutter default (`can_request_focus` → `true`, `skip_traversal`
+    /// → `false`, `descendants_are_focusable` → `true`, `on_key_event` → cleared).
+    /// This is what makes a rebuild *reset* a value the view no longer sets: writing
+    /// only the `Some` properties (the earlier shape) left a dropped
+    /// `skip_traversal(true)` or `on_key_event` lingering on the node. Flutter's
+    /// `_FocusState.didUpdateWidget` (`focus_scope.dart:646-682`) writes all of them
+    /// the same way. The node is the widget's to drive here, external or owned; a
+    /// caller that needs node state the widget must never touch keeps it off these
+    /// four properties.
     fn configure(&self, node: &Arc<FocusNode>) {
-        if let Some(can) = self.can_request_focus {
-            node.set_can_request_focus(can);
-        }
-        if let Some(skip) = self.skip_traversal {
-            node.set_skip_traversal(skip);
-        }
-        if let Some(focusable) = self.descendants_are_focusable {
-            node.set_descendants_are_focusable(focusable);
-        }
-        if let Some(handler) = &self.on_key_event {
-            node.set_on_key_event(Arc::clone(handler));
+        node.set_can_request_focus(self.can_request_focus.unwrap_or(true));
+        node.set_skip_traversal(self.skip_traversal.unwrap_or(false));
+        node.set_descendants_are_focusable(self.descendants_are_focusable.unwrap_or(true));
+        match &self.on_key_event {
+            Some(handler) => node.set_on_key_event(Arc::clone(handler)),
+            None => node.clear_on_key_event(),
         }
     }
 }
@@ -279,13 +285,14 @@ impl StatefulView for Focus {
             anchor: SubtreeAnchor::new(),
             focus_listener_id: None,
             autofocus: self.autofocus,
-            on_focus_change: self.on_focus_change.clone(),
+            on_focus_change: Arc::new(Mutex::new(self.on_focus_change.clone())),
         }
     }
 }
 
-/// `_FocusState` (`focus_scope.dart:554`). `pub` only because
-/// `StatefulView::State` requires it; not re-exported.
+/// `_FocusState` (`focus_scope.dart:554`). `pub` because `StatefulView::State`
+/// requires it, and re-exported like every other widget's state in this crate
+/// (`GestureDetectorState`, `AnimatedAlignState`, …) so a caller can name it.
 pub struct FocusState {
     node: Arc<FocusNode>,
     /// The node this one currently hangs under; `did_change_dependencies`
@@ -298,7 +305,11 @@ pub struct FocusState {
     focus_listener_id: Option<ListenerId>,
     /// Captured at `create_state`: `init_state` has no view reference.
     autofocus: bool,
-    on_focus_change: Option<FocusChangeHandler>,
+    /// The current `on_focus_change` handler, behind a shared cell so the installed
+    /// listener reads the *latest* one. `did_update_view` writes here rather than
+    /// reinstalling the listener — a captured-by-value closure would keep firing the
+    /// handler from the build that mounted it.
+    on_focus_change: Arc<Mutex<Option<FocusChangeHandler>>>,
 }
 
 impl std::fmt::Debug for FocusState {
@@ -313,18 +324,16 @@ impl FocusState {
     /// The rebuild-on-focus-change listener — Flutter's `_handleFocusChanged`
     /// `setState` (`:684-712`): descendants that read the node's state during
     /// build stay current, and `on_focus_change` fires on the edges.
-    fn install_focus_listener(
-        &mut self,
-        rebuild: RebuildHandle,
-        on_focus_change: Option<FocusChangeHandler>,
-    ) {
+    fn install_focus_listener(&mut self, rebuild: RebuildHandle) {
         let node_id = self.node.id();
+        let on_focus_change = Arc::clone(&self.on_focus_change);
         self.focus_listener_id = Some(FocusManager::global().add_listener(Arc::new(
             move |previous, current| {
                 let was_focused = previous == Some(node_id);
                 let now_focused = current == Some(node_id);
                 if was_focused != now_focused {
-                    if let Some(handler) = &on_focus_change {
+                    // Read the *current* handler, not the one captured at install.
+                    if let Some(handler) = on_focus_change.lock().as_ref() {
                         handler(now_focused);
                     }
                     rebuild.schedule();
@@ -505,8 +514,8 @@ impl StatefulView for FocusScope {
     }
 }
 
-/// The state behind [`FocusScope`]. `pub` only because `StatefulView::State`
-/// requires it; not re-exported.
+/// The state behind [`FocusScope`]. `pub` because `StatefulView::State` requires
+/// it; re-exported with the rest of the crate's widget states.
 pub struct FocusScopeState {
     scope: Arc<FocusScopeNode>,
     /// The node this scope's backing node hangs under.
