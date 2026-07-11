@@ -147,7 +147,8 @@ impl SingleActivator {
 /// While the primary focus sits inside `child`, a key event that every inner
 /// `Focus` ignored bubbles here; **every** matching binding fires
 /// (`:1210-1220`) and the event counts as handled iff at least one did. The
-/// `Intent`-mapped `Shortcuts`/`Actions` pair is ADR-0023/.
+/// `Intent`-mapped `Shortcuts` / `Actions` pair is the general form; this is the
+/// direct-callback shortcut for when an `Intent` would be ceremony (ADR-0023).
 #[derive(Clone)]
 pub struct CallbackShortcuts {
     bindings: Vec<(SingleActivator, ShortcutCallback)>,
@@ -373,12 +374,12 @@ mod tests {
         );
     }
 
-    /// ADR-0023+ end to end: a shortcut above a focused `Focus` fires
+    /// `Shortcuts` end to end (ADR-0023): a shortcut above a focused `Focus` fires
     /// only for keys that subtree **ignored** — a key the focused handler
     /// consumed never reaches the binding, and a matching ignored key fires
     /// every binding while counting as handled.
     ///
-    /// Red-check: revert `dispatch_key_event` to the flat pre- dispatch —
+    /// Red-check: revert `dispatch_key_event` to the earlier flat dispatch —
     /// the binding never fires and the second assertion fails.
     #[test]
     fn a_shortcut_fires_only_for_keys_the_focused_subtree_ignored() {
@@ -450,7 +451,7 @@ mod intent_tests {
         }
     }
 
-    /// ADR-0023+ end to end: Ctrl+S bubbles from the focused field,
+    /// `Shortcuts` end to end (ADR-0023): Ctrl+S bubbles from the focused field,
     /// `Shortcuts` maps it to `SaveIntent`, and the enclosing `Actions` chain
     /// invokes the bound action; the event is consumed.
     ///

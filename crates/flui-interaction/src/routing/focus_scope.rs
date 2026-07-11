@@ -1092,10 +1092,12 @@ pub enum TraversalEdgeBehavior {
     /// unfocus-and-report half is the whole implementable contract
     /// (ADR-0026).
     LeaveFlutterView,
-    /// Retry in the enclosing scope (`:141-149`). **Interim:** for now this
-    /// behaves as [`ClosedLoop`](Self::ClosedLoop) — Flutter's own no-parent
-    /// fallback — because the full unfocus→parent-retry→verify mechanism is not
-    /// built yet; it stays gated on the scope-landing decision in ADR-0026.
+    /// Continue traversal into the enclosing scope, keeping the cursor
+    /// (`:141-149`): a step at this scope's edge crosses the boundary to the first
+    /// node *outside* it (resolving to [`ResolvedStep::RetryInParent`]). With no
+    /// enclosing scope it wraps within this one, like
+    /// [`ClosedLoop`](Self::ClosedLoop) — Flutter's own no-parent fallback
+    /// (`focus_traversal.dart:148-149`), parity not a gap.
     ParentScope,
     /// Stay put (`:151-155`).
     Stop,
