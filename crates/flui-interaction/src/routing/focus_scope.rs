@@ -901,8 +901,14 @@ impl FocusScopeNode {
     /// nothing is focused), with this scope's edge behavior applied — **the**
     /// edge switch, shared by every caller (ADR-0026 §3.3): the manager's
     /// `focus_next`/`focus_previous`, this scope's in-scope variants, and
-    /// `set_first_focus`. Pure: the caller performs the returned intent
-    /// against whichever manager it owns.
+    /// `set_first_focus`.
+    ///
+    /// It computes, it does not focus: the caller performs the returned intent
+    /// against whichever [`crate::FocusManager`] it owns. (This scope's own
+    /// stepping methods perform it against the process-global manager, because
+    /// that is what a `FocusScopeNode` can reach; [`FocusManager::focus_next`]
+    /// performs it against itself, which is what lets a test manager traverse
+    /// without touching the singleton.)
     ///
     /// Three-state by construction (ADR-0026 §3.1): a cursor **outside** this
     /// scope resolves to [`ResolvedStep::None`] without consulting the edge
@@ -948,9 +954,29 @@ impl FocusScopeNode {
 
         // The true edge (`focus_traversal.dart:590-666`).
         match self.traversal_edge_behavior() {
-            // `ParentScope`'s full unfocus→parent-retry→verify mechanism is
-            // ADR-0026 U-B (gated on the scope-landing decision); until then it
-            // takes Flutter's own no-parent fallback (`:148-149`).
+            TraversalEdgeBehavior::ParentScope if self.inner.enclosing_scope().is_some() => {
+                // Leaving the scope needs landing semantics for the parent's
+                // own candidates: a scope's backing node is a zero-rect,
+                // non-focusable candidate today, so a naive retry lands nowhere
+                // useful. Wrapping instead is *not* the requested behavior, so
+                // say so rather than pretending it is.
+                tracing::warn!(
+                    "TraversalEdgeBehavior::ParentScope is not implemented while an enclosing \
+                     scope exists; this scope wraps instead of leaving. Use ClosedLoop or Stop \
+                     to state the behavior you want."
+                );
+                let wrap = if forward {
+                    order.iter().find(|node| is_traversable(node))
+                } else {
+                    order.iter().rev().find(|node| is_traversable(node))
+                };
+                match wrap {
+                    Some(node) => ResolvedStep::Focus(node.id()),
+                    None => ResolvedStep::None,
+                }
+            }
+            // With no enclosing scope, Flutter itself falls back to a wrap
+            // (`focus_traversal.dart:148-149`): parity, not a gap.
             TraversalEdgeBehavior::ClosedLoop | TraversalEdgeBehavior::ParentScope => {
                 let wrap = if forward {
                     order.iter().find(|node| is_traversable(node))
@@ -1011,10 +1037,7 @@ impl FocusScopeNode {
 
     /// Collects all focusable nodes in this scope.
     fn collect_focusable_nodes(&self) -> Vec<Arc<FocusNode>> {
-        self.inner
-            .descendants()
-            .filter(|node| node.can_request_focus() && !node.skip_traversal())
-            .collect()
+        self.inner.descendants().filter(is_traversable).collect()
     }
 }
 

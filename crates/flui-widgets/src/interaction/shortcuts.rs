@@ -494,14 +494,13 @@ mod intent_tests {
     /// unconsumed and stops bubbling.
     #[test]
     fn a_non_consuming_action_runs_but_leaves_the_event_unconsumed() {
+        // An action that runs but changes nothing declines the key, so the
+        // event keeps bubbling instead of being swallowed.
         struct NonConsuming(Arc<AtomicUsize>);
         impl Action<SaveIntent> for NonConsuming {
-            fn consumes_key(&self, _intent: &SaveIntent) -> bool {
-                false
-            }
             fn invoke(&self, _intent: &SaveIntent) -> ActionOutcome {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                ActionOutcome::Performed
+                ActionOutcome::NotPerformed
             }
         }
 

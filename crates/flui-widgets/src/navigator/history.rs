@@ -334,20 +334,35 @@ pub(crate) struct FlushOutcome {
     /// The dying entries themselves, moved out of the history so the caller can
     /// run `Route::dispose` outside the lock.
     dying: Vec<RouteEntry>,
-    /// `onPopInvokedWithResult(did_pop, …)` deliveries owed to each route's
-    /// `PopScope`s. **Deferred**: the fan-out runs user callbacks, and a user
-    /// callback may call back into the navigator — firing it under the history
-    /// lock deadlocks on the non-reentrant mutex, same-thread. The caller
-    /// (`apply`) delivers these first, before the observers hear `didPop`,
-    /// preserving Flutter's relative order (`navigator.dart:3372` before
-    /// `:4527`).
-    pub(crate) pop_invoked: Vec<(RouteId, bool)>,
-    /// Routes whose `did_pop` refused inside this flush. A refusal may mean a
-    /// local-history entry was consumed (`routes.dart:950-965`) — its
-    /// `on_remove` is owed on the route's registry, and `apply` drains it with
-    /// no lock held (ADR-0025 §3.3.1). Draining a plain user refusal is a
-    /// no-op.
-    pub(crate) refused_pops: Vec<RouteId>,
+    /// Everything the flush owes to **user code**, in the order the flush
+    /// produced it.
+    ///
+    /// These callbacks must run under no lock: user code may call straight back
+    /// into the navigator, and the history mutex is not reentrant, so firing
+    /// them inline deadlocks the same thread. The flush therefore *records*
+    /// them; the caller drains them once the lock is released.
+    ///
+    /// **One ordered channel, not one vector per kind.** A flush can run
+    /// several passes, so a pop in pass 1 and a refusal in pass 2 must reach
+    /// the user in that order; per-kind vectors would deliver all of one kind
+    /// before the other and invert an ordering the flush had already decided.
+    /// Ordering lives in the data, not in the draining code's statement order —
+    /// and a new kind of deferred effect adds a variant here, not a fourth
+    /// vector with a fourth loop and a fourth registry-lock storm.
+    pub(crate) deferred: Vec<DeferredEffect>,
+}
+
+/// A user-visible effect the flush owes, delivered after the history lock is
+/// released, in the order it was produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeferredEffect {
+    /// `onPopInvokedWithResult(did_pop, …)` for this route's `PopScope`s
+    /// (`navigator.dart:3372`; `:5612` for a refusal).
+    PopInvoked(RouteId, bool),
+    /// A `did_pop` that refused — it may have consumed a local-history entry
+    /// (`routes.dart:950-965`), whose `on_remove` is owed on the route's
+    /// registry. A plain refusal drains to nothing.
+    LocalHistoryPopped(RouteId),
 }
 
 impl FlushOutcome {
@@ -356,8 +371,7 @@ impl FlushOutcome {
     fn absorb(&mut self, later: Self) {
         self.rearrange_overlay |= later.rearrange_overlay;
         self.notifications.extend(later.notifications);
-        self.pop_invoked.extend(later.pop_invoked);
-        self.refused_pops.extend(later.refused_pops);
+        self.deferred.extend(later.deferred);
         self.disposed.extend(later.disposed);
         self.dying.extend(later.dying);
     }
@@ -535,8 +549,8 @@ impl RouteHistory {
             let refused = entry.id();
             self.last_outcome
                 .get_or_insert_with(FlushOutcome::default)
-                .pop_invoked
-                .push((refused, false));
+                .deferred
+                .push(DeferredEffect::PopInvoked(refused, false));
         }
     }
 
@@ -838,8 +852,7 @@ impl RouteHistory {
     fn flush_inner(&mut self, rearrange_overlay: bool) -> FlushOutcome {
         let mut index: isize = self.entries.len() as isize - 1;
         let mut next: Option<RouteId> = None;
-        let mut pop_invoked: Vec<(RouteId, bool)> = Vec::new();
-        let mut refused_pops: Vec<RouteId> = Vec::new();
+        let mut deferred: Vec<DeferredEffect> = Vec::new();
         let mut can_remove_or_add = false;
         let mut popped_route: Option<RouteId> = None;
         let mut seen_top_active_route = false;
@@ -904,7 +917,10 @@ impl RouteHistory {
                         // The user-facing `PopScope` fan-out is owed but NOT
                         // fired here — deferred through the outcome so it runs
                         // outside the history lock (see `FlushOutcome::pop_invoked`).
-                        pop_invoked.push((self.entries[position].id(), true));
+                        deferred.push(DeferredEffect::PopInvoked(
+                            self.entries[position].id(),
+                            true,
+                        ));
                         if !seen_top_active_route {
                             if let Some(popped) = popped_route {
                                 self.entries[position].handle_did_pop_next(popped);
@@ -929,7 +945,9 @@ impl RouteHistory {
                         // The route refused the pop; it returns to `Idle`. A
                         // local-history pop is one kind of refusal — its owed
                         // `on_remove` drains in `apply`, outside this lock.
-                        refused_pops.push(self.entries[position].id());
+                        deferred.push(DeferredEffect::LocalHistoryPopped(
+                            self.entries[position].id(),
+                        ));
                         debug_assert_eq!(self.entries[position].state, RouteLifecycle::Idle);
                         advance = false;
                     }
@@ -1030,8 +1048,7 @@ impl RouteHistory {
             notifications,
             disposed,
             dying: to_be_disposed,
-            pop_invoked,
-            refused_pops,
+            deferred,
         }
     }
 

@@ -65,6 +65,7 @@ pub trait Intent: Any + Send + Sync {}
 /// signature over a second parallel method: two methods that must agree is a
 /// permanent hazard, a break today is one afternoon. Prime Directive #2.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ActionOutcome {
     /// The action ran and did its thing.
     #[default]
@@ -86,39 +87,28 @@ pub trait Action<T: Intent>: Send + Sync {
         true
     }
 
-    /// Whether a key event that invoked this action counts as consumed
-    /// (`:297`): `false` maps to
-    /// [`SkipRemainingHandlers`](flui_interaction::KeyEventResult::SkipRemainingHandlers)
-    /// in `Shortcuts` (`:312-314`).
-    ///
-    /// **Only the default [`to_key_event_result`](Self::to_key_event_result)
-    /// reads this.** An action that overrides that method (because its key
-    /// result depends on what `invoke` did — the focus-traversal actions)
-    /// answers the question there instead, and whatever `consumes_key` says is
-    /// then dead. Override both or neither.
-    fn consumes_key(&self, intent: &T) -> bool {
-        let _ = intent;
-        true
-    }
-
     /// Perform the operation (`:354`). The [`ActionOutcome`] reaches the key
     /// path through [`to_key_event_result`](Self::to_key_event_result); a
     /// direct `Actions::maybe_invoke` caller may ignore it.
     fn invoke(&self, intent: &T) -> ActionOutcome;
 
     /// What a key event that invoked this action reports —
-    /// `Action.toKeyEventResult` (`actions.dart:312-314`). The default is
-    /// Flutter's: consumed iff [`consumes_key`](Self::consumes_key). An action
-    /// whose key result depends on what `invoke` *did* (the Tab intents:
-    /// handled iff focus moved, `focus_traversal.dart:2340-2348`) overrides
-    /// this — one method, reading the outcome, not a second invoke path that
-    /// could silently disagree with the first.
+    /// `Action.toKeyEventResult` (`actions.dart:312-314`).
+    ///
+    /// **The only method that answers this**, and it reads the outcome, so it
+    /// cannot contradict what `invoke` actually did. (Flutter splits the
+    /// question across `consumesKey` and `toKeyEventResult`; the two disagree
+    /// the moment an action's key result depends on its work — as the
+    /// focus-traversal actions' does, `focus_traversal.dart:2340-2348`.)
+    ///
+    /// The default consumes the key when the action did something, and reports
+    /// it unconsumed when the action declined — so an action that changed
+    /// nothing lets the event keep bubbling.
     fn to_key_event_result(&self, intent: &T, outcome: ActionOutcome) -> KeyEventResult {
-        let _ = outcome;
-        if self.consumes_key(intent) {
-            KeyEventResult::Handled
-        } else {
-            KeyEventResult::SkipRemainingHandlers
+        let _ = intent;
+        match outcome {
+            ActionOutcome::Performed => KeyEventResult::Handled,
+            ActionOutcome::NotPerformed => KeyEventResult::SkipRemainingHandlers,
         }
     }
 }
@@ -519,14 +509,6 @@ impl Action<NextFocusIntent> for NextFocusAction {
             ActionOutcome::NotPerformed
         }
     }
-
-    fn to_key_event_result(
-        &self,
-        _intent: &NextFocusIntent,
-        outcome: ActionOutcome,
-    ) -> KeyEventResult {
-        focus_key_result(outcome)
-    }
 }
 
 /// Steps the focus backwards — `PreviousFocusAction`
@@ -542,22 +524,5 @@ impl Action<PreviousFocusIntent> for PreviousFocusAction {
         } else {
             ActionOutcome::NotPerformed
         }
-    }
-
-    fn to_key_event_result(
-        &self,
-        _intent: &PreviousFocusIntent,
-        outcome: ActionOutcome,
-    ) -> KeyEventResult {
-        focus_key_result(outcome)
-    }
-}
-
-/// `NextFocusAction.toKeyEventResult` (`focus_traversal.dart:2340-2348`):
-/// handled iff focus actually moved.
-fn focus_key_result(outcome: ActionOutcome) -> KeyEventResult {
-    match outcome {
-        ActionOutcome::Performed => KeyEventResult::Handled,
-        ActionOutcome::NotPerformed => KeyEventResult::SkipRemainingHandlers,
     }
 }

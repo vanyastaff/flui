@@ -49,7 +49,7 @@ use parking_lot::Mutex;
 use super::binding::{RouteBinding, RouteRegistries, RouteVsync, TransitionPeer};
 use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
-use super::history::{FlushOutcome, RouteHistory};
+use super::history::{DeferredEffect, FlushOutcome, RouteHistory};
 use super::modal_route::ModalHandle;
 use super::observer::{NavigatorObserver, deliver};
 use super::overlay_route::NavigatorRoute;
@@ -125,29 +125,28 @@ impl NavigatorShared {
     ///    false` (`:5671`, `:5747`) precisely because step 1 already updated the
     ///    overlay's list.
     fn apply(&self, mut outcome: FlushOutcome) {
-        // 0a. Owed local-history removals — `on_remove` fires at the `didPop`
-        //     moment in Flutter (`routes.dart:952-963`), which is inside the
-        //     flush here; delivery waits until now so the callbacks run with
-        //     **no lock held** (ADR-0025 §3.3.1). The emptied-edge
-        //     `changed_internal_state` rides the same drain.
-        for route in &outcome.refused_pops {
-            let modal = self.registries.modals.lock().get(route).cloned();
-            if let Some(modal) = modal {
-                modal.drain_local_history();
-            }
-        }
-
-        // 0b. Each popped/refused route's `PopScope` callbacks — before the
-        //    observers hear `didPop`, preserving Flutter's relative order
+        // 0. Everything the flush owed to user code, **in the order it was
+        //    produced** — a multi-pass flush must not deliver a later pass's
+        //    refusal ahead of an earlier pass's pop — and before the observers
+        //    hear `didPop`, which is Flutter's relative order
         //    (`onPopInvokedWithResult` fires inside `handlePop`,
-        //    `navigator.dart:3372`, before the observation at `:4527`) — and,
-        //    like every user callback here, with **no lock held**: a callback
-        //    may call straight back into this navigator, and even a `can_pop()`
-        //    read would deadlock on the non-reentrant history mutex.
-        for (route, did_pop) in &outcome.pop_invoked {
-            let modal = self.registries.modals.lock().get(route).cloned();
-            if let Some(modal) = modal {
-                modal.notify_pop_invoked(*did_pop);
+        //    `navigator.dart:3372`, before the observation at `:4527`).
+        //
+        //    With **no lock held**: these are user callbacks, they may call
+        //    straight back into this navigator, and even a `can_pop()` read
+        //    would deadlock on the non-reentrant history mutex.
+        if !outcome.deferred.is_empty() {
+            let modals = self.registries.modals.lock().clone();
+            for effect in &outcome.deferred {
+                let (DeferredEffect::PopInvoked(route, _)
+                | DeferredEffect::LocalHistoryPopped(route)) = effect;
+                let Some(modal) = modals.get(route) else {
+                    continue;
+                };
+                match effect {
+                    DeferredEffect::PopInvoked(_, did_pop) => modal.notify_pop_invoked(*did_pop),
+                    DeferredEffect::LocalHistoryPopped(_) => modal.drain_local_history(),
+                }
             }
         }
 

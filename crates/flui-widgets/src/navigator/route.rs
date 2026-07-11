@@ -238,6 +238,14 @@ pub trait Route: Send + Sync + 'static {
 
     /// Flutter's `Route.onPopInvokedWithResult(didPop, result)` (`:410`), called
     /// with `true` after a real pop.
+    /// # Runs inside the flush, under the navigator's history lock
+    ///
+    /// Every `Route` lifecycle hook — this one included — is called while the
+    /// navigator holds its (non-reentrant) history mutex. **Calling back into
+    /// `NavigatorHandle` from here deadlocks the same thread**, including a
+    /// pure read such as `can_pop()`. Record what you need and act on it later
+    /// (a `PopScope`'s `on_pop_invoked` is delivered *outside* the lock for
+    /// exactly this reason, and is the hook user code should prefer).
     fn on_pop_invoked(&mut self, did_pop: bool) {}
 
     /// Flutter's `Route.dispose()` (`:574`).
