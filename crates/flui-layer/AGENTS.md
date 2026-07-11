@@ -23,6 +23,3 @@ Compositor layer tree — the fourth tree in FLUI's 5-tree architecture (View �
 
 See `crates/flui-layer/ARCHITECTURE.md` for deep architecture.
 
-## Note
-
-This crate's `Cargo.toml` still uses `edition = "2021"` — predates workspace standardization.

@@ -463,6 +463,10 @@ mod tests {
     fn test_scene_send() {
         fn assert_send<T: Send>() {}
         assert_send::<Scene>();
+        // SceneSnapshot moves by value into the raster mailbox (ADR-0027 §5) —
+        // it must be Send. Deliberately not asserting Sync: nothing shares a
+        // SceneSnapshot across threads, only moves it once.
+        assert_send::<crate::SceneSnapshot>();
     }
 
     #[test]
