@@ -409,7 +409,7 @@ impl FocusManager {
     fn traverse(&self, forward: bool) -> bool {
         let scope = self.active_scope();
         let current = *self.primary_focus.read();
-        match scope.resolve_traversal(current, forward) {
+        match scope.step(current, forward) {
             ResolvedStep::Focus(id) => {
                 self.set_primary_focus(Some(id));
                 true
@@ -418,7 +418,9 @@ impl FocusManager {
                 self.set_primary_focus(None);
                 false
             }
-            ResolvedStep::None => false,
+            // `step` follows the parent chain itself, so a retry never reaches
+            // here.
+            ResolvedStep::None | ResolvedStep::RetryInParent => false,
         }
     }
 
@@ -971,7 +973,7 @@ mod tests {
     /// starves the scope; `SkipRemainingHandlers` starves the scope *and*
     /// reports the event unconsumed (`focus_manager.dart:2278-2302`).
     ///
-    /// Red-check (the pre- flat dispatch): consult only the focused node —
+    /// Red-check (the earlier, non-bubbling dispatch): consult only the focused node —
     /// the bubbling arm's ancestor never fires and the first assertion fails.
     #[test]
     fn a_focused_child_key_bubbles_by_result_through_its_ancestors() {
@@ -1398,5 +1400,71 @@ mod tests {
             "Shift+Tab from nothing focuses last"
         );
         assert_eq!(manager.focused(), Some(rightmost.id()));
+    }
+
+    /// `TraversalEdgeBehavior::ParentScope` means **leave this scope and
+    /// continue in the enclosing one** (`focus_traversal.dart:141-149`) — it
+    /// shipped doing the opposite (wrapping inside the scope), which the branch
+    /// review caught.
+    ///
+    /// The enclosing scope's candidate set already contains the inner scope's
+    /// nodes (the walk crosses scope boundaries), so re-resolving there from
+    /// the same cursor steps to the first node *outside* the inner scope. No
+    /// landing on the scope's own invisible backing node.
+    ///
+    /// Red-check: answer the `ParentScope` edge with a wrap — Tab returns to
+    /// the inner scope's first node instead of leaving, and the outside
+    /// assertion fails.
+    #[test]
+    fn parent_scope_leaves_the_scope_instead_of_wrapping_inside_it() {
+        use crate::routing::focus_scope::TraversalEdgeBehavior;
+
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let at = |x: f32| {
+            flui_types::geometry::Rect::from_xywh(
+                flui_types::geometry::Pixels(x),
+                flui_types::geometry::Pixels(0.0),
+                flui_types::geometry::Pixels(10.0),
+                flui_types::geometry::Pixels(10.0),
+            )
+        };
+
+        // An inner scope holding two fields, and one field outside it, to the
+        // right — so "leaving" and "wrapping" land on different nodes.
+        let inner = FocusScopeNode::with_debug_label("inner");
+        root.attach_node(inner.as_focus_node());
+        let first = FocusNode::with_debug_label("inner-first");
+        first.set_rect(at(0.0));
+        let last = FocusNode::with_debug_label("inner-last");
+        last.set_rect(at(10.0));
+        inner.attach_node(&first);
+        inner.attach_node(&last);
+        let outside = FocusNode::with_debug_label("outside");
+        outside.set_rect(at(20.0));
+        root.attach_node(&outside);
+
+        // Traversal runs in the inner scope, and it asks to leave at its edge.
+        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::ParentScope);
+        manager.set_active_scope(Some(Arc::clone(&inner)));
+        manager.request_focus(last.id());
+
+        assert!(manager.focus_next(), "the step resolved");
+        assert_eq!(
+            manager.focused(),
+            Some(outside.id()),
+            "ParentScope leaves the scope and continues in the enclosing one; \
+             wrapping would have gone back to `inner-first`"
+        );
+
+        // And the default still wraps, so the two behaviors are distinguishable.
+        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::ClosedLoop);
+        manager.request_focus(last.id());
+        assert!(manager.focus_next());
+        assert_eq!(
+            manager.focused(),
+            Some(first.id()),
+            "ClosedLoop stays inside and wraps to the scope's first node"
+        );
     }
 }

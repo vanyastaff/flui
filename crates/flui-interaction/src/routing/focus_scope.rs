@@ -954,26 +954,15 @@ impl FocusScopeNode {
 
         // The true edge (`focus_traversal.dart:590-666`).
         match self.traversal_edge_behavior() {
+            // Continue in the enclosing scope, keeping the cursor
+            // (`focus_traversal.dart:141-149`). The enclosing scope's candidate
+            // set includes this scope's nodes — the walk crosses scope
+            // boundaries — so re-resolving there from the same cursor steps to
+            // the first node *outside* this scope, which is what "leave the
+            // scope" means. No landing on the scope's own (invisible) backing
+            // node, and no geometry to invent.
             TraversalEdgeBehavior::ParentScope if self.inner.enclosing_scope().is_some() => {
-                // Leaving the scope needs landing semantics for the parent's
-                // own candidates: a scope's backing node is a zero-rect,
-                // non-focusable candidate today, so a naive retry lands nowhere
-                // useful. Wrapping instead is *not* the requested behavior, so
-                // say so rather than pretending it is.
-                tracing::warn!(
-                    "TraversalEdgeBehavior::ParentScope is not implemented while an enclosing \
-                     scope exists; this scope wraps instead of leaving. Use ClosedLoop or Stop \
-                     to state the behavior you want."
-                );
-                let wrap = if forward {
-                    order.iter().find(|node| is_traversable(node))
-                } else {
-                    order.iter().rev().find(|node| is_traversable(node))
-                };
-                match wrap {
-                    Some(node) => ResolvedStep::Focus(node.id()),
-                    None => ResolvedStep::None,
-                }
+                ResolvedStep::RetryInParent
             }
             // With no enclosing scope, Flutter itself falls back to a wrap
             // (`focus_traversal.dart:148-149`): parity, not a gap.
@@ -996,12 +985,43 @@ impl FocusScopeNode {
     /// Focuses the next node in this scope. Returns `true` when focus
     /// advanced.
     pub fn focus_next_in_scope(&self, current: FocusNodeId) -> bool {
-        Self::perform(self.resolve_traversal(Some(current), true))
+        Self::perform(self.step(Some(current), true))
     }
 
     /// Focuses the previous node in this scope.
     pub fn focus_previous_in_scope(&self, current: FocusNodeId) -> bool {
-        Self::perform(self.resolve_traversal(Some(current), false))
+        Self::perform(self.step(Some(current), false))
+    }
+
+    /// [`resolve_traversal`](Self::resolve_traversal), following
+    /// [`ResolvedStep::RetryInParent`] up the scope chain until a scope decides
+    /// — the loop Flutter's `_moveFocus` performs by recursing into
+    /// `parentScope.nextFocus()`.
+    ///
+    /// The walk is bounded by the scope chain, which is finite and acyclic
+    /// (a scope's parent is a strict ancestor), so it terminates.
+    pub fn step(&self, current: Option<FocusNodeId>, forward: bool) -> ResolvedStep {
+        let mut scope: Option<Arc<FocusScopeNode>> = None;
+        loop {
+            let step = match &scope {
+                Some(scope) => scope.resolve_traversal(current, forward),
+                None => self.resolve_traversal(current, forward),
+            };
+            if step != ResolvedStep::RetryInParent {
+                return step;
+            }
+            let node = match &scope {
+                Some(scope) => Arc::clone(scope.as_focus_node()),
+                None => Arc::clone(&self.inner),
+            };
+            let Some(parent) = node.enclosing_scope() else {
+                // No parent to continue in: Flutter falls back to a wrap
+                // (`focus_traversal.dart:148-149`), which is what a
+                // `ClosedLoop` scope answers.
+                return ResolvedStep::None;
+            };
+            scope = Some(parent);
+        }
     }
 
     /// Carry out a resolved step against the global manager.
@@ -1015,7 +1035,9 @@ impl FocusScopeNode {
                 crate::FocusManager::global().unfocus();
                 false
             }
-            ResolvedStep::None => false,
+            // `step` follows the parent chain itself, so a retry never reaches
+            // a performer.
+            ResolvedStep::None | ResolvedStep::RetryInParent => false,
         }
     }
 
@@ -1070,10 +1092,10 @@ pub enum TraversalEdgeBehavior {
     /// unfocus-and-report half is the whole implementable contract
     /// (ADR-0026).
     LeaveFlutterView,
-    /// Retry in the enclosing scope (`:141-149`). **Interim (ADR-0026):**
+    /// Retry in the enclosing scope (`:141-149`). **Interim:** for now this
     /// behaves as [`ClosedLoop`](Self::ClosedLoop) — Flutter's own no-parent
-    /// fallback — until the full unfocus→parent-retry→verify
-    /// mechanism behind the scope-landing decision.
+    /// fallback — because the full unfocus→parent-retry→verify mechanism is not
+    /// built yet; it stays gated on the scope-landing decision in ADR-0026.
     ParentScope,
     /// Stay put (`:151-155`).
     Stop,
@@ -1092,6 +1114,10 @@ pub enum ResolvedStep {
     /// No focus change: `Stop` at the edge, a cursor outside the scope, or an
     /// empty scope.
     None,
+    /// The step ran off this scope's edge and the scope asked to continue in
+    /// the enclosing one ([`TraversalEdgeBehavior::ParentScope`]). The caller
+    /// re-resolves against that scope, keeping the same cursor.
+    RetryInParent,
 }
 
 /// Whether Tab may land on `node` — the candidate filter

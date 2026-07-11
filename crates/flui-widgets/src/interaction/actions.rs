@@ -476,7 +476,7 @@ mod tests {
 }
 
 // ============================================================================
-// Focus traversal intents (ADR-0026 )
+// Focus traversal intents (ADR-0026)
 // ============================================================================
 
 /// "Move focus to the next widget" — Flutter's `NextFocusIntent`

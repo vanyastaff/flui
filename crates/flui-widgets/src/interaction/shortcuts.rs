@@ -13,7 +13,7 @@
 //! `3.33.0-0.0.pre-6280-g88e87cd963f`: `SingleActivator` (`:433-581`),
 //! `CallbackShortcuts` (`:1181-1231`).
 //!
-//! # Deferred, and named (ADR-0023 ADR-0023)
+//! # Deferred, and named (ADR-0023)
 //!
 //! `LogicalKeySet` (needs a `HardwareKeyboard`-style pressed-set tracker),
 //! `CharacterActivator` (no consumer), a shared `ShortcutManager`, and
@@ -232,10 +232,14 @@ impl StatelessView for CallbackShortcuts {
 ///
 /// On a key the focused subtree ignored, the **first** matching activator's
 /// intent resolves to the nearest enclosing enabled action
-/// (`ShortcutManager.handleKeypress`, `:922-938`); the event is consumed
-/// unless the action reports it did nothing, which stops the bubbling
-/// *without* consuming (`actions.dart:312-314`). No match, or no enabled action: the key keeps
-/// bubbling.
+/// (`ShortcutManager.handleKeypress`, `:922-938`). That action's
+/// [`to_key_event_result`](super::actions::Action::to_key_event_result) decides
+/// the final [`KeyEventResult`] — it is an overridable method, so the action has
+/// the last word. Its default consumes the
+/// key when the action performed its work, and reports the event unconsumed —
+/// stopping the bubbling *without* consuming — when the action declined
+/// (`actions.dart:312-314`); an action may override it to decide otherwise. No
+/// match, or no enabled action: the key keeps bubbling.
 #[derive(Clone)]
 pub struct Shortcuts {
     shortcuts: Vec<(SingleActivator, Arc<dyn Intent>)>, // PORT-CHECK-OK-DYN: ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
@@ -488,7 +492,8 @@ mod intent_tests {
         manager.unfocus();
     }
 
-    /// `Action::consumes_key` = false maps to `SkipRemainingHandlers`
+    /// The default [`Action::to_key_event_result`](super::actions::Action::to_key_event_result)
+    /// maps a `NotPerformed` outcome to `SkipRemainingHandlers`
     /// (`actions.dart:312-314`): the action runs, but the event reports
     /// unconsumed and stops bubbling.
     #[test]

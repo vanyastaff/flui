@@ -1,7 +1,7 @@
 //! [`ModalRoute`] — a [`TransitionRoute`] that covers the screen with a barrier
 //! and a page.
 //!
-//! ADR-0020 **Private.** No `PageRoute`, no `PopupRoute`, no public API.
+//! Ported under ADR-0020. **Private:** no `PageRoute`, no `PopupRoute`, no public API.
 //!
 //! # Flutter parity
 //!
