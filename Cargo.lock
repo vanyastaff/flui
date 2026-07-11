@@ -1468,6 +1468,7 @@ version = "0.2.0"
 dependencies = [
  "android-activity",
  "anyhow",
+ "crossbeam-channel",
  "flui-animation",
  "flui-engine",
  "flui-foundation",
@@ -1587,6 +1588,7 @@ version = "0.2.0"
 dependencies = [
  "bytemuck",
  "criterion",
+ "crossbeam-channel",
  "flui-assets",
  "flui-foundation",
  "flui-layer",

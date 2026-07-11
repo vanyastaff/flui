@@ -151,6 +151,9 @@ pub mod binding;
 pub mod callbacks;
 pub mod clock;
 pub mod consts;
+// Monotonic generation/version counters for the window-runtime protocol
+// (ADR-0027 §6): FrameEpoch, SurfaceGeneration, ResourceGeneration.
+pub mod epoch;
 pub mod id;
 pub mod key;
 pub mod wasm;
@@ -187,6 +190,9 @@ pub use callbacks::{
 pub use clock::{ManualClock, MonotonicClock, SystemClock};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
+// Window-runtime generation/version counters + commit-time freshness gate
+// (ADR-0027 §6).
+pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
 // Diagnostics
 pub use debug::{
     DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
@@ -207,6 +213,8 @@ pub use id::{
     Marker,
     ObserverId,
     RawId,
+    // Realm identity (ADR-0027 §6) — one UiRealm incarnation
+    RealmId,
     RenderId,
     SemanticsId,
     TaskId,
@@ -273,6 +281,7 @@ pub mod prelude {
         ObserverId,
         Predicate,
         RELEASE_MODE,
+        RealmId,
         RenderId,
         SemanticsId,
         TreeId,

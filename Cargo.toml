@@ -110,6 +110,9 @@ tokio = { version = "1.43" }
 parking_lot = "0.12"
 once_cell = "1.20"
 dashmap = "6.1"
+# Bounded typed mailboxes (PipelineOwnerHandle dirty channel, WindowRuntime
+# owner inbox — ADR-0027 §4: bounded queues with typed backpressure only)
+crossbeam-channel = "0.5"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }

@@ -720,6 +720,23 @@ ids! {
         /// under a different node). `RenderTree` accessors perform the
         /// generation check; there is no bare-index `get()`.
         pub type RenderId Render;
+
+        /// Realm ID - **generational** key identifying one `UiRealm`
+        /// incarnation (ADR-0027 §6).
+        ///
+        /// Generational so a recreated realm never compares equal to its
+        /// predecessor: closing and reopening a realm's window mints a fresh
+        /// generation at the same (or a reused) slot, and any stale id held
+        /// by a worker or cache fails the generation check instead of
+        /// silently addressing the new incarnation (ABA).
+        ///
+        /// Minted by the process composition root (`AppRuntime`); the
+        /// platform layer maps native window handles to it. This is a
+        /// distinct type from flui-platform's native `WindowId(pub u64)`
+        /// (`flui-platform/src/window.rs`), which remains the
+        /// platform-internal native handle key — the two are not
+        /// interchangeable and neither converts implicitly to the other.
+        pub type RealmId Realm;
     }
 }
 
