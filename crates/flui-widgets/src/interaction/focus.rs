@@ -355,8 +355,7 @@ impl ViewState<Focus> for FocusState {
 
         install_rect_provider(&self.node, &self.anchor, ctx);
 
-        let on_focus_change = self.on_focus_change.clone();
-        self.install_focus_listener(ctx.rebuild_handle(), on_focus_change);
+        self.install_focus_listener(ctx.rebuild_handle());
 
         // `_handleAutofocus` (`:625-630`): only when the enclosing scope has
         // nothing focused yet. Synchronous — FLUI has no end-of-frame focus
@@ -388,7 +387,11 @@ impl ViewState<Focus> for FocusState {
         // node is read once in `create_state`.
         new_view.configure(&self.node);
         self.autofocus = new_view.autofocus;
-        self.on_focus_change.clone_from(&new_view.on_focus_change);
+        // The listener installed at mount reads this cell, so a rebuild that
+        // swaps the handler swaps what actually fires — capturing the handler
+        // in the closure instead would pin the *first* one for the widget's
+        // whole life.
+        (*self.on_focus_change.lock()).clone_from(&new_view.on_focus_change);
     }
 
     fn dispose(&mut self) {
