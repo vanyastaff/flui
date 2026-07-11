@@ -342,6 +342,12 @@ pub(crate) struct FlushOutcome {
     /// preserving Flutter's relative order (`navigator.dart:3372` before
     /// `:4527`).
     pub(crate) pop_invoked: Vec<(RouteId, bool)>,
+    /// Routes whose `did_pop` refused inside this flush. A refusal may mean a
+    /// local-history entry was consumed (`routes.dart:950-965`) — its
+    /// `on_remove` is owed on the route's registry, and `apply` drains it with
+    /// no lock held (ADR-0025 §3.3.1). Draining a plain user refusal is a
+    /// no-op.
+    pub(crate) refused_pops: Vec<RouteId>,
 }
 
 impl FlushOutcome {
@@ -351,6 +357,7 @@ impl FlushOutcome {
         self.rearrange_overlay |= later.rearrange_overlay;
         self.notifications.extend(later.notifications);
         self.pop_invoked.extend(later.pop_invoked);
+        self.refused_pops.extend(later.refused_pops);
         self.disposed.extend(later.disposed);
         self.dying.extend(later.dying);
     }
@@ -699,8 +706,11 @@ impl RouteHistory {
         (id, result)
     }
 
-    /// Flutter's `NavigatorState.pop` (`:5642-5675`). Returns whether a route was
-    /// found to pop; `false` also when the route refused (`did_pop → false`).
+    /// Flutter's `NavigatorState.pop` (`:5642-5675`). Returns whether a present
+    /// route was found to arm; a route that *refuses* the pop (`did_pop` →
+    /// `false`, e.g. a local-history entry consumed instead) still counts —
+    /// Flutter's `pop` is `void` and reports nothing either. (This doc
+    /// previously claimed `false` on refusal; the code was right.)
     pub(crate) fn pop(&mut self, result: Option<AnyResult>) -> bool {
         let Some(index) = self.last_present_index() else {
             return false;
@@ -829,6 +839,7 @@ impl RouteHistory {
         let mut index: isize = self.entries.len() as isize - 1;
         let mut next: Option<RouteId> = None;
         let mut pop_invoked: Vec<(RouteId, bool)> = Vec::new();
+        let mut refused_pops: Vec<RouteId> = Vec::new();
         let mut can_remove_or_add = false;
         let mut popped_route: Option<RouteId> = None;
         let mut seen_top_active_route = false;
@@ -915,7 +926,10 @@ impl RouteHistory {
                             can_remove_or_add = true;
                         }
                     } else {
-                        // The route refused the pop; it returns to `Idle`.
+                        // The route refused the pop; it returns to `Idle`. A
+                        // local-history pop is one kind of refusal — its owed
+                        // `on_remove` drains in `apply`, outside this lock.
+                        refused_pops.push(self.entries[position].id());
                         debug_assert_eq!(self.entries[position].state, RouteLifecycle::Idle);
                         advance = false;
                     }
@@ -1017,6 +1031,7 @@ impl RouteHistory {
             disposed,
             dying: to_be_disposed,
             pop_invoked,
+            refused_pops,
         }
     }
 

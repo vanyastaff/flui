@@ -125,7 +125,19 @@ impl NavigatorShared {
     ///    false` (`:5671`, `:5747`) precisely because step 1 already updated the
     ///    overlay's list.
     fn apply(&self, mut outcome: FlushOutcome) {
-        // 0. Each popped/refused route's `PopScope` callbacks — before the
+        // 0a. Owed local-history removals — `on_remove` fires at the `didPop`
+        //     moment in Flutter (`routes.dart:952-963`), which is inside the
+        //     flush here; delivery waits until now so the callbacks run with
+        //     **no lock held** (ADR-0025 §3.3.1). The emptied-edge
+        //     `changed_internal_state` rides the same drain.
+        for route in &outcome.refused_pops {
+            let modal = self.registries.modals.lock().get(route).cloned();
+            if let Some(modal) = modal {
+                modal.drain_local_history();
+            }
+        }
+
+        // 0b. Each popped/refused route's `PopScope` callbacks — before the
         //    observers hear `didPop`, preserving Flutter's relative order
         //    (`onPopInvokedWithResult` fires inside `handlePop`,
         //    `navigator.dart:3372`, before the observation at `:4527`) — and,
@@ -562,21 +574,27 @@ impl NavigatorHandle {
             return true;
         }
 
-        let Some(disposition) = self.shared.history.lock().pop_disposition_of_top() else {
-            return false;
-        };
-
-        match disposition {
-            RoutePopDisposition::Bubble => false,
-            RoutePopDisposition::Pop => {
-                self.pop_erased(result);
-                true
+        // Disposition and the acted-on pop share **one** critical section:
+        // deciding "Pop — an entry/route is there" and popping must not be
+        // separated by a racing `entry_handle.remove()` or `remove_route`
+        // retargeting the answer (ADR-0025 §3.3.3). Flutter is immune only by
+        // being single-threaded.
+        self.shared.mutate(|history| {
+            let Some(disposition) = history.pop_disposition_of_top() else {
+                return false;
+            };
+            match disposition {
+                RoutePopDisposition::Bubble => false,
+                RoutePopDisposition::Pop => {
+                    history.pop(result);
+                    true
+                }
+                RoutePopDisposition::DoNotPop => {
+                    history.notify_pop_refused();
+                    true
+                }
             }
-            RoutePopDisposition::DoNotPop => {
-                self.shared.mutate(RouteHistory::notify_pop_refused);
-                true
-            }
-        }
+        })
     }
 
     /// Consult the top route's `popDisposition` and act on it, with no result.

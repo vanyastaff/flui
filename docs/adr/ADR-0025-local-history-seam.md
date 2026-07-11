@@ -1,6 +1,6 @@
 # ADR-0025 — The `LocalHistoryRoute` seam
 
-- **Status:** **Proposed — design accepted with adversarial-review constraints.** Produced by a design pass (chief-architect agent) and an adversarial critique (harsh-critic agent), 2026-07-11. The critique's three structural findings are folded in below as **binding constraints**, not suggestions; one of them exposed a live deadlock in the already-shipped `PopScope` fan-out, fixed immediately in `7b038dee`. U1 is implementable now; U2's public surface is gated (§6).
+- **Status:** **Accepted — U1 landed 2026-07-11; U2 gated (§6).** Produced by a design pass (chief-architect agent) and an adversarial critique (harsh-critic agent), 2026-07-11. The critique's three structural findings are folded in below as **binding constraints**, not suggestions; one of them exposed a live deadlock in the already-shipped `PopScope` fan-out, fixed immediately in `7b038dee`. U1 is implementable now; U2's public surface is gated (§6).
 - **Date:** 2026-07-11
 - **Deciders:** chief-architect (delivery/lock discipline, §3.3); api-design-lead (the three U2 public types, §3.2 — sign-off due before U2, not U1); product-steward (§6's U2 timing); qa-lead (the §5 edge-case matrix).
 - **Relates to:** ADR-0019 (deferred `LocalHistoryRoute`; the `will_handle_pop_internally`/`did_pop → false` machinery already transcribed and commented as waiting — `route.rs:178-186`, `:215-224`; `history.rs` `can_pop`/`pop_disposition_of_top`); PopScope (`pop_scope.rs`, whose registry pattern and — post-`7b038dee` — deferred delivery this reuses).
@@ -51,6 +51,26 @@ Acquisition discipline (trigger #22): `add` is rebuild-adjacent (`changed_intern
 - **`remove()` after the route died** → `on_remove` fires (Flutter's dispose never clears `_owner`; `removeLocalHistoryEntry` still runs).
 - **`handle_pop`'s `is_completed` early-return**: a route completed via `remove_route` then popped skips `did_pop` — leaves with live entries, `on_remove` silent; Flutter asserts page-based there (`navigator.dart:3361-3366`), FLUI doesn't. Equivalence note + test.
 - The Flutter material-free example (`routes.dart:762-880`) is the U1 integration test.
+
+## 5a. U1 as landed (2026-07-11)
+
+Shipped per the constraints: `LocalHistoryRegistry` on `ModalInner` (leaf lock;
+atomic `removed` flag as the exactly-once linearization), the two `ModalRoute`
+overrides, deferred delivery — `did_pop` *records* the owed `on_remove` and the
+flush notes the route in `FlushOutcome::refused_pops`; `apply` drains via
+`ModalHandle::drain_local_history` with no lock held, the emptied-edge
+`changed_internal_state` riding the same drain — and `maybe_pop`'s disposition
++ act collapsed into one `mutate` critical section. Red-checked: dropping the
+`did_pop` arm pops the route instead of the entry; firing inline instead of
+deferring hangs the watchdog re-entrancy test. **One §5 pin corrected at
+implementation:** `remove()` after the route died is a **no-op**, diverging
+from Flutter (which fires `onRemove` because GC lets `_localHistory` float) —
+keeping callbacks alive past dispose is precisely the §3.3.4 Arc-cycle leak,
+so dispose severs; recorded in the module docs. The `pub(crate)` surface
+(`LocalHistoryHandle::maybe_of`/`add`, entry handles) is exercised by the
+Flutter material-free example as the integration test, plus the veto-ordering,
+observer-silence, pending-future, single-route-claim, exactly-once, and
+sever-at-dispose pins.
 
 ## 6. Units and the recommendation
 

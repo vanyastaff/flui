@@ -39,6 +39,7 @@ mod hero_controller_scope;
 mod hero_flight;
 mod history;
 mod lifecycle;
+mod local_history;
 mod modal_route;
 #[allow(clippy::module_inception)]
 mod navigator;

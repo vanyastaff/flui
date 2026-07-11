@@ -82,6 +82,7 @@ use parking_lot::Mutex;
 
 use super::binding::{RouteBindingSlot, TransitionGroup};
 use super::hero::{HeroRegistry, HeroScope};
+use super::local_history::{LocalHistoryHandle, LocalHistoryRegistry, LocalHistoryScope};
 use super::navigator::NavigatorHandle;
 use super::overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
@@ -178,6 +179,11 @@ struct ModalInner {
     /// [`Route::vetoes_pop`] and notified from [`Route::on_pop_invoked`].
     pop_entries: PopEntryRegistry,
 
+    /// This route's local-history stack — Flutter's `_localHistory`
+    /// (`routes.dart:748`). While non-empty, a pop removes the most recent
+    /// entry instead of the route (ADR-0025 U1).
+    local_history: LocalHistoryRegistry,
+
     /// `_ModalScopeState.focusScopeNode` (`routes.dart:1095`): the per-route
     /// focus scope. The page is wrapped in a `FocusScope::with_external_node`
     /// over this, and the route lifecycle makes it the manager's **active
@@ -248,6 +254,7 @@ impl ModalInner {
                 subtree: self.subtree.clone(),
                 heroes: self.heroes.clone(),
                 pop_entries: self.pop_entries.clone(),
+                local_history: self.local_history_handle(),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -297,6 +304,17 @@ impl ModalInner {
         if Arc::ptr_eq(&manager.active_scope(), &self.focus_scope) {
             manager.set_active_scope(None);
         }
+    }
+
+    /// The page-facing local-history capability: the registry plus this
+    /// route's `changed_internal_state`, owed on the empty↔non-empty edges
+    /// (`routes.dart:886-895`).
+    fn local_history_handle(self: &Arc<Self>) -> LocalHistoryHandle {
+        let inner = Arc::clone(self);
+        LocalHistoryHandle::new(
+            self.local_history.clone(),
+            Arc::new(move || changed_internal_state(&inner)),
+        )
     }
 
     /// Repoint both proxies at whatever [`offstage`](Self::offstage) currently
@@ -385,6 +403,9 @@ struct ModalScope {
     heroes: HeroRegistry,
     /// The route's `PopScope` registry, provided to the page as an ambient.
     pop_entries: PopEntryRegistry,
+    /// The route's local-history handle, provided to the page as an ambient
+    /// (ADR-0025 §3.2).
+    local_history: LocalHistoryHandle,
 }
 
 impl_animated_view!(ModalScope);
@@ -426,7 +447,10 @@ impl ViewState<ModalScope> for ModalScopeState {
             view.subtree.clone(),
             HeroScope::new(
                 view.heroes.clone(),
-                PopEntryScope::new(view.pop_entries.clone(), page),
+                PopEntryScope::new(
+                    view.pop_entries.clone(),
+                    LocalHistoryScope::new(view.local_history.clone(), page),
+                ),
             ),
         )
         .boxed();
@@ -468,6 +492,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
             subtree: RouteSubtreeCell::new(),
             heroes: HeroRegistry::new(),
             pop_entries: PopEntryRegistry::new(),
+            local_history: LocalHistoryRegistry::new(),
             focus_scope: FocusScopeNode::with_debug_label("ModalRoute Focus Scope"),
         });
 
@@ -608,6 +633,20 @@ impl ModalHandle {
         self.inner.pop_entries.notify_pop_invoked(did_pop);
     }
 
+    /// Fire the `on_remove`s owed by local-history pops that happened inside
+    /// the flush, and the emptied-edge `changed_internal_state`
+    /// (`routes.dart:952-963`). Called by `NavigatorShared::apply` with **no
+    /// lock held** (ADR-0025 §3.3.1).
+    pub(crate) fn drain_local_history(&self) {
+        let (callbacks, emptied) = self.inner.local_history.take_owed();
+        for callback in callbacks {
+            callback();
+        }
+        if emptied {
+            changed_internal_state(&self.inner);
+        }
+    }
+
     /// `ModalRoute.offstage = value` (`routes.dart:1951-1962`), whole: the early
     /// return on an unchanged value, the animation-proxy swap, and
     /// `changedInternalState`.
@@ -715,8 +754,10 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         self.transition.finished_when_popped()
     }
 
+    /// `LocalHistoryRoute.willHandlePopInternally` (`routes.dart:970-972`):
+    /// non-empty local history claims the pop.
     fn will_handle_pop_internally(&self) -> bool {
-        self.transition.will_handle_pop_internally()
+        !self.inner.local_history.is_empty() || self.transition.will_handle_pop_internally()
     }
 
     /// `OverlayRoute.install` creates the entries, then `TransitionRoute.install`
@@ -757,7 +798,16 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         self.transition.did_replace(previous);
     }
 
+    /// `LocalHistoryRoute.didPop` (`routes.dart:950-965`): while entries
+    /// exist, pop the most recent one and answer `false` — the route stays and
+    /// its future stays pending. The entry's `on_remove` (and the emptied-edge
+    /// `changed_internal_state`) are **owed**, not fired: this runs under the
+    /// history lock, and `NavigatorShared::apply` delivers them outside it
+    /// (ADR-0025 §3.3.1).
     fn did_pop(&mut self) -> bool {
+        if self.inner.local_history.pop_last_deferred() {
+            return false;
+        }
         self.transition.did_pop()
     }
 
@@ -812,6 +862,9 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// go now: a disposed route that a `HeroController` can still name is a route
     /// it can still measure.
     fn dispose(&mut self) {
+        // Sever local history first: live entries drop un-fired (Flutter
+        // GC-drops the list) and late adds become inert (ADR-0025 §5).
+        self.inner.local_history.sever();
         self.inner.release_focus_scope();
         if let Some(binding) = self.binding() {
             binding.withdraw_subtree();

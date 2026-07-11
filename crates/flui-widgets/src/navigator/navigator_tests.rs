@@ -767,7 +767,7 @@ fn public_no_internal_route_stack_exports() {
     const NAV_MOD: &str = include_str!("mod.rs");
     const LIB: &str = include_str!("../lib.rs");
 
-    const INTERNAL: [&str; 29] = [
+    const INTERNAL: [&str; 35] = [
         "RouteHistory",
         "RouteLifecycle",
         "RouteEntry",
@@ -810,6 +810,16 @@ fn public_no_internal_route_stack_exports() {
         "Shuttle",
         "ShuttleState",
         "FlightPlan",
+        // ADR-0019's deferred `PopScope` landed 2026-07-10: the widget is
+        // public; the route-side registry and its ambient carrier stay private.
+        "PopEntryRegistry",
+        "PopEntryScope",
+        // ADR-0025 U1: the local-history mechanism is crate-private; the
+        // public surface (U2) is gated on the first Catalog consumer.
+        "LocalHistoryRegistry",
+        "LocalHistoryScope",
+        "LocalHistoryHandle",
+        "LocalHistoryEntryHandle",
     ];
 
     super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);
@@ -1149,4 +1159,320 @@ fn pop_scope_callbacks_may_call_back_into_the_navigator() {
         "a PopScope callback calling back into the navigator deadlocked — \
          the fan-out ran under the history lock"
     );
+}
+
+// ============================================================================
+// Local history — ADR-0025 U1 (routes.dart:747-973)
+// ============================================================================
+
+mod local_history {
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::PopScope;
+    use crate::navigator::PageRoute;
+    use crate::navigator::local_history::{LocalHistoryEntry, LocalHistoryHandle};
+    use crate::navigator::observer::NavigatorObserver;
+    use crate::navigator::route::RouteId;
+
+    /// Captures the ambient [`LocalHistoryHandle`] in `init_state`, exactly
+    /// where a real consumer acquires it (trigger-#22 discipline). The scope
+    /// is provided *inside* the built page subtree, so the page **builder**'s
+    /// context cannot see it — only a mounted descendant's can.
+    #[derive(Clone)]
+    struct HandleProbe {
+        sink: Arc<Mutex<Option<LocalHistoryHandle>>>,
+    }
+
+    impl View for HandleProbe {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateful(self)
+        }
+    }
+
+    impl StatefulView for HandleProbe {
+        type State = HandleProbeState;
+
+        fn create_state(&self) -> Self::State {
+            HandleProbeState {
+                sink: Arc::clone(&self.sink),
+            }
+        }
+    }
+
+    struct HandleProbeState {
+        sink: Arc<Mutex<Option<LocalHistoryHandle>>>,
+    }
+
+    impl std::fmt::Debug for HandleProbeState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("HandleProbeState").finish_non_exhaustive()
+        }
+    }
+
+    impl ViewState<HandleProbe> for HandleProbeState {
+        fn init_state(&mut self, ctx: &dyn BuildContext) {
+            *self.sink.lock() = LocalHistoryHandle::maybe_of(ctx);
+        }
+
+        fn build(&self, _view: &HandleProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+            SizedBox::new(10.0, 10.0)
+        }
+    }
+
+    /// A modal page whose content captures the route's [`LocalHistoryHandle`]
+    /// on mount.
+    fn page_with_handle(
+        sink: &Arc<Mutex<Option<LocalHistoryHandle>>>,
+        duration: Duration,
+    ) -> PageRoute<i32> {
+        let sink = Arc::clone(sink);
+        PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            HandleProbe {
+                sink: Arc::clone(&sink),
+            }
+            .into_view()
+            .boxed()
+        })
+        .transition_duration(duration)
+    }
+
+    /// Counts `did_pop` observations, to prove observer silence on entry pops.
+    #[derive(Default)]
+    struct PopCounter(AtomicUsize);
+    impl NavigatorObserver for PopCounter {
+        fn did_pop(&self, _route: RouteId, _previous: Option<RouteId>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// **The Flutter example, end to end** (`routes.dart:762-880`): with an
+    /// entry on the top route, a pop consumes the **entry** — the route stays,
+    /// its future stays pending, observers hear nothing — and the next pop
+    /// removes the route itself.
+    ///
+    /// Red-check: skip the `local_history.pop_last_deferred()` arm in
+    /// `ModalRoute::did_pop` — the first `maybe_pop` removes the route and the
+    /// stays-put assertion fails.
+    #[test]
+    fn an_entry_pops_before_the_route_and_observers_stay_silent() {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let pops = Arc::new(PopCounter::default());
+        handle.add_observer(Arc::clone(&pops) as Arc<dyn NavigatorObserver>);
+
+        let sink = Arc::new(Mutex::new(None));
+        let route_result = handle.push(page_with_handle(&sink, Duration::ZERO));
+        harness.tick();
+        let local = sink.lock().clone().expect("the page captured its handle");
+
+        let removed = Arc::new(AtomicUsize::new(0));
+        let removed_for_entry = Arc::clone(&removed);
+        let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
+            removed_for_entry.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        assert!(handle.maybe_pop(), "the entry pop is handled");
+        harness.tick();
+        assert_eq!(handle.route_ids().len(), 2, "the route stays");
+        assert_eq!(removed.load(Ordering::SeqCst), 1, "on_remove fired once");
+        assert_eq!(
+            route_result.try_take(),
+            None,
+            "the route's future stays pending (`routes.dart:964-966`)"
+        );
+        assert_eq!(
+            pops.0.load(Ordering::SeqCst),
+            0,
+            "observers hear nothing for an entry pop (`navigator.dart:4517-4519`)"
+        );
+
+        assert!(handle.maybe_pop(), "the second pop takes the route");
+        harness.tick();
+        assert_eq!(handle.route_ids().len(), 1);
+        assert_eq!(
+            pops.0.load(Ordering::SeqCst),
+            1,
+            "now the observers hear it"
+        );
+        assert_eq!(removed.load(Ordering::SeqCst), 1, "no second on_remove");
+    }
+
+    /// A **single** route with an entry claims the pop: `can_pop` answers
+    /// `true` through `will_handle_pop_internally` (`history.rs`'s bottom-route
+    /// arm ≙ `routes.dart:970-972`), and the pop consumes the entry while the
+    /// lone route stays.
+    #[test]
+    fn a_single_route_with_an_entry_claims_can_pop() {
+        let handle = NavigatorHandle::new();
+        let sink = Arc::new(Mutex::new(None));
+        handle.seed_initial(page_with_handle(&sink, Duration::ZERO));
+        let mut harness = mount(Navigator::new(handle.clone()));
+        let local = sink.lock().clone().expect("captured");
+
+        assert!(!handle.can_pop(), "a lone route cannot pop");
+        let _entry = local.add(LocalHistoryEntry::new());
+        assert!(handle.can_pop(), "an entry claims the pop internally");
+
+        assert!(handle.maybe_pop());
+        harness.tick();
+        assert_eq!(handle.route_ids().len(), 1, "the lone route stays");
+        assert!(!handle.can_pop(), "and the claim is gone with the entry");
+    }
+
+    /// A `PopScope` veto beats local history — Flutter checks `_popEntries`
+    /// **before** the local-history layer (`routes.dart:2033-2042` over
+    /// `:940-947`): `maybe_pop` refuses without consuming the entry, and a
+    /// programmatic `pop()` (which skips the veto) consumes it.
+    #[test]
+    fn a_pop_scope_veto_beats_local_history() {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+
+        let sink = Arc::new(Mutex::new(None));
+        let sink_for_page = Arc::clone(&sink);
+        let _guarded = handle.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                PopScope::new(HandleProbe {
+                    sink: Arc::clone(&sink_for_page),
+                })
+                .can_pop(false)
+                .into_view()
+                .boxed()
+            })
+            .transition_duration(Duration::ZERO),
+        );
+        harness.tick();
+        let local = sink.lock().clone().expect("captured");
+
+        let removed = Arc::new(AtomicUsize::new(0));
+        let removed_for_entry = Arc::clone(&removed);
+        let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
+            removed_for_entry.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        assert!(handle.maybe_pop(), "the veto handles the attempt");
+        assert_eq!(
+            removed.load(Ordering::SeqCst),
+            0,
+            "the entry survives a veto"
+        );
+        assert_eq!(handle.route_ids().len(), 2);
+
+        assert!(handle.pop(), "a programmatic pop skips the veto");
+        harness.tick();
+        assert_eq!(removed.load(Ordering::SeqCst), 1, "and consumes the entry");
+        assert_eq!(handle.route_ids().len(), 2, "the route still stays");
+    }
+
+    /// `on_remove` may call back into the navigator on **both** trigger paths
+    /// — the deferred in-flush pop and the direct `remove()` — because neither
+    /// runs under the history lock (ADR-0025 §3.3.1; the `7b038dee` shape).
+    ///
+    /// Red-check: fire `on_remove` inside `ModalRoute::did_pop` instead of
+    /// deferring — the pop phase hangs into the watchdog.
+    #[test]
+    fn on_remove_may_call_back_into_the_navigator() {
+        const BUDGET: Duration = Duration::from_secs(10);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let built = Built::default();
+            let (handle, mut harness) = navigator_with(&built);
+            let sink = Arc::new(Mutex::new(None));
+            let _route = handle.push(page_with_handle(&sink, Duration::ZERO));
+            harness.tick();
+            let local = sink.lock().clone().expect("captured");
+
+            let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+            let observed_for_entry = Arc::clone(&observed);
+            let navigator = handle.clone();
+            let entry = local.add(LocalHistoryEntry::new().on_remove(move || {
+                observed_for_entry.lock().push(navigator.can_pop());
+            }));
+
+            assert!(handle.maybe_pop(), "in-flush path");
+            let navigator = handle.clone();
+            let observed_for_entry = Arc::clone(&observed);
+            let entry2 = local.add(LocalHistoryEntry::new().on_remove(move || {
+                observed_for_entry.lock().push(navigator.can_pop());
+            }));
+            entry2.remove(); // direct path
+            let _ = entry;
+
+            assert_eq!(observed.lock().len(), 2, "both paths re-entered");
+            let _ = done.send(());
+        });
+        assert!(
+            finished.recv_timeout(BUDGET).is_ok(),
+            "an on_remove calling back into the navigator deadlocked"
+        );
+    }
+
+    /// `remove()` fires exactly once and is idempotent (`routes.dart:902-927`,
+    /// with the atomic linearization of ADR-0025 §3.3.2); once the last entry
+    /// is gone, the next pop takes the route.
+    #[test]
+    fn remove_fires_once_and_releases_the_internal_claim() {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let sink = Arc::new(Mutex::new(None));
+        let _route = handle.push(page_with_handle(&sink, Duration::ZERO));
+        harness.tick();
+        let local = sink.lock().clone().expect("captured");
+
+        let removed = Arc::new(AtomicUsize::new(0));
+        let removed_for_entry = Arc::clone(&removed);
+        let entry = local.add(LocalHistoryEntry::new().on_remove(move || {
+            removed_for_entry.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        entry.remove();
+        entry.remove(); // idempotent
+        assert_eq!(removed.load(Ordering::SeqCst), 1, "exactly once");
+
+        assert!(handle.maybe_pop(), "no entry left: the route itself pops");
+        harness.tick();
+        assert_eq!(handle.route_ids().len(), 1);
+    }
+
+    /// Route teardown severs: live entries drop **without** firing (Flutter
+    /// GC-drops `_localHistory`; dispose never touches it), late adds are
+    /// inert, and a late `remove()` is a no-op (FLUI divergence, named in the
+    /// module docs — keeping callbacks past dispose is the Arc-cycle leak).
+    #[test]
+    fn dispose_severs_live_entries_without_firing() {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let sink = Arc::new(Mutex::new(None));
+        let _route = handle.push(page_with_handle(&sink, Duration::ZERO));
+        harness.tick();
+        let local = sink.lock().clone().expect("captured");
+
+        let removed = Arc::new(AtomicUsize::new(0));
+        let removed_for_entry = Arc::clone(&removed);
+        let entry = local.add(LocalHistoryEntry::new().on_remove(move || {
+            removed_for_entry.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // Remove the whole route out from under its entry.
+        let ids = handle.route_ids();
+        assert!(handle.remove_route(ids[1]));
+        harness.tick();
+        assert_eq!(handle.route_ids().len(), 1);
+        assert_eq!(
+            removed.load(Ordering::SeqCst),
+            0,
+            "a dying route's entries drop un-fired"
+        );
+
+        entry.remove();
+        assert_eq!(removed.load(Ordering::SeqCst), 0, "late remove is a no-op");
+
+        let late =
+            local.add(LocalHistoryEntry::new().on_remove(|| {
+                unreachable!("BUG: an entry added to a disposed route must be inert")
+            }));
+        late.remove();
+    }
 }
