@@ -600,6 +600,14 @@ pub(crate) struct ModalHandle {
 /// caller, and it is itself dead until U4's `Hero` widget. See `hero_controller.rs`.
 #[allow(dead_code)]
 impl ModalHandle {
+    /// Deliver `onPopInvokedWithResult(did_pop, …)` to every `PopScope`
+    /// registered in this route's page (`routes.dart:2045-2050`). Called by
+    /// `NavigatorShared::apply` **outside** the history lock — the callbacks
+    /// are user code and may call back into the navigator.
+    pub(crate) fn notify_pop_invoked(&self, did_pop: bool) {
+        self.inner.pop_entries.notify_pop_invoked(did_pop);
+    }
+
     /// `ModalRoute.offstage = value` (`routes.dart:1951-1962`), whole: the early
     /// return on an unchanged value, the animation-proxy swap, and
     /// `changedInternalState`.
@@ -785,10 +793,13 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         self.inner.pop_entries.any_vetoes()
     }
 
-    /// `ModalRoute.onPopInvokedWithResult` fans the outcome out to every
-    /// registered `PopScope` before the base behavior (`routes.dart:2045-2050`).
+    /// The route-level hook only. The user-facing `PopScope` fan-out
+    /// (`routes.dart:2045-2050`) is **not** fired from here: this runs inside
+    /// the flush, under the history lock, where a user callback calling back
+    /// into the navigator deadlocks. The flush owes the fan-out through
+    /// `FlushOutcome::pop_invoked`, and `apply` delivers it via
+    /// [`ModalHandle::notify_pop_invoked`] outside the lock.
     fn on_pop_invoked(&mut self, did_pop: bool) {
-        self.inner.pop_entries.notify_pop_invoked(did_pop);
         self.transition.on_pop_invoked(did_pop);
     }
 

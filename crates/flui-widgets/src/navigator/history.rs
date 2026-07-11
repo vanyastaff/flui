@@ -334,6 +334,14 @@ pub(crate) struct FlushOutcome {
     /// The dying entries themselves, moved out of the history so the caller can
     /// run `Route::dispose` outside the lock.
     dying: Vec<RouteEntry>,
+    /// `onPopInvokedWithResult(did_pop, …)` deliveries owed to each route's
+    /// `PopScope`s. **Deferred**: the fan-out runs user callbacks, and a user
+    /// callback may call back into the navigator — firing it under the history
+    /// lock deadlocks on the non-reentrant mutex, same-thread. The caller
+    /// (`apply`) delivers these first, before the observers hear `didPop`,
+    /// preserving Flutter's relative order (`navigator.dart:3372` before
+    /// `:4527`).
+    pub(crate) pop_invoked: Vec<(RouteId, bool)>,
 }
 
 impl FlushOutcome {
@@ -342,6 +350,7 @@ impl FlushOutcome {
     fn absorb(&mut self, later: Self) {
         self.rearrange_overlay |= later.rearrange_overlay;
         self.notifications.extend(later.notifications);
+        self.pop_invoked.extend(later.pop_invoked);
         self.disposed.extend(later.disposed);
         self.dying.extend(later.dying);
     }
@@ -505,6 +514,10 @@ impl RouteHistory {
 
     /// Tell the top present route its pop was refused
     /// (`onPopInvokedWithResult(false, result)`, `navigator.dart:5612`).
+    ///
+    /// The route hook fires here; the user-facing `PopScope` fan-out is owed
+    /// through the outcome, so `mutate`'s `apply` delivers it **outside** the
+    /// history lock — a callback may call back into the navigator.
     pub(crate) fn notify_pop_refused(&mut self) {
         if let Some(entry) = self
             .entries
@@ -512,6 +525,11 @@ impl RouteHistory {
             .rfind(|entry| entry.state.is_present())
         {
             entry.route.on_pop_invoked(false);
+            let refused = entry.id();
+            self.last_outcome
+                .get_or_insert_with(FlushOutcome::default)
+                .pop_invoked
+                .push((refused, false));
         }
     }
 
@@ -810,6 +828,7 @@ impl RouteHistory {
     fn flush_inner(&mut self, rearrange_overlay: bool) -> FlushOutcome {
         let mut index: isize = self.entries.len() as isize - 1;
         let mut next: Option<RouteId> = None;
+        let mut pop_invoked: Vec<(RouteId, bool)> = Vec::new();
         let mut can_remove_or_add = false;
         let mut popped_route: Option<RouteId> = None;
         let mut seen_top_active_route = false;
@@ -871,6 +890,10 @@ impl RouteHistory {
 
                 RouteLifecycle::Pop => {
                     if self.entries[position].handle_pop() {
+                        // The user-facing `PopScope` fan-out is owed but NOT
+                        // fired here — deferred through the outcome so it runs
+                        // outside the history lock (see `FlushOutcome::pop_invoked`).
+                        pop_invoked.push((self.entries[position].id(), true));
                         if !seen_top_active_route {
                             if let Some(popped) = popped_route {
                                 self.entries[position].handle_did_pop_next(popped);
@@ -993,6 +1016,7 @@ impl RouteHistory {
             notifications,
             disposed,
             dying: to_be_disposed,
+            pop_invoked,
         }
     }
 

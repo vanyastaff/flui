@@ -125,6 +125,20 @@ impl NavigatorShared {
     ///    false` (`:5671`, `:5747`) precisely because step 1 already updated the
     ///    overlay's list.
     fn apply(&self, mut outcome: FlushOutcome) {
+        // 0. Each popped/refused route's `PopScope` callbacks — before the
+        //    observers hear `didPop`, preserving Flutter's relative order
+        //    (`onPopInvokedWithResult` fires inside `handlePop`,
+        //    `navigator.dart:3372`, before the observation at `:4527`) — and,
+        //    like every user callback here, with **no lock held**: a callback
+        //    may call straight back into this navigator, and even a `can_pop()`
+        //    read would deadlock on the non-reentrant history mutex.
+        for (route, did_pop) in &outcome.pop_invoked {
+            let modal = self.registries.modals.lock().get(route).cloned();
+            if let Some(modal) = modal {
+                modal.notify_pop_invoked(*did_pop);
+            }
+        }
+
         // 1. Observers, with **no lock held** — this is the whole reason the flush
         //    returns data instead of calling them. An observer may read the stack
         //    through its `NavigatorHandle`, and may mutate it (which runs a fresh

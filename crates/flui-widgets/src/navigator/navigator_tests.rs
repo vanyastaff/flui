@@ -1085,3 +1085,68 @@ fn a_disposed_pop_scope_stops_vetoing() {
         "no stale veto survives the scope's dispose"
     );
 }
+
+/// A `PopScope` callback may call back into the navigator — filed by the
+/// ADR-0025 critique: the fan-out used to run inside the flush, under the
+/// non-reentrant history lock, so even a `can_pop()` read from the callback
+/// deadlocked same-thread. Delivery now defers through
+/// `FlushOutcome::pop_invoked` and `apply` fires it with no lock held, still
+/// synchronously within the `pop`/`maybe_pop` call (the outcomes-ordering
+/// tests above pin that), and before observers hear `didPop`
+/// (`navigator.dart:3372` before `:4527`).
+///
+/// Red-check (the shipped bug): fan out from `ModalRoute::on_pop_invoked`
+/// again — both phases hang and the watchdog fails the test.
+#[test]
+fn pop_scope_callbacks_may_call_back_into_the_navigator() {
+    use std::time::Duration;
+
+    use crate::PopScope;
+    use crate::navigator::PageRoute;
+
+    const BUDGET: Duration = Duration::from_secs(10);
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+
+        let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+        let observed_for_scope = Arc::clone(&observed);
+        let handle_for_scope = handle.clone();
+        let _guarded = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            let observed = Arc::clone(&observed_for_scope);
+            let navigator = handle_for_scope.clone();
+            PopScope::new(SizedBox::new(10.0, 10.0))
+                .can_pop(false)
+                .on_pop_invoked(move |_did_pop| {
+                    // The re-entrant read that used to deadlock.
+                    observed.lock().push(navigator.can_pop());
+                })
+                .into_view()
+                .boxed()
+        }));
+        harness.tick();
+
+        // Refused path: `maybe_pop` → veto → deferred fan-out.
+        assert!(handle.maybe_pop());
+        // Forced path: `pop` → flush Pop arm → deferred fan-out.
+        assert!(handle.pop());
+        harness.tick();
+
+        assert_eq!(
+            observed.lock().as_slice(),
+            [true, false],
+            "both callbacks re-entered the navigator; the second reads the \
+             post-pop stack (the route is already finalized when its callback \
+             runs — ADR-0019 §7d correction 2, `routes.dart:90-92`)"
+        );
+        let _ = done.send(());
+    });
+
+    assert!(
+        finished.recv_timeout(BUDGET).is_ok(),
+        "a PopScope callback calling back into the navigator deadlocked — \
+         the fan-out ran under the history lock"
+    );
+}
