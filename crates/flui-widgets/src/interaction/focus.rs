@@ -741,6 +741,165 @@ mod tests {
 
         manager.root_scope().detach_node(scope.as_focus_node().id());
     }
+
+    /// A configurable `Focus` whose flags/handlers change across a `swap_root`, so
+    /// the inner `Focus`'s `did_update_view` → `configure` runs with a new config.
+    #[derive(Clone)]
+    struct Configurable {
+        node: Arc<FocusNode>,
+        scope: Arc<FocusScopeNode>,
+        can_request_focus: Option<bool>,
+        skip_traversal: Option<bool>,
+        on_key_event: Option<KeyEventHandler>,
+        on_focus_change: Option<FocusChangeHandler>,
+    }
+
+    impl View for Configurable {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateless(self)
+        }
+    }
+
+    impl StatelessView for Configurable {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            let mut focus =
+                Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&self.node));
+            if let Some(can) = self.can_request_focus {
+                focus = focus.can_request_focus(can);
+            }
+            if let Some(skip) = self.skip_traversal {
+                focus = focus.skip_traversal(skip);
+            }
+            if let Some(handler) = &self.on_key_event {
+                focus = focus.on_key_event(Arc::clone(handler));
+            }
+            if let Some(handler) = &self.on_focus_change {
+                let handler = Arc::clone(handler);
+                focus = focus.on_focus_change(move |focused| handler(focused));
+            }
+            FocusScope::with_external_node(Arc::clone(&self.scope), focus)
+                .into_view()
+                .boxed()
+        }
+    }
+
+    /// A rebuild that drops a property resets it to its default and clears the key
+    /// handler — `configure` writes the *full* configuration, not just the `Some`
+    /// fields (the reviewer's `did_update_view` finding).
+    ///
+    /// Red-check: revert `configure` to write only the `Some(...)` properties — the
+    /// dropped `skip_traversal`/`can_request_focus`/`on_key_event` linger and every
+    /// reset assertion fails.
+    #[test]
+    fn a_rebuild_resets_dropped_focus_config() {
+        use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
+        use flui_interaction::routing::KeyEventResult;
+
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("cfg-scope");
+        let node = FocusNode::with_debug_label("cfg-node");
+        let mut harness = mount(Configurable {
+            node: Arc::clone(&node),
+            scope: Arc::clone(&scope),
+            can_request_focus: Some(false),
+            skip_traversal: Some(true),
+            on_key_event: Some(Arc::new(|_event| KeyEventResult::Handled)),
+            on_focus_change: None,
+        });
+
+        let key = || KeyEvent {
+            state: KeyState::Down,
+            key: Key::Character("a".into()),
+            modifiers: Modifiers::default(),
+            ..KeyEvent::default()
+        };
+        assert!(
+            !node.can_request_focus(),
+            "configured can_request_focus(false)"
+        );
+        assert!(node.skip_traversal(), "configured skip_traversal(true)");
+        assert_eq!(
+            node.handle_key_event(&key()),
+            KeyEventResult::Handled,
+            "the configured key handler runs"
+        );
+
+        // Rebuild with none of the three set.
+        harness.swap_root(Configurable {
+            node: Arc::clone(&node),
+            scope: Arc::clone(&scope),
+            can_request_focus: None,
+            skip_traversal: None,
+            on_key_event: None,
+            on_focus_change: None,
+        });
+
+        assert!(node.can_request_focus(), "reset to the default true");
+        assert!(!node.skip_traversal(), "reset to the default false");
+        assert_eq!(
+            node.handle_key_event(&key()),
+            KeyEventResult::Ignored,
+            "the dropped key handler was cleared"
+        );
+
+        manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
+
+    /// Changing `on_focus_change` across a rebuild takes effect: the listener reads
+    /// the current handler, not the one captured when it was installed.
+    ///
+    /// Red-check: in `did_update_view`, stop updating the shared cell — the listener
+    /// keeps the first handler, `first` fires and `second` is never called.
+    #[test]
+    fn a_rebuild_swaps_the_on_focus_change_handler() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("swap-scope");
+        let node = FocusNode::with_debug_label("swap-node");
+        let first = Arc::new(Mutex::new(Vec::<bool>::new()));
+        let second = Arc::new(Mutex::new(Vec::<bool>::new()));
+
+        let first_rec = Arc::clone(&first);
+        let mut harness = mount(Configurable {
+            node: Arc::clone(&node),
+            scope: Arc::clone(&scope),
+            can_request_focus: None,
+            skip_traversal: None,
+            on_key_event: None,
+            on_focus_change: Some(Arc::new(move |focused| first_rec.lock().push(focused))),
+        });
+
+        // Rebuild with a different handler.
+        let second_rec = Arc::clone(&second);
+        harness.swap_root(Configurable {
+            node: Arc::clone(&node),
+            scope: Arc::clone(&scope),
+            can_request_focus: None,
+            skip_traversal: None,
+            on_key_event: None,
+            on_focus_change: Some(Arc::new(move |focused| second_rec.lock().push(focused))),
+        });
+
+        node.request_focus();
+        manager.unfocus();
+
+        assert!(
+            first.lock().is_empty(),
+            "the superseded handler no longer fires"
+        );
+        assert_eq!(
+            second.lock().as_slice(),
+            [true, false],
+            "the current handler fires the gain/loss edges"
+        );
+
+        manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
 }
 
 #[cfg(test)]
