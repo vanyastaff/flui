@@ -1,6 +1,6 @@
 # ADR-0026 — Focus traversal: groups, edge behavior, and Tab intents
 
-- **Status:** **Proposed — reworked after adversarial review; not yet implementable as a whole.** The first design (api-designer agent, 2026-07-11) **did not survive** the harsh-critic pass: two blockers, five majors, and a structural finding that the chosen primitive was inverted. This ADR records the reworked shape with the critique's requirements as binding constraints. U-A is implementable; U-B/U-C carry open decisions flagged for their deciders.
+- **Status:** **Accepted — U-A landed 2026-07-11; U-B/U-C gated on their deciders.** The first design (api-designer agent, 2026-07-11) **did not survive** the harsh-critic pass: two blockers, five majors, and a structural finding that the chosen primitive was inverted. This ADR records the reworked shape with the critique's requirements as binding constraints. U-A is implementable; U-B/U-C carry open decisions flagged for their deciders.
 - **Date:** 2026-07-11
 - **Deciders:** chief-architect (the ALT-1 primitive inversion, §3.1; scope-landing semantics, §3.4); api-design-lead (§3.6's `Action::invoke` signature — a deliberate breaking change while consumers are few, Prime Directive #2); qa-lead (§5's pinning tests, incl. the `allows_descendant_focus` guard).
 - **Relates to:** ADR-0022 (Focus widgets; §4 named this gap; the geometry fix that unblocked it), ADR-0023 (Shortcuts/Actions/Intent; O-1's resolve-at-own-position divergence is load-bearing here).
@@ -60,6 +60,31 @@ Actions::new(
 The nesting constraint is part of the public docs. No auto-install: FLUI has no `WidgetsApp`-equivalent root to hang it on (named; revisit with one).
 
 `NextFocusAction`'s key result is whether focus moved — `invoke`'s return in Flutter. Choice for api-design-lead, **recommendation: the breaking change** (`fn invoke(&self, intent: &T) -> ActionOutcome`, unit-defaultable): two in-repo impls exist, Prime Directive #2 says break now before consumers ossify. The additive alternative (a defaulted `invoke_for_key_result`) buys a permanent two-methods-that-must-agree hazard (an override that skips `invoke` silently diverges the `maybe_invoke` and key paths) — if chosen anyway, that hazard gets a pinning test.
+
+## 3a. U-A as landed (2026-07-11)
+
+The primitive is inverted: `FocusTraversalPolicy` shrank to one required
+method, `sort_descendants` (the trait no longer carries `find_next`/
+`find_previous`/`find_first`/`find_last`), and `FocusScopeNode::
+sorted_traversal_order(cursor)` — cursor **force-included**, per
+`focus_traversal.dart:487-489` — is the only traversal primitive.
+`resolve_traversal(current, forward) -> ResolvedStep { Focus | Unfocus | None }`
+is the **one** shared step resolver every caller uses (the manager's
+`focus_next`/`focus_previous`, the scope's in-scope variants, and
+`set_first_focus`), so there is one edge switch, not four. It is pure — the
+caller performs the intent against whichever manager it owns, which is also
+what lets instance-scoped test managers stop touching the singleton.
+
+Landed with it: `TraversalEdgeBehavior` (`ClosedLoop` default, `Stop`,
+`LeaveFlutterView` = unfocus-and-report-unconsumed; `ParentScope` interim-maps
+to Flutter's own no-parent `ClosedLoop` fallback until U-B decides scope
+landing); the first-Tab fallback (nothing focused → policy-ordered first/last,
+`:594-608`); and `set_first_focus`'s attach-order divergence fixed by the same
+resolver. Red-checked: dropping the force-include kills the `skip_traversal`
+cursor step; restoring the nothing-focused guard no-ops the first Tab; ignoring
+the edge behavior makes `Stop` wrap. The three-state result closes the
+critique's blocker #2 — a foreign cursor now resolves to `None` without ever
+consulting the edge behavior.
 
 ## 4. Units (reordered per the critique's ALT-3)
 

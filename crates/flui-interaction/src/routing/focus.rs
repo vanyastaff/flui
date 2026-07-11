@@ -61,7 +61,7 @@ use parking_lot::RwLock;
 use crate::{
     events::KeyEvent,
     ids::FocusNodeId,
-    routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
+    routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult, ResolvedStep},
 };
 
 // ============================================================================
@@ -388,16 +388,7 @@ impl FocusManager {
     /// Returns `true` if focus advanced, `false` if no element is
     /// currently focused or the traversal policy returned `None`.
     pub fn focus_next(&self) -> bool {
-        let Some(current) = *self.primary_focus.read() else {
-            tracing::trace!("focus_next: no element currently focused");
-            return false;
-        };
-        let scope = self.active_scope();
-        let Some(next_id) = scope.next_focusable_id(current) else {
-            return false;
-        };
-        self.set_primary_focus(Some(next_id));
-        true
+        self.traverse(true)
     }
 
     /// Transfer focus to the previous focusable element via the
@@ -405,16 +396,30 @@ impl FocusManager {
     ///
     /// See [`Self::focus_next`] for behavior contract.
     pub fn focus_previous(&self) -> bool {
-        let Some(current) = *self.primary_focus.read() else {
-            tracing::trace!("focus_previous: no element currently focused");
-            return false;
-        };
+        self.traverse(false)
+    }
+
+    /// One shared traversal body (ADR-0026 §3.3): resolve a step against the
+    /// active scope's order and edge behavior, then perform the intent against
+    /// **this** manager — instance-scoped, so a test manager never touches the
+    /// singleton. With nothing focused, the resolver falls back to
+    /// policy-ordered first/last (Flutter's `findFirstFocus` fallback,
+    /// `focus_traversal.dart:594-608`) — the first Tab in a fresh app moves
+    /// focus instead of no-opping.
+    fn traverse(&self, forward: bool) -> bool {
         let scope = self.active_scope();
-        let Some(prev_id) = scope.previous_focusable_id(current) else {
-            return false;
-        };
-        self.set_primary_focus(Some(prev_id));
-        true
+        let current = *self.primary_focus.read();
+        match scope.resolve_traversal(current, forward) {
+            ResolvedStep::Focus(id) => {
+                self.set_primary_focus(Some(id));
+                true
+            }
+            ResolvedStep::Unfocus => {
+                self.set_primary_focus(None);
+                false
+            }
+            ResolvedStep::None => false,
+        }
     }
 
     /// Check if any element has focus.
@@ -1224,5 +1229,174 @@ mod tests {
 
         // Handler should not be called (was cleared)
         assert!(!called.load(Ordering::Relaxed));
+    }
+
+    /// ADR-0026 U-A — the sorted list is the primitive, and the cursor is
+    /// **force-included** even when it is not itself traversable
+    /// (`focus_traversal.dart:487-489`), so a step *from* a `skip_traversal`
+    /// node still knows where it stands. Before the inversion that cursor fell
+    /// out of the candidate set entirely and the step died silently.
+    ///
+    /// Red-check (verified): drop the force-include in
+    /// `sorted_traversal_order` — the cursor is absent from the order,
+    /// `resolve_traversal` reports `None`, and `focus_next` returns `false`.
+    #[test]
+    fn a_skip_traversal_cursor_still_steps_to_the_node_after_it() {
+        use crate::routing::focus_scope::ResolvedStep;
+
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let at = |x: f32| {
+            flui_types::geometry::Rect::from_xywh(
+                flui_types::geometry::Pixels(x),
+                flui_types::geometry::Pixels(0.0),
+                flui_types::geometry::Pixels(10.0),
+                flui_types::geometry::Pixels(10.0),
+            )
+        };
+
+        // Focusable by request, skipped by Tab — what `Focus::skip_traversal`
+        // builds.
+        let cursor = FocusNode::with_debug_label("skipped-cursor");
+        cursor.set_skip_traversal(true);
+        cursor.set_rect(at(0.0));
+        let after = FocusNode::with_debug_label("after");
+        after.set_rect(at(20.0));
+        root.attach_node(&cursor);
+        root.attach_node(&after);
+
+        assert_eq!(
+            root.resolve_traversal(Some(cursor.id()), true),
+            ResolvedStep::Focus(after.id()),
+            "the cursor is force-included as a position, not as a target"
+        );
+
+        manager.request_focus(cursor.id());
+        assert!(manager.focus_next());
+        assert_eq!(manager.focused(), Some(after.id()));
+
+        // The skipped cursor is never a landing spot: `after` is the only
+        // traversable node, so the ClosedLoop wrap returns to it.
+        assert!(manager.focus_next());
+        assert_eq!(
+            manager.focused(),
+            Some(after.id()),
+            "the wrap skips the non-traversable cursor"
+        );
+    }
+
+    /// A cursor **outside** the active scope resolves to `None` without
+    /// consulting the edge behavior — the three-state result (`Focus` /
+    /// `Unfocus` / `None`) the ADR-0026 review demanded, where one `None`
+    /// used to conflate "true edge" with "cursor not in candidates".
+    #[test]
+    fn a_foreign_cursor_resolves_to_none_not_to_the_edge() {
+        use crate::routing::focus_scope::ResolvedStep;
+
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let scope = FocusScopeNode::with_debug_label("dialog");
+        root.attach_node(scope.as_focus_node());
+        let inside = FocusNode::with_debug_label("inside");
+        scope.attach_node(&inside);
+        let foreign = FocusNode::with_debug_label("foreign");
+        root.attach_node(&foreign);
+
+        assert_eq!(
+            scope.resolve_traversal(Some(foreign.id()), true),
+            ResolvedStep::None,
+            "a cursor the scope does not own decides nothing here — it must \
+             not wrap onto the scope's first node"
+        );
+    }
+
+    /// `TraversalEdgeBehavior` (`focus_traversal.dart:113-156`), un-hardcoding
+    /// the wraparound the policy used to bake in: `ClosedLoop` wraps (the
+    /// default), `Stop` stays put, `LeaveFlutterView` releases the focus and
+    /// reports the traversal unconsumed.
+    ///
+    /// Red-check: ignore `traversal_edge_behavior()` in `resolve_traversal` —
+    /// `Stop` wraps and its assertions fail.
+    #[test]
+    fn edge_behavior_decides_what_happens_at_the_end_of_the_order() {
+        use crate::routing::focus_scope::TraversalEdgeBehavior;
+
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let at = |x: f32| {
+            flui_types::geometry::Rect::from_xywh(
+                flui_types::geometry::Pixels(x),
+                flui_types::geometry::Pixels(0.0),
+                flui_types::geometry::Pixels(10.0),
+                flui_types::geometry::Pixels(10.0),
+            )
+        };
+        let first = FocusNode::with_debug_label("first");
+        first.set_rect(at(0.0));
+        let last = FocusNode::with_debug_label("last");
+        last.set_rect(at(20.0));
+        root.attach_node(&first);
+        root.attach_node(&last);
+
+        assert_eq!(
+            root.traversal_edge_behavior(),
+            TraversalEdgeBehavior::ClosedLoop
+        );
+        manager.request_focus(last.id());
+        assert!(manager.focus_next());
+        assert_eq!(manager.focused(), Some(first.id()), "ClosedLoop wraps");
+
+        root.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
+        manager.request_focus(last.id());
+        assert!(!manager.focus_next(), "Stop reports no move");
+        assert_eq!(manager.focused(), Some(last.id()), "and focus stays");
+
+        root.set_traversal_edge_behavior(TraversalEdgeBehavior::LeaveFlutterView);
+        assert!(!manager.focus_next(), "LeaveFlutterView reports unconsumed");
+        assert_eq!(manager.focused(), None, "and releases the focus");
+    }
+
+    /// The first Tab in a fresh app must move focus: with nothing focused,
+    /// traversal falls back to policy-ordered first (Flutter's `findFirstFocus`
+    /// fallback, `focus_traversal.dart:594-608`) — in **policy** order, not
+    /// attach order, which is also the `set_first_focus` divergence U-A fixes.
+    ///
+    /// Red-check (verified): restore the `let Some(current) = … else { return
+    /// false }` guard in `FocusManager::traverse` — the first Tab no-ops.
+    #[test]
+    fn the_first_tab_focuses_the_policy_first_node() {
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let at = |x: f32| {
+            flui_types::geometry::Rect::from_xywh(
+                flui_types::geometry::Pixels(x),
+                flui_types::geometry::Pixels(0.0),
+                flui_types::geometry::Pixels(10.0),
+                flui_types::geometry::Pixels(10.0),
+            )
+        };
+
+        // Attached second, but leftmost — reading order must win.
+        let rightmost = FocusNode::with_debug_label("rightmost");
+        rightmost.set_rect(at(20.0));
+        let leftmost = FocusNode::with_debug_label("leftmost");
+        leftmost.set_rect(at(0.0));
+        root.attach_node(&rightmost);
+        root.attach_node(&leftmost);
+
+        assert_eq!(manager.focused(), None, "nothing focused yet");
+        assert!(manager.focus_next(), "the first Tab moves focus");
+        assert_eq!(
+            manager.focused(),
+            Some(leftmost.id()),
+            "onto the policy-first node, not the first attached"
+        );
+
+        manager.unfocus();
+        assert!(
+            manager.focus_previous(),
+            "Shift+Tab from nothing focuses last"
+        );
+        assert_eq!(manager.focused(), Some(rightmost.id()));
     }
 }

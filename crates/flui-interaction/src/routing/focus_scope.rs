@@ -754,6 +754,10 @@ pub struct FocusScopeNode {
 
     /// Traversal policy for this scope.
     traversal_policy: RwLock<Arc<dyn FocusTraversalPolicy>>,
+
+    /// What happens when traversal runs off the end of this scope's order —
+    /// Flutter's `TraversalEdgeBehavior` (`focus_traversal.dart:113-156`).
+    traversal_edge_behavior: RwLock<TraversalEdgeBehavior>,
 }
 
 impl FocusScopeNode {
@@ -765,6 +769,7 @@ impl FocusScopeNode {
             autofocus: AtomicBool::new(false),
             traps_focus: AtomicBool::new(false),
             traversal_policy: RwLock::new(Arc::new(ReadingOrderPolicy)),
+            traversal_edge_behavior: RwLock::new(TraversalEdgeBehavior::default()),
         })
     }
 
@@ -777,6 +782,7 @@ impl FocusScopeNode {
             autofocus: AtomicBool::new(false),
             traps_focus: AtomicBool::new(false),
             traversal_policy: RwLock::new(Arc::new(ReadingOrderPolicy)),
+            traversal_edge_behavior: RwLock::new(TraversalEdgeBehavior::default()),
         })
     }
 
@@ -853,51 +859,138 @@ impl FocusScopeNode {
         self.inner.adopt_node(node);
     }
 
-    /// Sets focus to the first focusable child via the singleton.
+    /// This scope's edge behavior — see [`TraversalEdgeBehavior`].
+    pub fn traversal_edge_behavior(&self) -> TraversalEdgeBehavior {
+        *self.traversal_edge_behavior.read()
+    }
+
+    /// Set what happens when traversal runs off the end of this scope's order.
+    pub fn set_traversal_edge_behavior(&self, behavior: TraversalEdgeBehavior) {
+        *self.traversal_edge_behavior.write() = behavior;
+    }
+
+    /// Sets focus to the first focusable child via the singleton — in
+    /// **policy order**, not attach order (a pre-existing divergence from
+    /// Flutter's `findFirstFocus`, fixed with ADR-0026 U-A).
     pub fn set_first_focus(self: &Arc<Self>) {
-        let nodes = self.collect_focusable_nodes();
-        if let Some(first) = nodes.first() {
-            crate::FocusManager::global().request_focus(first.id());
+        if let ResolvedStep::Focus(id) = self.resolve_traversal(None, true) {
+            crate::FocusManager::global().request_focus(id);
         }
     }
 
-    /// Compute the next focusable node ID per the scope's traversal
-    /// policy without mutating any focus state.
-    ///
-    /// Returns `None` if no next focusable exists. Use this when the
-    /// caller (e.g. the [`crate::FocusManager`] singleton's
-    /// `focus_next`) needs to update its own focused state.
-    pub fn next_focusable_id(&self, current: FocusNodeId) -> Option<FocusNodeId> {
-        let nodes = self.collect_focusable_nodes();
+    /// This scope's traversal candidates in policy order, with `cursor`
+    /// **force-included** even when it is not itself traversable
+    /// (`skip_traversal`, `can_request_focus(false)`) — Flutter force-includes
+    /// the current node (`focus_traversal.dart:487-489`) precisely so a step
+    /// *from* a non-traversable node still knows where it stands. The sorted
+    /// list is the traversal primitive (ADR-0026 §3.1); next/previous/edge are
+    /// positional facts about it.
+    pub fn sorted_traversal_order(&self, cursor: Option<FocusNodeId>) -> Vec<Arc<FocusNode>> {
+        let mut nodes = self.collect_focusable_nodes();
+        if let Some(cursor) = cursor
+            && !nodes.iter().any(|node| node.id() == cursor)
+            && let Some(node) = self.inner.descendants().find(|node| node.id() == cursor)
+        {
+            nodes.push(node);
+        }
         let policy = self.traversal_policy.read().clone();
-        policy.find_next(current, &nodes)
+        policy.sort_descendants(&nodes)
     }
 
-    /// Compute the previous focusable node ID per the scope's traversal
-    /// policy without mutating any focus state.
-    pub fn previous_focusable_id(&self, current: FocusNodeId) -> Option<FocusNodeId> {
-        let nodes = self.collect_focusable_nodes();
-        let policy = self.traversal_policy.read().clone();
-        policy.find_previous(current, &nodes)
+    /// One traversal step from `current` (or the first-focus fallback when
+    /// nothing is focused), with this scope's edge behavior applied — **the**
+    /// edge switch, shared by every caller (ADR-0026 §3.3): the manager's
+    /// `focus_next`/`focus_previous`, this scope's in-scope variants, and
+    /// `set_first_focus`. Pure: the caller performs the returned intent
+    /// against whichever manager it owns.
+    ///
+    /// Three-state by construction (ADR-0026 §3.1): a cursor **outside** this
+    /// scope resolves to [`ResolvedStep::None`] without consulting the edge
+    /// behavior — previously both cases collapsed into one `None`, and a
+    /// `skip_traversal` cursor silently fell out of the candidate set.
+    pub fn resolve_traversal(&self, current: Option<FocusNodeId>, forward: bool) -> ResolvedStep {
+        let order = self.sorted_traversal_order(current);
+
+        let Some(current) = current else {
+            // Nothing focused: fall back to policy-ordered first/last —
+            // Flutter's `findFirstFocus` fallback (`focus_traversal.dart:594-608`).
+            let target = if forward {
+                order.iter().find(|node| is_traversable(node))
+            } else {
+                order.iter().rev().find(|node| is_traversable(node))
+            };
+            return match target {
+                Some(node) => ResolvedStep::Focus(node.id()),
+                None => ResolvedStep::None,
+            };
+        };
+
+        let Some(position) = order.iter().position(|node| node.id() == current) else {
+            // Not a descendant of this scope: nothing to decide here.
+            return ResolvedStep::None;
+        };
+
+        // Step positionally, skipping the force-included non-traversable
+        // cursor as a *target* (it only matters as the starting position).
+        let step_target = if forward {
+            order[position + 1..]
+                .iter()
+                .find(|node| is_traversable(node))
+        } else {
+            order[..position]
+                .iter()
+                .rev()
+                .find(|node| is_traversable(node))
+        };
+        if let Some(node) = step_target {
+            return ResolvedStep::Focus(node.id());
+        }
+
+        // The true edge (`focus_traversal.dart:590-666`).
+        match self.traversal_edge_behavior() {
+            // `ParentScope`'s full unfocus→parent-retry→verify mechanism is
+            // ADR-0026 U-B (gated on the scope-landing decision); until then it
+            // takes Flutter's own no-parent fallback (`:148-149`).
+            TraversalEdgeBehavior::ClosedLoop | TraversalEdgeBehavior::ParentScope => {
+                let wrap = if forward {
+                    order.iter().find(|node| is_traversable(node))
+                } else {
+                    order.iter().rev().find(|node| is_traversable(node))
+                };
+                match wrap {
+                    Some(node) => ResolvedStep::Focus(node.id()),
+                    None => ResolvedStep::None,
+                }
+            }
+            TraversalEdgeBehavior::Stop => ResolvedStep::None,
+            TraversalEdgeBehavior::LeaveFlutterView => ResolvedStep::Unfocus,
+        }
     }
 
     /// Focuses the next node in this scope. Returns `true` when focus
     /// advanced.
     pub fn focus_next_in_scope(&self, current: FocusNodeId) -> bool {
-        let Some(next_id) = self.next_focusable_id(current) else {
-            return false;
-        };
-        crate::FocusManager::global().request_focus(next_id);
-        true
+        Self::perform(self.resolve_traversal(Some(current), true))
     }
 
     /// Focuses the previous node in this scope.
     pub fn focus_previous_in_scope(&self, current: FocusNodeId) -> bool {
-        let Some(prev_id) = self.previous_focusable_id(current) else {
-            return false;
-        };
-        crate::FocusManager::global().request_focus(prev_id);
-        true
+        Self::perform(self.resolve_traversal(Some(current), false))
+    }
+
+    /// Carry out a resolved step against the global manager.
+    fn perform(step: ResolvedStep) -> bool {
+        match step {
+            ResolvedStep::Focus(id) => {
+                crate::FocusManager::global().request_focus(id);
+                true
+            }
+            ResolvedStep::Unfocus => {
+                crate::FocusManager::global().unfocus();
+                false
+            }
+            ResolvedStep::None => false,
+        }
     }
 
     /// Records that a node received focus.
@@ -941,21 +1034,61 @@ impl std::fmt::Debug for FocusScopeNode {
 // FocusTraversalPolicy
 // ============================================================================
 
+/// What happens when Tab traversal runs off the end of a scope's sorted
+/// order — Flutter's `TraversalEdgeBehavior` (`focus_traversal.dart:113-156`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TraversalEdgeBehavior {
+    /// Wrap to the other end (`:120-127`). The default, and Flutter's own
+    /// fallback for a scope with no parent (`:148-149`).
+    #[default]
+    ClosedLoop,
+    /// Unfocus and report the event unconsumed, so a host can move focus out
+    /// of the view (`:129-139`). FLUI has no embedder channel yet: the
+    /// unfocus-and-report half is the whole implementable contract
+    /// (ADR-0026 §5).
+    LeaveFlutterView,
+    /// Retry in the enclosing scope (`:141-149`). **Interim (ADR-0026 U-A):**
+    /// behaves as [`ClosedLoop`](Self::ClosedLoop) — Flutter's own no-parent
+    /// fallback — until U-B lands the full unfocus→parent-retry→verify
+    /// mechanism behind the scope-landing decision.
+    ParentScope,
+    /// Stay put (`:151-155`).
+    Stop,
+}
+
+/// The intent one traversal step resolved to. The resolver is pure; the
+/// caller performs the intent against whichever [`crate::FocusManager`] it
+/// owns (the singleton in production, an instance in tests).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedStep {
+    /// Move the primary focus here.
+    Focus(FocusNodeId),
+    /// Release the primary focus and report the traversal unconsumed
+    /// ([`TraversalEdgeBehavior::LeaveFlutterView`]).
+    Unfocus,
+    /// No focus change: `Stop` at the edge, a cursor outside the scope, or an
+    /// empty scope.
+    None,
+}
+
+/// Whether Tab may land on `node` — the candidate filter
+/// (`can_request_focus && !skip_traversal`), applied per *target*: a
+/// force-included cursor may sit in the order without being a landing spot.
+fn is_traversable(node: &Arc<FocusNode>) -> bool {
+    node.can_request_focus() && !node.skip_traversal()
+}
+
 /// Determines the order for Tab/Shift+Tab navigation.
 ///
-/// Implement this trait for custom traversal behavior.
+/// **The sorted list is the primitive** (ADR-0026 §3.1, Flutter's
+/// `_sortAllDescendants` architecture): a policy only orders candidates;
+/// next/previous/first/last/edge are positional facts the scope computes.
+/// (The pre-U-A trait's `find_next`-as-oracle shape baked wraparound into the
+/// policy and conflated "at the edge" with "cursor not in candidates".)
 pub trait FocusTraversalPolicy: Send + Sync + std::fmt::Debug {
-    /// Finds the next node to focus from current.
-    fn find_next(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
-
-    /// Finds the previous node to focus from current.
-    fn find_previous(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
-
-    /// Finds the first focusable node.
-    fn find_first(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
-
-    /// Finds the last focusable node.
-    fn find_last(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
+    /// `nodes`, reordered into this policy's traversal order — Flutter's
+    /// `sortDescendants` (`focus_traversal.dart:503-573`'s per-policy point).
+    fn sort_descendants(&self, nodes: &[Arc<FocusNode>]) -> Vec<Arc<FocusNode>>;
 }
 
 // ============================================================================
@@ -967,32 +1100,11 @@ pub trait FocusTraversalPolicy: Send + Sync + std::fmt::Debug {
 pub struct ReadingOrderPolicy;
 
 impl FocusTraversalPolicy for ReadingOrderPolicy {
-    fn find_next(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = Self::sorted_indices(nodes);
-        let current_idx = sorted.iter().position(|&i| nodes[i].id() == current)?;
-        let next_idx = (current_idx + 1) % sorted.len();
-        Some(nodes[sorted[next_idx]].id())
-    }
-
-    fn find_previous(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = Self::sorted_indices(nodes);
-        let current_idx = sorted.iter().position(|&i| nodes[i].id() == current)?;
-        let prev_idx = if current_idx == 0 {
-            sorted.len() - 1
-        } else {
-            current_idx - 1
-        };
-        Some(nodes[sorted[prev_idx]].id())
-    }
-
-    fn find_first(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = Self::sorted_indices(nodes);
-        sorted.first().map(|&i| nodes[i].id())
-    }
-
-    fn find_last(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let sorted = Self::sorted_indices(nodes);
-        sorted.last().map(|&i| nodes[i].id())
+    fn sort_descendants(&self, nodes: &[Arc<FocusNode>]) -> Vec<Arc<FocusNode>> {
+        Self::sorted_indices(nodes)
+            .into_iter()
+            .map(|index| Arc::clone(&nodes[index]))
+            .collect()
     }
 }
 
@@ -1196,9 +1308,10 @@ mod tests {
 
         let policy = ReadingOrderPolicy;
 
-        // First should be top-left
-        let first = policy.find_first(&nodes);
-        assert_eq!(first, Some(nodes[1].id())); // left one
+        // First of the sorted order is the top-left node — a positional fact
+        // over `sort_descendants`, the trait's one primitive (ADR-0026 U-A).
+        let order = policy.sort_descendants(&nodes);
+        assert_eq!(order.first().map(|n| n.id()), Some(nodes[1].id())); // left one
     }
 
     #[test]
