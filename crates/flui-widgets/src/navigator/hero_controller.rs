@@ -87,12 +87,12 @@
 //! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
 //! [`RouteSubtree`]: super::subtree::RouteSubtree
 
-// `HeroController` measures and launches private flights, but nothing constructs a
-// controller in production yet — a `Navigator` gains one only when the public `Hero`
-// API lands — so the tests are this module's only callers, and `dead_code` cascades
-// from here into the `ModalHandle` / `RouteBinding` / `HeroRegistry` seams it is the
-// sole production consumer of. Deleting it and re-deriving it later is how a seam
-// stops matching the ADR that specified it.
+// A `Navigator` now auto-attaches a `HeroController` in production (§7m), so the
+// controller and its flight path are live. What stays test-only are the `pub(crate)`
+// introspection accessors (`scheduled_count`, `measurements`, `manifests`) the tests
+// read to assert the measurement pass; their `dead_code` in a non-test build cascades
+// into the `ModalHandle` / `RouteBinding` / `HeroRegistry` seams. The allow keeps a
+// seam from being deleted and re-derived later, out of step with the ADR.
 #![allow(dead_code)]
 
 use std::sync::Arc;

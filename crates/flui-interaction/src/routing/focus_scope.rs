@@ -906,7 +906,7 @@ impl FocusScopeNode {
     /// It computes, it does not focus: the caller performs the returned intent
     /// against whichever [`crate::FocusManager`] it owns. (This scope's own
     /// stepping methods perform it against the process-global manager, because
-    /// that is what a `FocusScopeNode` can reach; [`FocusManager::focus_next`]
+    /// that is what a `FocusScopeNode` can reach; [`crate::FocusManager::focus_next`]
     /// performs it against itself, which is what lets a test manager traverse
     /// without touching the singleton.)
     ///
