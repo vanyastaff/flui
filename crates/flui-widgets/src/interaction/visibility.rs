@@ -34,7 +34,9 @@ use crate::layout::SizedBox;
 /// Flutter parity: `widgets/indexed_stack.dart` `Visibility`.
 ///
 /// **Divergences from Flutter:**
-/// - `maintainAnimation` (requires `TickerMode`) — deferred.
+/// - `maintainAnimation` — deferred. `TickerMode` now exists (2026-07-11), so
+///   this is a straight wiring job whenever a consumer wants it: gate the
+///   hidden subtree's `TickerMode` on the flag instead of always muting.
 /// - `maintainSize` (requires `maintainAnimation`) — deferred.
 /// - `maintainInteractivity` (requires `maintainSize` in Flutter) — accepted
 ///   but currently a no-op beyond `maintain_state`; full semantics deferred

@@ -67,7 +67,7 @@ use parking_lot::{Mutex, RwLock};
 
 use super::hero_controller::FlightDirection;
 use super::subtree::AnchoredBox;
-use crate::{Offstage, SizedBox, Stack};
+use crate::{Offstage, SizedBox, Stack, TickerMode};
 
 /// Builds the [`RectTween`](flui_animation::RectTween)-like path a hero's shuttle
 /// follows. Flutter's `CreateRectTween` (`heroes.dart:27`); the default is a linear
@@ -713,8 +713,10 @@ impl ViewState<Hero> for HeroState {
         }
     }
 
-    /// `_HeroState.build` (`heroes.dart:410-438`), minus `TickerMode`, plus the anchor
-    /// and FLUI's state-preserving custom placeholder (§7n D-N.3).
+    /// `_HeroState.build` (`heroes.dart:410-438`), plus the anchor and FLUI's
+    /// state-preserving custom placeholder (§7n D-N.3). The `TickerMode`
+    /// (`:433`) is ported: an offstage hero's animations stop while its copy
+    /// flies.
     ///
     /// | Flutter | here |
     /// |---|---|
@@ -754,7 +756,7 @@ impl ViewState<Hero> for HeroState {
             let mut layers: Vec<BoxedView> = vec![
                 Offstage::new()
                     .offstage(show_placeholder)
-                    .child(view.child.clone())
+                    .child(TickerMode::new(view.child.clone()).enabled(!show_placeholder))
                     .into_view()
                     .boxed(),
             ];
@@ -777,10 +779,9 @@ impl ViewState<Hero> for HeroState {
             return AnchoredBox::new(anchor, SizedBox::new(size.width.0, size.height.0));
         }
 
-        // The **fixed chain** — Flutter's `:427-437`, minus `TickerMode` (FLUI has no
-        // ticker gating) and minus the `KeyedSubtree(_key)`:
+        // The **fixed chain** — Flutter's `:427-437`, minus the `KeyedSubtree(_key)`:
         //
-        //   SizedBox(size?) → Offstage(showPlaceholder) → child
+        //   SizedBox(size?) → Offstage(showPlaceholder) → TickerMode(!showPlaceholder) → child
         //
         // The structure is constant across "not in flight" (`SizedBox::default()`,
         // unconstrained, `Offstage(false)`) and "in flight, keep child"
@@ -795,11 +796,13 @@ impl ViewState<Hero> for HeroState {
         };
         AnchoredBox::new(
             anchor,
-            sized.child(
-                Offstage::new()
-                    .offstage(show_placeholder)
-                    .child(view.child.clone()),
-            ),
+            sized.child(Offstage::new().offstage(show_placeholder).child(
+                // `TickerMode(enabled: !showPlaceholder)` (`heroes.dart:433`):
+                // the hero left behind offstage keeps its subtree — and its
+                // state — but its animations must not keep running while the
+                // shuttle carries a copy of it across the screen.
+                TickerMode::new(view.child.clone()).enabled(!show_placeholder),
+            )),
         )
     }
 }

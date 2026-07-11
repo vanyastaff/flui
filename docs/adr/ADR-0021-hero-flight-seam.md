@@ -1857,7 +1857,7 @@ machinery: both reads use `depend_on`, so a notifying scope rebuilds its depende
 and the handle's flag follows. That machinery is tested in `flui-view`; no end-to-end
 mid-transition toggle test is claimed here. Flutter's `TickerMode(enabled:
 !showPlaceholder)` inside `_HeroState.build` (`:433`) is TickerMode, not HeroMode,
-and stays deferred with TickerMode itself (§8).
+and is now available (§8's `TickerMode` row); wiring `HeroMode` to it is not needed — `TickerMode` gates the *offstage-while-flying* subtree, which `HeroMode` does not create.
 
 ---
 
@@ -1867,7 +1867,7 @@ and stays deferred with TickerMode itself (§8).
 |---|---|
 | **Full nested-navigator flight parity** (`heroes.dart:322-332`, `HeroControllerScope`) | `HeroControllerScope` exists and nested navigators are isolated by `.none`, but the cross-navigator hero cases at `heroes_test.dart:2558` remain out of scope. A **narrowing**, stated in §3 S7, not a silent gap. |
 | **User-gesture flights** — `transitionOnUserGestures`, `didStartUserGesture`, `didStopUserGesture`, `userGestureInProgressNotifier`, `didStartUserGesture` (`:872`) / `didStopUserGesture` (`:882`), and the delayed `_performAnimationUpdate` (`:620-650`) | FLUI has no back-swipe / predictive back (ADR-0020 §7e defers it). Every gesture path in `HeroController` is unreachable without it. |
-| **`TickerMode`** (`heroes.dart:433`) | Does not exist in FLUI (`visibility.rs:29` already records the gap). An offstage hero's animations keep running. Cost, not correctness. |
+| ~~**`TickerMode`** (`heroes.dart:433`)~~ | **Landed 2026-07-11.** `TickerMode` is public, and `Hero` gates its offstage subtree on it (both the default chain and the custom-placeholder branch), so an in-flight hero's animations stop while the shuttle carries its copy. FLUI's shape is a **nested `Vsync` registry**, since FLUI's animated widgets register controllers with the ambient registry rather than creating tickers: muting is structural, and Flutter's `_updateEffectiveMode` AND falls out of the nesting. |
 | ~~**`HeroMode`** (`heroes.dart:1129`)~~ | **Landed 2026-07-10 (§7p).** The registry honours the inherited disable exactly as S7 predicted. |
 | **Hero semantics** | Flutter's shuttle and placeholders have no special semantics handling worth porting yet; FLUI's `RenderTheater` does not skip semantics for offstage children at all (ADR-0020 §7d). Fixing that is `RenderTheater`'s problem, not Hero's. |
 | **Duplicate-tag `assert`** | Replaced by log-and-drop (D8). Divergence, recorded. |
