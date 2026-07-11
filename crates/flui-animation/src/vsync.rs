@@ -152,6 +152,14 @@ impl Vsync {
         self.inner.lock().children.retain(|c| c.id != id);
     }
 
+    /// Whether both handles name the **same** registry (`Arc` identity) — how a
+    /// consumer tells "the ambient registry changed" from "same registry, fresh
+    /// clone".
+    #[must_use]
+    pub fn is_same(&self, other: &Vsync) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Whether `other` is this registry or one of its (transitive) children.
     fn contains(&self, other: &Vsync) -> bool {
         if Arc::ptr_eq(&self.inner, &other.inner) {
@@ -175,9 +183,14 @@ impl Vsync {
         self.inner.lock().muted
     }
 
-    /// Mute or unmute this registry. A muted registry's controllers keep their
-    /// status and value — time simply does not advance for them, and they
-    /// resume from where they were, as an unmuted ticker does.
+    /// Mute or unmute this registry: while muted it delivers no ticks, to its
+    /// own controllers or to a nested registry's.
+    ///
+    /// **The clock keeps running.** Run anchors are absolute, so an unmuted
+    /// controller lands where the wall clock says it should be — it does not
+    /// resume from where it stopped. That is Flutter's `Ticker.muted`
+    /// convention: "a ticker's clock can still run, but the callback will not
+    /// be called" (`ticker.dart:102-104`).
     pub fn set_muted(&self, muted: bool) {
         self.inner.lock().muted = muted;
     }
@@ -260,9 +273,10 @@ impl Vsync {
             )
         };
 
-        // A muted registry advances nothing — not its own controllers, not a
-        // nested registry's. The run anchors are left alone, so an unmute
-        // resumes rather than jumping (`ticker.dart:124-128`).
+        // A muted registry delivers no tick — not to its own controllers, not
+        // to a nested registry's. The anchors are absolute and left alone, so
+        // the clock keeps running underneath: an unmute lands the animation
+        // where the wall clock says (`ticker.dart:102-104`).
         if muted {
             return;
         }

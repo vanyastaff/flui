@@ -1,7 +1,8 @@
 //! [`HeroController`] — the measurement half of Flutter's hero machinery.
 //!
-//! ADR-0021 U3 (the controller) and U3.5 (the manifests). **Private**: nothing here
-//! is exported.
+//! ADR-0021 U3 (the controller) and U3.5 (the manifests). [`HeroController`] and
+//! [`FlightDirection`] are public (§7l/§7n); the manifests, measurement, and flight
+//! machinery below stay `pub(crate)`.
 //!
 //! This is the observer that decides *when* a flight starts, *where* its destination
 //! will be, and *which heroes* fly. It records [`HeroFlightManifest`] values for

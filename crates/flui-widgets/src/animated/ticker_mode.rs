@@ -43,17 +43,18 @@
 use flui_animation::{Vsync, VsyncRegistration};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use parking_lot::Mutex;
 
 use super::VsyncScope;
 
 /// Pauses (or resumes) every animation in its subtree — Flutter's `TickerMode`
 /// (`ticker_provider.dart:25`).
 ///
-/// While `enabled` is `false`, descendant animation controllers stop
-/// advancing: they keep their current value and status, and resume from there
-/// when re-enabled. Nesting composes as an AND — a `TickerMode` inside a
-/// disabled one cannot re-enable its subtree.
+/// While `enabled` is `false`, descendant animation controllers receive no
+/// ticks. **The clock keeps running** — this is a mute button, not a pause
+/// button: a re-enabled subtree lands where the wall clock says it should be,
+/// not where it stopped (Flutter's `Ticker.muted`, `ticker.dart:102-104`).
+/// Nesting composes as an AND — a `TickerMode` inside a disabled one cannot
+/// re-enable its subtree.
 ///
 /// # Examples
 ///
@@ -107,7 +108,7 @@ impl StatefulView for TickerMode {
         registry.set_muted(!self.enabled);
         TickerModeState {
             registry,
-            parent: Mutex::new(None),
+            parent: None,
         }
     }
 }
@@ -118,9 +119,9 @@ impl StatefulView for TickerMode {
 pub struct TickerModeState {
     registry: Vsync,
     /// The ambient registry this one is nested under, and the id it holds
-    /// there — `None` when no `VsyncScope` is above (then nothing ticks this
-    /// subtree anyway, and muting is moot).
-    parent: Mutex<Option<(Vsync, VsyncRegistration)>>,
+    /// there. `None` when no `VsyncScope` is above — then this registry has no
+    /// driver, and `build` deliberately does **not** hand it to the subtree.
+    parent: Option<(Vsync, VsyncRegistration)>,
 }
 
 impl std::fmt::Debug for TickerModeState {
@@ -131,16 +132,46 @@ impl std::fmt::Debug for TickerModeState {
     }
 }
 
-impl ViewState<TickerMode> for TickerModeState {
-    /// Nest this subtree's registry under the ambient one. Read once, in the
-    /// one lifecycle hook with a `BuildContext` that is not a frame phase.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
-        let Some(parent) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) else {
+impl TickerModeState {
+    /// Re-derive the ambient registry and move this one under it. Idempotent:
+    /// re-nesting under the same parent is a no-op.
+    fn renest(&mut self, ctx: &dyn BuildContext) {
+        let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let unchanged = self
+            .parent
+            .as_ref()
+            .zip(ambient.as_ref())
+            .is_some_and(|((held, _), ambient)| held.is_same(ambient));
+        if unchanged {
+            return;
+        }
+        self.unnest();
+        let Some(parent) = ambient else {
             return;
         };
         if let Some(id) = parent.attach_child(&self.registry) {
-            *self.parent.lock() = Some((parent, id));
+            self.parent = Some((parent, id));
         }
+    }
+
+    fn unnest(&mut self) {
+        if let Some((parent, id)) = self.parent.take() {
+            parent.detach_child(id);
+        }
+    }
+}
+
+impl ViewState<TickerMode> for TickerModeState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.renest(ctx);
+    }
+
+    /// The ambient registry changed (an ancestor swapped its `Vsync`, or this
+    /// subtree moved): move the nesting with it. Without this the registry-tree
+    /// edge, fixed at mount, would outlive the widget-tree relationship it
+    /// mirrors — ticked, or starved, by the wrong ancestor forever.
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        self.renest(ctx);
     }
 
     /// `_updateEffectiveMode` (`ticker_provider.dart:246-252`) — minus the AND,
@@ -152,74 +183,198 @@ impl ViewState<TickerMode> for TickerModeState {
     /// Un-nest: a registry left attached to a live parent would keep ticking a
     /// dead subtree's controllers.
     fn dispose(&mut self) {
-        if let Some((parent, id)) = self.parent.lock().take() {
-            parent.detach_child(id);
-        }
+        self.unnest();
     }
 
     /// The subtree sees **this** registry as its ambient `Vsync`, so every
     /// controller a descendant registers lands here and is muted with it.
+    ///
+    /// **Unless nothing would drive it.** With no ambient `VsyncScope` above,
+    /// this registry is nested under nobody and would never be ticked; handing
+    /// it down would turn descendants that fall back to their own wall-clock
+    /// ticker into *frozen* ones — a widget documented as changing nothing
+    /// would silently kill the animations it wraps. So the child passes through
+    /// bare and the fallback keeps working.
     fn build(&self, view: &TickerMode, _ctx: &dyn BuildContext) -> impl IntoView {
+        if self.parent.is_none() {
+            return view.child.clone();
+        }
         VsyncScope::new(self.registry.clone(), view.child.clone())
+            .into_view()
+            .boxed()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use flui_animation::Vsync;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use flui_animation::{Animation, AnimationController, Vsync};
+    use flui_scheduler::Scheduler;
     use flui_view::ViewExt;
+    use parking_lot::Mutex;
 
     use super::*;
+    use crate::SizedBox;
     use crate::test_harness::mount;
-    use crate::{AnimatedOpacity, SizedBox, VsyncScope};
 
-    /// The subtree's registry nests under the ambient one and follows
-    /// `enabled`, so a descendant `AnimatedOpacity`'s controller lands in the
-    /// disabled registry and stops receiving ticks — Flutter's `TickerMode`
-    /// muting a subtree's tickers (`ticker_provider.dart:397`).
+    /// Registers `controller` with whatever ambient registry it finds, and
+    /// records **whether it found one** — the two facts a `TickerMode` decides.
+    /// This is exactly what every animated widget does (`animated_opacity.rs`).
+    #[derive(Clone)]
+    struct Probe {
+        controller: AnimationController,
+        found_ambient: Arc<Mutex<Option<bool>>>,
+    }
+
+    impl View for Probe {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateful(self)
+        }
+    }
+
+    impl StatefulView for Probe {
+        type State = ProbeState;
+
+        fn create_state(&self) -> Self::State {
+            ProbeState {
+                controller: self.controller.clone(),
+                found_ambient: Arc::clone(&self.found_ambient),
+            }
+        }
+    }
+
+    struct ProbeState {
+        controller: AnimationController,
+        found_ambient: Arc<Mutex<Option<bool>>>,
+    }
+
+    impl std::fmt::Debug for ProbeState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("ProbeState").finish_non_exhaustive()
+        }
+    }
+
+    impl ViewState<Probe> for ProbeState {
+        fn init_state(&mut self, ctx: &dyn BuildContext) {
+            let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+            *self.found_ambient.lock() = Some(ambient.is_some());
+            if let Some(vsync) = ambient {
+                let _registration = vsync.register(self.controller.clone());
+            }
+        }
+
+        fn build(&self, _view: &Probe, _ctx: &dyn BuildContext) -> impl IntoView {
+            SizedBox::new(10.0, 10.0)
+        }
+    }
+
+    fn probe(controller: &AnimationController) -> (Probe, Arc<Mutex<Option<bool>>>) {
+        let found = Arc::new(Mutex::new(None));
+        (
+            Probe {
+                controller: controller.clone(),
+                found_ambient: Arc::clone(&found),
+            },
+            found,
+        )
+    }
+
+    fn controller() -> AnimationController {
+        AnimationController::new(Duration::from_secs(1), Arc::new(Scheduler::new()))
+    }
+
+    /// A **disabled** `TickerMode` freezes the animations in its subtree and an
+    /// **enabled** one lets them run — the whole point of the widget, observed
+    /// on a real controller a descendant registered with the ambient registry
+    /// (`ticker_provider.dart:397`).
     ///
-    /// Red-check: drop the `attach_child` in `init_state` — the nested
-    /// registry is never ticked at all, and the enabled case fails too.
+    /// Red-check (verified): delete the `set_muted(!enabled)` calls — the
+    /// disabled subtree animates and the freeze case fails.
     #[test]
-    fn a_disabled_ticker_mode_starves_its_subtree_while_an_enabled_one_ticks() {
-        let root_vsync = Vsync::new();
+    fn a_disabled_ticker_mode_freezes_its_subtree_and_an_enabled_one_does_not() {
+        for (enabled, expect_motion) in [(false, false), (true, true)] {
+            let root = Vsync::new();
+            let animation = controller();
+            let (probe, found) = probe(&animation);
 
-        // A `TickerMode(false)` around an implicit animation: its controller
-        // registers with the nested (muted) registry.
+            let _harness = mount(VsyncScope::new(
+                root.clone(),
+                TickerMode::new(probe).enabled(enabled).into_view().boxed(),
+            ));
+            assert_eq!(
+                *found.lock(),
+                Some(true),
+                "the descendant found the TickerMode's registry"
+            );
+
+            let _ = animation.forward();
+            root.tick_all(0.0);
+            root.tick_all(0.5);
+
+            assert_eq!(
+                animation.value() > 0.0,
+                expect_motion,
+                "TickerMode(enabled = {enabled}) should {} its subtree (value {})",
+                if expect_motion { "run" } else { "freeze" },
+                animation.value()
+            );
+            animation.dispose();
+        }
+    }
+
+    /// **A `TickerMode` with no ambient `VsyncScope` above must not swallow its
+    /// subtree's registration.** Its registry would hang under nobody and never
+    /// be ticked, so handing it down would turn descendants that fall back to
+    /// their own wall-clock ticker into frozen ones — a widget documented as
+    /// changing nothing, silently killing the animations it wraps.
+    ///
+    /// Red-check (verified): make `build` always provide the registry — the
+    /// probe reports it found an ambient scope, and its controller is now
+    /// registered with a registry nothing drives.
+    #[test]
+    fn a_ticker_mode_without_an_ambient_scope_leaves_the_subtree_alone() {
+        let animation = controller();
+        let (probe, found) = probe(&animation);
+
+        let _harness = mount(TickerMode::new(probe).into_view().boxed());
+
+        assert_eq!(
+            *found.lock(),
+            Some(false),
+            "with no driver above, the TickerMode must not hand its subtree an \
+             undriven registry — the wall-clock fallback has to stay reachable"
+        );
+        animation.dispose();
+    }
+
+    /// The nesting follows the widget tree: a `TickerMode` under a *disabled*
+    /// one is starved even when it is itself enabled (Flutter's
+    /// `_updateEffectiveMode` AND, `ticker_provider.dart:246-252`) — observed
+    /// end to end through two widget layers, not just on the registries.
+    #[test]
+    fn a_nested_enabled_ticker_mode_cannot_re_enable_a_disabled_ancestor() {
+        let root = Vsync::new();
+        let animation = controller();
+        let (probe, _found) = probe(&animation);
+
         let _harness = mount(VsyncScope::new(
-            root_vsync.clone(),
-            TickerMode::new(AnimatedOpacity::new(0.5, SizedBox::new(10.0, 10.0)))
+            root.clone(),
+            TickerMode::new(TickerMode::new(probe).enabled(true))
                 .enabled(false)
                 .into_view()
                 .boxed(),
         ));
 
+        let _ = animation.forward();
+        root.tick_all(0.0);
+        root.tick_all(0.5);
         assert_eq!(
-            root_vsync.len(),
-            0,
-            "the descendant registered with the nested registry, not the root"
+            animation.value(),
+            0.0,
+            "a disabled ancestor starves the enabled descendant"
         );
-
-        // Ticking the root walks into the child registry — but a muted one
-        // forwards nothing. Nothing to assert on the widget from here beyond
-        // the registry contract itself (pinned in `flui-animation`); what this
-        // proves is the *wiring*: the subtree's controllers are in the
-        // TickerMode's registry, which is muted while disabled.
-        root_vsync.tick_all(0.0);
-        root_vsync.tick_all(0.5);
-    }
-
-    /// A bare `TickerMode` defaults to `enabled: true`
-    /// (`ticker_provider.dart:32`) and changes nothing.
-    #[test]
-    fn a_bare_ticker_mode_is_enabled() {
-        let root_vsync = Vsync::new();
-        let _harness = mount(VsyncScope::new(
-            root_vsync.clone(),
-            TickerMode::new(SizedBox::new(10.0, 10.0))
-                .into_view()
-                .boxed(),
-        ));
-        root_vsync.tick_all(0.0);
+        animation.dispose();
     }
 }
