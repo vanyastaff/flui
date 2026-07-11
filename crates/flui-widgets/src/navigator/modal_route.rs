@@ -637,6 +637,14 @@ impl ModalHandle {
     /// the flush, and the emptied-edge `changed_internal_state`
     /// (`routes.dart:952-963`). Called by `NavigatorShared::apply` with **no
     /// lock held** (ADR-0025).
+    /// Make this route's focus scope the active one and restore the focus it
+    /// remembers (`routes.dart:1692`, `:1137`). Called by the navigator from
+    /// `apply`, **outside** the history lock: this moves the primary focus, and
+    /// the listeners that fire are user code.
+    pub(crate) fn activate_focus_scope(&self) {
+        self.inner.activate_focus_scope();
+    }
+
     pub(crate) fn drain_local_history(&self) {
         let (callbacks, emptied) = self.inner.local_history.take_owed();
         for callback in callbacks {
@@ -784,13 +792,17 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
 
     /// `ModalRoute.didPush` moves the focus into the route's scope
     /// (`routes.dart:1690-1695`); so does `didAdd` (`:1698-1703`).
+    /// Focus activation is **not** done here: this runs inside the flush, under
+    /// the history lock, and moving the focus fires user listeners (a `Focus`
+    /// widget's `on_focus_change` and its rebuild) that may call back into the
+    /// navigator — a same-thread deadlock on the non-reentrant mutex. The
+    /// navigator activates the new top route's scope from `apply`, once the
+    /// lock is released.
     fn did_push(&mut self) -> PushCompletion {
-        self.inner.activate_focus_scope();
         self.transition.did_push()
     }
 
     fn did_add(&mut self) {
-        self.inner.activate_focus_scope();
         self.transition.did_add();
     }
 
@@ -819,7 +831,6 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// re-focuses it through `changedInternalState` → `_routeSetState`
     /// (`routes.dart:1731-1736`).
     fn did_pop_next(&mut self, popped: RouteId) {
-        self.inner.activate_focus_scope();
         self.transition.did_pop_next(popped);
     }
 
@@ -828,9 +839,6 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
         // `_routeSetState` re-`setFirstFocus`es whenever `isCurrent` flips
         // (`routes.dart:1731-1736`); a pop announces `did_change_next(None)`
         // to the revealed route.
-        if next.is_none() {
-            self.inner.activate_focus_scope();
-        }
         self.transition.did_change_next(next);
     }
 

@@ -62,15 +62,26 @@ struct EntryInner {
     removed: AtomicBool,
 }
 
+/// The winner of a [`EntryInner::claim`] race: this entry is now removed, and
+/// the claimer owes its `on_remove` — **if it has one**. A callback-less entry
+/// is an entry (Flutter's `onRemove` is nullable, `routes.dart:711`): it
+/// absorbs its pop like any other, it simply has nothing to fire.
+struct Claim(Option<OnRemoveCallback>);
+
 impl EntryInner {
-    /// Claim this entry for removal. `Some(callback)` for the winner; `None`
-    /// for a loser of the race (already popped, already removed, or severed
-    /// at dispose).
-    fn claim(&self) -> Option<OnRemoveCallback> {
+    /// Claim this entry for removal. `Some(claim)` for the winner — whose
+    /// payload may be `None` when the entry carries no callback — and `None`
+    /// for a loser of the race (already popped, already removed, or severed at
+    /// dispose).
+    ///
+    /// The two `None`s are **not** the same answer, and collapsing them was a
+    /// real bug: a bare entry read as "someone else already took this", so the
+    /// pop walked past it and took the route.
+    fn claim(&self) -> Option<Claim> {
         if self.removed.swap(true, Ordering::AcqRel) {
             return None;
         }
-        self.on_remove.lock().take()
+        Some(Claim(self.on_remove.lock().take()))
     }
 }
 
@@ -112,10 +123,10 @@ pub(crate) struct LocalHistoryRegistry {
 #[derive(Default)]
 struct RegistryInner {
     entries: Mutex<Vec<Arc<EntryInner>>>,
-    /// Callbacks owed by pops that happened under the history lock, drained
-    /// by `NavigatorShared::apply` outside it. `true` alongside a callback
-    /// when that pop emptied the stack (the `changed_internal_state` edge,
-    /// `routes.dart:961-963`).
+    /// What pops that happened under the history lock owe: the entry's
+    /// `on_remove` when it had one, and whether that pop emptied the stack (the
+    /// `changed_internal_state` edge, `routes.dart:961-963`). A callback-less
+    /// entry still records its edge — it just has nothing to fire.
     owed: Mutex<Vec<(Option<OnRemoveCallback>, bool)>>,
     /// Set at route dispose: adds become inert-with-a-warning
     /// (ADR-0025).
@@ -159,18 +170,18 @@ impl LocalHistoryRegistry {
             let mut entries = self.inner.entries.lock();
             let mut claimed = None;
             while let Some(entry) = entries.pop() {
-                if let Some(callback) = entry.claim() {
-                    claimed = Some(callback);
+                if let Some(claim) = entry.claim() {
+                    claimed = Some(claim);
                     break;
                 }
-                // A loser of a concurrent `remove()` race: already fired
-                // elsewhere; keep popping for a live one.
+                // A loser of a concurrent `remove()` race: someone already
+                // fired it. Keep popping for a live entry.
             }
             (claimed, entries.is_empty())
         };
         match claimed {
-            Some(callback) => {
-                self.inner.owed.lock().push((Some(callback), emptied));
+            Some(Claim(callback)) => {
+                self.inner.owed.lock().push((callback, emptied));
                 true
             }
             None => false,
@@ -212,13 +223,17 @@ impl LocalHistoryRegistry {
     /// synchronously **after** the leaf lock is released. Returns whether the
     /// empty edge was crossed.
     fn remove(&self, entry: &Arc<EntryInner>) -> Option<bool> {
-        let callback = entry.claim()?;
+        let Claim(callback) = entry.claim()?;
         let emptied = {
             let mut entries = self.inner.entries.lock();
             entries.retain(|held| !Arc::ptr_eq(held, entry));
             entries.is_empty()
         };
-        callback();
+        // Fired outside the registry lock (it is a leaf), and a callback-less
+        // entry simply has nothing to fire.
+        if let Some(callback) = callback {
+            callback();
+        }
         Some(emptied)
     }
 }

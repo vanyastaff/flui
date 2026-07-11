@@ -195,7 +195,8 @@ impl Vsync {
         self.inner.lock().muted = muted;
     }
 
-    /// The number of currently registered controllers.
+    /// The number of controllers registered **with this registry**, not
+    /// counting nested ones (see [`attach_child`](Self::attach_child)).
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.lock().controllers.len()
@@ -217,11 +218,30 @@ impl Vsync {
     /// infinite redraw after all animations settle.
     #[must_use]
     pub fn has_running(&self) -> bool {
-        self.inner
-            .lock()
-            .controllers
-            .iter()
-            .any(|c| c.controller.status().is_running())
+        let (mine, children) = {
+            let inner = self.inner.lock();
+            // A muted registry advances nothing — not its own controllers, not a
+            // nested registry's — so nothing under it can hold the frame loop
+            // open.
+            if inner.muted {
+                return false;
+            }
+            (
+                inner
+                    .controllers
+                    .iter()
+                    .any(|c| c.controller.status().is_running()),
+                inner
+                    .children
+                    .iter()
+                    .map(|registered| registered.child.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        // Nested registries hold real controllers: a `TickerMode` (and so every
+        // `Hero` child) puts its subtree's animations in one, and a frame-loop
+        // gate that only looked at this level would stall them after one frame.
+        mine || children.iter().any(Vsync::has_running)
     }
 
     /// Advance every registered, running controller to virtual instant
@@ -458,6 +478,40 @@ mod tests {
 
         // The tick walk still terminates.
         outer.tick_all(0.0);
+    }
+
+    /// The frame-loop gate asks `has_running`. A `TickerMode` — and therefore
+    /// every `Hero` child — puts its subtree's controllers in a **nested**
+    /// registry, so a gate that only looked at the top level would report "no
+    /// animation" and stall them after a single frame.
+    ///
+    /// Red-check: drop the recursion in `has_running` — the nested controller is
+    /// invisible and the first assertion fails.
+    #[test]
+    fn has_running_sees_controllers_in_nested_registries() {
+        let parent = Vsync::new();
+        let child = Vsync::new();
+        parent.attach_child(&child).expect("nested");
+
+        let animation = controller(1000);
+        child.register(animation.clone());
+        assert!(!parent.has_running(), "nothing is running yet");
+
+        let _ = animation.forward();
+        assert!(
+            parent.has_running(),
+            "a running controller in a nested registry keeps the frame loop alive"
+        );
+
+        // A muted registry cannot advance anything, so it cannot keep the loop
+        // alive either.
+        child.set_muted(true);
+        assert!(
+            !parent.has_running(),
+            "a muted registry's controllers do not hold the frame loop open"
+        );
+
+        animation.dispose();
     }
 
     #[test]

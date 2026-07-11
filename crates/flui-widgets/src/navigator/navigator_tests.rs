@@ -1436,6 +1436,102 @@ mod local_history {
         assert_eq!(handle.route_ids().len(), 1);
     }
 
+    /// A `LocalHistoryEntry` **without** an `on_remove` is still an entry: Flutter's
+    /// `onRemove` is nullable (`routes.dart:711`) and the entry still absorbs the
+    /// pop. FLUI's `claim()` returned `None` both for "already claimed" and for "no
+    /// callback to fire", so `pop_last_deferred` treated a bare entry as a lost race
+    /// and kept popping — a lone bare entry let the pop take **the whole route**,
+    /// and a bare entry above a live one let one back-press eat **two** entries.
+    ///
+    /// Red-check: make `claim()` answer `Option<OnRemoveCallback>` again — the
+    /// route pops on the first `maybe_pop` and the stays-put assertion fails.
+    #[test]
+    fn a_callback_less_entry_absorbs_the_pop_like_any_other() {
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let sink: Arc<Mutex<Option<LocalHistoryHandle>>> = Arc::new(Mutex::new(None));
+        let sink_for_page = Arc::clone(&sink);
+        let route = handle.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                HandleProbe {
+                    sink: Arc::clone(&sink_for_page),
+                }
+                .into_view()
+                .boxed()
+            })
+            .transition_duration(Duration::ZERO),
+        );
+        harness.tick();
+        let local = sink.lock().clone().expect("captured");
+
+        // A bare entry — no `on_remove`.
+        let _bare = local.add(LocalHistoryEntry::new());
+
+        assert!(handle.maybe_pop(), "the entry absorbs the pop");
+        harness.tick();
+        assert_eq!(
+            handle.route_ids().len(),
+            2,
+            "the route stays: a callback-less entry is still an entry"
+        );
+        assert_eq!(
+            route.try_take(),
+            None,
+            "and the route's future must not resolve"
+        );
+
+        // With the entry gone, the next pop takes the route.
+        assert!(handle.maybe_pop());
+        harness.tick();
+        assert_eq!(handle.route_ids().len(), 1);
+    }
+
+    /// One back-press consumes exactly **one** entry, even when the top entry has no
+    /// callback: the bare entry must not be skipped as a race-loser, which would let
+    /// a single pop eat the entry below it and fire *its* `on_remove`.
+    #[test]
+    fn one_pop_consumes_exactly_one_entry() {
+        use std::sync::atomic::AtomicUsize;
+
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let sink: Arc<Mutex<Option<LocalHistoryHandle>>> = Arc::new(Mutex::new(None));
+        let sink_for_page = Arc::clone(&sink);
+        let _route = handle.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                HandleProbe {
+                    sink: Arc::clone(&sink_for_page),
+                }
+                .into_view()
+                .boxed()
+            })
+            .transition_duration(Duration::ZERO),
+        );
+        harness.tick();
+        let local = sink.lock().clone().expect("captured");
+
+        let deep_removals = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&deep_removals);
+        let _deep = local.add(LocalHistoryEntry::new().on_remove(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        let _bare_on_top = local.add(LocalHistoryEntry::new());
+
+        assert!(handle.maybe_pop(), "the bare entry absorbs this pop");
+        harness.tick();
+        assert_eq!(
+            deep_removals.load(Ordering::SeqCst),
+            0,
+            "the entry below must not be consumed by the same back-press"
+        );
+        assert_eq!(handle.route_ids().len(), 2, "and the route stays");
+
+        assert!(handle.maybe_pop(), "the second pop takes the deeper entry");
+        harness.tick();
+        assert_eq!(deep_removals.load(Ordering::SeqCst), 1);
+        assert_eq!(handle.route_ids().len(), 2, "the route still stays");
+    }
+
     /// Route teardown severs: live entries drop **without** firing (Flutter
     /// GC-drops `_localHistory`; dispose never touches it), late adds are
     /// inert, and a late `remove()` is a no-op (FLUI divergence, named in the
@@ -1475,4 +1571,91 @@ mod local_history {
             }));
         late.remove();
     }
+}
+
+/// A route transition activates its focus scope, which **restores the remembered
+/// focus** — moving the primary focus fires user focus-change listeners (the
+/// `Focus` widget's `on_focus_change`, and its rebuild). Those must not run under
+/// the navigator's history lock: the mutex is not reentrant, so a listener that
+/// touches the navigator (even `can_pop()`) deadlocks the same thread.
+///
+/// This is the deadlock class already fixed for the `PopScope` fan-out; the focus
+/// path never got the same treatment — `activate_focus_scope` was called straight
+/// from `did_push` / `did_add` / `did_pop_next` / `did_change_next`, every one of
+/// which runs inside the flush.
+///
+/// The pop is what triggers it: the revealed route restores the field it
+/// remembers, so the listener fires from inside the flush.
+///
+/// Red-check: call `activate_focus_scope` from those hooks again — the pop hangs
+/// and the watchdog fails.
+#[test]
+fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
+    use std::time::Duration;
+
+    use flui_interaction::routing::{FocusManager, FocusNode};
+
+    use crate::navigator::PageRoute;
+    use crate::{Focus, SizedBox as Box2};
+
+    const BUDGET: Duration = Duration::from_secs(10);
+    let (done, finished) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+
+        let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+        let field = FocusNode::with_debug_label("deadlock-field");
+        let field_for_page = Arc::clone(&field);
+        let observed_for_page = Arc::clone(&observed);
+        let navigator = handle.clone();
+
+        let _a = handle.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                let observed = Arc::clone(&observed_for_page);
+                let navigator = navigator.clone();
+                Focus::new(Box2::new(10.0, 10.0))
+                    .focus_node(Arc::clone(&field_for_page))
+                    .on_focus_change(move |_focused| {
+                        // The re-entrant read that deadlocks under the lock.
+                        observed.lock().push(navigator.can_pop());
+                    })
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(Duration::ZERO),
+        );
+        harness.tick();
+        field.request_focus();
+
+        // Cover it, then reveal it: the reveal restores the remembered focus
+        // from inside the flush, firing the user listener.
+        let _b = handle.push(
+            PageRoute::<i32>::new(|_ctx, _p, _s| Box2::new(10.0, 10.0).into_view().boxed())
+                .transition_duration(Duration::ZERO),
+        );
+        harness.tick();
+        assert!(handle.pop());
+        harness.tick();
+
+        assert!(
+            !observed.lock().is_empty(),
+            "the focus listener must actually have fired — otherwise this test \
+             proves nothing about where it runs"
+        );
+
+        manager.unfocus();
+        let _ = done.send(());
+    });
+
+    assert!(
+        finished.recv_timeout(BUDGET).is_ok(),
+        "a focus listener calling back into the navigator deadlocked — the \
+         route's focus activation ran under the history lock"
+    );
 }

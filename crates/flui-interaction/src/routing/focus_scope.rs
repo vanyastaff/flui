@@ -533,6 +533,17 @@ impl FocusNode {
     /// scope at the new location records the focused id. A node already under
     /// this parent is a no-op.
     pub fn adopt_node(self: &Arc<Self>, node: &Arc<FocusNode>) {
+        // A node cannot become its own ancestor: the parent pointers would form
+        // a cycle, and the very next `enclosing_scope()` walk would spin
+        // forever. Reachable from a widget's `did_change_dependencies`, so
+        // refuse it rather than hang.
+        if self.id == node.id || node.has_descendant(self.id) {
+            tracing::error!(
+                "BUG: a focus node cannot be adopted into its own subtree; the move is refused"
+            );
+            return;
+        }
+
         let old_parent = node.parent();
         if old_parent
             .as_ref()
@@ -577,6 +588,19 @@ impl FocusNode {
     }
 
     fn attach_child(self: &Arc<Self>, child: &Arc<FocusNode>) {
+        // Lift the node out of any previous parent first. Without this it sits
+        // in **two** child lists: `descendants()` yields it twice — so it
+        // appears twice in the traversal order — and the abandoned parent's
+        // later `detach_child` unfocuses a node it no longer owns.
+        if let Some(old_parent) = child.parent()
+            && old_parent.id != self.id
+        {
+            old_parent
+                .children
+                .write()
+                .retain(|held| held.id != child.id);
+        }
+
         // Set parent
         *child.parent.write() = Some(Arc::downgrade(self));
 
@@ -1126,7 +1150,11 @@ pub enum ResolvedStep {
 /// (`can_request_focus && !skip_traversal`), applied per *target*: a
 /// force-included cursor may sit in the order without being a landing spot.
 fn is_traversable(node: &Arc<FocusNode>) -> bool {
-    node.can_request_focus() && !node.skip_traversal()
+    // A scope's backing node is **not** a landing spot. It is focusable and
+    // un-skipped by construction, and it carries no geometry of its own — so it
+    // sorts at the origin and would be exactly where the first Tab goes.
+    // Flutter never gives a scope the primary focus.
+    !node.is_scope() && node.can_request_focus() && !node.skip_traversal()
 }
 
 /// Determines the order for Tab/Shift+Tab navigation.
@@ -1170,19 +1198,15 @@ impl ReadingOrderPolicy {
             let rect_b = nodes[b].rect();
 
             // Primary: top-to-bottom
-            let y_cmp = rect_a
-                .top()
-                .partial_cmp(&rect_b.top())
-                .unwrap_or(Ordering::Equal);
+            // `total_cmp`, not `partial_cmp(..).unwrap_or(Equal)`: the rects come
+            // from a render transform now, and a single NaN made the comparator
+            // non-transitive — which `sort_by` detects and panics on. A total
+            // order cannot be inconsistent, whatever the input.
+            let y_cmp = rect_a.top().0.total_cmp(&rect_b.top().0);
             if y_cmp != Ordering::Equal {
                 return y_cmp;
             }
-
-            // Secondary: left-to-right
-            rect_a
-                .left()
-                .partial_cmp(&rect_b.left())
-                .unwrap_or(Ordering::Equal)
+            rect_a.left().0.total_cmp(&rect_b.left().0)
         });
         indices
     }

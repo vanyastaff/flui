@@ -1467,4 +1467,147 @@ mod tests {
             "ClosedLoop stays inside and wraps to the scope's first node"
         );
     }
+
+    /// Tab must never land on a scope's backing node: it is focusable and
+    /// un-skipped by construction, carries no geometry, and therefore sorts at
+    /// the origin — i.e. it is exactly where the *first* Tab would go. Flutter
+    /// never gives a scope the primary focus.
+    ///
+    /// Red-check: drop the `!node.is_scope()` clause from `is_traversable` —
+    /// the first Tab focuses the scope node, a keyboard black hole.
+    #[test]
+    fn traversal_never_lands_on_a_scope_node() {
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let inner = FocusScopeNode::with_debug_label("inner");
+        root.attach_node(inner.as_focus_node());
+        let field = FocusNode::with_debug_label("field");
+        field.set_rect(flui_types::geometry::Rect::from_xywh(
+            flui_types::geometry::Pixels(50.0),
+            flui_types::geometry::Pixels(50.0),
+            flui_types::geometry::Pixels(10.0),
+            flui_types::geometry::Pixels(10.0),
+        ));
+        inner.attach_node(&field);
+
+        assert!(manager.focus_next(), "the first Tab moves focus");
+        assert_eq!(
+            manager.focused(),
+            Some(field.id()),
+            "onto the field — not onto the (zero-rect, first-sorting) scope node"
+        );
+    }
+
+    /// A node attached to a second parent must leave the first: otherwise it
+    /// sits in two child lists, `descendants()` yields it twice — so it appears
+    /// twice in the traversal order — and the abandoned parent's later detach
+    /// unfocuses a node it no longer owns.
+    ///
+    /// Red-check: stop lifting the node out of its old parent in `attach_child`
+    /// — the node is a child of both scopes and Tab visits it twice.
+    #[test]
+    fn attaching_to_a_new_parent_leaves_the_old_one() {
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let first = FocusScopeNode::with_debug_label("first-parent");
+        let second = FocusScopeNode::with_debug_label("second-parent");
+        root.attach_node(first.as_focus_node());
+        root.attach_node(second.as_focus_node());
+
+        let node = FocusNode::with_debug_label("moved");
+        first.attach_node(&node);
+        second.attach_node(&node);
+
+        assert!(
+            first.as_focus_node().children().is_empty(),
+            "the old parent no longer lists the node"
+        );
+        assert_eq!(second.as_focus_node().children().len(), 1);
+        assert_eq!(
+            node.parent().map(|parent| parent.id()),
+            Some(second.as_focus_node().id())
+        );
+
+        // And the node appears exactly once in the traversal order.
+        let order = root.sorted_traversal_order(None);
+        assert_eq!(
+            order.iter().filter(|held| held.id() == node.id()).count(),
+            1,
+            "a double-parented node would be visited twice"
+        );
+    }
+
+    /// Adopting a node into its own subtree would make it its own ancestor: the
+    /// parent pointers form a cycle, and the very next `enclosing_scope()` walk
+    /// spins forever. Refused, not hung.
+    ///
+    /// Red-check: drop the ancestor guard in `adopt_node` — this test hangs.
+    #[test]
+    fn adopting_a_node_into_its_own_subtree_is_refused() {
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let outer = FocusScopeNode::with_debug_label("outer");
+        root.attach_node(outer.as_focus_node());
+        let inner = FocusScopeNode::with_debug_label("inner");
+        outer.attach_node(inner.as_focus_node());
+
+        // Try to move the outer scope *under its own descendant*.
+        inner.adopt_node(outer.as_focus_node());
+
+        assert_eq!(
+            outer.as_focus_node().parent().map(|parent| parent.id()),
+            Some(root.as_focus_node().id()),
+            "the cyclic move is refused and the tree is unchanged"
+        );
+        // The walks that a cycle would hang still terminate.
+        assert!(inner.as_focus_node().enclosing_scope().is_some());
+        let _ = root.sorted_traversal_order(None);
+    }
+
+    /// A non-finite rect (a degenerate render transform reaches the focus tree
+    /// now) must leave the traversal order complete and deterministic.
+    ///
+    /// **No red-check is claimed.** The comparator was
+    /// `partial_cmp(..).unwrap_or(Equal)`, which is *not* a total order when a
+    /// NaN is present — `sort_by` is entitled to panic on that ("user-provided
+    /// comparison function does not correctly implement a total order"), but on
+    /// this input it does not, and I could not construct one that does. The fix
+    /// (`total_cmp`) is therefore a correctness fix without a failing test: the
+    /// old code was unsound by contract, not observably broken here. This test
+    /// pins the property that matters — no panic, every candidate present
+    /// exactly once — and would catch a regression that dropped candidates.
+    #[test]
+    fn a_non_finite_rect_does_not_panic_the_sort() {
+        let manager = FocusManager::new_for_test();
+        let root = manager.root_scope().clone();
+        let at = |x: f32| {
+            flui_types::geometry::Rect::from_xywh(
+                flui_types::geometry::Pixels(x),
+                flui_types::geometry::Pixels(x),
+                flui_types::geometry::Pixels(10.0),
+                flui_types::geometry::Pixels(10.0),
+            )
+        };
+        // Enough candidates to reach the sort's merge path, which is where a
+        // non-total comparator is detected and panics; a handful of elements
+        // would take the insertion path and hide the defect.
+        const NODES: usize = 40;
+        for index in 0..NODES {
+            let node = FocusNode::new();
+            #[expect(clippy::cast_precision_loss, reason = "test coordinates, exact in f32")]
+            node.set_rect(at((index % 7) as f32 * 10.0));
+            root.attach_node(&node);
+        }
+        // Several poisoned rects, interleaved: one NaN is enough to make
+        // `partial_cmp(..).unwrap_or(Equal)` intransitive.
+        for _ in 0..5 {
+            let poisoned = FocusNode::with_debug_label("nan");
+            poisoned.set_rect(at(f32::NAN));
+            root.attach_node(&poisoned);
+        }
+
+        // Must not panic, and must still produce every candidate exactly once.
+        let order = root.sorted_traversal_order(None);
+        assert_eq!(order.len(), NODES + 5);
+    }
 }

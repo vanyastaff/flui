@@ -51,7 +51,7 @@ use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
 use super::history::{DeferredEffect, FlushOutcome, RouteHistory};
 use super::modal_route::ModalHandle;
-use super::observer::{NavigatorObserver, deliver};
+use super::observer::{NavigatorObserver, Notification, deliver};
 use super::overlay_route::NavigatorRoute;
 use super::result::RouteResult;
 use super::route::{AnyResult, RouteId, RoutePopDisposition};
@@ -147,6 +147,26 @@ impl NavigatorShared {
                     DeferredEffect::PopInvoked(_, did_pop) => modal.notify_pop_invoked(*did_pop),
                     DeferredEffect::LocalHistoryPopped(_) => modal.drain_local_history(),
                 }
+            }
+        }
+
+        // 0b. The new top route takes the keyboard: its scope becomes active and
+        //     the focus it remembers is restored (`routes.dart:1692`, `:1137`).
+        //     Also outside the lock — moving the focus fires user focus-change
+        //     listeners, and one that calls back into this navigator would
+        //     deadlock the same thread if this ran inside the flush.
+        if let Some(top) =
+            outcome
+                .notifications
+                .iter()
+                .find_map(|notification| match notification {
+                    Notification::TopChanged { top, .. } => Some(*top),
+                    Notification::Observed(_) => None,
+                })
+        {
+            let modal = self.registries.modals.lock().get(&top).cloned();
+            if let Some(modal) = modal {
+                modal.activate_focus_scope();
             }
         }
 
