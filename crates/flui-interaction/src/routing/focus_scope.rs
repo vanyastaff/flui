@@ -93,6 +93,14 @@ fn allocate_focus_node_id() -> FocusNodeId {
 /// Returns `true` if the event was handled (stops propagation).
 pub type KeyEventHandler = Arc<dyn Fn(&KeyEvent) -> KeyEventResult + Send + Sync>;
 
+/// Computes a node's bounding rectangle on demand, in root coordinates.
+///
+/// Installed by the widget layer, which owns the render geometry the
+/// reading-order traversal sorts by (ADR-0022 §4's traversal-geometry gap):
+/// the node itself cannot reach a render tree. `None` while the widget has no
+/// committed layout to measure.
+pub type RectProvider = Arc<dyn Fn() -> Option<Rect<Pixels>> + Send + Sync>;
+
 /// Result of key event processing — Flutter's `KeyEventResult`
 /// (`focus_manager.dart:73-88`), consumed by the leaf→root dispatch walk
 /// (ADR-0023 U1).
@@ -184,6 +192,9 @@ pub struct FocusNode {
 
     /// Bounding rectangle (for spatial navigation).
     rect: RwLock<Rect<Pixels>>,
+    /// The live geometry source, when a widget installed one; wins over
+    /// [`rect`](Self::rect)'s stored value.
+    rect_provider: RwLock<Option<RectProvider>>,
 
     /// Whether this node is attached to the focus tree.
     attached: AtomicBool,
@@ -203,6 +214,7 @@ impl FocusNode {
             scope_owner: RwLock::new(None),
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
+            rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
         })
     }
@@ -220,6 +232,7 @@ impl FocusNode {
             scope_owner: RwLock::new(None),
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
+            rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
         })
     }
@@ -239,6 +252,7 @@ impl FocusNode {
             scope_owner: RwLock::new(Some(scope_owner)),
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
+            rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
         })
     }
@@ -311,14 +325,33 @@ impl FocusNode {
         self.children.read().clone()
     }
 
-    /// Returns the bounding rectangle.
+    /// Returns the bounding rectangle: a live [`RectProvider`]'s answer when
+    /// one is installed (widget-mounted nodes measure their render anchor
+    /// lazily), else the stored value.
     pub fn rect(&self) -> Rect<Pixels> {
+        if let Some(provider) = self.rect_provider.read().as_ref()
+            && let Some(rect) = provider()
+        {
+            return rect;
+        }
         *self.rect.read()
     }
 
     /// Sets the bounding rectangle.
     pub fn set_rect(&self, rect: Rect<Pixels>) {
         *self.rect.write() = rect;
+    }
+
+    /// Install a live geometry source — see [`RectProvider`].
+    pub fn set_rect_provider(&self, provider: RectProvider) {
+        *self.rect_provider.write() = Some(provider);
+    }
+
+    /// Remove the live geometry source; [`rect`](Self::rect) falls back to the
+    /// stored value. The installing widget clears on dispose so an external
+    /// node never measures a dead anchor.
+    pub fn clear_rect_provider(&self) {
+        *self.rect_provider.write() = None;
     }
 
     /// Sets the key event handler.
@@ -618,6 +651,7 @@ impl Default for FocusNode {
             scope_owner: RwLock::new(None),
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
+            rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
         }
     }

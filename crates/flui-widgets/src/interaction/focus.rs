@@ -34,10 +34,15 @@
 use std::sync::Arc;
 
 use flui_foundation::ListenerId;
+use flui_geometry::Rect;
 use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode, KeyEventHandler};
+use flui_objects::SubtreeAnchor;
+use flui_types::geometry::px;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
+
+use crate::navigator::AnchoredBox;
 
 /// Reports whether this widget's node gained or lost the primary focus.
 pub type FocusChangeHandler = Arc<dyn Fn(bool) + Send + Sync>;
@@ -271,6 +276,7 @@ impl StatefulView for Focus {
         FocusState {
             node,
             parent: None,
+            anchor: SubtreeAnchor::new(),
             focus_listener_id: None,
             autofocus: self.autofocus,
             on_focus_change: self.on_focus_change.clone(),
@@ -285,6 +291,10 @@ pub struct FocusState {
     /// The node this one currently hangs under; `did_change_dependencies`
     /// moves it when the provider changes.
     parent: Option<Arc<FocusNode>>,
+    /// Publishes the child's `RenderId` while mounted, so the node's
+    /// [`RectProvider`](flui_interaction::RectProvider) can measure it —
+    /// reading-order traversal sorts by this geometry (ADR-0022 §4).
+    anchor: SubtreeAnchor,
     focus_listener_id: Option<ListenerId>,
     /// Captured at `create_state`: `init_state` has no view reference.
     autofocus: bool,
@@ -334,6 +344,8 @@ impl ViewState<Focus> for FocusState {
         parent.attach_node(&self.node);
         self.parent = Some(parent);
 
+        install_rect_provider(&self.node, &self.anchor, ctx);
+
         let on_focus_change = self.on_focus_change.clone();
         self.install_focus_listener(ctx.rebuild_handle(), on_focus_change);
 
@@ -371,6 +383,9 @@ impl ViewState<Focus> for FocusState {
     }
 
     fn dispose(&mut self) {
+        // An external node outlives this widget: it must not keep measuring a
+        // dead anchor.
+        self.node.clear_rect_provider();
         if let Some(id) = self.focus_listener_id.take() {
             FocusManager::global().remove_listener(id);
         }
@@ -384,13 +399,37 @@ impl ViewState<Focus> for FocusState {
 
     /// Every `Focus` provides itself as the parent for descendants —
     /// Flutter's `_FocusInheritedScope` in `_FocusState.build`
-    /// (`focus_scope.dart:714-741`).
+    /// (`focus_scope.dart:714-741`) — and anchors the child so the node's
+    /// rect provider has a render node to measure.
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
         FocusParentProvider {
             parent: Arc::clone(&self.node),
-            child: view.child.clone(),
+            child: BoxedView(Box::new(
+                AnchoredBox::new(self.anchor.clone(), view.child.clone()).into_view(),
+            )),
         }
     }
+}
+
+/// Wire `node`'s rect to `anchor`'s render node: measured lazily at traversal
+/// time against committed layout — `box_size` + `transform_to` the render
+/// root, the `HeroHandle::bounding_box_in` shape. `None` (fall back to the
+/// stored rect) while unmounted or before first layout.
+pub(crate) fn install_rect_provider(
+    node: &Arc<FocusNode>,
+    anchor: &SubtreeAnchor,
+    ctx: &dyn BuildContext,
+) {
+    let anchor = anchor.clone();
+    let owner = ctx.pipeline_owner();
+    node.set_rect_provider(Arc::new(move || {
+        let render_id = anchor.get()?;
+        let owner = owner.as_ref()?.read();
+        let size = owner.box_size(render_id)?;
+        let root = owner.root_id()?;
+        let transform = owner.transform_to(render_id, root)?;
+        Some(transform.transform_rect(&Rect::from_ltwh(px(0.0), px(0.0), size.width, size.height)))
+    }));
 }
 
 /// Detach `child` from `parent`, routing through the scope API when the
@@ -688,6 +727,80 @@ mod tests {
             "gain then loss, exactly once each"
         );
 
+        manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
+}
+
+#[cfg(test)]
+mod traversal_tests {
+    use flui_interaction::routing::FocusManager;
+    use flui_view::ViewExt;
+
+    use super::*;
+    use crate::test_harness::{FOCUS_TEST_LOCK, mount};
+    use crate::{Positioned, SizedBox, Stack};
+
+    /// Widget-mounted nodes traverse in **reading order**, not attach order —
+    /// the ADR-0022 §4 traversal-geometry gap, closed: every `Focus` anchors
+    /// its child and installs a rect provider, so `ReadingOrderPolicy` sorts
+    /// real committed geometry. The attach order (`a`, `b`, `c`) is chosen so
+    /// the on-screen order (`b`, `a`, `c`) is **not** one of its rotations:
+    /// from `a`, geometry says `c` next, attach order would say `b`.
+    ///
+    /// Red-check (the pre-fix behavior): skip `install_rect_provider` in
+    /// `init_state` — every rect reads zero, the sort degenerates to attach
+    /// order, and the first assertion gets `b`.
+    #[test]
+    fn tab_traversal_follows_geometry_not_attach_order() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("traversal-scope");
+        let a = FocusNode::with_debug_label("a-middle");
+        let b = FocusNode::with_debug_label("b-top");
+        let c = FocusNode::with_debug_label("c-bottom");
+
+        let positioned = |top: f32, node: &Arc<FocusNode>| {
+            Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(node)))
+                .left(0.0)
+                .top(top)
+                .width(10.0)
+                .height(10.0)
+                .into_view()
+                .boxed()
+        };
+        let _harness = mount(FocusScope::with_external_node(
+            Arc::clone(&scope),
+            Stack::new(vec![
+                positioned(50.0, &a),
+                positioned(0.0, &b),
+                positioned(100.0, &c),
+            ]),
+        ));
+
+        assert_eq!(
+            b.rect().min_y().0,
+            0.0,
+            "sanity: the provider measures committed layout"
+        );
+        assert_eq!(a.rect().min_y().0, 50.0);
+
+        manager.set_active_scope(Some(Arc::clone(&scope)));
+        a.request_focus();
+
+        manager.focus_next();
+        assert!(
+            c.has_primary_focus(),
+            "after the middle node comes the bottom one — reading order, not attach order"
+        );
+        manager.focus_next();
+        assert!(b.has_primary_focus(), "wraparound lands on the top node");
+        manager.focus_next();
+        assert!(a.has_primary_focus(), "then the middle again");
+
+        manager.unfocus();
+        manager.set_active_scope(None);
         manager.root_scope().detach_node(scope.as_focus_node().id());
     }
 }

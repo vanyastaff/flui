@@ -100,6 +100,9 @@ impl EditableText {
 pub struct EditableTextState {
     /// Focus node representing this field in the global focus tree.
     focus_node: Arc<FocusNode>,
+    /// Publishes the field's `RenderId` while mounted, so the node's rect
+    /// provider can measure it for reading-order traversal (ADR-0022 §4).
+    anchor: flui_objects::SubtreeAnchor,
     /// The node this field's node hangs under — the nearest enclosing focus
     /// parent at mount, or the root scope's backing node. Detached from in
     /// `dispose`.
@@ -134,6 +137,7 @@ impl StatefulView for EditableText {
     fn create_state(&self) -> EditableTextState {
         EditableTextState {
             focus_node: FocusNode::with_debug_label("EditableText"),
+            anchor: flui_objects::SubtreeAnchor::new(),
             parent: None,
             controller: self.controller.clone(),
             controller_listener_id: None,
@@ -155,6 +159,7 @@ impl ViewState<EditableText> for EditableTextState {
         self.controller
             .set_focus_node_id(Some(self.focus_node.id()));
         self.parent = Some(parent);
+        crate::interaction::install_rect_provider(&self.focus_node, &self.anchor, ctx);
 
         // 2. Register a key handler with the FocusManager.  Only fires when
         //    this node is the primary-focused node.
@@ -192,12 +197,16 @@ impl ViewState<EditableText> for EditableTextState {
         let caret_height = view.caret_height;
         let caret_color = view.caret_color;
 
-        AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
-            build_field_view(&controller, &focus_node, caret_height, caret_color)
-        })
+        crate::navigator::AnchoredBox::new(
+            self.anchor.clone(),
+            AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
+                build_field_view(&controller, &focus_node, caret_height, caret_color)
+            }),
+        )
     }
 
     fn dispose(&mut self) {
+        self.focus_node.clear_rect_provider();
         // Remove the focus-change listener we registered in init_state.
         if let Some(id) = self.focus_listener_id.take() {
             FocusManager::global().remove_listener(id);

@@ -16,8 +16,8 @@ mod visibility;
 
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{Action, Actions, CallbackAction, Intent};
-pub(crate) use focus::enclosing_focus_parent;
 pub use focus::{Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
+pub(crate) use focus::{enclosing_focus_parent, install_rect_provider};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
 pub use ignore_pointer::IgnorePointer;

@@ -65,6 +65,7 @@ pub use page_route::{PageRoute, PopupRoute};
 pub use pop_scope::{PopInvokedCallback, PopScope};
 pub use result::RouteResult;
 pub use route::{PushCompletion, Route, RouteId, RouteSettings};
+pub(crate) use subtree::AnchoredBox;
 
 #[cfg(test)]
 mod export_guard;
