@@ -1,10 +1,10 @@
-//! Local history — a mini navigation state inside one route (ADR-0025 U1).
+//! Local history — a mini navigation state inside one route (ADR-0025).
 //!
 //! While a route holds entries, a pop removes the most recent **entry**
 //! instead of the route — Flutter's `LocalHistoryRoute` mixin
 //! (`routes.dart:747-973`, applied to `ModalRoute` at `:1266`).
 //!
-//! # Delivery discipline (ADR-0025 §3.3, binding)
+//! # Delivery discipline (binding, per ADR-0025)
 //!
 //! `on_remove` is user code. An entry popped by `did_pop` is popped **inside
 //! the flush, under the history lock** — firing the callback there deadlocks
@@ -20,7 +20,7 @@
 //! exactly-once linearization for `remove()` racing `did_pop` is the entry's
 //! atomic `removed` flag.
 //!
-//! # Divergence, named (ADR-0025 §5, corrected)
+//! # Divergence, named (ADR-0025, corrected)
 //!
 //! Flutter never clears `_localHistory` on route dispose, so
 //! `removeLocalHistoryEntry` after the route died still fires `onRemove`. FLUI
@@ -28,11 +28,11 @@
 //! Flutter's GC drops them) and the entries are marked removed, so a late
 //! `remove()` is a no-op. Keeping callbacks alive past dispose is exactly the
 //! `EntryInner → closure → state → handle → EntryInner` cycle Rust would leak
-//! forever (ADR-0025 §3.3.4); the loyal-but-leaking alternative loses.
+//! forever (ADR-0025); the loyal-but-leaking alternative loses.
 
-// U1 ships the mechanism with crate-private surface; its only in-crate
-// producers are the tests until the U2 public flip lands beside the first
-// Catalog consumer (ADR-0025 §6) — the seam-before-consumer shape
+// The mechanism ships with a crate-private surface: its only in-crate
+// producers are the tests until the public surface lands beside the first
+// Catalog consumer (ADR-0025) — the seam-before-consumer shape
 // `hero_controller.rs` documents. Deleting and re-deriving later is how a
 // seam stops matching the ADR that specified it.
 #![allow(dead_code)]
@@ -50,12 +50,12 @@ use parking_lot::Mutex;
 pub(crate) type OnRemoveCallback = Arc<dyn Fn() + Send + Sync>;
 
 /// One live entry. Flutter's `LocalHistoryEntry` (`routes.dart:708-729`),
-/// minus `impliesAppBarDismissal` (no `AppBar`; ADR-0025 §4).
+/// minus `impliesAppBarDismissal` (no `AppBar`; ADR-0025).
 struct EntryInner {
     /// Consumed (`Option::take`) when the entry fires or the route dies —
     /// never merely cloned out — so the callback (and whatever widget state it
     /// captures) cannot cycle back to a handle that keeps this inner alive
-    /// (ADR-0025 §3.3.4).
+    /// (ADR-0025).
     on_remove: Mutex<Option<OnRemoveCallback>>,
     /// The exactly-once linearization point: whoever swaps this to `true`
     /// owns the firing of `on_remove`.
@@ -118,7 +118,7 @@ struct RegistryInner {
     /// `routes.dart:961-963`).
     owed: Mutex<Vec<(Option<OnRemoveCallback>, bool)>>,
     /// Set at route dispose: adds become inert-with-a-warning
-    /// (ADR-0025 §5).
+    /// (ADR-0025).
     closed: AtomicBool,
 }
 
@@ -233,12 +233,12 @@ impl std::fmt::Debug for LocalHistoryRegistry {
 }
 
 // ============================================================================
-// The page-facing handles (pub(crate) in U1; public with the first consumer)
+// The page-facing handles (crate-private until the first consumer)
 // ============================================================================
 
 /// The capability a page uses to push local-history entries onto its route —
 /// `ModalRoute.of(context)` narrowed to `addLocalHistoryEntry`
-/// (ADR-0025 §3.2). Acquire in `init_state`/`did_change_dependencies`, fire
+/// (ADR-0025). Acquire in `init_state`/`did_change_dependencies`, fire
 /// from event or animation callbacks (trigger #22 discipline: `add` is
 /// rebuild-adjacent).
 #[derive(Clone)]
@@ -300,7 +300,7 @@ impl std::fmt::Debug for LocalHistoryHandle {
 
 /// Removes the one entry it was minted for — `LocalHistoryEntry.remove()`
 /// (`routes.dart:726-729`), with cross-entry theft syntactically absent.
-/// Holds the registry weakly (ADR-0025 §3.3.4): a handle outliving its route
+/// Holds the registry weakly (ADR-0025): a handle outliving its route
 /// keeps no route state alive.
 #[derive(Clone)]
 pub(crate) struct LocalHistoryEntryHandle {

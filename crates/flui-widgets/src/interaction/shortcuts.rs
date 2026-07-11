@@ -1,11 +1,11 @@
 //! [`SingleActivator`] and [`CallbackShortcuts`] — keyboard shortcuts riding
 //! the leaf→root key dispatch.
 //!
-//! ADR-0023 U2. A shortcut widget is, mechanically, a
+//! ADR-0023. A shortcut widget is, mechanically, a
 //! `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper
 //! (`shortcuts.dart:1134-1143`, `:1225-1231`): it sees a key only when every
 //! `Focus` below it — most importantly the focused field — *ignored* the
-//! event and the ADR-0023 U1 walk bubbled it up.
+//! event and the ADR-0023 walk bubbled it up.
 //!
 //! # Flutter parity
 //!
@@ -13,13 +13,13 @@
 //! `3.33.0-0.0.pre-6280-g88e87cd963f`: `SingleActivator` (`:433-581`),
 //! `CallbackShortcuts` (`:1181-1231`).
 //!
-//! # Deferred, and named (ADR-0023 §4)
+//! # Deferred, and named (ADR-0023 ADR-0023)
 //!
 //! `LogicalKeySet` (needs a `HardwareKeyboard`-style pressed-set tracker),
 //! `CharacterActivator` (no consumer), a shared `ShortcutManager`, and
 //! `includeSemantics`. The Intent-mapped [`Shortcuts`] resolves its
 //! [`Actions`](super::actions::Actions) chain from **its own position**, not
-//! the focused leaf's context (ADR-0023 O-1) — visible only when an `Actions`
+//! the focused leaf's context (ADR-0023's resolve-at-own-position divergence) — visible only when an `Actions`
 //! sits between the focused widget and the `Shortcuts`.
 
 use std::any::Any;
@@ -147,7 +147,7 @@ impl SingleActivator {
 /// While the primary focus sits inside `child`, a key event that every inner
 /// `Focus` ignored bubbles here; **every** matching binding fires
 /// (`:1210-1220`) and the event counts as handled iff at least one did. The
-/// `Intent`-mapped `Shortcuts`/`Actions` pair is ADR-0023 U3/U4.
+/// `Intent`-mapped `Shortcuts`/`Actions` pair is ADR-0023/.
 #[derive(Clone)]
 pub struct CallbackShortcuts {
     bindings: Vec<(SingleActivator, ShortcutCallback)>,
@@ -233,13 +233,12 @@ impl StatelessView for CallbackShortcuts {
 /// On a key the focused subtree ignored, the **first** matching activator's
 /// intent resolves to the nearest enclosing enabled action
 /// (`ShortcutManager.handleKeypress`, `:922-938`); the event is consumed
-/// unless that action's [`consumes_key`](super::actions::Action::consumes_key)
-/// declines, which stops the bubbling *without* consuming
-/// (`actions.dart:312-314`). No match, or no enabled action: the key keeps
+/// unless the action reports it did nothing, which stops the bubbling
+/// *without* consuming (`actions.dart:312-314`). No match, or no enabled action: the key keeps
 /// bubbling.
 #[derive(Clone)]
 pub struct Shortcuts {
-    shortcuts: Vec<(SingleActivator, Arc<dyn Intent>)>, // PORT-CHECK-OK-DYN: ADR-0023 U4 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
+    shortcuts: Vec<(SingleActivator, Arc<dyn Intent>)>, // PORT-CHECK-OK-DYN: ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
     child: BoxedView,
 }
 
@@ -277,7 +276,7 @@ impl View for Shortcuts {
 impl StatelessView for Shortcuts {
     /// The `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper
     /// (`shortcuts.dart:1134-1143`). The `Actions` chain is captured from this
-    /// widget's own position (ADR-0023 O-1) with a real dependency, so a
+    /// widget's own position (ADR-0023's resolve-at-own-position divergence) with a real dependency, so a
     /// chain that changes rebuilds this widget and the handler re-captures.
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
@@ -370,12 +369,12 @@ mod tests {
         );
     }
 
-    /// ADR-0023 U1+U2 end to end: a shortcut above a focused `Focus` fires
+    /// ADR-0023+ end to end: a shortcut above a focused `Focus` fires
     /// only for keys that subtree **ignored** — a key the focused handler
     /// consumed never reaches the binding, and a matching ignored key fires
     /// every binding while counting as handled.
     ///
-    /// Red-check: revert `dispatch_key_event` to the flat pre-U1 dispatch —
+    /// Red-check: revert `dispatch_key_event` to the flat pre- dispatch —
     /// the binding never fires and the second assertion fails.
     #[test]
     fn a_shortcut_fires_only_for_keys_the_focused_subtree_ignored() {
@@ -447,7 +446,7 @@ mod intent_tests {
         }
     }
 
-    /// ADR-0023 U3+U4 end to end: Ctrl+S bubbles from the focused field,
+    /// ADR-0023+ end to end: Ctrl+S bubbles from the focused field,
     /// `Shortcuts` maps it to `SaveIntent`, and the enclosing `Actions` chain
     /// invokes the bound action; the event is consumed.
     ///
@@ -558,14 +557,14 @@ mod tab_tests {
         }
     }
 
-    /// **Tab works, end to end** (ADR-0026 U-C): a real key event enters
-    /// `dispatch_key_event`, bubbles from the focused field (ADR-0023 U1),
+    /// **Tab works, end to end** (ADR-0026): a real key event enters
+    /// `dispatch_key_event`, bubbles from the focused field (ADR-0023),
     /// matches the `Shortcuts` activator, resolves `NextFocusIntent` through
     /// the enclosing `Actions`, and moves the focus in reading order.
     ///
     /// Note the nesting the ADR-0026 review made a binding constraint:
     /// **`Actions` must be OUTSIDE `Shortcuts`** — FLUI's `Shortcuts` resolves
-    /// its action chain from its own position (ADR-0023 O-1), so the Flutter
+    /// its action chain from its own position (ADR-0023's resolve-at-own-position divergence), so the Flutter
     /// habit of `Shortcuts(child: Actions(...))` silently dead-keys Tab.
     ///
     /// Red-check: swap the nesting to `Shortcuts::new(Actions::new(...))` —
@@ -628,7 +627,7 @@ mod tab_tests {
     /// (`focus_traversal.dart:2340-2348`): with a `Stop` edge and nowhere to
     /// go, the action runs, moves nothing, and reports the event
     /// **unconsumed** — so an outer handler still gets its chance. This is the
-    /// channel ADR-0023 U3 dropped and ADR-0026's review chose to reopen with
+    /// channel ADR-0023 dropped and ADR-0026's review chose to reopen with
     /// a breaking `invoke -> ActionOutcome` rather than a second, silently
     /// divergent method.
     ///

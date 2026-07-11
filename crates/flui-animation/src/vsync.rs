@@ -539,7 +539,7 @@ mod tests {
     ///
     /// Regression: `tick_all` used to hold the registry lock across `tick_at`, so
     /// the listener's `unregister` re-entered a non-reentrant `parking_lot::Mutex`
-    /// and hung. Found by ADR-0020 U5.4's first end-to-end `PopupRoute` pop.
+    /// and hung. Found by ADR-0025's first end-to-end `PopupRoute` pop.
     #[test]
     fn a_listener_may_unregister_from_inside_tick_all() {
         let vsync = Vsync::new();

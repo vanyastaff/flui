@@ -1,7 +1,7 @@
 //! [`Intent`], [`Action`], [`CallbackAction`] and the [`Actions`] widget — the
 //! typed command layer `Shortcuts` dispatches into.
 //!
-//! ADR-0023 U3.
+//! ADR-0023.
 //!
 //! # Flutter parity
 //!
@@ -10,7 +10,7 @@
 //! `CallbackAction<T>` (`:606`), `Actions` (`:729`), the ancestor resolution
 //! (`_visitActionsAncestors`, `:759-790`; `maybeInvoke`, `:1032-1044`).
 //!
-//! # The Rust shape (ADR-0023 U3)
+//! # The Rust shape (ADR-0023)
 //!
 //! Flutter keys its map by the intent's runtime `Type` and walks
 //! `_ActionsScope` ancestors at invoke time. FLUI keys by [`TypeId`] and
@@ -30,7 +30,7 @@
 //! `ActionDispatcher` as a replaceable object, `Action.addActionListener`,
 //! `Actions.handler`, `DoNothingAction` (write `CallbackAction::new(|_| ())`
 //! until the propagation-control use case arrives), and invoke-at-primary-focus
-//! context resolution (ADR-0023 O-1 — `Shortcuts` resolves from its own
+//! context resolution (ADR-0023's resolve-at-own-position divergence — `Shortcuts` resolves from its own
 //! position until `FocusNode` records an element).
 
 use std::any::{Any, TypeId};
@@ -59,7 +59,7 @@ pub trait Intent: Any + Send + Sync {}
 /// (`focus_traversal.dart:2340-2348`).
 ///
 /// FLUI keeps the channel but not Dart's `Object?`: what a key-dispatched
-/// action can say is *whether it did anything*. (ADR-0023 U3 dropped the
+/// action can say is *whether it did anything*. (ADR-0023 dropped the
 /// return value entirely — "until a non-key caller needs one". The Tab
 /// intents are that caller, and ADR-0026's review chose the breaking
 /// signature over a second parallel method: two methods that must agree is a
@@ -167,7 +167,7 @@ pub(crate) struct ErasedAction {
 /// The typed view of an erased intent. Reached only through the matching
 /// `TypeId`, so the downcast cannot fail.
 fn typed<T: Intent>(intent: &dyn Any) -> &T {
-    let typed = intent.downcast_ref::<T>(); // PORT-CHECK-OK-DOWNCAST: ADR-0023 U3 — keyed by this intent's TypeId, so only a `T` arrives; same shape as the sanctioned Navigator pop-result boundary.
+    let typed = intent.downcast_ref::<T>(); // PORT-CHECK-OK-DOWNCAST: ADR-0023 — keyed by this intent's TypeId, so only a `T` arrives; same shape as the sanctioned Navigator pop-result boundary.
     typed.expect(
         "BUG: an ErasedAction received an intent of a foreign type; \
          the Actions map must be keyed by the intent's TypeId",
@@ -305,7 +305,7 @@ impl StatelessView for Actions {
 /// The nearest provider's chain, if any. Resolved at call time, so late reads
 /// (a key handler built earlier) still see the tree's current bindings only if
 /// they re-read — `Shortcuts` captures at build and re-captures when this
-/// provider's subtree rebuilds (ADR-0023 O-1).
+/// provider's subtree rebuilds (ADR-0023's resolve-at-own-position divergence).
 pub(crate) fn ambient_action_chain(ctx: &dyn BuildContext) -> Option<ActionChain> {
     ctx.get::<ActionChainProvider, _>(|provider| Arc::clone(&provider.chain))
 }
@@ -476,7 +476,7 @@ mod tests {
 }
 
 // ============================================================================
-// Focus traversal intents (ADR-0026 U-C)
+// Focus traversal intents (ADR-0026 )
 // ============================================================================
 
 /// "Move focus to the next widget" — Flutter's `NextFocusIntent`

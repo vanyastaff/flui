@@ -1,7 +1,7 @@
 //! [`Focus`] and [`FocusScope`] — the widgets that put `flui-interaction`'s
 //! focus tree into the element tree.
 //!
-//! ADR-0022 U2. The node/manager layer (`FocusManager`, `FocusNode`,
+//! ADR-0022. The node/manager layer (`FocusManager`, `FocusNode`,
 //! `FocusScopeNode` — tracker H4) predates these widgets; what they add is the
 //! lifecycle wiring: a widget-owned node attached under the nearest enclosing
 //! scope on mount, moved with [`FocusScopeNode::adopt_node`] when that scope
@@ -13,12 +13,12 @@
 //! `3.33.0-0.0.pre-6280-g88e87cd963f`: `Focus` (`:126-153`), `_FocusState`
 //! (`:554-742`), `FocusScope` (`:804-834`, incl. `withExternalFocusNode`).
 //!
-//! # Divergences, each named (ADR-0022 §3-§4)
+//! # Divergences, each named (ADR-0022)
 //!
 //! * **Nodes parent to the nearest focus *node*** — scope or plain `Focus` —
-//!   through one provider, Flutter's `_FocusInheritedScope` shape. (ADR-0022
-//!   U1.2 originally flattened to the nearest scope; ADR-0023's key bubbling
-//!   made the node tree's shape observable and superseded that decision.)
+//!   through one provider, Flutter's `_FocusInheritedScope` shape. (An earlier
+//!   design flattened to the nearest scope; key bubbling made the node tree's
+//!   shape observable and superseded that decision — ADR-0022, ADR-0023.)
 //! * **Reparenting happens in `did_change_dependencies`**, not on every build
 //!   as Flutter's `_focusAttachment.reparent()` does — the provider notifying
 //!   is the only way the enclosing scope changes without a remount. Observable
@@ -58,7 +58,7 @@ pub type FocusChangeHandler = Arc<dyn Fn(bool) + Send + Sync>;
 /// [`FocusScope`] are the public surface.
 ///
 /// The parent being a *node*, not always a scope, is what makes the
-/// leaf→root key-dispatch walk (ADR-0023 U1) match the widget tree: a
+/// leaf→root key-dispatch walk (ADR-0023) match the widget tree: a
 /// `Shortcuts`-style non-scope `Focus` above a field is a node **ancestor**
 /// of the field, so keys the field ignores bubble through it.
 #[derive(Clone)]
@@ -210,7 +210,7 @@ impl Focus {
     /// event, [`Ignored`](flui_interaction::KeyEventResult::Ignored) to let it
     /// bubble to the enclosing `Focus`, or
     /// [`SkipRemainingHandlers`](flui_interaction::KeyEventResult::SkipRemainingHandlers)
-    /// to stop the bubbling without consuming (ADR-0023 U1).
+    /// to stop the bubbling without consuming (ADR-0023).
     #[must_use]
     pub fn on_key_event(mut self, handler: KeyEventHandler) -> Self {
         self.on_key_event = Some(handler);
@@ -300,7 +300,7 @@ pub struct FocusState {
     parent: Option<Arc<FocusNode>>,
     /// Publishes the child's `RenderId` while mounted, so the node's
     /// [`RectProvider`](flui_interaction::RectProvider) can measure it —
-    /// reading-order traversal sorts by this geometry (ADR-0022 §4).
+    /// reading-order traversal sorts by this geometry (ADR-0022).
     anchor: SubtreeAnchor,
     focus_listener_id: Option<ListenerId>,
     /// Captured at `create_state`: `init_state` has no view reference.
@@ -368,7 +368,7 @@ impl ViewState<Focus> for FocusState {
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         // The provider changed: move the node — with focus — under the new
         // parent. `_focusAttachment.reparent()` in `didChangeDependencies`
-        // (`focus_scope.dart:618-623`), via ADR-0022 U1.3's adopt.
+        // (`focus_scope.dart:618-623`), via ADR-0022's adopt.
         let parent = enclosing_focus_parent(ctx);
         if self
             .parent
@@ -542,7 +542,7 @@ impl ViewState<FocusScope> for FocusScopeState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         // An enclosing provider changed: move this scope — subtree, focus and
-        // all — under the new parent (ADR-0022 U1.3).
+        // all — under the new parent (ADR-0022).
         let parent = enclosing_focus_parent(ctx);
         if self
             .parent
@@ -912,7 +912,7 @@ mod traversal_tests {
     use crate::{Positioned, SizedBox, Stack};
 
     /// Widget-mounted nodes traverse in **reading order**, not attach order —
-    /// the ADR-0022 §4 traversal-geometry gap, closed: every `Focus` anchors
+    /// the ADR-0022 traversal-geometry gap, closed: every `Focus` anchors
     /// its child and installs a rect provider, so `ReadingOrderPolicy` sorts
     /// real committed geometry. The attach order (`a`, `b`, `c`) is chosen so
     /// the on-screen order (`b`, `a`, `c`) is **not** one of its rotations:

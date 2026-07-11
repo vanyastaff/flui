@@ -399,7 +399,7 @@ impl FocusManager {
         self.traverse(false)
     }
 
-    /// One shared traversal body (ADR-0026 §3.3): resolve a step against the
+    /// One shared traversal body (ADR-0026): resolve a step against the
     /// active scope's order and edge behavior, then perform the intent against
     /// **this** manager — instance-scoped, so a test manager never touches the
     /// singleton. With nothing focused, the resolver falls back to
@@ -483,7 +483,7 @@ impl FocusManager {
 
     /// Dispatch a key event to the appropriate handler(s).
     ///
-    /// Event routing order (ADR-0023 U1; Flutter's `handleKeyMessage` walk,
+    /// Event routing order (ADR-0023; Flutter's `handleKeyMessage` walk,
     /// `focus_manager.dart:2278-2302`):
     /// 1. Global handlers (in order added) — stop if any returns `true`.
     /// 2. A **leaf→root walk** from the primary-focused node up its ancestors.
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn a_removed_listener_stops_firing_while_others_keep_firing() {
-        // ADR-0022 U1: per-listener removal. Before this API a widget could
+        // ADR-0022: per-listener removal. Before this API a widget could
         // only gate its closure with a disposed flag — the dead callback
         // stayed registered on the process-global manager forever.
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -966,12 +966,12 @@ mod tests {
         assert!(handled.load(Ordering::Relaxed));
     }
 
-    /// ADR-0023 U1 — the leaf→root walk. A focused child that **ignores** a
+    /// ADR-0023 — the leaf→root walk. A focused child that **ignores** a
     /// key feeds the enclosing scope's `on_key_event`; one that **handles** it
     /// starves the scope; `SkipRemainingHandlers` starves the scope *and*
     /// reports the event unconsumed (`focus_manager.dart:2278-2302`).
     ///
-    /// Red-check (the pre-U1 flat dispatch): consult only the focused node —
+    /// Red-check (the pre- flat dispatch): consult only the focused node —
     /// the bubbling arm's ancestor never fires and the first assertion fails.
     #[test]
     fn a_focused_child_key_bubbles_by_result_through_its_ancestors() {
@@ -1231,7 +1231,7 @@ mod tests {
         assert!(!called.load(Ordering::Relaxed));
     }
 
-    /// ADR-0026 U-A — the sorted list is the primitive, and the cursor is
+    /// ADR-0026 — the sorted list is the primitive, and the cursor is
     /// **force-included** even when it is not itself traversable
     /// (`focus_traversal.dart:487-489`), so a step *from* a `skip_traversal`
     /// node still knows where it stands. Before the inversion that cursor fell
@@ -1359,7 +1359,7 @@ mod tests {
     /// The first Tab in a fresh app must move focus: with nothing focused,
     /// traversal falls back to policy-ordered first (Flutter's `findFirstFocus`
     /// fallback, `focus_traversal.dart:594-608`) — in **policy** order, not
-    /// attach order, which is also the `set_first_focus` divergence U-A fixes.
+    /// attach order, which is also the `set_first_focus` divergence  fixes.
     ///
     /// Red-check (verified): restore the `let Some(current) = … else { return
     /// false }` guard in `FocusManager::traverse` — the first Tab no-ops.

@@ -1,7 +1,7 @@
 //! [`ModalRoute`] — a [`TransitionRoute`] that covers the screen with a barrier
 //! and a page.
 //!
-//! ADR-0020 U5.3. **Private.** No `PageRoute`, no `PopupRoute`, no public API.
+//! ADR-0020 **Private.** No `PageRoute`, no `PopupRoute`, no public API.
 //!
 //! # Flutter parity
 //!
@@ -21,7 +21,7 @@
 //!    overlay entry and republishes `maintainState`. It does **not** rebuild the
 //!    navigator.
 //!
-//! ADR-0021 U3 added the fourth: **`offstage` swaps the animation proxies** to
+//! ADR-0021 added the fourth: **`offstage` swaps the animation proxies** to
 //! `kAlwaysComplete` / `kAlwaysDismissed` (`:1958-1961`), so an offstage route's
 //! builders lay it out at its *final* position. That is what lets `HeroController`
 //! read a flight's destination one frame early.
@@ -46,7 +46,7 @@
 //!
 //! # Divergences — none of this is parity
 //!
-//! * **Per-route `FocusScope` — landed (ADR-0022 U3).** The page is wrapped in
+//! * **Per-route `FocusScope` — landed (ADR-0022).** The page is wrapped in
 //!   `FocusScope::with_external_node` (`routes.dart:1201-1202`) and the current
 //!   route's scope is the `FocusManager`'s *active scope* — FLUI's analogue of
 //!   `setFirstFocus` chaining. Still absent: `traversalEdgeBehavior` (no
@@ -165,13 +165,13 @@ struct ModalInner {
     secondary: Arc<ProxyAnimation<f32>>,
 
     /// `ModalRoute._subtreeKey` (`routes.dart:2268`) — owned from construction,
-    /// filled while the page is mounted. ADR-0021 U2, seam 4.
+    /// filled while the page is mounted. ADR-0021, seam 4.
     subtree: RouteSubtreeCell,
 
     /// Every `Hero` mounted in this route's page, by tag. Flutter builds the
     /// equivalent map on demand by walking `subtreeContext`'s elements
     /// (`heroes.dart:279-345`); FLUI's heroes register themselves into this one, so
-    /// no walk and no downcast is ever needed. ADR-0021 U4.
+    /// no walk and no downcast is ever needed. ADR-0021
     heroes: HeroRegistry,
 
     /// Every `PopScope` mounted in this route's page — Flutter's
@@ -181,13 +181,13 @@ struct ModalInner {
 
     /// This route's local-history stack — Flutter's `_localHistory`
     /// (`routes.dart:748`). While non-empty, a pop removes the most recent
-    /// entry instead of the route (ADR-0025 U1).
+    /// entry instead of the route (ADR-0025).
     local_history: LocalHistoryRegistry,
 
     /// `_ModalScopeState.focusScopeNode` (`routes.dart:1095`): the per-route
     /// focus scope. The page is wrapped in a `FocusScope::with_external_node`
     /// over this, and the route lifecycle makes it the manager's **active
-    /// scope** while the route is current — ADR-0022 U3.
+    /// scope** while the route is current — ADR-0022
     focus_scope: Arc<FocusScopeNode>,
 }
 
@@ -242,7 +242,7 @@ impl ModalInner {
     /// [`focus_scope`](Self::focus_scope) is Flutter's
     /// `FocusScope.withExternalFocusNode` (`routes.dart:1201-1202`): heroes,
     /// text fields and `Focus` widgets in the page attach under the route's own
-    /// scope, so traversal stays within the route (ADR-0022 U3).
+    /// scope, so traversal stays within the route (ADR-0022).
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
             Some(_transition) => ModalScope {
@@ -404,7 +404,7 @@ struct ModalScope {
     /// The route's `PopScope` registry, provided to the page as an ambient.
     pop_entries: PopEntryRegistry,
     /// The route's local-history handle, provided to the page as an ambient
-    /// (ADR-0025 §3.2).
+    /// (ADR-0025).
     local_history: LocalHistoryHandle,
 }
 
@@ -583,7 +583,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
     /// A cloneable view of this route's modal state, obtainable **before** the
     /// route is moved into `NavigatorHandle::push`.
     ///
-    /// Production since ADR-0021 U3: `HeroController` drives `set_offstage` through
+    /// Production since ADR-0021: `HeroController` drives `set_offstage` through
     /// the copy this route publishes into the navigator's registry at `install()`.
     pub(crate) fn handle(&self) -> ModalHandle {
         ModalHandle {
@@ -636,7 +636,7 @@ impl ModalHandle {
     /// Fire the `on_remove`s owed by local-history pops that happened inside
     /// the flush, and the emptied-edge `changed_internal_state`
     /// (`routes.dart:952-963`). Called by `NavigatorShared::apply` with **no
-    /// lock held** (ADR-0025 §3.3.1).
+    /// lock held** (ADR-0025).
     pub(crate) fn drain_local_history(&self) {
         let (callbacks, emptied) = self.inner.local_history.take_owed();
         for callback in callbacks {
@@ -651,7 +651,7 @@ impl ModalHandle {
     /// return on an unchanged value, the animation-proxy swap, and
     /// `changedInternalState`.
     ///
-    /// (ADR-0021 U3 added the proxy swap. Until then this doc read "minus the
+    /// (ADR-0021 added the proxy swap. Until then this doc read "minus the
     /// animation-proxy swap", which was true when written and a trap afterwards.)
     pub(crate) fn set_offstage(&self, offstage: bool) {
         if self.inner.offstage.swap(offstage, Ordering::Relaxed) == offstage {
@@ -803,7 +803,7 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// its future stays pending. The entry's `on_remove` (and the emptied-edge
     /// `changed_internal_state`) are **owed**, not fired: this runs under the
     /// history lock, and `NavigatorShared::apply` delivers them outside it
-    /// (ADR-0025 §3.3.1).
+    /// (ADR-0025).
     fn did_pop(&mut self) -> bool {
         if self.inner.local_history.pop_last_deferred() {
             return false;
@@ -863,7 +863,7 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     /// it can still measure.
     fn dispose(&mut self) {
         // Sever local history first: live entries drop un-fired (Flutter
-        // GC-drops the list) and late adds become inert (ADR-0025 §5).
+        // GC-drops the list) and late adds become inert (ADR-0025).
         self.inner.local_history.sever();
         self.inner.release_focus_scope();
         if let Some(binding) = self.binding() {

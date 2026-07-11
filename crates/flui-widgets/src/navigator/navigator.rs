@@ -76,7 +76,7 @@ struct NavigatorShared {
     /// peers, page subtrees and modal (`offstage`) controls. Flutter reads all four
     /// straight off the `Route` object; FLUI's routes live behind
     /// `Box<dyn ErasedRoute>` inside the history's mutex, so they publish here
-    /// instead (ADR-0019 §7b).
+    /// instead (ADR-0019).
     registries: RouteRegistries,
 
     /// The clock this navigator's route transitions register with (ADR-0020 U5.2).
@@ -576,7 +576,7 @@ impl NavigatorHandle {
         // Disposition and the acted-on pop share **one** critical section:
         // deciding "Pop — an entry/route is there" and popping must not be
         // separated by a racing `entry_handle.remove()` or `remove_route`
-        // retargeting the answer (ADR-0025 §3.3.3). Flutter is immune only by
+        // retargeting the answer (ADR-0025). Flutter is immune only by
         // being single-threaded.
         self.shared.mutate(|history| {
             let Some(disposition) = history.pop_disposition_of_top() else {
@@ -700,7 +700,7 @@ impl NavigatorHandle {
 ///
 /// Each method is one thing Flutter reads straight off a `Route` object or off
 /// `NavigatorState` — neither of which FLUI can reach, because routes live behind
-/// `Box<dyn ErasedRoute>` inside the history's mutex (ADR-0019 §7b). Nothing here
+/// `Box<dyn ErasedRoute>` inside the history's mutex (ADR-0019). Nothing here
 /// hands out a borrow into the trees, and nothing takes a second lock under a
 /// first.
 ///

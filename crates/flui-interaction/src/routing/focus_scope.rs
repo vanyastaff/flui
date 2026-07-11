@@ -96,14 +96,14 @@ pub type KeyEventHandler = Arc<dyn Fn(&KeyEvent) -> KeyEventResult + Send + Sync
 /// Computes a node's bounding rectangle on demand, in root coordinates.
 ///
 /// Installed by the widget layer, which owns the render geometry the
-/// reading-order traversal sorts by (ADR-0022 §4's traversal-geometry gap):
+/// reading-order traversal sorts by (the traversal-geometry gap ADR-0022 records):
 /// the node itself cannot reach a render tree. `None` while the widget has no
 /// committed layout to measure.
 pub type RectProvider = Arc<dyn Fn() -> Option<Rect<Pixels>> + Send + Sync>;
 
 /// Result of key event processing — Flutter's `KeyEventResult`
 /// (`focus_manager.dart:73-88`), consumed by the leaf→root dispatch walk
-/// (ADR-0023 U1).
+/// (ADR-0023).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEventResult {
     /// Event was handled; the walk stops and the event counts as consumed.
@@ -511,7 +511,7 @@ impl FocusNode {
     }
 
     /// Attach `child` under **this node** — scope or not. The node-tree edge
-    /// the leaf→root key-dispatch walk follows (ADR-0023 U2): a non-scope
+    /// the leaf→root key-dispatch walk follows (ADR-0023): a non-scope
     /// `Focus` in the widget tree nests here so keys the focused descendant
     /// ignores bubble through it, Flutter's node-tree shape.
     pub fn attach_node(self: &Arc<Self>, child: &Arc<FocusNode>) {
@@ -527,7 +527,7 @@ impl FocusNode {
     }
 
     /// Move `node` — with its whole subtree — under this node, **preserving
-    /// focus** (ADR-0022 U1.3, generalized to plain-node parents for
+    /// focus** (ADR-0022, generalized to plain-node parents for
     /// ADR-0023). A moved subtree that holds the primary focus keeps it, the
     /// old enclosing scope's history forgets the moved ids, and the *nearest*
     /// scope at the new location records the focused id. A node already under
@@ -846,7 +846,7 @@ impl FocusScopeNode {
     /// Move `node` — with its whole subtree — under this scope, **preserving
     /// focus**.
     ///
-    /// The reparent primitive (ADR-0022 U1.3). [`detach_node`](Self::detach_node)
+    /// The reparent primitive (ADR-0022). [`detach_node`](Self::detach_node)
     /// followed by [`attach_node`](Self::attach_node) is a *removal* and an
     /// insertion: the detach marks the subtree detached and clears the manager's
     /// primary focus if the subtree held it — right for an unmount, wrong for a
@@ -871,7 +871,7 @@ impl FocusScopeNode {
 
     /// Sets focus to the first focusable child via the singleton — in
     /// **policy order**, not attach order (a pre-existing divergence from
-    /// Flutter's `findFirstFocus`, fixed with ADR-0026 U-A).
+    /// Flutter's `findFirstFocus`, fixed with ADR-0026).
     pub fn set_first_focus(self: &Arc<Self>) {
         if let ResolvedStep::Focus(id) = self.resolve_traversal(None, true) {
             crate::FocusManager::global().request_focus(id);
@@ -883,7 +883,7 @@ impl FocusScopeNode {
     /// (`skip_traversal`, `can_request_focus(false)`) — Flutter force-includes
     /// the current node (`focus_traversal.dart:487-489`) precisely so a step
     /// *from* a non-traversable node still knows where it stands. The sorted
-    /// list is the traversal primitive (ADR-0026 §3.1); next/previous/edge are
+    /// list is the traversal primitive (ADR-0026); next/previous/edge are
     /// positional facts about it.
     pub fn sorted_traversal_order(&self, cursor: Option<FocusNodeId>) -> Vec<Arc<FocusNode>> {
         let mut nodes = self.collect_focusable_nodes();
@@ -899,7 +899,7 @@ impl FocusScopeNode {
 
     /// One traversal step from `current` (or the first-focus fallback when
     /// nothing is focused), with this scope's edge behavior applied — **the**
-    /// edge switch, shared by every caller (ADR-0026 §3.3): the manager's
+    /// edge switch, shared by every caller (ADR-0026): the manager's
     /// `focus_next`/`focus_previous`, this scope's in-scope variants, and
     /// `set_first_focus`.
     ///
@@ -910,7 +910,7 @@ impl FocusScopeNode {
     /// performs it against itself, which is what lets a test manager traverse
     /// without touching the singleton.)
     ///
-    /// Three-state by construction (ADR-0026 §3.1): a cursor **outside** this
+    /// Three-state by construction (ADR-0026): a cursor **outside** this
     /// scope resolves to [`ResolvedStep::None`] without consulting the edge
     /// behavior — previously both cases collapsed into one `None`, and a
     /// `skip_traversal` cursor silently fell out of the candidate set.
@@ -1068,11 +1068,11 @@ pub enum TraversalEdgeBehavior {
     /// Unfocus and report the event unconsumed, so a host can move focus out
     /// of the view (`:129-139`). FLUI has no embedder channel yet: the
     /// unfocus-and-report half is the whole implementable contract
-    /// (ADR-0026 §5).
+    /// (ADR-0026).
     LeaveFlutterView,
-    /// Retry in the enclosing scope (`:141-149`). **Interim (ADR-0026 U-A):**
+    /// Retry in the enclosing scope (`:141-149`). **Interim (ADR-0026):**
     /// behaves as [`ClosedLoop`](Self::ClosedLoop) — Flutter's own no-parent
-    /// fallback — until U-B lands the full unfocus→parent-retry→verify
+    /// fallback — until the full unfocus→parent-retry→verify
     /// mechanism behind the scope-landing decision.
     ParentScope,
     /// Stay put (`:151-155`).
@@ -1103,10 +1103,10 @@ fn is_traversable(node: &Arc<FocusNode>) -> bool {
 
 /// Determines the order for Tab/Shift+Tab navigation.
 ///
-/// **The sorted list is the primitive** (ADR-0026 §3.1, Flutter's
+/// **The sorted list is the primitive** (ADR-0026, Flutter's
 /// `_sortAllDescendants` architecture): a policy only orders candidates;
 /// next/previous/first/last/edge are positional facts the scope computes.
-/// (The pre-U-A trait's `find_next`-as-oracle shape baked wraparound into the
+/// (The old trait's `find_next`-as-oracle shape baked wraparound into the
 /// policy and conflated "at the edge" with "cursor not in candidates".)
 pub trait FocusTraversalPolicy: Send + Sync + std::fmt::Debug {
     /// `nodes`, reordered into this policy's traversal order — Flutter's
@@ -1173,7 +1173,7 @@ mod tests {
     /// concurrent test would see (or clobber) this one's primary focus.
     static GLOBAL_FOCUS_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
-    /// ADR-0022 U1.3: `adopt_node` is a **move**, not a remove-plus-insert —
+    /// ADR-0022: `adopt_node` is a **move**, not a remove-plus-insert —
     /// the primary focus survives the reparent, the new scope's history learns
     /// the focused id, and the old parent forgets the subtree. `detach_node` +
     /// `attach_node` would clear the focus (`detach_child`'s removal
@@ -1332,7 +1332,7 @@ mod tests {
         let policy = ReadingOrderPolicy;
 
         // First of the sorted order is the top-left node — a positional fact
-        // over `sort_descendants`, the trait's one primitive (ADR-0026 U-A).
+        // over `sort_descendants`, the trait's one primitive (ADR-0026).
         let order = policy.sort_descendants(&nodes);
         assert_eq!(order.first().map(|n| n.id()), Some(nodes[1].id())); // left one
     }
