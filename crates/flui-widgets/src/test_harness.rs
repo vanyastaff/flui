@@ -23,14 +23,26 @@ pub(crate) struct Harness {
     binding: HeadlessBinding,
     root_element: ElementId,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    /// Held for the harness's whole lifetime, so every mounted test serializes on
+    /// the process-global `FocusManager`: a `ModalRoute` activates a focus scope the
+    /// moment it becomes current (`modal_route.rs`), so *any* Navigator mount writes
+    /// global focus state — not just the focus tests. Reentrant, so a focus test may
+    /// also lock explicitly on the same thread.
+    _focus_guard: parking_lot::ReentrantMutexGuard<'static, ()>,
 }
 
-/// Mount `root` as the render-tree root and drive one frame.
-/// Serializes tests that drive the process-global `FocusManager` — nextest
-/// isolates test *binaries*, not the threads inside one, so two focus tests in
-/// this crate's lib binary would otherwise clobber each other's primary focus.
-pub(crate) static FOCUS_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+/// Serializes every test that touches the process-global `FocusManager`.
+///
+/// **Reentrant**: [`mount`] takes it for the returned [`Harness`]'s lifetime — so a
+/// test never has to remember to — and a focus test that *also* locks it explicitly
+/// (for pre-mount manager setup) nests on the same thread without deadlock. nextest
+/// isolates test *binaries*, not the threads inside one, so two focus-touching tests
+/// in this crate's lib binary would otherwise clobber each other's primary focus and
+/// active scope under `cargo test`'s in-process parallelism.
+pub(crate) static FOCUS_TEST_LOCK: parking_lot::ReentrantMutex<()> =
+    parking_lot::ReentrantMutex::new(());
 
+/// Mount `root` as the render-tree root and drive one frame.
 pub(crate) fn mount(root: impl View) -> Harness {
     mount_with_capabilities(root, PostFrameCapability::Installed)
 }
@@ -52,6 +64,9 @@ pub(crate) enum PostFrameCapability {
 
 /// [`mount`], but able to withhold the post-frame capability.
 pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapability) -> Harness {
+    // Serialize on the global FocusManager before touching the tree; held until the
+    // Harness drops (see FOCUS_TEST_LOCK). Reentrant, so an explicit lock composes.
+    let focus_guard = FOCUS_TEST_LOCK.lock();
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
     let mut build_owner = flui_view::BuildOwner::new();
     let mut tree = flui_view::ElementTree::new();
@@ -100,6 +115,7 @@ pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapa
         binding,
         root_element,
         pipeline_owner,
+        _focus_guard: focus_guard,
     }
 }
 
