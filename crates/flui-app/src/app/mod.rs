@@ -11,6 +11,7 @@ mod config;
 pub mod direct;
 mod lifecycle;
 pub mod runner;
+pub mod ui_realm;
 
 pub use binding::AppBinding;
 pub use config::AppConfig;
@@ -19,6 +20,9 @@ pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState};
 #[cfg(target_os = "android")]
 pub use runner::{run_app_android, run_app_android_with_config};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};
+pub use ui_realm::{
+    CommandSendError, DrainReport, ResultStamp, UiCommandSender, UiRealm, UiRealmError,
+};
 
 /// Alias for AppBinding matching Flutter naming convention.
 pub type WidgetsFlutterBinding = AppBinding;

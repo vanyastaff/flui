@@ -91,6 +91,25 @@ fn init_logging() {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+thread_local! {
+    /// Transitional home for the desktop window's [`UiRealm`]
+    /// (ADR-0027 migration step 1). `PlatformWindow` callbacks still require
+    /// `Send` (the Send costume this ADR retires in steps 2–3), so the
+    /// `!Send` runtime cannot move into the frame closure yet; it lives on
+    /// the event-loop thread, and the frame closure — invoked only on that
+    /// thread — reaches it here. Retires when the platform callback bounds
+    /// drop and the runtime becomes the closure's owned state.
+    ///
+    /// [`UiRealm`]: super::ui_realm::UiRealm
+    static DESKTOP_UI_REALM: std::cell::RefCell<Option<super::ui_realm::UiRealm>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 fn run_desktop<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + Send + Sync + 'static,
@@ -210,6 +229,31 @@ where
         });
     }
 
+    // 3c. Construct the per-window owner and its bounded command inbox
+    // (ADR-0027 §1/§3). The wake is the existing chain: `wake_frame` sets
+    // `needs_redraw` and queues a `RedrawRequested`, so a command sent to an
+    // idle loop produces the frame whose drain observes it.
+    //
+    // Clear a runtime left by a previous `run_desktop` on this thread first
+    // (its claim releases on drop) — otherwise a second run in the same
+    // process would hit the at-most-one guard and silently never launch.
+    DESKTOP_UI_REALM.with(|slot| drop(slot.borrow_mut().take()));
+    let ui_realm = match super::ui_realm::UiRealm::new(Arc::new(|| {
+        AppBinding::instance().wake_frame();
+    })) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            tracing::error!(error = %e, "UiRealm construction failed");
+            return;
+        }
+    };
+    tracing::info!(
+        realm_id = ?ui_realm.realm_id(),
+        inbox_capacity = ui_realm.command_sender().capacity(),
+        "UiRealm constructed"
+    );
+    DESKTOP_UI_REALM.with(|slot| *slot.borrow_mut() = Some(ui_realm));
+
     // 4. Wrap renderer for callback sharing
     let renderer = Arc::new(Mutex::new(renderer));
 
@@ -238,13 +282,40 @@ where
         let binding = AppBinding::instance();
         let scheduler = Scheduler::instance();
 
+        // Owner-inbox drain (ADR-0027 §3): commands and worker results
+        // commit HERE, at the frame boundary while the scheduler phase is
+        // Idle — never inside the frame transaction below. Runs before the
+        // dirty gate so a command-driven redraw request is observed by the
+        // very frame its wake produced.
+        //
+        // The runtime is TAKEN out of the slot for the drain (and restored
+        // after) so drained user closures never run under the RefCell
+        // borrow: a command that re-enters this frame callback through a
+        // nested platform pump then finds an empty slot and skips the
+        // drain, instead of panicking the borrow.
+        let inbox_redraw = {
+            let taken = DESKTOP_UI_REALM.with(|slot| slot.borrow_mut().take());
+            match taken {
+                Some(mut runtime) => {
+                    let report = runtime.drain_commands();
+                    if report != super::ui_realm::DrainReport::default() {
+                        tracing::trace!(?report, "owner inbox drained");
+                    }
+                    let redraw = runtime.take_redraw_request();
+                    DESKTOP_UI_REALM.with(|slot| *slot.borrow_mut() = Some(runtime));
+                    redraw
+                }
+                None => false,
+            }
+        };
+
         // On-demand rendering: skip frame if nothing changed. A frame
         // the SCHEDULER scheduled (a pending animation ticker callback)
         // counts as work: `needs_redraw` is cleared by `mark_rendered`
         // at the end of the previous frame, so without this check the
         // gate starves tickers after one frame — the wake hook gets the
         // event loop here, and this lets the pump actually run.
-        let dirty = binding.needs_redraw() || binding.has_pending_work();
+        let dirty = inbox_redraw || binding.needs_redraw() || binding.has_pending_work();
         if !dirty && !scheduler.is_frame_scheduled() {
             return;
         }
@@ -370,6 +441,11 @@ where
     platform.run(Box::new(|| {
         tracing::info!("Platform ready");
     }));
+
+    // Event loop exited: drop the runtime now (releases the at-most-one
+    // claim; outstanding senders turn `OwnerGone`) instead of at thread
+    // death.
+    DESKTOP_UI_REALM.with(|slot| drop(slot.borrow_mut().take()));
 }
 
 /// Register the hit-test root `RenderView` with the `RendererBinding`

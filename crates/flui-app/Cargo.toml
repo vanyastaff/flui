@@ -53,6 +53,8 @@ flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
 tracing.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
+# WindowRuntime owner inbox (bounded typed mailbox, ADR-0027 §4)
+crossbeam-channel.workspace = true
 anyhow.workspace = true
 raw-window-handle.workspace = true
 pollster = "0.4"
