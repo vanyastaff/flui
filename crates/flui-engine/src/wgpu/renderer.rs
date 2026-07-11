@@ -173,6 +173,21 @@ struct WindowedGpuStack {
 }
 
 /// Cross-platform GPU renderer
+///
+/// `Send` (see the `unsafe impl Send` below, justified there) but
+/// deliberately never `Sync`: ADR-0027 §5 gives the raster owner
+/// (`crate::raster_owner::RasterOwner`) sole mutable access to the
+/// `Renderer`/`Surface`/`Device`/`Queue` it wraps, and a shared `&Renderer`
+/// across threads would defeat that single-mutator contract. No field
+/// grants `Sync` today, so this already holds without a marker type; the
+/// doctest below pins the contract so a future field addition that
+/// accidentally makes every field `Sync` fails loudly at compile time
+/// instead of silently reopening `Arc<Renderer>` shared-mutation:
+///
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<flui_engine::wgpu::Renderer>();
+/// ```
 pub struct Renderer {
     // `instance` and `adapter` are kept alive for the lifetime of the renderer
     // because `wgpu::Surface<'static>` and `wgpu::Device` depend on them. They

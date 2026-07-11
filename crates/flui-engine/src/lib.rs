@@ -109,6 +109,11 @@ pub(crate) mod superellipse;
 /// is gated on the `wgpu-backend` feature.
 pub mod raster;
 
+/// The raster mailbox + dedicated ack channel boundary
+/// ([`RasterOwner`]/[`RasterHandle`]/[`RasterAck`], ADR-0027 §4/§5/§7).
+/// Generic over [`RasterBackend`]; unconditional like `raster` itself.
+pub mod raster_owner;
+
 // ============================================================================
 // BACKENDS
 // ============================================================================
@@ -126,8 +131,8 @@ pub use commands::{dispatch_command, dispatch_commands};
 pub use error::{EngineError, EngineResult, Recoverability};
 // Re-export layer types from flui-layer
 pub use flui_layer::{
-    CanvasLayer, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor,
-    ShaderMaskLayer,
+    CanvasLayer, DamageRegion, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder,
+    SceneCompositor, SceneSnapshot, ShaderMaskLayer,
 };
 // Re-export Paint from flui_painting
 pub use flui_painting::Paint;
@@ -140,6 +145,10 @@ pub use traits::{CommandRenderer, LayerStateStack};
 // RasterBackend: the frame-driver swap point. The trait is unconditional;
 // only the wgpu impl is feature-gated.
 pub use raster::RasterBackend;
+// Raster mailbox + dedicated ack channel boundary (ADR-0027 §4/§5/§7).
+pub use raster_owner::{
+    FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError,
+};
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
 // wgpu backend exports
