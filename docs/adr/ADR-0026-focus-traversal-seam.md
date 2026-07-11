@@ -1,6 +1,6 @@
 # ADR-0026 — Focus traversal: groups, edge behavior, and Tab intents
 
-- **Status:** **Accepted — U-A landed 2026-07-11; U-B/U-C gated on their deciders.** The first design (api-designer agent, 2026-07-11) **did not survive** the harsh-critic pass: two blockers, five majors, and a structural finding that the chosen primitive was inverted. This ADR records the reworked shape with the critique's requirements as binding constraints. U-A is implementable; U-B/U-C carry open decisions flagged for their deciders.
+- **Status:** **Accepted — U-A + U-C landed 2026-07-11 (Tab works end to end); U-B gated on §3.4's scope-landing decision.** The first design (api-designer agent, 2026-07-11) **did not survive** the harsh-critic pass: two blockers, five majors, and a structural finding that the chosen primitive was inverted. This ADR records the reworked shape with the critique's requirements as binding constraints. U-A is implementable; U-B/U-C carry open decisions flagged for their deciders.
 - **Date:** 2026-07-11
 - **Deciders:** chief-architect (the ALT-1 primitive inversion, §3.1; scope-landing semantics, §3.4); api-design-lead (§3.6's `Action::invoke` signature — a deliberate breaking change while consumers are few, Prime Directive #2); qa-lead (§5's pinning tests, incl. the `allows_descendant_focus` guard).
 - **Relates to:** ADR-0022 (Focus widgets; §4 named this gap; the geometry fix that unblocked it), ADR-0023 (Shortcuts/Actions/Intent; O-1's resolve-at-own-position divergence is load-bearing here).
@@ -85,6 +85,29 @@ cursor step; restoring the nothing-focused guard no-ops the first Tab; ignoring
 the edge behavior makes `Stop` wrap. The three-state result closes the
 critique's blocker #2 — a foreign cursor now resolves to `None` without ever
 consulting the edge behavior.
+
+## 3b. U-C as landed (2026-07-11) — and the signature call
+
+**ALT-2 taken:** `Action::invoke` now returns [`ActionOutcome`]
+(`Performed`/`NotPerformed`) rather than growing a second, defaulted
+`invoke_for_key_result` beside it. The additive shape was a permanent
+two-methods-that-must-agree hazard (an override skipping `invoke` silently
+diverges the key and `maybe_invoke` paths); the break cost one afternoon and
+two in-repo impls, which is precisely the trade Prime Directive #2 names —
+breaking changes are cheap today and ossify once consumers exist. `Action`
+gains a defaulted `to_key_event_result(intent, outcome)` (Flutter's
+`actions.dart:312-314`), and `ErasedAction::invoke_for_key` is **one** call, so
+the key result cannot contradict what actually ran.
+
+`NextFocusIntent`/`PreviousFocusIntent` + `NextFocusAction`/`PreviousFocusAction`
+report `Handled` iff focus actually moved (`focus_traversal.dart:2340-2348`) —
+a Tab with nowhere to go (a `Stop` edge) runs, moves nothing, and leaves the
+key **unconsumed** for an outer handler. Red-checked both ways: reverting
+`to_key_event_result` to the trait default makes the dead Tab swallow the key;
+and writing the Flutter-habitual `Shortcuts(child: Actions(...))` nesting
+proves the review's blocker #1 — the chain resolves to `None` and Tab is dead
+with zero diagnostics. The correct nesting (§3.6) is in the public docs and the
+test's doc comment.
 
 ## 4. Units (reordered per the critique's ALT-3)
 

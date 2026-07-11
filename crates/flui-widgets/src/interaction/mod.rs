@@ -15,7 +15,10 @@ mod shortcuts;
 mod visibility;
 
 pub use absorb_pointer::AbsorbPointer;
-pub use actions::{Action, Actions, CallbackAction, Intent};
+pub use actions::{
+    Action, ActionOutcome, Actions, CallbackAction, Intent, NextFocusAction, NextFocusIntent,
+    PreviousFocusAction, PreviousFocusIntent,
+};
 pub use focus::{Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
 pub(crate) use focus::{enclosing_focus_parent, install_rect_provider};
 pub use gesture_arena_scope::GestureArenaScope;

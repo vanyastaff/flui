@@ -300,16 +300,10 @@ impl StatelessView for Shortcuts {
                 };
                 let intent: &dyn Any = &**intent;
                 match resolve(chain, intent) {
-                    Some(action) => {
-                        let consumes = action.consumes_key(intent);
-                        action.invoke(intent);
-                        // `Action.toKeyEventResult` (`actions.dart:312-314`).
-                        if consumes {
-                            KeyEventResult::Handled
-                        } else {
-                            KeyEventResult::SkipRemainingHandlers
-                        }
-                    }
+                    // One call: invoke and read `to_key_event_result` off what
+                    // it actually did (`actions.dart:312-314`), so the key
+                    // result cannot disagree with the invocation.
+                    Some(action) => action.invoke_for_key(intent),
                     None => KeyEventResult::Ignored,
                 }
             }))
@@ -436,7 +430,7 @@ mod intent_tests {
     use flui_interaction::events::{KeyState, Modifiers};
     use flui_interaction::routing::{FocusManager, FocusNode};
 
-    use super::super::actions::{Action, Actions, CallbackAction, Intent};
+    use super::super::actions::{Action, ActionOutcome, Actions, CallbackAction, Intent};
     use super::*;
     use crate::SizedBox;
     use crate::test_harness::{FOCUS_TEST_LOCK, mount};
@@ -505,8 +499,9 @@ mod intent_tests {
             fn consumes_key(&self, _intent: &SaveIntent) -> bool {
                 false
             }
-            fn invoke(&self, _intent: &SaveIntent) {
+            fn invoke(&self, _intent: &SaveIntent) -> ActionOutcome {
                 self.0.fetch_add(1, Ordering::SeqCst);
+                ActionOutcome::Performed
             }
         }
 
@@ -534,5 +529,146 @@ mod intent_tests {
         assert_eq!(runs.load(Ordering::SeqCst), 1, "the action still ran");
 
         manager.unfocus();
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use flui_interaction::events::{KeyState, Modifiers, NamedKey};
+    use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode};
+    use flui_view::ViewExt;
+
+    use super::super::actions::{
+        Actions, NextFocusAction, NextFocusIntent, PreviousFocusAction, PreviousFocusIntent,
+    };
+    use super::super::focus::FocusScope;
+    use super::*;
+    use crate::test_harness::{FOCUS_TEST_LOCK, mount};
+    use crate::{Positioned, SizedBox, Stack};
+
+    fn tab(shift: bool) -> KeyEvent {
+        KeyEvent {
+            state: KeyState::Down,
+            key: Key::Named(NamedKey::Tab),
+            modifiers: if shift {
+                Modifiers::SHIFT
+            } else {
+                Modifiers::empty()
+            },
+            ..KeyEvent::default()
+        }
+    }
+
+    /// **Tab works, end to end** (ADR-0026 U-C): a real key event enters
+    /// `dispatch_key_event`, bubbles from the focused field (ADR-0023 U1),
+    /// matches the `Shortcuts` activator, resolves `NextFocusIntent` through
+    /// the enclosing `Actions`, and moves the focus in reading order.
+    ///
+    /// Note the nesting the ADR-0026 review made a binding constraint:
+    /// **`Actions` must be OUTSIDE `Shortcuts`** — FLUI's `Shortcuts` resolves
+    /// its action chain from its own position (ADR-0023 O-1), so the Flutter
+    /// habit of `Shortcuts(child: Actions(...))` silently dead-keys Tab.
+    ///
+    /// Red-check: swap the nesting to `Shortcuts::new(Actions::new(...))` —
+    /// the chain resolves to `None`, the handler returns `Ignored`, and the
+    /// focus never moves.
+    #[test]
+    fn tab_and_shift_tab_move_the_focus_through_the_actions_chain() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("tab-scope");
+        let left = FocusNode::with_debug_label("left");
+        let right = FocusNode::with_debug_label("right");
+
+        let field = |x: f32, node: &Arc<FocusNode>| {
+            Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(node)))
+                .left(x)
+                .top(0.0)
+                .width(10.0)
+                .height(10.0)
+                .into_view()
+                .boxed()
+        };
+
+        let _harness = mount(
+            Actions::new(
+                Shortcuts::new(FocusScope::with_external_node(
+                    Arc::clone(&scope),
+                    Stack::new(vec![field(0.0, &left), field(20.0, &right)]),
+                ))
+                .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
+                .shortcut(
+                    SingleActivator::named(NamedKey::Tab).shift(),
+                    PreviousFocusIntent,
+                ),
+            )
+            .action(NextFocusAction)
+            .action(PreviousFocusAction),
+        );
+
+        manager.set_active_scope(Some(Arc::clone(&scope)));
+        left.request_focus();
+
+        assert!(manager.dispatch_key_event(&tab(false)), "Tab is consumed");
+        assert!(
+            right.has_primary_focus(),
+            "Tab moved the focus to the next node in reading order"
+        );
+
+        assert!(manager.dispatch_key_event(&tab(true)), "Shift+Tab too");
+        assert!(left.has_primary_focus(), "and it stepped back");
+
+        manager.unfocus();
+        manager.set_active_scope(None);
+        manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
+
+    /// `NextFocusAction`'s key result is **what the traversal did**
+    /// (`focus_traversal.dart:2340-2348`): with a `Stop` edge and nowhere to
+    /// go, the action runs, moves nothing, and reports the event
+    /// **unconsumed** — so an outer handler still gets its chance. This is the
+    /// channel ADR-0023 U3 dropped and ADR-0026's review chose to reopen with
+    /// a breaking `invoke -> ActionOutcome` rather than a second, silently
+    /// divergent method.
+    ///
+    /// Red-check: make `to_key_event_result` ignore the outcome (the trait
+    /// default) — the dead Tab reports handled and swallows the key.
+    #[test]
+    fn a_tab_with_nowhere_to_go_reports_the_key_unconsumed() {
+        use flui_interaction::routing::TraversalEdgeBehavior;
+
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("dead-end-scope");
+        scope.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
+        let only = FocusNode::with_debug_label("only");
+
+        let _harness = mount(
+            Actions::new(
+                Shortcuts::new(FocusScope::with_external_node(
+                    Arc::clone(&scope),
+                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&only)),
+                ))
+                .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent),
+            )
+            .action(NextFocusAction),
+        );
+
+        manager.set_active_scope(Some(Arc::clone(&scope)));
+        only.request_focus();
+
+        assert!(
+            !manager.dispatch_key_event(&tab(false)),
+            "a Tab that moved nothing is reported unconsumed"
+        );
+        assert!(only.has_primary_focus(), "and the focus stayed put");
+
+        manager.unfocus();
+        manager.set_active_scope(None);
+        manager.root_scope().detach_node(scope.as_focus_node().id());
     }
 }

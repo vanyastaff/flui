@@ -31,7 +31,7 @@ pub use event_router::EventRouter;
 pub use focus::{FocusManager, KeyEventCallback};
 pub use focus_scope::{
     FocusNode, FocusNodeId, FocusScopeNode, FocusTraversalPolicy, KeyEventHandler, KeyEventResult,
-    ReadingOrderPolicy, RectProvider,
+    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalEdgeBehavior,
 };
 pub use hit_test::{
     EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,

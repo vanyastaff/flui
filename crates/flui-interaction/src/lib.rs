@@ -258,7 +258,8 @@ pub use routing::{
     EventPropagation, EventRouter, FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy,
     GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
     KeyEventCallback, KeyEventHandler, KeyEventResult, PointerEventHandler, PointerRouteHandler,
-    PointerRouter, ReadingOrderPolicy, RectProvider, RenderId, ScrollEventHandler, TransformGuard,
+    PointerRouter, ReadingOrderPolicy, RectProvider, RenderId, ResolvedStep, ScrollEventHandler,
+    TransformGuard, TraversalEdgeBehavior,
 };
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{

@@ -37,6 +37,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use flui_interaction::routing::{FocusManager, KeyEventResult};
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
@@ -51,6 +52,28 @@ use flui_view::prelude::*;
 /// impl Intent for SaveIntent {}
 /// ```
 pub trait Intent: Any + Send + Sync {}
+
+/// What an [`Action::invoke`] did — Flutter threads `invoke`'s return value
+/// through to `Action.toKeyEventResult` (`actions.dart:312-314`), where
+/// `NextFocusAction` maps "focus actually moved" onto the key result
+/// (`focus_traversal.dart:2340-2348`).
+///
+/// FLUI keeps the channel but not Dart's `Object?`: what a key-dispatched
+/// action can say is *whether it did anything*. (ADR-0023 U3 dropped the
+/// return value entirely — "until a non-key caller needs one". The Tab
+/// intents are that caller, and ADR-0026's review chose the breaking
+/// signature over a second parallel method: two methods that must agree is a
+/// permanent hazard, a break today is one afternoon. Prime Directive #2.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActionOutcome {
+    /// The action ran and did its thing.
+    #[default]
+    Performed,
+    /// The action ran but changed nothing — a `Tab` at a `Stop` edge with
+    /// nowhere to go. On the key path this reports the event **unconsumed**,
+    /// so an outer handler may still see it.
+    NotPerformed,
+}
 
 /// Performs the operation an intent of type `T` describes — Flutter's
 /// `Action<T>` (`actions.dart:135`).
@@ -72,10 +95,26 @@ pub trait Action<T: Intent>: Send + Sync {
         true
     }
 
-    /// Perform the operation (`:354`). The return value Flutter threads
-    /// through is dropped on the key-dispatch path anyway (`:348-349`); FLUI
-    /// omits it until a non-key caller needs one.
-    fn invoke(&self, intent: &T);
+    /// Perform the operation (`:354`). The [`ActionOutcome`] reaches the key
+    /// path through [`to_key_event_result`](Self::to_key_event_result); a
+    /// direct `Actions::maybe_invoke` caller may ignore it.
+    fn invoke(&self, intent: &T) -> ActionOutcome;
+
+    /// What a key event that invoked this action reports —
+    /// `Action.toKeyEventResult` (`actions.dart:312-314`). The default is
+    /// Flutter's: consumed iff [`consumes_key`](Self::consumes_key). An action
+    /// whose key result depends on what `invoke` *did* (the Tab intents:
+    /// handled iff focus moved, `focus_traversal.dart:2340-2348`) overrides
+    /// this — one method, reading the outcome, not a second invoke path that
+    /// could silently disagree with the first.
+    fn to_key_event_result(&self, intent: &T, outcome: ActionOutcome) -> KeyEventResult {
+        let _ = outcome;
+        if self.consumes_key(intent) {
+            KeyEventResult::Handled
+        } else {
+            KeyEventResult::SkipRemainingHandlers
+        }
+    }
 }
 
 /// An [`Action`] from a closure — Flutter's `CallbackAction<T>`
@@ -102,8 +141,9 @@ impl<T: Intent> std::fmt::Debug for CallbackAction<T> {
 }
 
 impl<T: Intent> Action<T> for CallbackAction<T> {
-    fn invoke(&self, intent: &T) {
+    fn invoke(&self, intent: &T) -> ActionOutcome {
         (self.on_invoke)(intent);
+        ActionOutcome::Performed
     }
 }
 
@@ -114,16 +154,18 @@ impl<T: Intent> Action<T> for CallbackAction<T> {
 /// One `Action<T>` behind `dyn Any` intents, so a heterogeneous map can hold
 /// it. Reached only through the matching `TypeId`, so the inner downcast
 /// cannot fail.
-/// A predicate over an erased intent (`is_enabled` / `consumes_key`).
+/// A predicate over an erased intent (`is_enabled`).
 type ErasedPredicate = Arc<dyn Fn(&dyn Any) -> bool + Send + Sync>;
-/// The erased `invoke`.
-type ErasedInvoke = Arc<dyn Fn(&dyn Any) + Send + Sync>;
+/// The erased `invoke`, carrying its outcome back out.
+type ErasedInvoke = Arc<dyn Fn(&dyn Any) -> ActionOutcome + Send + Sync>;
+/// The erased `to_key_event_result`.
+type ErasedKeyResult = Arc<dyn Fn(&dyn Any, ActionOutcome) -> KeyEventResult + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct ErasedAction {
     is_enabled: ErasedPredicate,
-    consumes_key: ErasedPredicate,
     invoke: ErasedInvoke,
+    to_key_event_result: ErasedKeyResult,
 }
 
 /// The typed view of an erased intent. Reached only through the matching
@@ -140,11 +182,13 @@ impl ErasedAction {
     fn new<T: Intent, A: Action<T> + 'static>(action: A) -> Self {
         let action = Arc::new(action);
         let enabled_action = Arc::clone(&action);
-        let consumes_action = Arc::clone(&action);
+        let key_result_action = Arc::clone(&action);
         Self {
             is_enabled: Arc::new(move |intent| enabled_action.is_enabled(typed::<T>(intent))),
-            consumes_key: Arc::new(move |intent| consumes_action.consumes_key(typed::<T>(intent))),
             invoke: Arc::new(move |intent| action.invoke(typed::<T>(intent))),
+            to_key_event_result: Arc::new(move |intent, outcome| {
+                key_result_action.to_key_event_result(typed::<T>(intent), outcome)
+            }),
         }
     }
 
@@ -152,12 +196,15 @@ impl ErasedAction {
         (self.is_enabled)(intent)
     }
 
-    pub(crate) fn consumes_key(&self, intent: &dyn Any) -> bool {
-        (self.consumes_key)(intent)
+    pub(crate) fn invoke(&self, intent: &dyn Any) -> ActionOutcome {
+        (self.invoke)(intent)
     }
 
-    pub(crate) fn invoke(&self, intent: &dyn Any) {
-        (self.invoke)(intent);
+    /// Invoke, then report what the key dispatch should do — **one** call, so
+    /// the key result cannot disagree with what actually ran.
+    pub(crate) fn invoke_for_key(&self, intent: &dyn Any) -> KeyEventResult {
+        let outcome = (self.invoke)(intent);
+        (self.to_key_event_result)(intent, outcome)
     }
 }
 
@@ -343,7 +390,7 @@ mod tests {
         fn is_enabled(&self, _intent: &AddToCounter) -> bool {
             false
         }
-        fn invoke(&self, _intent: &AddToCounter) {
+        fn invoke(&self, _intent: &AddToCounter) -> ActionOutcome {
             unreachable!("BUG: a disabled action must never be invoked (actions.dart:1032-1044)");
         }
     }
@@ -429,5 +476,82 @@ mod tests {
             ran: Arc::clone(&ran),
         });
         assert_eq!(ran.load(Ordering::SeqCst), 0, "nothing to invoke");
+    }
+}
+
+// ============================================================================
+// Focus traversal intents (ADR-0026 U-C)
+// ============================================================================
+
+/// "Move focus to the next widget" — Flutter's `NextFocusIntent`
+/// (`focus_traversal.dart:2320`), what `WidgetsApp` binds Tab to
+/// (`app.dart:1275`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NextFocusIntent;
+impl Intent for NextFocusIntent {}
+
+/// "Move focus to the previous widget" — `PreviousFocusIntent`
+/// (`focus_traversal.dart:2360`), bound to Shift+Tab (`app.dart:1276`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PreviousFocusIntent;
+impl Intent for PreviousFocusIntent {}
+
+/// Advances the focus through the active scope's traversal order —
+/// `NextFocusAction` (`focus_traversal.dart:2330-2348`).
+///
+/// The key result is **what the traversal did**: `Handled` when focus moved,
+/// `SkipRemainingHandlers` when it did not (a `Stop` edge with nowhere to go),
+/// so an unmoved Tab keeps bubbling instead of being swallowed (`:2340-2348`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NextFocusAction;
+
+impl Action<NextFocusIntent> for NextFocusAction {
+    fn invoke(&self, _intent: &NextFocusIntent) -> ActionOutcome {
+        if FocusManager::global().focus_next() {
+            ActionOutcome::Performed
+        } else {
+            ActionOutcome::NotPerformed
+        }
+    }
+
+    fn to_key_event_result(
+        &self,
+        _intent: &NextFocusIntent,
+        outcome: ActionOutcome,
+    ) -> KeyEventResult {
+        focus_key_result(outcome)
+    }
+}
+
+/// Steps the focus backwards — `PreviousFocusAction`
+/// (`focus_traversal.dart:2350-2368`). Same result contract as
+/// [`NextFocusAction`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PreviousFocusAction;
+
+impl Action<PreviousFocusIntent> for PreviousFocusAction {
+    fn invoke(&self, _intent: &PreviousFocusIntent) -> ActionOutcome {
+        if FocusManager::global().focus_previous() {
+            ActionOutcome::Performed
+        } else {
+            ActionOutcome::NotPerformed
+        }
+    }
+
+    fn to_key_event_result(
+        &self,
+        _intent: &PreviousFocusIntent,
+        outcome: ActionOutcome,
+    ) -> KeyEventResult {
+        focus_key_result(outcome)
+    }
+}
+
+/// `NextFocusAction.toKeyEventResult` (`focus_traversal.dart:2340-2348`):
+/// handled iff focus actually moved.
+fn focus_key_result(outcome: ActionOutcome) -> KeyEventResult {
+    match outcome {
+        ActionOutcome::Performed => KeyEventResult::Handled,
+        ActionOutcome::NotPerformed => KeyEventResult::SkipRemainingHandlers,
     }
 }
