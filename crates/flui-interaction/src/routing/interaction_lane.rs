@@ -17,9 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 
 use flui_types::geometry::Matrix4;
+use flui_types::{Offset, Pixels};
 
 use super::hit_test::{HitTestEntry, transform_pointer_event};
-use crate::events::PointerEvent;
+use crate::events::{DeviceId, PointerEvent};
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -210,6 +211,37 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 
 type PointerHandler = Rc<dyn Fn(&PointerEvent) + 'static>;
 
+/// Callback for mouse enter events.
+pub type MouseEnterCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
+
+/// Callback for mouse exit events.
+pub type MouseExitCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
+
+/// Callback for mouse hover events.
+pub type MouseHoverCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
+
+/// Owner-local callback set for one mouse region target.
+#[doc(hidden)]
+#[derive(Clone, Default)]
+pub struct MouseRegionCallbacks {
+    /// Called when the mouse enters this region.
+    pub on_enter: Option<MouseEnterCallback>,
+    /// Called when the mouse exits this region.
+    pub on_exit: Option<MouseExitCallback>,
+    /// Called when the mouse hovers over this region.
+    pub on_hover: Option<MouseHoverCallback>,
+}
+
+impl fmt::Debug for MouseRegionCallbacks {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MouseRegionCallbacks")
+            .field("has_on_enter", &self.on_enter.is_some())
+            .field("has_on_exit", &self.on_exit.is_some())
+            .field("has_on_hover", &self.on_hover.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 struct HandlerCell {
     current: RefCell<PointerHandler>,
 }
@@ -227,6 +259,26 @@ impl HandlerCell {
 
     fn replace(&self, handler: PointerHandler) -> PointerHandler {
         std::mem::replace(&mut *self.current.borrow_mut(), handler)
+    }
+}
+
+pub(super) struct MouseRegionCell {
+    current: RefCell<MouseRegionCallbacks>,
+}
+
+impl MouseRegionCell {
+    fn new(callbacks: MouseRegionCallbacks) -> Self {
+        Self {
+            current: RefCell::new(callbacks),
+        }
+    }
+
+    pub(super) fn snapshot(&self) -> MouseRegionCallbacks {
+        self.current.borrow().clone()
+    }
+
+    fn replace(&self, callbacks: MouseRegionCallbacks) -> MouseRegionCallbacks {
+        std::mem::replace(&mut *self.current.borrow_mut(), callbacks)
     }
 }
 
@@ -330,6 +382,7 @@ struct LocalLaneInner {
     target_ids: MonotonicIdSource,
     route_ids: MonotonicIdSource,
     targets: RefCell<HashMap<TargetId, Rc<HandlerCell>>>,
+    mouse_targets: RefCell<HashMap<TargetId, Rc<MouseRegionCell>>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -366,6 +419,7 @@ impl InteractionLane {
             target_ids: MonotonicIdSource::new(),
             route_ids: MonotonicIdSource::new(),
             targets: RefCell::new(HashMap::new()),
+            mouse_targets: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
@@ -409,6 +463,7 @@ impl Drop for InteractionLane {
 
         let routes = self.inner.routes.take();
         let targets = self.inner.targets.take();
+        let mouse_targets = self.inner.mouse_targets.take();
 
         let mut routes: Vec<_> = routes.into_iter().collect();
         routes.sort_unstable_by_key(|(id, _)| *id);
@@ -417,6 +472,10 @@ impl Drop for InteractionLane {
         let mut targets: Vec<_> = targets.into_iter().collect();
         targets.sort_unstable_by_key(|(id, _)| *id);
         drop(targets);
+
+        let mut mouse_targets: Vec<_> = mouse_targets.into_iter().collect();
+        mouse_targets.sort_unstable_by_key(|(id, _)| *id);
+        drop(mouse_targets);
     }
 }
 
@@ -525,6 +584,70 @@ impl InteractionDispatchHandle {
             .ok_or(InteractionDispatchError::TargetGone)?;
         drop(removed);
         Ok(())
+    }
+
+    /// Register mouse-region callbacks in the active owner lane.
+    pub fn register_mouse_region(
+        &self,
+        callbacks: MouseRegionCallbacks,
+    ) -> Result<MouseRegionTarget, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        let target_id = TargetId(lane.target_ids.try_next()?);
+        lane.mouse_targets
+            .borrow_mut()
+            .insert(target_id, Rc::new(MouseRegionCell::new(callbacks)));
+        Ok(MouseRegionTarget {
+            lane_id: self.ticket.lane_id,
+            target_id,
+        })
+    }
+
+    /// Replace a mouse-region target's callbacks without changing identity.
+    pub fn replace_mouse_region(
+        &self,
+        target: MouseRegionTarget,
+        callbacks: MouseRegionCallbacks,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .mouse_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let old_callbacks = cell.replace(callbacks);
+        drop(old_callbacks);
+        Ok(())
+    }
+
+    /// Remove a mouse-region target from future annotation resolution.
+    pub fn unregister_mouse_region(
+        &self,
+        target: MouseRegionTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let removed = lane
+            .mouse_targets
+            .borrow_mut()
+            .remove(&target.target_id)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        drop(removed);
+        Ok(())
+    }
+
+    pub(super) fn resolve_mouse_region(
+        &self,
+        target: MouseRegionTarget,
+    ) -> Result<Rc<MouseRegionCell>, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        lane.mouse_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)
     }
 
     /// Resolve the target-bearing entries of a hit path into one ordered

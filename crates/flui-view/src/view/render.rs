@@ -102,6 +102,56 @@ impl<'a> RenderObjectContext<'a> {
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_pointer(target)?)
     }
+
+    /// Register mouse-region callbacks in the active owner lane.
+    ///
+    /// The returned target is data-only and may be stored in a render object;
+    /// enter/exit/hover callbacks remain in the owner-local interaction lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_mouse_region(
+        &self,
+        callbacks: flui_interaction::MouseRegionCallbacks,
+    ) -> Result<flui_interaction::MouseRegionTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_mouse_region(callbacks)?)
+    }
+
+    /// Replace an existing mouse-region target's callbacks without changing
+    /// its data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_mouse_region(
+        &self,
+        target: flui_interaction::MouseRegionTarget,
+        callbacks: flui_interaction::MouseRegionCallbacks,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_mouse_region(target, callbacks)?)
+    }
+
+    /// Remove a mouse-region target from future annotation resolution.
+    ///
+    /// Existing tracker state may still retain a strong owner-local cell long
+    /// enough to emit the matching exit callback for a previously active
+    /// annotation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_mouse_region(
+        &self,
+        target: flui_interaction::MouseRegionTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_mouse_region(target)?)
+    }
 }
 
 // ============================================================================

@@ -17,7 +17,7 @@ Flutter semantics. This file is the durable source of truth. Status: ☐ todo ·
 | 2 | Give `UiRealm` and `HeadlessBinding` one interaction lane, activate it with owner scopes, add the narrow `RenderObjectContext`, and eliminate the test harness's double binding. | LIFO/unwind-safe activation; wrong-realm and two-realm isolation; create/update can register and replace handlers; headless pointer helpers use the same binding/lane as the mounted tree. | `chief-architect` | 1 | ☑ done |
 | 3 | Atomically migrate ordinary pointer delivery to data-only targets and one resolver/invoker used by cached and direct dispatch. | Every-target leaf-first synchronous delivery with local transforms and no `EventPropagation::Stop`; Down resolves/caches before arena close; Move reuses; Up/Cancel delivers before sweep/release; unmount/rebuild lifetime rules; per-target panic continuation and cleanup before unwind. | `api-design-lead` | 2 | ☑ done |
 | 4 | Atomically owner-localize `GestureBinding`, arena members, recognizers, and gesture callback storage, including the minimum View/State bound ripple. | No gesture callback remains behind `Arc<Mutex<_>>` or `Send + Sync`; no gesture-detail token/queue bridge; long-press, double-tap, tap, and pan retain Flutter ordering through real `HeadlessBinding`; render data remains `Send + Sync`. | `systems-perf-lead` | 3 | ◐ in-progress |
-| 5 | Atomically migrate `MouseRegion` and mouse tracking to data-only targets with owner-local strong annotations. | Enter/hover/exit are local callbacks; previous annotations survive long enough to emit Exit after removal; new/current annotation diffing and panic/drop behavior are covered without executable closures in render storage. | `api-design-lead` | 4 | ☐ todo |
+| 5 | Atomically migrate `MouseRegion` and mouse tracking to data-only targets with owner-local strong annotations. | Enter/hover/exit are local callbacks; previous annotations survive long enough to emit Exit after removal; new/current annotation diffing and panic/drop behavior are covered without executable closures in render storage. | `api-design-lead` | 4 | ☑ done |
 | 6 | Complete ADR-0027 step 2c with a realm-local `NavigatorHandle` and `UiCommandSender` as the only cross-thread navigation ingress. | Navigation mutations are owner-thread capabilities; no generic UI-thread executor or cross-thread closure API; wrong/dead realm behavior is typed and tested. | `api-design-lead` | 2 | ☐ todo |
 | 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ☐ todo |
 | 8 | Verify Flutter parity, destruction/reentrancy safety, public API shape, and measured routing cost across the completed slice. | Cached/direct parity; unmount/rebuild/stale-route/realm teardown cases; `DropProbe` owner-thread/outside-borrow coverage; nested/reentrant and panic cleanup; Criterion 1/4/16-target baselines and common-Move allocation evidence; semver/API review. | `qa-lead` | 7 | ☐ todo |
@@ -213,6 +213,26 @@ and navigation ownership contract are complete.
   mouse/focus global trackers, or an async task. Evidence: `cargo check -p
   flui-widgets --tests` and `cargo test -p flui-widgets --test scroll
   refresh_indicator` pass.
+- 2026-07-12 mouse-region owner-lane checkpoint: `MouseRegion` callbacks moved
+  from `Arc<dyn Fn + Send + Sync>` to owner-local `Rc<dyn Fn>`, and
+  `RenderMouseRegion` no longer stores executable enter/hover/exit callbacks.
+  Render hit entries now carry a data-only `MouseTrackerAnnotation { region_id,
+  target }`; the target resolves through `InteractionLane` to a strong
+  owner-local callback cell. `MouseTracker` is owner-local (`Rc<RefCell<_>>`)
+  with a thread-local global, derives active regions only from mouse
+  annotations, preserves previous resolved annotations long enough to emit
+  exit after target unregistration/removal, and continues later mouse callbacks
+  before resuming the first panic. Hover remains ordinary pointer dispatch,
+  matching Flutter's `RenderMouseRegion.handleEvent`; `MouseTracker` handles
+  enter/exit/cursor updates. `BindingBase` and `RendererBinding` were updated
+  to owner-runtime semantics so binding singletons are thread-local instead of
+  process-global `Sync` objects. Evidence: `cargo test -p flui-interaction
+  mouse_tracker --lib`, `cargo test -p flui-objects harness_mouse_region
+  --test render_object_harness`, `cargo test -p flui-widgets --test
+  mouse_region`, `cargo test -p flui-foundation binding --lib`, `cargo check
+  -p flui-app --tests`, and `cargo clippy -p flui-foundation -p
+  flui-interaction -p flui-rendering -p flui-objects -p flui-view -p
+  flui-widgets -p flui-app --all-targets -- -D warnings` pass.
 - Tasks 3–5 must check the corresponding `.flutter/` sources before claiming parity.
   A green gate without behavioral evidence does not satisfy their acceptance slices.
 - No task may introduce a generic UI-thread executor, queue the current pointer event,

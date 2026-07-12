@@ -230,7 +230,10 @@ pub use ids::{FocusNodeId, HandlerId, PointerId};
 // the crate root before the move (PR 163). External crates (`flui-rendering`,
 // `flui-app`) import it via `flui_interaction::MouseTracker`; the routing
 // path remains the canonical one for new code.
-pub use routing::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
+pub use routing::{
+    CursorChangeCallback, MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseTracker,
+    MouseTrackerAnnotation,
+};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
@@ -263,10 +266,10 @@ pub use routing::{
     EventPropagation, EventRouter, FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy,
     GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, MouseRegionTarget, PointerRouteHandler, PointerRouter,
-    PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken, ResolvedStep,
-    RoutePanic, RouteResolution, RouteResolutionMiss, ScrollEventHandler, TransformGuard,
-    TraversalEdgeBehavior,
+    KeyEventHandler, KeyEventResult, MouseRegionCallbacks, MouseRegionTarget, PointerRouteHandler,
+    PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken,
+    ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollEventHandler,
+    TransformGuard, TraversalEdgeBehavior,
 };
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{
@@ -371,5 +374,4 @@ mod static_assertions {
     impl AssertSendSync for HitTestEntry {}
     impl AssertSendSync for PointerEventResampler {}
     impl AssertSendSync for PointerSignalResolver {}
-    impl AssertSendSync for crate::routing::MouseTracker {}
 }

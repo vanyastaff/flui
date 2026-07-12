@@ -1,11 +1,11 @@
 //! [`MouseRegion`] — hover/cursor interaction widget.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_objects::RenderMouseRegion;
 use flui_rendering::hit_testing::{
     CursorIcon, DeviceId, HitTestBehavior, InputEvent, MouseEnterCallback, MouseExitCallback,
-    MouseHoverCallback, PointerEvent, PointerEventExt as _,
+    MouseHoverCallback, MouseRegionCallbacks, PointerEvent, PointerEventExt as _,
 };
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Offset;
@@ -62,22 +62,22 @@ impl MouseRegion {
 
     /// Called when the mouse enters this region.
     #[must_use]
-    pub fn on_enter(mut self, callback: impl Fn(DeviceId, Offset) + Send + Sync + 'static) -> Self {
-        self.on_enter = Some(Arc::new(callback));
+    pub fn on_enter(mut self, callback: impl Fn(DeviceId, Offset) + 'static) -> Self {
+        self.on_enter = Some(Rc::new(callback));
         self
     }
 
     /// Called when the mouse moves within this region.
     #[must_use]
-    pub fn on_hover(mut self, callback: impl Fn(DeviceId, Offset) + Send + Sync + 'static) -> Self {
-        self.on_hover = Some(Arc::new(callback));
+    pub fn on_hover(mut self, callback: impl Fn(DeviceId, Offset) + 'static) -> Self {
+        self.on_hover = Some(Rc::new(callback));
         self
     }
 
     /// Called when the mouse exits this region.
     #[must_use]
-    pub fn on_exit(mut self, callback: impl Fn(DeviceId, Offset) + Send + Sync + 'static) -> Self {
-        self.on_exit = Some(Arc::new(callback));
+    pub fn on_exit(mut self, callback: impl Fn(DeviceId, Offset) + 'static) -> Self {
+        self.on_exit = Some(Rc::new(callback));
         self
     }
 
@@ -110,12 +110,21 @@ impl MouseRegion {
     }
 
     fn configure(&self, render_object: &mut RenderMouseRegion) {
-        render_object.set_on_enter(self.on_enter.clone());
-        render_object.set_on_hover(self.on_hover.clone());
-        render_object.set_on_exit(self.on_exit.clone());
         render_object.set_cursor(self.cursor);
         render_object.set_opaque(self.opaque);
         render_object.set_behavior(self.behavior);
+    }
+
+    fn mouse_callbacks(&self) -> MouseRegionCallbacks {
+        MouseRegionCallbacks {
+            on_enter: self.on_enter.clone(),
+            on_exit: self.on_exit.clone(),
+            on_hover: self.on_hover.clone(),
+        }
+    }
+
+    fn has_mouse_tracker_callbacks(&self) -> bool {
+        self.on_enter.is_some() || self.on_exit.is_some()
     }
 
     /// The owner-local hover adapter: forwards each pointer `Move` landing on
@@ -161,6 +170,43 @@ impl MouseRegion {
             (None, None) => {}
         }
     }
+
+    /// Keep the render object's mouse-region target in sync with enter/exit
+    /// callbacks. Hover is delivered by ordinary pointer dispatch, matching
+    /// Flutter's `RenderMouseRegion.handleEvent`; the same callback set is
+    /// still stored in one owner-local mouse cell so future tracker paths can
+    /// observe replacements consistently.
+    fn sync_mouse_region_target(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut RenderMouseRegion,
+    ) {
+        match (
+            self.has_mouse_tracker_callbacks(),
+            render_object.mouse_region_target(),
+        ) {
+            (true, Some(target)) => {
+                if let Err(error) = ctx.replace_mouse_region(target, self.mouse_callbacks()) {
+                    tracing::warn!(?error, "MouseRegion callback replacement failed");
+                }
+            }
+            (true, None) => match ctx.register_mouse_region(self.mouse_callbacks()) {
+                Ok(target) => render_object.set_mouse_region_target(Some(target)),
+                Err(error) => tracing::debug!(
+                    ?error,
+                    "MouseRegion mounted without an active interaction lane; \
+                     enter/exit events will not be delivered"
+                ),
+            },
+            (false, Some(target)) => {
+                if let Err(error) = ctx.unregister_mouse_region(target) {
+                    tracing::debug!(?error, "MouseRegion target unregistration failed");
+                }
+                render_object.set_mouse_region_target(None);
+            }
+            (false, None) => {}
+        }
+    }
 }
 
 impl RenderView for MouseRegion {
@@ -170,6 +216,7 @@ impl RenderView for MouseRegion {
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         let mut render_object = RenderMouseRegion::new();
         self.configure(&mut render_object);
+        self.sync_mouse_region_target(ctx, &mut render_object);
         self.sync_hover_target(ctx, &mut render_object);
         render_object
     }
@@ -180,6 +227,7 @@ impl RenderView for MouseRegion {
         render_object: &mut Self::RenderObject,
     ) {
         self.configure(render_object);
+        self.sync_mouse_region_target(ctx, render_object);
         self.sync_hover_target(ctx, render_object);
     }
 
@@ -195,6 +243,12 @@ impl RenderView for MouseRegion {
                 tracing::debug!(?error, "MouseRegion hover target unregistration failed");
             }
             render_object.set_hover_target(None);
+        }
+        if let Some(target) = render_object.mouse_region_target() {
+            if let Err(error) = ctx.unregister_mouse_region(target) {
+                tracing::debug!(?error, "MouseRegion target unregistration failed");
+            }
+            render_object.set_mouse_region_target(None);
         }
     }
 

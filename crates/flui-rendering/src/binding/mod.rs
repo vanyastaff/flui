@@ -83,7 +83,7 @@ use crate::{
 /// orchestrator is [`PipelineOwner::<Idle>::run_frame`], which
 /// composes the four phase transitions and returns the owner back at
 /// `Idle` plus the produced layer tree.
-pub trait RendererBinding: Send + Sync {
+pub trait RendererBinding {
     // ========================================================================
     // Pipeline / Manifold (formerly PipelineManifold)
     // ========================================================================
@@ -241,12 +241,8 @@ pub trait RendererBinding: Send + Sync {
     ///
     /// Cycle 4 U-6: the return type changed from
     /// `&RwLock<MouseTracker>` to `&MouseTracker`. The interaction-
-    /// side [`flui_interaction::MouseTracker`] is `Clone` with
-    /// interior mutability (`Arc<Mutex<inner>>`), so the outer
-    /// `RwLock` wrapper the rendering-side tracker required is
-    /// double-wrapping. Implementers now expose the tracker
-    /// directly; callers needing a snapshot clone the handle
-    /// (cheap -- `Arc`-bump).
+    /// side [`flui_interaction::MouseTracker`] is owner-local, so executable
+    /// mouse callbacks do not force the whole binding to be `Send + Sync`.
     fn mouse_tracker(&self) -> &MouseTracker;
 
     // ========================================================================
@@ -506,12 +502,6 @@ mod tests {
 
     // Verify the trait is object-safe.
     fn _assert_renderer_binding_object_safe(_: &dyn RendererBinding) {}
-
-    #[test]
-    fn test_renderer_binding_send_sync() {
-        fn assert_send_sync<T: Send + Sync + ?Sized>() {}
-        assert_send_sync::<dyn RendererBinding>();
-    }
 
     /// Minimal `RendererBinding` implementer exercising the trait's default
     /// methods (`add_render_view_with_config`, `create_view_configuration_for`,

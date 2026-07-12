@@ -87,7 +87,7 @@ pub use flui_interaction::routing::HitTestBehavior;
 pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
 pub use flui_interaction::routing::{
     DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
-    MouseTrackerAnnotation, PointerTarget,
+    MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation, PointerTarget,
 };
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;

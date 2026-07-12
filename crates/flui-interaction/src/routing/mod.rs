@@ -40,11 +40,9 @@ pub use hit_test::{
 };
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, MouseRegionTarget,
-    PointerTarget, ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
+    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, MouseEnterCallback,
+    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PointerTarget,
+    ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
 };
-pub use mouse_tracker::{
-    CursorChangeCallback, DeviceId, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
-    MouseTracker, MouseTrackerAnnotation,
-};
+pub use mouse_tracker::{CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation};
 pub use pointer_router::{GlobalPointerHandler, PointerRouteHandler, PointerRouter};

@@ -86,15 +86,7 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
-use std::{
-    any::Any,
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{AnimationController, Curves, Scheduler};
@@ -108,10 +100,7 @@ use flui_rendering::{
         MultiChildLayoutDelegate, SingleChildLayoutDelegate,
         SliverGridDelegateWithFixedCrossAxisCount,
     },
-    hit_testing::{
-        CursorIcon, HitTestBehavior, HitTestResult, InputEvent, MouseEnterCallback,
-        MouseExitCallback, MouseHoverCallback,
-    },
+    hit_testing::{CursorIcon, HitTestBehavior, HitTestResult, InputEvent, MouseRegionCallbacks},
     layer::LayerLink,
     parent_data::{
         FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
@@ -679,15 +668,16 @@ fn harness_mouse_region_childless_fills_parent_and_self_describes() {
 
 #[test]
 fn harness_mouse_region_hit_entry_carries_cursor_and_annotation() {
-    let enters = Arc::new(AtomicUsize::new(0));
-    let enter_counter = Arc::clone(&enters);
-    let on_enter: MouseEnterCallback = Arc::new(move |_device, _position| {
-        enter_counter.fetch_add(1, Ordering::SeqCst);
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let target = lane.enter(|| {
+        lane.dispatch_handle()
+            .register_mouse_region(MouseRegionCallbacks::default())
+            .expect("register mouse-region target")
     });
 
     let mut region = RenderMouseRegion::new();
     region.set_cursor(CursorIcon::Pointer);
-    region.set_on_enter(Some(on_enter));
+    region.set_mouse_region_target(Some(target));
 
     let run = RenderTester::mount(box_node(region))
         .with_constraints(BoxConstraints::tight(Size::new(px(60.0), px(30.0))))
@@ -712,7 +702,7 @@ fn harness_mouse_region_hit_entry_carries_cursor_and_annotation() {
         .as_ref()
         .expect("mouse region must contribute MouseTrackerAnnotation");
     assert_eq!(annotation.region_id, run.root());
-    assert!(annotation.on_enter.is_some());
+    assert_eq!(annotation.target, target);
 }
 
 #[test]
@@ -738,30 +728,37 @@ fn harness_mouse_region_opaque_false_adds_entry_without_blocking_lower_sibling()
 
 #[test]
 fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
-    let hovers = Arc::new(AtomicUsize::new(0));
-    let hover_counter = Arc::clone(&hovers);
-    let on_hover: MouseHoverCallback = Arc::new(move |_device, _position| {
-        hover_counter.fetch_add(1, Ordering::SeqCst);
-    });
-    let exits = Arc::new(AtomicUsize::new(0));
-    let exit_counter = Arc::clone(&exits);
-    let on_exit: MouseExitCallback = Arc::new(move |_device, _position| {
-        exit_counter.fetch_add(1, Ordering::SeqCst);
-    });
+    let hovers = Rc::new(Cell::new(0));
+    let enters = Rc::new(Cell::new(0));
+    let exits = Rc::new(Cell::new(0));
     let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
-    let hover_target = lane.enter(|| {
-        let hover_counter = Arc::clone(&hovers);
-        lane.dispatch_handle()
+    let (hover_target, mouse_target) = lane.enter(|| {
+        let handle = lane.dispatch_handle();
+        let hover_counter = Rc::clone(&hovers);
+        let hover_target = handle
             .register_pointer(move |_event| {
-                hover_counter.fetch_add(1, Ordering::SeqCst);
+                hover_counter.set(hover_counter.get() + 1);
             })
-            .expect("register mouse-region hover pointer target")
+            .expect("register mouse-region hover pointer target");
+        let enter_counter = Rc::clone(&enters);
+        let exit_counter = Rc::clone(&exits);
+        let mouse_target = handle
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::new(move |_device, _position| {
+                    enter_counter.set(enter_counter.get() + 1);
+                })),
+                on_exit: Some(Rc::new(move |_device, _position| {
+                    exit_counter.set(exit_counter.get() + 1);
+                })),
+                on_hover: None,
+            })
+            .expect("register mouse-region target");
+        (hover_target, mouse_target)
     });
 
     let mut region = RenderMouseRegion::new();
-    region.set_on_hover(Some(on_hover));
-    region.set_on_exit(Some(on_exit));
     region.set_hover_target(Some(hover_target));
+    region.set_mouse_region_target(Some(mouse_target));
 
     let run = RenderTester::mount(box_node(region))
         .with_constraints(BoxConstraints::tight(Size::new(px(60.0), px(30.0))))
@@ -777,7 +774,7 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
         ));
     });
     assert_eq!(
-        hovers.load(Ordering::SeqCst),
+        hovers.get(),
         1,
         "PointerEvent::Move dispatch should invoke RenderMouseRegion's hover handler",
     );
@@ -790,44 +787,49 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
         },
         &HitTestResult::new(),
     );
-    tracker.update_with_event(
-        &InputEvent::Pointer(flui_interaction::events::make_move_event(
-            inside_position,
-            flui_interaction::events::PointerType::Mouse,
-        )),
-        &inside,
-    );
-    assert_eq!(
-        hovers.load(Ordering::SeqCst),
-        1,
-        "first tracker update is an enter, not a hover",
-    );
+    lane.enter(|| {
+        tracker.update_with_event(
+            &InputEvent::Pointer(flui_interaction::events::make_move_event(
+                inside_position,
+                flui_interaction::events::PointerType::Mouse,
+            )),
+            &inside,
+        );
+    });
+    assert_eq!(enters.get(), 1, "first tracker update enters the region");
 
-    tracker.update_with_event(
-        &InputEvent::Pointer(flui_interaction::events::make_move_event(
-            inside_position,
-            flui_interaction::events::PointerType::Mouse,
-        )),
-        &inside,
-    );
+    lane.enter(|| {
+        tracker.update_with_event(
+            &InputEvent::Pointer(flui_interaction::events::make_move_event(
+                inside_position,
+                flui_interaction::events::PointerType::Mouse,
+            )),
+            &inside,
+        );
+    });
     assert_eq!(
-        hovers.load(Ordering::SeqCst),
-        2,
-        "second tracker update over the same region is a hover",
+        hovers.get(),
+        1,
+        "MouseTracker does not deliver hover; hover stays ordinary pointer dispatch",
     );
 
     let mut outside = HitTestResult::new();
     let outside_position = Offset::new(px(80.0), px(10.0));
     run.pipeline().hit_test(outside_position, &mut outside);
-    tracker.update_with_event(
-        &InputEvent::Pointer(flui_interaction::events::make_move_event(
-            outside_position,
-            flui_interaction::events::PointerType::Mouse,
-        )),
-        &outside,
-    );
+    lane.enter(|| {
+        lane.dispatch_handle()
+            .unregister_mouse_region(mouse_target)
+            .expect("unregister mouse target after prior annotation was resolved");
+        tracker.update_with_event(
+            &InputEvent::Pointer(flui_interaction::events::make_move_event(
+                outside_position,
+                flui_interaction::events::PointerType::Mouse,
+            )),
+            &outside,
+        );
+    });
     assert_eq!(
-        exits.load(Ordering::SeqCst),
+        exits.get(),
         1,
         "tracker must retain the prior annotation long enough to fire exit",
     );
