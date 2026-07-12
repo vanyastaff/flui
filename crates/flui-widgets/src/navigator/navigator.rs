@@ -36,10 +36,15 @@
 //! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay private implementation
 //! details behind public `PageRoute` / `PopupRoute`.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::marker::PhantomData;
+use std::num::NonZeroU64;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
+use std::thread::{self, ThreadId};
 
 use flui_view::BuildContextExt;
 use flui_view::element::ElementKind;
@@ -58,6 +63,38 @@ use super::route::{AnyResult, RouteId, RoutePopDisposition};
 use super::subtree::RouteSubtree;
 use crate::animated::VsyncScope;
 use crate::overlay::{Overlay, OverlayEntry, OverlayHandle};
+
+static NEXT_NAVIGATOR_COMMAND_TARGET_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static NAVIGATOR_COMMAND_TARGETS: RefCell<HashMap<NavigatorCommandTargetId, Weak<NavigatorShared>>> =
+        RefCell::new(HashMap::new());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct NavigatorCommandTargetId(NonZeroU64);
+
+impl NavigatorCommandTargetId {
+    fn next() -> Self {
+        let raw = NEXT_NAVIGATOR_COMMAND_TARGET_ID.fetch_add(1, Ordering::Relaxed);
+        let id =
+            NonZeroU64::new(raw).expect("BUG: navigator command target id counter started at zero");
+        Self(id)
+    }
+}
+
+fn register_command_target(shared: &Arc<NavigatorShared>) -> NavigatorCommandTarget {
+    let target = NavigatorCommandTarget {
+        id: NavigatorCommandTargetId::next(),
+        owner: thread::current().id(),
+    };
+    NAVIGATOR_COMMAND_TARGETS.with(|targets| {
+        targets
+            .borrow_mut()
+            .insert(target.id, Arc::downgrade(shared));
+    });
+    target
+}
 
 /// Everything a [`NavigatorHandle`] and the mounted [`NavigatorState`] share.
 ///
@@ -295,14 +332,158 @@ impl NavigatorShared {
     }
 }
 
+/// A Send/Sync token naming one navigator for typed cross-thread commands.
+///
+/// This is deliberately not a [`NavigatorHandle`]. It carries only an opaque
+/// registry id and the owner thread id; the non-`Send` route stack is resolved
+/// from thread-local owner storage when a [`NavigatorCommand`] is drained by the
+/// UI runtime.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NavigatorCommandTarget {
+    id: NavigatorCommandTargetId,
+    owner: ThreadId,
+}
+
+impl fmt::Debug for NavigatorCommandTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NavigatorCommandTarget")
+            .field("id", &self.id)
+            .field("owner", &self.owner)
+            .finish()
+    }
+}
+
+/// A typed navigation command that may cross a thread boundary.
+///
+/// The command vocabulary is intentionally closed. It covers owner-thread
+/// mutations that need no view/builder payload. Pushing a route remains a
+/// [`NavigatorHandle`] operation because a route owns owner-local view builders
+/// and cannot be made `Send` without changing the widget model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavigatorCommand {
+    /// Pop the target navigator's top route.
+    Pop {
+        /// Navigator to mutate.
+        target: NavigatorCommandTarget,
+    },
+    /// Run [`NavigatorHandle::maybe_pop`] on the target navigator.
+    MaybePop {
+        /// Navigator to mutate.
+        target: NavigatorCommandTarget,
+    },
+    /// Remove a specific route from the target navigator.
+    RemoveRoute {
+        /// Navigator to mutate.
+        target: NavigatorCommandTarget,
+        /// Route to remove.
+        route: RouteId,
+    },
+}
+
+impl NavigatorCommand {
+    /// Build a [`NavigatorHandle::pop`] command.
+    #[must_use]
+    pub fn pop(target: NavigatorCommandTarget) -> Self {
+        Self::Pop { target }
+    }
+
+    /// Build a [`NavigatorHandle::maybe_pop`] command.
+    #[must_use]
+    pub fn maybe_pop(target: NavigatorCommandTarget) -> Self {
+        Self::MaybePop { target }
+    }
+
+    /// Build a [`NavigatorHandle::remove_route`] command.
+    #[must_use]
+    pub fn remove_route(target: NavigatorCommandTarget, route: RouteId) -> Self {
+        Self::RemoveRoute { target, route }
+    }
+
+    /// Apply this command on the navigator owner thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NavigatorCommandError::WrongOwnerThread`] when called from any
+    /// other thread, and [`NavigatorCommandError::OwnerGone`] when the target was
+    /// dropped or belongs to a dead owner registry.
+    pub fn apply_on_owner(self) -> Result<NavigatorCommandOutcome, NavigatorCommandError> {
+        let target = self.target();
+        let shared = resolve_command_target(target)?;
+        let handle = NavigatorHandle {
+            shared,
+            command_target: target,
+            _owner_affine: PhantomData,
+        };
+        match self {
+            Self::Pop { .. } => Ok(NavigatorCommandOutcome::Popped(handle.pop())),
+            Self::MaybePop { .. } => Ok(NavigatorCommandOutcome::MaybePopped(handle.maybe_pop())),
+            Self::RemoveRoute { route, .. } => {
+                Ok(NavigatorCommandOutcome::Removed(handle.remove_route(route)))
+            }
+        }
+    }
+
+    fn target(&self) -> NavigatorCommandTarget {
+        match self {
+            Self::Pop { target } | Self::MaybePop { target } | Self::RemoveRoute { target, .. } => {
+                *target
+            }
+        }
+    }
+}
+
+/// Result of applying a typed [`NavigatorCommand`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigatorCommandOutcome {
+    /// Outcome of [`NavigatorHandle::pop`].
+    Popped(bool),
+    /// Outcome of [`NavigatorHandle::maybe_pop`].
+    MaybePopped(bool),
+    /// Outcome of [`NavigatorHandle::remove_route`].
+    Removed(bool),
+}
+
+/// Why a typed navigation command could not reach its owner-local navigator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum NavigatorCommandError {
+    /// The command was drained outside the thread that owns the navigator.
+    #[error("navigation command applied on the wrong owner thread")]
+    WrongOwnerThread,
+    /// The navigator or its owner registry no longer exists.
+    #[error("navigation command target owner is gone")]
+    OwnerGone,
+}
+
+fn resolve_command_target(
+    target: NavigatorCommandTarget,
+) -> Result<Arc<NavigatorShared>, NavigatorCommandError> {
+    if thread::current().id() != target.owner {
+        return Err(NavigatorCommandError::WrongOwnerThread);
+    }
+
+    NAVIGATOR_COMMAND_TARGETS.with(|targets| {
+        let mut targets = targets.borrow_mut();
+        let Some(shared) = targets.get(&target.id).and_then(Weak::upgrade) else {
+            targets.remove(&target.id);
+            return Err(NavigatorCommandError::OwnerGone);
+        };
+        Ok(shared)
+    })
+}
+
 /// An owned, `'static` capability to drive a [`Navigator`].
 ///
 /// This is what `Navigator::of` returns — never `&mut NavigatorState`, which no
-/// caller can obtain. Cloneable, `Send + Sync`, and inert once the navigator
-/// unmounts.
+/// caller can obtain. Cloneable and inert once the navigator unmounts, but
+/// deliberately owner-affine (`!Send + !Sync`): route storage contains view
+/// builders and observer callbacks that belong to the UI owner thread. To send
+/// navigation intent across threads, extract [`Self::command_target`] and enqueue
+/// a [`NavigatorCommand`] through the runtime's typed command sender.
 #[derive(Clone)]
 pub struct NavigatorHandle {
     shared: Arc<NavigatorShared>,
+    command_target: NavigatorCommandTarget,
+    _owner_affine: PhantomData<Rc<()>>,
 }
 
 impl NavigatorHandle {
@@ -310,23 +491,27 @@ impl NavigatorHandle {
     /// [`Navigator::new`], and keep a clone.
     #[must_use]
     pub fn new() -> Self {
+        let shared = Arc::new(NavigatorShared {
+            history: Mutex::new(RouteHistory::new()),
+            overlay: OverlayHandle::new(),
+            vsync: Arc::new(Mutex::new(None)),
+            registries: RouteRegistries {
+                peers: Arc::new(Mutex::new(HashMap::new())),
+                entries: Arc::new(Mutex::new(HashMap::new())),
+                subtrees: Arc::new(Mutex::new(HashMap::new())),
+                modals: Arc::new(Mutex::new(HashMap::new())),
+            },
+            post_frame: Mutex::new(None),
+            render_tree: Mutex::new(None),
+            observers: Mutex::new(Vec::new()),
+            auto_hero_observer: Mutex::new(None),
+            observers_attached: AtomicBool::new(false),
+        });
+        let command_target = register_command_target(&shared);
         Self {
-            shared: Arc::new(NavigatorShared {
-                history: Mutex::new(RouteHistory::new()),
-                overlay: OverlayHandle::new(),
-                vsync: Arc::new(Mutex::new(None)),
-                registries: RouteRegistries {
-                    peers: Arc::new(Mutex::new(HashMap::new())),
-                    entries: Arc::new(Mutex::new(HashMap::new())),
-                    subtrees: Arc::new(Mutex::new(HashMap::new())),
-                    modals: Arc::new(Mutex::new(HashMap::new())),
-                },
-                post_frame: Mutex::new(None),
-                render_tree: Mutex::new(None),
-                observers: Mutex::new(Vec::new()),
-                auto_hero_observer: Mutex::new(None),
-                observers_attached: AtomicBool::new(false),
-            }),
+            shared,
+            command_target,
+            _owner_affine: PhantomData,
         }
     }
 
@@ -382,6 +567,16 @@ impl NavigatorHandle {
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
+    }
+
+    /// A Send/Sync token for typed cross-thread navigation commands.
+    ///
+    /// This token cannot read or mutate the navigator by itself. It only names
+    /// the navigator for a [`NavigatorCommand`] later drained on the owner thread
+    /// by the UI runtime's command sender.
+    #[must_use]
+    pub fn command_target(&self) -> NavigatorCommandTarget {
+        self.command_target
     }
 
     /// Seed an initial route **without flushing** — Flutter's `restoreState`
@@ -816,6 +1011,7 @@ impl fmt::Debug for NavigatorHandle {
         f.debug_struct("NavigatorHandle")
             .field("routes", &self.shared.history.lock().len())
             .field("mounted", &self.is_mounted())
+            .field("command_target", &self.command_target)
             .finish()
     }
 }
@@ -859,6 +1055,7 @@ impl StatefulView for Navigator {
     fn create_state(&self) -> Self::State {
         NavigatorState {
             shared: Arc::clone(&self.handle.shared),
+            command_target: self.handle.command_target,
         }
     }
 }
@@ -870,6 +1067,7 @@ impl StatefulView for Navigator {
 /// borrow of this state.
 pub struct NavigatorState {
     shared: Arc<NavigatorShared>,
+    command_target: NavigatorCommandTarget,
 }
 
 impl fmt::Debug for NavigatorState {
@@ -886,6 +1084,8 @@ impl NavigatorState {
     fn handle(&self) -> NavigatorHandle {
         NavigatorHandle {
             shared: Arc::clone(&self.shared),
+            command_target: self.command_target,
+            _owner_affine: PhantomData,
         }
     }
 }

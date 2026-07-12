@@ -1,6 +1,6 @@
 //! Keyboard focus management
 //!
-//! [`FocusManager`] is a global singleton that fronts the entire focus
+//! [`FocusManager`] is an owner-thread singleton that fronts the entire focus
 //! tree machinery — it owns the [`FocusScopeNode`] root, tracks the
 //! primary-focused node, notifies focus-change listeners, and routes
 //! key events through the registered handlers.
@@ -16,7 +16,7 @@
 //!
 //! - **Newtype pattern**: [`FocusNodeId`] uses `NonZeroU64` for niche
 //!   optimization (so `Option<FocusNodeId>` is the same 8 bytes).
-//! - **Singleton pattern**: Global focus manager via `OnceLock`.
+//! - **Singleton pattern**: owner-local focus manager via thread-local storage.
 //! - **parking_lot**: High-performance read-write locks.
 //! - **TOCTOU-safe**: Primary-focus updates take a single write lock
 //!   so concurrent `request_focus` callers cannot interleave a stale
@@ -52,7 +52,7 @@
 //! ```
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use flui_foundation::ListenerId;
 
@@ -68,15 +68,15 @@ use crate::{
 // FocusChangeCallback
 // ============================================================================
 
-/// Callback invoked when focus changes.
+/// Owner-local callback invoked when focus changes.
 ///
 /// Receives the previous and new focus node IDs.
-pub type FocusChangeCallback = Arc<dyn Fn(Option<FocusNodeId>, Option<FocusNodeId>) + Send + Sync>;
+pub type FocusChangeCallback = Rc<dyn Fn(Option<FocusNodeId>, Option<FocusNodeId>)>;
 
-/// Callback for handling key events.
+/// Owner-local callback for handling key events.
 ///
 /// Returns `true` if the event was handled (stops propagation).
-pub type KeyEventCallback = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
+pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 
 // ============================================================================
 // FocusManager
@@ -91,17 +91,17 @@ pub type KeyEventCallback = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
 ///
 /// # Singleton ownership
 ///
-/// `FocusManager::global()` returns a `&'static FocusManager` initialized
-/// once via [`OnceLock`](std::sync::OnceLock). On first access, [`Default`] eagerly creates the
+/// `FocusManager::global()` returns the focus manager for the current UI owner
+/// thread. On first access, [`Default`] eagerly creates the
 /// root [`FocusScopeNode`] so consumers can always reach
 /// [`FocusManager::root_scope`] without re-initialization.
 ///
-/// # Thread Safety
+/// # Owner-thread safety
 ///
-/// `FocusManager` uses `parking_lot::RwLock` for efficient concurrent
-/// reads. Primary-focus mutations take a single write lock to avoid
-/// read-then-write TOCTOU races against competing `request_focus`
-/// callers.
+/// `FocusManager` is owner-local under ADR-0027. The locks protect re-entrant
+/// tree walks on the owner thread; they are not a cross-thread sharing contract.
+/// Primary-focus mutations still take a single write lock to avoid
+/// read-then-write TOCTOU bugs within one dispatch turn.
 ///
 /// # Niche Optimization
 ///
@@ -189,11 +189,14 @@ impl Default for FocusManager {
 impl FocusManager {
     /// Get the global focus manager instance.
     ///
-    /// This is a singleton — the same instance is returned every time.
+    /// This is a per-owner-thread singleton — the same instance is returned
+    /// every time on the current thread.
     /// On first access the root [`FocusScopeNode`] is constructed.
     pub fn global() -> &'static FocusManager {
-        static INSTANCE: std::sync::OnceLock<FocusManager> = std::sync::OnceLock::new();
-        INSTANCE.get_or_init(FocusManager::default)
+        thread_local! {
+            static INSTANCE: &'static FocusManager = Box::leak(Box::new(FocusManager::default()));
+        }
+        INSTANCE.with(|manager| *manager)
     }
 
     /// Returns the root focus scope.
@@ -332,7 +335,7 @@ impl FocusManager {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let id = FocusManager::global().add_listener(Arc::new(|prev, new| {
+    /// let id = FocusManager::global().add_listener(Rc::new(|prev, new| {
     ///     println!("Focus changed from {:?} to {:?}", prev, new);
     /// }));
     /// // … later, from the owner's teardown:
@@ -443,7 +446,7 @@ impl FocusManager {
     ///
     /// ```rust,ignore
     /// let text_field = FocusNodeId::new(1);
-    /// FocusManager::global().register_key_handler(text_field, Arc::new(|event| {
+    /// FocusManager::global().register_key_handler(text_field, Rc::new(|event| {
     ///     println!("Key pressed: {:?}", event);
     ///     true // Event handled
     /// }));
@@ -466,7 +469,7 @@ impl FocusManager {
     /// # Example
     ///
     /// ```rust,ignore
-    /// FocusManager::global().add_global_key_handler(Arc::new(|event| {
+    /// FocusManager::global().add_global_key_handler(Rc::new(|event| {
     ///     if event.key == Key::Escape {
     ///         close_modal();
     ///         return true;
@@ -629,7 +632,7 @@ mod tests {
     fn a_removed_listener_stops_firing_while_others_keep_firing() {
         // ADR-0022: per-listener removal. Before this API a widget could
         // only gate its closure with a disposed flag — the dead callback
-        // stayed registered on the process-global manager forever.
+        // stayed registered on the owner-thread manager forever.
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let manager = FocusManager::new_for_test();
@@ -638,12 +641,12 @@ mod tests {
 
         let removed = {
             let hits = Arc::clone(&removed_hits);
-            manager.add_listener(Arc::new(move |_, _| {
+            manager.add_listener(Rc::new(move |_, _| {
                 hits.fetch_add(1, Ordering::SeqCst);
             }))
         };
         let survivor_hits = Arc::clone(&surviving_hits);
-        let _survivor = manager.add_listener(Arc::new(move |_, _| {
+        let _survivor = manager.add_listener(Rc::new(move |_, _| {
             survivor_hits.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -726,7 +729,7 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        let _listener = manager.add_listener(Arc::new(move |_prev, _new| {
+        let _listener = manager.add_listener(Rc::new(move |_prev, _new| {
             called_clone.store(true, Ordering::Relaxed);
         }));
 
@@ -873,7 +876,7 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let count_clone = call_count.clone();
 
-        manager.add_listener(Arc::new(move |_prev, _new| {
+        manager.add_listener(Rc::new(move |_prev, _new| {
             count_clone.fetch_add(1, Ordering::Relaxed);
         }));
 
@@ -896,7 +899,7 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        let _listener = manager.add_listener(Arc::new(move |_prev, _new| {
+        let _listener = manager.add_listener(Rc::new(move |_prev, _new| {
             called_clone.store(true, Ordering::Relaxed);
         }));
 
@@ -923,7 +926,7 @@ mod tests {
 
         manager.register_key_handler(
             node,
-            Arc::new(move |_event| {
+            Rc::new(move |_event| {
                 called_clone.store(true, Ordering::Relaxed);
                 true
             }),
@@ -950,7 +953,7 @@ mod tests {
 
         manager.register_key_handler(
             node,
-            Arc::new(move |_event| {
+            Rc::new(move |_event| {
                 handled_clone.store(true, Ordering::Relaxed);
                 true
             }),
@@ -993,7 +996,7 @@ mod tests {
             let hits = Arc::clone(&scope_hits);
             scope
                 .as_focus_node()
-                .set_on_key_event(Arc::new(move |_event| {
+                .set_on_key_event(Rc::new(move |_event| {
                     hits.fetch_add(1, Ordering::SeqCst);
                     KeyEventResult::Handled
                 }));
@@ -1010,7 +1013,7 @@ mod tests {
         assert_eq!(scope_hits.load(Ordering::SeqCst), 1, "the ancestor fired");
 
         // 2. The child handles: the walk stops at the leaf.
-        child.set_on_key_event(Arc::new(|_event| KeyEventResult::Handled));
+        child.set_on_key_event(Rc::new(|_event| KeyEventResult::Handled));
         assert!(manager.dispatch_key_event(&event));
         assert_eq!(
             scope_hits.load(Ordering::SeqCst),
@@ -1019,7 +1022,7 @@ mod tests {
         );
 
         // 3. The child skips: the walk stops AND the event is unconsumed.
-        child.set_on_key_event(Arc::new(|_event| KeyEventResult::SkipRemainingHandlers));
+        child.set_on_key_event(Rc::new(|_event| KeyEventResult::SkipRemainingHandlers));
         assert!(
             !manager.dispatch_key_event(&event),
             "SkipRemainingHandlers reports the event unconsumed"
@@ -1055,13 +1058,13 @@ mod tests {
             let hits = Arc::clone(&scope_hits);
             manager.register_key_handler(
                 scope.as_focus_node().id(),
-                Arc::new(move |_event| {
+                Rc::new(move |_event| {
                     hits.fetch_add(1, Ordering::SeqCst);
                     true
                 }),
             );
         }
-        manager.register_key_handler(child.id(), Arc::new(|_event| false));
+        manager.register_key_handler(child.id(), Rc::new(|_event| false));
 
         manager.request_focus(child.id());
         let event = KeyEventBuilder::new(Code::KeyA).build();
@@ -1090,7 +1093,7 @@ mod tests {
 
         manager.register_key_handler(
             node,
-            Arc::new(move |_event| {
+            Rc::new(move |_event| {
                 handled_clone.store(true, Ordering::Relaxed);
                 true
             }),
@@ -1116,7 +1119,7 @@ mod tests {
         let global_handled = Arc::new(AtomicBool::new(false));
         let global_clone = global_handled.clone();
 
-        manager.add_global_key_handler(Arc::new(move |_event| {
+        manager.add_global_key_handler(Rc::new(move |_event| {
             global_clone.store(true, Ordering::Relaxed);
             true
         }));
@@ -1144,7 +1147,7 @@ mod tests {
         let node_clone = node_called.clone();
 
         // Global handler that handles the event
-        manager.add_global_key_handler(Arc::new(move |_event| {
+        manager.add_global_key_handler(Rc::new(move |_event| {
             global_clone.store(true, Ordering::Relaxed);
             true // Handled - stop propagation
         }));
@@ -1152,7 +1155,7 @@ mod tests {
         // Node handler
         manager.register_key_handler(
             node,
-            Arc::new(move |_event| {
+            Rc::new(move |_event| {
                 node_clone.store(true, Ordering::Relaxed);
                 true
             }),
@@ -1184,7 +1187,7 @@ mod tests {
         let node_clone = node_called.clone();
 
         // Global handler that does NOT handle the event
-        manager.add_global_key_handler(Arc::new(move |_event| {
+        manager.add_global_key_handler(Rc::new(move |_event| {
             global_clone.store(true, Ordering::Relaxed);
             false // Not handled - continue to focused node
         }));
@@ -1192,7 +1195,7 @@ mod tests {
         // Node handler
         manager.register_key_handler(
             node,
-            Arc::new(move |_event| {
+            Rc::new(move |_event| {
                 node_clone.store(true, Ordering::Relaxed);
                 true
             }),
@@ -1219,7 +1222,7 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        manager.add_global_key_handler(Arc::new(move |_event| {
+        manager.add_global_key_handler(Rc::new(move |_event| {
             called_clone.store(true, Ordering::Relaxed);
             true
         }));

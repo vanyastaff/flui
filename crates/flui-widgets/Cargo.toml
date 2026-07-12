@@ -71,6 +71,8 @@ flui-binding = { path = "../flui-binding", version = "0.2.0" }
 parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.
 insta = { workspace = true }
+# Compile-time ownership-boundary assertions for ADR-0027.
+static_assertions = { workspace = true }
 
 # The parity test suite lives in a subdirectory so `mod harness; mod *_test;`
 # work via Cargo's single-binary test model. Auto-discovery misses subdirectory

@@ -35,7 +35,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_interaction::routing::{FocusManager, KeyEventResult};
 use flui_view::element::ElementKind;
@@ -51,7 +51,7 @@ use flui_view::prelude::*;
 /// struct SaveIntent;
 /// impl Intent for SaveIntent {}
 /// ```
-pub trait Intent: Any + Send + Sync {}
+pub trait Intent: Any {}
 
 /// What an [`Action::invoke`] did — Flutter threads `invoke`'s return value
 /// through to `Action.toKeyEventResult` (`actions.dart:312-314`), where
@@ -78,7 +78,7 @@ pub enum ActionOutcome {
 
 /// Performs the operation an intent of type `T` describes — Flutter's
 /// `Action<T>` (`actions.dart:135`).
-pub trait Action<T: Intent>: Send + Sync {
+pub trait Action<T: Intent> {
     /// Whether this action can run for `intent` right now (`:267`). A
     /// disabled action lets resolution fall through to an enclosing
     /// [`Actions`] scope, as Flutter's walk does.
@@ -116,14 +116,14 @@ pub trait Action<T: Intent>: Send + Sync {
 /// An [`Action`] from a closure — Flutter's `CallbackAction<T>`
 /// (`actions.dart:606`).
 pub struct CallbackAction<T: Intent> {
-    on_invoke: Arc<dyn Fn(&T) + Send + Sync>,
+    on_invoke: Rc<dyn Fn(&T)>,
 }
 
 impl<T: Intent> CallbackAction<T> {
     /// An always-enabled, key-consuming action calling `on_invoke`.
-    pub fn new(on_invoke: impl Fn(&T) + Send + Sync + 'static) -> Self {
+    pub fn new(on_invoke: impl Fn(&T) + 'static) -> Self {
         Self {
-            on_invoke: Arc::new(on_invoke),
+            on_invoke: Rc::new(on_invoke),
         }
     }
 }
@@ -151,11 +151,11 @@ impl<T: Intent> Action<T> for CallbackAction<T> {
 /// it. Reached only through the matching `TypeId`, so the inner downcast
 /// cannot fail.
 /// A predicate over an erased intent (`is_enabled`).
-type ErasedPredicate = Arc<dyn Fn(&dyn Any) -> bool + Send + Sync>;
+type ErasedPredicate = Rc<dyn Fn(&dyn Any) -> bool>;
 /// The erased `invoke`, carrying its outcome back out.
-type ErasedInvoke = Arc<dyn Fn(&dyn Any) -> ActionOutcome + Send + Sync>;
+type ErasedInvoke = Rc<dyn Fn(&dyn Any) -> ActionOutcome>;
 /// The erased `to_key_event_result`.
-type ErasedKeyResult = Arc<dyn Fn(&dyn Any, ActionOutcome) -> KeyEventResult + Send + Sync>;
+type ErasedKeyResult = Rc<dyn Fn(&dyn Any, ActionOutcome) -> KeyEventResult>;
 
 #[derive(Clone)]
 pub(crate) struct ErasedAction {
@@ -176,13 +176,13 @@ fn typed<T: Intent>(intent: &dyn Any) -> &T {
 
 impl ErasedAction {
     fn new<T: Intent, A: Action<T> + 'static>(action: A) -> Self {
-        let action = Arc::new(action);
-        let enabled_action = Arc::clone(&action);
-        let key_result_action = Arc::clone(&action);
+        let action = Rc::new(action);
+        let enabled_action = Rc::clone(&action);
+        let key_result_action = Rc::clone(&action);
         Self {
-            is_enabled: Arc::new(move |intent| enabled_action.is_enabled(typed::<T>(intent))),
-            invoke: Arc::new(move |intent| action.invoke(typed::<T>(intent))),
-            to_key_event_result: Arc::new(move |intent, outcome| {
+            is_enabled: Rc::new(move |intent| enabled_action.is_enabled(typed::<T>(intent))),
+            invoke: Rc::new(move |intent| action.invoke(typed::<T>(intent))),
+            to_key_event_result: Rc::new(move |intent, outcome| {
                 key_result_action.to_key_event_result(typed::<T>(intent), outcome)
             }),
         }
@@ -207,7 +207,7 @@ impl ErasedAction {
 /// Per intent type, the candidate actions in resolution order — nearest
 /// `Actions` scope first. What Flutter's ancestor walk visits, precomputed at
 /// provide time.
-pub(crate) type ActionChain = Arc<HashMap<TypeId, Vec<ErasedAction>>>;
+pub(crate) type ActionChain = Rc<HashMap<TypeId, Vec<ErasedAction>>>;
 
 /// The first **enabled** action for `intent` in `chain` — `Actions.maybeInvoke`'s
 /// walk-until-enabled (`actions.dart:1032-1044`).
@@ -296,7 +296,7 @@ impl StatelessView for Actions {
             chain.entry(*type_id).or_default().insert(0, action.clone());
         }
         ActionChainProvider {
-            chain: Arc::new(chain),
+            chain: Rc::new(chain),
             child: self.child.clone(),
         }
     }
@@ -307,7 +307,7 @@ impl StatelessView for Actions {
 /// they re-read — `Shortcuts` captures at build and re-captures when this
 /// provider's subtree rebuilds (ADR-0023's resolve-at-own-position divergence).
 pub(crate) fn ambient_action_chain(ctx: &dyn BuildContext) -> Option<ActionChain> {
-    ctx.get::<ActionChainProvider, _>(|provider| Arc::clone(&provider.chain))
+    ctx.get::<ActionChainProvider, _>(|provider| Rc::clone(&provider.chain))
 }
 
 /// The inherited carrier of the layered [`ActionChain`]. Private: `Actions`
@@ -340,7 +340,7 @@ impl InheritedView for ActionChainProvider {
     /// Rebuilding an `Actions` mints a fresh chain `Arc`, so dependents (a
     /// `Shortcuts` that captured the chain into its key handler) re-capture.
     fn update_should_notify(&self, old: &Self) -> bool {
-        !Arc::ptr_eq(&self.chain, &old.chain)
+        !Rc::ptr_eq(&self.chain, &old.chain)
     }
 }
 
@@ -348,6 +348,8 @@ impl_inherited_view!(ActionChainProvider);
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -430,6 +432,26 @@ mod tests {
             0,
             "the outer action was shadowed"
         );
+    }
+
+    #[test]
+    fn callback_action_accepts_owner_local_rc_state() {
+        let ran = Arc::new(AtomicUsize::new(0));
+        let total = Rc::new(Cell::new(0));
+        let total_for_action = Rc::clone(&total);
+
+        let _harness = mount(
+            Actions::new(InvokeProbe {
+                amount: 11,
+                ran: Arc::clone(&ran),
+            })
+            .action(CallbackAction::new(move |intent: &AddToCounter| {
+                total_for_action.set(total_for_action.get() + intent.0);
+            })),
+        );
+
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "maybe_invoke ran");
+        assert_eq!(total.get(), 11, "owner-local callback captured Rc<Cell<_>>");
     }
 
     /// A **disabled** nearer action falls through to an enabled outer one —

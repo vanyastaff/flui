@@ -45,7 +45,7 @@
 //!
 //! // Create a focusable node
 //! let node = FocusNode::new_with_debug_label("my_button");
-//! node.set_on_key_event(Arc::new(|event| { /* handle key */ false }));
+//! node.set_on_key_event(Rc::new(|event| { /* handle key */ false }));
 //!
 //! // Attach to root scope
 //! FocusManager::global().root_scope().attach_node(&node);
@@ -63,6 +63,7 @@
 use std::{
     cmp::Ordering,
     collections::VecDeque,
+    rc::Rc,
     sync::{
         Arc, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -88,10 +89,12 @@ fn allocate_focus_node_id() -> FocusNodeId {
 // Key Event Handler
 // ============================================================================
 
-/// Callback for handling key events.
+/// Owner-local callback for handling key events.
 ///
-/// Returns `true` if the event was handled (stops propagation).
-pub type KeyEventHandler = Arc<dyn Fn(&KeyEvent) -> KeyEventResult + Send + Sync>;
+/// Returns the key event result used by the leaf-to-root focus dispatch walk.
+/// This is intentionally not `Send + Sync`: focus callbacks run on the UI
+/// owner thread and may capture owner-local widget state.
+pub type KeyEventHandler = Rc<dyn Fn(&KeyEvent) -> KeyEventResult>;
 
 /// Computes a node's bounding rectangle on demand, in root coordinates.
 ///
@@ -929,7 +932,7 @@ impl FocusScopeNode {
     ///
     /// It computes, it does not focus: the caller performs the returned intent
     /// against whichever [`crate::FocusManager`] it owns. (This scope's own
-    /// stepping methods perform it against the process-global manager, because
+    /// stepping methods perform it against the owner-thread manager, because
     /// that is what a `FocusScopeNode` can reach; [`crate::FocusManager::focus_next`]
     /// performs it against itself, which is what lets a test manager traverse
     /// without touching the singleton.)

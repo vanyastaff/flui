@@ -1934,6 +1934,7 @@ dependencies = [
  "image",
  "insta",
  "parking_lot",
+ "static_assertions",
  "thiserror 2.0.18",
  "tracing",
 ]

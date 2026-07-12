@@ -30,6 +30,7 @@ use flui_foundation::{GenerationGate, HasInstance, RealmId, ResourceGeneration};
 use flui_interaction::InteractionLane;
 use flui_scheduler::{LocalPostFrameLane, Scheduler, SchedulerPhase};
 use flui_view::WidgetsBinding;
+use flui_widgets::NavigatorCommand;
 
 /// Default bound of the owner inbox, matching the pipeline dirty-channel
 /// precedent (`DEFAULT_DIRTY_CHANNEL_CAPACITY`)). Observable at
@@ -163,6 +164,8 @@ impl ResultStamp {
 pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     HotReload(flui_hot_reload::HotReloadTier),
+    /// Apply a typed navigator mutation on the owner thread.
+    Navigation(NavigatorCommand),
     /// Run on the owner thread at the next Idle drain.
     Invoke(Box<dyn FnOnce() + Send + 'static>),
     /// A versioned worker result: applied only if the stamp is fresh at
@@ -179,6 +182,10 @@ impl std::fmt::Debug for UiCommand {
             UiCommand::HotReload(tier) => {
                 f.debug_tuple("UiCommand::HotReload").field(tier).finish()
             }
+            UiCommand::Navigation(command) => f
+                .debug_tuple("UiCommand::Navigation")
+                .field(command)
+                .finish(),
             UiCommand::Invoke(_) => f.write_str("UiCommand::Invoke"),
             UiCommand::Result { stamp, .. } => f
                 .debug_struct("UiCommand::Result")
@@ -246,6 +253,30 @@ impl UiCommandSender {
         tier: flui_hot_reload::HotReloadTier,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::HotReload(tier))
+    }
+
+    /// Enqueue a typed navigation command for owner-thread application.
+    ///
+    /// This is the ADR-0027 cross-thread navigation ingress. The sender only
+    /// accepts the closed [`NavigatorCommand`] vocabulary; it does not expose a
+    /// generic "run this closure on the UI thread" API.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandSendError::ChannelFull`] under backpressure,
+    /// [`CommandSendError::OwnerGone`] once the runtime is dropped.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "typed navigation command sender is wired before public runtime vending"
+        )
+    )]
+    pub(crate) fn send_navigation(
+        &self,
+        command: NavigatorCommand,
+    ) -> Result<(), CommandSendError> {
+        self.send(UiCommand::Navigation(command))
     }
 
     /// Enqueue `run` for the owner thread and wake it.
@@ -559,6 +590,18 @@ impl UiRealm {
                     super::binding::AppBinding::instance().perform_hot_reload_entered(self, tier);
                     report.invoked += 1;
                 }
+                UiCommand::Navigation(command) => match command.apply_on_owner() {
+                    Ok(_) => {
+                        report.invoked += 1;
+                    }
+                    Err(error) => {
+                        tracing::trace!(
+                            ?error,
+                            "dropping navigation command that no longer reaches its owner"
+                        );
+                        report.dropped_stale += 1;
+                    }
+                },
                 UiCommand::Invoke(run) => {
                     run();
                     report.invoked += 1;
@@ -597,6 +640,8 @@ mod tests {
     use std::thread::ThreadId;
 
     use flui_foundation::GenerationGate;
+    use flui_view::prelude::*;
+    use flui_widgets::{NavigatorCommand, NavigatorHandle, SimpleRoute, SizedBox};
 
     use super::*;
 
@@ -717,6 +762,51 @@ mod tests {
             executions.iter().all(|(_, thread)| *thread == owner_thread),
             "every command must execute on the owner thread"
         );
+    }
+
+    #[test]
+    fn cross_thread_navigation_command_drains_on_owner_thread() {
+        let _claim = REALM_TEST_LOCK.lock();
+        let runtime = UiRealm::new(noop_wake()).expect("runtime");
+        let sender = runtime.command_sender();
+
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(test_route("/"));
+        let pushed = navigator.push(test_route("/details"));
+        let target = navigator.command_target();
+
+        std::thread::spawn(move || {
+            sender
+                .send_navigation(NavigatorCommand::pop(target))
+                .expect("inbox has room");
+        })
+        .join()
+        .expect("sender thread did not panic");
+
+        let report = runtime.drain_commands();
+        assert_eq!(report.invoked, 1);
+        assert_eq!(report.dropped_stale, 0);
+        assert_eq!(navigator.route_ids().len(), 1);
+        assert_eq!(pushed.try_take(), Some(None));
+    }
+
+    #[test]
+    fn dead_navigation_target_is_dropped_at_commit() {
+        let _claim = REALM_TEST_LOCK.lock();
+        let runtime = UiRealm::new(noop_wake()).expect("runtime");
+        let sender = runtime.command_sender();
+        let target = {
+            let navigator = NavigatorHandle::new();
+            navigator.command_target()
+        };
+
+        sender
+            .send_navigation(NavigatorCommand::maybe_pop(target))
+            .expect("inbox has room");
+
+        let report = runtime.drain_commands();
+        assert_eq!(report.invoked, 0);
+        assert_eq!(report.dropped_stale, 1);
     }
 
     #[test]
@@ -865,5 +955,9 @@ mod tests {
             .expect("inbox has room");
         assert_eq!(wake_count.load(Ordering::Relaxed), 2);
         let _ = runtime.drain_commands();
+    }
+
+    fn test_route(name: &'static str) -> SimpleRoute<i32> {
+        SimpleRoute::new(move |_ctx| SizedBox::new(1.0, 1.0).into_view().boxed()).named(name)
     }
 }

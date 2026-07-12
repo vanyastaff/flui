@@ -250,7 +250,7 @@ impl Focus {
         node.set_skip_traversal(self.skip_traversal.unwrap_or(false));
         node.set_descendants_are_focusable(self.descendants_are_focusable.unwrap_or(true));
         match &self.on_key_event {
-            Some(handler) => node.set_on_key_event(Arc::clone(handler)),
+            Some(handler) => node.set_on_key_event(Rc::clone(handler)),
             None => node.clear_on_key_event(),
         }
     }
@@ -311,7 +311,7 @@ pub struct FocusState {
     /// reinstalling the listener — a captured-by-value closure would keep firing the
     /// handler from the build that mounted it.
     on_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
-    /// Focus edges captured by the `Send + Sync` focus-manager listener and
+    /// Focus edges captured by the owner-local focus-manager listener and
     /// delivered from owner-local `build`.
     pending_focus_changes: Arc<Mutex<Vec<bool>>>,
 }
@@ -331,7 +331,7 @@ impl FocusState {
     fn install_focus_listener(&mut self, rebuild: RebuildHandle) {
         let node_id = self.node.id();
         let pending_focus_changes = Arc::clone(&self.pending_focus_changes);
-        self.focus_listener_id = Some(FocusManager::global().add_listener(Arc::new(
+        self.focus_listener_id = Some(FocusManager::global().add_listener(Rc::new(
             move |previous, current| {
                 let was_focused = previous == Some(node_id);
                 let now_focused = current == Some(node_id);
@@ -784,7 +784,7 @@ mod tests {
                 focus = focus.skip_traversal(skip);
             }
             if let Some(handler) = &self.on_key_event {
-                focus = focus.on_key_event(Arc::clone(handler));
+                focus = focus.on_key_event(Rc::clone(handler));
             }
             if let Some(handler) = &self.on_focus_change {
                 let handler = Rc::clone(handler);
@@ -819,7 +819,7 @@ mod tests {
             scope: Arc::clone(&scope),
             can_request_focus: Some(false),
             skip_traversal: Some(true),
-            on_key_event: Some(Arc::new(|_event| KeyEventResult::Handled)),
+            on_key_event: Some(Rc::new(|_event| KeyEventResult::Handled)),
             on_focus_change: None,
         });
 

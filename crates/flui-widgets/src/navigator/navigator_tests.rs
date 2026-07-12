@@ -22,7 +22,10 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use super::binding::RouteBindingSlot;
-use super::navigator::{Navigator, NavigatorHandle};
+use super::navigator::{
+    Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
+    NavigatorCommandTarget, NavigatorHandle,
+};
 use super::overlay_route::{NavigatorRoute, RouteContentBuilder, SimpleRoute};
 use super::route::{PushCompletion, Route, RouteSettings};
 use crate::SizedBox;
@@ -108,6 +111,78 @@ fn navigator_with(built: &Built) -> (NavigatorHandle, Harness) {
     handle.seed_initial(page(built, "/"));
     let harness = mount(Navigator::new(handle.clone()));
     (handle, harness)
+}
+
+#[test]
+fn navigator_handle_is_owner_affine_but_command_target_is_send_sync() {
+    static_assertions::assert_not_impl_any!(NavigatorHandle: Send, Sync);
+    static_assertions::assert_impl_all!(NavigatorCommandTarget: Send, Sync);
+    static_assertions::assert_impl_all!(NavigatorCommand: Send, Sync);
+}
+
+#[test]
+fn navigator_command_applies_only_on_owner_thread() {
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    let route = handle.push(page(&built, "/next"));
+    let target = handle.command_target();
+
+    assert_eq!(
+        NavigatorCommand::pop(target).apply_on_owner(),
+        Ok(NavigatorCommandOutcome::Popped(true))
+    );
+    assert_eq!(handle.route_ids().len(), 1);
+    assert_eq!(
+        route.try_take(),
+        Some(None),
+        "a pop without result completes with None"
+    );
+}
+
+#[test]
+fn navigator_command_wrong_thread_is_typed_error() {
+    let handle = NavigatorHandle::new();
+    let target = handle.command_target();
+
+    let outcome = std::thread::spawn(move || NavigatorCommand::pop(target).apply_on_owner())
+        .join()
+        .expect("worker did not panic");
+
+    assert_eq!(outcome, Err(NavigatorCommandError::WrongOwnerThread));
+}
+
+#[test]
+fn navigator_command_dead_target_is_typed_error() {
+    let target = {
+        let handle = NavigatorHandle::new();
+        handle.command_target()
+    };
+
+    assert_eq!(
+        NavigatorCommand::maybe_pop(target).apply_on_owner(),
+        Err(NavigatorCommandError::OwnerGone)
+    );
+}
+
+#[test]
+fn navigator_command_can_remove_specific_route() {
+    let built = Built::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(page(&built, "/"));
+    let pushed = handle.push(page(&built, "/details"));
+    let route = *handle.route_ids().last().expect("pushed route id");
+
+    assert_eq!(
+        NavigatorCommand::remove_route(handle.command_target(), route).apply_on_owner(),
+        Ok(NavigatorCommandOutcome::Removed(true))
+    );
+    assert_eq!(handle.route_ids().len(), 1);
+    assert_eq!(
+        pushed.try_take(),
+        Some(None),
+        "removed routes complete their future with None by default"
+    );
 }
 
 /// The overlay's layer elements, bottom → top. `Navigator → Overlay → Stack → …`.

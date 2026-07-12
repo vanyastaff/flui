@@ -23,7 +23,7 @@
 //! sits between the focused widget and the `Shortcuts`.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_interaction::events::{Key, KeyEvent, NamedKey};
 use flui_interaction::routing::KeyEventResult;
@@ -34,7 +34,7 @@ use super::actions::{ActionChainProvider, Intent, resolve};
 use super::focus::Focus;
 
 /// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`].
-pub type ShortcutCallback = Arc<dyn Fn() + Send + Sync>;
+pub type ShortcutCallback = Rc<dyn Fn()>;
 
 // ============================================================================
 // SingleActivator
@@ -167,12 +167,8 @@ impl CallbackShortcuts {
     /// Fire `callback` whenever `activator` matches a key the focused subtree
     /// ignored.
     #[must_use]
-    pub fn binding(
-        mut self,
-        activator: SingleActivator,
-        callback: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
-        self.bindings.push((activator, Arc::new(callback)));
+    pub fn binding(mut self, activator: SingleActivator, callback: impl Fn() + 'static) -> Self {
+        self.bindings.push((activator, Rc::new(callback)));
         self
     }
 }
@@ -206,7 +202,7 @@ impl StatelessView for CallbackShortcuts {
         Focus::new(self.child.clone())
             .can_request_focus(false)
             .debug_label("CallbackShortcuts")
-            .on_key_event(Arc::new(move |event| {
+            .on_key_event(Rc::new(move |event| {
                 let mut handled = false;
                 for (activator, callback) in &bindings {
                     if activator.matches(event) {
@@ -243,7 +239,7 @@ impl StatelessView for CallbackShortcuts {
 /// match, or no enabled action: the key keeps bubbling.
 #[derive(Clone)]
 pub struct Shortcuts {
-    shortcuts: Vec<(SingleActivator, Arc<dyn Intent>)>, // PORT-CHECK-OK-DYN: ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
+    shortcuts: Vec<(SingleActivator, Rc<dyn Intent>)>, // PORT-CHECK-OK-DYN: ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
     child: BoxedView,
 }
 
@@ -259,7 +255,7 @@ impl Shortcuts {
     /// Bind `activator` to `intent`. Earlier bindings match first.
     #[must_use]
     pub fn shortcut(mut self, activator: SingleActivator, intent: impl Intent) -> Self {
-        self.shortcuts.push((activator, Arc::new(intent)));
+        self.shortcuts.push((activator, Rc::new(intent)));
         self
     }
 }
@@ -289,7 +285,7 @@ impl StatelessView for Shortcuts {
         Focus::new(self.child.clone())
             .can_request_focus(false)
             .debug_label("Shortcuts")
-            .on_key_event(Arc::new(move |event| {
+            .on_key_event(Rc::new(move |event| {
                 let Some(chain) = &chain else {
                     return KeyEventResult::Ignored;
                 };
@@ -316,6 +312,8 @@ impl StatelessView for Shortcuts {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_interaction::events::{KeyState, Modifiers};
@@ -393,7 +391,7 @@ mod tests {
         // The inner "field" consumes the character "x" and ignores all else.
         let inner = Focus::new(SizedBox::new(10.0, 10.0))
             .focus_node(Arc::clone(&field))
-            .on_key_event(Arc::new(|event| match &event.key {
+            .on_key_event(Rc::new(|event| match &event.key {
                 Key::Character(c) if c == "x" => KeyEventResult::Handled,
                 _ => KeyEventResult::Ignored,
             }));
@@ -425,10 +423,37 @@ mod tests {
 
         manager.unfocus();
     }
+
+    #[test]
+    fn callback_shortcuts_accept_owner_local_rc_state() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let fired = Rc::new(Cell::new(0));
+        let fired_for_binding = Rc::clone(&fired);
+        let field = FocusNode::with_debug_label("owner-local-shortcut-field");
+        let _harness = mount(
+            CallbackShortcuts::new(
+                Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
+            )
+            .binding(SingleActivator::character("l").control(), move || {
+                fired_for_binding.set(fired_for_binding.get() + 1);
+            }),
+        );
+        field.request_focus();
+
+        assert!(manager.dispatch_key_event(&key_down("l", Modifiers::CONTROL)));
+        assert_eq!(fired.get(), 1, "shortcut callback captured Rc<Cell<_>>");
+
+        manager.unfocus();
+    }
 }
 
 #[cfg(test)]
 mod intent_tests {
+    use std::cell::Cell;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_interaction::events::{KeyState, Modifiers};
@@ -493,6 +518,77 @@ mod intent_tests {
         manager.unfocus();
     }
 
+    #[test]
+    fn shortcut_actions_accept_owner_local_rc_state() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let saves = Rc::new(Cell::new(0));
+        let saves_for_action = Rc::clone(&saves);
+        let field = FocusNode::with_debug_label("owner-local-intent-field");
+        let _harness = mount(
+            Actions::new(
+                Shortcuts::new(
+                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
+                )
+                .shortcut(SingleActivator::character("s").control(), SaveIntent),
+            )
+            .action(CallbackAction::new(move |_intent: &SaveIntent| {
+                saves_for_action.set(saves_for_action.get() + 1);
+            })),
+        );
+        field.request_focus();
+
+        assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
+        assert_eq!(saves.get(), 1, "action callback captured Rc<Cell<_>>");
+
+        manager.unfocus();
+    }
+
+    #[test]
+    fn shortcut_intents_accept_owner_local_rc_payloads() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        struct OwnerLocalIntent {
+            marker: Rc<Cell<u32>>,
+        }
+        impl Intent for OwnerLocalIntent {}
+
+        let marker = Rc::new(Cell::new(7));
+        let seen = Rc::new(Cell::new(0));
+        let seen_for_action = Rc::clone(&seen);
+        let field = FocusNode::with_debug_label("owner-local-intent-payload-field");
+        let _harness = mount(
+            Actions::new(
+                Shortcuts::new(
+                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
+                )
+                .shortcut(
+                    SingleActivator::character("s").control(),
+                    OwnerLocalIntent {
+                        marker: Rc::clone(&marker),
+                    },
+                ),
+            )
+            .action(CallbackAction::new(move |intent: &OwnerLocalIntent| {
+                seen_for_action.set(intent.marker.get());
+            })),
+        );
+        field.request_focus();
+
+        assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
+        assert_eq!(
+            seen.get(),
+            7,
+            "shortcut intent carried an owner-local Rc<Cell<_>> payload"
+        );
+
+        manager.unfocus();
+    }
+
     /// The default [`Action::to_key_event_result`](super::actions::Action::to_key_event_result)
     /// maps a `NotPerformed` outcome to `SkipRemainingHandlers`
     /// (`actions.dart:312-314`): the action runs, but the event reports
@@ -538,6 +634,8 @@ mod intent_tests {
 
 #[cfg(test)]
 mod tab_tests {
+    use std::sync::Arc;
+
     use flui_interaction::events::{KeyState, Modifiers, NamedKey};
     use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode};
     use flui_view::ViewExt;

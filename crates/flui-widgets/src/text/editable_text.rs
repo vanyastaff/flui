@@ -1,7 +1,7 @@
 //! [`EditableText`] — single-line editable text backed by a
 //! [`TextEditingController`].
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
@@ -179,7 +179,7 @@ impl ViewState<EditableText> for EditableTextState {
         //    gains or loses focus. Removed by id in `dispose`.
         let rebuild_notifier_for_focus = self.rebuild_notifier.clone();
         let node_id = self.focus_node.id();
-        self.focus_listener_id = Some(FocusManager::global().add_listener(Arc::new(
+        self.focus_listener_id = Some(FocusManager::global().add_listener(Rc::new(
             move |previous, current| {
                 // Only rebuild when this node's focus state actually changed.
                 let was_focused = previous == Some(node_id);
@@ -247,7 +247,7 @@ impl ViewState<EditableText> for EditableTextState {
 /// Only `KeyState::Down` events (which cover key-repeat) are acted upon.
 /// Returns `true` when the event is consumed so propagation stops.
 fn build_key_handler(controller: TextEditingController) -> KeyEventCallback {
-    Arc::new(move |event| {
+    Rc::new(move |event| {
         if event.state != KeyState::Down {
             return false;
         }

@@ -159,6 +159,7 @@ pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
 pub use navigator::{
     FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode, Navigator,
+    NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome, NavigatorCommandTarget,
     NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
     PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route, RouteAnimation,
     RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteSettings,

@@ -18,8 +18,8 @@ Flutter semantics. This file is the durable source of truth. Status: ☐ todo ·
 | 3 | Atomically migrate ordinary pointer delivery to data-only targets and one resolver/invoker used by cached and direct dispatch. | Every-target leaf-first synchronous delivery with local transforms and no `EventPropagation::Stop`; Down resolves/caches before arena close; Move reuses; Up/Cancel delivers before sweep/release; unmount/rebuild lifetime rules; per-target panic continuation and cleanup before unwind. | `api-design-lead` | 2 | ☑ done |
 | 4 | Atomically owner-localize `GestureBinding`, arena members, recognizers, and gesture callback storage, including the minimum View/State bound ripple. | No gesture callback remains behind `Arc<Mutex<_>>` or `Send + Sync`; no gesture-detail token/queue bridge; long-press, double-tap, tap, and pan retain Flutter ordering through real `HeadlessBinding`; render data remains `Send + Sync`. | `systems-perf-lead` | 3 | ◐ in-progress |
 | 5 | Atomically migrate `MouseRegion` and mouse tracking to data-only targets with owner-local strong annotations. | Enter/hover/exit are local callbacks; previous annotations survive long enough to emit Exit after removal; new/current annotation diffing and panic/drop behavior are covered without executable closures in render storage. | `api-design-lead` | 4 | ☑ done |
-| 6 | Complete ADR-0027 step 2c with a realm-local `NavigatorHandle` and `UiCommandSender` as the only cross-thread navigation ingress. | Navigation mutations are owner-thread capabilities; no generic UI-thread executor or cross-thread closure API; wrong/dead realm behavior is typed and tested. | `api-design-lead` | 2 | ☐ todo |
-| 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ☐ todo |
+| 6 | Complete ADR-0027 step 2c with a realm-local `NavigatorHandle` and `UiCommandSender` as the only cross-thread navigation ingress. | Navigation mutations are owner-thread capabilities; no generic UI-thread executor or cross-thread closure API; wrong/dead realm behavior is typed and tested. | `api-design-lead` | 2 | ☑ done |
+| 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ◐ in-progress |
 | 8 | Verify Flutter parity, destruction/reentrancy safety, public API shape, and measured routing cost across the completed slice. | Cached/direct parity; unmount/rebuild/stale-route/realm teardown cases; `DropProbe` owner-thread/outside-borrow coverage; nested/reentrant and panic cleanup; Criterion 1/4/16-target baselines and common-Move allocation evidence; semver/API review. | `qa-lead` | 7 | ☐ todo |
 | 9 | Reconcile ADR-0027 and project documentation with the implementation, run final gates, and complete `/spec-verify`. | ADR status and consequences match shipped ownership; architecture/API docs contain no obsolete closure path; format, inventory, port-check, clippy, tests, doctests, docs, and applicable platform/render gates pass with evidence. | `chief-architect` | 8 | ☐ todo |
 
@@ -233,6 +233,53 @@ and navigation ownership contract are complete.
   -p flui-app --tests`, and `cargo clippy -p flui-foundation -p
   flui-interaction -p flui-rendering -p flui-objects -p flui-view -p
   flui-widgets -p flui-app --all-targets -- -D warnings` pass.
+- 2026-07-12 Navigator ownership checkpoint (Task 6): `NavigatorHandle` is now
+  structurally owner-affine (`!Send + !Sync`) while `NavigatorCommandTarget` and
+  `NavigatorCommand` are the Send/Sync data-plane tokens. The command target
+  stores only an opaque id plus owner `ThreadId`; the owner resolves it through
+  a thread-local weak registry, so `NavigatorShared` and its route/view/observer
+  storage never become cross-thread state. Cross-thread navigation enters
+  through `UiCommandSender::send_navigation` and the closed `UiCommand::Navigation`
+  vocabulary; the crate-internal closure `invoke` remains non-public and is not
+  a navigation API. Route pushes stay owner-local because route builders carry
+  owner-plane views. Typed error coverage exists for wrong-thread and dead-target
+  application, and `UiRealm::drain_commands` drops dead navigation commands at
+  the commit point. Evidence: `cargo test -p flui-widgets navigator_command
+  --lib`, `cargo test -p flui-widgets
+  navigator_handle_is_owner_affine_but_command_target_is_send_sync --lib`,
+  `cargo test -p flui-widgets --lib`, `cargo test -p flui-app --lib`,
+  `cargo fmt -p flui-widgets -p flui-app`, and `cargo clippy -p flui-widgets
+  -p flui-app --all-targets -- -D warnings` pass.
+- 2026-07-12 app-root authoring checkpoint (Task 7): the `flui-app` root-view
+  bootstrap path no longer requires `Send + Sync` on app-authored roots.
+  `run_app`, `run_app_with_config`, Android/web/desktop internal runners, and
+  `AppBinding::attach_root_widget*` now require only owner-plane `View` /
+  `StatelessView` + `Clone + 'static`. Platform callbacks still carry only the
+  stamped realm dispatcher, renderer handles, and typed events after the root is
+  attached; no root view crosses a thread boundary. Regression tests prove an
+  `Rc<Cell<_>>` root can be named by the runner entrypoints and attached through
+  `AppBinding` while data-plane wake/callback capabilities keep their `Send +
+  Sync` bounds. Evidence: `cargo test -p flui-app
+  attach_root_widget_accepts_owner_local_root_state --lib`, `cargo test -p
+  flui-app runner_entrypoints_accept_owner_local_root_state --lib`, `cargo test
+  -p flui-app --lib`, `cargo fmt -p flui-app`, and `cargo clippy -p flui-app
+  --all-targets -- -D warnings` pass.
+- 2026-07-12 key/action owner-local checkpoint (Task 7): the focus/key/action
+  authoring surface no longer requires thread-safe UI callbacks.
+  `FocusManager::global()` is now an owner-thread singleton backed by
+  thread-local storage, and `FocusChangeCallback`, `KeyEventCallback`,
+  `KeyEventHandler`, `CallbackAction`, erased action handlers,
+  `CallbackShortcuts`, `Shortcuts`, and `EditableText` focus/key handlers use
+  owner-local `Rc` callback payloads. `Intent` is also owner-local (`Any`
+  only), and `Shortcuts` stores `Rc<dyn Intent>` so custom shortcut intents may
+  carry `Rc<Cell<_>>` state. Data-plane seams remain unchanged: pointer/scroll
+  routing, `RectProvider`, render objects, controller/listenable notifiers, and
+  frame wake capabilities keep their existing thread-safe boundaries. Evidence:
+  `cargo test -p flui-interaction focus --lib`, `cargo test -p flui-widgets
+  shortcut_intents_accept_owner_local_rc_payloads --lib`, `cargo test -p
+  flui-widgets shortcuts --lib`, `cargo test -p flui-widgets --lib`, `cargo
+  fmt -p flui-interaction -p flui-widgets`, and `cargo clippy -p
+  flui-interaction -p flui-widgets --all-targets -- -D warnings` pass.
 - Tasks 3–5 must check the corresponding `.flutter/` sources before claiming parity.
   A green gate without behavioral evidence does not satisfy their acceptance slices.
 - No task may introduce a generic UI-thread executor, queue the current pointer event,
