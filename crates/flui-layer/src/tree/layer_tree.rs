@@ -433,7 +433,7 @@ impl LayerTree {
         self.insert_node(LayerNode::new(layer))
     }
 
-    /// Inserts a pre-built [`LayerNode`] into the tree (cycle 3 T-2).
+    /// Inserts a pre-built [`LayerNode`] into the tree.
     ///
     /// This is the primitive that [`Self::insert`] (which takes a
     /// [`Layer`] and wraps it) and the [`TreeWrite::insert`](flui_tree::TreeWrite::insert) trait
@@ -480,7 +480,7 @@ impl LayerTree {
         self.get_mut(id).map(LayerNode::layer_mut)
     }
 
-    // NOTE (cycle 3 T-2): the cycle 2 inherent `pub fn remove` was
+    // NOTE: the inherent `pub fn remove` that used to live here was
     // deleted in favour of [`flui_tree::TreeWrite::remove`] (the trait's
     // default cascade impl). The behaviour is identical — post-order
     // cascade via `children()` walks, parent unlink via `remove_shallow`,
@@ -503,11 +503,11 @@ impl LayerTree {
     ///
     /// Returns the removed node, or `None` if it did not exist.
     ///
-    /// **Cycle 3 T-1 contract change**: the parent's children vector
-    /// IS now drained of `id` before the node is dropped. Pre-cycle this
-    /// method intentionally left the parent's children vec pointing at a
-    /// stale id, expecting the caller to handle parent-cleanup; the
-    /// audit found zero production callers actually exercising that
+    /// **Contract change**: the parent's children vector IS now drained
+    /// of `id` before the node is dropped. This method used to
+    /// intentionally leave the parent's children vec pointing at a
+    /// stale id, expecting the caller to handle parent-cleanup; a
+    /// review found zero production callers actually exercising that
     /// escape-hatch, and several test sites that would have surfaced
     /// the stale-id bug had they been hit. The new contract aligns
     /// with the trait-level [`TreeWrite::remove_shallow`](flui_tree::TreeWrite::remove_shallow) — parent
@@ -1267,7 +1267,8 @@ mod add_child_hygiene_tests {
     use crate::layer::{CanvasLayer, Layer};
 
     use super::LayerTree;
-    // Cycle 3 T-2: `tree.remove(id)` resolves through the trait.
+    // `tree.remove(id)` resolves through the unified `TreeWrite` trait
+    // rather than an inherent method.
     use flui_tree::TreeWrite;
 
     #[test]
@@ -1387,7 +1388,8 @@ mod remove_cascade_tests {
     use crate::layer::{CanvasLayer, Layer};
 
     use super::LayerTree;
-    // Cycle 3 T-2: `tree.remove(id)` resolves through the trait.
+    // `tree.remove(id)` resolves through the unified `TreeWrite` trait
+    // rather than an inherent method.
     use flui_tree::TreeWrite;
 
     #[test]

@@ -346,7 +346,7 @@ pub type BoxChildIntrinsicCallback<'a> = &'a (
 /// user-widget flow
 /// (`let s = ctx.layout_child(i, c); … ctx.child_geometry(i)`).
 ///
-/// # Storage shape (PR #141 Copilot review feedback, comment 3293746260)
+/// # Storage shape
 ///
 /// Indexed by dense child index (`0..child_count`) so a hash map is
 /// strictly worse on every dimension: lookup is `O(log n)` ↔ `O(1)`
@@ -535,9 +535,9 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         );
         // Pre-size the dense `Vec<Option<Size>>` cache to the erased
         // ctx's child_count — one allocation per Proxy construction, no
-        // per-`layout_child` reallocation. PR #141 Copilot review fix:
-        // swapped from `HashMap<usize, Size>` (sparse + hashing on hot
-        // path) to indexed `Vec<Option<Size>>` (O(1) access, contiguous).
+        // per-`layout_child` reallocation. Uses indexed `Vec<Option<Size>>`
+        // (O(1) access, contiguous) rather than `HashMap<usize, Size>`
+        // (sparse + hashing on the hot path).
         let child_count = erased.child_count();
         Self {
             storage: BoxLayoutCtxStorage::Proxy {
@@ -1353,7 +1353,7 @@ impl BoxHitTestEntry {
 ///
 /// # Transform accumulation
 ///
-/// Cycle 4 wave 5 R-24: `current_transform()` previously folded the
+/// `current_transform()` previously folded the
 /// entire `transform_stack: Vec<Matrix4>` via
 /// `iter().fold(IDENTITY, |acc, t| acc * t)` -- O(N) matrix-multiply
 /// chain on every hit-test entry. Hit testing is hot-path; a 30-deep
@@ -1381,7 +1381,8 @@ pub type HitTestChildCallback<'a> =
 
 /// Box-protocol hit-test context: local-space position, the entry
 /// path under construction, the live child recursion supplied by the
-/// pipeline driver, and the transform stack (R-24 cached composition).
+/// pipeline driver, and the transform stack (with a cached composition,
+/// see [`BoxHitTestCtx::current_transform`]).
 pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
@@ -1438,8 +1439,8 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
 
     /// Returns the current accumulated transform.
     ///
-    /// O(1) -- reads the cached composition. See type-level doc for
-    /// the R-24 incremental-composition design.
+    /// O(1) -- reads the cached composition. See the type-level doc for
+    /// the incremental-composition design.
     pub fn current_transform(&self) -> Matrix4 {
         self.composed_transform
     }
@@ -1502,7 +1503,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn push_transform(&mut self, transform: Matrix4) {
-        // R-24: keep the cached composition in sync. One mat-mult
+        // Keep the cached composition in sync. One mat-mult
         // per push amortizes O(stack_depth) hit-test queries down
         // to O(1).
         self.transform_stack.push(transform);
@@ -1510,7 +1511,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn pop_transform(&mut self) {
-        // R-24: a popped factor cannot be "un-multiplied" cheaply
+        // A popped factor cannot be "un-multiplied" cheaply
         // (would require matrix inverse + multiply, ~5x cost of a
         // forward fold and numerically fragile). Full re-fold over
         // the now-shorter stack is the cleanest fix; hit-test stacks
@@ -1590,7 +1591,7 @@ mod tests {
         assert!(!ctx.is_hit(outside));
     }
 
-    /// Cycle 4 wave 5 R-24: incremental transform composition must
+    /// Incremental transform composition must
     /// stay numerically identical to the prior O(N) fold path.
     /// Builds a 3-deep stack and asserts the cached
     /// `current_transform()` equals the explicit `fold(IDENTITY, |a, t| a * t)`.

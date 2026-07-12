@@ -257,14 +257,14 @@ impl Key {
     }
 }
 
-// NOTE (audit I-5): `impl Default for Key` was removed in cycle 3.
+// NOTE: `impl Default for Key` was removed.
 // `Key::default()` returning a fresh unique key violated the
 // least-surprise principle for `Default`: every call produced a
 // different value, which made `#[derive(Default)]` on parent types
 // silently break round-trip equality.
 //
 // Construction now goes through `Key::new()` (explicit unique
-// generation) or `Key::from_u64` (deterministic). Audit confirmed
+// generation) or `Key::from_u64` (deterministic). There were
 // zero in-workspace consumers of `Key::default()`.
 
 impl fmt::Debug for Key {
@@ -596,7 +596,7 @@ impl UniqueKey {
     }
 }
 
-// NOTE (audit I-5): `impl Default for UniqueKey` was removed —
+// NOTE: `impl Default for UniqueKey` was removed —
 // same rationale as `Key`: defaults must be deterministic, but
 // `UniqueKey::new()` bumps an atomic counter per call.
 // `UniqueKey::new()` is the only constructor.

@@ -96,11 +96,11 @@ runtime-internals = []
 ignored-paths = ["tests/ui/*.rs"]
 
 [[bench]]
-name = "s1_key_storage"
+name = "key_storage_shape"
 harness = false
 
 [[bench]]
-name = "s2_static_path"
+name = "static_path_algorithm"
 harness = false
 
 [[bench]]

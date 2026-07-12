@@ -139,18 +139,19 @@ pub trait RendererBinding {
     }
 
     // ========================================================================
-    // RenderView Management (R-6 reshape — cycle 4 Wave 2 U-1)
+    // RenderView Management
     // ========================================================================
     //
-    // Pre-cycle this section exposed `render_views()` returning a
+    // This section used to expose `render_views()` returning a
     // `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` — a triple-lock
     // topology baked into the trait surface. Every consumer had to reason
     // about the outer `HashMap` lock, the inner `Arc<RwLock<RenderView>>`
-    // lock, and the implicit map-entry refcount. Cycle 4 R-6 audit
-    // flagged it as a Cycle-2 PR #100 newtype-getter violation at
-    // trait level.
+    // lock, and the implicit map-entry refcount. An audit flagged it as a
+    // newtype-getter violation at trait level: a getter returning a raw
+    // lock forces every caller to re-derive its own locking discipline
+    // instead of the trait stating what operation is needed.
     //
-    // Post-cycle the trait surface exposes four primitives:
+    // The trait surface now exposes four primitives instead:
     //   - `render_view(id)`         — single lookup, refcount bump
     //   - `render_view_ids()`       — owned `Vec<u64>` snapshot
     //   - `insert_render_view`      — single-write
@@ -239,10 +240,10 @@ pub trait RendererBinding {
 
     /// Returns the mouse tracker for hover notification.
     ///
-    /// Cycle 4 U-6: the return type changed from
-    /// `&RwLock<MouseTracker>` to `&MouseTracker`. The interaction-
-    /// side [`flui_interaction::MouseTracker`] is owner-local, so executable
-    /// mouse callbacks do not force the whole binding to be `Send + Sync`.
+    /// The return type is `&MouseTracker` rather than `&RwLock<MouseTracker>`.
+    /// The interaction-side [`flui_interaction::MouseTracker`] is
+    /// owner-local, so executable mouse callbacks do not force the whole
+    /// binding to be `Send + Sync`.
     fn mouse_tracker(&self) -> &MouseTracker;
 
     // ========================================================================
@@ -311,11 +312,11 @@ pub trait RendererBinding {
     fn handle_metrics_changed(&self) {
         let mut force_frame = false;
 
-        // R-6 reshape: ids-then-lookup iteration. The outer-container
-        // lock is released between snapshot collection and per-view
-        // writes; previously this method held the read-lock on the
-        // container for the duration of every view's write-lock, which
-        // is the exact nested-lock topology the audit flagged.
+        // Ids-then-lookup iteration: the outer-container lock is released
+        // between snapshot collection and per-view writes. Previously this
+        // method held the read-lock on the container for the duration of
+        // every view's write-lock, which is the exact nested-lock topology
+        // the trait reshape above was meant to avoid.
         for view_id in self.render_view_ids() {
             if let Some(view) = self.render_view(view_id) {
                 let mut view_guard = view.write();
@@ -359,12 +360,11 @@ pub trait RendererBinding {
         action: flui_semantics::SemanticsAction,
         _args: Option<flui_semantics::ActionArgs>,
     ) {
-        // Cycle 4 R-2: pre-cycle the body panicked via `unimplemented!()`
-        // — a Constitution Principle 6 violation reachable from every
-        // assistive-tech action dispatch. Post-cycle: emit a
-        // `tracing::warn!` with the action context and return without
-        // panicking. When `SemanticsOwner` integration lands the warn
-        // is swapped for the real dispatch.
+        // This body used to panic via `unimplemented!()` — a Constitution
+        // Principle 6 violation reachable from every assistive-tech action
+        // dispatch. It now emits a `tracing::warn!` with the action context
+        // and returns without panicking. When `SemanticsOwner` integration
+        // lands, the warning is swapped for the real dispatch.
         if self.render_view(view_id).is_some() {
             tracing::warn!(
                 view_id,

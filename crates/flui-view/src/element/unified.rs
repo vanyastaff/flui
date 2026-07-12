@@ -282,7 +282,7 @@ where
     }
 
     // ========================================================================
-    // Dependency-change typed-hook dispatch (audit V-19)
+    // Dependency-change typed-hook dispatch
     //
     // Routes through the behavior. Only `StatefulBehavior<V>` and
     // `AnimatedBehavior<V>` override the default no-op — they forward

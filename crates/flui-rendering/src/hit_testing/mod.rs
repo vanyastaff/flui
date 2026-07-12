@@ -1,7 +1,6 @@
 //! Hit testing infrastructure for pointer interaction.
 //!
-//! After cycle 4 R-7 + R-8 + R-9 consolidation (Wave 2), this module
-//! is a thin protocol-extension surface over
+//! This module is a thin protocol-extension surface over
 //! `flui_interaction::routing` and `flui_interaction::mouse_tracker`.
 //! The canonical `HitTestResult` / `HitTestEntry` / `HitTestBehavior`
 //! types live in `flui-interaction` (Flutter's `gestures/` ↔
@@ -28,25 +27,29 @@
 //!
 //! `BoxHitTestResult` / `BoxHitTestEntry` / `SliverHitTestResult` /
 //! `SliverHitTestEntry` are in `crate::protocol` (next to the
-//! `BoxProtocol` / `SliverProtocol` capability definitions). They
-//! lived here pre-cycle as parallels to the protocol-side versions,
-//! deleted in cycle 4 U-3.
+//! `BoxProtocol` / `SliverProtocol` capability definitions). This
+//! module used to carry its own parallel copies of those types; the
+//! duplicates were removed since the protocol-side versions are the
+//! ones the box/sliver capability code actually consumes.
 //!
-//! # Cycle 4 deletions (Wave 2)
+//! # What this module used to contain
 //!
-//! U-3 removed the parallel `BoxHitTestEntry` / `BoxHitTestResult` /
-//! `SliverHitTestEntry` / `SliverHitTestResult` structs.
+//! This module previously defined its own `HitTestResult` and
+//! `HitTestEntry` structs, separate from the canonical interaction-side
+//! versions; those were removed and replaced with the re-exports above
+//! so there is only one hit-test result type in the workspace, not two
+//! that could drift apart.
 //!
-//! U-4 removed the rendering-side `HitTestResult` + `HitTestEntry`,
-//! replacing them with re-exports of the canonical interaction-side
-//! types.
-//!
-//! U-5 removed the entire `target.rs` module: the `HitTestTarget`
-//! trait, `PointerEvent`, `PointerDeviceKind`, and `PointerEventKind`.
-//! The trait had one production impl (`RenderView`, deleted in U-4)
-//! plus two file-private `DummyTarget` stubs (deleted in U-3/U-4
-//! alongside the structs that owned them). No remaining workspace
-//! consumers.
+//! It also used to contain an entire `target.rs` module: a
+//! `HitTestTarget` trait plus `PointerEvent`, `PointerDeviceKind`, and
+//! `PointerEventKind` types. That module was deleted once it had no
+//! remaining purpose: the trait had exactly one production
+//! implementation (on `RenderView`, itself removed once the rendering
+//! side stopped defining its own `HitTestResult`), plus two
+//! file-private `DummyTarget` test stubs that went away with the
+//! structs they supported. With no implementors or consumers left in
+//! the workspace, the trait and its module were removed rather than
+//! kept as dead code.
 //!
 //! # Flutter Equivalence
 //!
@@ -72,10 +75,10 @@ mod entry;
 mod result;
 mod transform;
 
-// Canonical types re-exported from flui-interaction. Cycle 4 U-4
-// replaced the in-crate `HitTestEntry` + `HitTestResult` structs
-// with these re-exports; consumers' `use crate::hit_testing::HitTestResult`
-// imports compile unchanged.
+// Canonical types re-exported from flui-interaction. These re-exports
+// replaced the in-crate `HitTestEntry` + `HitTestResult` structs, so
+// consumers' `use crate::hit_testing::HitTestResult` imports compile
+// unchanged.
 pub use entry::HitTestEntry;
 pub use flui_interaction::routing::HitTestBehavior;
 // Pointer-event dispatch surface: a `RenderObject` advertises a data-only

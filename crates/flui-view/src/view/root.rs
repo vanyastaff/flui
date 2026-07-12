@@ -243,10 +243,10 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
     fn unmount(&mut self, _element_owner: &mut crate::ElementOwner<'_>) {
         // Detach from PipelineOwner's RenderTree
         if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id) {
-            // Cycle 3 T-1: cascade-by-default `remove` brings the whole
-            // RenderTree subtree down with the root element. The
-            // pre-cycle non-cascade `remove` (now `remove_shallow`)
-            // would have orphaned descendants in the slab.
+            // `remove` cascades by default, bringing the whole RenderTree
+            // subtree down with the root element. The non-cascading
+            // variant (`remove_shallow`) would orphan descendants in the
+            // slab instead.
 
             let mut owner = pipeline_owner.write();
             owner.set_root_id(None);

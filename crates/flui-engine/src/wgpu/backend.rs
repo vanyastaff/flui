@@ -70,7 +70,7 @@ fn build_gradient_stops(
 /// [`Backend::new`] which leaves the surface handles unbound; the
 /// [`render_backdrop_filter`](CommandRenderer::render_backdrop_filter)
 /// command-path falls back to passthrough when the handles are
-/// `None` (cycle 4 U-8, U-9).
+/// `None`.
 ///
 /// Per *Rust for Rustaceans* ch.2 "Variance and Lifetimes": the
 /// `'frame` parameter encodes the borrow's scope so the compiler
@@ -95,7 +95,7 @@ pub struct Backend<'frame> {
     /// `COPY_TEXTURE_TO_TEXTURE` operations during backdrop-filter
     /// dispatch.
     surface_texture: Option<&'frame wgpu::Texture>,
-    /// Cycle 4 wave 5 E-13: matrix that is currently applied to
+    /// The matrix that is currently applied to
     /// [`painter`](Self::painter) via a `save() + apply` pair that
     /// has not yet been balanced with `restore()`. `with_transform`
     /// uses this to coalesce consecutive same-matrix calls into a
@@ -113,10 +113,9 @@ pub struct Backend<'frame> {
     /// `push_opacity`, `pop_opacity`, `push_color_filter`,
     /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`),
     /// and the explicit [`Backend::restore`](Self::restore) escape
-    /// hatch. PR #117 review (Codex P1) added the LayerStateStack
-    /// flush points after the initial wave-5 ship; without them, a
-    /// `push_clip → with_transform → pop_clip` sequence would pop the
-    /// lazy save instead of the clip, corrupting state across sibling
+    /// hatch. These `LayerStateStack` flush points are required: without
+    /// them, a `push_clip → with_transform → pop_clip` sequence would pop
+    /// the lazy save instead of the clip, corrupting state across sibling
     /// layers.
     ///
     /// `None` means the painter is at the default state and no
@@ -174,8 +173,6 @@ impl<'frame> Backend<'frame> {
     /// flush + blur the surface contents; without it the backdrop-
     /// filter path falls back to dispatching the child display list
     /// without applying the filter (visible regression vs Flutter).
-    ///
-    /// Cycle 4 E-2 / U-8.
     pub fn bind_surface(
         &mut self,
         view: &'frame wgpu::TextureView,
@@ -214,10 +211,9 @@ impl<'frame> Backend<'frame> {
     /// This pops the transform and clip state from the save stack.
     /// Used to restore state after rendering layer children.
     ///
-    /// Cycle 4 wave 5 E-13 PR #117 review (Codex P1): flushes any
-    /// lazy `with_transform` save first so the explicit `restore()`
-    /// pops the caller's matched `save()`, not the lazy transform
-    /// that happens to be the top of the painter stack.
+    /// Flushes any lazy `with_transform` save first so the explicit
+    /// `restore()` pops the caller's matched `save()`, not the lazy
+    /// transform that happens to be the top of the painter stack.
     pub fn restore(&mut self) {
         self.flush_active_transform();
         self.painter.restore();
@@ -263,7 +259,7 @@ impl<'frame> Backend<'frame> {
         })
     }
 
-    /// Cycle 4 wave 5 E-13: dispatch a draw closure under the given
+    /// Dispatch a draw closure under the given
     /// transform, coalescing consecutive same-matrix calls so that
     /// the `painter.save()` + matrix-decompose + apply + restore
     /// pipeline runs once per RUN of identical transforms rather
@@ -288,10 +284,11 @@ impl<'frame> Backend<'frame> {
     /// / push_color_filter / pop_color_filter / push_image_filter
     /// / pop_image_filter), the public `Backend::restore` escape
     /// hatch, and the `Drop` impl (so the borrowed painter is
-    /// balanced when the Backend leaves scope). See [`Self::active_transform`] for
-    /// the full list and the PR #117 review (Codex P1) context.
+    /// balanced when the Backend leaves scope). See
+    /// [`Self::active_transform`] for the full list of flush points and why
+    /// each one is needed.
     ///
-    /// Audit context: a render pass batching 1000 same-transform
+    /// Measured effect: a render pass batching 1000 same-transform
     /// shapes used to pay 2000 stack ops + 1000 mat-decomposes
     /// (each pair `save + apply + restore`). After this change the
     /// run pays one `save + apply` plus one `restore` at the next
@@ -338,7 +335,7 @@ impl<'frame> Backend<'frame> {
         draw_fn(self.painter);
     }
 
-    /// Cycle 4 wave 5 E-13: balance the deferred `save()` left by a
+    /// Balance the deferred `save()` left by a
     /// prior `with_transform` run with a `restore()`, clearing
     /// `active_transform`. No-op if no transform is active.
     ///
@@ -347,7 +344,7 @@ impl<'frame> Backend<'frame> {
     /// mismatch arms, every `LayerStateStack` method on `Backend`,
     /// the public `Backend::restore`, and the `Drop` impl. See the
     /// [`active_transform`](Self::active_transform) field doc for
-    /// the full list and the PR #117 review (Codex P1) context.
+    /// the full list of flush points and why each one is needed.
     fn flush_active_transform(&mut self) {
         if self.active_transform.is_some() {
             self.painter.restore();
@@ -1334,12 +1331,13 @@ impl CommandRenderer for Backend<'_> {
 
     // ===== Layer Tree Operations split out =====
     //
-    // Cycle 4 E-9: push_clip_* / push_offset / push_transform /
-    // push_opacity / push_color_filter / push_image_filter + their
-    // corresponding pop_* moved to `impl LayerStateStack for Backend`
-    // (below). The visitor methods on this trait stay; the layer-tree
-    // state-stack methods live on the dedicated `LayerStateStack`
-    // trait. See traits.rs E-9 commentary.
+    // push_clip_* / push_offset / push_transform / push_opacity /
+    // push_color_filter / push_image_filter and their corresponding pop_*
+    // methods live in `impl LayerStateStack for Backend` (below), not in
+    // this `CommandRenderer` impl. The visitor methods stay on this trait;
+    // the layer-tree state-stack methods live on the dedicated
+    // `LayerStateStack` trait. See the doc comment on that trait in
+    // traits.rs for why.
 
     fn add_performance_overlay(
         &mut self,
@@ -1421,20 +1419,19 @@ impl CommandRenderer for Backend<'_> {
 }
 
 // ============================================================================
-// LAYER-STATE-STACK IMPL (cycle 4 E-9 split)
+// LAYER-STATE-STACK IMPL
 // ============================================================================
 //
-// The 13 push_/pop_ methods below moved out of the `impl CommandRenderer
-// for Backend` block in cycle 4 E-9 to live on the dedicated
-// `LayerStateStack` trait. Bodies + behavior unchanged; only the
+// The 13 push_/pop_ methods below live on the dedicated `LayerStateStack`
+// trait rather than in the `impl CommandRenderer for Backend` block.
+// Bodies and behavior are unchanged from before the split; only the
 // receiving trait differs. See `crates/flui-engine/src/traits.rs`
 // for the trait-split rationale.
 
 impl LayerStateStack for Backend<'_> {
-    // Cycle 4 wave 5 PR #117 review (Codex P1): every method on
-    // this trait must call `self.flush_active_transform()` BEFORE
-    // any `painter.save` / `painter.restore` / `painter.save_layer`
-    // / `painter.restore_layer` op. E-13's `with_transform` leaves
+    // Every method on this trait must call `self.flush_active_transform()`
+    // BEFORE any `painter.save` / `painter.restore` / `painter.save_layer`
+    // / `painter.restore_layer` op. `with_transform`'s coalescing leaves
     // a deferred `save()` active across consecutive same-matrix
     // calls; if a layer-tree boundary (push_clip etc.) intervened
     // without flushing first, the layer's matched

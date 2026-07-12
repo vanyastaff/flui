@@ -299,7 +299,7 @@ impl SystemFontsNotifier {
     ///
     /// Crate-internal until the platform-side font-change trigger lands;
     /// currently exercised only by the in-crate test suite. See the
-    /// struct doc-comment (audit P-10) for the visibility rationale.
+    /// struct doc-comment above for the visibility rationale.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>) {
         self.listeners.write().push(listener);

@@ -3,7 +3,7 @@
 //! This module defines vertex structures for all primitive types.
 //! All vertices use bytemuck for zero-copy GPU uploads.
 //!
-//! # Cycle 4 wave 5 E-10
+//! # Deleted duplicate/unused vertex types
 //!
 //! The 4 parallel vertex types `RectVertex`, `RectInstance`,
 //! `PathVertex`, `ImageInstance` (and their `new` / `desc`

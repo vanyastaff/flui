@@ -1,9 +1,9 @@
 //! Hit test entry -- canonical type re-exported from
 //! `flui_interaction::routing`.
 //!
-//! # Cycle 4 R-7/U-4 migration
+//! # What this file used to contain
 //!
-//! Pre-cycle this file owned a `HitTestEntry` struct carrying a
+//! This file used to own a `HitTestEntry` struct carrying a
 //! `Weak<dyn HitTestTarget>` reference plus a `MatrixTransformPart`
 //! transform and a local position. Its `new_render_view()` and
 //! `with_position()` constructors used a file-private `DummyTarget`
@@ -22,11 +22,11 @@
 //! The interaction-side entry covers every responsibility the
 //! rendering-side one expressed (transform + local target identity)
 //! plus the runtime-dispatch concerns the rendering-side never
-//! grew (pointer target identity, cursor). Workspace audit (`rg 'impl HitTestTarget'`)
-//! showed ONE production impl (`RenderView`) and TWO file-private
-//! `DummyTarget` stubs -- the trait-dispatch surface had been
-//! parallel-implemented rather than adopted, in violation of the
-//! cycle-2 PR #100 parallel-type prohibition.
+//! grew (pointer target identity, cursor). A workspace search for
+//! `impl HitTestTarget` showed ONE production impl (`RenderView`) and
+//! TWO file-private `DummyTarget` stubs -- the trait-dispatch surface
+//! had been parallel-implemented rather than adopted, duplicating a
+//! type that already existed on the interaction side.
 //!
 //! The previous `HitTestEntry` struct, its `Debug` impl, and the
 //! file-private `DummyTarget` were deleted. The inherent `hit_test`
@@ -35,8 +35,9 @@
 //! canonical hit-test entry point is
 //! [`PipelineOwner::hit_test`](crate::pipeline::PipelineOwner::hit_test).
 //!
-//! `BoxHitTestEntry` / `SliverHitTestEntry` (parallel sibling
-//! structs in this module pre-cycle) were deleted in cycle 4 U-3
-//! -- see `docs/research/2026-05-22-cycle4-wave2-design.md`.
+//! `BoxHitTestEntry` / `SliverHitTestEntry` (parallel sibling structs
+//! that used to live in this module) were deleted once the
+//! protocol-side versions in `crate::protocol` were confirmed to cover
+//! the same need -- see `docs/research/2026-05-22-cycle4-wave2-design.md`.
 
 pub use flui_interaction::routing::HitTestEntry;

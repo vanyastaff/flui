@@ -189,7 +189,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///    shipped as a no-op returning `*self.size()` because the trait
     ///    surface didn't carry children.
     ///
-    /// 2. **PR #141** — signature changed to
+    /// 2. **Next revision** — signature changed to
     ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::LayoutCtxErased<'_>) -> ProtocolGeometry<P>`
     ///    so the blanket impl can construct a typed [`BoxLayoutCtx`]
     ///    with children access. Contract-violation signalling went
@@ -197,14 +197,14 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///    caught by `catch_unwind` in `RenderEntry::layout_leaf_only` —
     ///    `panic_any` was a niche escape hatch with hidden control flow.
     ///
-    ///    The PR #141 review (finding #5) called this out as a
-    ///    Constitution Principle 6 violation — using panic primitives
-    ///    for an error condition the caller can structurally handle.
+    ///    That shape was flagged as unsound API design — using panic
+    ///    primitives for an error condition the caller can structurally
+    ///    handle.
     ///
-    /// 3. **Current shape (this PR, follow-up to #141 #5 Option A)** —
-    ///    signature returns `RenderResult<ProtocolGeometry<P>>` so
-    ///    contract violations propagate as typed `Err(RenderError::...)`
-    ///    directly through `?`. `panic_any` removed; `catch_unwind` in
+    /// 3. **Current shape** — signature returns
+    ///    `RenderResult<ProtocolGeometry<P>>` so contract violations
+    ///    propagate as typed `Err(RenderError::...)` directly through
+    ///    `?`. `panic_any` removed; `catch_unwind` in
     ///    `RenderEntry::layout_leaf_only` retained only to wrap genuine
     ///    runtime panics from third-party user widget code into
     ///    [`RenderError::Poisoned`].
@@ -711,12 +711,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     // trait object. Removing the method also removes the only paint-phase
     // `&mut` access to the trait surface.
 
-    // Cycle 4 wave 5 R-21: `insert_into_pipeline` convenience method
-    // removed. It was a default trait method gated by `Self: Sized`
-    // (so unusable through `dyn RenderObject<P>`) that wrapped a
-    // single line: `owner.insert(self)`. Workspace grep showed zero
-    // production callsites -- the trait was paying compile-time and
-    // API-stability cost for a convenience that earned nothing.
+    // The `insert_into_pipeline` convenience method has been removed.
+    // It was a default trait method gated by `Self: Sized` (so unusable
+    // through `dyn RenderObject<P>`) that wrapped a single line:
+    // `owner.insert(self)`. A workspace grep showed zero production
+    // callsites -- the trait was paying compile-time and API-stability
+    // cost for a convenience that earned nothing.
     //
     // Direct equivalent: `owner.insert(Box::new(render_object))`,
     // see [`crate::pipeline::PipelineOwner::insert`]. The real

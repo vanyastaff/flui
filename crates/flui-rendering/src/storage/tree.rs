@@ -239,16 +239,16 @@ impl RenderTree {
     ///    `add_node_needing_*` registration methods directly when adding
     ///    nodes to an already-owned tree.
     ///
-    /// # Cycle 4 R-12
+    /// # Documentation note
     ///
-    /// Pre-cycle the docstring promised "This will attach all existing nodes
-    /// to the new owner" — the impl never did that (silent no-op on existing
-    /// nodes). The lie was a real Constitution Principle 6 violation in the
-    /// docstring layer. Per audit R-12 the cycle-4 cleanup is the lower-cost
-    /// **honest-doc** path; Flutter parity (`RenderObject::attach` recursive
-    /// subtree walk) is a follow-up audit item that needs an
-    /// `attached: AtomicBool` on `RenderState<P>::flags` + owner-dirty-list
-    /// re-registration plumbing not yet in place.
+    /// An earlier version of this docstring claimed this method would
+    /// attach all existing nodes to the new owner, but the implementation
+    /// never did that — it silently no-ops on nodes already in the tree.
+    /// This doc has been corrected to describe the actual (store-only)
+    /// behavior rather than the aspirational one. Full Flutter parity
+    /// (`RenderObject::attach`'s recursive subtree walk) is still pending
+    /// work: it needs an `attached: AtomicBool` on `RenderState<P>::flags`
+    /// plus owner-dirty-list re-registration plumbing that doesn't exist yet.
     pub fn set_owner(&mut self, owner: Option<Arc<RwLock<PipelineOwner>>>) {
         self.owner = owner;
     }
@@ -494,8 +494,8 @@ impl RenderTree {
     /// are orphaned in the slab; use [`Self::remove_recursive`] for full
     /// cascade.
     ///
-    /// Cycle 3 T-1: this is the [`TreeWrite::remove_shallow`] primitive
-    /// the trait builds the cascade-by-default `remove` on top of.
+    /// This is the [`TreeWrite::remove_shallow`] primitive the trait builds
+    /// its cascade-by-default `remove` on top of.
     pub fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
@@ -520,11 +520,11 @@ impl RenderTree {
 
     /// Removes a node and all its descendants recursively.
     ///
-    /// Returns the number of nodes removed. Cycle 3 T-1: equivalent to
-    /// [`TreeWrite::remove`] (which now cascades by default) with a
-    /// count instead of the returned root node. Prefer `TreeWrite::remove`
-    /// for new code; this inherent stays for in-crate callers that want
-    /// the count.
+    /// Returns the number of nodes removed. Equivalent to
+    /// [`TreeWrite::remove`] (which now cascades by default), except it
+    /// returns a count instead of the removed root node. Prefer
+    /// `TreeWrite::remove` for new code; this inherent method stays for
+    /// in-crate callers that want the count.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
         // Iterative: collect the subtree up front (explicit-stack
         // pre-order with cycle protection), then remove in REVERSE
@@ -783,9 +783,8 @@ impl RenderTree {
     ///
     /// # Implementation
     ///
-    /// Cycle 4 R-26: iterative loop + `SmallVec<[RenderId; 32]>`
-    /// work-stack rather than recursive `visit_depth_first_from`.
-    /// Three wins:
+    /// Uses an iterative loop with a `SmallVec<[RenderId; 32]>` work-stack
+    /// rather than a recursive `visit_depth_first_from`. Three wins:
     /// - **No stack overflow** on pathological tree depths
     ///   (recursion blew at ~5000 with default Rust stack; the
     ///   iterative version is unbounded).
@@ -931,10 +930,10 @@ impl TreeWrite<RenderId> for RenderTree {
     }
 
     fn remove_shallow(&mut self, id: RenderId) -> Option<Self::Node> {
-        // Cycle 3 T-1: the trait's `remove` default impl now cascades
-        // post-order via this primitive. `remove_shallow` keeps the
-        // pre-cycle non-cascade behaviour for reparenting workflows
-        // (re-attach the descendants under a new parent immediately).
+        // The trait's `remove` default impl cascades post-order via this
+        // primitive. `remove_shallow` itself keeps the original
+        // non-cascading behavior for reparenting workflows (re-attach the
+        // descendants under a new parent immediately).
 
         // Update root if removing root
         if self.root == Some(id) {

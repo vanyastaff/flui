@@ -381,10 +381,10 @@ impl Ticker {
     /// Returns a [`TickerFuture`] for the active run. If no callback is
     /// pre-loaded, this is a no-op and returns an already-complete future.
     ///
-    /// Returns immediately as no-op if no callback is pre-loaded — fixes
-    /// PR #85 reviewer finding (P1) where create_ticker stored the
-    /// callback but start required a fresh one, leaving the pre-loaded
-    /// callback unreachable.
+    /// Returns immediately as a no-op if no callback is pre-loaded. This
+    /// fixes an earlier bug where `create_ticker` stored the callback but
+    /// `start` required a fresh one to be passed in, leaving the
+    /// pre-loaded callback unreachable.
     pub fn start_default(&mut self) -> TickerFuture {
         self.start_inner(None)
     }

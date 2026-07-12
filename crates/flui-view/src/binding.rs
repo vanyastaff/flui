@@ -275,12 +275,12 @@ pub trait WidgetsBindingObserver {
     // ========================================================================
     // Predictive Back Gesture (Android 13+)
     //
-    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. These four trait
+    // REMOVE_BY: 2026-09-22 — scheduled cleanup reminder. These four trait
     // methods + the matching `WidgetsBinding::handle_*_back_gesture`
     // impls + the `back_gesture_observers` storage are Android-13+
     // infrastructure waiting on the `flui-platform` Android wire-up. No
     // in-workspace `impl WidgetsBindingObserver` overrides them today.
-    // By the cadence date either delete the whole surface (no consumer
+    // By this date either delete the whole surface (no consumer
     // materialized) OR wire the platform side and drop this marker.
     // ========================================================================
 
@@ -475,11 +475,11 @@ struct WidgetsBindingInner {
 
     /// Observers currently handling a predictive back gesture (Android).
     ///
-    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. The predictive-
+    // REMOVE_BY: 2026-09-22 — scheduled cleanup reminder. The predictive-
     // back-gesture surface (`handle_*_back_gesture` trait methods +
     // `back_gesture_observers` storage + `WidgetsBinding::handle_*_
     // back_gesture` impls) is Android-13+ infrastructure waiting on the
-    // `flui-platform` Android side. By the cadence date either delete
+    // `flui-platform` Android side. By this date either delete
     // this surface (no consumer materialized) OR wire the platform side
     // and drop this marker.
     back_gesture_observers: Vec<Arc<dyn WidgetsBindingObserver>>,
@@ -661,7 +661,12 @@ impl WidgetsBinding {
     // Root Widget Attachment
     // ========================================================================
 
-    // PORT-TARGET: flui-app runner root-bootstrap consolidation, pending Cycle 6 element-ownership unification (V-7 deferral)
+    // PORT-TARGET: flui-app runner root-bootstrap consolidation — the runner's `mount_root`
+    // hand-rolls its own root-element wiring instead of calling this method. Folding the two
+    // together requires first deciding which of the two coexisting element-tree ownership
+    // models (the by-id `ElementTree` vs. the recursive boxed-child tree the runner actually
+    // drives) is the single source of truth, so consolidation stays deferred until that
+    // ownership question is resolved.
     /// Attach a root widget to the binding.
     ///
     /// This creates the root element and schedules the first build.
@@ -743,8 +748,8 @@ impl WidgetsBinding {
         // method downcasts the trait object back to `V`. A `BoxedView`
         // wrap would make the runtime type `BoxedView` (not `V`), the
         // downcast in `ElementCore::update_view` would fail, and the
-        // root update would be silently skipped (PR #119 review —
-        // codex P1).
+        // root update would be silently skipped — this was caught as a
+        // real regression, so keep the clone-not-wrap shape.
         //
         // The `Clone + 'static` bound is no real
         // restriction in practice — every concrete `View` in this
@@ -1169,7 +1174,7 @@ impl WidgetsBinding {
     /// Notify all observers of locale change.
     ///
     /// Snapshots the observer list under the read lock and releases the
-    /// lock before invoking callbacks (audit V-21). An observer callback
+    /// lock before invoking callbacks. An observer callback
     /// that re-enters the binding (e.g., adds or removes an observer,
     /// reads `observer_count`, or schedules a build) would deadlock if
     /// the iteration held the lock across the dispatch.
@@ -1183,7 +1188,7 @@ impl WidgetsBinding {
     /// Notify all observers of metrics change.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale (audit V-21).
+    /// rationale.
     pub fn handle_metrics_changed(&self) {
         let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
         for observer in &observers {
@@ -1194,7 +1199,7 @@ impl WidgetsBinding {
     /// Notify all observers of text scale factor change.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale (audit V-21).
+    /// rationale.
     pub fn handle_text_scale_factor_changed(&self) {
         let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
         for observer in &observers {
@@ -1205,7 +1210,7 @@ impl WidgetsBinding {
     /// Notify all observers of platform brightness change.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale (audit V-21).
+    /// rationale.
     pub fn handle_platform_brightness_changed(&self) {
         let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
         for observer in &observers {
@@ -1216,7 +1221,7 @@ impl WidgetsBinding {
     /// Notify all observers of app lifecycle change.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale (audit V-21).
+    /// rationale.
     pub fn handle_app_lifecycle_state_changed(&self, state: AppLifecycleState) {
         let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
         for observer in &observers {
@@ -1227,7 +1232,7 @@ impl WidgetsBinding {
     /// Notify all observers of memory pressure.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale (audit V-21).
+    /// rationale.
     pub fn handle_memory_pressure(&self) {
         let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
         for observer in &observers {
@@ -1238,7 +1243,7 @@ impl WidgetsBinding {
     /// Notify all observers of accessibility features change.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale (audit V-21).
+    /// rationale.
     pub fn handle_accessibility_features_changed(&self) {
         let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
         for observer in &observers {
@@ -1370,7 +1375,7 @@ impl WidgetsBinding {
     // ========================================================================
     // Predictive Back Gesture (Android)
     //
-    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. See the matching
+    // REMOVE_BY: 2026-09-22 — scheduled cleanup reminder. See the matching
     // marker on the `WidgetsBindingObserver::handle_*_back_gesture` trait
     // surface for the rationale and dispose-or-wire decision rule.
     // ========================================================================
@@ -1440,7 +1445,7 @@ impl WidgetsBinding {
     /// Handle view focus change.
     ///
     /// Snapshots the observer list under the read lock and releases the
-    /// lock before invoking callbacks (audit V-21). See
+    /// lock before invoking callbacks. See
     /// [`Self::handle_locale_changed`] for the deadlock-safety rationale.
     ///
     /// # Flutter Equivalent
@@ -1706,7 +1711,9 @@ mod tests {
             // The mounted root is the `RootRenderElement`, identified by
             // the `RootRenderView<LeafView>` view type it reports — the
             // user view's concrete type is preserved as the type
-            // parameter (no `BoxedView` wrap; see PR #119 review fix).
+            // parameter (no `BoxedView` wrap, which would erase it and
+            // break the downcast — see the comment in
+            // `attach_root_widget`).
             assert_eq!(
                 element.view_type_id(),
                 TypeId::of::<RootRenderView<LeafView>>(),
@@ -1761,7 +1768,7 @@ mod tests {
         );
     }
 
-    /// V-7 / E2: the runner's sized bootstrap path
+    /// Verifies that the runner's sized bootstrap path
     /// (`attach_root_widget_with_size`) mounts the root render tree at an
     /// explicit window size, identically to the default-size attach — proving
     /// the size param threads through without disturbing the bootstrap.
@@ -2142,11 +2149,12 @@ mod tests {
     }
 
     // ========================================================================
-    // V-21 — snapshot-then-fire on sync handle_* event handlers
+    // Snapshot-then-fire fix — regression tests for sync handle_* event
+    // handlers
     // ========================================================================
 
     /// Observer whose callback re-enters the binding by taking a
-    /// `write()` lock (via `add_observer`). Before the V-21 fix the
+    /// `write()` lock (via `add_observer`). Before this fix, the
     /// `handle_*` dispatch held a `read()` lock on `self.inner` across
     /// the iteration, so this re-entrant `write()` would deadlock the
     /// thread under `parking_lot`'s non-reentrant `RwLock`. After the
@@ -2169,7 +2177,7 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // Re-enter the binding from inside the observer callback.
             // `add_observer` takes a `write()` lock on `self.inner` ---
-            // pre-V-21 this deadlocks; post-V-21 it is safe because the
+            // before this fix, this deadlocks; after the fix it is safe because the
             // dispatch released the `read()` lock before iterating.
             self.binding.add_observer(Arc::new(InertObserver));
         }
@@ -2271,8 +2279,8 @@ mod tests {
         );
     }
 
-    /// Pre-V-21: this test would deadlock `cargo test -p flui-view --lib`.
-    /// Post-V-21: `handle_metrics_changed` snapshots the observer Vec
+    /// Before this fix: this test would deadlock `cargo test -p flui-view --lib`.
+    /// After the fix: `handle_metrics_changed` snapshots the observer Vec
     /// before iterating, so the re-entrant `add_observer` write lock can
     /// be acquired without blocking. The test asserts (a) the observer
     /// callback fired and (b) the re-entrant `add_observer` completed
@@ -2296,8 +2304,8 @@ mod tests {
         binding.add_observer(observer.clone() as Arc<dyn WidgetsBindingObserver>);
         assert_eq!(binding.observer_count(), 1);
 
-        // Pre-V-21: this call deadlocks (read lock held + observer wants
-        // write lock). Post-V-21: returns normally.
+        // Before this fix: this call deadlocks (read lock held + observer wants
+        // write lock). After the fix: returns normally.
         binding.handle_metrics_changed();
 
         assert_eq!(

@@ -130,7 +130,7 @@ epoch_counters! {
 
     /// Generational identity for worker-produced cache resources — image
     /// decode, tessellation, and text-shaping cache slots — following the
-    /// same generational pattern as [`GenId`](crate::GenId).
+    /// same generational pattern as [`GenId`](crate::id::GenId).
     ///
     /// Guards a cache slot against being read after its producer moved past
     /// it: a worker result is applied at commit only if its declared

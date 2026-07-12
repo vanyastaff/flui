@@ -8,30 +8,28 @@ use thiserror::Error;
 
 /// Errors that can occur during rendering operations.
 ///
-/// Cycle 4: `#[non_exhaustive]` future-compat marker. Matches the
-/// workspace 2026 quality bar — public error enums in foundation /
-/// tree / painting / engine all carry the attribute (cycle 3 I-11
-/// added it on `DiagnosticLevel` / `DiagnosticsTreeStyle`).
+/// Marked `#[non_exhaustive]` as a future-compat measure, matching the
+/// convention followed by public error enums across foundation / tree /
+/// painting / engine so new variants can be added without a breaking
+/// change for downstream matches.
 ///
-/// Cycle 4 R-17: the 5 message-carrying variants
-/// (`InvalidConstraints`, `RelayoutBoundaryViolation`, `LayerError`,
-/// `CompositingError`, `SemanticsError`) store `Box<str>` rather
-/// than `String`. `Box<str>` is a 16-byte fat pointer (vs `String`'s
-/// 24-byte `Vec<u8>` header) and never wastes capacity on the heap
-/// — error messages are written-once / read-rarely, so the `Vec`
-/// growth amortisation `String` provides has no value here. Same
-/// pattern as cycle 3 PR #106 (TreeError::Internal). Constructors
-/// accept `impl Into<Box<str>>` which covers `&str`, `String`, and
-/// `Box<str>` callers unchanged.
-// Cycle 4 R-25: dropped `Clone` derive. Workspace grep
-// (`rg 'RenderError.*clone\(\)'`) returned zero consumers of
-// `.clone()` on RenderError; errors are terminal values that
-// propagate through `?` or `Result::map_err`, neither of which
-// requires Clone. Removing the derive matches the canonical Rust
-// error idiom (*Programming Rust* 2nd ed §7 "Error Handling":
-// errors are throwaways, not duplicates). If a future caller needs
-// to fan out a RenderError to multiple consumers, wrap in `Arc`
-// at that callsite -- cheap, explicit, and avoids the
+/// The 5 message-carrying variants (`InvalidConstraints`,
+/// `RelayoutBoundaryViolation`, `LayerError`, `CompositingError`,
+/// `SemanticsError`) store `Box<str>` rather than `String`. `Box<str>` is
+/// a 16-byte fat pointer (vs `String`'s 24-byte `Vec<u8>` header) and
+/// never wastes capacity on the heap — error messages are written-once /
+/// read-rarely, so the `Vec` growth amortisation `String` provides has no
+/// value here (the same reasoning applies to `TreeError::Internal`).
+/// Constructors accept `impl Into<Box<str>>` which covers `&str`,
+/// `String`, and `Box<str>` callers unchanged.
+// This type intentionally does not derive `Clone`. A workspace grep
+// (`rg 'RenderError.*clone\(\)'`) found zero consumers of `.clone()` on
+// RenderError; errors are terminal values that propagate through `?` or
+// `Result::map_err`, neither of which requires Clone. Omitting the derive
+// matches the canonical Rust error idiom (*Programming Rust* 2nd ed §7
+// "Error Handling": errors are throwaways, not duplicates). If a future
+// caller needs to fan out a RenderError to multiple consumers, wrap in
+// `Arc` at that callsite -- cheap, explicit, and avoids the
 // implicit-deep-copy footgun.
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -277,11 +275,11 @@ pub enum RenderError {
     ///
     /// # History
     ///
-    /// **Original landing (Option B, PR #141):**
-    /// introduced so the `RenderObject<BoxProtocol>` blanket impl on
+    /// **Original implementation:** introduced so the
+    /// `RenderObject<BoxProtocol>` blanket impl on
     /// [`crate::traits::RenderBox`] can signal that a render object
     /// violated its layout contract as a typed error rather than an
-    /// opaque panic. The original landing used
+    /// opaque panic. It used
     /// `std::panic::panic_any(RenderError::ContractViolation { ... })`
     /// caught by `catch_unwind` in
     /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
@@ -289,9 +287,8 @@ pub enum RenderError {
     /// minimum-disruption shape that preserved the existing
     /// `perform_layout_raw` infallible signature.
     ///
-    /// **Follow-up PR (this commit, Option A):** the
-    /// `perform_layout_raw` signature now returns
-    /// `RenderResult<ProtocolGeometry<P>>` so contract violations
+    /// **Follow-up change:** the `perform_layout_raw` signature now
+    /// returns `RenderResult<ProtocolGeometry<P>>` so contract violations
     /// propagate as typed `Err(...)` through `?` directly — no panic
     /// primitive in the normal error path. The variant + constructor
     /// stay; the only change is how the value reaches
@@ -316,17 +313,16 @@ pub type RenderResult<T> = Result<T, RenderError>;
 impl RenderError {
     /// Creates an invalid constraints error with a message.
     ///
-    /// Cycle 4 R-17: message stored as `Box<str>` (heap allocation
-    /// shrinks from 24 bytes of `String` header to 16 bytes of fat
-    /// pointer).
+    /// The message is stored as `Box<str>` (heap allocation shrinks from
+    /// 24 bytes of `String` header to 16 bytes of fat pointer).
     ///
-    /// PR #112 review fix: constructor bound is `impl AsRef<str>`
-    /// rather than `impl Into<Box<str>>`. `AsRef<str>` is strictly
-    /// more permissive -- it accepts `&str`, `String`, `Box<str>`,
-    /// `&String`, `Cow<str>`, etc. The allocation happens once via
-    /// `message.as_ref().into()` (`str` -> `Box<str>`). Pre-fix
-    /// `Into<Box<str>>` rejected `&String` callers (no impl from
-    /// `&String` to `Box<str>` without deref coercion).
+    /// The constructor bound is `impl AsRef<str>` rather than
+    /// `impl Into<Box<str>>`. `AsRef<str>` is strictly more permissive --
+    /// it accepts `&str`, `String`, `Box<str>`, `&String`, `Cow<str>`,
+    /// etc. The allocation happens once via `message.as_ref().into()`
+    /// (`str` -> `Box<str>`); `Into<Box<str>>` would reject `&String`
+    /// callers (there is no impl from `&String` to `Box<str>` without
+    /// deref coercion).
     pub fn invalid_constraints(message: impl AsRef<str>) -> Self {
         Self::InvalidConstraints {
             message: message.as_ref().into(),

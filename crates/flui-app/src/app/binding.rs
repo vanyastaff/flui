@@ -242,7 +242,12 @@ impl AppBinding {
     // Widgets Binding Access
     // ========================================================================
 
-    // PORT-TARGET: flui-app runner root-bootstrap consolidation, pending Cycle 6 element-ownership unification (V-7 deferral)
+    // PORT-TARGET: flui-app runner root-bootstrap consolidation — the runner's `mount_root`
+    // hand-rolls its own root-element wiring instead of calling this method. Folding the two
+    // together requires first deciding which of the two coexisting element-tree ownership
+    // models (the by-id `ElementTree` vs. the recursive boxed-child tree the runner actually
+    // drives) is the single source of truth, so consolidation stays deferred until that
+    // ownership question is resolved.
     /// Attach a root widget.
     ///
     /// This creates the root element and schedules the first build.
@@ -277,10 +282,9 @@ impl AppBinding {
     /// underlying [`WidgetsBinding::attach_root_widget`] returns —
     /// notably [`AttachError::AlreadyAttached`](flui_view::AttachError::AlreadyAttached)
     /// when a root widget is already mounted. Callers MUST handle the
-    /// `Result` (PR #119 review — copilot); the previous log-and-
-    /// swallow shape hid `AlreadyAttached` (and any future variant
-    /// added under the enum's `#[non_exhaustive]` cover) from the
-    /// caller.
+    /// `Result`: an earlier version logged the error and swallowed it,
+    /// which hid `AlreadyAttached` (and any future variant added under
+    /// the enum's `#[non_exhaustive]` cover) from the caller.
     #[cfg_attr(
         not(test),
         expect(
@@ -294,7 +298,7 @@ impl AppBinding {
         view: &V,
     ) -> Result<(), flui_view::AttachError>
     where
-        V: View + Clone + Send + Sync + 'static,
+        V: View + Clone + 'static,
     {
         realm.enter(|realm| self.attach_root_widget_entered(realm, view))
     }
@@ -305,7 +309,7 @@ impl AppBinding {
         view: &V,
     ) -> Result<(), flui_view::AttachError>
     where
-        V: View + Clone + Send + Sync + 'static,
+        V: View + Clone + 'static,
     {
         // Auto-wrap: inject a VsyncScope carrying the binding's registry so
         // every implicitly-animated widget below can register its controller
@@ -343,7 +347,7 @@ impl AppBinding {
         height: f32,
     ) -> Result<(), flui_view::AttachError>
     where
-        V: View + Clone + Send + Sync + 'static,
+        V: View + Clone + 'static,
     {
         realm.enter(|realm| self.attach_root_widget_with_size_entered(realm, view, width, height))
     }
@@ -356,7 +360,7 @@ impl AppBinding {
         height: f32,
     ) -> Result<(), flui_view::AttachError>
     where
-        V: View + Clone + Send + Sync + 'static,
+        V: View + Clone + 'static,
     {
         // Auto-wrap: same VsyncScope injection as attach_root_widget.
         let wrapped = VsyncScope::new(self.vsync(), view.clone());
@@ -994,6 +998,9 @@ impl std::fmt::Debug for AppBinding {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use super::*;
     // Required to call `ctx.get::<T, _>(...)` on `&dyn BuildContext`; the method
     // lives on the `BuildContextExt` extension trait.
@@ -1087,6 +1094,40 @@ mod tests {
         }
     }
 
+    /// Root view with owner-local state. This deliberately does not implement
+    /// `Send` or `Sync`; the app root is mounted on the UI owner thread.
+    #[derive(Clone)]
+    struct OwnerLocalLeafView {
+        creates: Rc<Cell<usize>>,
+    }
+
+    impl flui_view::RenderView for OwnerLocalLeafView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            self.creates.set(self.creates.get() + 1);
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+            render_object: &mut Self::RenderObject,
+        ) {
+            *render_object = flui_objects::RenderSizedBox::shrink();
+        }
+    }
+
+    impl View for OwnerLocalLeafView {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
+        }
+    }
+
     fn test_realm(app: &AppBinding) -> super::super::ui_realm::UiRealm {
         super::super::ui_realm::UiRealm::for_test(app)
     }
@@ -1108,6 +1149,24 @@ mod tests {
             "AppBinding must pass its PipelineOwner to the widgets binding so the \
              root render tree bootstraps; without it the window renders nothing",
         );
+    }
+
+    #[test]
+    fn attach_root_widget_accepts_owner_local_root_state() {
+        static_assertions::assert_not_impl_any!(OwnerLocalLeafView: Send, Sync);
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        let creates = Rc::new(Cell::new(0));
+        let root = OwnerLocalLeafView {
+            creates: Rc::clone(&creates),
+        };
+
+        realm
+            .enter(|realm| app.attach_root_widget(realm, &root))
+            .expect("owner-local root attaches");
+
+        assert!(app.shared_pipeline_owner.read().root_id().is_some());
     }
 
     // ========================================================================

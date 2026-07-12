@@ -172,7 +172,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// a yet-unmounted root render object that supplies its own
     /// constraints via `RootRenderElement::mount`).
     ///
-    /// # Auto-schedules root relayout (PR #148 review fix)
+    /// # Auto-schedules root relayout
     ///
     /// When `Some(_)` is passed AND `root_id` is set AND the new
     /// constraints differ from the prior value, this method also

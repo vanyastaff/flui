@@ -345,7 +345,8 @@ where
 
     // ── 5. Dispose off-band children ──────────────────────────────────────
     // For `RenderOwned` slivers, `dispose_box_child` enqueues the render-node
-    // removal (U3c D2: Remove → Insert ordering D3 in `layout_dirty_root`).
+    // removal (U3c — the queued removal must be ordered before the
+    // corresponding insert in `layout_dirty_root`).
     // For `ElementOwned` slivers, we skip this entirely: the element tree drives
     // eviction via `SparseChildren::retain_band` using the `cache_first`/
     // `cache_last` band returned below, preventing the ABA double-remove that

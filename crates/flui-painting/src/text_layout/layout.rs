@@ -40,7 +40,7 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 /// principled fix and is tracked in
 /// `crates/flui-painting/ARCHITECTURE.md ## Future Enhancements`.
 //
-// REMOVE_BY: 2026-09-22 — audit P-17 cadence marker. By this date the
+// REMOVE_BY: 2026-09-22 — this is a scheduled re-check. By this date the
 // `catch_unwind` wrapper around cosmic-text's `set_text` /
 // `shape_until_scroll` is the principled fix; if `cosmic-text` panics
 // are still not a today-problem, push the date out, but do not let the

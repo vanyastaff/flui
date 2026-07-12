@@ -1372,9 +1372,9 @@ impl Renderer {
         } else {
             Backend::new(&mut painter)
         };
-        // Cycle 4 U-8: bind the frame render target so the
-        // DisplayList-level `render_backdrop_filter` path (U-9)
-        // can flush + blur the same target the layer-level path uses.
+        // Bind the frame render target so the DisplayList-level
+        // `render_backdrop_filter` path can flush + blur the same
+        // target the layer-level path uses.
         // When intermediate-active, `render_view`/`render_texture` point
         // at the intermediate; otherwise they point at the swapchain.
         // Without this bind, that command path falls back to passthrough

@@ -124,8 +124,8 @@ impl BufferPool {
         )
     }
 
-    // Cycle 4 wave 5 E-10: `get_index_buffer` and `get_uniform_buffer`
-    // standalone entry points deleted -- zero workspace callers. The
+    // The `get_index_buffer` and `get_uniform_buffer` standalone entry
+    // points were deleted -- zero workspace callers. The
     // joint `get_vertex_and_index_buffers` (below) is the live index-
     // buffer path (split-borrow to dodge the borrow checker), and
     // uniform buffers don't go through this pool at all (the filter

@@ -41,8 +41,9 @@ pub trait TreeNav<I: TreeId>: super::TreeRead<I> {
     ///
     /// Iterators can use this to size internal buffers appropriately.
     /// Defaults to the canonical [`crate::depth::INLINE_TREE_DEPTH`]
-    /// (= 32) per audit T-10's single-source-of-truth refactor.
-    /// Implementations override when their tree shape has different
+    /// (= 32), which is the single source of truth for this depth
+    /// constant across the crate. Implementations override when their
+    /// tree shape has different
     /// depth characteristics (e.g. `RenderTree` keeps 64 for
     /// scroll-heavy hierarchies).
     const MAX_DEPTH: usize = crate::depth::INLINE_TREE_DEPTH;
@@ -153,7 +154,7 @@ pub trait TreeNav<I: TreeId>: super::TreeRead<I> {
     ///
     /// Computes slot info from parent/children/depth via a single
     /// streaming pass over the parent's children — no `Vec`
-    /// allocation (audit T-9). Pre-cycle the default collected the
+    /// allocation. An earlier version of this default collected the
     /// parent's children into a `Vec<I>` for index lookup, which
     /// allocated on every slot query.
     fn slot(&self, id: I) -> Option<Slot<I>> {
@@ -287,9 +288,9 @@ pub trait TreeNav<I: TreeId>: super::TreeRead<I> {
             return Some(a);
         }
 
-        // Collect ancestors of both nodes into stack-allocated buffers
-        // (audit T-18). Inline capacity `INLINE_TREE_DEPTH` = 32 matches
-        // typical widget-tree depth; deeper trees spill to the heap.
+        // Collect ancestors of both nodes into stack-allocated buffers.
+        // Inline capacity `INLINE_TREE_DEPTH` = 32 matches typical
+        // widget-tree depth; deeper trees spill to the heap.
         let ancestors_a: SmallVec<[I; INLINE_TREE_DEPTH]> = self.ancestors(a).collect();
         let ancestors_b: SmallVec<[I; INLINE_TREE_DEPTH]> = self.ancestors(b).collect();
 
@@ -378,9 +379,9 @@ pub trait TreeNavExt<I: TreeId>: TreeNav<I> {
             .count()
     }
 
-    // Cycle 3 T-6: `path_to_node` returning `TreePath<I>` deleted —
-    // `TreePath` lived in `iter::path` which was removed as zombie
-    // surface. Callers that need a path collect via
+    // `path_to_node` (returning `TreePath<I>`) was removed: `TreePath`
+    // lived in `iter::path`, which had zero in-workspace consumers.
+    // Callers that need a path collect one via
     // `tree.ancestors(target).collect::<Vec<_>>().iter().rev()`.
 
     /// Get the nth child of a node.
@@ -409,11 +410,11 @@ pub trait TreeNavExt<I: TreeId>: TreeNav<I> {
         Some((first, last))
     }
 
-    // Cycle 3 T-6: `cursor_at`, `cursor_with_history`, `cursor_at_root`
-    // deleted — `TreeCursor` lived in `iter::cursor` which was
-    // removed as zombie surface (1,057 LOC, zero in-workspace
-    // consumers). Callers that need stateful navigation can compose
-    // `tree.children(id)` + `tree.parent(id)` directly.
+    // `cursor_at`, `cursor_with_history`, and `cursor_at_root` were
+    // removed: `TreeCursor` lived in `iter::cursor` (1,057 LOC) and had
+    // zero in-workspace consumers. Callers that need stateful
+    // navigation can compose `tree.children(id)` + `tree.parent(id)`
+    // directly.
 }
 
 // Blanket implementation for all TreeNav types
@@ -685,8 +686,8 @@ mod tests {
         let found = tree.find_child_where(root, |_node| true);
         assert!(found.is_some());
 
-        // Cycle 3 T-6: `path_to_node` deleted; root-to-target path
-        // composes from `ancestors().collect::<Vec<_>>().iter().rev()`.
+        // `path_to_node` was removed; a root-to-target path composes
+        // from `ancestors().collect::<Vec<_>>().iter().rev()` instead.
         let mut path: Vec<_> = tree.ancestors(child1).collect();
         path.reverse();
         assert_eq!(path, vec![root, child1]);

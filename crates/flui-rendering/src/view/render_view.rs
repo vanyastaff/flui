@@ -52,11 +52,11 @@ pub struct RenderView {
     /// allows the render view to reference the owner without preventing cleanup
     /// when the owner is dropped.
     owner: Option<Weak<RwLock<PipelineOwner>>>,
-    // Cycle 4 R-14: the 9-field `#[allow(dead_code)]` placeholder
-    // block (depth / needs_layout / needs_paint /
-    // needs_compositing_bits_update / needs_semantics_update /
-    // is_repaint_boundary / needs_compositing / cached_constraints /
-    // parent_data) was deleted. Workspace audit:
+    // A 9-field `#[allow(dead_code)]` placeholder block used to live here
+    // (depth / needs_layout / needs_paint / needs_compositing_bits_update /
+    // needs_semantics_update / is_repaint_boundary / needs_compositing /
+    // cached_constraints / parent_data). It was removed after an audit
+    // found none of the fields were pulling their weight:
     //   - 5 fields (needs_compositing_bits_update, needs_semantics_update,
     //     needs_compositing, cached_constraints, parent_data) had zero
     //     writes AND zero reads -- pure placeholders.
@@ -167,9 +167,9 @@ impl RenderView {
         if should_replace_layer {
             self.replace_root_layer_internal();
         }
-        // Cycle 4 R-14: the previous `self.needs_layout = true` write
-        // here had zero readers. When RenderView's full lifecycle
-        // plumbing lands, the equivalent invalidation flips on
+        // A `self.needs_layout = true` write used to happen here, but it had
+        // zero readers, so it was removed. When RenderView's full lifecycle
+        // plumbing lands, the equivalent invalidation should flip on
         // `RenderState<P>::flags::NEEDS_LAYOUT` (the atomic version
         // in `crates/flui-rendering/src/storage/flags.rs`).
     }
@@ -285,18 +285,18 @@ impl RenderView {
     }
 
     fn schedule_initial_layout_internal() {
-        // Cycle 4 R-14: the previous `self.needs_layout = true` write
-        // had zero readers. RenderState<P>::flags::NEEDS_LAYOUT is
-        // the load-bearing equivalent; the full plumbing lands when
+        // A `self.needs_layout = true` write used to happen here, but it had
+        // zero readers, so it was removed. RenderState<P>::flags::NEEDS_LAYOUT
+        // is the load-bearing equivalent; the full plumbing lands when
         // RenderView grows its own RenderState (or attaches to one) —
         // at which point this becomes a `&mut self` method again.
     }
 
     fn schedule_initial_paint_internal(&mut self) {
         self.layer = Some(self.update_matrices_and_create_new_root_layer());
-        // Cycle 4 R-14: the previous `self.needs_paint = true` write
-        // had zero readers. RenderState<P>::flags::NEEDS_PAINT carries
-        // the live signal post-plumbing.
+        // A `self.needs_paint = true` write used to happen here, but it had
+        // zero readers, so it was removed. RenderState<P>::flags::NEEDS_PAINT
+        // carries the live signal post-plumbing.
     }
 
     /// Prepare the initial frame without requiring a PipelineOwner.
@@ -329,8 +329,8 @@ impl RenderView {
             "RenderView size must be finite: {:?}",
             self.size
         );
-        // Cycle 4 R-14: the previous `self.needs_layout = false`
-        // clear had zero readers. The atomic flag lives on
+        // A `self.needs_layout = false` clear used to happen here, but it
+        // had zero readers, so it was removed. The atomic flag lives on
         // `RenderState<P>::flags::NEEDS_LAYOUT`; clearing it will
         // happen at the state-flip site when RenderView's lifecycle
         // plumbing wires up.
@@ -584,14 +584,15 @@ impl Diagnosticable for RenderView {
     }
 }
 
-// Cycle 4 U-4: `impl HitTestTarget for RenderView` was deleted. The
-// pre-cycle body was a no-op (`let _ = (event, entry);`) -- the view
-// implemented the trait only to satisfy the trait-dispatch shape
-// `flui_rendering::hit_testing::HitTestResult` required. Post-U-4 the
-// result type is the data-typed `flui_interaction::routing::HitTestResult`
-// where entries carry handler closures directly; no trait impl is
-// needed on RenderView. The `HitTestTarget` trait itself is U-5's
-// deletion target.
+// `impl HitTestTarget for RenderView` used to live here, but was deleted.
+// Its body was a no-op (`let _ = (event, entry);`) -- the view only
+// implemented the trait to satisfy the trait-dispatch shape that the
+// old rendering-side `flui_rendering::hit_testing::HitTestResult` type
+// required. Hit testing now produces the data-typed
+// `flui_interaction::routing::HitTestResult`, whose entries carry handler
+// closures directly, so no trait impl is needed on RenderView. The
+// `HitTestTarget` trait itself has since been removed entirely, since it
+// no longer had a production implementor.
 
 #[cfg(test)]
 mod tests {
@@ -625,11 +626,11 @@ mod tests {
         );
     }
 
-    // Cycle 4 R-14: tests for `is_repaint_boundary` and `depth`
-    // fields were removed alongside the field deletions -- the tests
-    // asserted the field VALUE (a literal `0` / `true`), not any
-    // behavior driven by the field. Both fields had zero production
-    // readers, so the assertions tested the test itself.
+    // Tests for the `is_repaint_boundary` and `depth` fields were removed
+    // alongside the field deletions above -- the tests asserted the field
+    // VALUE (a literal `0` / `true`), not any behavior driven by the field.
+    // Both fields had zero production readers, so the assertions tested
+    // the test itself.
 
     #[test]
     fn test_render_view_owner_is_none() {

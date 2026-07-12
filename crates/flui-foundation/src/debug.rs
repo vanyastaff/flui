@@ -1045,7 +1045,7 @@ impl fmt::Display for DiagnosticsNode {
 pub trait Diagnosticable: fmt::Debug {
     /// Create a diagnostics node for this object.
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        // F27: strip the module path, keeping only the final type segment.
+        // Strip the module path, keeping only the final type segment.
         // "flui_rendering::objects::RenderPadding" -> "RenderPadding".
         let full = std::any::type_name::<Self>();
         let type_name = full.rsplit("::").next().unwrap_or(full);
@@ -1563,8 +1563,8 @@ mod tests {
 
         let node = MyWidget.to_diagnostics_node();
         // `type_name::<MyWidget>()` includes the full module path
-        // (e.g. `flui_foundation::debug::tests::...::MyWidget`); after the
-        // F27 fix the node name must be stripped to just "MyWidget".
+        // (e.g. `flui_foundation::debug::tests::...::MyWidget`); the node
+        // name must be stripped down to just "MyWidget".
         assert_eq!(
             node.name(),
             Some("MyWidget"),

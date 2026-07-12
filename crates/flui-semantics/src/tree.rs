@@ -161,7 +161,7 @@ impl SemanticsTree {
         self.nodes.get_mut(id.get() - 1)
     }
 
-    // NOTE (cycle 3 T-2): the cycle 2 inherent `pub fn remove` was
+    // NOTE: the inherent `pub fn remove` that used to live here was
     // deleted in favour of [`flui_tree::TreeWrite::remove`] (the trait's
     // default cascade impl). The behaviour is identical — post-order
     // cascade via `children()` walks, parent unlink via
@@ -183,12 +183,12 @@ impl SemanticsTree {
     /// use only when the caller will re-attach or drop them
     /// immediately).
     ///
-    /// **Cycle 3 T-1 contract change**: the parent's children vector
-    /// IS now drained of `id` before the node is dropped. Pre-cycle
-    /// this method intentionally left the parent's children vec
-    /// pointing at a stale id, expecting the caller to handle
-    /// parent-cleanup; the audit found zero production callers actually
-    /// exercising that escape-hatch.
+    /// **Contract change**: the parent's children vector IS now drained
+    /// of `id` before the node is dropped. This method used to
+    /// intentionally leave the parent's children vec pointing at a
+    /// stale id, expecting the caller to handle parent-cleanup; a
+    /// review found zero production callers actually exercising that
+    /// escape-hatch, so the cleanup was made automatic instead.
     pub fn remove_shallow(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
         if !self.contains(id) {
             return None;
@@ -463,15 +463,14 @@ impl TreeNav<SemanticsId> for SemanticsTree {
 }
 
 // ============================================================================
-// TREE WRITE IMPLEMENTATION (cycle 3 T-2)
+// TREE WRITE IMPLEMENTATION
 // ============================================================================
 //
-// Hoists the cycle 2 cascade-by-default `remove` from the inherent API
-// up to the unified [`TreeWrite`] trait per memory
-// `flui-tree-unified-interface-intent`. Callers now write
-// `use flui_tree::TreeWrite; tree.remove(id);` and get cascade
-// automatically. The inherent `SemanticsTree::remove_shallow` is the
-// trait primitive; the trait default `remove` walks descendants and
+// Hoists the cascade-by-default `remove` from the inherent API up to
+// the unified [`TreeWrite`] trait so every tree type shares one removal
+// contract. Callers now write `use flui_tree::TreeWrite; tree.remove(id);`
+// and get cascade automatically. The inherent `SemanticsTree::remove_shallow`
+// is the trait primitive; the trait default `remove` walks descendants and
 // calls `remove_shallow`.
 
 impl TreeWrite<SemanticsId> for SemanticsTree {
@@ -503,7 +502,8 @@ impl TreeWrite<SemanticsId> for SemanticsTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Cycle 3 T-2: `tree.remove(id)` resolves through the trait now.
+    // `tree.remove(id)` resolves through the unified `TreeWrite` trait
+    // now, not an inherent method.
     use flui_tree::TreeWrite;
 
     #[test]
@@ -885,7 +885,8 @@ mod slab_hygiene_tests {
     use crate::node::SemanticsNode;
     use crate::tree::SemanticsTree;
     use flui_foundation::SemanticsId;
-    // Cycle 3 T-2: `tree.remove(id)` now resolves through the trait.
+    // `tree.remove(id)` now resolves through the unified `TreeWrite`
+    // trait rather than an inherent method.
     use flui_tree::TreeWrite;
 
     fn empty_node() -> SemanticsNode {

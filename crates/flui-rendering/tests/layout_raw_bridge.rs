@@ -21,9 +21,9 @@ use flui_rendering::{
     constraints::BoxConstraints,
     parent_data::{BoxParentData, FlexParentData},
     // `BoxLayoutCtxErased` is intentionally NOT re-exported under
-    // `protocol::*` (PR #141 review comment 3293746269) — `protocol::*`
-    // glob would pull it in alongside `LayoutContextApi` and collide
-    // on method names. Pull it from the explicit module path here.
+    // `protocol::*` — a `protocol::*` glob would pull it in alongside
+    // `LayoutContextApi` and collide on method names. Pull it from the
+    // explicit module path here.
     protocol::{
         BoxLayoutCtx, BoxProtocol, ChildState, Protocol, RenderObject,
         box_protocol::BoxLayoutCtxErased,
@@ -52,9 +52,8 @@ fn leaf_bridge_returns_constrained_size() {
     let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
-    // perform_layout_raw returns `RenderResult<Size>` (Option A
-    // follow-up to PR #141 #5); on the happy path we unwrap to assert
-    // the concrete Size.
+    // perform_layout_raw returns `RenderResult<Size>`; on the happy path
+    // we unwrap to assert the concrete Size.
     let size = <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(
         &mut obj,
         // GAT resolves `<BoxProtocol as Protocol>::LayoutCtxErased<'_>` to

@@ -213,9 +213,9 @@ impl DirtyTracker {
             };
             let (is_boundary, depth, parent) = step;
             if is_boundary {
-                // Codex P1 (PR #139 review): always enqueue the boundary for
-                // this invalidation with a dedup check so multiple
-                // marks-in-same-frame don't push duplicate entries.
+                // Always enqueue the boundary for this invalidation, with a
+                // dedup check so multiple marks-in-same-frame don't push
+                // duplicate entries.
                 if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) {
                     // Wake the platform: an idle event loop must produce a
                     // frame for this invalidation (Flutter parity:

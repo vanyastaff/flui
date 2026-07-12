@@ -25,13 +25,13 @@
 //! | [`Range<MIN, MAX>`] | bounded range | Constrained layouts |
 //! | [`Never`] | uninhabited | Type-system bottom |
 //!
-//! Cycle 3 T-7: the storage machinery (`ArityStorage`,
-//! `ChildrenStorage`, `ChildrenAccess`, `accessors` module,
-//! `runtime` module, `aliases` module) was deleted as zombie
-//! surface — ~3,000 LOC with zero in-workspace consumers. Concrete
-//! render objects use plain `Option<C>` / `Vec<C>` storage attached
-//! to the marker; the marker stays for compile-time documentation +
-//! future arity-aware algorithms.
+//! The storage machinery (`ArityStorage`, `ChildrenStorage`,
+//! `ChildrenAccess`, `accessors` module, `runtime` module, `aliases`
+//! module) was deleted as unused surface — ~3,000 LOC with zero
+//! in-workspace consumers. Concrete render objects use plain
+//! `Option<C>` / `Vec<C>` storage attached to the marker; the marker
+//! stays for compile-time documentation + future arity-aware
+//! algorithms.
 
 // ============================================================================
 // MODULES

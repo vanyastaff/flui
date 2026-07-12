@@ -216,7 +216,7 @@ pub use text_painter::{DEFAULT_FONT_SIZE, Invalidation, TextBaseline, TextPainte
 // This creates a cohesive API where users don't need to import from multiple
 // crates.
 //
-// REVIEW_BY: 2026-09-22 — audit P-12 cadence marker.
+// REVIEW_BY: 2026-09-22 — scheduled re-check of this re-export note.
 //
 // **Canonical home: `flui_types::painting`.** The types below are
 // *defined* in `flui-types` and *re-exported* here. `flui_painting::

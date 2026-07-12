@@ -1157,9 +1157,9 @@ mod unit_tests {
         );
     }
 
-    // ── U7b: scissor entirely outside tile → fully-clipped sentinel ─────────
+    // ── Scissor entirely outside tile → fully-clipped sentinel ──────────────
 
-    /// U7b: A full-frame scissor that does not intersect the tile must produce
+    /// A full-frame scissor that does not intersect the tile must produce
     /// the fully-clipped sentinel, not a garbage rect that accidentally covers
     /// part of the tile.
     ///

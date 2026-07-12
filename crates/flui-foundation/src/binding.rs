@@ -387,13 +387,12 @@ mod tests {
         });
         assert!(result.is_err(), "PanicBinding::new must propagate panic");
 
-        // Post-condition: `INITIALIZED` MUST still be `false`. Pre-I-3
+        // Post-condition: `INITIALIZED` MUST still be `false`. Before this
         // fix this assertion failed — the closure flipped `INITIALIZED`
         // to `true` BEFORE `new()` was called.
         assert!(
             !PanicBinding::is_initialized(),
-            "init panic incorrectly flipped INITIALIZED to true \
-             (regression of audit I-3)"
+            "init panic incorrectly flipped INITIALIZED to true"
         );
     }
 }

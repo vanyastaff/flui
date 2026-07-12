@@ -453,7 +453,7 @@ fn get_inherited_returns_none_when_no_ancestor() {
 }
 
 // ============================================================================
-// Wires `did_change_dependencies` to inherited updates (audit V-19).
+// Wires `did_change_dependencies` to inherited updates.
 //
 // When `InheritedView::update_should_notify` returns `true`, the
 // dependent's typed `ViewState::did_change_dependencies` hook fires

@@ -82,7 +82,7 @@ pub const EPSILON: f64 = 1e-10;
 /// Single-precision tolerance for f32 comparisons.
 pub const EPSILON_F32: f32 = 1e-6;
 
-// NOTE (audit I-13): `approx_equal`, `approx_equal_f32`, `is_near_zero`,
+// NOTE: `approx_equal`, `approx_equal_f32`, `is_near_zero`,
 // `is_near_zero_f32` were removed from this module — they had zero
 // in-workspace consumers. The geometry/float-comparison primitive belongs
 // in `flui-types`, not in the foundation crate. If a need surfaces, port

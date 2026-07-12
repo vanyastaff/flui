@@ -370,15 +370,15 @@ pub trait CommandRenderer {
 }
 
 // ============================================================================
-// LAYER-STATE-STACK TRAIT (cycle 4 E-9 split)
+// LAYER-STATE-STACK TRAIT
 // ============================================================================
 
 /// Compositor hand-off interface for the flui-layer clip/transform/effect
 /// stacks.
 ///
-/// Pre-cycle these 13 methods lived on [`CommandRenderer`] alongside the
-/// 34 per-command visitor methods. Cycle 4 E-9 split them into this
-/// dedicated trait because:
+/// These 13 methods used to live on [`CommandRenderer`] alongside its 34
+/// per-command visitor methods. They were split out into this dedicated
+/// trait because:
 ///
 /// - The visitor methods (render_rect / render_text / ...) are the
 ///   `DrawCommand` dispatch contract every backend implements -- a
@@ -399,13 +399,13 @@ pub trait CommandRenderer {
 /// compositor route -- implement both. The trait split lets new
 /// command-only backends materialize without the 13-method overhead.
 ///
-/// # Audit
+/// # Rationale
 ///
-/// See `docs/research/2026-05-22-flui-rendering-engine-audit.md`
-/// E-9. Same trait-split intuition as the earlier
-/// `SemanticsConfiguration` split: separate the minimal command-only
-/// surface from the fuller stateful one so implementers only pay for
-/// what they use.
+/// See `docs/research/2026-05-22-flui-rendering-engine-audit.md` for the
+/// full write-up. This follows the same trait-split intuition as the
+/// earlier `SemanticsConfiguration` split: separate the minimal
+/// command-only surface from the fuller stateful one so implementers only
+/// pay for what they use.
 pub trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);

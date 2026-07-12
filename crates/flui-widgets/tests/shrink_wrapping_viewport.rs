@@ -56,8 +56,9 @@ fn shrink_wrapping_viewport_adopts_the_new_axis_on_rebuild() {
     // A shrink-wrap sizes to content on its MAIN axis and fills the cross axis.
     // Loose on both axes (0..300) so the content (2×25 = 50px) shrinks whichever
     // axis is main. Reconciliation reuses the render object across a rebuild, so
-    // a vertical→horizontal axis change must flip the layout — the axis must not
-    // stay stale from construction (Codex P2 / stale-on-rebuild).
+    // a vertical→horizontal axis change must flip the layout — this is a
+    // regression guard for the axis staying stale from construction instead
+    // of updating on rebuild.
     let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(300.0));
     let content = || {
         vec![

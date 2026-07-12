@@ -12,7 +12,7 @@ use super::{AppBinding, AppConfig};
 /// This is the internal implementation called by `run_app()`.
 pub fn run_app_impl<V>(root: V)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     run_app_with_config_impl(root, AppConfig::default());
 }
@@ -22,7 +22,7 @@ where
 /// This is the internal implementation called by `run_app_with_config()`.
 pub fn run_app_with_config_impl<V>(root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     // Initialize logging
     init_logging();
@@ -540,7 +540,7 @@ mod realm_dispatch_tests {
 ))]
 fn run_desktop<V>(root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     use std::sync::Arc;
 
@@ -881,9 +881,10 @@ where
 ///
 /// `WidgetsBinding::attach_root_widget` bootstraps the *paint* render tree
 /// (`RootRenderElement` → `PipelineOwner`), but hit testing routes through the
-/// `RendererBinding`'s own per-view registry. V-7 keeps these two `RenderView`s
-/// mapped independently: the paint root lives in the `PipelineOwner`; the
-/// hit-test root is registered here by the runner after attach.
+/// `RendererBinding`'s own per-view registry. These two `RenderView`s are
+/// kept mapped independently by design: the paint root lives in the
+/// `PipelineOwner`; the hit-test root is registered here by the runner
+/// after attach.
 fn register_hit_test_render_view() {
     use std::sync::Arc;
 
@@ -913,7 +914,7 @@ fn register_hit_test_render_view() {
 #[cfg(target_os = "android")]
 pub fn run_app_android<V>(app: android_activity::AndroidApp, root: V)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     run_app_android_with_config(app, root, AppConfig::default());
 }
@@ -934,7 +935,7 @@ where
 #[cfg(target_os = "android")]
 pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     init_logging();
 
@@ -949,7 +950,7 @@ where
 #[cfg(target_os = "android")]
 fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     use std::{path::PathBuf, sync::Arc};
 
@@ -1179,7 +1180,7 @@ fn run_ios(_config: AppConfig) {
 #[cfg(target_arch = "wasm32")]
 fn run_web<V>(root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     use std::sync::Arc;
 
@@ -1384,6 +1385,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use flui_types::geometry::px;
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
@@ -1404,6 +1408,34 @@ mod tests {
         fn create_element(&self) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
+    }
+
+    #[derive(Clone)]
+    struct OwnerLocalRoot {
+        value: Rc<Cell<usize>>,
+    }
+
+    impl StatelessView for OwnerLocalRoot {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            self.value.set(self.value.get() + 1);
+            TestView.boxed()
+        }
+    }
+
+    impl View for OwnerLocalRoot {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+
+    #[test]
+    fn runner_entrypoints_accept_owner_local_root_state() {
+        static_assertions::assert_not_impl_any!(OwnerLocalRoot: Send, Sync);
+
+        std::hint::black_box(run_app_impl::<OwnerLocalRoot> as fn(OwnerLocalRoot));
+        std::hint::black_box(
+            run_app_with_config_impl::<OwnerLocalRoot> as fn(OwnerLocalRoot, AppConfig),
+        );
     }
 
     #[test]

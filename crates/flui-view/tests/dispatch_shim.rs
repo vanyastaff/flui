@@ -84,10 +84,10 @@ fn identity_shim_succeeds_on_type_match() {
     );
 }
 
-/// PR #133 review (P1) regression lock — `BoxedView` forwards
-/// `View::view_type_id()` to its inner view; a `view_type_id()`-keyed
-/// guard would let the wrapper slip through and the subsequent
-/// downcast would panic on every `.boxed()` rebuild.
+/// Regression lock: `BoxedView` forwards `View::view_type_id()` to its
+/// inner view; a `view_type_id()`-keyed guard would let the wrapper slip
+/// through and the subsequent downcast would panic on every `.boxed()`
+/// rebuild.
 ///
 /// The dispatch keys on `Downcast::as_any().type_id()` —
 /// the concrete runtime TypeId, not the overridable trait method —
