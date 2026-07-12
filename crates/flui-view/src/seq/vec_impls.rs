@@ -10,7 +10,7 @@
 //!
 //! Per-child `dyn`-dispatch cost is the same as the tuple path's
 //! `&dyn View` callback boundary — both pay one `dyn`-call per
-//! child (`SC-007` model). The tuple path's monomorphism advantage
+//! child. The tuple path's monomorphism advantage
 //! is per-*position* (inlined callback bodies, no nested arity
 //! discriminant), not per-child.
 

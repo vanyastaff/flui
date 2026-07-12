@@ -19,7 +19,7 @@ View and Element tree: immutable Views → mutable Elements → RenderObjects. T
 - **`trybuild` compile-fail tests** — `tests/ui/` corpus exercises derive macro error messages (e.g., `column_17_compile_error.rs`).
 - **No `Box<dyn View>` as struct fields** in element child collections — enforced by port-check trigger #6.
 - **No `downcast_ref::<V>()` in update-dispatch path** — enforced by FR-033. `dispatch_view_update` (TypeId-keyed `Box::downcast::<V>`) is the only path.
-- **Benchmarks** — `s1_key_storage`, `s2_static_path`, `sc012_global_key_reparent`.
+- **Benchmarks** — `key_storage_shape`, `static_path_algorithm`, `global_key_reparent_latency`.
 - **`cargo-shear` false positive** — `tests/ui/*.rs` declared in `[package.metadata.cargo-shear] ignored-paths`.
 
 ## Related crates

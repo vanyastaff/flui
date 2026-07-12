@@ -1451,7 +1451,7 @@ fn retake_inactive_global_key(
         "ElementTree::insert retook inactive element for GlobalKey state migration"
     );
 
-    // SC-003: emit ReconcileEvent::Reparent. The element
+    // Emit ReconcileEvent::Reparent. The element
     // came from the inactive queue (Lifecycle::Inactive → Active), so
     // `from_parent: None` per ADV-1 branch case 1 — there is no prior
     // *active* parent at the moment of reparent; the donor parent

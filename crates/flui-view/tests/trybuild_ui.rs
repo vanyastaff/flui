@@ -1,13 +1,13 @@
 //! trybuild driver for the `tests/ui/` compile-fail corpus.
 //!
-//! Locks the FR-034 friendly diagnostic (SC-014) at
+//! Locks the FR-034 friendly diagnostic at
 //! `column!` arity > 16. trybuild compares each `compile_fail`
 //! entry's captured rustc output against the sibling `.stderr`
 //! file. The comparison is **whole-output**, not a `contains`
 //! substring search; trybuild normalizes a handful of fields
 //! (line numbers, file paths, hashes) and supports `...` wildcards
 //! inside the `.stderr` snapshot for variance-tolerant matches.
-//! The SC-014 contract is therefore: rustc emits an error block
+//! The contract is therefore: rustc emits an error block
 //! whose first line carries the FR-034 message verbatim, and the
 //! `.stderr` snapshot captures the surrounding framing.
 //!

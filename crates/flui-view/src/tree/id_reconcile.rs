@@ -1337,9 +1337,9 @@ mod tests {
         /// Assert the captured events carry exactly the expected
         /// `(kind, slot)` dispositions as a MULTISET. Both sides are
         /// sorted before comparison so a test does not depend on the
-        /// HashMap-iteration order of the keyed-middle phase (the SC-008
-        /// multiset contract) — `expected` is written in natural emission
-        /// order at the call site.
+        /// HashMap-iteration order of the keyed-middle phase's multiset
+        /// contract — `expected` is written in natural emission order
+        /// at the call site.
         fn assert_dispositions(events: &[CollectedEvent], expected: &[(ReconcileEventKind, u64)]) {
             let sort_key = |(kind, slot): &(ReconcileEventKind, u64)| (*kind as u8, *slot);
             let mut actual: Vec<(ReconcileEventKind, u64)> =
@@ -1520,7 +1520,7 @@ mod tests {
             );
         }
 
-        /// The S_3 permutation corpus (SC-002 / FR-024(b)) on the slab:
+        /// The S_3 permutation corpus (FR-024(b)) on the slab:
         /// for each of the 6 permutations of keyed `[1, 2, 3]`, the
         /// disposition multiset matches the keyed-reconcile contract AND
         /// every key's element moves to its permuted slot (never rebuilt).

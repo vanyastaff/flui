@@ -1,4 +1,4 @@
-//! SC-011 — `ElementKind` is a closed `#[non_exhaustive]` enum.
+//! `ElementKind` is a closed `#[non_exhaustive]` enum.
 //!
 //! The contract: a contributor adding a new `ElementKind` variant
 //! should see the compiler enumerate every non-exhaustive `match`
@@ -50,12 +50,12 @@ fn classify_compile_check(kind: &ElementKind) -> &'static str {
         ElementKind::RenderSingle(_) => "RenderSingle",
         ElementKind::RenderOptional(_) => "RenderOptional",
         ElementKind::RenderVariable(_) => "RenderVariable",
-        _ => "<unknown variant — sc011_non_exhaustive_smoke needs an update>",
+        _ => "<unknown variant — this exhaustiveness check needs an update>",
     }
 }
 
 #[test]
-fn covers_sc011_element_kind_is_non_exhaustive_and_variants_named() {
+fn element_kind_is_non_exhaustive_and_variants_named() {
     // The function pointer is what we observe — the compiler
     // accepts the body only if every named arm matches an actual
     // variant. The runtime call is unnecessary for the check

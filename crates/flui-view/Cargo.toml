@@ -104,7 +104,7 @@ name = "static_path_algorithm"
 harness = false
 
 [[bench]]
-name = "sc012_global_key_reparent"
+name = "global_key_reparent_latency"
 harness = false
 
 [lints]

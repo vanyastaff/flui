@@ -41,9 +41,8 @@ use std::any::TypeId;
 use flui_foundation::ElementId;
 
 /// Disposition recorded by the keyed reconciler for a single child
-/// slot. `#[non_exhaustive]` per FR-035 + SC-011 so adding a new
-/// disposition (e.g. an `Async` suspend variant) is not a breaking
-/// change.
+/// slot. `#[non_exhaustive]` per FR-035 so adding a new disposition
+/// (e.g. an `Async` suspend variant) is not a breaking change.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]

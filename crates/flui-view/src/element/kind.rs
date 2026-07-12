@@ -11,18 +11,16 @@
 //! `Box<dyn ElementBase>` storage paired with a runtime
 //! `downcast_ref::<V>()` (`crates/flui-view/src/element/generic.rs:271`)
 //! emits `tracing::warn!` on type mismatch and continues with stale
-//! state — a silent-correctness trap that the round-5 spec made FR-021
-//! retire. `ElementKind` replaces that path with a closed enum so the
-//! reconciler can dispatch monomorphically per child position
-//! (SC-007). Arity-class dispatch lives at the outer match site
-//! because an enum variant cannot introduce a generic parameter the
-//! outer enum does not carry — collapsing the Render family into a
-//! single variant with an inner arity enum would defeat the per-
-//! position monomorphism guarantee.
+//! state — a silent-correctness trap FR-021 retires. `ElementKind`
+//! replaces that path with a closed enum so the reconciler can
+//! dispatch monomorphically per child position. Arity-class dispatch
+//! lives at the outer match site because an enum variant cannot
+//! introduce a generic parameter the outer enum does not carry —
+//! collapsing the Render family into a single variant with an inner
+//! arity enum would defeat the per-position monomorphism guarantee.
 //!
-//! `#[non_exhaustive]` per Constitution Principle 4 + SC-011: future
-//! variants (e.g. an `Async` or `Suspense` family) can land without a
-//! breaking change.
+//! `#[non_exhaustive]`: future variants (e.g. an `Async` or
+//! `Suspense` family) can land without a breaking change.
 //!
 //! # Sub-trait surface
 //!
@@ -103,7 +101,7 @@ pub trait InheritedElementBase: ElementBase {}
 /// Parameterised by the arity so each render-arity family has its own
 /// trait object type — the reconciler can dispatch per arity-class at
 /// the outer `ElementKind` match site without re-checking the arity
-/// inside the variant data (SC-007). Today only
+/// inside the variant data. Today only
 /// `RenderElementBase<Variable>` has a blanket impl
 /// (`Element<V, Variable, RenderBehavior<V>>` over `V: RenderView<...>`);
 /// the `Leaf` / `Single` / `Optional` slots exist in the type surface
@@ -315,7 +313,7 @@ impl fmt::Debug for AnimationListener {
 ///
 /// Replaces the legacy `Box<dyn ElementBase>` storage with a typed
 /// variant set so the reconciler can dispatch monomorphically per
-/// arity-class (SC-007) and the `View::can_update` mismatch path no
+/// arity-class and the `View::can_update` mismatch path no
 /// longer silently downcast-warns with stale state (FR-021).
 ///
 /// Variants are pinned at the behavior-FAMILY level — adding a new
@@ -727,8 +725,8 @@ mod tests {
 
     /// Exhaustivity check — the closed set is exactly the eleven
     /// variants below. Adding a new behavior family without updating
-    /// this match (and every other consumer) is a compile error,
-    /// which is the SC-007 / SC-011 contract.
+    /// this match (and every other consumer) is a compile error —
+    /// that's the point of keeping this test's match exhaustive.
     ///
     /// `#[non_exhaustive]` lets downstream `match` blocks fail-safe
     /// with a wildcard; this test deliberately omits the wildcard so

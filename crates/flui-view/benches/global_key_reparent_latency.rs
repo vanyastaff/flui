@@ -1,4 +1,4 @@
-//! SC-012 — GlobalKey reparent latency is independent of outer-tree
+//! GlobalKey reparent latency is independent of outer-tree
 //! size. Comparing two reparent runs in a 1K-element tree vs a 10K-
 //! element tree, the wall-clock cost should stay roughly constant
 //! (within ~2x), proving the algorithm is O(subtree depth + 1)
@@ -134,7 +134,7 @@ fn setup_tree(outer_size: usize) -> SetupOutputs {
 }
 
 fn bench_reparent(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sc012_global_key_reparent");
+    let mut group = c.benchmark_group("global_key_reparent_latency");
 
     // Two tree sizes — reparent cost should not depend on outer
     // size. 1K vs 10K is the comparison the plan envisions.

@@ -1,4 +1,4 @@
-//! SC-009 — `BoxedView` conditional return compiles and the
+//! `BoxedView` conditional return compiles and the
 //! author-side overhead is bounded by `.boxed()` per branch.
 //!
 //! Edge Case (spec): a `build()` body whose arms have different
@@ -10,10 +10,10 @@
 //! implements `View`, hence `IntoView` via the blanket
 //! `impl<V: View> IntoView for V`).
 //!
-//! SC-009 caps the author-side overhead at **≤ 2 tokens per
+//! The author-side overhead is bounded at **≤ 2 tokens per
 //! branch** (`.boxed()` itself is one identifier + one `()` call,
 //! so 4 token-positions per branch in `proc_macro2` accounting;
-//! the SC's "2 tokens" framing collapses the `(` and `)` into the
+//! the "2 tokens" framing collapses the `(` and `)` into the
 //! identifier as one author-visible action).
 //!
 //! This file pins:
@@ -86,10 +86,10 @@ struct ConditionalRoot {
 
 impl StatelessView for ConditionalRoot {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // SC-009 canonical authoring shape: each arm explicitly
+        // Canonical authoring shape: each arm explicitly
         // `.boxed()` so both land on `BoxedView`. The author-side
         // overhead vs the trivial `impl IntoView` return is
-        // `.boxed()` per branch — within the SC-009 bound.
+        // `.boxed()` per branch — within the token budget above.
         if self.branch {
             LeafA.boxed()
         } else {
@@ -127,21 +127,21 @@ impl View for ThreeWayRoot {
 }
 
 #[test]
-fn covers_sc009_two_arm_conditional_compiles_and_is_a_view() {
+fn two_arm_conditional_compiles_and_is_a_view() {
     let v = ConditionalRoot { branch: true };
     let element = View::create_element(&v);
     assert_eq!(element.lifecycle(), Lifecycle::Initial);
 }
 
 #[test]
-fn covers_sc009_three_arm_match_compiles_and_is_a_view() {
+fn three_arm_match_compiles_and_is_a_view() {
     let v = ThreeWayRoot { arm: 1 };
     let element = View::create_element(&v);
     assert_eq!(element.lifecycle(), Lifecycle::Initial);
 }
 
 #[test]
-fn covers_sc009_boxed_view_is_a_view() {
+fn boxed_view_is_a_view() {
     // `BoxedView` itself satisfies the `View` trait — the
     // `IntoView` blanket then makes it a valid `impl IntoView`
     // return. This is what makes the per-branch `.boxed()` shape
