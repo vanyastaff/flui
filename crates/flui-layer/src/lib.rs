@@ -89,7 +89,7 @@ pub mod damage;
 mod error;
 mod link_registry;
 mod scene;
-// The owned per-window per-frame raster package (ADR-0027 §5).
+// The owned per-window per-frame raster package.
 mod scene_snapshot;
 
 pub mod layer;
@@ -205,7 +205,7 @@ pub mod prelude {
     pub use crate::{Layer, LayerBounds, LayerId, LayerNode, LayerTree};
     // Compositor
     pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor, resolve_follower_offset};
-    // Raster boundary (ADR-0027 §5)
+    // Raster boundary
     pub use crate::{DamageRegion, SceneSnapshot};
     // Transform layers
     pub use crate::{OffsetLayer, TransformLayer};

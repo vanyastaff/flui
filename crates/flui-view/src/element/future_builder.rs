@@ -1,21 +1,21 @@
-//! `FutureBuilder` — build from the latest state of a future (ADR-0018, unit U4).
+//! `FutureBuilder` — build from the latest state of a future.
 //!
 //! # Public shape
 //!
 //! Exported from `flui-view::element` and re-exported by `flui-widgets` plus its
-//! prelude after the ADR-0018 U6 parity gate. The keyed identity shape is signed
+//! prelude once the design passed its Flutter-parity gate. The keyed identity shape is signed
 //! off by the repository owner; this repository has no separate api-design-lead
 //! role. The state type is public only because Rust requires a public associated
 //! `State` type for a public `StatefulView` implementation; it remains opaque.
 //!
 //! # How the seams compose
 //!
-//! - **U1** `RebuildHandle` — captured in `init_state`, called from the task's
+//! - `RebuildHandle` — captured in `init_state`, called from the task's
 //!   completion to schedule a rebuild. Never acquired in `build`.
-//! - **U2** `AsyncDriver` — reached through [`BuildContext::async_driver`], which
+//! - `AsyncDriver` — reached through [`BuildContext::async_driver`], which
 //!   yields the driver *this binding's frame step polls*. The task is spawned
 //!   with `spawn_local_eager`, so an immediately-ready future completes inline.
-//! - **U3** [`AsyncSnapshot`] / [`ConnectionState`] — the state machine.
+//! - [`AsyncSnapshot`] / [`ConnectionState`] — the state machine.
 //!
 //! # Identity is an explicit key
 //!
@@ -35,8 +35,8 @@
 //! `init_state` runs inside `build_scope`, and the frame's driver step already
 //! ran *before* `build_scope`. A plain `spawn_local` would therefore first poll
 //! on the next frame, and the first build would show `Waiting` even for a ready
-//! future — diverging from Flutter's `SynchronousFuture` behavior. U4 added
-//! `AsyncDriver::spawn_local_eager`, which polls once inline at subscribe time,
+//! future — diverging from Flutter's `SynchronousFuture` behavior.
+//! `AsyncDriver::spawn_local_eager` polls once inline at subscribe time,
 //! exactly as Dart's synchronous `.then` runs inline inside `initState`.
 //!
 //! While that inline poll runs, `inline_window` is set: a completion landing in
@@ -44,9 +44,7 @@
 //! that will read it has not happened yet. `after_subscribe` then leaves an
 //! already-`Done` snapshot alone rather than dragging it back to `Waiting`.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, rc::Rc, sync::Arc};
 
 use flui_foundation::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
@@ -64,7 +62,7 @@ pub type BoxedResultFuture<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + S
 
 /// Produces the future to await. `Fn`, not `FnOnce`: the view is cloned on every
 /// rebuild. Called once per subscription.
-pub type FutureFactory<T, E> = Arc<dyn Fn() -> BoxedResultFuture<T, E> + Send + Sync>;
+pub type FutureFactory<T, E> = Rc<dyn Fn() -> BoxedResultFuture<T, E>>;
 
 /// Fold a completion into the shared snapshot, honouring the generation guard.
 ///
@@ -97,9 +95,9 @@ impl<K: Clone, T, E> Clone for FutureBuilder<K, T, E> {
     fn clone(&self) -> Self {
         Self {
             key: self.key.clone(),
-            make: Arc::clone(&self.make),
+            make: Rc::clone(&self.make),
             initial_data: self.initial_data.clone(),
-            builder: Arc::clone(&self.builder),
+            builder: Rc::clone(&self.builder),
         }
     }
 }
@@ -165,7 +163,7 @@ where
             token: None,
             key: None,
             initial_key: self.key.clone(),
-            initial_make: Arc::clone(&self.make),
+            initial_make: Rc::clone(&self.make),
             initial_data: self.initial_data.clone(),
         }
     }
@@ -313,7 +311,7 @@ where
         // An absent key is Flutter's null future: no subscription, snapshot stays
         // where `initial` left it.
         if let Some(key) = self.initial_key.clone() {
-            let make = Arc::clone(&self.initial_make);
+            let make = Rc::clone(&self.initial_make);
             self.subscribe(key, &make);
         }
     }
@@ -425,7 +423,7 @@ mod tests {
         fn factory(&self) -> FutureFactory<Payload, Boom> {
             let result = Arc::clone(&self.result);
             let waker = Arc::clone(&self.waker);
-            Arc::new(move || {
+            Rc::new(move || {
                 Box::pin(Controlled {
                     result: Arc::clone(&result),
                     waker: Arc::clone(&waker),
@@ -444,7 +442,7 @@ mod tests {
 
     /// Records every snapshot the builder was handed.
     fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
-        Arc::new(move |_ctx, snapshot| {
+        Rc::new(move |_ctx, snapshot| {
             log.lock().push(Seen {
                 state: snapshot.connection_state(),
                 data: snapshot.data().map(|payload| payload.0),
@@ -554,7 +552,7 @@ mod tests {
             completer.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(7)));
+        .with_initial_data(Rc::new(|| Payload(7)));
 
         let _harness = Harness::mount(&view);
         assert_eq!(
@@ -619,7 +617,7 @@ mod tests {
             completer.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(1)));
+        .with_initial_data(Rc::new(|| Payload(1)));
 
         let mut harness = Harness::mount(&view);
         assert_eq!(last(&log).state, ConnectionState::Waiting);
@@ -683,14 +681,14 @@ mod tests {
         let factory_calls = Arc::new(AtomicUsize::new(0));
         let calls_for_factory = Arc::clone(&factory_calls);
         let inner = completer.factory();
-        let make: FutureFactory<Payload, Boom> = Arc::new(move || {
+        let make: FutureFactory<Payload, Boom> = Rc::new(move || {
             calls_for_factory.fetch_add(1, Ordering::Relaxed);
             inner()
         });
 
         let view = FutureBuilder::keyed(
             Some(1_u32),
-            Arc::clone(&make),
+            Rc::clone(&make),
             recording_builder(Arc::clone(&log)),
         );
         let mut harness = Harness::mount(&view);
@@ -703,7 +701,7 @@ mod tests {
         // Same key ⇒ untouched snapshot, no new subscription.
         let same = FutureBuilder::keyed(
             Some(1_u32),
-            Arc::clone(&make),
+            Rc::clone(&make),
             recording_builder(Arc::clone(&log)),
         );
         harness.update(&same);
@@ -733,7 +731,7 @@ mod tests {
             first.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99)));
+        .with_initial_data(Rc::new(|| Payload(99)));
 
         let mut harness = Harness::mount(&view);
         first.complete(Ok(Payload(1)));
@@ -747,7 +745,7 @@ mod tests {
             second.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99)));
+        .with_initial_data(Rc::new(|| Payload(99)));
         harness.update(&next);
 
         assert_eq!(

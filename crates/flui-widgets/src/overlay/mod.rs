@@ -1,8 +1,8 @@
 //! [`Overlay`] — an insertion-ordered stack of independently-managed layers.
 //!
-//! ADR-0019 U1, the first prerequisite for `Navigator`. **Private to
+//! The first prerequisite for `Navigator`. **Private to
 //! `flui-widgets`**: nothing here is exported from the crate root or the prelude
-//! until ADR-0019 U4's parity + sign-off gate.
+//! until the parity + sign-off gate.
 //!
 //! # Flutter parity
 //!
@@ -18,8 +18,8 @@
 //!
 //! # `opaque` / `maintainState` / `skipCount`
 //!
-//! ADR-0019 U1 shipped this as a plain `Stack` with `StackFit::Expand` and
-//! deferred the three flags. ADR-0020 U5.3 lands them, because `ModalRoute`'s
+//! This originally shipped as a plain `Stack` with `StackFit::Expand`, deferring
+//! the three flags; they landed later, because `ModalRoute`'s
 //! `maintainState` would otherwise be a field that lies.
 //!
 //! [`OverlayState::build`] is now a port of `overlay.dart:886-918`: walk the
@@ -42,28 +42,28 @@
 //!
 //! # Threading and locks
 //!
-//! [`OverlayHandle`] is the ADR-0019 §3.2 answer to "how does something outside
-//! the tree mutate the overlay?": an owned, `'static`, cloneable capability, not
-//! a `GlobalKey` lookup. Mutation takes a private `Mutex` and then schedules a
-//! rebuild through the [`RebuildHandle`] the state published at `init_state`.
-//! No element-tree borrow is held, no second lock is taken under a first, and no
-//! `GlobalKey` registry is consulted. `Navigator` (U3) will reach its overlay the
+//! [`OverlayHandle`] answers "how does something outside the tree mutate the
+//! overlay?": an owned, `'static`, cloneable capability, not a `GlobalKey`
+//! lookup. Mutation takes a private `Mutex` and then schedules a rebuild
+//! through the [`RebuildHandle`] the state published at `init_state`. No
+//! element-tree borrow is held, no second lock is taken under a first, and no
+//! `GlobalKey` registry is consulted. `Navigator` will reach its overlay the
 //! same way.
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
-// `Overlay` stays **private** after ADR-0020 U5.4: `Navigator`, `ModalRoute` and
-// the public `PageRoute` / `PopupRoute` all need it, but nothing in the signed-off
+// `Overlay` stays **private**: `Navigator`, `ModalRoute` and the public
+// `PageRoute` / `PopupRoute` all need it, but nothing in the signed-off
 // public surface names it, and exporting Flutter's `Overlay` / `OverlayEntry` /
-// `OverlayPortal` is a separate parity gate (§7e).
+// `OverlayPortal` is a separate parity gate.
 //
-// `Navigator` exercises `rearrange`, `OverlayEntry::new/remove/is_attached`, and —
-// since U5.3 — `opaque` / `maintain_state`. What stays dead is the *insertion*
+// `Navigator` exercises `rearrange`, `OverlayEntry::new/remove/is_attached`, and
+// `opaque` / `maintain_state`. What stays dead is the *insertion*
 // half (`insert`, `insert_all`, `InsertPosition`, `entry_ids`) plus the builder
 // forms and `mark_needs_build`, which only an app author placing entries directly,
-// or `Hero` (B1.4), would call. Ported, tested, waiting for a consumer.
+// or `Hero`, would call. Ported, tested, waiting for a consumer.
 //
-// The `navigator` module needs no such allow: U5.4 gave every item a production
+// The `navigator` module needs no such allow: every item there has a production
 // caller or a `#[cfg(test)]`.
 #![allow(dead_code)]
 
@@ -104,8 +104,8 @@ pub(crate) enum InsertPosition {
 ///
 /// Shared by `Arc` between the [`OverlayHandle`] the caller holds and the
 /// `OverlayState` the framework owns. This is deliberate: mutation arrives from
-/// outside the tree (from a `Navigator`'s route flush, in U2), so the list cannot
-/// live behind `&mut OverlayState` — nothing can obtain one. See ADR-0019 §3.2.
+/// outside the tree (from a `Navigator`'s route flush), so the list cannot
+/// live behind `&mut OverlayState` — nothing can obtain one.
 pub(crate) struct OverlayShared {
     /// Bottom → top. The last entry paints on top.
     entries: Mutex<Vec<OverlayEntry>>,
@@ -151,8 +151,10 @@ impl OverlayShared {
 /// whatever the list holds — and mutating after unmount is a silent no-op.
 ///
 /// This replaces Flutter's `GlobalKey<OverlayState>` (`navigator.dart:3746`),
-/// which `Navigator` uses purely to call `rearrange`. ADR-0019 §3.2 records why
-/// the `GlobalKey` route is not merely unnecessary but hazardous here.
+/// which `Navigator` uses purely to call `rearrange`. The `GlobalKey` route is
+/// not merely unnecessary but hazardous here: resolving it from inside a
+/// tree-borrow callback would nest the `WidgetsBinding` registry lock inside
+/// the lock already held for the ancestor walk.
 #[derive(Clone)]
 pub(crate) struct OverlayHandle {
     shared: Arc<OverlayShared>,
@@ -389,7 +391,7 @@ impl StatefulView for Overlay {
 ///
 /// Holds the shared entry list. The list is `Arc`-shared rather than owned
 /// outright because `ViewState::build` takes `&self` and no caller can ever
-/// obtain `&mut OverlayState` — see ADR-0019 §3.2.
+/// obtain `&mut OverlayState`.
 pub(crate) struct OverlayState {
     shared: Arc<OverlayShared>,
 }

@@ -1,4 +1,4 @@
-//! `SceneSnapshot` — the owned per-presentation per-frame raster package (ADR-0027 §5).
+//! `SceneSnapshot` — the owned per-presentation per-frame raster package.
 //!
 //! Compositing produces one `SceneSnapshot` per window per frame; it is the one
 //! seam a `UiRealm` hands to a raster owner (Flutter parity:
@@ -13,7 +13,7 @@ use crate::scene::Scene;
 /// Only [`DamageRegion::Full`] exists today: every fresh [`Scene`] forces a
 /// full repaint (`flui-app`'s `binding.rs:837-844`). The type is
 /// `#[non_exhaustive]` so fine-grained sub-rect damage is additive later
-/// (ADR-0027 §5 follow-up) instead of a breaking change — a `match` on this
+/// instead of a breaking change — a `match` on this
 /// enum already needs a `_` arm today, so a future `Partial` variant slots in
 /// without touching existing call sites.
 #[non_exhaustive]
@@ -23,7 +23,7 @@ pub enum DamageRegion {
     Full,
 }
 
-/// The owned per-presentation per-frame raster package (ADR-0027 §5).
+/// The owned per-presentation per-frame raster package.
 ///
 /// Produced by compositing and moved **by value** into the raster mailbox —
 /// never `Arc<Scene>`. Ownership transfer, not shared reference counting, is
@@ -52,8 +52,7 @@ pub struct SceneSnapshot {
 
 impl SceneSnapshot {
     /// Packages a composited [`Scene`] with the identity/versioning fields
-    /// the raster boundary needs to accept, reject, or reconcile it
-    /// (ADR-0027 §5/§6).
+    /// the raster boundary needs to accept, reject, or reconcile it.
     #[must_use]
     pub fn new(
         realm_id: RealmId,

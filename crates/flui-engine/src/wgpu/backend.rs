@@ -1286,8 +1286,8 @@ impl CommandRenderer for Backend<'_> {
         // Override the trait default (which routes to clip_rrect against an
         // approximating rounded rectangle). Delegate to the Painter's real
         // SDF clip, populating `current_rsuperellipse_clip` so subsequent
-        // rect_instanced draws apply the iOS-squircle SDF (U9 wired the
-        // per-instance kind=2 path).
+        // rect_instanced draws apply the iOS-squircle SDF via the
+        // per-instance kind=2 path.
         self.with_transform(transform, |painter| {
             painter.clip_rsuperellipse(rsuperellipse);
         });

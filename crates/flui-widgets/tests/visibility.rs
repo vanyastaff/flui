@@ -84,8 +84,8 @@ fn maintain_state_true_and_hidden_wraps_the_child_in_an_offstage_offstage() {
     assert_eq!(laid.render_node_count(), 2, "RenderOffstage + the child");
 }
 
-/// The widget-level consequence of ADR-0020 U5.0: a hidden-but-maintained child
-/// is laid out at its **full size**, not collapsed to zero.
+/// The widget-level consequence of `RenderOffstage`'s layout contract: a
+/// hidden-but-maintained child is laid out at its **full size**, not collapsed to zero.
 ///
 /// Flutter's `RenderOffstage.performLayout` does `child?.layout(constraints)`
 /// with the real constraints (`proxy_box.dart:3919-3925`); only the `Offstage`

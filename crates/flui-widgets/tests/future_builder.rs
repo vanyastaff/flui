@@ -1,4 +1,4 @@
-//! Public-API tests for [`FutureBuilder`] (ADR-0018 U6).
+//! Public-API tests for [`FutureBuilder`].
 //!
 //! These drive the widget through the real `flui_widgets::prelude` surface and a
 //! real `HeadlessBinding` frame — the same path `AppBinding::draw_frame` takes.
@@ -18,9 +18,9 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
+use std::{rc::Rc, sync::Arc};
 
 use common::{lay_out, loose};
 use flui_foundation::ConnectionState;
@@ -94,7 +94,7 @@ impl Completer {
         let result = Arc::clone(&self.result);
         let waker = Arc::clone(&self.waker);
         let subscriptions = Arc::clone(&self.subscriptions);
-        Arc::new(move || {
+        Rc::new(move || {
             subscriptions.fetch_add(1, Ordering::Relaxed);
             Box::pin(Controlled {
                 result: Arc::clone(&result),
@@ -119,7 +119,7 @@ impl Completer {
 /// Records every snapshot the builder was handed. Reads by reference, so `T`/`E`
 /// never need `Clone`.
 fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
-    Arc::new(move |_ctx, snapshot| {
+    Rc::new(move |_ctx, snapshot| {
         log.lock().push(Seen {
             state: snapshot.connection_state(),
             data: snapshot.data().map(|payload| payload.0),
@@ -206,7 +206,7 @@ fn future_builder_pending_then_error() {
             completer.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(1))),
+        .with_initial_data(Rc::new(|| Payload(1))),
         loose(400.0),
     );
     assert_eq!(last(&log).data, Some(1), "initial data survives Waiting");
@@ -231,7 +231,7 @@ fn future_builder_key_change_preserves_old_payload_while_waiting() {
             first.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99))),
+        .with_initial_data(Rc::new(|| Payload(99))),
         loose(400.0),
     );
     first.complete(Ok(Payload(1)));
@@ -245,7 +245,7 @@ fn future_builder_key_change_preserves_old_payload_while_waiting() {
             second.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99))),
+        .with_initial_data(Rc::new(|| Payload(99))),
     );
 
     assert_eq!(
@@ -339,7 +339,7 @@ fn future_builder_absent_future_shows_initial_data() {
             completer.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(7))),
+        .with_initial_data(Rc::new(|| Payload(7))),
         loose(400.0),
     );
 

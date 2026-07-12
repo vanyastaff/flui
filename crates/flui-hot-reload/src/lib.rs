@@ -129,6 +129,8 @@ pub use worker::{
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
-pub use dispatch::{WorkerBuildEnv, request_rebuild, set_request_rebuild};
+pub use dispatch::{
+    RebuildHookRegistration, WorkerBuildEnv, register_request_rebuild, request_rebuild,
+};
 pub use engine::{HotReloadOutcome, HotReloadTier};
 pub use strategy::ReloadStrategy;

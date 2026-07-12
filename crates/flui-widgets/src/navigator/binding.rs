@@ -1,9 +1,9 @@
 //! [`RouteBinding`] — the owned capability a route uses to drive its own
-//! lifecycle: the ADR-0020 U5.1 route-animation seam.
+//! lifecycle: the route-animation seam.
 //!
 //! `RouteBinding` itself stays private — it can finalize and dispose routes — but
-//! ADR-0020 U5.4 exports the opaque [`RouteBindingSlot`] a route hands the
-//! navigator to receive one. See *Correction 2* and its U5.4 resolution below.
+//! the opaque [`RouteBindingSlot`] a route hands the
+//! navigator to receive one is exported. See *Correction 2* and its resolution below.
 //!
 //! # What Flutter does
 //!
@@ -24,7 +24,7 @@
 //! `assert(!navigator._debugLocked)`, because a `TickerFuture` completion always
 //! arrives on a later microtask, never inside a flush.
 //!
-//! # Correction 1 to ADR-0020 Decision 2: a direct callback would **deadlock**
+//! # Correction 1 to ADR-0020: a direct callback would **deadlock**
 //!
 //! ADR-0020 proposed a `RouteBinding` exposing `notify_push_completed()` and
 //! `finalize()` as direct navigator callbacks. That cannot work.
@@ -44,15 +44,15 @@
 //! `BUG: flush_history_updates re-entered` assert stays reachable for a genuinely
 //! recursive `flush()` — which is what it was always guarding.
 //!
-//! # Correction 2 to ADR-0020 Decision 2: `install(&mut self, binding)` cannot be
+//! # Correction 2 to ADR-0020: `install(&mut self, binding)` cannot be
 //!
-//! `Route` is public (ADR-0019 U4). Threading a `&RouteBinding` through
-//! `Route::install` would force `RouteBinding` into the public surface, which U5.1
-//! was explicitly not authorized to do. U5.1 therefore delivered the binding
+//! `Route` is public. Threading a `&RouteBinding` through
+//! `Route::install` would force `RouteBinding` into the public surface, which
+//! was explicitly not authorized. The binding was therefore delivered
 //! through `BoundRoute`, a private trait, from a private `push_bound` — which is
 //! why `RouteId` is minted up front rather than inside `RouteRecord::erase`.
 //!
-//! **U5.4 resolution.** `PageRoute` and `PopupRoute` are public and must be
+//! **Resolution.** `PageRoute` and `PopupRoute` are public and must be
 //! pushable through the one public `NavigatorHandle::push`, so a private
 //! `push_bound` no longer works. `BoundRoute` is gone. In its place
 //! [`NavigatorRoute::binding_slot`] returns an optional [`RouteBindingSlot`]: a
@@ -96,7 +96,7 @@ pub(crate) enum RouteCommand {
 /// Flutter reads these straight off the next `Route` object
 /// (`routes.dart:429-437`). FLUI's routes are named by [`RouteId`] and live behind
 /// `Box<dyn ErasedRoute>` inside a `Mutex`, so a route cannot reach another —
-/// ADR-0019 §7b flagged exactly this ("U5 will need a lookup handle"). The
+/// this was flagged early on as needing a lookup handle. The
 /// registry is that handle.
 #[derive(Clone)]
 pub(crate) struct TransitionPeer {
@@ -122,7 +122,7 @@ pub(crate) struct TransitionPeer {
 /// `PageRoute` overrides *both* sides with the same test, the pair is exactly a
 /// symmetric "same family?" relation, which is what this enum encodes. FLUI's
 /// routes cannot ask "is the route above a `PageRoute`" — they name each other by
-/// [`RouteId`] and never hold each other's object (ADR-0019 §7b) — so the family
+/// [`RouteId`] and never hold each other's object — so the family
 /// travels with the published [`TransitionPeer`].
 ///
 /// A `PopupRoute` pushed over a `PageRoute` therefore drives no secondary
@@ -141,17 +141,17 @@ pub(crate) enum TransitionGroup {
 ///
 /// Flutter uses a `Future`; FLUI's routes are driven synchronously from the flush,
 /// so a plain callback list is both sufficient and observable. Private: this is
-/// the `completed` channel ADR-0020 U5.2 said to add **only if** the disposal /
+/// the `completed` channel, added **only if** the disposal /
 /// train-hopping contract needs it. It does — see `transition_route.rs`.
 #[derive(Default)]
 pub(crate) struct CompletedSignal {
     done: Mutex<bool>,
-    listeners: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
+    listeners: Mutex<Vec<Arc<dyn Fn()>>>,
 }
 
 impl CompletedSignal {
     /// Run `callback` when the route completes, or **now** if it already has.
-    pub(crate) fn on_completed(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+    pub(crate) fn on_completed(&self, callback: Arc<dyn Fn()>) {
         if *self.done.lock() {
             callback();
             return;
@@ -189,7 +189,7 @@ pub(crate) type TransitionRegistry = Arc<Mutex<HashMap<RouteId, TransitionPeer>>
 
 /// The clock a route's `AnimationController` registers with.
 ///
-/// **Correction to ADR-0020 Decision 1.** Flutter's `vsync: navigator!` works
+/// **Correction to ADR-0020.** Flutter's `vsync: navigator!` works
 /// because `NavigatorState` mixes in `TickerProviderStateMixin`. FLUI's
 /// `AnimationController::new` takes an `Arc<Scheduler>` and builds its **own**
 /// ticker; `flui_animation::Vsync` is not a `TickerProvider` at all but a
@@ -211,13 +211,13 @@ pub(crate) type RouteEntries = Arc<Mutex<HashMap<RouteId, OverlayEntry>>>;
 /// `route.subtreeContext` (`routes.dart:1966`) — which reads a `GlobalKey` off the
 /// route object. FLUI's routes live behind `Box<dyn ErasedRoute>` inside the
 /// history's mutex, so the route publishes its cell into a registry the navigator
-/// owns instead. ADR-0021 U2, seam 4.
+/// owns instead.
 pub(crate) type RouteSubtrees = Arc<Mutex<HashMap<RouteId, RouteSubtreeCell>>>;
 
 /// `RouteId -> ModalHandle`, the navigator's answer to Flutter's
 /// `toRoute.offstage = …` (`routes.dart:1951`, driven from `heroes.dart:967`) —
 /// which writes straight to the `Route` object. FLUI's routes are unreachable, so a
-/// `ModalRoute` publishes its handle here at `install()`. ADR-0021 U3.
+/// `ModalRoute` publishes its handle here at `install()`.
 pub(crate) type RouteModals = Arc<Mutex<HashMap<RouteId, ModalHandle>>>;
 
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
@@ -236,19 +236,19 @@ pub(crate) struct RouteRegistries {
     /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
     /// route may consult it from inside a flush.
     pub(crate) peers: TransitionRegistry,
-    /// `RouteId -> OverlayEntry` (ADR-0020 U5.3).
+    /// `RouteId -> OverlayEntry`.
     pub(crate) entries: RouteEntries,
-    /// `RouteId -> RouteSubtreeCell` (ADR-0021 U2).
+    /// `RouteId -> RouteSubtreeCell`.
     pub(crate) subtrees: RouteSubtrees,
-    /// `RouteId -> ModalHandle` (ADR-0021 U3).
+    /// `RouteId -> ModalHandle`.
     pub(crate) modals: RouteModals,
 }
 
 /// An owned, `'static` capability, pre-bound to one [`RouteId`].
 ///
 /// A route can only ever drive *itself*: the id is baked in at construction, so
-/// no route can finalize another. Cloneable and `Send + Sync`, so a route may
-/// hand it to an animation status listener (U5.2).
+/// no route can finalize another. Cloneable, but owner-local: the wake callback
+/// reaches the owning navigator.
 ///
 /// Inert once the navigator is gone: the `wake` closure holds a `Weak`, and a
 /// queued command for a route that no longer exists is dropped on drain.
@@ -257,7 +257,7 @@ pub(crate) struct RouteBinding {
     route: RouteId,
     queue: RouteCommandQueue,
     /// Applies the queue if the history is not currently locked. See *Correction 1*.
-    wake: Arc<dyn Fn() + Send + Sync>,
+    wake: Arc<dyn Fn()>,
     /// The navigator's clock. `Mutex` because `NavigatorState::init_state`
     /// resolves it after the handle (and therefore any seeded binding) exists.
     vsync: RouteVsync,
@@ -271,7 +271,7 @@ impl RouteBinding {
     pub(crate) fn new(
         route: RouteId,
         queue: RouteCommandQueue,
-        wake: Arc<dyn Fn() + Send + Sync>,
+        wake: Arc<dyn Fn()>,
         vsync: RouteVsync,
         registries: RouteRegistries,
     ) -> Self {
@@ -311,9 +311,9 @@ impl RouteBinding {
     /// route's** overlay entry, not the navigator.
     ///
     /// Reached only through `ModalRoute::changed_internal_state`, whose caller is
-    /// `ModalHandle::set_offstage` — the `HeroController` seam (ADR-0021 U3).
+    /// `ModalHandle::set_offstage` — the `HeroController` seam.
     ///
-    /// `dead_code` because that consumer is itself dead until U4's `Hero` widget
+    /// `dead_code` because that consumer is itself dead until the `Hero` widget
     /// gives it a production caller; see `hero_controller.rs`.
     #[allow(dead_code)]
     pub(crate) fn mark_entry_needs_build(&self) {
@@ -415,8 +415,7 @@ impl fmt::Debug for RouteBinding {
 /// [`NavigatorRoute::binding_slot`], and can do nothing else with it: the
 /// `RouteBinding` inside is `pub(crate)` and there is no accessor. This is how an
 /// animated route gets a navigator capability without that binding — which can
-/// finalize and dispose routes — becoming public. ADR-0020 §7e records the
-/// sign-off.
+/// finalize and dispose routes — becoming public.
 ///
 /// [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
 #[derive(Clone, Default)]

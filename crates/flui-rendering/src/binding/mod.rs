@@ -17,8 +17,8 @@
 //! flui_app::RenderingFlutterBinding implements RendererBinding
 //! ```
 //!
-//! Mythos Step 4 (2026-05-20): the three-trait stack (`PipelineManifold`,
-//! `HitTestDispatcher`, `ViewHitTestable`) was collapsed. See
+//! The three-trait stack (`PipelineManifold`, `HitTestDispatcher`,
+//! `ViewHitTestable`) was collapsed on 2026-05-20. See
 //! `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md` Section 12.
 
 use std::sync::Arc;
@@ -78,8 +78,8 @@ use crate::{
 /// 6. **Compositing** - Send layers to GPU
 /// 7. **Semantics** - `PipelineOwner::<Semantics>::run_semantics`
 ///
-/// Mythos Step 7 (2026-05-20) lifted these phase methods out of
-/// `PipelineOwner<Idle>` and onto their phase-typed impls. The
+/// These phase methods were lifted out of `PipelineOwner<Idle>` and
+/// onto their phase-typed impls on 2026-05-20. The
 /// orchestrator is [`PipelineOwner::<Idle>::run_frame`], which
 /// composes the four phase transitions and returns the owner back at
 /// `Idle` plus the produced layer tree.
@@ -127,8 +127,7 @@ pub trait RendererBinding: Send + Sync {
     ///
     /// This is the root of the PipelineOwner tree. Multi-window scenarios
     /// own multiple PipelineOwner instances side-by-side; the previous
-    /// `PipelineOwner::adopt_child` hierarchical API was removed in
-    /// Mythos Step 9.
+    /// `PipelineOwner::adopt_child` hierarchical API was removed.
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner>;
 
     /// Creates the root pipeline owner.
@@ -148,7 +147,7 @@ pub trait RendererBinding: Send + Sync {
     // topology baked into the trait surface. Every consumer had to reason
     // about the outer `HashMap` lock, the inner `Arc<RwLock<RenderView>>`
     // lock, and the implicit map-entry refcount. Cycle 4 R-6 audit
-    // flagged it as a Cycle-2 PR #100/U22 newtype-getter violation at
+    // flagged it as a Cycle-2 PR #100 newtype-getter violation at
     // trait level.
     //
     // Post-cycle the trait surface exposes four primitives:

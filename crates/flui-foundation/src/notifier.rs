@@ -840,7 +840,7 @@ mod tests {
 
     #[test]
     fn removed_listener_does_not_fire_during_notify() {
-        // F5: a listener removed *during* iteration (by a previously-fired
+        // A listener removed *during* iteration (by a previously-fired
         // listener) must NOT fire. Given listeners A and B, where A removes B
         // mid-notify, B must not fire (post-removal skip).
         use std::sync::atomic::AtomicBool;
@@ -983,12 +983,11 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // U6: ChangeNotifier::dispose + disposed-state assertion (R19, AE12)
+    // ChangeNotifier::dispose + disposed-state assertion
     //
     // Mirrors Flutter's `ChangeNotifier.dispose` at
     // flutter/lib/src/foundation/change_notifier.dart:181 (debugAssertNotDisposed)
-    // and :376 (dispose). Tests added first (TEST-FIRST per plan exec note);
-    // implementation follows.
+    // and :376 (dispose).
     // ------------------------------------------------------------------
 
     #[cfg(debug_assertions)]

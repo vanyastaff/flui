@@ -399,11 +399,13 @@ pub trait CommandRenderer {
 /// compositor route -- implement both. The trait split lets new
 /// command-only backends materialize without the 13-method overhead.
 ///
-/// # Cycle 4 audit
+/// # Audit
 ///
 /// See `docs/research/2026-05-22-flui-rendering-engine-audit.md`
-/// E-9. Same trait-split intuition as cycle 2 PR #100/U21
-/// SemanticsConfiguration split.
+/// E-9. Same trait-split intuition as the earlier
+/// `SemanticsConfiguration` split: separate the minimal command-only
+/// surface from the fuller stateful one so implementers only pay for
+/// what they use.
 pub trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);

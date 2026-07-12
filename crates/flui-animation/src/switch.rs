@@ -579,7 +579,7 @@ mod tests {
         controller2.dispose();
     }
 
-    /// **ADR-0020 U5.2 preflight.** `TrainHoppingAnimation` fires `onSwitchedTrain`
+    /// `TrainHoppingAnimation` fires `onSwitchedTrain`
     /// **exactly once** (`animations.dart:591-593`): the hop nulls `_nextTrain`, so
     /// no later tick can hop again. The route layer's teardown paths
     /// (`_trainHoppingListenerRemover`, `onSwitchedTrain`) rely on that — a second
@@ -631,7 +631,7 @@ mod tests {
         controller2.dispose();
     }
 
-    /// **ADR-0020 U5.2 preflight.** `TrainHoppingAnimation.dispose` detaches from
+    /// `TrainHoppingAnimation.dispose` detaches from
     /// **both** trains (`animations.dart:601-613`): status + value listeners from
     /// `_currentTrain`, and the value listener from `_nextTrain`. The route layer
     /// disposes a hopper that never hopped (`jumpOnAnimationEnd`, and the

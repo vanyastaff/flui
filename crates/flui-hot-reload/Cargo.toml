@@ -11,12 +11,13 @@ description = "Hot-reload support for FLUI scene plugins via dynamic library loa
 
 [features]
 default = []
-app-plugin = ["dep:flui-view", "dep:flui-rendering", "dep:flui-types", "dep:parking_lot"]
+app-plugin = ["dep:flui-foundation", "dep:flui-view", "flui-view/runtime-internals", "dep:flui-rendering", "dep:flui-types", "dep:parking_lot"]
 # Layer 1: debounced source watching for `flui-cli` / `flui-devtools`
 source-watch = ["dep:notify-debouncer-mini"]
 
 [dependencies]
 flui-layer = { path = "../flui-layer", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0", optional = true }
 notify-debouncer-mini = { version = "0.5", optional = true }
 flui-view = { path = "../flui-view", version = "0.2.0", optional = true }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", optional = true }
@@ -32,6 +33,9 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+
+[dev-dependencies]
+flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
 
 [lints]
 workspace = true

@@ -24,7 +24,7 @@ use crate::layer::Layer;
 /// all layer types. This simplifies the API while maintaining the same
 /// architectural pattern.
 ///
-/// # Lifecycle (phase 1, U8)
+/// # Lifecycle
 ///
 /// `LayerNode` adopts the same `disposed: AtomicBool` + `Drop` + debug-assert
 /// guard pattern that PR #84 introduced on
@@ -54,12 +54,12 @@ pub struct LayerNode {
     /// Associated ElementId (for cross-tree references)
     element_id: Option<ElementId>,
 
-    // ========== Lifecycle (phase 1, U8) ==========
+    // ========== Lifecycle ==========
     /// Whether the node has been dropped. Set by [`Drop`]; once `true` the
     /// node MUST NOT be mutated again. Guarded by [`LayerNode::assert_alive`].
     disposed: AtomicBool,
 
-    // ========== Compositor dirty-bit (phase 2, U9) ==========
+    // ========== Compositor dirty-bit ==========
     /// Whether this node's payload changed and needs to be re-pushed into the
     /// engine scene on the next composite. Defaults to `true` (fresh nodes
     /// have not yet been pushed). Cleared by the engine after a successful
@@ -263,7 +263,7 @@ impl LayerNode {
         self.disposed.load(Ordering::Acquire)
     }
 
-    // ========== Compositor dirty-bit (phase 2, U9) ==========
+    // ========== Compositor dirty-bit ==========
 
     /// Returns whether this node is *clean* — i.e. its current payload has
     /// already been pushed into the engine scene and need not be pushed
@@ -580,7 +580,7 @@ impl LayerTree {
 
     /// Adds `child_id` as a child of `parent_id`.
     ///
-    /// **Auto-detach semantics (U10)** — if `child_id` is currently attached
+    /// **Auto-detach semantics** — if `child_id` is currently attached
     /// to a different parent, it is removed from that parent's children
     /// vector first, then attached here. Re-attaching to the *same* parent
     /// is a short-circuit no-op so the child appears only once in the
@@ -593,8 +593,8 @@ impl LayerTree {
     /// **Cycle rejection (PR #100 followup)** — a call that would create a
     /// cycle (`child_id == parent_id`, or attaching an ancestor under its
     /// descendant) is rejected as a no-op and emits a `tracing::warn!`.
-    /// Pre-rejection the recursive `remove` (U12) would have followed a
-    /// cycle to unbounded recursion and stack overflow; this guard makes
+    /// Before this guard existed, the recursive `remove` would have followed
+    /// a cycle to unbounded recursion and stack overflow; this guard makes
     /// the cycle impossible to enter via the public API.
     ///
     /// Missing-id lookups (either `parent_id` or `child_id` not in the
@@ -671,9 +671,9 @@ impl LayerTree {
             }
             steps += 1;
             if steps > max_steps {
-                // Defence-in-depth: a malformed cycle pre-dating the U10
-                // / PR #100 followup guards (e.g. a slab loaded from disk
-                // with corrupt parent pointers) would otherwise spin.
+                // Defence-in-depth: a malformed cycle pre-dating the
+                // add_child cycle-rejection guards (e.g. a slab loaded from
+                // disk with corrupt parent pointers) would otherwise spin.
                 tracing::warn!(
                     "LayerTree::is_ancestor_of: walk exceeded slab size — \
                      malformed parent pointers?"
@@ -867,7 +867,7 @@ impl LayerTree {
             .map(|(index, node)| (LayerId::new(index + 1), node))
     }
 
-    // ========== Compositor dirty-bit propagation (U9) ==========
+    // ========== Compositor dirty-bit propagation ==========
     //
     // Mirrors Flutter `layer.dart`:
     // - `markNeedsAddToScene`            (lines 377-392)
@@ -970,7 +970,7 @@ impl Default for LayerTree {
 }
 
 // ============================================================================
-// LAYER NODE LIFECYCLE TESTS (U8 — phase 1)
+// LAYER NODE LIFECYCLE TESTS
 // ============================================================================
 
 #[cfg(test)]
@@ -1097,7 +1097,7 @@ mod lifecycle_tests {
 }
 
 // ============================================================================
-// COMPOSITOR DIRTY-BIT TESTS (U9 — phase 2)
+// COMPOSITOR DIRTY-BIT TESTS
 // ============================================================================
 
 #[cfg(test)]
@@ -1259,7 +1259,7 @@ mod dirty_bit_tests {
 }
 
 // ============================================================================
-// SLAB-TREE HYGIENE TESTS (U10 — add_child auto-detach + dedup)
+// SLAB-TREE HYGIENE TESTS (add_child auto-detach + dedup)
 // ============================================================================
 
 #[cfg(test)]
@@ -1379,7 +1379,7 @@ mod add_child_hygiene_tests {
 }
 
 // ============================================================================
-// SLAB-TREE HYGIENE TESTS (U12 — remove cascade + remove_shallow)
+// SLAB-TREE HYGIENE TESTS (remove cascade + remove_shallow)
 // ============================================================================
 
 #[cfg(test)]

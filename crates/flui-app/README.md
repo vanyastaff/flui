@@ -3,13 +3,14 @@
 **The application layer — where the three trees meet the platform.**
 
 `flui-app` is the top of the framework stack: it owns the `run_app` entry
-point, combines every subsystem binding into one `AppBinding` singleton, and
-drives the frame loop that turns platform callbacks into build → layout →
-paint → composite passes, mirroring Flutter's binding architecture:
+point, constructs an owner-affine `UiRealm`, hosts the process services still
+being extracted by ADR-0027, and drives the frame loop that turns platform
+callbacks into build → layout → paint → composite passes. FLUI preserves
+Flutter's tree behavior without copying its process/runtime topology:
 
 | FLUI | Flutter |
 |------|---------|
-| `AppBinding` (alias `WidgetsFlutterBinding`) | `WidgetsFlutterBinding` |
+| `UiRealm` + transitional `AppBinding` | `WidgetsFlutterBinding` |
 | `run_app` / `run_app_with_config` | `runApp` |
 | `WidgetsBinding` | `WidgetsBinding` |
 | `RenderingFlutterBinding` + `PipelineOwner` | `RendererBinding` |
@@ -24,17 +25,19 @@ consumed by path (not published to crates.io).
 run_app(view)                       — bootstrap: window, GPU surface, frame loop
     │
     ▼
-AppBinding (central coordinator)    — singleton combining all bindings
+UiRealm (owner-affine, !Send + !Sync)
+    └── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
+
+AppBinding (transitional host)
     ├── GestureBinding              — pointer events, hit testing, event coalescing
     ├── FocusManager                — keyboard event dispatch
-    ├── WidgetsBinding              — build phase (View → Element, flui-view)
     ├── RenderingFlutterBinding     — layout/paint via PipelineOwner (flui-rendering)
     ├── SemanticsBinding            — accessibility tree flushes (flui-semantics)
     └── Scheduler                   — frame callbacks, animation tickers (flui-scheduler)
 ```
 
 - **Entry points** — `run_app` / `run_app_with_config` bootstrap a platform
-  window and hand the root `View` to `AppBinding::attach_root_widget`, which
+  window and hand the root `View` to the runner-owned `UiRealm`, which
   auto-wraps it in `VsyncScope` so implicit-animation widgets tick with zero
   boilerplate. `run_direct` bypasses the widget tree for raw
   `SceneBuilder`-callback rendering.
@@ -53,17 +56,11 @@ AppBinding (central coordinator)    — singleton combining all bindings
 
 ## Known architectural debt
 
-`AppBinding`, `Scheduler`, and friends are process-wide singletons
-(`instance()`), mirroring Flutter's `WidgetsFlutterBinding.instance`. Tests
-share that global, so any test mutating binding state must serialize against
-the others touching the same field — `renderer_binding.rs` does this with
-`SEMANTICS_TEST_LOCK` around the `semantics_enabled` toggles. Under `cargo
-nextest` each test gets its own process, so the tests run fully parallel;
-under `cargo test` they share one process and rely on that lock.
-
-Scoping binding state per test/app instance (via `flui-binding`'s
-`HeadlessBinding`) remains a tracked ship-quality item, but it no longer
-gates parallel test execution.
+`WidgetsBinding` and GlobalKey identity are realm-owned. `AppBinding`,
+`Scheduler`, renderer orchestration, and some gesture/focus services remain
+process-scoped migration debt. Tests mutating those remaining globals must
+use their existing serialization guard; the guard retires as each service
+moves behind an explicit owner.
 
 ## Documentation
 

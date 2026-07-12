@@ -107,8 +107,8 @@ pub trait TreeWrite<I: TreeId>: TreeRead<I> {
     ///
     /// The post-order drain guarantees each `remove_shallow` call sees
     /// children disposing before their parents — the engine listeners
-    /// and lifecycle hooks (`LayerNode::Drop` from PR #100 U8) rely on
-    /// it.
+    /// and lifecycle hooks (`LayerNode::Drop`, introduced in PR #100)
+    /// rely on it.
     ///
     /// PR #103 followup: the original draft of this default did a
     /// recursive `self.remove(child_id)` call per child, which

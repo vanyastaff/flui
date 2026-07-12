@@ -1,4 +1,4 @@
-//! ADR-0020 U5.4 tests for [`PageRoute`] and [`PopupRoute`].
+//! Tests for [`PageRoute`] and [`PopupRoute`].
 //!
 //! # Parity oracles
 //!
@@ -73,12 +73,16 @@ fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
     (handle, harness, bottom)
 }
 
-/// Run an entrance transition to completion. `set_value(1.0)` fires `Completed`,
-/// which is the status `_handleStatusChanged` acts on.
+/// Run an entrance transition to completion, then settle the owner status bridge
+/// and the overlay rebuild it schedules. `set_value(1.0)` fires `Completed`,
+/// which is queued by the animation listener and drained from owner-local
+/// `ModalScope` build; the resulting `OverlayEntry.opaque` write rebuilds the
+/// overlay on the following tick.
 fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
     let controller = transition.controller().expect("install created it");
     controller.set_value(1.0);
     assert_eq!(controller.status(), AnimationStatus::Completed);
+    harness.tick();
     harness.tick();
 }
 
@@ -134,6 +138,7 @@ fn page_route_clears_opaque_while_it_moves() {
 
     let controller = transition.controller().expect("installed");
     controller.reverse().expect("reverse from 1.0");
+    harness.tick();
     harness.tick();
 
     assert_eq!(controller.status(), AnimationStatus::Reverse);
@@ -199,6 +204,7 @@ fn maintain_state_false_route_below_an_opaque_page_is_unmounted_and_rebuilt_fres
         .expect("installed")
         .reverse()
         .expect("reverse from 1.0");
+    harness.tick();
     harness.tick();
 
     assert!(navigator.entry_of(covered_id).expect("entry").is_mounted());

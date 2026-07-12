@@ -24,9 +24,9 @@ pub(crate) mod stream_builder;
 pub mod arity;
 pub mod behavior;
 pub(crate) mod behavior_commons;
-// `dispatch` is the only View-update routing path post-§U27. The
-// pre-FR-021 `feature = "legacy-downcast"` gate (Phase 1 §U8 /
-// KTD-4) is gone: `ElementCore::update_view` unconditionally
+// `dispatch` is the only View-update routing path. The
+// pre-FR-021 `feature = "legacy-downcast"` gate is gone:
+// `ElementCore::update_view` unconditionally
 // routes through `dispatch_view_update`, which performs a
 // `TypeId`-keyed dispatch + `Downcast::into_any` + `Box::downcast`
 // (no `downcast_ref::<V>()` pattern). The workspace-internal

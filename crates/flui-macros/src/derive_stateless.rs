@@ -56,7 +56,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     // forwards the generics into the `impl View` block verbatim.
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    // The bound `Self: Clone + Send + Sync + 'static` is what
+    // The bound `Self: Clone + 'static` is what
     // `StatelessView` itself requires. `View` adds `Downcast + DynClone`
     // — both satisfied by `Clone + 'static` via the blanket impls in
     // `downcast-rs` / `dyn-clone`. We do not add extra bounds here; the

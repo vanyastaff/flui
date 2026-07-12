@@ -180,9 +180,8 @@ pub fn run_direct(
     }));
 
     // 6. Register input callback (triggers redraw on any input)
-    window.on_input(Box::new(move |_input: PlatformInput| DispatchEventResult {
-        propagate: false,
-        default_prevented: false,
+    window.on_input(Box::new(move |_input: PlatformInput| {
+        DispatchEventResult::resolved(false, false)
     }));
 
     // 7. Lifecycle callbacks

@@ -330,7 +330,7 @@ impl RenderNode {
     }
 
     /// Sets the `NEEDS_LAYOUT` flag on this node's state — **flag-only**, no
-    /// propagation. Added in D-block PR-A1 U15 to support the
+    /// propagation. Added to support the
     /// [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
     /// ancestor-walk: each step of the walk flips one node's flag, and the
     /// owner is responsible for the ancestor traversal and dirty-queue push
@@ -367,8 +367,8 @@ impl RenderNode {
     /// Sets the `NEEDS_PAINT` flag on this node's state — flag-only,
     /// no propagation.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** additive helper mirroring
-    /// [`Self::mark_layout_flag`]. NOT used by U22's dedup path —
+    /// Additive helper mirroring
+    /// [`Self::mark_layout_flag`]. NOT used by the dedup path —
     /// `PipelineOwner::add_node_needing_paint` uses queue-membership
     /// scanning instead of flag-based dedup (flag-based dedup is
     /// unsuitable because `RenderState::new()` defaults
@@ -385,7 +385,7 @@ impl RenderNode {
     }
 
     /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
-    /// flag-only, no propagation. **D-block PR-A1 U22:** additive
+    /// flag-only, no propagation. Additive
     /// helper; not used by the queue-scan dedup path (see
     /// [`Self::mark_paint_flag`] doc for rationale).
     #[inline]
@@ -397,7 +397,7 @@ impl RenderNode {
     }
 
     /// Sets the `NEEDS_SEMANTICS` flag on this node's state —
-    /// flag-only, no propagation. **D-block PR-A1 U22:** additive
+    /// flag-only, no propagation. Additive
     /// helper; not used by the queue-scan dedup path (see
     /// [`Self::mark_paint_flag`] doc for rationale).
     #[inline]
@@ -409,7 +409,7 @@ impl RenderNode {
     }
 
     /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
-    /// **D-block PR-A1 U22:** additive accessor for future flag-based
+    /// Additive accessor for future flag-based
     /// callers (current `add_node_needing_semantics` uses queue-scan
     /// dedup, not this flag).
     #[inline]
@@ -427,7 +427,7 @@ impl RenderNode {
     }
 
     /// Returns true if `NEEDS_COMPOSITING` is set on this node's
-    /// state. **D-block PR-A1 U22:** additive accessor (see
+    /// state. Additive accessor (see
     /// [`Self::needs_semantics`] doc for usage notes).
     #[inline]
     pub fn needs_compositing(&self) -> bool {
@@ -458,7 +458,7 @@ impl RenderNode {
     ///
     /// # Background
     ///
-    /// **D-block PR-A1b U18 (companion memo D4):** the pipeline operates on
+    /// The pipeline operates on
     /// protocol-erased `RenderNode`s, but
     /// `RenderEntry::layout_leaf_only` is generic over `P: Protocol`.
     /// This method bridges the seam — variant mismatch (e.g., `Box`
@@ -468,11 +468,11 @@ impl RenderNode {
     /// Pipeline-side callers lift the protocol-typed root constraints
     /// to `ErasedConstraints` via the `From<BoxConstraints>` /
     /// `From<SliverConstraints>` impls before invoking. Per-protocol-typed
-    /// callers (the `RenderBox` bridge and `RenderSliver` bridge in
-    /// U19) downcast the returned geometry via
+    /// callers (the `RenderBox` bridge and `RenderSliver` bridge)
+    /// downcast the returned geometry via
     /// `TryFrom<ErasedGeometry>`.
     ///
-    /// U20's `PipelineOwner::layout_dirty_root` does NOT route through
+    /// `PipelineOwner::layout_dirty_root` does NOT route through
     /// this method — it builds typed `BoxLayoutCtx` with children via
     /// disjoint borrows and calls `render_object.perform_layout_raw`
     /// directly against an erased view, bypassing the leaf-mode
@@ -518,7 +518,7 @@ impl RenderNode {
         }
     }
 
-    /// Reads the `IS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U33).
+    /// Reads the `IS_REPAINT_BOUNDARY` storage flag.
     ///
     /// The flag is bootstrapped on insert from the trait answer via
     /// `PipelineOwner::bootstrap_repaint_boundary_flag`. The compositing-bits
@@ -534,7 +534,7 @@ impl RenderNode {
         }
     }
 
-    /// Sets the `IS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U33).
+    /// Sets the `IS_REPAINT_BOUNDARY` storage flag.
     ///
     /// Called by `PipelineOwner::bootstrap_repaint_boundary_flag` at insert
     /// time after reading the trait answer; not called from layout/paint
@@ -549,7 +549,7 @@ impl RenderNode {
 
     /// Returns true if this node is a relayout boundary.
     ///
-    /// **D-block PR-A1 U15**: reads the per-instance `IS_RELAYOUT_BOUNDARY`
+    /// Reads the per-instance `IS_RELAYOUT_BOUNDARY`
     /// storage flag (set by [`RenderState::compute_relayout_boundary`] during
     /// layout per Flutter `!parentUsesSize || sizedByParent || constraints.isTight() || !hasParent`).
     /// Prior behaviour returned the hardcoded `RenderObject::is_relayout_boundary()`
@@ -711,7 +711,7 @@ impl RenderNode {
     /// rotation about its centre, a `RenderFractionalTranslation`, a `RenderFlow`
     /// — produces a *different, plausible-looking* matrix at `Size::ZERO`.
     /// Substituting zero here made [`PipelineOwner::transform_to`] quietly wrong
-    /// before the first layout (ADR-0021 §7a). Flutter asserts `box.hasSize` at
+    /// before the first layout (ADR-0021). Flutter asserts `box.hasSize` at
     /// the corresponding call sites (`heroes.dart:380`, `box.dart:3016`) rather
     /// than inventing a size.
     ///
@@ -812,7 +812,7 @@ impl RenderNode {
     /// Returns a mutable reference to the Box render object.
     ///
     /// Panics if this is not a Box node. Requires `&mut self`; pipeline
-    /// phases obtain this through `&mut RenderTree`. See the U2 exemplar
+    /// phases obtain this through `&mut RenderTree`. See the exemplar
     /// refactor docstring on `RenderEntry`.
     pub fn box_render_object_mut(&mut self) -> &mut dyn RenderObject<BoxProtocol> {
         self.as_box_unchecked_mut().render_object_mut()
@@ -853,7 +853,7 @@ impl RenderNode {
     }
 
     /// Reads the `RenderObject::always_needs_compositing()` static trait
-    /// answer (D-block PR-A2 U34 / memo R26b).
+    /// answer.
     ///
     /// Consulted by the compositing-bits walk to force `NEEDS_COMPOSITING`
     /// regardless of subtree state — used by render objects that apply
@@ -866,7 +866,7 @@ impl RenderNode {
         }
     }
 
-    /// Reads the `WAS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U34).
+    /// Reads the `WAS_REPAINT_BOUNDARY` storage flag.
     ///
     /// Set by the paint phase after a node was painted as a repaint
     /// boundary. The compositing-bits walk consults this to detect the
@@ -881,7 +881,7 @@ impl RenderNode {
         }
     }
 
-    /// Writes the `WAS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U35).
+    /// Writes the `WAS_REPAINT_BOUNDARY` storage flag.
     ///
     /// Called by the paint phase after a node is painted so subsequent
     /// compositing-bits walks can detect boundary-status transitions.
@@ -893,12 +893,12 @@ impl RenderNode {
         }
     }
 
-    /// Sets the `NEEDS_COMPOSITING` flag (D-block PR-A2 U34).
+    /// Sets the `NEEDS_COMPOSITING` flag.
     ///
     /// Distinct from [`Self::mark_compositing_flag`] only in that this
     /// method documents its role in the per-frame compositing-bits walk
-    /// (`_updateCompositingBits`); `mark_compositing_flag` was added in
-    /// U22 as an additive helper.
+    /// (`_updateCompositingBits`); `mark_compositing_flag` was added
+    /// separately as an additive helper.
     #[inline]
     pub fn mark_needs_compositing(&self) {
         match self {
@@ -907,7 +907,7 @@ impl RenderNode {
         }
     }
 
-    /// Clears the `NEEDS_COMPOSITING` flag (D-block PR-A2 U34).
+    /// Clears the `NEEDS_COMPOSITING` flag.
     #[inline]
     pub fn clear_needs_compositing(&self) {
         match self {
@@ -916,7 +916,7 @@ impl RenderNode {
         }
     }
 
-    /// Reads the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    /// Reads the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     ///
     /// Set by `markNeedsCompositingBitsUpdate` (parent chain walks up to
     /// the first repaint boundary or already-dirty ancestor) and consulted
@@ -930,7 +930,7 @@ impl RenderNode {
         }
     }
 
-    /// Sets the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    /// Sets the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
     pub fn mark_needs_compositing_bits_update(&self) {
         match self {
@@ -939,7 +939,7 @@ impl RenderNode {
         }
     }
 
-    /// Clears the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    /// Clears the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
     pub fn clear_needs_compositing_bits_update(&self) {
         match self {

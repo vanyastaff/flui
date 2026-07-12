@@ -31,7 +31,7 @@
 //!   and `Focus.of`/`maybeOf` (descendants read the provider directly; a
 //!   public lookup waits for `Actions`/`Shortcuts`).
 
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use flui_foundation::ListenerId;
 use flui_geometry::Rect;
@@ -46,7 +46,7 @@ use parking_lot::Mutex;
 use crate::navigator::AnchoredBox;
 
 /// Reports whether this widget's node gained or lost the primary focus.
-pub type FocusChangeHandler = Arc<dyn Fn(bool) + Send + Sync>;
+pub type FocusChangeHandler = Rc<dyn Fn(bool)>;
 
 // ============================================================================
 // The ambient scope
@@ -197,9 +197,9 @@ impl Focus {
     #[must_use]
     pub fn on_focus_change<F>(mut self, handler: F) -> Self
     where
-        F: Fn(bool) + Send + Sync + 'static,
+        F: Fn(bool) + 'static,
     {
-        self.on_focus_change = Some(Arc::new(handler));
+        self.on_focus_change = Some(Rc::new(handler));
         self
     }
 
@@ -285,7 +285,8 @@ impl StatefulView for Focus {
             anchor: SubtreeAnchor::new(),
             focus_listener_id: None,
             autofocus: self.autofocus,
-            on_focus_change: Arc::new(Mutex::new(self.on_focus_change.clone())),
+            on_focus_change: Rc::new(RefCell::new(self.on_focus_change.clone())),
+            pending_focus_changes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -309,7 +310,10 @@ pub struct FocusState {
     /// listener reads the *latest* one. `did_update_view` writes here rather than
     /// reinstalling the listener — a captured-by-value closure would keep firing the
     /// handler from the build that mounted it.
-    on_focus_change: Arc<Mutex<Option<FocusChangeHandler>>>,
+    on_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
+    /// Focus edges captured by the `Send + Sync` focus-manager listener and
+    /// delivered from owner-local `build`.
+    pending_focus_changes: Arc<Mutex<Vec<bool>>>,
 }
 
 impl std::fmt::Debug for FocusState {
@@ -326,16 +330,13 @@ impl FocusState {
     /// build stay current, and `on_focus_change` fires on the edges.
     fn install_focus_listener(&mut self, rebuild: RebuildHandle) {
         let node_id = self.node.id();
-        let on_focus_change = Arc::clone(&self.on_focus_change);
+        let pending_focus_changes = Arc::clone(&self.pending_focus_changes);
         self.focus_listener_id = Some(FocusManager::global().add_listener(Arc::new(
             move |previous, current| {
                 let was_focused = previous == Some(node_id);
                 let now_focused = current == Some(node_id);
                 if was_focused != now_focused {
-                    // Read the *current* handler, not the one captured at install.
-                    if let Some(handler) = on_focus_change.lock().as_ref() {
-                        handler(now_focused);
-                    }
+                    pending_focus_changes.lock().push(now_focused);
                     rebuild.schedule();
                 }
             },
@@ -391,7 +392,9 @@ impl ViewState<Focus> for FocusState {
         // swaps the handler swaps what actually fires — capturing the handler
         // in the closure instead would pin the *first* one for the widget's
         // whole life.
-        (*self.on_focus_change.lock()).clone_from(&new_view.on_focus_change);
+        self.on_focus_change
+            .borrow_mut()
+            .clone_from(&new_view.on_focus_change);
     }
 
     fn dispose(&mut self) {
@@ -414,6 +417,14 @@ impl ViewState<Focus> for FocusState {
     /// (`focus_scope.dart:714-741`) — and anchors the child so the node's
     /// rect provider has a render node to measure.
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
+        let changes = std::mem::take(&mut *self.pending_focus_changes.lock());
+        for focused in changes {
+            // Read the *current* handler, not the one captured at install.
+            if let Some(handler) = self.on_focus_change.borrow().as_ref() {
+                handler(focused);
+            }
+        }
+
         FocusParentProvider {
             parent: Arc::clone(&self.node),
             child: BoxedView(Box::new(
@@ -602,7 +613,7 @@ mod tests {
                 .focus_node(Arc::clone(&self.node))
                 .autofocus(self.autofocus);
             if let Some(handler) = &self.on_focus_change {
-                let handler = Arc::clone(handler);
+                let handler = Rc::clone(handler);
                 focus = focus.on_focus_change(move |focused| handler(focused));
             }
             FocusScope::with_external_node(Arc::clone(&self.scope), focus)
@@ -723,16 +734,18 @@ mod tests {
         let node = FocusNode::with_debug_label("edge-node");
         let edges = Arc::new(parking_lot::Mutex::new(Vec::<bool>::new()));
         let recorded = Arc::clone(&edges);
-        let _harness = mount(Host {
+        let mut harness = mount(Host {
             show: true,
             scope: Arc::clone(&scope),
             node: Arc::clone(&node),
             autofocus: false,
-            on_focus_change: Some(Arc::new(move |focused| recorded.lock().push(focused))),
+            on_focus_change: Some(Rc::new(move |focused| recorded.lock().push(focused))),
         });
 
         node.request_focus();
+        harness.tick();
         manager.unfocus();
+        harness.tick();
         assert_eq!(
             edges.lock().as_slice(),
             [true, false],
@@ -774,7 +787,7 @@ mod tests {
                 focus = focus.on_key_event(Arc::clone(handler));
             }
             if let Some(handler) = &self.on_focus_change {
-                let handler = Arc::clone(handler);
+                let handler = Rc::clone(handler);
                 focus = focus.on_focus_change(move |focused| handler(focused));
             }
             FocusScope::with_external_node(Arc::clone(&self.scope), focus)
@@ -871,7 +884,7 @@ mod tests {
             can_request_focus: None,
             skip_traversal: None,
             on_key_event: None,
-            on_focus_change: Some(Arc::new(move |focused| first_rec.lock().push(focused))),
+            on_focus_change: Some(Rc::new(move |focused| first_rec.lock().push(focused))),
         });
 
         // Rebuild with a different handler.
@@ -882,11 +895,13 @@ mod tests {
             can_request_focus: None,
             skip_traversal: None,
             on_key_event: None,
-            on_focus_change: Some(Arc::new(move |focused| second_rec.lock().push(focused))),
+            on_focus_change: Some(Rc::new(move |focused| second_rec.lock().push(focused))),
         });
 
         node.request_focus();
+        harness.tick();
         manager.unfocus();
+        harness.tick();
 
         assert!(
             first.lock().is_empty(),

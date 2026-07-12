@@ -368,7 +368,7 @@ mod tests {
         assert!(painted);
     }
 
-    /// Covers AE1 (R4): `Clip::None` no longer short-circuits the
+    /// `Clip::None` no longer short-circuits the
     /// save/restore bracket. Flutter saves the canvas, runs the painter,
     /// then restores — even when no clip call is issued. This locks in
     /// that semantic against the prior FLUI short-circuit code path.

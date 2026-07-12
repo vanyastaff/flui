@@ -1,4 +1,4 @@
-//! ADR-0021 U1.5: a post-frame callback registered on the **binding's own**
+//! A post-frame callback registered on the **binding's own**
 //! scheduler observes THIS frame's committed layout.
 //!
 //! # Parity oracle
@@ -9,8 +9,8 @@
 //! route offstage, schedules a post-frame callback, and measures the destination
 //! hero in that same frame.
 //!
-//! Before U1.5 `pump_frame` never drained the post-frame queue at all, and never
-//! opened a scheduler frame (ADR-0021 §7b).
+//! Previously, `pump_frame` never drained the post-frame queue at all, and never
+//! opened a scheduler frame.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -88,7 +88,7 @@ fn binding_with_probe(
     (binding, pipeline, root)
 }
 
-/// **The U1.5 acceptance test.** The callback is never invoked by the test — it
+/// **The acceptance test.** The callback is never invoked by the test — it
 /// runs because `pump_frame` drives a real scheduler frame — and when it runs, it
 /// already sees this frame's committed geometry.
 #[test]
@@ -131,7 +131,7 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
 /// The negative half, observed from **inside layout**: while the pipeline runs,
 /// the post-frame callback has not fired yet.
 ///
-/// The pre-U1.5 production order (drain, then pipeline) makes this fail — the
+/// The previous production order (drain, then pipeline) makes this fail — the
 /// probe would see `fired == true` while laying out. An earlier version of this
 /// test sampled from a *persistent* callback and passed under the bug, because
 /// persistent callbacks precede the pipeline in both orderings. Red-checked.
@@ -174,9 +174,9 @@ fn the_post_frame_callback_has_not_run_while_layout_is_still_uncommitted() {
     );
 }
 
-/// ADR-0018's real invariant, preserved: exactly one async-driver poll per frame,
+/// The real invariant, preserved: exactly one async-driver poll per frame,
 /// on the binding's **own** scheduler, before `build_scope`. The poll moved from
-/// `pump_frame` into `Scheduler::handle_begin_frame` (ADR-0021 §7c) — it must
+/// `pump_frame` into `Scheduler::handle_begin_frame` — it must
 /// still happen, and still happen once.
 #[test]
 fn pump_frame_still_polls_the_async_driver_exactly_once_per_frame() {

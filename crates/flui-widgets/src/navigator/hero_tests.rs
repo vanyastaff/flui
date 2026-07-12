@@ -1,4 +1,4 @@
-//! ADR-0021 U4: the `Hero` view, its per-route registry, and `HeroHandle`.
+//! The `Hero` view, its per-route registry, and `HeroHandle`.
 //!
 //! No flight is started here. These tests pin the three things a flight will stand
 //! on: a hero can be *found* by tag from outside the tree, it can be *measured*, and
@@ -125,7 +125,7 @@ fn hero_registers_its_tag_with_the_enclosing_route_and_deregisters_on_dispose() 
 /// Two heroes sharing a tag inside one route: **log and keep the first**, never panic.
 ///
 /// Flutter throws inside an `assert` (`heroes.dart:287-305`) — debug-only — and in
-/// release `result[tag] = heroState` silently keeps the *last*. ADR-0021 D8 chose
+/// release `result[tag] = heroState` silently keeps the *last*. FLUI chose
 /// first-wins-and-log: a duplicate tag is a caller mistake, not a framework invariant
 /// (PANIC-POLICY), and last-wins would make the survivor depend on mount order.
 ///
@@ -180,7 +180,7 @@ fn duplicate_tags_in_one_route_log_and_drop_the_second() {
 }
 
 /// A hero's `RenderId` comes from `RenderBox::attach` and goes at `detach` — the
-/// ADR-0021 U2 anchor, reused. `BuildContext::find_render_object` walks strict
+/// same anchor mechanism, reused. `BuildContext::find_render_object` walks strict
 /// *ancestors* and can never answer this.
 ///
 /// Red-check: delete `fn detach` from `RenderSubtreeAnchor` — the id survives the
@@ -329,7 +329,7 @@ fn end_flight_restores_child() {
     harness.tick();
 
     assert_eq!(hero.placeholder_size(), None);
-    // The fixed chain (ADR-0021 §7k) keeps a transparent `Offstage(offstage: false)`
+    // The fixed chain keeps a transparent `Offstage(offstage: false)`
     // around the child even out of flight, so its *presence* is no longer the signal.
     // What matters is that the child is **visible**: an `Offstage` that were still
     // hiding it would zero the anchor, so the real size is the honest check.
@@ -448,7 +448,7 @@ fn an_unmounted_hero_measures_to_none() {
 
 /// A hero's `RenderId` exists from `attach`, which runs during **build**; its geometry
 /// does not exist until layout commits. `bounding_box_in` must answer `None` in that
-/// window rather than guess — the same two-stage rule ADR-0021 U2 established for
+/// window rather than guess — the same two-stage rule established for
 /// `RouteSubtree`.
 ///
 /// The probe reads the hero through the registry from inside the hero's own child
@@ -565,16 +565,16 @@ fn a_hero_outside_any_route_registers_with_nothing_and_still_builds() {
 }
 
 // ============================================================================
-// U5.2 — the placeholder preserves the child element without a GlobalKey
+// The placeholder preserves the child element without a GlobalKey
 // ============================================================================
 
-/// **The D2 decision, made concrete.** A stateful hero child must keep its state when
+/// **Preserving child state without a `GlobalKey`.** A stateful hero child must keep its state when
 /// the hero enters and leaves a flight — Flutter guarantees this with `_HeroState._key`
 /// (`heroes.dart:363`, `:434`), a `GlobalKey`.
 ///
 /// FLUI needs no key: `HeroState::build` emits the fixed chain
 /// `SizedBox(size?) → Offstage(show) → child` in **both** the not-in-flight and the
-/// in-flight-keep-child cases (ADR-0021 §7k). The child sits at the same depth under
+/// in-flight-keep-child cases. The child sits at the same depth under
 /// the same two view types throughout, so reconciliation migrates its element in place
 /// rather than rebuilding it. `create_state` therefore runs exactly once across a whole
 /// flight.

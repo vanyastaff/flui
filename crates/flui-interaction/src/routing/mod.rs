@@ -24,6 +24,7 @@ pub(crate) mod event_router;
 mod focus;
 pub mod focus_scope;
 mod hit_test;
+mod interaction_lane;
 pub(crate) mod mouse_tracker;
 mod pointer_router;
 
@@ -34,8 +35,13 @@ pub use focus_scope::{
     ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalEdgeBehavior,
 };
 pub use hit_test::{
-    EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
-    PointerEventHandler, RenderId, ScrollEventHandler, TransformGuard,
+    EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable, RenderId,
+    ScrollEventHandler, TransformGuard,
+};
+pub(crate) use interaction_lane::active_dispatch_handle;
+pub use interaction_lane::{
+    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, MouseRegionTarget,
+    PointerTarget, ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
 };
 pub use mouse_tracker::{
     CursorChangeCallback, DeviceId, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,

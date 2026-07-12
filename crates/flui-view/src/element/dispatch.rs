@@ -1,6 +1,6 @@
 //! Typed-dispatch entry point for element-view updates.
 //!
-//! Phase 1 §U8 / KTD-4 / Phase 3 §U27 / FR-021. The current body
+//! The current body
 //! eliminates the runtime `downcast_ref::<V>()` call in the
 //! View-type update dispatch path by gating on the concrete
 //! runtime `TypeId` (via `Downcast::as_any().type_id()`) and
@@ -66,7 +66,7 @@ use crate::view::{BoxedView, View};
 ///
 /// # Why a free function rather than a method?
 ///
-/// Phase 3 §U27 settles this signature as the canonical typed
+/// This settles the signature as the canonical typed
 /// dispatch surface. The free-function shape keeps
 /// `ElementCore::update_view`'s body to a single line so future
 /// `ElementKind`-discriminated dispatch (Phase 4+) can replace
@@ -74,7 +74,7 @@ use crate::view::{BoxedView, View};
 /// behavior implementation.
 pub(crate) fn dispatch_view_update<V, A>(core: &mut ElementCore<V, A>, new_view: &dyn View) -> bool
 where
-    V: View + Clone + Send + Sync + 'static,
+    V: View + Clone + 'static,
     A: ElementArity,
 {
     // Use the CONCRETE runtime TypeId — `Any::type_id()` via
@@ -168,5 +168,5 @@ where
 
 // The dirty store is owned by `ElementCore::mark_dirty_for_dispatch`
 // (see `super::generic`) — this module keeps `std::sync::atomic` out
-// of its dependency surface so Phase 3 §U27's replacement does not
-// need to update unrelated imports.
+// of its dependency surface so a future replacement of this dispatch
+// does not need to update unrelated imports.

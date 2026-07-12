@@ -1,5 +1,4 @@
-//! `HeadlessBinding::pump_frame` runs the shared layout↔build fixpoint
-//! (ADR-0017 U1).
+//! `HeadlessBinding::pump_frame` runs the shared layout↔build fixpoint.
 //!
 //! These plant a registry entry by hand rather than mounting a real
 //! `LayoutBuilder`, so they stay pure wiring tests of the frame path. `flui-app` carries the mirror-image test for `draw_frame`; if

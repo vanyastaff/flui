@@ -117,7 +117,7 @@ impl<T: flui_rendering::parent_data::ParentData + Clone + Default> ParentDataCon
 /// | Positioned | Stack | left, top, right, bottom, width, height |
 /// | Flexible | Flex | flex, fit |
 /// | TableCell | Table | row, column span |
-pub trait ParentDataView: Clone + Send + Sync + 'static + Sized {
+pub trait ParentDataView: Clone + 'static + Sized {
     /// The type of parent data this View provides.
     ///
     /// Cycle 4 R-11: bound is `ParentDataConfig` (was `ParentData`,
@@ -198,11 +198,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for DummyChild {

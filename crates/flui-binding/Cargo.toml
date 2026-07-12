@@ -25,7 +25,7 @@ flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Registered `AnimationController`s the frame loop ticks on the virtual timeline,
 # restart-aware via the controller's `run_generation` counter.
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
-# The frame-driven async task driver (ADR-0018 U2). `pump_frame` runs the SAME
+# The frame-driven async task driver. `pump_frame` runs the SAME
 # `Scheduler::drive_async_tasks` step `AppBinding::draw_frame` runs, in the same
 # slot — between the vsync tick and `build_scope`.
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
@@ -35,6 +35,8 @@ flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 parking_lot = { workspace = true }
 
 [dev-dependencies]
+static_assertions.workspace = true
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
 # Enable flui-view's `test-utils` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out

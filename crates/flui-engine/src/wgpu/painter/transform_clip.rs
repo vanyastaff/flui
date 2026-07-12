@@ -121,7 +121,7 @@ impl WgpuPainter {
     /// with the bounding rect + per-corner radii, applies a bounding-rect
     /// scissor for early rasterizer rejection, and relies on
     /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
-    /// outside the iOS-squircle curve (wired in U9 / U10).
+    /// outside the iOS-squircle curve.
     #[allow(
         clippy::similar_names,
         reason = "tl_r/tr_r/br_r/bl_r mirror the rsuperellipse-corner field names; renaming would obscure intent"

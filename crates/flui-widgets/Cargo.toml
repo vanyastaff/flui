@@ -16,7 +16,7 @@ categories = ["gui"]
 # (also transitively re-exports flui-foundation's ElementId/RenderId).
 flui-view = { path = "../flui-view", version = "0.2.0" }
 # Re-exported as `flui_widgets::Stream` so a `StreamBuilder` consumer can name the
-# trait without depending on futures-core directly (ADR-0018 U6). Trait-only: no
+# trait without depending on futures-core directly. Trait-only: no
 # executor, no combinators, no proc macros.
 futures-core = { workspace = true }
 # Concrete RenderBox catalog every render-object widget wraps (also re-exports
@@ -26,7 +26,7 @@ flui-objects = { path = "../flui-objects", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Animation primitives (`Animation<T>`) for transition widgets (`FadeTransition`).
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
-# ADR-0021 U3: `NavigatorState::init_state` stores a `PostFrameHandle` so a
+# `NavigatorState::init_state` stores a `PostFrameHandle` so a
 # `HeroController` can schedule its measurement. No cycle: flui-view already
 # depends on flui-scheduler.
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
@@ -40,7 +40,7 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
 flui-geometry = { path = "../flui-geometry", version = "0.2.0" }
 # `Overlay`'s entry list and its published `RebuildHandle` live behind private
-# `Mutex`es (ADR-0019 U1): the list is mutated from outside the tree, and
+# `Mutex`es: the list is mutated from outside the tree, and
 # `ViewState::build` takes `&self`.
 parking_lot = { workspace = true }
 # Typed error variants for `ImageProviderError` via `#[derive(Error)]`.

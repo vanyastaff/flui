@@ -1,6 +1,6 @@
 //! [`RouteLifecycle`] — the state machine `flush_history_updates` walks.
 //!
-//! ADR-0019 U2. Private; nothing here is exported.
+//! Private; nothing here is exported.
 //!
 //! # Flutter parity
 //!
@@ -25,8 +25,8 @@
 //!
 //! - **`staging`** (index 0) exists only for `TransitionDelegate`, which decides
 //!   whether a page-based route entering via `Navigator.pages` should animate.
-//!   Page-based routing is deferred (ADR-0019 §6), so the state has no producer
-//!   and no consumer. Re-checked against the reference in U2: `staging` is
+//!   Page-based routing is deferred, so the state has no producer
+//!   and no consumer. Re-checked against the reference: `staging` is
 //!   written only by `_updatePages` / `RouteTransitionRecord`, read only by
 //!   `isWaitingForEnteringDecision` (`navigator.dart:3559`), and
 //!   `_flushHistoryUpdates` `assert(false)`s on it (`:4576`). Omitting it is

@@ -1487,6 +1487,7 @@ dependencies = [
  "parking_lot",
  "pollster",
  "raw-window-handle",
+ "static_assertions",
  "thiserror 2.0.18",
  "tracing",
  "wasm-bindgen-futures",
@@ -1520,6 +1521,7 @@ dependencies = [
  "flui-types",
  "flui-view",
  "parking_lot",
+ "static_assertions",
 ]
 
 [[package]]
@@ -1644,6 +1646,7 @@ name = "flui-hot-reload"
 version = "0.2.0"
 dependencies = [
  "android_log-sys",
+ "flui-foundation",
  "flui-layer",
  "flui-rendering",
  "flui-types",
@@ -1670,6 +1673,8 @@ dependencies = [
  "parking_lot",
  "proptest",
  "smallvec",
+ "static_assertions",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1815,6 +1820,7 @@ dependencies = [
  "flui-foundation",
  "parking_lot",
  "serde",
+ "static_assertions",
  "thiserror 2.0.18",
  "tracing",
  "web-time",
@@ -1867,6 +1873,7 @@ dependencies = [
  "downcast-rs 2.0.2",
  "dyn-clone",
  "flui-foundation",
+ "flui-interaction",
  "flui-macros",
  "flui-objects",
  "flui-rendering",
@@ -1877,6 +1884,7 @@ dependencies = [
  "parking_lot",
  "serial_test",
  "slab",
+ "static_assertions",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",

@@ -39,7 +39,7 @@
 //! in `SparseChildren::by_logical_index`; they are managed solely by
 //! `service_child_requests`.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::{RenderSliverGridLazy, RenderSliverList};
@@ -86,7 +86,7 @@ pub struct SliverList {
     pub(crate) item_extent_estimate: f32,
     /// Given a logical index, produces the item's view. Returns `None` when
     /// the index is past the end of the data source.
-    pub(crate) builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl SliverList {
@@ -99,7 +99,7 @@ impl SliverList {
     pub fn new(
         item_count: usize,
         item_extent_estimate: f32,
-        builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+        builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
         assert!(
             item_extent_estimate.is_finite() && item_extent_estimate > 0.0,
@@ -130,11 +130,15 @@ impl RenderView for SliverList {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverList;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
         RenderSliverList::new(self.item_count, self.item_extent_estimate)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &crate::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_item_count(self.item_count);
     }
 
@@ -188,9 +192,9 @@ pub(crate) struct SliverListAdaptorManager {
     /// The element id of the adaptor host element. `None` until `on_mount`
     /// stamps it; the host is always mounted before `service` runs.
     host_element_id: Option<ElementId>,
-    /// Item factory. `Arc` so it's shared with `SliverList` and the
+    /// Item factory. `Rc` so it's shared with `SliverList` and the
     /// behavior without cloning the closure.
-    builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl std::fmt::Debug for SliverListAdaptorManager {
@@ -299,7 +303,7 @@ impl SliverListAdaptorBehavior {
             manager: Arc::new(Mutex::new(SliverListAdaptorManager {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
-                builder: Arc::clone(&view.builder),
+                builder: Rc::clone(&view.builder),
             })),
         }
     }
@@ -354,7 +358,7 @@ where
             Some(render_id) => {
                 owner.register_child_manager(
                     render_id,
-                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager + Send>>,
+                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager>>,
                 );
                 tracing::debug!(
                     ?render_id,
@@ -413,8 +417,12 @@ where
         self.inner.on_unmount(core, owner);
     }
 
-    fn on_update(&mut self, core: &ElementCore<SliverList, Variable>) {
-        self.inner.on_update(core);
+    fn on_update(
+        &mut self,
+        core: &ElementCore<SliverList, Variable>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.inner.on_update(core, owner);
     }
 
     fn on_view_updated(
@@ -484,7 +492,7 @@ pub struct SliverGridLazy {
     pub(crate) item_count: usize,
     /// Given a logical index, produces the item's view.  Returns `None` when
     /// the index is past the end of the data source.
-    pub(crate) builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl SliverGridLazy {
@@ -492,7 +500,7 @@ impl SliverGridLazy {
     pub fn new(
         grid_delegate: std::sync::Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
         item_count: usize,
-        builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+        builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
         Self {
             grid_delegate,
@@ -517,14 +525,18 @@ impl crate::view::RenderView for SliverGridLazy {
     type Protocol = flui_rendering::protocol::SliverProtocol;
     type RenderObject = flui_objects::RenderSliverGridLazy;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
         flui_objects::RenderSliverGridLazy::new(
             std::sync::Arc::clone(&self.grid_delegate),
             self.item_count,
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &crate::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_item_count(self.item_count);
         render_object.set_grid_delegate(std::sync::Arc::clone(&self.grid_delegate));
     }
@@ -563,7 +575,7 @@ pub(crate) struct SliverGridLazyAdaptorManager {
     sparse_children: SparseChildren,
     host_element_id: Option<ElementId>,
     render_id: Option<RenderId>,
-    builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl std::fmt::Debug for SliverGridLazyAdaptorManager {
@@ -692,7 +704,7 @@ impl SliverGridLazyAdaptorBehavior {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
                 render_id: None,
-                builder: Arc::clone(&view.builder),
+                builder: Rc::clone(&view.builder),
             })),
         }
     }
@@ -737,7 +749,7 @@ where
                 self.manager.lock().render_id = Some(render_id);
                 owner.register_child_manager(
                     render_id,
-                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager + Send>>,
+                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager>>,
                 );
                 tracing::debug!(
                     ?render_id,
@@ -779,8 +791,12 @@ where
         self.inner.on_unmount(core, owner);
     }
 
-    fn on_update(&mut self, core: &ElementCore<SliverGridLazy, Variable>) {
-        self.inner.on_update(core);
+    fn on_update(
+        &mut self,
+        core: &ElementCore<SliverGridLazy, Variable>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.inner.on_update(core, owner);
     }
 
     fn on_view_updated(
@@ -838,10 +854,18 @@ mod tests {
     impl RenderView for ItemView {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(48.0)), Some(px(48.0)))
         }
-        fn update_render_object(&self, _: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for ItemView {
@@ -850,8 +874,8 @@ mod tests {
         }
     }
 
-    fn make_builder(item_count: usize) -> Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync> {
-        Arc::new(move |idx: usize| {
+    fn make_builder(item_count: usize) -> Rc<dyn Fn(usize) -> Option<BoxedView>> {
+        Rc::new(move |idx: usize| {
             if idx < item_count {
                 Some(BoxedView(Box::new(ItemView)))
             } else {
@@ -904,17 +928,16 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let call_count_clone = Arc::clone(&call_count);
 
-        let builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync> =
-            Arc::new(move |idx: usize| {
-                call_count_clone.fetch_add(1, Ordering::Relaxed);
-                if idx < 5 {
-                    Some(BoxedView(Box::new(ItemView)))
-                } else {
-                    None
-                }
-            });
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
+            call_count_clone.fetch_add(1, Ordering::Relaxed);
+            if idx < 5 {
+                Some(BoxedView(Box::new(ItemView)))
+            } else {
+                None
+            }
+        });
 
-        let view = SliverList::new(5, 48.0, Arc::clone(&builder));
+        let view = SliverList::new(5, 48.0, Rc::clone(&builder));
         assert!(!view.has_children(), "F4: no dense children");
         assert!((view.builder)(3).is_some());
         assert!((view.builder)(5).is_none());

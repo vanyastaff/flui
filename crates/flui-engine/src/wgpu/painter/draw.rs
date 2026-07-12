@@ -1,7 +1,7 @@
 // ===== Public Drawing API =====
 //
 // These methods used to be the `impl Painter for WgpuPainter` trait impl;
-// the `Painter` trait was deleted in Mythos U5 (1 production impl, 6 default
+// the `Painter` trait was deleted (1 production impl, 6 default
 // `tracing::warn!("not implemented")` impls, no second backend planned).
 // The methods stay as inherent on `WgpuPainter` for direct use by `Backend`
 // (the CommandRenderer impl) and external callers like `examples/painting_demo`.
@@ -14,7 +14,7 @@
 // intentional.
 //
 // These methods were originally `impl Painter for WgpuPainter` trait methods;
-// the `Painter` trait was deleted in Mythos U5 (1b376beb). This doc-sweep
+// the `Painter` trait was deleted in commit 1b376beb. This doc-sweep
 // (engine-painter-doc-sweep) adds per-method docs directly on the inherent impl.
 #[allow(
     clippy::cast_possible_truncation,

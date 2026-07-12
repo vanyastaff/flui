@@ -26,9 +26,8 @@
 //! retains at the outer `match self.kind { … }` dispatch in the
 //! element-storage layer.
 //!
-//! Phase 3 §U25 lands the trait + impls. Phase 3 §U26 ships the
-//! `column!` / `row!` macros (`crates/flui-view/src/macros/mod.rs`)
-//! that expand to the tuple form and the friendly FR-034
+//! The `column!` / `row!` macros (`crates/flui-view/src/macros/mod.rs`)
+//! expand to the tuple form and emit the friendly FR-034
 //! `compile_error!` at >16 children.
 
 mod tuple_impls;

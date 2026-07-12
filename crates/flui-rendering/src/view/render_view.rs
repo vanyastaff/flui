@@ -72,7 +72,7 @@ pub struct RenderView {
     // already carries the equivalent atomic flags via
     // `crates/flui-rendering/src/storage/flags.rs`).
     //
-    // U2 exemplar refactor note (preserved): the previous
+    // Exemplar refactor note (preserved): the previous
     // `was_repaint_boundary` field lived here as a mirror of the
     // (removed) `RenderObject::set_was_repaint_boundary` trait method.
     // The bit now lives on `RenderState<P>::flags` as

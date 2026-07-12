@@ -1,4 +1,4 @@
-//! U2 — S1 KeyId interning prototype bench.
+//! S1 KeyId interning prototype bench.
 //!
 //! Resolves the spec's Deferred S1 question against a synthetic mock: does
 //! `Option<KeyId>` (NonZeroU64 newtype, 8 bytes) beat the `Option<Box<dyn ViewKey>>`
@@ -7,8 +7,8 @@
 //!
 //! Phase 0 (this bench) does **not** modify production `ElementNode` storage —
 //! the spec FR-022 commits to the boxed-dyn baseline absent a strong S1 inversion.
-//! The U4 gate-report uses these numbers to decide whether to re-open FR-022
-//! before Phase 1 lands the storage shape.
+//! The gate report uses these numbers to decide whether to re-open FR-022
+//! before a later phase lands the storage shape.
 //!
 //! # Bench groups
 //!
@@ -25,15 +25,15 @@
 //!
 //! # Why a placeholder reconciler
 //!
-//! The production keyed reconciler does not land until Phase 2 U12 (and its
-//! callers don't get rewired until U15). The S1 question is a *storage-shape*
+//! The production keyed reconciler does not land until a later phase (and its
+//! callers don't get rewired until still later). The S1 question is a *storage-shape*
 //! question, not a *reconciler-algorithm* question. The minimal kernel that
 //! isolates the storage-shape cost is a `HashMap<key_hash, idx>` build +
 //! per-new-position lookup. That is what we measure.
 //!
 //! # Plan / spec references
 //!
-//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`] U2
+//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]
 //! - [`specs/004-view-element-core/spec.md`] Deferred S1, FR-022
 
 // Bench harness, not public API; `criterion_group!` generates the
@@ -164,7 +164,7 @@ fn bench_hash_lookup_interned_key_id(c: &mut Criterion) {
 /// The bench body recomputes [`MemoryAccounting::for_baseline`] per iteration
 /// (a pure `const`-style arithmetic over `NODE_COUNT`) so the value is
 /// reproducibly visible in the report without `println!` (forbidden by
-/// Constitution Principle 6). The U4 gate report reads the canonical totals
+/// Constitution Principle 6). The gate report reads the canonical totals
 /// from this source file's accounting struct, not from runtime output.
 fn bench_memory_baseline_box_dyn(c: &mut Criterion) {
     c.bench_function("s1_memory/baseline_box_dyn", |b| {

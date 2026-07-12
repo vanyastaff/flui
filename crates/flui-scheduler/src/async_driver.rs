@@ -1,4 +1,4 @@
-//! [`AsyncDriver`] — the frame-driven task driver (ADR-0018, unit U2).
+//! [`AsyncDriver`] — the frame-driven task driver.
 //!
 //! # What this is
 //!
@@ -19,7 +19,7 @@
 //! `false → true` transition** — asks the binding for a frame through the
 //! scheduler's existing `request_frame` hook. So a burst of wakes between frames
 //! costs one flag write and one frame request, exactly as
-//! `ExternalBuildScheduler` coalesces rebuild requests (ADR-0018 U1).
+//! `ExternalBuildScheduler` coalesces rebuild requests.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
 //! [`AsyncDriver::poll_ready`], which the binding calls once per frame.
@@ -34,7 +34,7 @@
 //! # What it never does
 //!
 //! Touch an element tree, a render tree, or a pipeline. A task that wants a
-//! rebuild calls `RebuildHandle::schedule()` (U1), which only writes to the
+//! rebuild calls `RebuildHandle::schedule()`, which only writes to the
 //! build owner's inbox.
 
 use std::collections::BTreeMap;
@@ -130,7 +130,7 @@ impl Wake for TaskWaker {
 /// Cancels its task when dropped.
 ///
 /// Hold it for as long as the task should run. `ViewState::dispose` dropping one
-/// is what stops an in-flight `FutureBuilder` subscription (ADR-0018 U4).
+/// is what stops an in-flight `FutureBuilder` subscription.
 #[derive(Debug)]
 pub struct TaskToken {
     id: TaskId,

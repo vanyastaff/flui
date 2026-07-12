@@ -43,11 +43,18 @@ impl RenderView for IntrinsicHeight {
     type Protocol = BoxProtocol;
     type RenderObject = RenderIntrinsicHeight;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderIntrinsicHeight::new()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // No configuration fields to synchronize.
     }
 

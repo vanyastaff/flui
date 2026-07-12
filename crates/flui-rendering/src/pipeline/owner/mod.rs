@@ -1,7 +1,7 @@
 //! PipelineOwner manages the rendering pipeline.
 //!
-//! Mythos Step 7 finalization (2026-05-20): the four pipeline phases now
-//! own their work as `run_*` methods on the phase-specific impls. The
+//! As finalized on 2026-05-20, the four pipeline phases own their work
+//! as `run_*` methods on the phase-specific impls. The
 //! legacy `flush_*` aliases on `PipelineOwner<Idle>` are gone. Calling
 //! `run_paint` on `<Idle>` is a compile error -- see the `compile_fail`
 //! doctest at the end of `pipeline/phase.rs`.
@@ -100,8 +100,8 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// Each PipelineOwner manages one render tree. Multi-window applications
 /// own multiple PipelineOwner instances side-by-side; the previous
 /// hierarchical-pipelines API (`adopt_child` / `drop_child`) was removed
-/// in Mythos Step 9 -- it used `Arc<RwLock<PipelineOwner>>` for tree
-/// nodes, an anti-pattern this crate refuses.
+/// -- it used `Arc<RwLock<PipelineOwner>>` for tree nodes, an
+/// anti-pattern this crate refuses.
 pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Unique identifier for this pipeline owner.
     id: u64,
@@ -132,7 +132,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// dirty entry is the tree root (`root_id`) and the root has no
     /// cached `state.constraints()` yet (first frame).
     ///
-    /// **D-block PR-A1 U23:** the binding layer (`flui-view` /
+    /// The binding layer (`flui-view` /
     /// `flui-app` / `flui-hot-reload`) sets this once per
     /// configuration via [`Self::set_root_constraints`] before the
     /// first `run_frame` invocation. On subsequent frames the root's
@@ -143,7 +143,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
 
-    /// The semantics tree owner (ADR-0014 D1; Flutter `PipelineOwner
+    /// The semantics tree owner (ADR-0014; Flutter `PipelineOwner
     /// ._semanticsOwner` parity). `None` until semantics is enabled via
     /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
     /// fires `fire_semantics_owner_created`; disposed (firing
@@ -163,7 +163,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     last_link_registry: Option<flui_layer::LinkRegistry>,
 
     /// Composite-resolved offsets for `Layer::Follower` render nodes,
-    /// keyed by `RenderId` (ADR-0015 D1) — a per-frame byproduct mirroring
+    /// keyed by `RenderId` (ADR-0015) — a per-frame byproduct mirroring
     /// `last_layer_tree`/`last_link_registry`. Populated post-paint
     /// (`paint.rs::run_paint`) by resolving each `FragmentComposer`-recorded
     /// follower correlation via the SAME `flui_layer::resolve_follower_offset`
@@ -179,7 +179,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
-    /// `show_when_unlinked == false`) — ADR-0015 D1/D4's companion to
+    /// `show_when_unlinked == false`) — ADR-0015's companion to
     /// `last_follower_offsets`. The hit-test walk must distinguish "not a
     /// follower" (fall through to normal traversal) from "a follower that
     /// is currently hidden" (skip the subtree entirely, mirroring
@@ -225,12 +225,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
 
     /// Child-build requests accumulated during the most recent layout pass
-    /// by request-strategy slivers (U4.2).  Each entry is `(sliver_id,
+    /// by request-strategy slivers.  Each entry is `(sliver_id,
     /// logical_index)`.  The binding layer drains this via
     /// [`Self::take_pending_child_requests`] after the frame to service the
-    /// requests through the element tree (U4.3).  Empty between frames.
+    /// requests through the element tree.  Empty between frames.
     pending_child_requests: Vec<(RenderId, usize)>,
-    /// Retain-band signals from element-owned slivers (U4.3 removal half).
+    /// Retain-band signals from element-owned slivers (the removal half).
     ///
     /// Each entry is `(sliver_id, cache_first, cache_last)`: the retained
     /// logical index band `[first, last)` emitted by
@@ -318,22 +318,22 @@ where
 
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Takes all child-build requests accumulated during the most recent
-    /// layout pass (U4.2), leaving the buffer empty.
+    /// layout pass, leaving the buffer empty.
     ///
     /// Each entry is `(sliver_id, logical_index)`: the sliver whose
     /// `request_child_build` fired, and the logical item index it could not
-    /// materialize synchronously.  The binding layer (U4.3) consumes this
+    /// materialize synchronously.  The binding layer consumes this
     /// after every frame to drive the element-tree child manager.
     ///
-    /// This is the U4.3 entry point — `pub` (not `pub(super)`) because no
-    /// in-module consumer exists in U4.2; the only caller is external.
+    /// `pub` (not `pub(super)`) because the only caller is external — no
+    /// in-module consumer exists.
     #[must_use]
     pub fn take_pending_child_requests(&mut self) -> Vec<(RenderId, usize)> {
         std::mem::take(&mut self.pending_child_requests)
     }
 
     /// Takes all retain-band signals accumulated during the most recent layout
-    /// pass (U4.3 removal half), leaving the buffer empty.
+    /// pass (the removal half), leaving the buffer empty.
     ///
     /// Each entry is `(sliver_id, cache_first, cache_last)`.  The binding
     /// layer calls this to drive `SparseChildren::retain_band` through the
@@ -581,7 +581,7 @@ mod tests {
         assert!(owner.nodes_needing_paint().is_empty());
     }
 
-    // test_pipeline_owner_hierarchy removed in Mythos Step 9 along with the
+    // test_pipeline_owner_hierarchy removed along with the
     // adopt_child/drop_child/child_count/children API. Multi-PipelineOwner
     // scenarios (multi-window) are now owned by flui-app side-by-side.
 
@@ -898,7 +898,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Mythos Step 12: catch_unwind plumbing
+    // catch_unwind plumbing
     // ========================================================================
     //
     // Verifies that a render object panicking inside a third-party trait
@@ -1096,7 +1096,7 @@ mod tests {
     /// A panicking `perform_layout_raw` surfaces as
     /// `RenderError::Poisoned { phase: "layout", .. }` through
     /// `RenderEntry::layout`. This verifies the catch_unwind wrapper on
-    /// the layout call site (Mythos Step 12).
+    /// the layout call site.
     ///
     /// Note: `RenderEntry::layout` is not yet wired into the pipeline
     /// owner's `run_layout` (the propagation stubs are empty per the
@@ -1155,10 +1155,10 @@ mod tests {
     }
 
     // ========================================================================
-    // D-block PR-A1 U15 — PipelineOwner::mark_needs_layout walk tests
+    // PipelineOwner::mark_needs_layout walk tests
     // ========================================================================
     //
-    // Verifies the Flutter `markNeedsLayout` shape ported in U15:
+    // Verifies the Flutter `markNeedsLayout` shape ported here:
     //   - propagation walks the ancestor chain
     //   - flag is set on every visited node (NEEDS_LAYOUT)
     //   - propagation stops at the first relayout boundary or root
@@ -1251,10 +1251,11 @@ mod tests {
     #[test]
     fn mark_needs_layout_stops_at_intermediate_relayout_boundary() {
         let (mut owner, root_id, middle_id, leaf_id) = build_three_level_chain();
-        // Promote `middle` to a relayout boundary via the storage flag (U17
-        // wires this from `RenderEntry::layout`'s post-set_constraints
+        // Promote `middle` to a relayout boundary via the storage flag
+        // (normally wired from `RenderEntry::layout`'s post-set_constraints
         // compute_relayout_boundary call; this test pre-bootstraps the
-        // flag directly to isolate U15 walk behaviour from U17 bootstrap).
+        // flag directly to isolate the mark_needs_layout walk behaviour
+        // from that bootstrap).
         if let Some(crate::storage::RenderNode::Box(entry)) = owner.render_tree.get_mut(middle_id) {
             entry.state().set_relayout_boundary(true);
         }

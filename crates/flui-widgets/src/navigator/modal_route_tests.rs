@@ -1,4 +1,4 @@
-//! ADR-0020 U5.3 tests for the private [`ModalRoute`].
+//! Tests for the private [`ModalRoute`].
 //!
 //! # Parity oracles
 //!
@@ -12,11 +12,12 @@
 //!
 //! That `RenderOffstage` lays its child out at real geometry and then suppresses
 //! paint, hit-test and semantics is pinned by `harness_offstage_*` in
-//! `flui-objects` (ADR-0020 U5.0). That `RenderTheater` skips its first
-//! `skip_count` children is pinned by `harness_theater_*` (U5.3 Part A). These
+//! `flui-objects`. That `RenderTheater` skips its first
+//! `skip_count` children is pinned by `harness_theater_*`. These
 //! tests prove the **wiring**: that a `ModalRoute` puts those render objects in
 //! the tree with the flags its own state says they should have.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -77,7 +78,7 @@ fn modal(built: &Built, creations: &Arc<AtomicUsize>) -> ModalRoute<i32> {
     let (built, creations) = (built.clone(), Arc::clone(creations));
     ModalRoute::new(
         FRAME,
-        Arc::new(
+        Rc::new(
             move |_ctx: &dyn BuildContext, _animation: &_, _secondary: &_| {
                 built.0.fetch_add(1, Ordering::Relaxed);
                 Probe(Arc::clone(&creations)).into_view().boxed()
@@ -99,11 +100,14 @@ fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
     (handle, harness, bottom)
 }
 
-/// Run the modal's entrance transition to completion, then settle a frame.
+/// Run the modal's entrance transition to completion, then settle the owner
+/// status bridge and the overlay rebuild it schedules.
 ///
 /// FLUI's `AnimationController` returns no `TickerFuture`, so a test drives the
 /// transition by hand — `set_value(1.0)` fires the `Completed` status, which is
-/// the seam `_handleStatusChanged` listens on.
+/// queued by the animation listener and drained from owner-local `ModalScope`
+/// build. The resulting `OverlayEntry.opaque` write schedules the overlay
+/// rebuild that applies occlusion on the following tick.
 fn complete_entrance(
     transition: &super::transition_route::TransitionHandle,
     harness: &mut Harness,
@@ -114,6 +118,7 @@ fn complete_entrance(
     controller.set_value(1.0);
     assert_eq!(controller.status(), AnimationStatus::Completed);
     harness.tick();
+    harness.tick();
 }
 
 // ============================================================================
@@ -122,7 +127,7 @@ fn complete_entrance(
 
 /// `case completed: overlayEntries.first.opaque = opaque` (`routes.dart:296`).
 ///
-/// Before U5.3 this write had nowhere to go. Now it drops the route below out of
+/// Previously this write had nowhere to go. Now it drops the route below out of
 /// the tree entirely, because that route has no `maintain_state`.
 #[test]
 fn modal_opaque_route_occludes_the_route_below_once_its_transition_completes() {
@@ -175,6 +180,7 @@ fn modal_opaque_route_clears_opaque_while_it_moves() {
     let controller = transition.controller().expect("installed");
     controller.reverse().expect("reverse from 1.0");
     harness.tick();
+    harness.tick();
 
     assert_eq!(controller.status(), AnimationStatus::Reverse);
     assert!(!top_entry.opaque(), "a moving route clears opaque");
@@ -210,7 +216,8 @@ fn modal_non_opaque_route_never_occludes() {
 
 /// `maintainState == false`: an occluded route is unmounted and its subtree state
 /// **destroyed**. Uncovering it creates fresh state. This is the contract routes
-/// below a `PageRoute` rely on, and it is what U5.3 Part A made observable.
+/// below a `PageRoute` rely on, and it is what `RenderTheater` skip-count support
+/// made observable.
 #[test]
 fn modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
@@ -240,6 +247,7 @@ fn modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state()
         .expect("installed")
         .reverse()
         .expect("reverse from 1.0");
+    harness.tick();
     harness.tick();
 
     assert!(covered_entry.is_mounted());
@@ -459,9 +467,9 @@ fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector(
 // Privacy
 // ============================================================================
 
-/// `ModalRoute` and `ModalHandle` stay private through U5.4: they are the
+/// `ModalRoute` and `ModalHandle` stay private: they are the
 /// implementation `PageRoute` / `PopupRoute` are built on, and exporting them as
-/// extensible bases is a separate sign-off (ADR-0020 §7e).
+/// extensible bases is a separate sign-off.
 ///
 /// Red-check: add `pub use modal_route::ModalRoute;` to `navigator/mod.rs`.
 #[test]
@@ -478,13 +486,13 @@ fn modal_route_is_not_exported() {
     );
 }
 
-/// [`ModalHandle`] is the ADR-0019 §3.2 owned capability: every clone names the
+/// [`ModalHandle`] is an owned capability: every clone names the
 /// same route, so a handle taken before `push_bound` still drives it afterwards.
 #[test]
 fn modal_handle_is_cloneable_and_shares_state() {
     let route: ModalRoute<i32> = ModalRoute::new(
         FRAME,
-        Arc::new(|_ctx: &dyn BuildContext, _a: &_, _s: &_| {
+        Rc::new(|_ctx: &dyn BuildContext, _a: &_, _s: &_| {
             SizedBox::new(10.0, 10.0).into_view().boxed()
         }),
     );

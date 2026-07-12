@@ -3,7 +3,7 @@
 //! This module provides GPU-accelerated rendering using wgpu
 //! (Vulkan/Metal/DX12/WebGPU).
 //!
-//! # Math-backend policy (N-geom PR 2, Option D — §U16)
+//! # Math-backend policy
 //!
 //! This engine layer uses `glam` (`Vec2`/`Mat4`/`vec4`, with `bytemuck` Pod)
 //! **directly** for GPU and paint hot-path math. That is intentional and
@@ -347,4 +347,4 @@ pub use offscreen::OffscreenRenderer;
 #[cfg(feature = "enable-wgpu-tests")]
 pub use texture_pool::{PooledTexture, TexturePool};
 
-// Painter (WgpuPainter is the concrete implementation; Painter trait deleted in Mythos U5)
+// Painter (WgpuPainter is the concrete implementation; the `Painter` trait was deleted)

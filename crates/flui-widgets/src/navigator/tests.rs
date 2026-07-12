@@ -1,4 +1,4 @@
-//! ADR-0019 U2 tests for the route stack.
+//! Tests for the route stack.
 //!
 //! # Parity oracles
 //!
@@ -219,7 +219,7 @@ fn watching(spy: &Arc<Spy>) -> Vec<Arc<dyn NavigatorObserver>> {
 ///
 /// `RouteHistory` walks the stack and *decides*; it no longer notifies observers or
 /// disposes routes, because both run arbitrary code that reaches back through a
-/// `NavigatorHandle` and would deadlock under the history's mutex (ADR-0021 §7f).
+/// `NavigatorHandle` and would deadlock under the history's mutex.
 /// A test that drives the history directly must therefore settle it, and settling
 /// with **no** observers is how the production path drops the observations of a
 /// flush nobody was listening to.
@@ -568,7 +568,7 @@ fn pop_then_remove_of_an_animating_route_completes_exactly_once() {
 /// Tested here, directly, because through `RouteHistory` it is unreachable —
 /// `arm_complete`'s `>= Remove` guard fires first (see the test above). Rather
 /// than ship an untestable correctness primitive or delete one, test it at the
-/// layer whose contract it is. Same posture as ADR-0018 U4's `apply_fold`.
+/// layer whose contract it is. Same posture as ADR-0018's `apply_fold`.
 ///
 /// Red-check: drop the `if shared.value.is_some() { return false; }` guard in
 /// `Completer::complete`.
@@ -588,7 +588,7 @@ fn completer_completes_exactly_once() {
 /// `result ?? current_result` fallback exactly once.
 ///
 /// Also unreachable through `RouteHistory` (see above), and likewise tested at
-/// its own layer — it is the contract U3's `Navigator` will call against.
+/// its own layer — it is the contract the `Navigator` view will call against.
 ///
 /// Red-check: delete `if self.completer.is_completed() { return; }` in
 /// `RouteRecord::did_complete`; `did_complete` fires on the route twice.
@@ -682,7 +682,7 @@ fn refused_pop_returns_the_entry_to_idle_and_completes_nothing() {
     assert!(!log.lock().contains(&Event::OnPopInvoked(true)));
 }
 
-/// The private `dyn Any` boundary (ADR-0019 §4). A wrong result type logs and
+/// The private `dyn Any` boundary. A wrong result type logs and
 /// completes with `None`, where Flutter throws a cast error.
 ///
 /// Red-check: `unwrap()` the downcast instead — the test panics.
@@ -1092,10 +1092,10 @@ fn push_pop_and_replace_in_sequence() {
 ///   the sentinel (`:3541-3546`). `handle_push` already sent `didChangeNext(null)`
 ///   for a new-first route, so a second one would be redundant.
 ///
-/// **Found by ADR-0019 U4's parity re-check.** FLUI initialised these fields to
+/// **Found by a parity re-check.** FLUI initialised these fields to
 /// `None`, so `None != None` was false and the bottom route's
 /// `did_change_previous(None)` was silently never sent. `SimpleRoute`'s no-op
-/// default masked it; `ModalRoute` (U5) drives `changedInternalState()` from
+/// default masked it; `ModalRoute` drives `changedInternalState()` from
 /// `didChangePrevious` and would have missed its initial init.
 ///
 /// Red-check: change `Announced` back to `Option<RouteId>` (i.e. seed the fields
@@ -1134,12 +1134,13 @@ fn bottom_route_receives_its_initial_did_change_previous() {
 /// (`navigator.dart:4452-4453`). This is framework misuse, so `PANIC-POLICY`
 /// permits the panic.
 ///
-/// ADR-0020 U5.1 did **not** relax this. What changed is that route callbacks no
-/// longer reach `flush` at all: `RouteBinding` enqueues a `RouteCommand`, and the
-/// running flush drains it (see `route_binding_finalize_during_flush_is_deferred`).
-/// So this assert now guards only a genuine recursive call, and it is still
-/// tested directly — a `Route` hook receives `&mut self` and cannot reach the
-/// history, exactly as in U2.
+/// The route-binding command queue did **not** relax this. What changed is that
+/// route callbacks no longer reach `flush` at all: `RouteBinding` enqueues a
+/// `RouteCommand`, and the running flush drains it (see
+/// `route_binding_finalize_during_flush_is_deferred`). So this assert now guards
+/// only a genuine recursive call, and it is still tested directly — a `Route`
+/// hook receives `&mut self` and cannot reach the history, exactly as the route
+/// stack enforces.
 ///
 /// Red-check: delete the `assert!` in `RouteHistory::flush`.
 #[test]
@@ -1151,11 +1152,11 @@ fn reentrant_flush_panics_with_bug() {
 }
 
 // ============================================================================
-// 12. THE ROUTE-ANIMATION SEAM (ADR-0020 U5.1)
+// 12. THE ROUTE-ANIMATION SEAM
 // ============================================================================
 
 /// A route that raises a `RouteCommand` from one of its lifecycle callbacks —
-/// the shape of a zero-duration `TransitionRoute` (U5.2).
+/// the shape of a zero-duration `TransitionRoute`.
 struct SeamRoute {
     settings: RouteSettings,
     binding: Option<RouteBinding>,
@@ -1228,10 +1229,10 @@ impl Route for SeamRoute {
 /// Drive a history's command queue without a navigator: the test's stand-in for
 /// `NavigatorShared::pump_route_commands`'s `wake`.
 ///
-/// Deliberately a **no-op**: the whole point of U5.1 is that a command raised
+/// Deliberately a **no-op**: the whole point of the command queue is that a command raised
 /// during a flush is drained by that flush, so `wake` has nothing to do. Commands
 /// raised *outside* a flush are applied by the explicit `flush` the test drives.
-fn inert_wake() -> Arc<dyn Fn() + Send + Sync> {
+fn inert_wake() -> Arc<dyn Fn()> {
     Arc::new(|| {})
 }
 
@@ -1255,7 +1256,7 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
 /// with `if (!_flushingHistory)` (`navigator.dart:5825-5828`); FLUI enqueues a
 /// `RouteCommand` and the running flush drains it, costing one extra pass.
 ///
-/// Before U5.1 this shape was structurally unreachable. It is the reason the
+/// Before the command queue existed this shape was structurally unreachable. It is the reason the
 /// `BUG:` assert existed.
 ///
 /// Red-check: make `RouteBinding::finalize` call `RouteHistory::finalize_route`
@@ -1395,7 +1396,7 @@ fn zero_duration_push_then_pop_settles_lifecycle_and_overlay_outcome() {
     assert!(!history.has_pending_commands());
 }
 
-/// Commands raised **between** flushes (an animation status listener, U5.2) are
+/// Commands raised **between** flushes (an animation status listener) are
 /// applied at the head of the next flush, before the walk sees the history.
 ///
 /// Red-check: delete the `self.apply_pending_commands()` call before the first
@@ -1476,7 +1477,7 @@ fn route_commands_are_pre_bound_to_one_route() {
 /// the render pipeline, or the overlay. ADR-0019's whole sequencing argument
 /// depends on it, so check the sources rather than trusting prose.
 ///
-/// # Why `observer.rs` is judged separately (ADR-0021 U2, seam 2)
+/// # Why `observer.rs` is judged separately
 ///
 /// `NavigatorObserver::did_attach` hands an observer an owned `NavigatorHandle`,
 /// so `observer.rs` names `super::navigator` — a module that *does* touch the
@@ -1506,7 +1507,7 @@ fn route_stack_flush_is_pure_data() {
     /// …and, for the four files that are pure *data*, anything that reaches the
     /// navigator, the scheduler, or an id minted by either tree.
     ///
-    /// `NavigatorObserver` joined this list in ADR-0021 §7f: an observer holds a
+    /// `NavigatorObserver` joined this list because an observer holds a
     /// `NavigatorHandle`, so a `RouteHistory` that could *call* one could deadlock
     /// on its own mutex. It now computes `Notification`s and hands them to the
     /// navigator, which delivers them with the lock released.
@@ -1547,7 +1548,7 @@ fn route_stack_flush_is_pure_data() {
         for token in FRAMEWORK.iter().chain(&NAVIGATOR_EDGE) {
             assert!(
                 !code.contains(token),
-                "{name} references `{token}`: the U2 route stack must stay pure data"
+                "{name} references `{token}`: the route stack must stay pure data"
             );
         }
     }

@@ -1,7 +1,7 @@
 //! [`NavigatorRoute`] and [`SimpleRoute`] — the bridge from the pure route stack
 //! to the overlay.
 //!
-//! ADR-0019 U3. Private; nothing here is exported.
+//! Private; nothing here is exported.
 //!
 //! # Flutter parity
 //!
@@ -15,8 +15,8 @@
 //! Flutter's `OverlayRoute` **owns** its `List<OverlayEntry>`, and the navigator
 //! reaches them through `route.overlayEntries` (`navigator.dart:4151`). FLUI
 //! cannot: the route lives behind `Box<dyn ErasedRoute>` inside `RouteHistory`,
-//! and exposing overlay entries there would break U2's pure-data invariant, which
-//! `route_stack_flush_is_pure_data` enforces.
+//! and exposing overlay entries there would break the route stack's pure-data
+//! invariant, which `route_stack_flush_is_pure_data` enforces.
 //!
 //! So the `NavigatorState` keeps the entries, in a `RouteId -> OverlayEntry` map
 //! it maintains alongside the stack. The route only supplies the *builder*. The
@@ -33,11 +33,12 @@
 //! # `SimpleRoute` is the floor, not the ceiling
 //!
 //! [`SimpleRoute`] pushes and pops instantly: no animation, no barrier, no
-//! `offstage`. ADR-0020 U5.4 adds `PageRoute` and `PopupRoute` on top of the
+//! `offstage`. `PageRoute` and `PopupRoute` add on top of the
 //! private `TransitionRoute` / `ModalRoute`; they reach their navigator through
 //! [`NavigatorRoute::binding_slot`].
 
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_animation::Animation;
@@ -50,8 +51,8 @@ use super::route::{Route, RouteSettings};
 ///
 /// Structurally identical to the private `overlay::OverlayBuilder`; named here so
 /// that the public [`NavigatorRoute`] surface does not mention `Overlay`, which
-/// stays private until it has its own parity gate (ADR-0019 §5 U5).
-pub type RouteContentBuilder = Arc<dyn Fn(&dyn BuildContext) -> BoxedView + Send + Sync>;
+/// stays private until it has its own parity gate.
+pub type RouteContentBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 
 /// One of a route's two animations, as seen by a page or transitions builder.
 ///
@@ -64,16 +65,13 @@ pub type RouteAnimation = Arc<dyn Animation<f32>>;
 /// Builds a route's page. Flutter's `RoutePageBuilder` / `ModalRoute.buildPage`
 /// (`routes.dart:1455-1459`).
 pub type RoutePageBuilder =
-    Arc<dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + Send + Sync>;
+    Rc<dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView>;
 
 /// Wraps a route's page in its entrance/exit transition. Flutter's
 /// `RouteTransitionsBuilder` / `ModalRoute.buildTransitions`
 /// (`routes.dart:1591-1598`), whose default is a jump cut — `child` unchanged.
-pub type RouteTransitionsBuilder = Arc<
-    dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation, BoxedView) -> BoxedView
-        + Send
-        + Sync,
->;
+pub type RouteTransitionsBuilder =
+    Rc<dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation, BoxedView) -> BoxedView>;
 
 /// A route that can be shown in the navigator's overlay.
 ///
@@ -96,7 +94,6 @@ pub trait NavigatorRoute: Route {
     /// settle the route, and a pop's exit animation has to finalize it.
     ///
     /// The slot is opaque: nothing public can read the binding back out of it.
-    /// ADR-0020 §7e.
     fn binding_slot(&self) -> Option<&RouteBindingSlot> {
         None
     }
@@ -129,10 +126,10 @@ impl<T> fmt::Debug for SimpleRoute<T> {
 
 impl<T> SimpleRoute<T> {
     /// A route showing whatever `builder` builds.
-    pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + Send + Sync + 'static) -> Self {
+    pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
         Self {
             settings: RouteSettings::default(),
-            builder: Arc::new(builder),
+            builder: Rc::new(builder),
             current_result: None,
             handles_pop_internally: false,
             consents_to_pop: true,
@@ -156,7 +153,7 @@ impl<T> SimpleRoute<T> {
     /// Make `did_pop` refuse, modelling `LocalHistoryRoute`.
     ///
     /// Test-only: a real refusing route implements [`Route::did_pop`] itself, and
-    /// `LocalHistoryRoute` is deferred (ADR-0019 §6). Not part of the U4 surface.
+    /// `LocalHistoryRoute` is deferred. Not part of the signed-off public surface.
     #[cfg(test)]
     pub(crate) fn refusing_pop(mut self) -> Self {
         self.consents_to_pop = false;
@@ -173,7 +170,7 @@ impl<T> SimpleRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> Route for SimpleRoute<T> {
+impl<T: Send + Clone + 'static> Route for SimpleRoute<T> {
     type Output = T;
 
     fn settings(&self) -> &RouteSettings {
@@ -193,8 +190,8 @@ impl<T: Send + Sync + Clone + 'static> Route for SimpleRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> NavigatorRoute for SimpleRoute<T> {
+impl<T: Send + Clone + 'static> NavigatorRoute for SimpleRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
-        Arc::clone(&self.builder)
+        Rc::clone(&self.builder)
     }
 }

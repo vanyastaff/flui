@@ -1,4 +1,4 @@
-//! ADR-0021 U1.5: post-frame callbacks run **after** the pipeline, in the same frame.
+//! Post-frame callbacks run **after** the pipeline, in the same frame.
 //!
 //! # Parity oracles
 //!
@@ -59,7 +59,7 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 }
 
 /// The negative half: the callback must not have run when the pipeline is
-/// executing. Before U1.5 the production runner drained the queue *first*, so
+/// executing. Previously the production runner drained the queue *first*, so
 /// this is the exact regression under guard.
 #[test]
 fn post_frame_callback_does_not_run_before_the_pipeline() {
@@ -242,7 +242,7 @@ fn abort_frame_is_a_no_op_when_no_frame_is_open() {
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
 
-/// `execute_frame` keeps its pre-U1.5 behavior: a complete frame whose post-frame
+/// `execute_frame` keeps its previous behavior: a complete frame whose post-frame
 /// callbacks run. It is `begin → persistent → end` with no pipeline.
 #[test]
 fn execute_frame_is_begin_persistent_end_and_still_drains_post_frame() {

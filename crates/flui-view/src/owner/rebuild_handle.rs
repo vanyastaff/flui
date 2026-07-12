@@ -1,5 +1,5 @@
 //! [`RebuildHandle`] — the `'static` "rebuild this element later" token
-//! (ADR-0018, unit U1).
+//! (ADR-0018).
 //!
 //! # What this is
 //!
@@ -220,11 +220,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(1.0)), Some(px(1.0)))
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for Leaf {

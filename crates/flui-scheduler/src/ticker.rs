@@ -6,7 +6,7 @@
 //!
 //! ## Single Canonical Ticker
 //!
-//! Per U15 (auto-scheduling absorption), there is one canonical [`Ticker`]
+//! Auto-scheduling is absorbed into a single canonical [`Ticker`]
 //! type. It supports two driving modes selected at construction:
 //!
 //! - **Manual tick** ([`Ticker::new`]): caller drives ticks via
@@ -665,8 +665,8 @@ impl Ticker {
         // 3 × 8 bytes (Arc<Mutex<TickerInner>> + Arc<Scheduler> + Arc<AtomicBool>),
         // matching the audit-recommended hot-path shape. The Box<dyn FnOnce>
         // wrapping is unavoidable with the current `OneShotFrameCallback`
-        // signature; full elimination of per-frame Box requires AtomicU8
-        // state (U26) + persistent-callback model and is deferred.
+        // signature; full elimination of per-frame Box requires an AtomicU8
+        // state machine plus a persistent-callback model and is deferred.
         let inner_arc = Arc::clone(&self.inner);
         let scheduler_arc = Arc::clone(scheduler);
         let disposed_arc = Arc::clone(&self.disposed);
@@ -1506,7 +1506,7 @@ mod tests {
         assert!(future.is_canceled());
     }
 
-    // Auto-scheduling Ticker tests (post-U15 absorption)
+    // Auto-scheduling Ticker tests
 
     #[test]
     fn test_auto_scheduling_ticker_lifecycle() {

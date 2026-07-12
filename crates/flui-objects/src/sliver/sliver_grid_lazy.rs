@@ -2,7 +2,7 @@
 //!
 //! # Design
 //!
-//! Combines the **request-strategy seam** of `RenderSliverList` (U4.2/U4.3)
+//! Combines the **request-strategy seam** of `RenderSliverList`
 //! with the **delegate-windowed geometry** of the eager `RenderSliverGrid`.
 //!
 //! Because the delegate makes scroll extent deterministic
@@ -23,7 +23,7 @@
 //!
 //! # Lifecycle
 //!
-//! Inert until a U4.3 `ChildManager` is wired (via `SliverGridLazy` view).
+//! Inert until a `ChildManager` is wired (via `SliverGridLazy` view).
 //! Until then, `request_child_build` emits requests that nothing services, so
 //! absent tiles never appear.  This matches `RenderSliverList`'s posture.
 
@@ -50,8 +50,9 @@ use flui_rendering::{
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
 /// Layout geometry is delegated to a [`SliverGridDelegate`]; children are
-/// built on demand by the element tree's `ChildManager` (U4.3) in response to
-/// [`SliverLayoutContext::request_child_build`] calls emitted during layout.
+/// built on demand by the element tree's `ChildManager` (not yet wired) in
+/// response to [`SliverLayoutContext::request_child_build`] calls emitted
+/// during layout.
 ///
 /// # Construction
 ///

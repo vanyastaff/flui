@@ -44,7 +44,7 @@
 //!   `paint_child(index, transform)` signature has no opacity parameter
 //!   already; this is a pre-existing scope cut, not a new one.
 //! - ~~`RenderObject.applyPaintTransform`/`getTransformTo`/`localToGlobal`
-//!   (oracle L455-462)~~ — **landed, ADR-0021 U1.** `apply_paint_transform`
+//!   (oracle L455-462)~~ — **landed.** `apply_paint_transform`
 //!   below replays `paint_children` to recover the child's paint matrix, the way
 //!   `hit_test` already does; `getTransformTo` / `localToGlobal` live on
 //!   `PipelineOwner`, because a FLUI render object has no parent link.

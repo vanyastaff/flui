@@ -57,6 +57,11 @@
 // `flex/flex.rs`, `text/text.rs`: a one-type family module named after its
 // type is the catalog's house style (matches `flui-view`/`flui-objects`).
 #![allow(clippy::module_inception)]
+// ADR-0027: navigator/overlay/hero/focus widget state is owner-local, but the
+// current handle graph still uses `Arc` at many internal seams. Do not restore
+// `Send + Sync` to UI callbacks or route/page builders to satisfy this lint; a
+// focused owner-local handle migration can replace these with `Rc` later.
+#![allow(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Modules
@@ -80,15 +85,15 @@ pub mod layout;
 #[cfg(test)]
 mod test_harness;
 
-/// `Navigator` and routing — ADR-0019. The route stack, its lifecycle, the flush
-/// algorithm and the result channel are private; the surface signed off in
-/// ADR-0019 U4 is re-exported from the crate root below.
+/// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
+/// route stack, its lifecycle, the flush algorithm and the result channel are
+/// private; the signed-off surface is re-exported from the crate root below.
 pub mod navigator;
-// `Overlay` / `OverlayEntry` — ADR-0019 U1, the first `Navigator` prerequisite.
-// Deliberately private: nothing here is exported from the crate root or the
-// prelude until ADR-0019 U4's parity + sign-off gate. `Navigator` (U3) is the
-// intended in-crate consumer. (A `///` doc here would be concatenated with the
-// module's own `//!` docs and resolve its intra-doc links in the crate root.)
+// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. Deliberately
+// private: nothing here is exported from the crate root or the prelude until
+// the parity + sign-off gate lands. `Navigator` is the intended in-crate
+// consumer. (A `///` doc here would be concatenated with the module's own
+// `//!` docs and resolve its intra-doc links in the crate root.)
 mod overlay;
 pub mod paint;
 pub mod scroll;

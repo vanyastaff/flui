@@ -30,7 +30,7 @@ downcast-rs = "2.0"
 dyn-clone = "1.0"
 slab = "0.4"                       # For RenderTree storage
 crossbeam-channel = { workspace = true } # PipelineOwnerHandle bounded mark-dirty channel
-rustc-hash = { workspace = true }  # FxHashSet for layout cycle guard (D-block U21)
+rustc-hash = { workspace = true }  # FxHashSet for layout cycle guard
 
 # Segmented-stack growth for the recursive pipeline walks (layout /
 # paint / hit-test / intrinsics). A ~1000-level chain overflows the
@@ -48,13 +48,13 @@ harness = false
 name = "paint"
 harness = false
 
-# Virtualization core (ADR-0003 U1): O(log n) offset<->index seek both ways and
+# Virtualization core: O(log n) offset<->index seek both ways and
 # O(log n) mid-list insert/delete vs a naive O(n) flat-array baseline.
 [[bench]]
 name = "virtualizer"
 harness = false
 
-# ADR-0010 D3 — borrowed intrinsic path parent-data slice cost.
+# Borrowed intrinsic path parent-data slice cost.
 # Measures build_intrinsic_child_parent_data (subtree_arena.rs) called when a
 # widget queries a child's intrinsic during perform_layout. Parameterized over
 # N = {1, 8, 64} flex children to show per-child allocation scaling.
@@ -71,7 +71,7 @@ required-features = ["testing"]
 
 [dev-dependencies]
 criterion.workspace = true
-# Property-based tests for the virtualization B+-tree (ADR-0003 U1): random
+# Property-based tests for the virtualization B+-tree: random
 # insert/delete/set_measured/set_count sequences checked against a naive
 # Vec oracle + structural invariants. Test-only; no production dependency.
 # Version matches flui-types / flui-interaction (already resolved in the lockfile).

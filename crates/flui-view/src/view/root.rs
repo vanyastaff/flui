@@ -68,7 +68,7 @@ impl<V: View + Clone> RootRenderView<V> {
     }
 }
 
-impl<V: View + Clone + Send + Sync + 'static> View for RootRenderView<V> {
+impl<V: View + Clone + 'static> View for RootRenderView<V> {
     fn create_element(&self) -> crate::element::ElementKind {
         crate::element::ElementKind::Root(Box::new(RootRenderElement::new(self)))
     }
@@ -118,7 +118,7 @@ pub struct RootRenderElement<V: View + Clone> {
     needs_build: bool,
 }
 
-impl<V: View + Clone + Send + Sync + 'static> RootRenderElement<V> {
+impl<V: View + Clone + 'static> RootRenderElement<V> {
     /// Create a new RootRenderElement.
     pub fn new(view: &RootRenderView<V>) -> Self {
         Self {
@@ -149,7 +149,7 @@ impl<V: View + Clone + Send + Sync + 'static> RootRenderElement<V> {
     }
 }
 
-impl<V: View + Clone + Send + Sync + 'static> std::fmt::Debug for RootRenderElement<V> {
+impl<V: View + Clone + 'static> std::fmt::Debug for RootRenderElement<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RootRenderElement")
             .field("lifecycle", &self.lifecycle)
@@ -164,7 +164,7 @@ impl<V: View + Clone + Send + Sync + 'static> std::fmt::Debug for RootRenderElem
 // ElementBase Implementation
 // ============================================================================
 
-impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<V> {
+impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
     fn view_type_id(&self) -> TypeId {
         TypeId::of::<RootRenderView<V>>()
     }
@@ -280,7 +280,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             // Update configuration if size changed
             if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
             {
-                // U2 exemplar refactor: mutable access to the render object goes
+                // Mutable access to the render object goes
                 // through `&mut RenderTree` (`render_tree_mut().get_mut`) rather
                 // than acquiring a per-node `RwLock` write guard. The pipeline
                 // owner is still locked via its outer `Arc<RwLock<PipelineOwner>>`
@@ -361,7 +361,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
 // RenderObjectElement Implementation
 // ============================================================================
 
-impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRenderElement<V> {
+impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
     fn render_object_any(&self) -> Option<&dyn Any> {
         // With RenderTree, we don't have direct access to RenderObject
         // Use render_id and access via PipelineOwner.render_tree()
@@ -465,7 +465,7 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
 // RenderTreeRootElement Implementation
 // ============================================================================
 
-impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRenderElement<V> {
+impl<V: View + Clone + 'static> RenderTreeRootElement for RootRenderElement<V> {
     fn pipeline_owner(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         self.pipeline_owner
             .as_ref()
@@ -484,7 +484,7 @@ impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRend
     // `pipeline_owner.render_tree_mut()`, calls `set_root_id`, and
     // requests a visual update; unmount inverts that sequence. The
     // pre-Mythos `attach_to_pipeline_owner` / `detach_from_pipeline_owner`
-    // trait stubs were removed in framework-spine-repair U15 because
+    // trait stubs were removed during the framework spine repair because
     // their bodies were panicking placeholders (Constitution Principle 6
     // forbids panic in production paths) and they had zero callers in
     // the workspace.
@@ -506,11 +506,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for TestView {

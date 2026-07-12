@@ -1,5 +1,5 @@
 //! The shared snapshot slot behind `FutureBuilder` and `StreamBuilder`
-//! (ADR-0018, units U4/U5).
+//! (ADR-0018).
 //!
 //! Both builders publish an [`AsyncSnapshot`] from a spawned task and read it
 //! back during `build`. The channel is the same shape as ADR-0017's
@@ -7,7 +7,7 @@
 //! reads, plus the bookkeeping needed to reject a write from a subscription that
 //! has since been replaced.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::AsyncSnapshot;
 use parking_lot::Mutex;
@@ -19,13 +19,12 @@ use crate::context::BuildContext;
 ///
 /// A factory rather than a `T`, so `T` needs no `Clone` to sit inside a view that
 /// is cloned on every rebuild.
-pub type InitialDataFactory<T> = Arc<dyn Fn() -> T + Send + Sync>;
+pub type InitialDataFactory<T> = Rc<dyn Fn() -> T>;
 
 /// Builds the child from the latest snapshot.
 ///
 /// The snapshot is passed by **reference**, so neither `T` nor `E` needs `Clone`.
-pub type SnapshotBuilder<T, E> =
-    Arc<dyn Fn(&dyn BuildContext, &AsyncSnapshot<T, E>) -> BoxedView + Send + Sync>;
+pub type SnapshotBuilder<T, E> = Rc<dyn Fn(&dyn BuildContext, &AsyncSnapshot<T, E>) -> BoxedView>;
 
 /// Snapshot plus the bookkeeping a completion needs, shared between the state and
 /// the spawned task.

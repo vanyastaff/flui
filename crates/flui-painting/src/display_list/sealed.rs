@@ -1,7 +1,7 @@
 //! Sealed extension-trait pair: `DisplayListCore` + `DisplayListExt`.
 //!
-//! Mythos chain U5 extracted these from the 2,434-LOC
-//! `display_list.rs` god module. The sealed-extension-trait pattern is
+//! These were extracted from the 2,434-LOC
+//! `display_list.rs` god module as part of a concern-based split. The sealed-extension-trait pattern is
 //! the legitimate cross-crate seam consumed by `flui-layer` and
 //! `flui-engine`:
 //!

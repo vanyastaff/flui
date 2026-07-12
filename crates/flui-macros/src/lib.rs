@@ -6,10 +6,10 @@
 //!
 //! - [`macro@StatelessView`] — emit `impl View` for a `StatelessView`
 //!   type. Replaces the legacy `impl_stateless_view!` declarative
-//!   macro that Phase 3 §U24 deletes.
+//!   macro that this crate deletes.
 //! - [`macro@StatefulView`] — emit `impl View` for a `StatefulView`
 //!   type. Replaces the legacy `impl_stateful_view!` declarative
-//!   macro (also deleted in §U24).
+//!   macro (also deleted here).
 //!
 //! Both derives are re-exported from `flui_view::prelude` so widget
 //! authors write a single `use flui_view::prelude::*;` and pick up the

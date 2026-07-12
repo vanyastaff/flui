@@ -1,4 +1,4 @@
-//! Public-API tests for [`LayoutBuilder`] (ADR-0017 U4).
+//! Public-API tests for [`LayoutBuilder`].
 //!
 //! These drive the widget through the real `flui-widgets` surface and a real
 //! `HeadlessBinding` frame — the same path `AppBinding::draw_frame` takes. The

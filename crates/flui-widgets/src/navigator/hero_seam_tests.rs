@@ -1,4 +1,4 @@
-//! ADR-0021 U2 seams 2–5, the executable half.
+//! The executable half of the support seams.
 //!
 //! These tests predate the public Hero baseline and still pin the four support seams
 //! `HeroController` reaches for, each against the
@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
 
 use flui_foundation::RenderId;
 use flui_rendering::pipeline::PipelineOwner;
@@ -459,7 +458,7 @@ fn route_subtree_names_the_page_anchor_not_the_transition_offstage_or_theater() 
 
 /// **The two-stage contract.** A `RouteSubtree` resolves from `attach`, which
 /// happens during **build**. Layout has not run then, and `box_size` says so. Only
-/// the post-frame phase of that same frame sees committed geometry (ADR-0021 U1.5).
+/// the post-frame phase of that same frame sees committed geometry.
 ///
 /// This is why `SubtreeAnchor::get()` alone is *not* layout-readiness, and why
 /// `HeroController._maybeStartHeroTransition` measures from a post-frame callback
@@ -534,12 +533,17 @@ fn route_subtree_ids_are_published_before_layout_commits() {
     let after_cb = Arc::clone(&after_layout);
     let owner_cb = Arc::clone(&owner);
     let navigator_cb = navigator.clone();
-    harness
-        .scheduler()
-        .add_post_frame_callback(Box::new(move |_| {
-            let subtree = navigator_cb.route_subtree(pushed);
-            *after_cb.lock() = subtree.and_then(|s| owner_cb.read().box_size(s.render_id));
-        }));
+    let post_frame = navigator
+        .post_frame_handle()
+        .expect("mounted navigator publishes an owner-local post-frame handle");
+    harness.enter_owner_scope(|| {
+        post_frame
+            .schedule_local(move |_| {
+                let subtree = navigator_cb.route_subtree(pushed);
+                *after_cb.lock() = subtree.and_then(|s| owner_cb.read().box_size(s.render_id));
+            })
+            .expect("owner-local post-frame lane is active");
+    });
 
     harness.tick();
 
@@ -673,7 +677,7 @@ fn the_navigators_overlay_accepts_a_flight_entry_above_every_route() {
 }
 
 /// The overlay half of the stale-handle contract. `OverlayHandle` mutation on an
-/// unmounted overlay is defined behaviour (ADR-0019 U1), so a `HeroController` that
+/// unmounted overlay is defined behaviour, so a `HeroController` that
 /// wakes up after its navigator left the tree cannot corrupt anything — it simply
 /// has no overlay to insert into. Flutter's guard is the explicit
 /// `if (navigator == null || overlay == null) return;` (`heroes.dart:995-997`), and
@@ -715,27 +719,6 @@ fn inserting_into_a_stale_navigators_overlay_is_inert() {
 // Seam 2, continued — the handle is usable from inside a callback
 // ============================================================================
 
-/// A deadlock is the failure mode these tests exist to catch, and a deadlocked test
-/// *hangs* rather than fails. So the body runs on a worker thread and the assertion
-/// is on the clock.
-///
-/// The stuck thread is deliberately not joined on timeout — joining it would hang
-/// too. nextest gives every test its own process, so it dies with the failure.
-fn must_finish(what: &str, body: impl FnOnce() + Send + 'static) {
-    const BUDGET: Duration = Duration::from_secs(10);
-
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        body();
-        let _ = done.send(());
-    });
-    assert!(
-        finished.recv_timeout(BUDGET).is_ok(),
-        "{what} did not finish within {BUDGET:?} — a navigator lock is held across \
-         an observer callback"
-    );
-}
-
 /// Reads the stack from every callback it receives, through the handle it was
 /// handed at `did_attach`.
 #[derive(Default)]
@@ -773,7 +756,7 @@ impl NavigatorObserver for StackReader {
     }
 }
 
-/// **The U2 defect, fixed.** An observer stores the `NavigatorHandle` it is handed
+/// **The reentrancy defect, fixed.** An observer stores the `NavigatorHandle` it is handed
 /// and reads the stack from `did_push` / `did_pop` / `did_change_top`. Every one of
 /// those reads takes `history.lock()`; `parking_lot::Mutex` is not reentrant, so
 /// this hangs the moment a notification fires under the lock.
@@ -790,18 +773,12 @@ fn an_observer_reads_the_stack_from_its_callbacks_without_deadlocking() {
     let reader = Arc::new(StackReader::default());
     navigator.add_observer(Arc::clone(&reader) as Arc<dyn NavigatorObserver>);
 
-    let navigator_for_worker = navigator.clone();
-    let reader_for_worker = Arc::clone(&reader);
-    must_finish("an observer reading the stack", move || {
-        // Mount inside the worker: `did_attach` fires from `init_state`, which is
-        // where the handle comes from.
-        let mut harness = mount_navigator(&navigator_for_worker);
-        let _result = navigator_for_worker.push(PageRoute::<i32>::new(page));
-        harness.tick();
-        assert!(navigator_for_worker.pop());
-        harness.tick();
-        assert!(!reader_for_worker.reads.lock().is_empty());
-    });
+    let mut harness = mount_navigator(&navigator);
+    let _result = navigator.push(PageRoute::<i32>::new(page));
+    harness.tick();
+    assert!(navigator.pop());
+    harness.tick();
+    assert!(!reader.reads.lock().is_empty());
 
     let reads = reader.reads.lock().clone();
     let from: Vec<&str> = reads.iter().map(|(from, ..)| *from).collect();
@@ -869,12 +846,9 @@ fn an_observer_may_push_from_did_push_without_deadlocking() {
     let observer = Arc::new(Reentrant::default());
     navigator.add_observer(Arc::clone(&observer) as Arc<dyn NavigatorObserver>);
 
-    let navigator_for_worker = navigator.clone();
-    must_finish("an observer pushing from did_push", move || {
-        let mut harness = mount_navigator(&navigator_for_worker);
-        let _result = navigator_for_worker.push(PageRoute::<i32>::new(page));
-        harness.tick();
-    });
+    let mut harness = mount_navigator(&navigator);
+    let _result = navigator.push(PageRoute::<i32>::new(page));
+    harness.tick();
 
     assert_eq!(
         navigator.route_ids().len(),

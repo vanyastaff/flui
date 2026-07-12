@@ -38,7 +38,7 @@
 //!     .with_on_tap_up(|d| { let _ = d; });
 //! ```
 
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use flui_types::{
     Offset,
@@ -122,18 +122,18 @@ pub struct TapDragEndDetails {
 // ============================================================================
 
 /// Callback fired when the primary pointer contacts the screen.
-pub type TapDragDownCallback = Arc<dyn Fn(TapDragDownDetails) + Send + Sync>;
+pub type TapDragDownCallback = Arc<dyn Fn(TapDragDownDetails)>;
 /// Callback fired when the pointer lifts before crossing drag slop (a tap).
-pub type TapDragUpCallback = Arc<dyn Fn(TapDragUpDetails) + Send + Sync>;
+pub type TapDragUpCallback = Arc<dyn Fn(TapDragUpDetails)>;
 /// Callback fired when the pointer crosses drag slop and the drag begins.
-pub type TapDragStartCallback = Arc<dyn Fn(TapDragStartDetails) + Send + Sync>;
+pub type TapDragStartCallback = Arc<dyn Fn(TapDragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
-pub type TapDragUpdateCallback = Arc<dyn Fn(TapDragUpdateDetails) + Send + Sync>;
+pub type TapDragUpdateCallback = Arc<dyn Fn(TapDragUpdateDetails)>;
 /// Callback fired when the pointer lifts and the drag completes.
-pub type TapDragEndCallback = Arc<dyn Fn(TapDragEndDetails) + Send + Sync>;
+pub type TapDragEndCallback = Arc<dyn Fn(TapDragEndDetails)>;
 /// Callback fired when the sequence is cancelled (arena loss or pointer
 /// cancel) — neither the tap nor the drag outcome will fire.
-pub type TapDragCancelCallback = Arc<dyn Fn() + Send + Sync>;
+pub type TapDragCancelCallback = Arc<dyn Fn()>;
 
 // ============================================================================
 // Recogniser
@@ -200,7 +200,7 @@ pub struct TapAndDragGestureRecognizer {
     state: RecognizerBase,
     phase: Arc<Mutex<Phase>>,
     drag_state: Arc<Mutex<DragState>>,
-    callbacks: Arc<Mutex<TapDragCallbacks>>,
+    callbacks: Rc<RefCell<TapDragCallbacks>>,
     settings: Arc<Mutex<GestureSettings>>,
     /// Arena verdict for the in-flight sequence: `None` until resolved,
     /// `Some(true)` once this recogniser wins, `Some(false)` once it loses.
@@ -228,7 +228,7 @@ impl TapAndDragGestureRecognizer {
             state: RecognizerBase::new(arena),
             phase: Arc::new(Mutex::new(Phase::Ready)),
             drag_state: Arc::new(Mutex::new(DragState::default())),
-            callbacks: Arc::new(Mutex::new(TapDragCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(TapDragCallbacks::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
             accepted: Arc::new(Mutex::new(None)),
         })
@@ -243,7 +243,7 @@ impl TapAndDragGestureRecognizer {
             state: RecognizerBase::new(arena),
             phase: Arc::new(Mutex::new(Phase::Ready)),
             drag_state: Arc::new(Mutex::new(DragState::default())),
-            callbacks: Arc::new(Mutex::new(TapDragCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(TapDragCallbacks::default())),
             settings: Arc::new(Mutex::new(settings)),
             accepted: Arc::new(Mutex::new(None)),
         })
@@ -277,19 +277,16 @@ impl TapAndDragGestureRecognizer {
     /// arena has accepted this recogniser).
     pub fn with_on_tap_down(
         self: Arc<Self>,
-        cb: impl Fn(TapDragDownDetails) + Send + Sync + 'static,
+        cb: impl Fn(TapDragDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_tap_down = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_tap_down = Some(Arc::new(cb));
         self
     }
 
     /// Register the tap-up callback (fires when the pointer lifts before
     /// crossing drag slop, resolving the sequence as a tap).
-    pub fn with_on_tap_up(
-        self: Arc<Self>,
-        cb: impl Fn(TapDragUpDetails) + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_tap_up = Some(Arc::new(cb));
+    pub fn with_on_tap_up(self: Arc<Self>, cb: impl Fn(TapDragUpDetails) + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_tap_up = Some(Arc::new(cb));
         self
     }
 
@@ -297,9 +294,9 @@ impl TapAndDragGestureRecognizer {
     /// slop, voiding the tap outcome).
     pub fn with_on_drag_start(
         self: Arc<Self>,
-        cb: impl Fn(TapDragStartDetails) + Send + Sync + 'static,
+        cb: impl Fn(TapDragStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_drag_start = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_drag_start = Some(Arc::new(cb));
         self
     }
 
@@ -307,9 +304,9 @@ impl TapAndDragGestureRecognizer {
     /// the drag is in progress).
     pub fn with_on_drag_update(
         self: Arc<Self>,
-        cb: impl Fn(TapDragUpdateDetails) + Send + Sync + 'static,
+        cb: impl Fn(TapDragUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_drag_update = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_drag_update = Some(Arc::new(cb));
         self
     }
 
@@ -317,16 +314,16 @@ impl TapAndDragGestureRecognizer {
     /// drag, with end-of-drag velocity).
     pub fn with_on_drag_end(
         self: Arc<Self>,
-        cb: impl Fn(TapDragEndDetails) + Send + Sync + 'static,
+        cb: impl Fn(TapDragEndDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_drag_end = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_drag_end = Some(Arc::new(cb));
         self
     }
 
     /// Register the cancel callback (fires when the sequence is cancelled by
     /// an arena loss or a pointer-cancel event).
-    pub fn with_on_cancel(self: Arc<Self>, cb: impl Fn() + Send + Sync + 'static) -> Arc<Self> {
-        self.callbacks.lock().on_cancel = Some(Arc::new(cb));
+    pub fn with_on_cancel(self: Arc<Self>, cb: impl Fn() + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_cancel = Some(Arc::new(cb));
         self
     }
 
@@ -426,7 +423,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
     fn dispose(&self) {
         self.state.mark_disposed();
         self.state.reject();
-        let mut cbs = self.callbacks.lock();
+        let mut cbs = self.callbacks.borrow_mut();
         cbs.on_tap_down = None;
         cbs.on_tap_up = None;
         cbs.on_drag_start = None;
@@ -468,7 +465,7 @@ impl TapAndDragGestureRecognizer {
                     };
 
                     // Snapshot callbacks under lock, fire outside.
-                    let down_cb = self.callbacks.lock().on_tap_down.clone();
+                    let down_cb = self.callbacks.borrow().on_tap_down.clone();
                     if let Some(cb) = down_cb {
                         cb(TapDragDownDetails {
                             global_position: initial,
@@ -486,7 +483,7 @@ impl TapAndDragGestureRecognizer {
                             .add_position(std::time::Instant::now(), position);
                     }
 
-                    let start_cb = self.callbacks.lock().on_drag_start.clone();
+                    let start_cb = self.callbacks.borrow().on_drag_start.clone();
                     if let Some(cb) = start_cb {
                         cb(TapDragStartDetails {
                             global_position: initial,
@@ -497,7 +494,7 @@ impl TapAndDragGestureRecognizer {
 
                     // Fire an update with the crossing move.
                     let delta = (position - initial).to_delta();
-                    let update_cb = self.callbacks.lock().on_drag_update.clone();
+                    let update_cb = self.callbacks.borrow().on_drag_update.clone();
                     if let Some(cb) = update_cb {
                         cb(TapDragUpdateDetails {
                             global_position: position,
@@ -529,7 +526,7 @@ impl TapAndDragGestureRecognizer {
                     ds.velocity_tracker
                         .add_position(std::time::Instant::now(), position);
                 }
-                let cb = self.callbacks.lock().on_drag_update.clone();
+                let cb = self.callbacks.borrow().on_drag_update.clone();
                 if let Some(cb) = cb {
                     cb(TapDragUpdateDetails {
                         global_position: position,
@@ -566,7 +563,7 @@ impl TapAndDragGestureRecognizer {
                 // `handle_move`) AND the arena confirmed our win.
                 if tap_viable && self.accepted.lock().unwrap_or(false) {
                     if let Some(initial) = initial {
-                        let down_cb = self.callbacks.lock().on_tap_down.clone();
+                        let down_cb = self.callbacks.borrow().on_tap_down.clone();
                         if let Some(cb) = down_cb {
                             cb(TapDragDownDetails {
                                 global_position: initial,
@@ -575,7 +572,7 @@ impl TapAndDragGestureRecognizer {
                             });
                         }
                     }
-                    let up_cb = self.callbacks.lock().on_tap_up.clone();
+                    let up_cb = self.callbacks.borrow().on_tap_up.clone();
                     if let Some(cb) = up_cb {
                         cb(TapDragUpDetails {
                             global_position: position,
@@ -589,7 +586,7 @@ impl TapAndDragGestureRecognizer {
             Phase::Dragging => {
                 // Drag ended at up: fire on_drag_end with final velocity.
                 let velocity = self.drag_state.lock().velocity_tracker.get_velocity();
-                let end_cb = self.callbacks.lock().on_drag_end.clone();
+                let end_cb = self.callbacks.borrow().on_drag_end.clone();
                 if let Some(cb) = end_cb {
                     cb(TapDragEndDetails {
                         velocity,
@@ -611,7 +608,7 @@ impl TapAndDragGestureRecognizer {
             return;
         }
         // We were mid-gesture; fire cancel and stop tracking.
-        let cb = self.callbacks.lock().on_cancel.clone();
+        let cb = self.callbacks.borrow().on_cancel.clone();
         if let Some(cb) = cb {
             cb();
         }

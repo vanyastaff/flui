@@ -9,7 +9,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html>
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
@@ -20,16 +20,16 @@ use crate::{
 };
 
 /// Callback for scale start events
-pub type ScaleStartCallback = Arc<dyn Fn(ScaleStartDetails) + Send + Sync>;
+pub type ScaleStartCallback = Arc<dyn Fn(ScaleStartDetails)>;
 
 /// Callback for scale update events
-pub type ScaleUpdateCallback = Arc<dyn Fn(ScaleUpdateDetails) + Send + Sync>;
+pub type ScaleUpdateCallback = Arc<dyn Fn(ScaleUpdateDetails)>;
 
 /// Callback for scale end events
-pub type ScaleEndCallback = Arc<dyn Fn(ScaleEndDetails) + Send + Sync>;
+pub type ScaleEndCallback = Arc<dyn Fn(ScaleEndDetails)>;
 
 /// Callback for scale cancel events
-pub type ScaleCancelCallback = Arc<dyn Fn() + Send + Sync>;
+pub type ScaleCancelCallback = Arc<dyn Fn()>;
 
 /// Details about scale gesture start
 #[derive(Debug, Clone, PartialEq)]
@@ -108,7 +108,7 @@ pub struct ScaleGestureRecognizer {
     state: RecognizerBase,
 
     /// Callbacks
-    callbacks: Arc<Mutex<ScaleCallbacks>>,
+    callbacks: Rc<RefCell<ScaleCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<ScaleState>>,
@@ -195,7 +195,7 @@ impl ScaleGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(ScaleCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(ScaleCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ScaleState::default())),
             min_scale_delta: 0.05, // 5% change minimum
         })
@@ -204,36 +204,33 @@ impl ScaleGestureRecognizer {
     /// Set the scale start callback
     pub fn with_on_scale_start(
         self: Arc<Self>,
-        callback: impl Fn(ScaleStartDetails) + Send + Sync + 'static,
+        callback: impl Fn(ScaleStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Arc::new(callback));
         self
     }
 
     /// Set the scale update callback
     pub fn with_on_scale_update(
         self: Arc<Self>,
-        callback: impl Fn(ScaleUpdateDetails) + Send + Sync + 'static,
+        callback: impl Fn(ScaleUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Arc::new(callback));
         self
     }
 
     /// Set the scale end callback
     pub fn with_on_scale_end(
         self: Arc<Self>,
-        callback: impl Fn(ScaleEndDetails) + Send + Sync + 'static,
+        callback: impl Fn(ScaleEndDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_end = Some(Arc::new(callback));
         self
     }
 
     /// Set the scale cancel callback
-    pub fn with_on_scale_cancel(
-        self: Arc<Self>,
-        callback: impl Fn() + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_cancel = Some(Arc::new(callback));
+    pub fn with_on_scale_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_cancel = Some(Arc::new(callback));
         self
     }
 
@@ -306,7 +303,7 @@ impl ScaleGestureRecognizer {
                         drop(state); // Release lock before callback
 
                         // Call on_start callback
-                        if let Some(callback) = self.callbacks.lock().on_start.clone() {
+                        if let Some(callback) = self.callbacks.borrow().on_start.clone() {
                             let details = ScaleStartDetails {
                                 focal_point,
                                 local_focal_point: focal_point,
@@ -354,7 +351,7 @@ impl ScaleGestureRecognizer {
                     drop(state); // Release lock before callback
 
                     // Call on_update callback
-                    if let Some(callback) = self.callbacks.lock().on_update.clone() {
+                    if let Some(callback) = self.callbacks.borrow().on_update.clone() {
                         let details = ScaleUpdateDetails {
                             focal_point,
                             local_focal_point: focal_point,
@@ -420,7 +417,7 @@ impl ScaleGestureRecognizer {
                 drop(state); // Release lock before callback
 
                 // Call on_end callback
-                if let Some(callback) = self.callbacks.lock().on_end.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                     let details = ScaleEndDetails {
                         focal_point,
                         scale,
@@ -472,7 +469,7 @@ impl ScaleGestureRecognizer {
             drop(state);
 
             // Call on_cancel callback
-            if let Some(callback) = self.callbacks.lock().on_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_cancel.clone() {
                 callback();
             }
 
@@ -621,10 +618,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        self.callbacks.lock().on_start = None;
-        self.callbacks.lock().on_update = None;
-        self.callbacks.lock().on_end = None;
-        self.callbacks.lock().on_cancel = None;
+        self.callbacks.borrow_mut().on_start = None;
+        self.callbacks.borrow_mut().on_update = None;
+        self.callbacks.borrow_mut().on_end = None;
+        self.callbacks.borrow_mut().on_cancel = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

@@ -79,11 +79,18 @@ impl RenderView for RichText {
     type Protocol = BoxProtocol;
     type RenderObject = RenderParagraph;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.build_render_object();
     }
 }
@@ -136,7 +143,8 @@ mod tests {
 
     #[test]
     fn create_render_object_preserves_the_full_span_tree() {
-        let render_object = RichText::new(two_word_span()).create_render_object();
+        let render_object = RichText::new(two_word_span())
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         // `RenderParagraph` exposes its text only through `painter().text()`;
         // the plain-text projection is the public surface available to prove
         // the whole tree (both the parent span's own text and the bolded
@@ -146,10 +154,14 @@ mod tests {
 
     #[test]
     fn update_render_object_replaces_the_span_tree() {
-        let mut render_object = RichText::new(TextSpan::new("first")).create_render_object();
+        let mut render_object = RichText::new(TextSpan::new("first"))
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(plain_text(&render_object), "first");
 
-        RichText::new(TextSpan::new("second")).update_render_object(&mut render_object);
+        RichText::new(TextSpan::new("second")).update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(plain_text(&render_object), "second");
     }

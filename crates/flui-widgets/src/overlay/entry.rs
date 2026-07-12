@@ -1,6 +1,6 @@
 //! [`OverlayEntry`] — one independently-managed layer of an [`Overlay`].
 //!
-//! ADR-0019 U1. Private to `flui-widgets` until the U4 parity + sign-off gate.
+//! Private to `flui-widgets` until the parity + sign-off gate.
 //!
 //! # Flutter parity
 //!
@@ -19,10 +19,9 @@
 //!   `markNeedsBuild`, and keeping the entry's subtree state alive across a
 //!   `rearrange` reorder. FLUI does the first by having the entry's `ViewState`
 //!   publish its own [`RebuildHandle`] here at `init_state` (ADR-0018's pattern),
-//!   and the second through keyed reconciliation. ADR-0019 §3.2 explains why
-//!   *not* using a `GlobalKey` matters: the registry lookup re-enters
-//!   `WidgetsBinding::inner.read()`, and doing that under a `BuildContext`'s tree
-//!   borrow is a lock-order hazard.
+//!   and the second through keyed reconciliation. Not using a `GlobalKey` matters
+//!   because the registry lookup re-enters `WidgetsBinding::inner.read()`, and
+//!   doing that under a `BuildContext`'s tree borrow is a lock-order hazard.
 //! - **No mid-frame deferral.** `OverlayEntry.remove` posts a post-frame callback
 //!   when it runs during `persistentCallbacks` (`:236-242`), because Dart's
 //!   `setState` throws during build. [`RebuildHandle::schedule`] only inserts an
@@ -39,6 +38,7 @@
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
 use std::fmt;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -49,10 +49,10 @@ use super::OverlayShared;
 
 /// Builds an entry's subtree. Flutter's `WidgetBuilder`.
 ///
-/// `Arc<dyn Fn>` rather than `Box<dyn FnOnce>`: an entry is rebuilt many times,
+/// `Rc<dyn Fn>` rather than `Box<dyn FnOnce>`: an entry is rebuilt many times,
 /// and the [`OverlayEntry`] handle is cloned into the view tree on every overlay
 /// build.
-pub(crate) type OverlayBuilder = Arc<dyn Fn(&dyn BuildContext) -> BoxedView + Send + Sync>;
+pub(crate) type OverlayBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 
 /// Process-unique identity for an [`OverlayEntry`].
 ///
@@ -122,13 +122,11 @@ impl OverlayEntry {
     ///
     /// `opaque` and `maintain_state` both default to `false`, as in Flutter
     /// (`overlay.dart:117-121`).
-    pub(crate) fn new(
-        builder: impl Fn(&dyn BuildContext) -> BoxedView + Send + Sync + 'static,
-    ) -> Self {
+    pub(crate) fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
         Self {
             inner: Arc::new(EntryInner {
                 id: OverlayEntryId::next(),
-                builder: Arc::new(builder),
+                builder: Rc::new(builder),
                 rebuild: Mutex::new(None),
                 opaque: AtomicBool::new(false),
                 maintain_state: AtomicBool::new(false),
@@ -271,8 +269,8 @@ impl OverlayEntry {
         };
 
         // `if (!overlay.mounted) return;` (`overlay.dart:231-233`) — Flutter detaches
-        // the entry but leaves the unmounted overlay's list alone. Found by
-        // ADR-0019 U4's parity re-check: FLUI used to mutate it regardless.
+        // the entry but leaves the unmounted overlay's list alone. Found by a
+        // parity re-check: FLUI used to mutate it regardless.
         if !shared.is_mounted() {
             return;
         }

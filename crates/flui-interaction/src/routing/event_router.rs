@@ -99,7 +99,7 @@ impl EventRouter {
                 tracing::trace!(
                     position = ?position,
                     hit_count = result.len(),
-                    has_handlers = result.iter().any(|e| e.handler.is_some()),
+                    has_pointer_targets = result.iter().any(|e| e.pointer_target.is_some()),
                     "EventRouter: hit test complete for Down event"
                 );
 

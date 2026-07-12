@@ -1,6 +1,6 @@
-//! `View::can_update` semantics test suite (plan §U11 / FR-028).
+//! `View::can_update` semantics test suite (FR-028).
 //!
-//! Phase 1 §U11 extends the default `View::can_update` body from a
+//! The default `View::can_update` body was extended from a
 //! type-id-only check to spec FR-028's full
 //! `runtimeType == other.runtimeType && key == other.key` semantics.
 //! The body already shipped in
@@ -214,11 +214,11 @@ fn global_key_compares_by_id() {
     );
 }
 
-/// `Key` (the foundation newtype that U10 added a `ViewKey` impl
-/// for) compares by inner `u64`. Identical `Key::from_str` strings
-/// hash to the same value (compile-time FNV-1a), so the
-/// `can_update` round-trip succeeds — the U10 impl participates in
-/// the FR-028 match path correctly.
+/// `Key` (the foundation newtype with a `ViewKey` impl) compares by
+/// inner `u64`. Identical `Key::from_str` strings hash to the same
+/// value (compile-time FNV-1a), so the `can_update` round-trip
+/// succeeds — the `Key` impl participates in the FR-028 match path
+/// correctly.
 #[test]
 fn key_newtype_compares_by_inner_u64() {
     use flui_foundation::Key;

@@ -12,6 +12,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html>
 
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -29,16 +31,16 @@ use crate::{
 };
 
 /// Callback for long press down events (initial contact)
-pub type LongPressDownCallback = Arc<dyn Fn(LongPressDownDetails) + Send + Sync>;
+pub type LongPressDownCallback = Arc<dyn Fn(LongPressDownDetails)>;
 
 /// Callback for simple long press recognition (no details)
-pub type LongPressSimpleCallback = Arc<dyn Fn() + Send + Sync>;
+pub type LongPressSimpleCallback = Arc<dyn Fn()>;
 
 /// Callback for long press start events
-pub type LongPressStartCallback = Arc<dyn Fn(LongPressStartDetails) + Send + Sync>;
+pub type LongPressStartCallback = Arc<dyn Fn(LongPressStartDetails)>;
 
 /// Callback for long press move/up/cancel events
-pub type LongPressCallback = Arc<dyn Fn(LongPressDetails) + Send + Sync>;
+pub type LongPressCallback = Arc<dyn Fn(LongPressDetails)>;
 
 /// Details about long press down (initial contact)
 #[derive(Debug, Clone, PartialEq)]
@@ -104,7 +106,7 @@ pub struct LongPressGestureRecognizer {
     state: RecognizerBase,
 
     /// Callbacks
-    callbacks: Arc<Mutex<LongPressCallbacks>>,
+    callbacks: Rc<RefCell<LongPressCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<LongPressState>>,
@@ -156,7 +158,7 @@ impl LongPressGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(LongPressCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
@@ -169,7 +171,7 @@ impl LongPressGestureRecognizer {
     ) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(LongPressCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
             settings: Arc::new(Mutex::new(settings)),
         })
@@ -196,9 +198,9 @@ impl LongPressGestureRecognizer {
     /// before the long press timer has elapsed.
     pub fn with_on_long_press_down(
         self: Arc<Self>,
-        callback: impl Fn(LongPressDownDetails) + Send + Sync + 'static,
+        callback: impl Fn(LongPressDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_long_press_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_down = Some(Arc::new(callback));
         self
     }
 
@@ -207,20 +209,17 @@ impl LongPressGestureRecognizer {
     /// This is a simple callback with no details, called when the long press
     /// duration threshold is reached. For detailed information, use
     /// `with_on_long_press_start` instead.
-    pub fn with_on_long_press(
-        self: Arc<Self>,
-        callback: impl Fn() + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_long_press = Some(Arc::new(callback));
+    pub fn with_on_long_press(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_long_press = Some(Arc::new(callback));
         self
     }
 
     /// Set the long press start callback (called when timer elapses)
     pub fn with_on_long_press_start(
         self: Arc<Self>,
-        callback: impl Fn(LongPressStartDetails) + Send + Sync + 'static,
+        callback: impl Fn(LongPressStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_long_press_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_start = Some(Arc::new(callback));
         self
     }
 
@@ -228,9 +227,9 @@ impl LongPressGestureRecognizer {
     /// moves)
     pub fn with_on_long_press_move_update(
         self: Arc<Self>,
-        callback: impl Fn(LongPressDetails) + Send + Sync + 'static,
+        callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_long_press_move_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_move_update = Some(Arc::new(callback));
         self
     }
 
@@ -238,9 +237,9 @@ impl LongPressGestureRecognizer {
     /// press)
     pub fn with_on_long_press_up(
         self: Arc<Self>,
-        callback: impl Fn(LongPressDetails) + Send + Sync + 'static,
+        callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_long_press_up = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_up = Some(Arc::new(callback));
         self
     }
 
@@ -251,18 +250,18 @@ impl LongPressGestureRecognizer {
     /// onLongPressUp and onLongPressEnd.
     pub fn with_on_long_press_end(
         self: Arc<Self>,
-        callback: impl Fn(LongPressDetails) + Send + Sync + 'static,
+        callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_long_press_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_end = Some(Arc::new(callback));
         self
     }
 
     /// Set the long press cancel callback
     pub fn with_on_long_press_cancel(
         self: Arc<Self>,
-        callback: impl Fn(LongPressDetails) + Send + Sync + 'static,
+        callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_long_press_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_cancel = Some(Arc::new(callback));
         self
     }
 
@@ -276,7 +275,7 @@ impl LongPressGestureRecognizer {
         drop(state); // Release lock before callback
 
         // Call on_long_press_down callback (initial contact)
-        if let Some(callback) = self.callbacks.lock().on_long_press_down.clone() {
+        if let Some(callback) = self.callbacks.borrow().on_long_press_down.clone() {
             let details = LongPressDownDetails {
                 global_position: position,
                 local_position: position,
@@ -317,7 +316,7 @@ impl LongPressGestureRecognizer {
                 drop(state); // Release lock before calling callback
 
                 // Call on_long_press_move_update callback
-                if let Some(callback) = self.callbacks.lock().on_long_press_move_update.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_long_press_move_update.clone() {
                     let details = LongPressDetails {
                         global_position: position,
                         local_position: position,
@@ -357,12 +356,12 @@ impl LongPressGestureRecognizer {
                 };
 
                 // Call on_long_press_up callback
-                if let Some(callback) = self.callbacks.lock().on_long_press_up.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_long_press_up.clone() {
                     callback(details.clone());
                 }
 
                 // Call on_long_press_end callback
-                if let Some(callback) = self.callbacks.lock().on_long_press_end.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_long_press_end.clone() {
                     callback(details);
                 }
 
@@ -381,7 +380,7 @@ impl LongPressGestureRecognizer {
             drop(state); // Release lock before calling callback
 
             // Call on_long_press_cancel callback
-            if let Some(callback) = self.callbacks.lock().on_long_press_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_long_press_cancel.clone() {
                 let details = LongPressDetails {
                     global_position: position,
                     local_position: position,
@@ -431,10 +430,10 @@ impl LongPressGestureRecognizer {
         };
         let (kind, fired_pos) = snapshot;
 
-        if let Some(callback) = self.callbacks.lock().on_long_press.clone() {
+        if let Some(callback) = self.callbacks.borrow().on_long_press.clone() {
             callback();
         }
-        if let Some(callback) = self.callbacks.lock().on_long_press_start.clone() {
+        if let Some(callback) = self.callbacks.borrow().on_long_press_start.clone() {
             let details = LongPressStartDetails {
                 global_position: fired_pos,
                 local_position: fired_pos,
@@ -520,7 +519,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        let mut callbacks = self.callbacks.lock();
+        let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_long_press_down = None;
         callbacks.on_long_press = None;
         callbacks.on_long_press_start = None;

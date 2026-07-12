@@ -46,7 +46,7 @@ use flui_foundation::ElementId;
 ///     }
 /// }
 /// ```
-pub trait BuildContext: Send + Sync {
+pub trait BuildContext {
     // ========================================================================
     // Identity & State
     // ========================================================================
@@ -74,7 +74,7 @@ pub trait BuildContext: Send + Sync {
     // ========================================================================
 
     /// An owned, `'static` handle that schedules **this** element for rebuild on
-    /// the next frame (ADR-0018 U1).
+    /// the next frame.
     ///
     /// Capture it in `ViewState::init_state` (or `did_change_dependencies`) and
     /// call [`RebuildHandle::schedule`](crate::RebuildHandle::schedule) from a
@@ -93,7 +93,7 @@ pub trait BuildContext: Send + Sync {
     /// [`FOUNDATIONS.md`]: ../../../docs/FOUNDATIONS.md
     fn rebuild_handle(&self) -> crate::RebuildHandle;
 
-    /// The binding's frame-driven async task driver (ADR-0018 U2), if a binding
+    /// The binding's frame-driven async task driver, if a binding
     /// installed one.
     ///
     /// Spawn subscriptions from `ViewState::init_state` / `did_change_dependencies`
@@ -107,7 +107,7 @@ pub trait BuildContext: Send + Sync {
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver>;
 
     /// The binding's post-frame capability — schedule work that must observe this
-    /// frame's committed layout (ADR-0021 U2).
+    /// frame's committed layout.
     ///
     /// `None` when no binding installed one. Acquire it in a lifecycle hook
     /// (`init_state` / `did_change_dependencies`), never in `build`/layout/paint —
@@ -136,7 +136,7 @@ pub trait BuildContext: Send + Sync {
     /// Returns `true` if an ancestor InheritedView of that type was
     /// found and the callback was invoked; `false` otherwise.
     ///
-    /// Plan §U9 / R4. Flutter parity: `framework.dart:5081`
+    /// Flutter parity: `framework.dart:5081`
     /// `dependOnInheritedWidgetOfExactType`.
     fn depend_on_inherited(
         &self,
@@ -189,7 +189,7 @@ pub trait BuildContext: Send + Sync {
     /// callback was invoked; `false` otherwise. The callback is invoked
     /// at most once.
     ///
-    /// Plan §U11 / R6. Flutter parity: `framework.dart:5122`
+    /// Flutter parity: `framework.dart:5122`
     /// `findAncestorWidgetOfExactType<T>`.
     fn find_ancestor_view(
         &self,
@@ -208,7 +208,7 @@ pub trait BuildContext: Send + Sync {
     /// Same callback shape as [`find_ancestor_view`]: synchronous
     /// callback while the read-lock is held, no borrow extension.
     ///
-    /// Plan §U11 / R7. Flutter parity: `framework.dart:5132`
+    /// Flutter parity: `framework.dart:5132`
     /// `findAncestorStateOfType<T>`.
     ///
     /// [`find_ancestor_view`]: BuildContext::find_ancestor_view
@@ -228,7 +228,7 @@ pub trait BuildContext: Send + Sync {
     /// Same callback shape and `type_id` semantics as
     /// [`find_ancestor_state`].
     ///
-    /// Plan §U11 / R8. Flutter parity: `framework.dart:5146`
+    /// Flutter parity: `framework.dart:5146`
     /// `findRootAncestorStateOfType<T>`.
     ///
     /// [`find_ancestor_state`]: BuildContext::find_ancestor_state
@@ -266,7 +266,7 @@ pub trait BuildContext: Send + Sync {
     ///
     /// It schedules nothing, so port-check trigger #22 does not guard it and
     /// acquiring it inside `build` is harmless — a `PipelineOwner` read during build
-    /// simply answers `None` for every un-laid-out node (ADR-0021 U1). What it is
+    /// simply answers `None` for every un-laid-out node. What it is
     /// *for* is the opposite direction: code outside the tree (a routing observer, a
     /// `HeroController`) holding an owned handle so it can resolve a `RenderId` to
     /// geometry from a post-frame callback, after layout commits.
@@ -342,7 +342,7 @@ pub trait BuildContextExt: BuildContext {
     /// Callback form chosen over `Option<&T>` to preserve the
     /// declarative-build invariant (Constitution Principle 5) and avoid
     /// extending the inherited-data borrow across the rest of
-    /// `build()`. See plan §D2.
+    /// `build()`.
     ///
     /// # Example
     ///
@@ -395,9 +395,8 @@ pub trait BuildContextExt: BuildContext {
     /// Callback form chosen over `Option<&V>` to preserve the
     /// declarative-build invariant (Constitution Principle 5) and avoid
     /// extending the ancestor-view borrow across the rest of `build()`.
-    /// See plan §D2.
     ///
-    /// Plan §U11 / R6. Flutter parity: `framework.dart:5122`
+    /// Flutter parity: `framework.dart:5122`
     /// `findAncestorWidgetOfExactType<T>`.
     ///
     /// # Example
@@ -427,7 +426,7 @@ pub trait BuildContextExt: BuildContext {
     /// Same callback contract as [`find_ancestor`]: synchronous run, no
     /// borrow extension. Does NOT register a dependency.
     ///
-    /// Plan §U11 / R7. Flutter parity: `framework.dart:5132`
+    /// Flutter parity: `framework.dart:5132`
     /// `findAncestorStateOfType<T>`.
     ///
     /// # Example
@@ -459,7 +458,7 @@ pub trait BuildContextExt: BuildContext {
     /// Same callback contract as [`find_state`]: synchronous run, no
     /// borrow extension. Does NOT register a dependency.
     ///
-    /// Plan §U11 / R8. Flutter parity: `framework.dart:5146`
+    /// Flutter parity: `framework.dart:5146`
     /// `findRootAncestorStateOfType<T>`.
     ///
     /// # Example

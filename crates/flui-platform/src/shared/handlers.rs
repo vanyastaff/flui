@@ -7,6 +7,8 @@
 //! - [`PlatformHandlers`]: Global platform-level callbacks (quit, reopen, etc.)
 //! - [`WindowCallbacks`]: Per-window callbacks (input, resize, close, etc.)
 
+use std::collections::VecDeque;
+
 use flui_types::geometry::{Pixels, Size};
 use parking_lot::Mutex;
 
@@ -123,13 +125,15 @@ impl std::fmt::Debug for PlatformHandlers {
 // ============================================================================
 
 #[allow(clippy::type_complexity)]
-/// Per-window callback storage using Mutex-based take/restore pattern
+/// Per-window callback storage with one causal reentry queue.
 ///
 /// Each callback is stored in a `Mutex<Option<Box<dyn FnMut/FnOnce + Send>>>`.
-/// The dispatch pattern ensures reentrancy safety:
-/// 1. Lock → take callback out → unlock
-/// 2. Call callback (lock is NOT held)
-/// 3. Lock → restore callback → unlock
+/// The dispatch pattern ensures reentrancy safety and ordering:
+/// 1. enqueue the typed event in the window FIFO;
+/// 2. one caller becomes the drain owner;
+/// 3. take callback → unlock → call → restore;
+/// 4. drain all nested window events in causal order, including transitions
+///    between kinds such as input → resize → frame.
 ///
 /// This prevents deadlocks when a callback tries to interact with the window
 /// (which would require the same lock if stored differently).
@@ -165,6 +169,125 @@ pub struct WindowCallbacks {
 
     /// Called when the system appearance (light/dark) changes.
     pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+
+    event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
+    should_close_dispatching: Mutex<bool>,
+}
+
+enum WindowCallbackEvent {
+    Input(PlatformInput),
+    RequestFrame,
+    Resize(Size<Pixels>, f32),
+    Moved,
+    Close,
+    Active(bool),
+    Hover(bool),
+    AppearanceChanged,
+}
+
+struct DispatchState<E> {
+    pending: VecDeque<E>,
+    dispatching: bool,
+}
+
+impl<E> DispatchState<E> {
+    const fn new() -> Self {
+        Self {
+            pending: VecDeque::new(),
+            dispatching: false,
+        }
+    }
+}
+
+/// Owns one FIFO drain. On normal exhaustion it clears `dispatching` under
+/// the queue lock, closing the enqueue-vs-finish race. On unwind, `Drop`
+/// clears it and discards nested work from the aborted callback transaction.
+struct DispatchDrain<'a, E> {
+    state: &'a Mutex<DispatchState<E>>,
+    active: bool,
+}
+
+impl<'a, E> DispatchDrain<'a, E> {
+    fn begin(state: &'a Mutex<DispatchState<E>>, event: E) -> Option<Self> {
+        let mut guard = state.lock();
+        guard.pending.push_back(event);
+        if guard.dispatching {
+            return None;
+        }
+        guard.dispatching = true;
+        Some(Self {
+            state,
+            active: true,
+        })
+    }
+
+    fn next(&mut self) -> Option<E> {
+        let mut state = self.state.lock();
+        if let Some(event) = state.pending.pop_front() {
+            return Some(event);
+        }
+        state.dispatching = false;
+        self.active = false;
+        None
+    }
+}
+
+impl<E> Drop for DispatchDrain<'_, E> {
+    fn drop(&mut self) {
+        if self.active {
+            let pending = {
+                let mut state = self.state.lock();
+                state.dispatching = false;
+                // The causal parent callback aborted, so its nested events no
+                // longer have a valid completion point. Discard that aborted
+                // transaction instead of making the next unrelated caller
+                // receive a previous event's return value. Drop payloads only
+                // after releasing the mutex in case their destructors re-enter.
+                std::mem::take(&mut state.pending)
+            };
+            drop(pending);
+        }
+    }
+}
+
+struct BooleanDispatchGuard<'a> {
+    dispatching: &'a Mutex<bool>,
+}
+
+impl Drop for BooleanDispatchGuard<'_> {
+    fn drop(&mut self) {
+        *self.dispatching.lock() = false;
+    }
+}
+
+/// Temporarily removes one `FnMut` callback without holding its mutex while
+/// user code runs, then restores it even if that code unwinds.
+struct CallbackLease<'a, T> {
+    slot: &'a Mutex<Option<T>>,
+    callback: Option<T>,
+}
+
+impl<'a, T> CallbackLease<'a, T> {
+    fn take(slot: &'a Mutex<Option<T>>) -> Self {
+        let callback = slot.lock().take();
+        Self { slot, callback }
+    }
+
+    fn callback_mut(&mut self) -> Option<&mut T> {
+        self.callback.as_mut()
+    }
+}
+
+impl<T> Drop for CallbackLease<'_, T> {
+    fn drop(&mut self) {
+        let Some(callback) = self.callback.take() else {
+            return;
+        };
+        let mut slot = self.slot.lock();
+        if slot.is_none() {
+            *slot = Some(callback);
+        }
+    }
 }
 
 impl WindowCallbacks {
@@ -180,66 +303,147 @@ impl WindowCallbacks {
             on_active_status_change: Mutex::new(None),
             on_hover_status_change: Mutex::new(None),
             on_appearance_changed: Mutex::new(None),
+            event_dispatch: Mutex::new(DispatchState::new()),
+            should_close_dispatching: Mutex::new(false),
         }
     }
 
-    /// Dispatch an input event. Returns `DispatchEventResult::default()` if no
-    /// callback.
-    pub fn dispatch_input(&self, event: PlatformInput) -> DispatchEventResult {
-        let cb = self.on_input.lock().take();
-        if let Some(mut cb) = cb {
-            let result = cb(event);
-            *self.on_input.lock() = Some(cb);
-            result
-        } else {
-            DispatchEventResult::default()
+    fn drain_events(
+        &self,
+        mut drain: DispatchDrain<'_, WindowCallbackEvent>,
+    ) -> Option<DispatchEventResult> {
+        let mut input_result = None;
+        while let Some(event) = drain.next() {
+            match event {
+                WindowCallbackEvent::Input(event) => {
+                    let mut lease = CallbackLease::take(&self.on_input);
+                    let result = lease
+                        .callback_mut()
+                        .map_or_else(DispatchEventResult::default, |callback| callback(event));
+                    input_result.get_or_insert(result);
+                }
+                WindowCallbackEvent::RequestFrame => {
+                    let mut lease = CallbackLease::take(&self.on_request_frame);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback();
+                    }
+                }
+                WindowCallbackEvent::Resize(size, scale_factor) => {
+                    let mut lease = CallbackLease::take(&self.on_resize);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback(size, scale_factor);
+                    }
+                }
+                WindowCallbackEvent::Moved => {
+                    let mut lease = CallbackLease::take(&self.on_moved);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback();
+                    }
+                }
+                WindowCallbackEvent::Close => {
+                    let callback = self.on_close.lock().take();
+                    if let Some(callback) = callback {
+                        callback();
+                    }
+                }
+                WindowCallbackEvent::Active(is_active) => {
+                    let mut lease = CallbackLease::take(&self.on_active_status_change);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback(is_active);
+                    }
+                }
+                WindowCallbackEvent::Hover(is_hovered) => {
+                    let mut lease = CallbackLease::take(&self.on_hover_status_change);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback(is_hovered);
+                    }
+                }
+                WindowCallbackEvent::AppearanceChanged => {
+                    let mut lease = CallbackLease::take(&self.on_appearance_changed);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback();
+                    }
+                }
+            }
         }
+        input_result
+    }
+
+    /// Dispatch an input event.
+    ///
+    /// The outer drain returns the callback result for its own event. A nested
+    /// dispatch is queued and returns [`DispatchEventResult::DEFERRED`]
+    /// immediately because its callback result cannot be synchronously known
+    /// until the outer callback returns. The conservative deferred value
+    /// suppresses native default handling until FLUI consumes the queued event.
+    pub fn dispatch_input(&self, event: PlatformInput) -> DispatchEventResult {
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Input(event))
+        else {
+            return DispatchEventResult::DEFERRED;
+        };
+        self.drain_events(drain).unwrap_or_default()
     }
 
     /// Dispatch a frame request.
     pub fn dispatch_request_frame(&self) {
-        let cb = self.on_request_frame.lock().take();
-        if let Some(mut cb) = cb {
-            cb();
-            *self.on_request_frame.lock() = Some(cb);
-        }
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::RequestFrame)
+        else {
+            return;
+        };
+        self.drain_events(drain);
     }
 
     /// Dispatch a resize event with new logical size and scale factor.
     pub fn dispatch_resize(&self, size: Size<Pixels>, scale_factor: f32) {
-        let cb = self.on_resize.lock().take();
-        if let Some(mut cb) = cb {
-            cb(size, scale_factor);
-            *self.on_resize.lock() = Some(cb);
-        }
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::Resize(size, scale_factor),
+        ) else {
+            return;
+        };
+        self.drain_events(drain);
     }
 
     /// Dispatch a window moved event.
     pub fn dispatch_moved(&self) {
-        let cb = self.on_moved.lock().take();
-        if let Some(mut cb) = cb {
-            cb();
-            *self.on_moved.lock() = Some(cb);
-        }
+        let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Moved)
+        else {
+            return;
+        };
+        self.drain_events(drain);
     }
 
     /// Dispatch close event. Consumes the callback (FnOnce).
     pub fn dispatch_close(&self) {
-        let cb = self.on_close.lock().take();
-        if let Some(cb) = cb {
-            cb();
-            // FnOnce — not restored
-        }
+        let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Close)
+        else {
+            return;
+        };
+        self.drain_events(drain);
     }
 
-    /// Query whether the window should close. Returns `true` if no callback
-    /// registered.
+    /// Query whether the window should close.
+    ///
+    /// Returns `true` if no callback is registered. Same-kind reentry cannot
+    /// produce a causally valid synchronous answer, so a nested query returns
+    /// `false` (conservative veto) and is not recursively invoked. The outer
+    /// query remains authoritative and its callback is restored on unwind.
     pub fn dispatch_should_close(&self) -> bool {
-        let cb = self.on_should_close.lock().take();
-        if let Some(mut cb) = cb {
-            let result = cb();
-            *self.on_should_close.lock() = Some(cb);
-            result
+        {
+            let mut dispatching = self.should_close_dispatching.lock();
+            if *dispatching {
+                return false;
+            }
+            *dispatching = true;
+        }
+        let _dispatch_guard = BooleanDispatchGuard {
+            dispatching: &self.should_close_dispatching,
+        };
+        let mut lease = CallbackLease::take(&self.on_should_close);
+        if let Some(callback) = lease.callback_mut() {
+            callback()
         } else {
             true // Default: allow close
         }
@@ -247,29 +451,32 @@ impl WindowCallbacks {
 
     /// Dispatch active status change (focus gained/lost).
     pub fn dispatch_active_status_change(&self, is_active: bool) {
-        let cb = self.on_active_status_change.lock().take();
-        if let Some(mut cb) = cb {
-            cb(is_active);
-            *self.on_active_status_change.lock() = Some(cb);
-        }
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Active(is_active))
+        else {
+            return;
+        };
+        self.drain_events(drain);
     }
 
     /// Dispatch hover status change (mouse enter/leave).
     pub fn dispatch_hover_status_change(&self, is_hovered: bool) {
-        let cb = self.on_hover_status_change.lock().take();
-        if let Some(mut cb) = cb {
-            cb(is_hovered);
-            *self.on_hover_status_change.lock() = Some(cb);
-        }
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Hover(is_hovered))
+        else {
+            return;
+        };
+        self.drain_events(drain);
     }
 
     /// Dispatch appearance change (system theme changed).
     pub fn dispatch_appearance_changed(&self) {
-        let cb = self.on_appearance_changed.lock().take();
-        if let Some(mut cb) = cb {
-            cb();
-            *self.on_appearance_changed.lock() = Some(cb);
-        }
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::AppearanceChanged)
+        else {
+            return;
+        };
+        self.drain_events(drain);
     }
 }
 
@@ -300,6 +507,6 @@ impl std::fmt::Debug for WindowCallbacks {
                 "on_appearance_changed",
                 &self.on_appearance_changed.lock().is_some(),
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }

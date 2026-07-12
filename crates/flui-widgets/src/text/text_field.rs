@@ -114,7 +114,7 @@ fn field_border_decoration() -> BoxDecoration<Pixels> {
 }
 
 /// Focus the field driven by `controller` — the node its `EditableTextState`
-/// published on mount (ADR-0022 U4). Precise for multi-field forms, where the
+/// published on mount. Precise for multi-field forms, where the
 /// old root-scope walk could only ever find the first field. A no-op while the
 /// field is unmounted, since an unmounted node cannot take focus.
 fn focus_field(controller: &TextEditingController) {
@@ -133,7 +133,7 @@ mod tests {
 
     use super::*;
 
-    /// ADR-0022 U4 — the tap focuses **its own** field. Each mounted
+    /// The tap focuses **its own** field. Each mounted
     /// `EditableText` publishes its focus node on its controller; with two
     /// fields, focusing through the second controller must land on the second
     /// node — exactly what the old first-node-with-a-key-handler root-scope

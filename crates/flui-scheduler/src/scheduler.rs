@@ -80,12 +80,22 @@ use crate::{
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
+    post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback, drain_active_lane},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
     vsync::VsyncScheduler,
 };
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
+
+fn next_scheduler_identity() -> u64 {
+    static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
+    NEXT_IDENTITY
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .expect("BUG: Scheduler identity space exhausted")
+}
 
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
@@ -349,6 +359,10 @@ struct FrameState {
 
 /// Callback registration and cancellation state
 struct CallbackState {
+    /// Globally unique identity for owner-local lane tickets.
+    identity: u64,
+    /// Linearizes shared/local post-frame registration with frame snapshots.
+    post_frame_registration: Mutex<()>,
     /// Transient callbacks - animation tickers
     transient: Mutex<Vec<CancellableTransientCallback>>,
     /// Cancelled callback IDs (lock-free)
@@ -430,9 +444,9 @@ pub struct Scheduler {
     binding: Arc<BindingState>,
     /// Task queue (priority-based, already Arc-wrapped internally)
     task_queue: TaskQueue,
-    /// Frame-driven async task driver (ADR-0018 U2, corrected by ADR-0021 U1.5).
-    /// Polled once per frame by [`Scheduler::handle_begin_frame`], in the
-    /// mid-frame slot. The bindings no longer call it.
+    /// Frame-driven async task driver, polled once per frame by
+    /// [`Scheduler::handle_begin_frame`] in the mid-frame slot.
+    /// The bindings no longer call it directly.
     async_driver: crate::AsyncDriver,
 }
 
@@ -500,6 +514,8 @@ impl Scheduler {
                 completion_waiters: Mutex::new(Vec::new()),
             }),
             callbacks: Arc::new(CallbackState {
+                identity: next_scheduler_identity(),
+                post_frame_registration: Mutex::new(()),
                 transient: Mutex::new(Vec::new()),
                 cancelled: DashMap::new(),
                 id_gen: IdGenerator::new(),
@@ -571,12 +587,30 @@ impl Scheduler {
     ///
     /// `Scheduler` is `Arc`-backed, so this is pointer identity on the shared
     /// callback state. It exists because `HeadlessBinding` owns a binding-local
-    /// scheduler while production drives the `Scheduler::instance()` singleton
-    /// (ADR-0021 §7c), and a capability handed to a widget must be provably
-    /// pointed at the right one.
+    /// scheduler while production drives the `Scheduler::instance()` singleton,
+    /// and a capability handed to a widget must be provably pointed at the right one.
     #[must_use]
     pub fn is_same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.callbacks, &other.callbacks)
+    }
+
+    pub(crate) fn identity(&self) -> u64 {
+        self.callbacks.identity
+    }
+
+    pub(crate) fn with_post_frame_registration<R>(
+        &self,
+        callback: impl FnOnce(CallbackId) -> R,
+    ) -> R {
+        let _registration = self.callbacks.post_frame_registration.lock();
+        callback(self.callbacks.id_gen.next())
+    }
+
+    /// Create an owner-affine local post-frame lane for a binding/runtime.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn local_post_frame_lane(&self) -> crate::LocalPostFrameLane {
+        crate::LocalPostFrameLane::new(self)
     }
 
     /// Check if currently in a frame
@@ -652,19 +686,15 @@ impl Scheduler {
         self.set_scheduler_phase(SchedulerPhase::MidFrameMicrotasks);
         self.flush_microtasks();
 
-        // THE async-driver step (ADR-0018, corrected by ADR-0021 U1.5). Exactly
-        // one poll per frame, in Flutter's `midFrameMicrotasks` slot: after the
-        // transient callbacks above, before the persistent ones in
-        // `handle_draw_frame`. A future completing here calls
-        // `RebuildHandle::schedule()`, whose id the pipeline's `build_scope`
-        // drains — so a completion lands in THIS frame.
+        // The async-driver step: exactly one poll per frame in the mid-frame
+        // microtask slot, after transient callbacks and before persistent ones in
+        // `handle_draw_frame`. A future completing here calls `RebuildHandle::schedule()`,
+        // whose id the pipeline's `build_scope` drains — so a completion lands in THIS frame.
         //
-        // It lives here, not in the bindings. ADR-0018's contract was never "the
-        // binding must call it personally"; it was "exactly one mid-frame poll,
-        // on the right `Scheduler` instance". Owning it here enforces both
-        // structurally: `HeadlessBinding` drives its binding-local scheduler and
-        // production drives the `Scheduler::instance()` singleton, and neither can
-        // forget the step or run it twice.
+        // This lives in the scheduler, not in bindings. The contract is "exactly one
+        // mid-frame poll on the right `Scheduler` instance". Owning it here enforces
+        // both structurally: `HeadlessBinding` drives its binding-local scheduler and
+        // production drives the singleton, and neither can forget the step or run it twice.
         self.drive_async_tasks();
 
         frame_id
@@ -679,10 +709,11 @@ impl Scheduler {
     ///
     /// # This no longer finishes the frame
     ///
-    /// Before ADR-0021 U1.5 this method also drained the post-frame queue and
-    /// returned the phase to `Idle` — which meant every post-frame callback ran
-    /// *before* the pipeline it was supposed to observe. Use
-    /// [`drive_frame`](Self::drive_frame), or pair this with `end_frame`.
+    /// This method now leaves the scheduler in `PersistentCallbacks` after running
+    /// persistent callbacks. Previously it also drained the post-frame queue and
+    /// returned to `Idle`, which meant every post-frame callback ran *before* the
+    /// pipeline it was supposed to observe. Use [`drive_frame`](Self::drive_frame),
+    /// or pair this with `end_frame`.
     ///
     /// # Panics
     ///
@@ -769,23 +800,44 @@ impl Scheduler {
 
             // Drain BEFORE invoking: a post-frame callback that registers another
             // one must not have it run in this same frame.
-            let callbacks: Vec<_> = {
+            let mut callbacks: Vec<LocalPostFrameEntry> = {
+                let _registration = self.callbacks.post_frame_registration.lock();
                 let mut cbs = self.callbacks.post_frame.lock();
-                cbs.drain(..).collect()
+                let mut snapshot: Vec<_> = cbs
+                    .drain(..)
+                    .map(|entry| LocalPostFrameEntry {
+                        id: entry.id,
+                        callback: entry.callback as OwnerPostFrameCallback,
+                    })
+                    .collect();
+                snapshot.extend(drain_active_lane(self.identity()));
+                snapshot
             };
 
-            for cancellable in callbacks {
-                if self.callbacks.cancelled.contains_key(&cancellable.id) {
-                    continue;
+            callbacks.sort_unstable_by_key(|entry| entry.id.get());
+            let callback_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                for entry in callbacks {
+                    if self.callbacks.cancelled.contains_key(&entry.id) {
+                        continue;
+                    }
+                    (entry.callback)(&timing);
                 }
-                (cancellable.callback)(&timing);
-            }
+            }));
 
             // Clear processed cancellations
             self.callbacks.cancelled.clear();
 
             // Notify frame completion futures
             self.notify_frame_completion(&timing);
+
+            if let Err(payload) = callback_result {
+                self.frame
+                    .scheduler_phase
+                    .store(SchedulerPhase::Idle as u8, Ordering::Release);
+                *self.frame.current_vsync_time.lock() = None;
+                *self.frame.last_frame_end.lock() = Some(Instant::now());
+                std::panic::resume_unwind(payload);
+            }
         }
 
         // Return to idle
@@ -853,8 +905,7 @@ impl Scheduler {
     ///
     /// Every frame driver goes through here — `HeadlessBinding::pump_frame` on its
     /// binding-local scheduler, and the desktop / android / wasm runners on the
-    /// `Scheduler::instance()` singleton — so headless and production cannot drift
-    /// (ADR-0021 §7c).
+    /// `Scheduler::instance()` singleton — so headless and production cannot drift.
     ///
     /// `pipeline` is the binding's build → layout → compositing → paint step. It
     /// runs in the [`SchedulerPhase::PersistentCallbacks`] slot without being
@@ -911,7 +962,7 @@ impl Scheduler {
     pub fn execute_frame(&self) -> FrameId {
         // begin → persistent → end. The non-pipeline convenience path (warm-up
         // frames, tests); `drive_frame` is the same sequence with a pipeline in
-        // the persistent slot. Preserves this method's pre-U1.5 behavior: the
+        // the persistent slot. Preserves this method's original behavior: the
         // frame completes and its post-frame callbacks run.
         let vsync_time = Instant::now();
         let frame_id = self.handle_begin_frame(vsync_time);
@@ -1013,7 +1064,7 @@ impl Scheduler {
     }
 
     // =========================================================================
-    // Async task driver (ADR-0018 U2)
+    // Async Task Driver
     // =========================================================================
 
     /// The frame-driven task driver.
@@ -1046,9 +1097,9 @@ impl Scheduler {
     /// use (`HeadlessBinding::pump_frame` and `AppBinding::draw_frame`).
     ///
     /// Polls every task whose waker fired, on the calling thread. A future
-    /// completing here calls `RebuildHandle::schedule()` (ADR-0018 U1), whose id
-    /// the *same* frame's `build_scope` then drains — so a completion is observed
-    /// without waiting an extra frame.
+    /// completing here calls `RebuildHandle::schedule()`, whose id the *same*
+    /// frame's `build_scope` then drains — so a completion is observed without
+    /// waiting an extra frame.
     ///
     /// # Where this sits in a frame
     ///
@@ -1058,11 +1109,9 @@ impl Scheduler {
     /// `vsync.tick_all` and `build_scope`.
     ///
     /// **Called by [`handle_begin_frame`](Self::handle_begin_frame), once per
-    /// frame** (ADR-0021 U1.5). Before that, each binding called it directly, and
-    /// ADR-0018's contract was stated as "the driver step is owned by the
-    /// binding". That was a mis-statement of the real invariant, which is *one
-    /// mid-frame poll per frame, on the right `Scheduler` instance*. Moving the
-    /// call into the scheduler enforces both structurally and let the pipeline
+    /// frame**. Previously, each binding called it directly. The real invariant is
+    /// *one mid-frame poll per frame, on the right `Scheduler` instance*. Moving
+    /// the call into the scheduler enforces both structurally and lets the pipeline
     /// take the persistent slot it always semantically occupied.
     ///
     /// Still `pub`: a test may drive one poll directly. It does not mutate the
@@ -1124,11 +1173,12 @@ impl Scheduler {
     /// "Post-frame callbacks ... are called exactly once" and cannot be
     /// cancelled before they fire. Returns `()` — no cancellation handle.
     pub fn add_post_frame_callback(&self, callback: PostFrameCallback) {
-        let id = self.callbacks.id_gen.next();
-        self.callbacks
-            .post_frame
-            .lock()
-            .push(CancellablePostFrameCallback { id, callback });
+        self.with_post_frame_registration(|id| {
+            self.callbacks
+                .post_frame
+                .lock()
+                .push(CancellablePostFrameCallback { id, callback });
+        });
     }
 
     // =========================================================================
@@ -1949,13 +1999,13 @@ impl Default for SchedulerBuilder {
 mod tests {
 
     // =========================================================================
-    // Async driver integration (ADR-0018 U2)
+    // Async Driver Integration
     // =========================================================================
 
     /// Requirement 1: tasks are polled in the `MidFrameMicrotasks` phase.
     ///
-    /// Since ADR-0021 U1.5 `handle_begin_frame` performs the poll itself, in that
-    /// phase — the bindings no longer call `drive_async_tasks`. Replaces
+    /// `handle_begin_frame` performs the poll itself in that phase —
+    /// the bindings no longer call `drive_async_tasks` directly. Replaces
     /// `handle_begin_frame_does_not_poll_async_tasks`, which pinned the old
     /// binding-owned contract.
     #[test]
@@ -1995,7 +2045,7 @@ mod tests {
 
     /// The poll happens on **this** scheduler instance, not on a global. Headless
     /// bindings own a binding-local `Scheduler`; production drives the singleton.
-    /// A driver step on the wrong instance is the divergence ADR-0021 §7c names.
+    /// A driver step on the wrong instance would be a divergence between the two.
     #[test]
     fn each_scheduler_instance_polls_only_its_own_async_driver() {
         let a = Scheduler::new();
@@ -2122,8 +2172,8 @@ mod tests {
         // (TransientCallbacks already executed)
         assert_eq!(scheduler.phase(), SchedulerPhase::MidFrameMicrotasks);
 
-        // ADR-0021 U1.5: `handle_draw_frame` no longer finishes the frame. It
-        // hands the `PersistentCallbacks` slot to the caller's pipeline.
+        // `handle_draw_frame` no longer finishes the frame. It hands the
+        // `PersistentCallbacks` slot to the caller's pipeline.
         scheduler.handle_draw_frame();
         assert_eq!(scheduler.phase(), SchedulerPhase::PersistentCallbacks);
 
@@ -2419,7 +2469,7 @@ mod tests {
     fn test_persistent_callback_fires_every_frame() {
         // Flutter parity: binding.dart:773 "Persistent frame callbacks
         // cannot be unregistered. Once registered, they are called for every
-        // frame for the lifetime of the application." Pre-U31 commit FLUI
+        // frame for the lifetime of the application." FLUI previously
         // diverged with `remove_persistent_frame_callback`; reverted to
         // strict Flutter contract.
         let scheduler = Scheduler::new();

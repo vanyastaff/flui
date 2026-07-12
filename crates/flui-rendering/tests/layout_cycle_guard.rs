@@ -1,4 +1,4 @@
-//! D-block PR-A1 U21 — layout cycle guard tests.
+//! Layout cycle guard tests.
 //!
 //! Verifies [`PipelineOwner::layout_dirty_root`] surfaces
 //! [`RenderError::LayoutCycle`] on cyclic re-entry (via the
@@ -7,8 +7,8 @@
 //! panic so the in-flight flag stays consistent across frames.
 //!
 //! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U21
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D6
+//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
+//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, error::RenderError, pipeline::PipelineOwner};
@@ -22,16 +22,15 @@ fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
 // Structural cycle on leaf-only path — guard does NOT trigger
 // ============================================================================
 
-/// PR #146 Copilot review (3294315112, 3294315119) rename: prior name
-/// "u21_cyclic_tree_layout_returns_layout_cycle_via_callback" was
-/// misleading — this test does NOT surface LayoutCycle. The contract
+/// This test's name was chosen to avoid a prior misleading name that
+/// claimed the test surfaces LayoutCycle — it does NOT. The contract
 /// it verifies is: a structural cycle on a leaf-traversal path
 /// (RenderColoredBox child whose `children()` lists its parent) does
 /// NOT trigger the guard because the leaf widget's `perform_layout`
 /// never calls `ctx.layout_child` for the cyclic edge.
 ///
 /// Cycle protection layers exercised:
-/// - `collect_subtree_ids` visited HashSet (PR #145) dedups the cycle
+/// - `collect_subtree_ids`'s visited `HashSet` dedups the cycle
 ///   edge → returned `Vec<RenderId>` is unique → `get_subtree_mut`
 ///   precondition satisfied.
 /// - Padding's `perform_layout` calls `layout_child(0)` for ColoredBox.
@@ -41,9 +40,9 @@ fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
 /// Result: layout succeeds. The cycle exists structurally but is
 /// invisible to the layout walk. (The `LayoutCycle`-surfacing
 /// contract is tested separately by
-/// `u21_callback_reentry_marks_parent_dirty_for_retry`.)
+/// `callback_reentry_marks_parent_dirty_for_retry`.)
 #[test]
-fn u21_structural_cycle_on_leaf_path_does_not_trigger_guard() {
+fn structural_cycle_on_leaf_path_does_not_trigger_guard() {
     let mut pipeline = fresh_layout_pipeline();
 
     let padding_id = pipeline
@@ -74,12 +73,11 @@ fn u21_structural_cycle_on_leaf_path_does_not_trigger_guard() {
 // Callback re-entry — guard fires, parent marked dirty for retry
 // ============================================================================
 
-/// PR #146 Copilot review (3294315124, 3294315130) rename + cleanup:
-/// prior name claimed the test "surfaces LayoutCycle" but it actually
-/// asserts `result.is_ok()` and only verifies the dirty-bit-preserved-
+/// This test's name was similarly corrected: an earlier name claimed
+/// the test "surfaces LayoutCycle" but it actually asserts
+/// `result.is_ok()` and only verifies the dirty-bit-preserved-
 /// for-retry semantics (the LayoutCycle Err is collapsed at the
-/// inner callback, never reaching the outer caller). Dead Padding →
-/// ColoredBox setup at the top has been removed.
+/// inner callback, never reaching the outer caller).
 ///
 /// The contract: when a user widget's `perform_layout` calls
 /// `ctx.layout_child` for an ancestor id that's already in flight up
@@ -95,7 +93,7 @@ fn u21_structural_cycle_on_leaf_path_does_not_trigger_guard() {
 /// containing P1 (cyclic edge). Both widgets call `layout_child(0)`
 /// for their declared first child, so the cycle is reachable.
 #[test]
-fn u21_callback_reentry_marks_parent_dirty_for_retry() {
+fn callback_reentry_marks_parent_dirty_for_retry() {
     let mut pipeline = fresh_layout_pipeline();
     let p1 = pipeline
         .render_tree_mut()
@@ -140,7 +138,7 @@ fn u21_callback_reentry_marks_parent_dirty_for_retry() {
 // Drop-guard panic safety — guard removes id on perform_layout panic
 // ============================================================================
 
-/// Plan §U21 RAII safety: a non-leaf user widget whose
+/// RAII safety: a non-leaf user widget whose
 /// `perform_layout` panics must leave the in-flight flag clean
 /// for the next frame (the panic is caught by `catch_unwind` in the
 /// non-leaf path AND the `LayoutCycleGuard`'s Drop runs on unwind).
@@ -154,7 +152,7 @@ fn u21_callback_reentry_marks_parent_dirty_for_retry() {
 /// The frame-2 retry shape verifies the guard's panic-safety property
 /// without needing a separate mock for the set state.
 #[test]
-fn u21_drop_guard_clears_id_on_perform_layout_panic() {
+fn drop_guard_clears_id_on_perform_layout_panic() {
     use flui_foundation::Diagnosticable;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
@@ -207,7 +205,7 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
 
     let constraints = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
 
-    // Frame 1: panic surfaces as Poisoned (PR-A1b3 review fix wraps
+    // Frame 1: panic surfaces as Poisoned (the non-leaf path wraps
     // perform_layout_raw in catch_unwind).
     let frame_1 = pipeline.layout_dirty_root(parent_id, constraints);
     assert!(
@@ -248,7 +246,7 @@ fn u21_drop_guard_clears_id_on_perform_layout_panic() {
 /// trigger LayoutCycle — each call's guard inserts and removes
 /// cleanly; the next call sees an empty set.
 #[test]
-fn u21_sequential_calls_on_same_root_do_not_trigger_cycle() {
+fn sequential_calls_on_same_root_do_not_trigger_cycle() {
     let mut pipeline = fresh_layout_pipeline();
     let padding_id = pipeline
         .render_tree_mut()

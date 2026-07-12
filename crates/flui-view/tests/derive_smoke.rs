@@ -1,4 +1,4 @@
-//! Phase 3 §U23: smoke test for `#[derive(StatelessView)]` and
+//! Smoke test for `#[derive(StatelessView)]` and
 //! `#[derive(StatefulView)]`.
 //!
 //! Locks the canonical authoring shape — author writes the struct,

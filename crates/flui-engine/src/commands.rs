@@ -374,8 +374,8 @@ where
 // in release/bench profiles where `debug_assertions` is off.
 #[cfg(all(test, debug_assertions))]
 mod tests {
-    //! Cycle 5 U10 regression: dispatching an `Arc<Paint>`-carrying
-    //! `DrawCommand` reaches the backend identically to the pre-U10
+    //! Regression guard: dispatching an `Arc<Paint>`-carrying
+    //! `DrawCommand` reaches the backend identically to the earlier
     //! by-value-`Paint` shape. `DebugBackend` only counts commands —
     //! that is enough to prove the dispatch arm executed (rather
     //! than falling through the `_` catch-all) and that no panic was

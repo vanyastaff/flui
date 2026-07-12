@@ -1,6 +1,7 @@
-//! SC-003 GlobalKey reparenting test — locks the §U17 wiring.
+//! SC-003 GlobalKey reparenting test — locks the inactive-queue
+//! reactivation wiring.
 //!
-//! The §U17 commit (inactive-queue reactivation path) emits a
+//! The inactive-queue reactivation path emits a
 //! `ReconcileEvent::Reparent` with `from_parent: None` when an
 //! element registered under a `GlobalKey` is pulled back from the
 //! `BuildOwner::inactive_elements` queue and re-attached at a new
@@ -14,6 +15,10 @@
 //! new parent, and emits `from_parent: Some(old_parent)`.
 
 #![cfg(feature = "test-utils")]
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 

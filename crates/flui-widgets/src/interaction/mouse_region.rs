@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use flui_objects::RenderMouseRegion;
 use flui_rendering::hit_testing::{
-    CursorIcon, DeviceId, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
-    MouseHoverCallback,
+    CursorIcon, DeviceId, HitTestBehavior, InputEvent, MouseEnterCallback, MouseExitCallback,
+    MouseHoverCallback, PointerEvent, PointerEventExt as _,
 };
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Offset;
@@ -117,20 +117,85 @@ impl MouseRegion {
         render_object.set_opaque(self.opaque);
         render_object.set_behavior(self.behavior);
     }
+
+    /// The owner-local hover adapter: forwards each pointer `Move` landing on
+    /// the region to `on_hover` (FLUI models Flutter's hover stream as `Move`
+    /// events delivered through ordinary pointer dispatch).
+    fn hover_handler(on_hover: MouseHoverCallback) -> impl Fn(&PointerEvent) + 'static {
+        move |event: &PointerEvent| {
+            if matches!(event, PointerEvent::Move(_)) {
+                let device_id = InputEvent::Pointer(event.clone()).device_id().unwrap_or(0);
+                on_hover(device_id, event.position());
+            }
+        }
+    }
+
+    /// Keep the render object's hover target in sync with `on_hover`:
+    /// register on first use, replace inside the existing cell on rebuild,
+    /// unregister when the callback is removed.
+    fn sync_hover_target(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut RenderMouseRegion,
+    ) {
+        match (self.on_hover.clone(), render_object.hover_target()) {
+            (Some(on_hover), Some(target)) => {
+                if let Err(error) = ctx.replace_pointer(target, Self::hover_handler(on_hover)) {
+                    tracing::warn!(?error, "MouseRegion hover handler replacement failed");
+                }
+            }
+            (Some(on_hover), None) => match ctx.register_pointer(Self::hover_handler(on_hover)) {
+                Ok(target) => render_object.set_hover_target(Some(target)),
+                Err(error) => tracing::debug!(
+                    ?error,
+                    "MouseRegion mounted without an active interaction lane; \
+                         hover events will not be delivered"
+                ),
+            },
+            (None, Some(target)) => {
+                if let Err(error) = ctx.unregister_pointer(target) {
+                    tracing::debug!(?error, "MouseRegion hover target unregistration failed");
+                }
+                render_object.set_hover_target(None);
+            }
+            (None, None) => {}
+        }
+    }
 }
 
 impl RenderView for MouseRegion {
     type Protocol = BoxProtocol;
     type RenderObject = RenderMouseRegion;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         let mut render_object = RenderMouseRegion::new();
         self.configure(&mut render_object);
+        self.sync_hover_target(ctx, &mut render_object);
         render_object
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         self.configure(render_object);
+        self.sync_hover_target(ctx, render_object);
+    }
+
+    fn did_unmount_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
+        // Unmount removes the hover target from NEW route resolution; active
+        // cached routes retain their handler cells through Up/Cancel.
+        if let Some(target) = render_object.hover_target() {
+            if let Err(error) = ctx.unregister_pointer(target) {
+                tracing::debug!(?error, "MouseRegion hover target unregistration failed");
+            }
+            render_object.set_hover_target(None);
+        }
     }
 
     fn has_children(&self) -> bool {
@@ -155,7 +220,8 @@ mod tests {
 
     #[test]
     fn create_render_object_defaults_match_flutter_opaque_defaults() {
-        let render_object = MouseRegion::new().create_render_object();
+        let render_object =
+            MouseRegion::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.cursor(), CursorIcon::Default);
         assert!(render_object.opaque());
         assert_eq!(render_object.behavior(), HitTestBehavior::Opaque);
@@ -167,7 +233,7 @@ mod tests {
             .cursor(CursorIcon::Pointer)
             .opaque(false)
             .behavior(HitTestBehavior::Translucent)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert_eq!(render_object.cursor(), CursorIcon::Pointer);
         assert!(!render_object.opaque());
@@ -176,13 +242,17 @@ mod tests {
 
     #[test]
     fn update_render_object_reconfigures_cursor_opaque_and_behavior() {
-        let mut render_object = MouseRegion::new().create_render_object();
+        let mut render_object =
+            MouseRegion::new().create_render_object(&flui_view::RenderObjectContext::detached());
 
         MouseRegion::new()
             .cursor(CursorIcon::Text)
             .opaque(false)
             .behavior(HitTestBehavior::DeferToChild)
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
 
         assert_eq!(render_object.cursor(), CursorIcon::Text);
         assert!(!render_object.opaque());

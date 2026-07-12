@@ -1,7 +1,7 @@
 //! [`TransitionRoute`] — a route with an entrance and exit animation.
 //!
-//! ADR-0020 U5.2. **Private.** No `ModalRoute`, no barrier, no `PageRoute`, no
-//! public API. The first consumer of U5.1's `RouteBinding` seam.
+//! **Private.** No `ModalRoute`, no barrier, no `PageRoute`, no
+//! public API. The first consumer of the `RouteBinding` seam.
 //!
 //! # Flutter parity
 //!
@@ -26,15 +26,15 @@
 //! ```
 //!
 //! Both callbacks reach the navigator through a `RouteBinding`, which enqueues a
-//! `RouteCommand` rather than re-entering the flush (U5.1, `binding.rs`
+//! `RouteCommand` rather than re-entering the flush (see `binding.rs`
 //! *Correction 1*). A zero-duration transition therefore completes *inside* the
 //! flush that started it, and settles on that flush's second pass.
 //!
 //! # Deliberately not implemented here
 //!
 //! - **`opaque`.** `_handleStatusChanged` writes `overlayEntries.first.opaque`
-//!   (`:297`, `:304`). FLUI's `Overlay` has no `opaque` (ADR-0019 U1 deferred it),
-//!   so there is nothing to write to and **nothing is claimed**. U5.3 adds it.
+//!   (`:297`, `:304`). FLUI's `Overlay` has no `opaque` (deferred),
+//!   so there is nothing to write to and **nothing is claimed**. A later pass adds it.
 //! - **`didReplace`'s controller-value inheritance** (`:363-374`). It needs the
 //!   *replaced* route's controller, and FLUI's routes are named by `RouteId`; the
 //!   `TransitionPeer` registry publishes the primary `Animation`, not the
@@ -63,22 +63,23 @@
 //! synchronous, and added only because the contract demanded it.
 //! - **Predictive back / `_simulation` / `DartPerformanceMode`.** Platform work.
 
-// `TransitionRoute` is private and reached only through `ModalRoute` (U5.3) and,
-// above it, the public `PageRoute` / `PopupRoute` (U5.4). ADR-0020 U5.4 removed
+// `TransitionRoute` is private and reached only through `ModalRoute` and,
+// above it, the public `PageRoute` / `PopupRoute`. Exporting those removed
 // this file's `#![allow(dead_code)]`: everything left is either reachable from a
 // public route or `#[cfg(test)]`.
 
-use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{fmt, marker::PhantomData};
+use std::{rc::Rc, sync::Arc};
 
 use flui_animation::{
     ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationController, AnimationStatus,
     AnimationSwitch, ConstantAnimation, ProxyAnimation, Scheduler, VsyncRegistration,
 };
+use flui_foundation::ChangeNotifier;
 use parking_lot::Mutex;
 
 use super::binding::{CompletedSignal, RouteBindingSlot, TransitionGroup, TransitionPeer};
@@ -132,6 +133,13 @@ impl SecondaryParent {
 struct TransitionInner {
     controller: Mutex<Option<AnimationController>>,
     binding: RouteBindingSlot,
+    /// Statuses reported by the `Send + Sync` animation listener, awaiting
+    /// owner-local application.
+    pending_statuses: Arc<Mutex<Vec<AnimationStatus>>>,
+    /// Data-only owner wake for status changes that do not produce a value tick,
+    /// e.g. `reverse()` from 1.0. `ModalRoute` points this at the same relay that
+    /// its `ModalScope` listens to.
+    status_wake: Mutex<Option<Arc<ChangeNotifier>>>,
 
     /// The proxy handed to the route *below* this one is **this** route's
     /// secondary; the primary is the controller, unproxied. Flutter is the same:
@@ -175,7 +183,7 @@ impl TransitionInner {
 
     /// `_handleStatusChanged` (`routes.dart:293-321`).
     ///
-    /// All four arms have behavior since ADR-0020 U5.3 gave the overlay entry an
+    /// All four arms have behavior since the overlay entry gained an
     /// `opaque` flag to write. `_performanceModeRequestHandle` has no FLUI
     /// analogue and is not claimed.
     fn handle_status_changed(&self, status: AnimationStatus) {
@@ -213,12 +221,19 @@ impl TransitionInner {
             _ => {}
         }
     }
+
+    fn drain_pending_statuses(&self) {
+        let statuses = std::mem::take(&mut *self.pending_statuses.lock());
+        for status in statuses {
+            self.handle_status_changed(status);
+        }
+    }
 }
 
 /// A route whose entrance and exit are animated.
 ///
 /// Private: `TransitionRoute` is not exported, and `transition_route_is_not_exported`
-/// keeps it that way until U5.4's parity + sign-off gate.
+/// keeps it that way until its parity + sign-off gate.
 pub(crate) struct TransitionRoute<T> {
     settings: RouteSettings,
     builder: RouteContentBuilder,
@@ -243,11 +258,11 @@ impl<T> TransitionRoute<T> {
     /// A route showing `builder`, entering and leaving over `duration`.
     pub(crate) fn new(
         duration: Duration,
-        builder: impl Fn(&dyn flui_view::BuildContext) -> flui_view::BoxedView + Send + Sync + 'static,
+        builder: impl Fn(&dyn flui_view::BuildContext) -> flui_view::BoxedView + 'static,
     ) -> Self {
         Self {
             settings: RouteSettings::default(),
-            builder: Arc::new(builder),
+            builder: Rc::new(builder),
             duration,
             reverse_duration: None,
             current_result: None,
@@ -257,6 +272,8 @@ impl<T> TransitionRoute<T> {
             inner: Arc::new(TransitionInner {
                 controller: Mutex::new(None),
                 binding: RouteBindingSlot::new(),
+                pending_statuses: Arc::new(Mutex::new(Vec::new())),
+                status_wake: Mutex::new(None),
                 secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
                 secondary_parent: Mutex::new(SecondaryParent::Dismissed),
                 popped: AtomicBool::new(false),
@@ -339,6 +356,10 @@ impl<T> TransitionRoute<T> {
         }
     }
 
+    pub(crate) fn set_status_wake(&self, wake: Arc<ChangeNotifier>) {
+        *self.inner.status_wake.lock() = Some(wake);
+    }
+
     /// Flutter's `_updateSecondaryAnimation(nextRoute)` (`routes.dart:422-496`).
     ///
     /// Reads the next route's `TransitionPeer` (its primary animation and its
@@ -386,7 +407,7 @@ impl<T> TransitionRoute<T> {
         // controller has settled at `Completed`. Using the override here makes a
         // settled route look like a moving train and forces a spurious hop —
         // caught by `a_stale_train_does_not_clobber_a_newer_parent`. The
-        // controller's override is a separate divergence, recorded in ADR-0020 §7c.
+        // controller's override is a separate, recorded divergence.
         let is_moving = matches!(
             next_animation.status(),
             AnimationStatus::Forward | AnimationStatus::Reverse
@@ -493,6 +514,15 @@ impl TransitionHandle {
         self.inner.binding.get()
     }
 
+    /// Apply animation statuses captured by the data-plane listener.
+    ///
+    /// This is owner-local by construction: callers are route/modal build paths
+    /// or tests explicitly entering the owner scope. The status listener itself
+    /// stores only data so `AnimationController` can stay `Send + Sync`.
+    pub(crate) fn drain_pending_statuses(&self) {
+        self.inner.drain_pending_statuses();
+    }
+
     /// Flutter's `secondaryAnimation` (`routes.dart:197`). A `ProxyAnimation`
     /// resting at `kAlwaysDismissedAnimation`.
     pub(crate) fn secondary_animation(&self) -> Arc<ProxyAnimation<f32>> {
@@ -539,7 +569,7 @@ impl<T> fmt::Debug for TransitionRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
+impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     type Output = T;
 
     fn settings(&self) -> &RouteSettings {
@@ -585,10 +615,12 @@ impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
             controller.set_reverse_duration(reverse);
         }
 
-        let weak = Arc::downgrade(&self.inner);
+        let pending_statuses = Arc::clone(&self.inner.pending_statuses);
+        let status_wake = self.inner.status_wake.lock().clone();
         controller.add_status_listener(Arc::new(move |status| {
-            if let Some(inner) = weak.upgrade() {
-                inner.handle_status_changed(status);
+            pending_statuses.lock().push(status);
+            if let Some(wake) = &status_wake {
+                wake.notify_listeners();
             }
         }));
 
@@ -627,7 +659,7 @@ impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
     /// Flutter returns the `TickerFuture` and `handlePush` awaits it. FLUI's
     /// controller returns no future, so the entry parks in `Pushing` and the
     /// status listener raises `notify_push_completed` when the controller reaches
-    /// `Completed` — through the U5.1 command queue, never a direct call.
+    /// `Completed` — through the route-binding command queue, never a direct call.
     fn did_push(&mut self) -> PushCompletion {
         if let Some(controller) = self.inner.controller.lock().as_ref() {
             let _ = controller.forward();
@@ -693,9 +725,9 @@ impl<T: Send + Sync + Clone + 'static> Route for TransitionRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> NavigatorRoute for TransitionRoute<T> {
+impl<T: Send + Clone + 'static> NavigatorRoute for TransitionRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
-        Arc::clone(&self.builder)
+        Rc::clone(&self.builder)
     }
 
     fn binding_slot(&self) -> Option<&RouteBindingSlot> {

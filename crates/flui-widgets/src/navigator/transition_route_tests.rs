@@ -1,4 +1,4 @@
-//! ADR-0020 U5.2 tests for the private `TransitionRoute`.
+//! Tests for the private `TransitionRoute`.
 //!
 //! # Parity oracles
 //!
@@ -58,6 +58,7 @@ fn complete(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(1.0);
     assert_eq!(controller.status(), AnimationStatus::Completed);
+    handle.drain_pending_statuses();
 }
 
 /// Drive a controller to `Dismissed` (exit finished).
@@ -65,6 +66,7 @@ fn dismiss(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(0.0);
     assert_eq!(controller.status(), AnimationStatus::Dismissed);
+    handle.drain_pending_statuses();
 }
 
 // ============================================================================
@@ -103,7 +105,7 @@ fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
     );
 }
 
-/// The `Completed` status reaches the navigator through the U5.1 command queue,
+/// The `Completed` status reaches the navigator through the route-binding command queue,
 /// never a direct call — a direct call would deadlock on the history mutex.
 ///
 /// Red-check: make `TransitionInner::handle_status_changed` skip
@@ -183,7 +185,7 @@ fn pop_transition_keeps_the_route_until_dismissed_but_completes_its_result_at_on
 /// **What this does *not* test.** Dropping the `&& !_popFinalized` term from
 /// `finished_when_popped` leaves every test green: FLUI consults it exactly once,
 /// in `handle_pop`, and a second `finalize` is a no-op because a `RouteCommand`
-/// for a vanished route is dropped (U5.1). Flutter needs the term because
+/// for a vanished route is dropped. Flutter needs the term because
 /// `finalizeRoute` *asserts* `currentState == popping`. The guard is kept because
 /// it is faithful and free, and the thing it actually protects — the listener
 /// raising `finalize()` twice — is pinned directly by
@@ -195,7 +197,7 @@ fn pop_transition_keeps_the_route_until_dismissed_but_completes_its_result_at_on
 /// then reads `false` and the synchronous branch is never taken. Dart's controller
 /// does not notify from `reverse()`, so Flutter *does* take it. The end state is
 /// identical — disposed within the pop's own `flush` — and the divergence is
-/// recorded in ADR-0020 §7c.
+/// recorded, not hidden.
 ///
 /// Red-check: make the `Dismissed` arm of `handle_status_changed` skip
 /// `binding.finalize()`; the route never disposes.
@@ -228,7 +230,7 @@ fn an_already_dismissed_controller_finalizes_synchronously_without_double_finali
 /// set at `:316`).
 ///
 /// Tested directly, because through the navigator a second `finalize` is
-/// invisible: U5.1 drops a `RouteCommand` naming a vanished route. Flutter's
+/// invisible: the command queue drops a `RouteCommand` naming a vanished route. Flutter's
 /// `finalizeRoute` asserts instead. Same posture as ADR-0018's `apply_fold`.
 ///
 /// Red-check: replace `pop_finalized.swap(true, …)` with a plain `load`.
@@ -252,6 +254,7 @@ fn pop_finalized_stops_a_second_finalize() {
     controller.set_value(0.5);
     controller.set_value(0.0);
     assert_eq!(controller.status(), AnimationStatus::Dismissed);
+    animation.drain_pending_statuses();
 
     assert_eq!(
         animation.finalize_calls(),
@@ -490,7 +493,7 @@ fn secondary_animation_resets_when_the_next_route_is_popped() {
 /// (`routes.dart:440-486`).
 ///
 /// `on_switched` fires exactly once — pinned in `flui-animation` by
-/// `on_switched_fires_exactly_once`, this ADR's U5.2 preflight.
+/// `on_switched_fires_exactly_once`, this suite's preflight.
 ///
 /// Red-check: always take the `jump` branch in `update_secondary_animation`; the
 /// secondary snaps to the new train immediately and `secondary_is_hopping` is false.
@@ -674,9 +677,9 @@ fn secondary_keeps_tracking_the_exiting_route_while_it_reverses() {
 // PRIVACY
 // ============================================================================
 
-/// `TransitionRoute` and `ModalRoute` stay private after U5.4's sign-off gate:
+/// `TransitionRoute` and `ModalRoute` stay private after the sign-off gate:
 /// Rust has no subclassing, so exporting them as extensible bases needs a trait
-/// design that ADR-0020 §7e deliberately defers. Only `PageRoute` / `PopupRoute`
+/// design that is deliberately deferred. Only `PageRoute` / `PopupRoute`
 /// came out.
 ///
 /// Red-check: add `pub use transition_route::TransitionRoute;` to

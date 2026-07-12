@@ -1,6 +1,6 @@
-//! Virtualization core benchmark (ADR-0003 U1 + U3c lazy-sliver consumer).
+//! Virtualization core benchmark (ADR-0003, including the lazy-sliver consumer).
 //!
-//! ## Virtualizer core (U1)
+//! ## Virtualizer core
 //!
 //! Demonstrates the asymptotic win of the augmented B+-tree-backed
 //! [`Virtualizer`] over a naive flat-array baseline on the three operations the

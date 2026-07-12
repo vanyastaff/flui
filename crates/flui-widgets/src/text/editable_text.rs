@@ -101,7 +101,7 @@ pub struct EditableTextState {
     /// Focus node representing this field in the global focus tree.
     focus_node: Arc<FocusNode>,
     /// Publishes the field's `RenderId` while mounted, so the node's rect
-    /// provider can measure it for reading-order traversal (ADR-0022 §4).
+    /// provider can measure it for reading-order traversal.
     anchor: flui_objects::SubtreeAnchor,
     /// The node this field's node hangs under — the nearest enclosing focus
     /// parent at mount, or the root scope's backing node. Detached from in
@@ -119,7 +119,7 @@ pub struct EditableTextState {
     /// changes (forwarded from the FocusManager listener).
     rebuild_notifier: flui_foundation::notifier::ChangeNotifier,
     /// ID for the focus-change listener we added to the [`FocusManager`], so
-    /// dispose removes exactly ours (ADR-0022 U1).
+    /// dispose removes exactly ours.
     focus_listener_id: Option<ListenerId>,
 }
 
@@ -150,8 +150,8 @@ impl StatefulView for EditableText {
 impl ViewState<EditableText> for EditableTextState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         // 1. Attach our focus node under the nearest enclosing `FocusScope` —
-        //    a `ModalRoute`'s per-route scope when this field sits in a page
-        //    (ADR-0022 U3/U4) — falling back to the root scope, and publish the
+        //    a `ModalRoute`'s per-route scope when this field sits in a page —
+        //    falling back to the root scope, and publish the
         //    node on the controller so the enclosing `TextField`'s tap can
         //    focus *this* field.
         let parent = crate::interaction::enclosing_focus_parent(ctx);
@@ -309,11 +309,18 @@ impl RenderView for EditableTextRenderView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderEditable;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.build_render_object();
     }
 }

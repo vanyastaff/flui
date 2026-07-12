@@ -567,8 +567,8 @@ fn test_cancel_nonexistent_callback() {
 #[should_panic(expected = "A ticker was started twice")]
 fn test_double_start_ticker_panics_in_debug() {
     // Flutter parity: ticker.dart:188 throws FlutterError('A ticker was
-    // started twice.'). Post-U10 (7d93611d) FLUI debug-asserts the same
-    // contract instead of silently overwriting the active callback.
+    // started twice.'). FLUI debug-asserts the same contract instead of
+    // silently overwriting the active callback.
     let mut ticker = Ticker::new();
     ticker.start(|_| {});
     ticker.start(|_| {});
@@ -2639,8 +2639,8 @@ fn test_scheduler_adjust_for_epoch() {
 // ============================================================================
 //
 // The old `test_ticker_provider_schedule_tick_typed` exercised
-// `TickerProvider::schedule_tick_typed`, deleted in U15 alongside the
-// `schedule_tick` API removal (Flutter `TickerProvider.createTicker(callback)
+// `TickerProvider::schedule_tick_typed`, since removed alongside the
+// `schedule_tick` API (Flutter `TickerProvider.createTicker(callback)
 // -> Ticker` is now the only factory shape). The auto-scheduling integration
 // is covered by `crates/flui-scheduler/src/ticker.rs` unit tests
 // (`test_auto_scheduling_ticker_fires_each_frame`,
@@ -2690,7 +2690,7 @@ fn test_ticker_tick_skipped_when_muted() {
     use flui_scheduler::ticker::TickerProvider;
 
     // Marker provider used only as a witness type for `Ticker::tick(&provider)`.
-    // After U15 the trait has no required methods (default `create_ticker` is
+    // `TickerProvider` has no required methods (default `create_ticker` is
     // sufficient), so this is a one-liner.
     struct MockProvider;
     impl TickerProvider for MockProvider {}

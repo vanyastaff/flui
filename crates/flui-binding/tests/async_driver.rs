@@ -1,9 +1,9 @@
-//! `HeadlessBinding::pump_frame` runs the shared async-driver step (ADR-0018 U2).
+//! `HeadlessBinding::pump_frame` runs the shared async-driver step.
 //!
 //! `flui-app` carries the mirror-image test for `AppBinding::draw_frame`. Both
 //! call `Scheduler::drive_async_tasks`; if either stopped, exactly one of the two
 //! would fail — which is the headless↔production divergence this pair exists to
-//! catch (the ADR-0017 U4 lesson).
+//! catch.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

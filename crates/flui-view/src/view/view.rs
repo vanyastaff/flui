@@ -46,7 +46,7 @@ use dyn_clone::{DynClone, clone_trait_object};
 /// This trait corresponds to Flutter's `Widget` abstract class:
 /// - `create_element()` → `Widget.createElement()`
 /// - `can_update()` → `Widget.canUpdate()` static method
-pub trait View: Downcast + DynClone + Send + Sync + 'static {
+pub trait View: Downcast + DynClone + 'static {
     /// Create a new Element for this View.
     ///
     /// Called once when this View first appears in the tree.
@@ -173,7 +173,7 @@ clone_trait_object!(View);
 /// - `rebuild()` / `performRebuild()` - rebuild children
 /// - `activate()` / `deactivate()` - temporary removal
 /// - `didChangeDependencies()` - inherited widget changed
-pub trait ElementBase: Downcast + Send + Sync + 'static {
+pub trait ElementBase: Downcast + 'static {
     // ========================================================================
     // Identity
     // ========================================================================
@@ -210,7 +210,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// `u64`. This accessor surfaces the underlying
     /// [`flui_foundation::ViewKey`] so the reconciler can call
     /// [`flui_foundation::ViewKey::key_eq`] on a hash hit and reject
-    /// silent collisions. Plan §U12 / FR-024 work item (c).
+    /// silent collisions. FR-024 work item (c).
     ///
     /// The default impl returns `None`; the unified `Element<V, A, B>`
     /// overrides it to forward to `core.view().key()`. The borrow is
@@ -242,7 +242,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// Called by [`crate::tree::ElementTree::insert`] +
     /// [`crate::tree::ElementTree::mount_root_with_pipeline_owner`]
     /// immediately after slab insertion, BEFORE the element's
-    /// `mount` call. Plan §U15.
+    /// `mount` call.
     fn set_self_id(&mut self, _id: flui_foundation::ElementId) {
         // Default: ignore. Only the unified `Element<V, A, B>`
         // overrides this; hand-rolled element impls (test fixtures,
@@ -285,7 +285,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// * `owner` - Split-borrow handle into [`BuildOwner`](crate::BuildOwner)
     ///   (see [`ElementOwner`](crate::ElementOwner)). Implementations
     ///   may use it to register `GlobalKey`s, schedule rebuilds, or
-    ///   thread it into recursive child `mount` calls. Plan §U8.
+    ///   thread it into recursive child `mount` calls.
     fn mount(
         &mut self,
         parent: Option<flui_foundation::ElementId>,
@@ -298,7 +298,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// Called when the Element is removed from the tree permanently.
     /// Resources should be released. The split-borrow `owner` handle
     /// is provided so implementations may unregister `GlobalKey`s and
-    /// recurse into child unmounts. Plan §U8.
+    /// recurse into child unmounts.
     fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>);
 
     /// Activate this Element (re-inserted into tree).
@@ -324,7 +324,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///
     /// The split-borrow `owner` handle is provided so implementations
     /// may schedule rebuilds for descendants whose `InheritedView`
-    /// dependencies changed (R16, U9 territory). Plan §U8.
+    /// dependencies changed.
     fn update(&mut self, new_view: &dyn View, owner: &mut crate::ElementOwner<'_>);
 
     /// Mark this Element as needing a rebuild.
@@ -391,7 +391,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// (which sets the `_didChangeDependencies` flag) plus
     /// `framework.dart:5977-5982` `StatefulElement.performRebuild`
     /// (which fires `state.didChangeDependencies()` when the flag is
-    /// set). Plan §U14.
+    /// set).
     ///
     /// Default implementation is a no-op — non-stateful behaviors
     /// (Stateless, Proxy, Inherited, Render) have no typed `ViewState`
@@ -514,14 +514,14 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     }
 
     // ========================================================================
-    // Inherited-element protocol (U9 / R4)
+    // Inherited-element protocol
     // ========================================================================
 
     /// Object-safe accessor onto this element if it is an
     /// `InheritedElement<V>` (a `Element<V, Single, InheritedBehavior<V>>`).
     ///
     /// Returns `None` for every other behavior. Used by
-    /// [`BuildContext::depend_on_inherited`](crate::BuildContext::depend_on_inherited) (plan §U9) to read the
+    /// [`BuildContext::depend_on_inherited`](crate::BuildContext::depend_on_inherited) to read the
     /// view as `&dyn Any` and to record this caller as a dependent.
     ///
     /// The default impl returns `None`. Only the unified `Element`
@@ -537,7 +537,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     }
 
     // ========================================================================
-    // Ancestor-finder protocol (U11 / R6, R7, R8)
+    // Ancestor-finder protocol
     // ========================================================================
 
     /// Borrow the View configuration this element holds as `&dyn Any`.
@@ -550,7 +550,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// The reference is borrowed for the lifetime of the immutable
     /// borrow on this element — the caller's typed-callback wrapper
     /// runs synchronously while the tree-read-lock is held, never
-    /// extending the borrow into the rest of `build()`. Plan §U11.
+    /// extending the borrow into the rest of `build()`.
     ///
     /// Flutter parity: `framework.dart:5122`
     /// `findAncestorWidgetOfExactType<T>` — reads `element.widget` once
@@ -565,7 +565,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// Returns `None` for every behavior other than `StatefulBehavior<V>`
     /// (which yields `Some(&self.behavior.state)`). Used by
     /// [`BuildContext::find_ancestor_state`](crate::BuildContext::find_ancestor_state) and
-    /// [`BuildContext::find_root_ancestor_state`](crate::BuildContext::find_root_ancestor_state) (plan §U11) to surface
+    /// [`BuildContext::find_root_ancestor_state`](crate::BuildContext::find_root_ancestor_state) to surface
     /// the typed `ViewState` without leaking `V` into the object-safe
     /// trait surface.
     ///
@@ -580,7 +580,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     }
 
     // ========================================================================
-    // RenderObject-finder protocol (U12 / R9)
+    // RenderObject-finder protocol
     // ========================================================================
 
     /// Borrow this element's `RenderId` if it is a `RenderElement<V>`
@@ -591,9 +591,9 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// AND for `RenderElement`s that have not yet been mounted with a
     /// `PipelineOwner` (in which case `RenderBehavior::render_id` is
     /// still `None`). Used by [`BuildContext::find_render_object`](crate::BuildContext::find_render_object)
-    /// (plan §U12) to surface the nearest ancestor's `RenderId` without
+    /// to surface the nearest ancestor's `RenderId` without
     /// extending a `&self` borrow — `RenderId` is `Copy`, so the
-    /// non-callback signature is sound (plan §D2).
+    /// non-callback signature is sound.
     ///
     /// Flutter parity: `framework.dart:5160`
     /// `findAncestorRenderObjectOfType<T>` walks `_parent` and reads
@@ -624,7 +624,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     }
 
     // ========================================================================
-    // Notification handler protocol (U13 / R10)
+    // Notification handler protocol
     // ========================================================================
 
     /// Object-safe notification handler invoked by
@@ -649,7 +649,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// keeps the default unless the user opts in.
     ///
     /// Returning `true` cancels the bubble; `false` lets it continue to
-    /// the next ancestor. Plan U13 / R10. Flutter parity:
+    /// the next ancestor. Flutter parity:
     /// `notification_listener.dart:127`
     /// (`_NotificationElement.onNotification`) performs the same
     /// runtime-type check + downcast + typed-callback chain.
@@ -669,7 +669,7 @@ mod tests {
     fn _assert_view_is_object_safe(_: &dyn View) {}
     fn _assert_element_base_is_object_safe(_: &dyn ElementBase) {}
 
-    // AE7: `View::key()` accepts any flui_foundation::ViewKey impl
+    // `View::key()` accepts any flui_foundation::ViewKey impl
     // (GlobalKey, ValueKey, UniqueKey, ObjectKey) without an `as` cast.
     // Compile-time check that `&ValueKey<i32>` and `&UniqueKey`
     // (foundation ViewKey impls) coerce to

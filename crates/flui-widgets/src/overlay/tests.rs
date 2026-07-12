@@ -1,4 +1,4 @@
-//! ADR-0019 U1 tests for [`Overlay`] / [`OverlayEntry`].
+//! Tests for [`Overlay`] / [`OverlayEntry`].
 //!
 //! # Parity oracles
 //!
@@ -8,11 +8,11 @@
 //!
 //! # Why an in-crate harness
 //!
-//! [`Overlay`] is `pub(crate)` until ADR-0019 U4, so an integration test in
+//! [`Overlay`] is `pub(crate)` for now, so an integration test in
 //! `tests/` cannot name it. `tests/common::lay_out` is an integration-test module
 //! and is unreachable from `src/`. [`mount`] below is the trimmed equivalent: it
 //! keeps `lay_out`'s load-bearing ordering — **binding first, so the async driver
-//! is installed before the mount `build_scope`** (ADR-0018 U6) — and drops the
+//! is installed before the mount `build_scope`** — and drops the
 //! geometry helpers this unit does not need.
 
 use std::sync::Arc;
@@ -408,7 +408,7 @@ fn stale_overlay_handle_is_harmless() {
 /// the overlay's entry list untouched — Flutter's `if (!overlay.mounted) return;`
 /// (`overlay.dart:231-233`), which sits *before* `overlay._entries.remove(this)`.
 ///
-/// Found by ADR-0019 U4's parity re-check: FLUI mutated the list regardless.
+/// Found by a parity re-check against Flutter: FLUI mutated the list regardless.
 ///
 /// Red-check: delete the `if !shared.is_mounted() { return; }` guard in
 /// `OverlayEntry::remove`; the list drops to 0.
@@ -444,7 +444,7 @@ fn overlay_entry_remove_leaves_an_unmounted_overlays_list_alone() {
 /// `rearrange` reorders, and the keyed reconciler reuses each layer's element —
 /// so subtree state survives the move.
 ///
-/// **This is ADR-0019 §3.2's `UNVERIFIED` precondition for dropping Flutter's
+/// **This is the load-bearing precondition for dropping Flutter's
 /// `GlobalKey<_OverlayEntryWidgetState>`** (`overlay.dart:214`). If it fails, the
 /// `GlobalKey` must come back and the lock hazard must be resolved for real.
 ///
@@ -554,14 +554,14 @@ fn overlay_rearrange_inserts_unknown_entries() {
 }
 
 // ============================================================================
-// opaque / maintainState / skipCount  (ADR-0020 U5.3)
+// opaque / maintainState / skipCount
 // ============================================================================
 
 /// `overlay.dart:890-897`: the loop stops adding onstage children once an opaque
 /// entry is reached, and an entry below it without `maintainState` is not added
 /// at all — it never enters the view tree.
 ///
-/// Replaces ADR-0019 U1's `overlay_deferred_opaque_builds_every_entry`, which
+/// Replaces the earlier `overlay_deferred_opaque_builds_every_entry`, which
 /// pinned the not-yet-implemented behavior and is red by design now.
 #[test]
 fn overlay_opaque_top_entry_drops_lower_entries_entirely() {
@@ -602,7 +602,7 @@ fn overlay_maintain_state_keeps_covered_entry_built() {
     assert!(entry_a.is_mounted());
 }
 
-/// `opaque == false` is the default and skips nothing — the ADR-0019 U1
+/// `opaque == false` is the default and skips nothing — the original
 /// behavior, which must survive.
 #[test]
 fn overlay_non_opaque_top_entry_skips_nothing() {
@@ -701,8 +701,8 @@ fn overlay_setting_maintain_state_rebuilds_the_overlay() {
 }
 
 /// A `rearrange` that reorders entries under an opaque top must still preserve
-/// the surviving keyed entries' subtree state — ADR-0019 §3.2's contract, now
-/// with `skipCount` in play.
+/// the surviving keyed entries' subtree state — the same keyed-reorder contract
+/// verified above, now with `skipCount` in play.
 #[test]
 fn overlay_rearrange_with_opaque_preserves_surviving_entry_state() {
     let creations = Arc::new(AtomicUsize::new(0));
@@ -817,8 +817,8 @@ fn overlay_build_plan_matches_flutters_onstage_loop() {
 /// * inside an inner `Stack`, the `Positioned` is honoured;
 /// * as the entry's direct child, it is **not** — it sits at the origin.
 ///
-/// Red-check, as ADR-0021 §5 specifies it: *"remove the inner `Stack`; if it still
-/// passes, the theater is honouring `Positioned` and the ADR is wrong."* Dropping the
+/// Red-check: remove the inner `Stack`; if it still passes, the theater is
+/// honouring `Positioned` and this test's premise is wrong. Dropping the
 /// `Stack` from case 1 makes its assertion fail — which is the whole content of S8.
 ///
 /// Case 2 is the converse, and has no mutation short of giving `RenderTheater` the
@@ -884,7 +884,7 @@ fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
     assert_eq!(
         dropped,
         Point::ZERO,
-        "RenderTheater ignores positioned children (ADR-0020 U5.3), so a bare \
+        "RenderTheater ignores positioned children, so a bare \
          Positioned is silently dropped to the origin — this is why S8 requires \
          the inner Stack, and it is now a fact rather than a paper argument"
     );

@@ -11,11 +11,11 @@
 //! Three things arrive with this layer, and only these three are claimed:
 //!
 //! 1. **`maintainState`** (`routes.dart:1893`, written onto the scope entry at
-//!    `:2230`). Now real, because `Overlay` honours it (U5.3 Part A). A covered
+//!    `:2230`). Now real, because `Overlay` honours it. A covered
 //!    modal with `maintain_state == false` is *unmounted*; its subtree state is
 //!    destroyed and rebuilt fresh when it is uncovered.
 //! 2. **`offstage`** (`:1949-1962`). The page keeps its real geometry but is not
-//!    painted, hit-tested or announced — [`Offstage`] over the U5.0-fixed
+//!    painted, hit-tested or announced — [`Offstage`] over the fixed
 //!    `RenderOffstage`.
 //! 3. **`changedInternalState`** (`:2221-2231`), which rebuilds *this route's*
 //!    overlay entry and republishes `maintainState`. It does **not** rebuild the
@@ -29,7 +29,7 @@
 //! # One overlay entry, not two
 //!
 //! Flutter's `createOverlayEntries` returns `[_modalBarrier, _modalScope]`
-//! (`:2350-2356`). FLUI's navigator keys **one** entry per route (ADR-0019 U3,
+//! (`:2350-2356`). FLUI's navigator keys **one** entry per route (see
 //! `overlay_route.rs`), so this route builds a `Stack[barrier, page]` into a
 //! single entry instead. The three properties the overlay reads survive the merge:
 //!
@@ -62,11 +62,12 @@
 //! * **No `filter` / `BackdropFilter`, no `PopScope`, no `LocalHistoryRoute`, no
 //!   `_modalScopeCache`.**
 
-// `ModalRoute` is private; `PageRoute` / `PopupRoute` (U5.4) are its production
+// `ModalRoute` is private; `PageRoute` / `PopupRoute` are its production
 // consumers and do not surface every knob. `ModalHandle::set_offstage` in
-// particular has no public caller until `Hero` drives it (B1.4).
+// particular has no public caller until `Hero` drives it.
 
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -101,11 +102,11 @@ use crate::{
 
 /// `_defaultTransitionsBuilder` (`pages.dart:68-75`): a jump cut.
 pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
-    Arc::new(|_ctx, _animation, _secondary, child| child)
+    Rc::new(|_ctx, _animation, _secondary, child| child)
 }
 
 /// The mutable half a `ModalRoute` shares with its content builder and its
-/// binding. The builder is an `Arc<dyn Fn>` installed in the overlay entry and
+/// binding. The builder is an `Rc<dyn Fn>` installed in the overlay entry and
 /// outlives every borrow of the route, so nothing it reads can live on `self`.
 struct ModalInner {
     /// `ModalRoute.offstage` (`routes.dart:1949`).
@@ -245,9 +246,10 @@ impl ModalInner {
     /// scope, so traversal stays within the route (ADR-0022).
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
-            Some(_transition) => ModalScope {
-                page: Arc::clone(&self.page),
-                transitions: Arc::clone(&self.transitions.lock()),
+            Some(transition) => ModalScope {
+                page: Rc::clone(&self.page),
+                transitions: Rc::clone(&self.transitions.lock()),
+                transition: transition.clone(),
                 primary: Arc::clone(&self.primary),
                 secondary: Arc::clone(&self.secondary),
                 relay: Arc::clone(&self.relay),
@@ -313,7 +315,7 @@ impl ModalInner {
         let inner = Arc::clone(self);
         LocalHistoryHandle::new(
             self.local_history.clone(),
-            Arc::new(move || changed_internal_state(&inner)),
+            Rc::new(move || changed_internal_state(&inner)),
         )
     }
 
@@ -393,6 +395,7 @@ impl ModalInner {
 struct ModalScope {
     page: RoutePageBuilder,
     transitions: RouteTransitionsBuilder,
+    transition: TransitionHandle,
     /// `widget.route.animation` (`routes.dart:1234`) — the **proxy**, so an offstage
     /// route's builders see `kAlwaysCompleteAnimation`.
     primary: Arc<ProxyAnimation<f32>>,
@@ -437,6 +440,8 @@ impl ViewState<ModalScope> for ModalScopeState {
     /// the transitions would give `HeroController` the transition's coordinate
     /// space (mid-slide, mid-scale) instead of the page's.
     fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
+        view.transition.drain_pending_statuses();
+
         let primary: RouteAnimation = Arc::clone(&view.primary) as RouteAnimation;
         let secondary: RouteAnimation = Arc::clone(&view.secondary) as RouteAnimation;
         let page = (view.page)(ctx, &primary, &secondary);
@@ -460,14 +465,14 @@ impl ViewState<ModalScope> for ModalScopeState {
 
 /// A route that covers the routes below it with a barrier and a page.
 ///
-/// Private: `modal_route_is_not_exported` keeps it that way until U5.4's parity +
+/// Private: `modal_route_is_not_exported` keeps it that way until its parity +
 /// sign-off gate.
 pub(crate) struct ModalRoute<T> {
     transition: TransitionRoute<T>,
     inner: Arc<ModalInner>,
 }
 
-impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
+impl<T: Send + Clone + 'static> ModalRoute<T> {
     /// A modal showing `page`, entering and leaving over `duration`, with a
     /// jump-cut transition.
     ///
@@ -507,6 +512,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
         };
 
         let transition = TransitionRoute::new(duration, content);
+        transition.set_status_wake(Arc::clone(&inner.relay));
         // The content closure captured `inner` before the route existed, so the
         // handle can only be wired in afterwards. `OnceLock` makes that a fact of
         // the type rather than a comment.
@@ -611,8 +617,9 @@ impl<T> fmt::Debug for ModalRoute<T> {
 }
 
 /// An owned, `'static` capability to drive a pushed [`ModalRoute`]'s internal
-/// state — the ADR-0019 §3.2 pattern, again: the route itself lives behind
-/// `Box<dyn ErasedRoute>` inside the history's mutex and cannot be reached.
+/// state — the same pattern used elsewhere in the navigator: the route itself
+/// lives behind `Box<dyn ErasedRoute>` inside the history's mutex and cannot
+/// be reached directly.
 ///
 /// This is FLUI's `route.offstage = …` (`routes.dart:1951`). `HeroController` holds
 /// one per route, looked up by [`RouteId`] through the navigator's registry.
@@ -622,7 +629,7 @@ pub(crate) struct ModalHandle {
 }
 
 /// `dead_code` in the lib target: `HeroController` is this handle's only production
-/// caller, and it is itself dead until U4's `Hero` widget. See `hero_controller.rs`.
+/// caller, and it is itself dead until the `Hero` widget uses it. See `hero_controller.rs`.
 #[allow(dead_code)]
 impl ModalHandle {
     /// Deliver `onPopInvokedWithResult(did_pop, …)` to every `PopScope`
@@ -737,7 +744,7 @@ fn changed_internal_state(inner: &ModalInner) {
 // Route delegation
 // ============================================================================
 
-impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
+impl<T: Send + Clone + 'static> ModalRoute<T> {
     /// This route's navigator capability, or `None` before it is pushed.
     fn binding(&self) -> Option<super::binding::RouteBinding> {
         self.inner
@@ -747,7 +754,7 @@ impl<T: Send + Sync + Clone + 'static> ModalRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
+impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
     type Output = T;
 
     fn settings(&self) -> &RouteSettings {
@@ -883,7 +890,7 @@ impl<T: Send + Sync + Clone + 'static> Route for ModalRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> NavigatorRoute for ModalRoute<T> {
+impl<T: Send + Clone + 'static> NavigatorRoute for ModalRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
         self.transition.content_builder()
     }

@@ -1,4 +1,4 @@
-//! Public-API tests for `Navigator` (ADR-0019 U4).
+//! Public-API tests for `Navigator`.
 //!
 //! Driven through the real `flui_widgets::prelude` surface and a real
 //! `HeadlessBinding` frame — the path `AppBinding::draw_frame` takes. If a name
@@ -13,8 +13,14 @@
 //! `'Can push, pop, and replace in sequence'`, `'removeRoute'`,
 //! `'remove a route whose value is awaited'`.
 
+// ADR-0027: these public API tests capture owner-local `NavigatorHandle`s in
+// test cells. The production crate has the same lint allowance; integration
+// tests are separate crates, so repeat it here.
+#![allow(clippy::arc_with_non_send_sync)]
+
 mod common;
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -67,7 +73,7 @@ impl RefusingRoute {
     fn new(pops_attempted: &Arc<AtomicUsize>) -> Self {
         Self {
             settings: RouteSettings::named("refusing"),
-            builder: Arc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+            builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
             pops_attempted: Arc::clone(pops_attempted),
         }
     }
@@ -88,7 +94,7 @@ impl Route for RefusingRoute {
 
 impl NavigatorRoute for RefusingRoute {
     fn content_builder(&self) -> RouteContentBuilder {
-        Arc::clone(&self.builder)
+        Rc::clone(&self.builder)
     }
 }
 
@@ -102,7 +108,7 @@ impl StringRoute {
     fn new() -> Self {
         Self {
             settings: RouteSettings::named("string"),
-            builder: Arc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+            builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
         }
     }
 }
@@ -117,7 +123,7 @@ impl Route for StringRoute {
 
 impl NavigatorRoute for StringRoute {
     fn content_builder(&self) -> RouteContentBuilder {
-        Arc::clone(&self.builder)
+        Rc::clone(&self.builder)
     }
 }
 
@@ -287,8 +293,8 @@ fn public_remove_route_completes_result() {
     assert_eq!(handle.route_ids().len(), 1);
 }
 
-/// The ADR-0019 §4 divergence, through the public API: a wrong result type logs
-/// and completes with `None`, where Flutter throws a cast error.
+/// The Rust-forced divergence in the pop-result type, through the public API: a
+/// wrong result type logs and completes with `None`, where Flutter throws a cast error.
 ///
 /// Red-check: `unwrap()` the downcast in `RouteRecord::did_complete`; the test
 /// panics instead of resolving.
@@ -405,7 +411,7 @@ fn public_maybe_of_returns_none_when_absent() {
 /// *two or more* observations of the same kind, or one of each. The signed-off
 /// public surface has no such operation — `pushReplacement` and
 /// `pushAndRemoveUntil` are ported but **not exported** — so swapping the two
-/// drain loops leaves this test green. That asymmetry is pinned by U2's pure-data
+/// drain loops leaves this test green. That asymmetry is pinned by the pure-data
 /// suite (`push_adds_route_and_notifies_observer_lifo`,
 /// `delete_notifications_are_fifo`, `additions_precede_deletions_within_one_flush`),
 /// which drives the batching APIs directly. Stated rather than implied.
@@ -467,7 +473,7 @@ fn public_remove_route_is_observed_as_remove_not_pop() {
     );
 }
 
-/// No `GlobalKey` anywhere on the public `Navigator` path (ADR-0019 §3.2).
+/// No `GlobalKey` anywhere on the public `Navigator` path.
 ///
 /// Red-check: add `use flui_view::GlobalKey;` to `src/navigator/navigator.rs`.
 #[test]
@@ -518,7 +524,7 @@ fn public_prelude_exports_exact_approved_surface() {
         "FlushOutcome",
         "ObservationQueues",
         "RoutePopDisposition",
-        // ADR-0020 U5.1 seam + U5.2's route classes: all private.
+        // The transition/modal route seam and its route classes: all private.
         "RouteBinding",
         "RouteCommand",
         "BoundRoute",

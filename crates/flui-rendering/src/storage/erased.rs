@@ -1,15 +1,15 @@
 //! Protocol-erased constraint / geometry enums for the pipeline → entry
 //! dispatch seam.
 //!
-//! **D-block PR-A1b U18 (companion memo D4):** the pipeline operates on
-//! `&mut RenderNode` (a protocol-erased enum over `RenderEntry<BoxProtocol>`
-//! and `RenderEntry<SliverProtocol>`). `RenderEntry::layout` is generic
-//! over `P: Protocol` and takes protocol-typed `ProtocolConstraints<P>` /
-//! returns `ProtocolGeometry<P>`. Bridging the two ends requires an erased
-//! enum + per-variant dispatch through `RenderNode::layout_erased`.
+//! The pipeline operates on `&mut RenderNode` (a protocol-erased enum over
+//! `RenderEntry<BoxProtocol>` and `RenderEntry<SliverProtocol>`).
+//! `RenderEntry::layout` is generic over `P: Protocol` and takes
+//! protocol-typed `ProtocolConstraints<P>` / returns `ProtocolGeometry<P>`.
+//! Bridging the two ends requires an erased enum + per-variant dispatch
+//! through `RenderNode::layout_erased`.
 //!
 //! `ErasedConstraints` and `ErasedGeometry` carry the protocol-typed value
-//! inside an enum tag; `RenderNode::layout_erased` (added in U18 to
+//! inside an enum tag; `RenderNode::layout_erased` (in
 //! `crates/flui-rendering/src/storage/node.rs`) pattern-matches and forwards
 //! to the appropriate `RenderEntry<P>::layout` call, returning
 //! `Err(RenderError::ProtocolMismatch)` if the constraint variant does not

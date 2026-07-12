@@ -1,4 +1,4 @@
-//! ADR-0020 U5.4: `PageRoute` and `PopupRoute` through the **public** surface.
+//! `PageRoute` and `PopupRoute` through the **public** surface.
 //!
 //! Everything here imports from `flui_widgets::prelude` or the crate root — a
 //! missing `pub use` fails to compile rather than fails an assertion. And unlike
@@ -325,7 +325,7 @@ fn a_popup_route_leaves_the_page_below_built() {
 // the public surface itself
 // ============================================================================
 
-/// The names ADR-0020 §7e signed off are reachable from the prelude and the crate
+/// The signed-off names are reachable from the prelude and the crate
 /// root, with the shapes the docs promise. A missing export breaks the build.
 #[test]
 fn the_signed_off_route_surface_is_usable_from_the_prelude() {

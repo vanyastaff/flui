@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(k1, k2, "key stable across calls");
     }
 
-    /// Covers AE2 (R6): the audit Step 5 item 14 stress test.
+    /// Stress test for the cache's `max_entries` cap under heavy insertion churn.
     ///
     /// Insert 10 000 unique superellipse keys into a cache with the
     /// production-default `max_entries = 256` and verify the cache

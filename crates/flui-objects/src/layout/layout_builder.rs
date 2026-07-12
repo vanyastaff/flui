@@ -1,5 +1,4 @@
-//! [`RenderLayoutBuilder`] — the render half of the build-during-layout seam
-//! (ADR-0017, unit U2).
+//! [`RenderLayoutBuilder`] — the render half of the build-during-layout seam.
 //!
 //! # What it does
 //!
@@ -15,17 +14,18 @@
 //! It performs **no build**. Publishing is the whole point: the cell's
 //! edge-triggered `needs_build` flag is read *between* layout passes by
 //! `BuildOwner::service_layout_builders`, which rebuilds the element and
-//! re-dirties this node. See ADR-0017 for why FLUI cannot build mid-walk the way
-//! Flutter's `invokeLayoutCallback` does.
+//! re-dirties this node. FLUI cannot build mid-walk the way
+//! Flutter's `invokeLayoutCallback` does — the constraints must be published
+//! first, then the element rebuilt before this node's layout completes.
 //!
 //! # Not the public widget
 //!
 //! This is the render half. The public widget lives in `flui-view` and is
-//! re-exported by `flui-widgets` after ADR-0017 U4; it registers its element
+//! re-exported by `flui-widgets`; it registers its element
 //! against this object's cell. App code should construct `LayoutBuilder`, not
 //! this render object directly.
 //!
-//! # Verified against the reference (ADR-0017 U4)
+//! # Verified against the reference
 //!
 //! Cross-checked against `.flutter/packages/flutter/lib/src/widgets/layout_builder.dart`
 //! (`_RenderLayoutBuilder`) and `.flutter/packages/flutter/lib/src/rendering/box.dart`
@@ -84,7 +84,7 @@ pub struct RenderLayoutBuilder {
 impl RenderLayoutBuilder {
     /// Creates a render object publishing into `cell`.
     ///
-    /// The caller (ADR-0017 U3's element) must hold the same `Arc` and register
+    /// The caller (the element owning this render object) must hold the same `Arc` and register
     /// it against this node's `RenderId`, or nothing will ever read what this
     /// object publishes.
     #[must_use]
@@ -97,7 +97,7 @@ impl RenderLayoutBuilder {
 
     /// The cell this object publishes into.
     ///
-    /// Exposed so U3's element can assert it registered the same `Arc`, and so
+    /// Exposed so the element can assert it registered the same `Arc`, and so
     /// harness tests can observe what a layout pass published.
     #[must_use]
     pub fn cell(&self) -> &Arc<LayoutConstraintsCell> {

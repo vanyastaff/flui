@@ -147,11 +147,11 @@ pub enum RenderError {
     #[error("semantics system not enabled")]
     SemanticsNotEnabled,
 
-    // ChildHandleError variant removed in Mythos Step 5b along with the
+    // ChildHandleError variant removed along with the
     // child_handle.rs / children_access.rs modules it served.
 
     // ========================================================================
-    // Mythos Step 12 -- structured terminal failures
+    // Structured terminal failures
     // ========================================================================
     /// Geometry returned from a render object's `perform_layout` is
     /// structurally invalid (NaN, negative dimensions, larger than
@@ -187,7 +187,7 @@ pub enum RenderError {
     /// in-flight frame, and surfaces this variant so the caller can
     /// decide (drop the node, retry next frame, abort).
     ///
-    /// Mythos Step 12 (2026-05-20): the catch_unwind plumbing is live.
+    /// The `std::panic::catch_unwind` plumbing is live as of 2026-05-20.
     /// See [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
     /// for the layout wrapper and `PipelineOwner::<PaintPhase>` for the
     /// paint wrapper. The `Mapping decisions` section of
@@ -201,7 +201,7 @@ pub enum RenderError {
     },
 
     // ========================================================================
-    // D-block PR-A1b — protocol-erased dispatch
+    // Protocol-erased dispatch
     // ========================================================================
     /// A pipeline walk reached a node whose protocol does not match the
     /// protocol the walk expects. Returned by the layout walk (a `Box(_)`
@@ -222,8 +222,7 @@ pub enum RenderError {
     /// (via `LayoutContext::layout_child`) back into a node whose layout
     /// was still in flight on the same frame.
     ///
-    /// **Variant pre-added in D-block PR-A1b U18; cycle-detection wiring
-    /// landed in U21** (companion memo D6). The guard is a per-slot
+    /// The cycle-detection guard is a per-slot
     /// `AtomicBool` in-flight flag in the `SubtreeArena` `by_id` index,
     /// set/cleared by a RAII `LayoutCycleGuard` (unwind-safe via `Drop`);
     /// re-entry into an in-flight slot returns this variant.
@@ -233,7 +232,7 @@ pub enum RenderError {
     /// A pipeline-side disjoint-borrow walk requested a child slot
     /// outside the parent's child-id range.
     ///
-    /// **D-block PR-A1b3 U20 (companion memo D1):** reserved variant
+    /// Reserved variant
     /// for future defensive bounds checks at the pipeline-side
     /// disjoint-borrow seam (e.g., when an off-by-one or stale-id
     /// condition would make a `child_ids[index]` access panic).
@@ -278,7 +277,7 @@ pub enum RenderError {
     ///
     /// # History
     ///
-    /// **D-block PR-A1b U19 review fix #5 (Option B, PR #141):**
+    /// **Original landing (Option B, PR #141):**
     /// introduced so the `RenderObject<BoxProtocol>` blanket impl on
     /// [`crate::traits::RenderBox`] can signal that a render object
     /// violated its layout contract as a typed error rather than an
@@ -382,7 +381,7 @@ impl RenderError {
 
     /// Creates a ContractViolation error.
     ///
-    /// **D-block PR-A1b U19 review fix #5 (Option A follow-up):**
+    /// **Option A follow-up:**
     /// returned as `Err(...)` by the
     /// [`RenderObject<BoxProtocol>`](crate::traits::RenderObject)
     /// blanket impl when a render object violates its layout contract.
@@ -405,7 +404,7 @@ impl RenderError {
 
     /// Creates a [`ChildIndexOutOfBounds`](Self::ChildIndexOutOfBounds) error.
     ///
-    /// **D-block PR-A1b3 U20 (companion memo D1):** used by the
+    /// Used by the
     /// pipeline-side disjoint-borrow walk to surface stale-id /
     /// off-by-one conditions on the child-id slice as a typed error
     /// instead of a panic or silent `Size::ZERO`.
@@ -419,7 +418,7 @@ impl RenderError {
 
     /// Creates a [`LayoutCycle`](Self::LayoutCycle) error.
     ///
-    /// **D-block PR-A1 U21 (companion memo D6):** returned by
+    /// Returned by
     /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
     /// when a render object's `perform_layout` re-enters an ancestor's
     /// layout via `ctx.layout_child` — the `SubtreeArena` per-slot
@@ -456,7 +455,7 @@ mod tests {
         assert!(matches!(err, RenderError::CompositingError { .. }));
     }
 
-    /// PR-A1b3 U20: `ChildIndexOutOfBounds` round-trips its parent / index
+    /// `ChildIndexOutOfBounds` round-trips its parent / index
     /// / child_count fields and renders the expected display string.
     #[test]
     fn test_child_index_out_of_bounds() {

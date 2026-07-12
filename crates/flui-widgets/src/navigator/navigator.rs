@@ -1,8 +1,8 @@
 //! [`Navigator`], [`NavigatorState`] and [`NavigatorHandle`].
 //!
-//! ADR-0019 U3 introduced the private widget. ADR-0019 U4 exported the signed-off
-//! `Navigator` baseline; ADR-0020 U5.4 added public page/popup routes; ADR-0021 U6
-//! added the public Hero baseline that rides on this navigator.
+//! The private widget came first, then the signed-off
+//! `Navigator` baseline was exported; public page/popup routes were added, then
+//! the public Hero baseline that rides on this navigator.
 //!
 //! # Flutter parity
 //!
@@ -14,7 +14,7 @@
 //!
 //! # How this avoids Flutter's two `GlobalKey`s, and the lock hazard behind them
 //!
-//! ADR-0019 §3.2. `BuildContext::find_ancestor_state` yields `&dyn Any` —
+//! `BuildContext::find_ancestor_state` yields `&dyn Any` —
 //! *immutable* — while the element tree is borrowed. So `Navigator::of` can never
 //! return `&mut NavigatorState`, and it must not perform a second lookup inside
 //! that callback: Flutter's `_overlayKey.currentState` would take the GlobalKey
@@ -62,7 +62,7 @@ use crate::overlay::{Overlay, OverlayEntry, OverlayHandle};
 /// Everything a [`NavigatorHandle`] and the mounted [`NavigatorState`] share.
 ///
 /// The route stack lives behind a private `Mutex` because `ViewState::build` takes
-/// `&self` and nothing can obtain `&mut NavigatorState` — ADR-0019 §3.2. That is
+/// `&self` and nothing can obtain `&mut NavigatorState`. That is
 /// not a workaround: Flutter's `NavigatorState` mutates `_history` from `this` too.
 struct NavigatorShared {
     history: Mutex<RouteHistory>,
@@ -79,7 +79,7 @@ struct NavigatorShared {
     /// instead (ADR-0019).
     registries: RouteRegistries,
 
-    /// The clock this navigator's route transitions register with (ADR-0020 U5.2).
+    /// The clock this navigator's route transitions register with.
     /// Resolved from an ambient `VsyncScope` in `init_state`; `None` when there is
     /// none, in which case each controller falls back to its own wall-clock ticker.
     vsync: RouteVsync,
@@ -107,11 +107,11 @@ struct NavigatorShared {
     ///
     /// **Not on `RouteHistory`.** An observer holds a [`NavigatorHandle`], so
     /// notifying one is re-entrant by construction; the route stack must therefore
-    /// neither own observers nor call them (ADR-0021 §7f).
+    /// neither own observers nor call them.
     observers: Mutex<Vec<Arc<dyn NavigatorObserver>>>,
     /// The controller the navigator auto-created when no `HeroControllerScope` was
     /// present. Kept separate so a later hand-attached `HeroController` can replace
-    /// it instead of doubling the flight observer count (ADR-0021 §7m, D-U6.4).
+    /// it instead of doubling the flight observer count.
     auto_hero_observer: Mutex<Option<Arc<dyn NavigatorObserver>>>,
 }
 
@@ -207,13 +207,13 @@ impl NavigatorShared {
     }
 
     /// Apply any [`RouteCommand`](super::binding::RouteCommand)s a route raised,
-    /// and settle the history — the `wake` half of the ADR-0020 U5.1 seam.
+    /// and settle the history — the `wake` half of the route-binding seam.
     ///
     /// **`try_lock`, deliberately.** If the history mutex is held we are inside a
     /// flush on this thread (`mutate` holds it for the whole walk), and that flush
     /// drains the queue itself before returning — so there is nothing to do, and
     /// `lock()` here would deadlock rather than panic. If it is free we are
-    /// between frames (an animation status listener, U5.2), and the commands take
+    /// between frames (an animation status listener), and the commands take
     /// effect now. See `binding.rs`, *Correction 1*.
     ///
     fn pump_route_commands(&self) {
@@ -245,7 +245,7 @@ impl NavigatorShared {
     ///
     /// Returns the removed observer so the caller can run `did_detach` with no
     /// `observers` lock held. Flutter's observer callbacks are user code; holding the
-    /// lock would reintroduce the deadlock class ADR-0021 §7f removed.
+    /// lock would reintroduce a deadlock class this design removed.
     fn take_auto_hero_observer(&self) -> Option<Arc<dyn NavigatorObserver>> {
         let mut auto = self.auto_hero_observer.lock();
         let removed = auto.take()?;
@@ -332,7 +332,7 @@ impl NavigatorHandle {
 
     /// How many attached observers drive hero flights — the auto-default plus any
     /// hand-attached `HeroController`s. Test-facing: pins that automatic attach adds
-    /// exactly one, and that a manual controller suppresses it (ADR-0021 §7m).
+    /// exactly one, and that a manual controller suppresses it.
     #[cfg(test)]
     pub(crate) fn hero_observer_count(&self) -> usize {
         self.shared
@@ -378,7 +378,7 @@ impl NavigatorHandle {
     }
 
     /// Whether both handles name the same navigator — an `Arc` identity check, for the
-    /// shared-`HeroController` guard (ADR-0021 §7m, D-U6.5).
+    /// shared-`HeroController` guard.
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
@@ -552,7 +552,7 @@ impl NavigatorHandle {
     /// `T` is checked at **delivery**, not at the call site: the navigator holds a
     /// heterogeneous stack and cannot know the top route's `Output`. Passing the
     /// wrong type logs an error and completes the future with `None` rather than
-    /// panicking. ADR-0019 §4; Flutter throws a cast error here.
+    /// panicking; Flutter throws a cast error here.
     pub fn pop_with<T: Send + 'static>(&self, result: T) -> bool {
         self.pop_erased(Some(Box::new(result)))
     }
@@ -715,12 +715,12 @@ impl NavigatorHandle {
     }
 }
 
-/// The ADR-0021 U2 introspection seams: everything `HeroController` reads that is
+/// The introspection seams: everything `HeroController` reads that is
 /// not already on the public surface.
 ///
 /// Each method is one thing Flutter reads straight off a `Route` object or off
 /// `NavigatorState` — neither of which FLUI can reach, because routes live behind
-/// `Box<dyn ErasedRoute>` inside the history's mutex (ADR-0019). Nothing here
+/// `Box<dyn ErasedRoute>` inside the history's mutex. Nothing here
 /// hands out a borrow into the trees, and nothing takes a second lock under a
 /// first.
 ///
@@ -735,8 +735,8 @@ impl NavigatorHandle {
     /// `HeroController._startHeroTransition` (`heroes.dart:990`) to insert the
     /// flight's `OverlayEntry`.
     ///
-    /// ADR-0021 U2, seam 5. `pub(crate)`: `Overlay` and `OverlayEntry` stay
-    /// unexported (ADR-0020 §7e), so this widens no public surface.
+    /// `pub(crate)`: `Overlay` and `OverlayEntry` stay
+    /// unexported, so this widens no public surface.
     pub(crate) fn overlay(&self) -> &OverlayHandle {
         &self.shared.overlay
     }
@@ -768,8 +768,9 @@ impl NavigatorHandle {
     /// Flutter's `Route.isCurrent` (`routes.dart:196-201`), read by
     /// `Hero._allHeroesFor`'s route guard (`heroes.dart:331`).
     ///
-    /// Test-facing: `did_change_top` no longer asserts on it (ADR-0021 §7m removed the
-    /// over-strict `is_current` check that FLUI's re-entrant notification model breaks).
+    /// Test-facing: `did_change_top` no longer asserts on it (the over-strict
+    /// `is_current` check was removed because FLUI's re-entrant notification model
+    /// breaks it).
     #[cfg(test)]
     pub(crate) fn is_current(&self, id: RouteId) -> bool {
         self.current() == Some(id)
@@ -896,29 +897,29 @@ impl ViewState<Navigator> for NavigatorState {
     ///
     /// The overlay is not mounted yet (it is this view's child, built next), so
     /// the rearrange only fills the overlay's entry list; its first `build` reads
-    /// it. Mutating an unmounted `OverlayHandle` is defined behavior (U1).
+    /// it. Mutating an unmounted `OverlayHandle` is defined behavior.
     ///
     /// No `rebuild_handle()` is acquired here or anywhere in this file: the
     /// overlay owns its own rebuild, so trigger #22 has nothing to guard.
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        // ADR-0020 U5.2: the navigator owns the clock its route transitions
+        // The navigator owns the clock its route transitions
         // register with — the FLUI shape of Flutter's `vsync: navigator!`. Read
         // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.
         *self.shared.vsync.lock() = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
 
-        // ADR-0021 U3. Both are *lifecycle-only* acquisitions: a `HeroController`
+        // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
         *self.shared.post_frame.lock() = ctx.post_frame_handle();
         *self.shared.render_tree.lock() = ctx.pipeline_owner();
 
-        // ADR-0021 §7m: resolve the ambient `HeroControllerScope` and settle which
+        // Resolve the ambient `HeroControllerScope` and settle which
         // controller (if any) observes this navigator — before `attach_observers`, so
         // it is attached with the rest.
         //
         // * a scope with a controller → that controller;
         // * `HeroControllerScope::none` → nothing (flights disabled);
-        // * no scope at all → a fresh default, unless one was attached by hand
-        //   (D-U6.4). This is the auto-default that removes the `add_observer`
+        // * no scope at all → a fresh default, unless one was attached by hand.
+        //   This is the auto-default that removes the `add_observer`
         //   boilerplate; `Navigator::build` re-wraps its subtree in `.none`, so a
         //   nested navigator sees a scope and never auto-defaults.
         match ctx.get::<HeroControllerScope, _>(HeroControllerScope::controller) {
@@ -954,11 +955,11 @@ impl ViewState<Navigator> for NavigatorState {
     /// Flutter's `NavigatorState.build` returns an `Overlay` and nothing else that
     /// matters here (`navigator.dart:5984-5990`); its `HeroControllerScope`,
     /// `NavigationNotification` listener, pointer-cancelling `Listener` and
-    /// `FocusTraversalGroup` all belong to features deferred by ADR-0019 §6.
+    /// `FocusTraversalGroup` all belong to features deferred for now.
     fn build(&self, _view: &Navigator, _ctx: &dyn BuildContext) -> impl IntoView {
         // `HeroControllerScope.none` (`navigator.dart:5955`): a nested navigator under
         // this one must not pick up this navigator's controller. It resolves the
-        // `.none` in its own `init_state` and attaches nothing (ADR-0021 §7m D-U6.3).
+        // `.none` in its own `init_state` and attaches nothing.
         HeroControllerScope::none(Overlay::new(self.shared.overlay.clone()))
     }
 

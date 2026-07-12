@@ -11,6 +11,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html>
 
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -27,7 +29,7 @@ use crate::{
 };
 
 /// Callback for double tap events
-pub type DoubleTapCallback = Arc<dyn Fn(DoubleTapDetails) + Send + Sync>;
+pub type DoubleTapCallback = Arc<dyn Fn(DoubleTapDetails)>;
 
 /// Details about a double tap gesture
 #[derive(Debug, Clone, PartialEq)]
@@ -65,7 +67,7 @@ pub struct DoubleTapGestureRecognizer {
     state: RecognizerBase,
 
     /// Callbacks
-    callbacks: Arc<Mutex<DoubleTapCallbacks>>,
+    callbacks: Rc<RefCell<DoubleTapCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<DoubleTapState>>,
@@ -138,7 +140,7 @@ impl DoubleTapGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
             first_pointer: Arc::new(Mutex::new(None)),
@@ -153,7 +155,7 @@ impl DoubleTapGestureRecognizer {
     ) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
             settings: Arc::new(Mutex::new(settings)),
             first_pointer: Arc::new(Mutex::new(None)),
@@ -179,18 +181,18 @@ impl DoubleTapGestureRecognizer {
     /// Set the double tap callback
     pub fn with_on_double_tap(
         self: Arc<Self>,
-        callback: impl Fn(DoubleTapDetails) + Send + Sync + 'static,
+        callback: impl Fn(DoubleTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_double_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_double_tap = Some(Arc::new(callback));
         self
     }
 
     /// Set the double tap cancel callback
     pub fn with_on_double_tap_cancel(
         self: Arc<Self>,
-        callback: impl Fn(DoubleTapDetails) + Send + Sync + 'static,
+        callback: impl Fn(DoubleTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_double_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_double_tap_cancel = Some(Arc::new(callback));
         self
     }
 
@@ -316,7 +318,7 @@ impl DoubleTapGestureRecognizer {
                 self.state.accept_tracked();
 
                 // Fire the double-tap callback once.
-                if let Some(callback) = self.callbacks.lock().on_double_tap.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_double_tap.clone() {
                     callback(DoubleTapDetails {
                         global_position: position,
                         local_position: position,
@@ -351,7 +353,7 @@ impl DoubleTapGestureRecognizer {
             drop(state);
 
             // Call cancel callback
-            if let Some(callback) = self.callbacks.lock().on_double_tap_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_double_tap_cancel.clone() {
                 let details = DoubleTapDetails {
                     global_position: position,
                     local_position: position,
@@ -397,7 +399,7 @@ impl DoubleTapGestureRecognizer {
                 state.first_tap_time = None;
                 drop(state); // Release lock before callback + arena release
 
-                if let Some(callback) = self.callbacks.lock().on_double_tap_cancel.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_double_tap_cancel.clone() {
                     callback(DoubleTapDetails {
                         global_position: position,
                         local_position: position,
@@ -534,8 +536,8 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         if let Some(ptr) = first_ptr {
             self.state.arena().release(ptr);
         }
-        self.callbacks.lock().on_double_tap = None;
-        self.callbacks.lock().on_double_tap_cancel = None;
+        self.callbacks.borrow_mut().on_double_tap = None;
+        self.callbacks.borrow_mut().on_double_tap_cancel = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

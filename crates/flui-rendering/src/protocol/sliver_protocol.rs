@@ -104,7 +104,7 @@ impl Protocol for SliverProtocol {
     type HitTest = SliverHitTest;
     type DefaultParentData = SliverParentData;
 
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
     type LayoutCtxErased<'ctx> = dyn SliverLayoutCtxErased + 'ctx;
 
     // No sliver layout cache yet: no sliver object exposes intrinsic
@@ -135,7 +135,7 @@ impl Protocol for SliverProtocol {
         Ok(())
     }
 
-    /// D-block PR-A1b U19 — Sliver counterpart to
+    /// Sliver counterpart to
     /// [`BoxProtocol::with_leaf_erased_ctx`](super::BoxProtocol::with_leaf_erased_ctx).
     /// Wraps the given `SliverConstraints` in a typed
     /// `SliverLayoutCtx::<Leaf, SliverParentData>::new(constraints)` and
@@ -145,7 +145,7 @@ impl Protocol for SliverProtocol {
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = SliverLayoutCtx::<flui_tree::Leaf, SliverParentData>::new(constraints);
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
         f(erased)
     }
@@ -654,7 +654,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 }
 
 // ============================================================================
-// SLIVER LAYOUT CTX ERASED (D-block PR-A1b U19 / memo D5 — Sliver counterpart)
+// SLIVER LAYOUT CTX ERASED (Sliver counterpart)
 // ============================================================================
 
 /// Sliver counterpart to
@@ -760,11 +760,12 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     }
 
     /// Records a child-build request for `logical_index` under this sliver
-    /// (U4.2 request-strategy seam).
+    /// — the producer half of the request-strategy seam.
     ///
     /// Unlike [`Self::build_and_layout_box_child`], the caller does **not**
-    /// supply a pre-built render object — the element tree (U4.3) decides
-    /// what to build and at which dense slot to insert it.  The request is
+    /// supply a pre-built render object — the element tree decides
+    /// what to build and at which dense slot to insert it, once the
+    /// consumer half (child-manager wiring) lands.  The request is
     /// parked in the arena's `pending_child_requests` sink; after the walk
     /// releases its borrows the pipeline moves it into
     /// `PipelineOwner::pending_child_requests` for the binding layer.
@@ -794,7 +795,8 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     }
 
     /// Emit the element-owned retain band `[first, last)` for this sliver
-    /// (U4.3 removal half).
+    /// — the removal half of the consumer side, still awaiting its
+    /// child-manager wiring.
     ///
     /// Only `ErasedSliverLayoutCtx` (the pipeline-wired context) records the
     /// band; `Direct` / test / leaf contexts are honestly inert — they carry
@@ -835,14 +837,16 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     ) -> ChildLayout<BoxChildRef> {
         match &mut self.storage {
             // Direct storage carries no build backend yet — the production
-            // next-frame scheduler lands with its consumer (the lazy
-            // `SliverList`, U3), at which point a build callback joins the other
-            // Direct-storage layout callbacks. Until then there is nothing to
-            // materialize: honestly `Unwired` (a bug if a production consumer
-            // ever sees it) rather than a silent no-op masquerading as end-of-data.
+            // next-frame scheduler lands together with its consumer (the lazy
+            // `SliverList` widget), at which point a build callback joins the
+            // other Direct-storage layout callbacks. Until then there is
+            // nothing to materialize: honestly `Unwired` (a bug if a
+            // production consumer ever sees it) rather than a silent no-op
+            // masquerading as end-of-data.
             SliverLayoutCtxStorage::Direct { .. } => ChildLayout::Unwired,
             // Proxy forwards to the pipeline-built context underneath, so a
-            // backend wired there (U3) is reached through this wrapper unchanged.
+            // backend wired there once the lazy `SliverList` consumer lands
+            // is reached through this wrapper unchanged.
             SliverLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.build_and_layout_box_child(index, logical_index, constraints, build)
             }
@@ -991,15 +995,18 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// pending_builds are applied (Remove → Insert ordering, D3). Same
     /// `Mutex`-for-Send discipline as `pending_builds`.
     pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
-    /// Sink for child-build requests from request-strategy slivers (U4.2):
-    /// `(sliver_id, logical_index)` pairs recorded when an absent in-band
-    /// child is encountered.  Unlike `pending_builds`, no render object is
-    /// pre-built here — the element tree (U4.3) decides what to build.
-    /// Drained after `pending_builds` and exposed via
-    /// `PipelineOwner::take_pending_child_requests` for the binding layer.
+    /// Sink for child-build requests from request-strategy slivers — the
+    /// producer half of the request-strategy seam: `(sliver_id,
+    /// logical_index)` pairs recorded when an absent in-band child is
+    /// encountered.  Unlike `pending_builds`, no render object is pre-built
+    /// here — the element tree decides what to build once its consumer half
+    /// (child-manager wiring) lands.  Drained after `pending_builds` and
+    /// exposed via `PipelineOwner::take_pending_child_requests` for the
+    /// binding layer.
     pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
-    /// Sink for retain-band signals from element-owned slivers (U4.3 removal
-    /// half).  `RenderSliverList::perform_layout` emits `(sliver_id, first,
+    /// Sink for retain-band signals from element-owned slivers — the removal
+    /// half of the consumer side, still awaiting its child-manager wiring.
+    /// `RenderSliverList::perform_layout` emits `(sliver_id, first,
     /// last)` after the band walk via `ctx.emit_retain_band(first, last)`; the
     /// dirty-root walk drains this into `PipelineOwner::pending_retain_bands`
     /// for the binding layer.  Element-owned slivers skip `dispose_box_child`
@@ -1182,8 +1189,9 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
     }
 
     fn request_child_build(&mut self, logical_index: usize) -> ChildLayout<BoxChildRef> {
-        // Record the request so the binding layer (U4.3) can service it
-        // post-layout.  Returns `Scheduled` — the v1 next-frame policy.
+        // Record the request so the binding layer can service it post-layout
+        // once its consumer half (child-manager wiring) lands.  Returns
+        // `Scheduled` — the v1 next-frame policy.
         // `self.node_id` is the sliver, giving the element tree enough
         // context to locate the right child manager without leaking any
         // view-layer type into this crate (H3 seam discipline).

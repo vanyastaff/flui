@@ -1,8 +1,8 @@
-//! Integration tests for the lazy-sliver backend (U4.3).
+//! Integration tests for the lazy-sliver backend.
 //!
 //! Exercises the 7 correctness paths the single-node `LeafBox` harness missed.
-//! Each test uses the headless frame driver (`pump_frame`) which, since U4.3,
-//! calls `service_child_requests` after `run_frame` — so two `tick` calls
+//! Each test uses the headless frame driver (`pump_frame`) which, since the
+//! child-manager wiring landed, calls `service_child_requests` after `run_frame` — so two `tick` calls
 //! are enough to settle a visible window: the first dispatches the child-build
 //! request; the second lays out the now-built children.
 //!

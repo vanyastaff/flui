@@ -1,6 +1,6 @@
 //! [`HeroControllerScope`] — the ambient host for a [`HeroController`].
 //!
-//! ADR-0021 U6 follow-up (§7m). **Public.** Flutter's `HeroControllerScope`
+//! **Public.** Flutter's `HeroControllerScope`
 //! (`navigator.dart:851-920`): an inherited widget that provides an optional
 //! `HeroController` to the `Navigator`s beneath it.
 //!
@@ -9,14 +9,14 @@
 //! Without it, an app author had to write `navigator.add_observer(HeroController::new())`
 //! by hand. A `Navigator` now resolves the nearest scope in `init_state` and attaches
 //! its controller — or, when **no** scope is present, creates a default one so heroes
-//! fly with zero boilerplate (§7m D-U6.2). `HeroControllerScope::none` blocks that.
+//! fly with zero boilerplate. `HeroControllerScope::none` blocks that.
 //!
 //! # Flutter parity, and the one divergence
 //!
 //! `HeroControllerScope(controller:, child:)` and `HeroControllerScope.none(child:)`
 //! map 1:1. The divergence is the **auto-default**: Flutter's automatic attach comes
 //! from `MaterialApp` installing an app-level scope; FLUI has no `MaterialApp`, so the
-//! outermost `Navigator` self-provides. Recorded in §7m.
+//! outermost `Navigator` self-provides.
 
 use std::fmt;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ use super::hero_controller::HeroController;
 /// ```
 ///
 /// Most apps need neither: a `Navigator` with no enclosing scope creates its own
-/// default controller (ADR-0021 §7m).
+/// default controller.
 #[derive(Clone)]
 pub struct HeroControllerScope {
     controller: Option<Arc<HeroController>>,
@@ -91,7 +91,7 @@ impl InheritedView for HeroControllerScope {
 
     fn update_should_notify(&self, old: &Self) -> bool {
         // A Navigator reads the controller once, in `init_state`; a changed controller
-        // is not picked up mid-life (§7m, the recorded read-once simplification). But
+        // is not picked up mid-life — a deliberate read-once simplification. But
         // report the change honestly by identity so a future re-resolving Navigator
         // would see it.
         match (&self.controller, &old.controller) {

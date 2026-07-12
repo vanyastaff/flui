@@ -1,4 +1,4 @@
-//! Public-API tests for [`StreamBuilder`] (ADR-0018 U6).
+//! Public-API tests for [`StreamBuilder`].
 //!
 //! Driven through the real `flui_widgets::prelude` surface and a real
 //! `HeadlessBinding` frame — the path `AppBinding::draw_frame` takes.
@@ -16,6 +16,7 @@ mod common;
 
 use std::collections::VecDeque;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
@@ -86,7 +87,7 @@ impl Sender {
 
     fn factory(&self) -> StreamFactory<Payload, Boom> {
         let channel = Arc::clone(&self.channel);
-        Arc::new(move || {
+        Rc::new(move || {
             channel.subscriptions.fetch_add(1, Ordering::Relaxed);
             Box::pin(Controlled {
                 channel: Arc::clone(&channel),
@@ -120,7 +121,7 @@ impl Sender {
 
 /// Records every snapshot the builder was handed, by reference.
 fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
-    Arc::new(move |_ctx, snapshot| {
+    Rc::new(move |_ctx, snapshot| {
         log.lock().push(Seen {
             state: snapshot.connection_state(),
             data: snapshot.data().map(|payload| payload.0),
@@ -241,7 +242,7 @@ fn stream_builder_key_change_preserves_old_payload_while_waiting() {
             first.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99))),
+        .with_initial_data(Rc::new(|| Payload(99))),
         loose(400.0),
     );
     first.data(1);
@@ -255,7 +256,7 @@ fn stream_builder_key_change_preserves_old_payload_while_waiting() {
             second.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99))),
+        .with_initial_data(Rc::new(|| Payload(99))),
     );
 
     assert_eq!(
@@ -344,7 +345,7 @@ fn stream_builder_absent_stream_shows_initial_data() {
             sender.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(7))),
+        .with_initial_data(Rc::new(|| Payload(7))),
         loose(400.0),
     );
 

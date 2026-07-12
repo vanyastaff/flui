@@ -821,9 +821,9 @@ mod unit_tests {
         }
     }
 
-    // ── U1: SsaaPathOp is Clone (T11 purity witness) ─────────────────────────
+    // ── SsaaPathOp is Clone (T11 purity witness) ─────────────────────────────
 
-    /// U1: `SsaaPathOp` must implement `Clone` (T11 IR-purity contract).
+    /// `SsaaPathOp` must implement `Clone` (T11 IR-purity contract).
     ///
     /// Derivability of `Clone` proves no GPU handle is embedded in the record IR.
     #[test]
@@ -851,9 +851,9 @@ mod unit_tests {
         );
     }
 
-    // ── U2: divert_path_to_ssaa produces DrawItem::SsaaPath ─────────────────
+    // ── divert_path_to_ssaa produces DrawItem::SsaaPath ──────────────────────
 
-    /// U2: `divert_path_to_ssaa` must push `DrawItem::SsaaPath` to draw_order.
+    /// `divert_path_to_ssaa` must push `DrawItem::SsaaPath` to draw_order.
     #[test]
     fn divert_path_to_ssaa_produces_ssaa_path_item() {
         let mut segment = DrawSegment::new();
@@ -883,9 +883,9 @@ mod unit_tests {
         );
     }
 
-    // ── U3: divert seals prior content before pushing SsaaPath ──────────────
+    // ── divert seals prior content before pushing SsaaPath ───────────────────
 
-    /// U3: Prior SrcOver content in the main segment must be sealed into a
+    /// Prior SrcOver content in the main segment must be sealed into a
     /// `DrawItem::Segment` before the `DrawItem::SsaaPath` (Z-order correctness).
     #[test]
     fn divert_path_to_ssaa_seals_prior_content() {
@@ -939,9 +939,9 @@ mod unit_tests {
         );
     }
 
-    // ── U4: device_bounds AABB is correct ────────────────────────────────────
+    // ── device_bounds AABB is correct ─────────────────────────────────────────
 
-    /// U4: The `device_bounds` in `SsaaPathOp` must be the AABB of the
+    /// The `device_bounds` in `SsaaPathOp` must be the AABB of the
     /// input vertices.
     #[test]
     fn divert_path_to_ssaa_device_bounds_is_vertex_aabb() {
@@ -988,9 +988,9 @@ mod unit_tests {
         );
     }
 
-    // ── U5: empty indices produce no item ────────────────────────────────────
+    // ── empty indices produce no item ─────────────────────────────────────────
 
-    /// U5: `divert_path_to_ssaa` with empty indices must produce nothing.
+    /// `divert_path_to_ssaa` with empty indices must produce nothing.
     #[test]
     fn divert_path_to_ssaa_empty_indices_is_noop() {
         let mut segment = DrawSegment::new();
@@ -1012,9 +1012,9 @@ mod unit_tests {
         );
     }
 
-    // ── U6: tile rect covers the full right/bottom sub-pixel edge ────────────
+    // ── tile rect covers the full right/bottom sub-pixel edge ────────────────
 
-    /// U6: `tile_x + tile_w` must be ≥ `ceil(right)`, and
+    /// `tile_x + tile_w` must be ≥ `ceil(right)`, and
     /// `tile_y + tile_h` must be ≥ `ceil(bottom)`, for sub-pixel path bounds.
     ///
     /// The previous `tile_w = ceil(width)` scheme failed this:
@@ -1099,9 +1099,9 @@ mod unit_tests {
         }
     }
 
-    // ── U7: scissor remap translates to tile-local 2× space ─────────────────
+    // ── scissor remap translates to tile-local 2× space ───────────────────────
 
-    /// U7: A full-frame scissor must be translated into tile-local 2× space
+    /// A full-frame scissor must be translated into tile-local 2× space
     /// when `render_ssaa_path` remaps the vertex segment.
     ///
     /// Concrete: tile at (50, 50), size 100×100; full-frame scissor (60,70,40,30).

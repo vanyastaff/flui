@@ -1,14 +1,14 @@
 //! `LayoutBuilder` view + element — the element half of the build-during-layout
-//! seam (ADR-0017, unit U3).
+//! seam.
 //!
 //! # What this wires together
 //!
-//! - **U1** (`owner/layout_builder.rs`): `BuildOwner::service_layout_builders`
+//! - `owner/layout_builder.rs`: `BuildOwner::service_layout_builders`
 //!   and the bounded layout↔build fixpoint both bindings drive.
-//! - **U2** (`flui_objects::RenderLayoutBuilder`): the render half, which
+//! - `flui_objects::RenderLayoutBuilder`: the render half, which
 //!   publishes the real incoming `BoxConstraints` into a shared
 //!   [`LayoutConstraintsCell`] on every layout pass.
-//! - **U3** (this module): the element that owns the cell, registers
+//! - This module: the element that owns the cell, registers
 //!   `RenderId -> (ElementId, cell)` at mount, and — between layout passes —
 //!   rebuilds its child by handing the *published* constraints to a user
 //!   builder.
@@ -47,11 +47,11 @@
 //!
 //! Cross-checked against `.flutter/packages/flutter/lib/src/widgets/layout_builder.dart`
 //! and `packages/flutter/test/widgets/layout_builder_test.dart` (Flutter master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`) as ADR-0017 U4. `performLayout`, the skip
+//! `3.33.0-0.0.pre-6280-g88e87cd963f`). `performLayout`, the skip
 //! condition, and the update/error semantics match; the intrinsics, dry-layout,
 //! and double-invocation divergences are recorded in ADR-0017's *Parity findings*.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_objects::{LayoutConstraintsCell, RenderLayoutBuilder};
 use flui_rendering::{constraints::BoxConstraints, protocol::BoxProtocol};
@@ -75,11 +75,10 @@ use crate::{
 
 /// The erased builder closure stored on [`LayoutBuilder`].
 ///
-/// `Arc<dyn Fn…>` (rather than a generic parameter) so the view stays
-/// `Clone + Send + Sync + 'static` and object-safe as a `dyn View`, matching
-/// `SliverList`'s item-builder shape.
-pub(crate) type LayoutWidgetBuilder =
-    Arc<dyn Fn(&dyn BuildContext, BoxConstraints) -> BoxedView + Send + Sync>;
+/// `Rc<dyn Fn…>` (rather than a generic parameter) so the view stays cheaply
+/// cloneable and object-safe as a `dyn View` while keeping the builder
+/// UI-owner-local under ADR-0027.
+pub(crate) type LayoutWidgetBuilder = Rc<dyn Fn(&dyn BuildContext, BoxConstraints) -> BoxedView>;
 
 /// A widget whose child is built from the constraints its parent imposes.
 ///
@@ -124,13 +123,11 @@ impl LayoutBuilder {
     /// The closure is called during layout with the real incoming constraints.
     pub fn new<F, R>(builder: F) -> Self
     where
-        F: Fn(&dyn BuildContext, BoxConstraints) -> R + Send + Sync + 'static,
+        F: Fn(&dyn BuildContext, BoxConstraints) -> R + 'static,
         R: IntoView,
     {
         Self {
-            builder: Arc::new(move |ctx, constraints| {
-                builder(ctx, constraints).into_view().boxed()
-            }),
+            builder: Rc::new(move |ctx, constraints| builder(ctx, constraints).into_view().boxed()),
         }
     }
 }
@@ -157,13 +154,18 @@ impl RenderView for LayoutBuilder {
     /// render object and the registry hold. `create_render_object` runs exactly
     /// once per mount; `LayoutBuilderBehavior::on_mount` reads the cell back out
     /// of the render object, which is therefore the single source of truth.
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
         RenderLayoutBuilder::new(Arc::new(LayoutConstraintsCell::new()))
     }
 
     /// Deliberately empty: the builder closure lives on the view, never on the
     /// render object, and the cell must survive rebuilds untouched.
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &crate::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 
     /// The child is produced by `build_into_views` from the published
     /// constraints, not carried on the view — so there is nothing static to
@@ -349,8 +351,12 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         self.inner.on_unmount(core, owner);
     }
 
-    fn on_update(&mut self, core: &ElementCore<LayoutBuilder, Variable>) {
-        self.inner.on_update(core);
+    fn on_update(
+        &mut self,
+        core: &ElementCore<LayoutBuilder, Variable>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.inner.on_update(core, owner);
     }
 }
 
@@ -376,11 +382,18 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(self.0)), Some(px(self.1)))
         }
 
-        fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            render_object: &mut Self::RenderObject,
+        ) {
             *render_object = RenderSizedBox::new(Some(px(self.0)), Some(px(self.1)));
         }
     }
@@ -400,11 +413,18 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderConstrainedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderConstrainedBox::new(BoxConstraints::tight(Size::new(px(self.0), px(self.0))))
         }
 
-        fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            render_object: &mut Self::RenderObject,
+        ) {
             *render_object =
                 RenderConstrainedBox::new(BoxConstraints::tight(Size::new(px(self.0), px(self.0))));
         }
@@ -495,7 +515,7 @@ mod tests {
 
     /// A builder that records every constraint it was called with.
     fn recording_builder(log: Arc<parking_lot::Mutex<Vec<BoxConstraints>>>) -> LayoutWidgetBuilder {
-        Arc::new(move |_ctx, constraints| {
+        Rc::new(move |_ctx, constraints| {
             log.lock().push(constraints);
             FixedBox(20.0, 20.0).into_view().boxed()
         })
@@ -576,7 +596,7 @@ mod tests {
         // Flutter: Center > ConstrainedBox(maxWidth: 100, maxHeight: 200).
         let incoming = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(200.0));
         let view = LayoutBuilder {
-            builder: Arc::new(move |_ctx, constraints: BoxConstraints| {
+            builder: Rc::new(move |_ctx, constraints: BoxConstraints| {
                 log.lock().push(constraints);
                 // Flutter's builder returns SizedBox(biggest/2).
                 FixedBox(
@@ -677,7 +697,7 @@ mod tests {
     #[test]
     fn layout_builder_registers_on_mount_and_deregisters_on_unmount() {
         let view = LayoutBuilder {
-            builder: Arc::new(|_ctx, _c| FixedBox(10.0, 10.0).into_view().boxed()),
+            builder: Rc::new(|_ctx, _c| FixedBox(10.0, 10.0).into_view().boxed()),
         };
         let mut h = Harness::mount(&view, tight(50.0, 50.0));
 
@@ -714,7 +734,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_builder = Arc::clone(&calls);
         let view = LayoutBuilder {
-            builder: Arc::new(move |_ctx, constraints: BoxConstraints| {
+            builder: Rc::new(move |_ctx, constraints: BoxConstraints| {
                 calls_for_builder.fetch_add(1, Ordering::Relaxed);
                 if constraints.max_width.get() > 100.0 {
                     FixedBox(30.0, 30.0).into_view().boxed()
@@ -777,7 +797,7 @@ mod tests {
                 let calls = Arc::clone(&self.calls);
                 let variant = self.variant.load(Ordering::Relaxed);
                 LayoutBuilder {
-                    builder: Arc::new(move |_ctx, _constraints| {
+                    builder: Rc::new(move |_ctx, _constraints| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         if variant == 0 {
                             FixedBox(10.0, 10.0).into_view().boxed()
@@ -837,7 +857,7 @@ mod tests {
     #[test]
     fn layout_builder_panicking_builder_recovers_and_the_frame_settles() {
         let view = LayoutBuilder {
-            builder: Arc::new(|_ctx, _c| panic!("builder blew up")),
+            builder: Rc::new(|_ctx, _c| panic!("builder blew up")),
         };
         let mut h = Harness::mount(&view, tight(60.0, 60.0));
 
@@ -865,10 +885,10 @@ mod tests {
         let inner_log_for_builder = Arc::clone(&inner_log);
 
         let outer = LayoutBuilder {
-            builder: Arc::new(move |_ctx, _outer_constraints| {
+            builder: Rc::new(move |_ctx, _outer_constraints| {
                 let inner_log = Arc::clone(&inner_log_for_builder);
                 LayoutBuilder {
-                    builder: Arc::new(move |_ctx, constraints| {
+                    builder: Rc::new(move |_ctx, constraints| {
                         inner_log.lock().push(constraints);
                         FixedBox(10.0, 10.0).into_view().boxed()
                     }),

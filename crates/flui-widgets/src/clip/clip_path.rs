@@ -65,12 +65,19 @@ impl RenderView for ClipPath {
     type Protocol = BoxProtocol;
     type RenderObject = RenderClipPath;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         let clipper = Arc::clone(&self.clipper);
         RenderClipPath::new(self.clip_behavior).with_clipper(move |size| clipper(size))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_clip_behavior(self.clip_behavior);
         // The clipper is a closure with no identity to diff (Flutter compares via
         // `CustomClipper.shouldReclip`; the closure-based render clipper cannot),
@@ -105,7 +112,8 @@ mod tests {
 
     #[test]
     fn create_render_object_defaults_to_anti_alias_and_installs_the_clipper() {
-        let render_object = clip_path().create_render_object();
+        let render_object =
+            clip_path().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
         assert!(
             render_object.has_custom_clipper(),
@@ -117,18 +125,22 @@ mod tests {
     fn create_render_object_applies_an_overridden_clip_behavior() {
         let render_object = clip_path()
             .clip_behavior(Clip::HardEdge)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }
 
     #[test]
     fn update_render_object_applies_a_changed_clip_behavior_and_reinstalls_the_clipper() {
-        let mut render_object = clip_path().create_render_object();
+        let mut render_object =
+            clip_path().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
 
         clip_path()
             .clip_behavior(Clip::HardEdge)
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
         assert!(

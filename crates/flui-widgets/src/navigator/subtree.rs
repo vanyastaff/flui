@@ -1,6 +1,6 @@
 //! Route subtree identity — the FLUI shape of `ModalRoute._subtreeKey`.
 //!
-//! ADR-0021 U2, seam 4. **Private**: nothing here is exported.
+//! **Private**: nothing here is exported.
 //!
 //! # What Flutter names, and how
 //!
@@ -51,7 +51,7 @@
 //! attached?"* — nothing more. A render object exists from `attach`, which happens
 //! during **build**, long before layout commits. Asking a `RouteSubtree` for
 //! geometry means asking [`PipelineOwner::box_size`], which returns `None` until
-//! the first layout commits (ADR-0021 U1). `SubtreeAnchor::get()` alone is *not*
+//! the first layout commits. `SubtreeAnchor::get()` alone is *not*
 //! layout-readiness, and `route_subtree_ids_are_published_before_layout_commits`
 //! pins that.
 //!
@@ -206,7 +206,7 @@ impl ViewState<RouteSubtreeAnchor> for RouteSubtreeAnchorState {
 
 /// The render half: a transparent proxy whose only job is to have a `RenderId`.
 ///
-/// `pub(crate)` since ADR-0021 U4: a `Hero` needs exactly this — a render node it can
+/// `pub(crate)`: a `Hero` needs exactly this — a render node it can
 /// name — and duplicating it would mean a second `RenderSubtreeAnchor` wrapper with
 /// the same body and a different name.
 #[derive(Debug, Clone)]
@@ -229,13 +229,21 @@ impl RenderView for AnchoredBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSubtreeAnchor;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSubtreeAnchor::new(self.anchor.clone())
     }
 
     /// Nothing to update: a render object's anchor is its identity, fixed for the
     /// life of the node. Reconciliation only ever hands this the same cell.
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 
     fn has_children(&self) -> bool {
         self.child.is_some()

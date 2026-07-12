@@ -1,7 +1,6 @@
-//! D-block PR-A1b3 U20 — `PipelineOwner::layout_dirty_root` disjoint-borrow
-//! walk integration tests.
+//! `PipelineOwner::layout_dirty_root` disjoint-borrow walk integration tests.
 //!
-//! These exercise the **production layout path** introduced in U20:
+//! These exercise the **production layout path**:
 //! [`PipelineOwner::layout_dirty_root`] drives `perform_layout_raw`
 //! against a Direct-storage [`BoxLayoutCtx`] populated with the
 //! parent's child IDs + a recursive [`layout_subtree_raw`] callback. The
@@ -9,15 +8,15 @@
 //! 3-level grandchild path (Padding → Center → ColoredBox), and the
 //! failure path (NodeNotFound on a stale root id).
 //!
-//! The full integration suite (`tests/pipeline/layout_pipeline_test.rs`
-//! per plan §U25/§U26) lands in PR-A1c; this file is the U20-local smoke
-//! verification.
+//! A broader integration suite (`tests/pipeline/layout_pipeline_test.rs`)
+//! covers more ground; this file is a smoke-level verification of the
+//! disjoint-borrow walk itself.
 //!
 //! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U20
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D1
-//!   * PR #140 (U18 — protocol-erased dispatch)
-//!   * PR #141 (U19 — typed bridge)
+//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
+//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
+//!   * PR #140 (protocol-erased dispatch)
+//!   * PR #141 (typed bridge)
 //!   * PR #143 (perform_layout_raw → Result)
 
 use flui_foundation::RenderId;
@@ -45,7 +44,7 @@ fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
 // Happy path — 2-level tree: RenderPadding (parent) + RenderColoredBox (child)
 // ============================================================================
 
-/// Plan §U20 happy path: a 2-level tree (`Padding` wrapping a single
+/// Happy path: a 2-level tree (`Padding` wrapping a single
 /// `ColoredBox`) lays out correctly through `layout_dirty_root`. The
 /// padding deflates parent constraints by 20 (left=right=10) on each
 /// axis, the colored box sizes to its preferred (80×40) clipped to the
@@ -62,7 +61,7 @@ fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
 /// `layout_subtree_raw(colored_box_id, deflated)` → leaf path →
 /// `RenderEntry::layout_leaf_only` produces the child size.
 #[test]
-fn u20_two_level_padding_with_colored_box_child() {
+fn two_level_padding_with_colored_box_child() {
     let mut pipeline = fresh_layout_pipeline();
 
     // Build tree: Padding(all=10) → ColoredBox(preferred 80×40).
@@ -108,7 +107,7 @@ fn u20_two_level_padding_with_colored_box_child() {
 // Happy path — 3-level grandchild propagation: Padding → Center → ColoredBox
 // ============================================================================
 
-/// Plan §U20 edge case: a 3-level tree (`Padding` → `Center` →
+/// Edge case: a 3-level tree (`Padding` → `Center` →
 /// `ColoredBox`) propagates layout correctly through the
 /// **recursive** callback path of `layout_subtree_raw`. Each recursion
 /// level builds its own Direct `BoxLayoutCtx`, invokes
@@ -128,7 +127,7 @@ fn u20_two_level_padding_with_colored_box_child() {
 /// - `RenderCenter` expands to fill the loose constraints' max → 360×260.
 /// - `RenderPadding` adds 20+20 = 40 in each axis → 360+40=400, 260+40=300.
 #[test]
-fn u20_three_level_padding_center_colored_box_grandchild_propagation() {
+fn three_level_padding_center_colored_box_grandchild_propagation() {
     let mut pipeline = fresh_layout_pipeline();
 
     // Build tree: Padding(20) → Center → ColoredBox(60×30).
@@ -199,13 +198,13 @@ fn u20_three_level_padding_center_colored_box_grandchild_propagation() {
 // Failure path — stale root id surfaces RenderError::NodeNotFound
 // ============================================================================
 
-/// Plan §U20 failure path (adapted): `layout_dirty_root` invoked on a
+/// Failure path: `layout_dirty_root` invoked on a
 /// `RenderId` that doesn't exist in the tree returns
 /// `Err(RenderError::NodeNotFound)` rather than panicking.
 ///
-/// The plan's literal phrasing names `ChildIndexOutOfBounds` for the
-/// "child slice access out of bounds" case, but the U20 implementation
-/// surfaces that condition via `NodeNotFound` instead: the callback
+/// An earlier design considered surfacing this as `ChildIndexOutOfBounds`
+/// for the "child slice access out of bounds" case, but the actual
+/// implementation surfaces that condition via `NodeNotFound` instead: the callback
 /// iterates over the parent's snapshotted `child_ids` (always within
 /// bounds by construction), so a stale child-id surfaces as a
 /// downstream `get(child_id) -> None` in the recursive call — i.e.,
@@ -213,7 +212,7 @@ fn u20_three_level_padding_center_colored_box_grandchild_propagation() {
 /// constructor doc) for future defensive checks; this test covers the
 /// shape that the current implementation actually produces.
 #[test]
-fn u20_stale_root_id_returns_node_not_found() {
+fn stale_root_id_returns_node_not_found() {
     let mut pipeline = fresh_layout_pipeline();
 
     let stale_id = RenderId::new(999); // never inserted
@@ -237,11 +236,11 @@ fn u20_stale_root_id_returns_node_not_found() {
 
 /// Sanity: when `id`'s child list is empty, `layout_dirty_root` should
 /// route through `RenderEntry::layout_leaf_only` and return the
-/// constraint-clamped size — same path the U18/U19 leaf bridge tests
-/// already cover, exercised here through the U20 entry point to prove
-/// the leaf branch is reachable from the new public API.
+/// constraint-clamped size — same path the leaf bridge tests
+/// already cover, exercised here through this entry point to prove
+/// the leaf branch is reachable from the public API.
 #[test]
-fn u20_leaf_path_delegates_to_layout_leaf_only() {
+fn leaf_path_delegates_to_layout_leaf_only() {
     let mut pipeline = fresh_layout_pipeline();
 
     let leaf_id = pipeline
@@ -264,19 +263,20 @@ fn u20_leaf_path_delegates_to_layout_leaf_only() {
 
 // ============================================================================
 // Idempotence — re-running layout on a clean tree returns the same size
-// (interaction with U14's OnceCell→Option migration: no panic on frame 2).
+// (interaction with an earlier OnceCell→Option state-storage migration:
+// no panic on frame 2).
 // ============================================================================
 
-/// Frame-2 regression smoke: U14 swapped `RenderState::set_constraints` /
-/// `set_geometry` from `OnceCell` (panic on re-set) to `Option` (replace
-/// on re-set). Two consecutive `layout_dirty_root` calls on the same
-/// tree must succeed without panic — the new walk goes through the same
-/// `set_*` path U14 fixed.
+/// Frame-2 regression smoke: `RenderState::set_constraints` /
+/// `set_geometry` were migrated from `OnceCell` (panic on re-set) to
+/// `Option` (replace on re-set). Two consecutive `layout_dirty_root` calls
+/// on the same tree must succeed without panic — the walk goes through
+/// that same `set_*` path.
 ///
-/// Covers the AE8 surface (frame-2 no panic) at the U20 entry point;
-/// the full AE8 integration test lands in U29.
+/// This covers the frame-2-no-panic surface at this entry point; a fuller
+/// integration test covering the same surface lives elsewhere.
 #[test]
-fn u20_double_layout_does_not_panic_on_frame_two() {
+fn double_layout_does_not_panic_on_frame_two() {
     let mut pipeline = fresh_layout_pipeline();
 
     let padding_id = pipeline
@@ -304,7 +304,7 @@ fn u20_double_layout_does_not_panic_on_frame_two() {
 }
 
 // ============================================================================
-// Manual RenderObject<BoxProtocol> impls (RenderViewAdapter): the U20 walk
+// Manual RenderObject<BoxProtocol> impls (RenderViewAdapter): the layout walk
 // still drives perform_layout_raw on them via the trait dispatch.
 // ============================================================================
 
@@ -312,16 +312,16 @@ fn u20_double_layout_does_not_panic_on_frame_two() {
 // Review-fix regression — non-leaf perform_layout panic surfaces as Poisoned
 // ============================================================================
 
-/// PR-A1b3 review fix: a panicking user widget at NON-LEAF position
+/// Regression guard: a panicking user widget at NON-LEAF position
 /// surfaces as `RenderError::Poisoned`, symmetric with the leaf path.
-/// Pre-fix the non-leaf branch invoked `perform_layout_raw` without
+/// Before this fix the non-leaf branch invoked `perform_layout_raw` without
 /// `catch_unwind` — a panic would have unwound out of
 /// `layout_dirty_root` and terminated the rendering thread. With the
 /// fix, the non-leaf branch wraps `perform_layout_raw` in
 /// `catch_unwind(AssertUnwindSafe(...))` mirroring
 /// `RenderEntry::layout_leaf_only`'s discipline.
 #[test]
-fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
+fn non_leaf_perform_layout_panic_surfaces_as_poisoned() {
     use flui_foundation::Diagnosticable;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
@@ -396,7 +396,7 @@ fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
 // Review-fix regression — descendant Err preserves parent NEEDS_LAYOUT
 // ============================================================================
 
-/// PR-A1b3 review fix: when the recursive callback observes a
+/// Regression guard: when the recursive callback observes a
 /// descendant `Err`, the outer parent's `NEEDS_LAYOUT` must STAY SET
 /// so the next dirty walk re-runs the subtree. Pre-fix the parent
 /// was unconditionally `clear_needs_layout`'d after a successful
@@ -414,7 +414,7 @@ fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
 /// completes (0+padding = small size); stage 6 skips
 /// `clear_needs_layout` per the flag.
 #[test]
-fn u20_descendant_err_preserves_parent_needs_layout() {
+fn descendant_err_preserves_parent_needs_layout() {
     let mut pipeline = fresh_layout_pipeline();
 
     // Build Padding → Child. Insert both, then REMOVE the child from
@@ -476,14 +476,14 @@ fn u20_descendant_err_preserves_parent_needs_layout() {
 // Review-fix regression — Sliver protocol mismatch surfaces as ProtocolMismatch
 // ============================================================================
 
-/// PR-A1b3 review fix: when `layout_dirty_root` is called on a
+/// Regression guard: when `layout_dirty_root` is called on a
 /// `RenderId` whose node is a `SliverProtocol` entry (not `Box`), it
 /// surfaces as `RenderError::ProtocolMismatch` — NOT
-/// `RenderError::NodeNotFound`. Pre-fix the `.get_mut(id).and_then(|n|
+/// `RenderError::NodeNotFound`. Before this fix the `.get_mut(id).and_then(|n|
 /// n.as_box_mut())` chain collapsed both cases into `NodeNotFound`,
 /// masking the protocol-mismatch bug class.
 #[test]
-fn u20_sliver_node_surfaces_as_protocol_mismatch() {
+fn sliver_node_surfaces_as_protocol_mismatch() {
     use flui_rendering::{
         constraints::SliverGeometry,
         context::{SliverHitTestContext, SliverLayoutContext},
@@ -550,14 +550,12 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
 }
 
 // ============================================================================
-// SubtreeArena thread-affinity smoke (PR #144 Copilot review legacy)
+// SubtreeArena thread-affinity smoke
 // ============================================================================
 
-/// PR #144 Copilot review (comment_id=3294225417) fix carried forward
-/// to U20.1: [`SubtreeArena`] (the U20.1 replacement for `TreePtr`)
-/// carries the owning thread's `ThreadId` and panics with a
-/// documented diagnostic on cross-thread access via
-/// [`SubtreeArena::check_thread`].
+/// [`SubtreeArena`] (the replacement for `TreePtr`) carries the owning
+/// thread's `ThreadId` and panics with a documented diagnostic on
+/// cross-thread access via [`SubtreeArena::check_thread`].
 ///
 /// This test verifies the legitimate worker-thread case: a pipeline
 /// run inside `std::thread::spawn` succeeds because `SubtreeArena`
@@ -568,7 +566,7 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
 /// private to `pipeline/owner.rs` — the guard is a defensive layer
 /// validated by code reading.
 #[test]
-fn u20_subtree_borrows_worker_thread_pipeline_succeeds() {
+fn subtree_borrows_worker_thread_pipeline_succeeds() {
     let mut pipeline = fresh_layout_pipeline();
     let padding_id = pipeline
         .render_tree_mut()
@@ -596,15 +594,15 @@ fn u20_subtree_borrows_worker_thread_pipeline_succeeds() {
 }
 
 // ============================================================================
-// U20.1 — 4-level deep recursion (verifies pre-acquired subtree borrows
-// scale to deeper trees than the original PR #144 tests covered)
+// 4-level deep recursion (verifies pre-acquired subtree borrows
+// scale to deeper trees than the original thread-affinity tests covered)
 // ============================================================================
 
-/// PR-A1b3 U20.1 deep-recursion smoke: a 4-level Padding chain
+/// Deep-recursion smoke: a 4-level Padding chain
 /// successfully lays out through the pre-acquired-subtree walk.
 /// Verifies `collect_subtree_ids` + `get_subtree_mut` + recursive
 /// `layout_subtree_borrowed` correctly handle deeper-than-typical
-/// trees (the prior U20 tests topped out at 3 levels).
+/// trees (the earlier tests in this file topped out at 3 levels).
 ///
 /// Math: outer Padding(10) → mid Padding(5) → inner Padding(2) →
 /// ColoredBox(20×20). Parent constraints (0..200) × (0..200) — loose.
@@ -613,7 +611,7 @@ fn u20_subtree_borrows_worker_thread_pipeline_succeeds() {
 /// - mid Padding: wraps 24×24 + (5+5) = 34×34.
 /// - outer Padding: wraps 34×34 + (10+10) = 54×54.
 #[test]
-fn u20_1_four_level_padding_chain() {
+fn four_level_padding_chain() {
     let mut pipeline = fresh_layout_pipeline();
 
     let outer = pipeline
@@ -646,9 +644,9 @@ fn u20_1_four_level_padding_chain() {
     );
 
     // Every node — INCLUDING the leaf — must be marked clean
-    // post-layout (no descendant errors). PR #145 review fix
-    // (Copilot 3294267600): prior version excluded `_leaf` from the
-    // loop while the message claimed "every node".
+    // post-layout (no descendant errors). An earlier version of this
+    // test excluded the leaf from the loop while the message claimed
+    // "every node".
     for id in [outer, mid, inner, leaf] {
         let node = pipeline
             .render_tree()
@@ -663,15 +661,15 @@ fn u20_1_four_level_padding_chain() {
 
 /// `RenderViewAdapter` carries a manual (non-blanket)
 /// `RenderObject<BoxProtocol>` impl that ignores the erased ctx and
-/// drives layout from its embedded `ViewConfiguration`. The U20 walk
+/// drives layout from its embedded `ViewConfiguration`. The layout walk
 /// should still invoke `perform_layout_raw` on it correctly (the manual
 /// impl chooses to ignore the ctx — that's its prerogative — but the
 /// walk's dispatch shouldn't change behaviour).
 ///
-/// Smoke check that the U20 pipeline-side ctx (Direct, no children) is
+/// Smoke check that the pipeline-side ctx (Direct, no children) is
 /// accepted by the adapter's manual impl.
 #[test]
-fn u20_render_view_adapter_layout_smoke() {
+fn render_view_adapter_layout_smoke() {
     use flui_rendering::view::{RenderView, RenderViewAdapter, ViewConfiguration};
 
     let mut pipeline = fresh_layout_pipeline();

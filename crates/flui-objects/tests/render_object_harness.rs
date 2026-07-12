@@ -109,8 +109,8 @@ use flui_rendering::{
         SliverGridDelegateWithFixedCrossAxisCount,
     },
     hit_testing::{
-        CursorIcon, EventPropagation, HitTestBehavior, HitTestResult, InputEvent,
-        MouseEnterCallback, MouseExitCallback, MouseHoverCallback, PointerEventHandler,
+        CursorIcon, HitTestBehavior, HitTestResult, InputEvent, MouseEnterCallback,
+        MouseExitCallback, MouseHoverCallback,
     },
     layer::LayerLink,
     parent_data::{
@@ -575,15 +575,23 @@ fn harness_custom_paint_foreground_hit_test_wins() {
 
 #[test]
 fn harness_listener_passes_layout_through_and_attaches_handler() {
-    // A no-op handler — the harness verifies it reaches the hit entry (the new
-    // pipeline wiring); that it FIRES end-to-end is covered by the Listener
-    // widget's dispatch test.
-    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
+    // A lane-registered no-op target — the harness verifies its identity
+    // reaches the hit entry (the pipeline wiring); that it FIRES end-to-end is
+    // covered by the Listener widget's dispatch test.
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let target = lane.enter(|| {
+        lane.dispatch_handle()
+            .register_pointer(|_event| {})
+            .expect("register no-op pointer target")
+    });
     let run = RenderTester::mount(
         // DeferToChild over a hittable ColoredBox: the listener registers when
         // the child is hit.
-        box_node(RenderListener::new(handler, HitTestBehavior::DeferToChild))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        box_node(RenderListener::new(
+            Some(target),
+            HitTestBehavior::DeferToChild,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
     .run_frame();
@@ -593,7 +601,7 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
 
     // A pointer landing on the child hits the listener (it registers itself in
     // the leaf-first path alongside its child), and its hit entry carries the
-    // handler the pipeline attached from `pointer_event_handler()`.
+    // data-only target identity supplied by the render object.
     assert!(
         run.hit(20.0, 20.0).contains(&run.root()),
         "the listener registers itself in the hit path",
@@ -602,22 +610,21 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
     run.pipeline()
         .hit_test(Offset::new(px(20.0), px(20.0)), &mut result);
     assert!(
-        result.path().iter().any(|entry| entry.handler.is_some()),
-        "the listener's hit entry must carry a pointer handler:\n{}",
+        result
+            .path()
+            .iter()
+            .any(|entry| entry.pointer_target == Some(target)),
+        "the listener's hit entry must carry its pointer target:\n{}",
         run.diagnostics(),
     );
 }
 
 #[test]
 fn harness_listener_childless_fills_parent() {
-    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
     let constraints = loose(200.0);
-    let mut run = RenderTester::mount(box_node(RenderListener::new(
-        handler,
-        HitTestBehavior::Opaque,
-    )))
-    .with_constraints(constraints)
-    .run_frame();
+    let mut run = RenderTester::mount(box_node(RenderListener::new(None, HitTestBehavior::Opaque)))
+        .with_constraints(constraints)
+        .run_frame();
 
     assert_eq!(
         run.box_geometry(run.root()),
@@ -633,12 +640,11 @@ fn harness_listener_childless_fills_parent() {
 
 #[test]
 fn harness_listener_translucent_adds_entry_without_blocking_lower_sibling() {
-    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
     let run = RenderTester::mount(
         box_node(RenderStack::new())
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
             .child(
-                box_node(RenderListener::new(handler, HitTestBehavior::Translucent))
+                box_node(RenderListener::new(None, HitTestBehavior::Translucent))
                     .label("top_listener"),
             ),
     )
@@ -742,10 +748,20 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
     let on_exit: MouseExitCallback = Arc::new(move |_device, _position| {
         exit_counter.fetch_add(1, Ordering::SeqCst);
     });
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let hover_target = lane.enter(|| {
+        let hover_counter = Arc::clone(&hovers);
+        lane.dispatch_handle()
+            .register_pointer(move |_event| {
+                hover_counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .expect("register mouse-region hover pointer target")
+    });
 
     let mut region = RenderMouseRegion::new();
     region.set_on_hover(Some(on_hover));
     region.set_on_exit(Some(on_exit));
+    region.set_hover_target(Some(hover_target));
 
     let run = RenderTester::mount(box_node(region))
         .with_constraints(BoxConstraints::tight(Size::new(px(60.0), px(30.0))))
@@ -754,10 +770,12 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
     let mut inside = HitTestResult::new();
     let inside_position = Offset::new(px(10.0), px(10.0));
     run.pipeline().hit_test(inside_position, &mut inside);
-    inside.dispatch(&flui_interaction::events::make_move_event(
-        inside_position,
-        flui_interaction::events::PointerType::Mouse,
-    ));
+    lane.enter(|| {
+        inside.dispatch(&flui_interaction::events::make_move_event(
+            inside_position,
+            flui_interaction::events::PointerType::Mouse,
+        ));
+    });
     assert_eq!(
         hovers.load(Ordering::SeqCst),
         1,
@@ -1485,7 +1503,7 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
 /// measure a route at its final size before it is visible.
 ///
 /// Red-check: lay the child out at `BoxConstraints::tight(Size::ZERO)` (the
-/// pre-ADR-0020-U5.0 behavior); the child measures 0×0.
+/// previous behavior); the child measures 0×0.
 #[test]
 fn harness_offstage_hidden_lays_the_child_out_at_full_size() {
     let run = RenderTester::mount(
@@ -2225,7 +2243,7 @@ fn harness_shader_mask_paints_with_shader_mask_layer() {
 #[test]
 fn harness_shader_mask_callback_receives_local_not_offset_rect() {
     // Regression test for the highest-risk trap in the design research
-    // plan (§4.3): the shader callback must see the node's LOCAL bounds
+    // plan: the shader callback must see the node's LOCAL bounds
     // rect even when the ShaderMask itself sits at a non-zero origin
     // within its parent — nesting under RenderPadding gives the
     // ShaderMask a non-zero accumulated origin (20, 20) so a bug that
@@ -2345,7 +2363,7 @@ fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
 
 #[test]
 fn harness_backdrop_filter_disabled_bypasses_filter_but_still_paints_child() {
-    // Regression test for trap §4.4: `enabled` and "has a child" are TWO
+    // Regression test: `enabled` and "has a child" are TWO
     // INDEPENDENT gates. enabled=false must bypass the filter layer
     // entirely while the child STILL paints (unfiltered) — a naive
     // combined `enabled && has_child` condition would wrongly skip
@@ -2451,7 +2469,7 @@ fn harness_leader_layer_layout_uses_smallest_when_no_child() {
 #[test]
 fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
     // Regression test for the highest-risk trap in the design research
-    // plan (§7.1/§7.2): unlike ShaderMask/BackdropFilter's OWN no-child
+    // plan: unlike ShaderMask/BackdropFilter's OWN no-child
     // test (which asserts the layer is ABSENT), oracle's
     // `RenderLeaderLayer.paint` pushes its `LeaderLayer` UNCONDITIONALLY
     // (`proxy_box.dart:4513-4528`) — a childless leader is still a
@@ -2551,8 +2569,8 @@ fn harness_follower_layer_layout_uses_smallest_when_no_child() {
 
 #[test]
 fn harness_follower_layer_always_pushes_layer_even_with_zero_children() {
-    // Regression test for the highest-risk trap (design research plan
-    // §7.1/§7.2), the direct opposite of ShaderMask/BackdropFilter's own
+    // Regression test for the highest-risk trap (design research plan),
+    // the direct opposite of ShaderMask/BackdropFilter's own
     // no-child test: oracle's `RenderFollowerLayer.paint` pushes its
     // `FollowerLayer` UNCONDITIONALLY (`proxy_box.dart:4708-4721`) — the
     // no-leader/hidden decision is resolved later, not by skipping the
@@ -2615,7 +2633,7 @@ fn harness_follower_layer_hit_tests_through_to_child_structurally_only() {
     // Structural-forward half ONLY: a child positioned at the follower's
     // own layout-relative offset is hit. This does NOT cover
     // resolved-transform-aware hit-testing — that is the genuinely
-    // deferred ADR-level gap (design research plan §4.4/§8), not
+    // deferred gap (design research plan), not
     // implemented by this render object today.
     let run = RenderTester::mount(
         box_node(RenderFollowerLayer::new(LayerLink::new()))
@@ -2867,7 +2885,7 @@ fn harness_physical_model_elevation_casts_shadow_before_fill_and_child() {
     );
 }
 
-// The `usesSaveLayer` fork (research plan trap §4.3) — controls WHERE the
+// The `usesSaveLayer` fork (research plan trap) — controls WHERE the
 // fill is drawn, not just whether. These two tests are the direct check
 // that a naive port didn't collapse the fork into "always fill outside"
 // or "always fill inside" (either would double-paint or bleed an edge).
@@ -2948,9 +2966,9 @@ fn harness_physical_model_fills_inside_clip_when_save_layer() {
     );
 }
 
-// Trap §4.4 regression at the render-object level (see the unit-level
+// Trap regression at the render-object level (see the unit-level
 // regression in `proxy::physical_model::tests` for the formula check) plus
-// the hit-test divergence trap §4.2: `RenderPhysicalModel` ALWAYS tests the
+// the hit-test divergence trap: `RenderPhysicalModel` ALWAYS tests the
 // clip shape, even though it never exposes a public clipper — a deliberate,
 // precedent-backed divergence from the oracle's `_clipper != null` gate,
 // which for `RenderPhysicalModel` specifically never engages (see the
@@ -2968,7 +2986,7 @@ fn harness_physical_model_hit_test_always_tests_circle_shape_excludes_bbox_corne
 
     // (1, 1) is inside the 100x40 bounding box but outside the inscribed
     // ellipse (rx=50, ry=20 centered at (50, 20)) — the ellipse-not-circle
-    // formula from trap §4.4 makes this exclusion asymmetric per axis.
+    // formula makes this exclusion asymmetric per axis.
     assert_eq!(run.hit_first(1.0, 1.0), None);
     // The ellipse center is always inside.
     assert_eq!(run.hit_first(50.0, 20.0), Some(run.id("child")));
@@ -3076,7 +3094,7 @@ fn harness_physical_model_self_describes_shape_border_radius_and_colors() {
             "border_radius",
         ],
     );
-    // Trap §4.1 regression: the oracle's own `debugFillProperties` bug
+    // Trap regression: the oracle's own `debugFillProperties` bug
     // passes `color` a second time instead of `shadowColor` — this must
     // read back the real shadow color, not the fill color.
     assert_eq!(
@@ -3356,9 +3374,8 @@ fn harness_flex_dry_layout_returns_real_size() {
 /// 100 → `flex.offset.dy == 90`.  Before the fix the flex returned `None`,
 /// so the outer fell back to the flex's height (30px) and placed it at 70.
 ///
-/// Red before Slice A (flex has no `compute_distance_to_actual_baseline` override,
-/// returns `None`, outer baseline falls back to child height → offset 70 ≠ 90).
-/// Green after.
+/// Fails without a `compute_distance_to_actual_baseline` override on flex
+/// (returns `None`, outer baseline falls back to child height → offset 70 ≠ 90).
 #[test]
 fn harness_flex_row_reports_highest_baseline() {
     let run = RenderTester::mount(
@@ -3398,7 +3415,7 @@ fn harness_flex_row_reports_highest_baseline() {
 /// After fix the outer baseline positions the flex so its baseline (5) sits at
 /// 50 → `flex.offset.dy == 45`.  Before the fix the flex returned `None` → 20.
 ///
-/// Red before Slice A, green after.
+/// Fails without the baseline override, passes with it.
 #[test]
 fn harness_flex_column_reports_first_baseline() {
     let run = RenderTester::mount(
@@ -3441,8 +3458,7 @@ fn harness_flex_column_reports_first_baseline() {
 ///
 /// Expected dry baseline: `min(10 + 0, 30 + 0) = 10.0`.
 ///
-/// Red before Slice B (`compute_dry_baseline` not overridden → returns `None`).
-/// Green after.
+/// Fails without a `compute_dry_baseline` override (returns `None`).
 #[test]
 fn harness_flex_dry_baseline_equals_committed() {
     let constraints = BoxConstraints::loose(Size::new(px(300.0), px(100.0)));
@@ -3472,7 +3488,7 @@ fn harness_flex_dry_baseline_equals_committed() {
     assert!(
         (dry - 10.0).abs() < 0.1,
         "flex dry baseline must equal committed baseline (~10.0); got {dry}; \
-         before Slice B compute_dry_baseline was not overridden and returned None",
+         without a compute_dry_baseline override this would return None",
     );
 }
 
@@ -4339,7 +4355,7 @@ fn harness_sliver_ignore_pointer_passes_hits_when_inactive() {
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("item")));
 }
 
-// ─── RenderSliverList (U4.2 request seam — INERT without U4.3 child manager) ─
+// ─── RenderSliverList (request seam — INERT without a child manager) ─────────
 
 #[test]
 fn harness_sliver_list_zero_items_reports_zero_geometry() {
@@ -6678,7 +6694,7 @@ fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_expl
 // ============================================================================
 //
 // Every test below constructs its own `AnimationController` (a fresh,
-// never-pumped `Scheduler`, per ADR-0013 D2) and, where the test needs to
+// never-pumped `Scheduler`) and, where the test needs to
 // drive the retarget animation across frames, keeps a `Clone` of it (`driver`)
 // to call `tick_at(seconds_since_the_current_run_started)` directly —
 // mirroring how `flui-animation`'s own controller tests and `Vsync::tick_all`
@@ -7524,12 +7540,13 @@ fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scr
 }
 
 // ============================================================================
-// RenderLayoutBuilder (ADR-0017 U2) — the render half of the
+// RenderLayoutBuilder (ADR-0017) — the render half of the
 // build-during-layout seam. It publishes constraints; it never builds.
 //
 // Parity is NOT claimed: `.flutter/` is absent from this checkout, so these
 // assertions encode the algorithm recorded in ADR-0017, not a verified match
-// against `widgets/layout_builder.dart`. ADR-0017 U4 is the parity gate.
+// against `widgets/layout_builder.dart`. Full parity verification against
+// that oracle remains the gate.
 // ============================================================================
 
 /// A layout pass must publish the **real** incoming constraints — not a
@@ -7908,7 +7925,7 @@ fn harness_theater_intrinsics_ignore_offstage_children() {
     );
 }
 
-// ── Ancestor paint transforms (ADR-0021 U1) ───────────────────────────────────
+// ── Ancestor paint transforms (ADR-0021) ──────────────────────────────────────
 //
 // `PipelineOwner::transform_to` composes one
 // `RenderObject::apply_paint_transform` per level. The default body is the paint
@@ -8101,7 +8118,7 @@ fn assert_transform_point(
     );
 }
 
-// ── RenderSubtreeAnchor (ADR-0021 U2) ────────────────────────────────────────
+// ── RenderSubtreeAnchor (ADR-0021) ───────────────────────────────────────────
 //
 // The anchor's whole job is identity: publish its own `RenderId` while mounted,
 // clear it when it leaves. `attach(RepaintHandle)` is the first — and only —

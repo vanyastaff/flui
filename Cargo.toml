@@ -2,10 +2,10 @@
 resolver = "2"
 members = [
     # === Phase 1: Foundation Layer ===
-    "crates/flui-geometry",   # Geometry primitives (split from flui-types in D-block PR-C-2)
+    "crates/flui-geometry",   # Geometry primitives (split from flui-types)
     "crates/flui-types",      # Base types with Unit system (ACTIVE)
     "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
-    "crates/flui-macros",     # Proc-macros (skeleton — derives land in Phase 3 §U23)
+    "crates/flui-macros",     # Proc-macros (skeleton — derives land as a follow-up)
     "crates/flui-tree",       # Tree abstractions (ACTIVE)
     "crates/flui-platform",   # Platform abstraction (ACTIVE)
 
@@ -110,8 +110,8 @@ tokio = { version = "1.43" }
 parking_lot = "0.12"
 once_cell = "1.20"
 dashmap = "6.1"
-# Bounded typed mailboxes (PipelineOwnerHandle dirty channel, WindowRuntime
-# owner inbox — ADR-0027 §4: bounded queues with typed backpressure only)
+# Bounded typed mailboxes (PipelineOwnerHandle dirty channel, UiRealm
+# owner inbox — bounded queues with typed backpressure only)
 crossbeam-channel = "0.5"
 
 # COLLECTIONS - Used by multiple crates
@@ -162,7 +162,7 @@ naga_oil = { version = "0.22", default-features = false }
 winit = "0.30.12"
 raw-window-handle = "0.6"
 pollster = "0.4"
-# Trait-only `Stream` (ADR-0018 U5). NOT `futures`/`futures-util`: no executor, no
+# Trait-only `Stream`. NOT `futures`/`futures-util`: no executor, no
 # combinators, no proc macros — just the trait `StreamBuilder` polls by hand.
 # Already in the graph via wgpu's `flume`, so it vendors nothing new.
 futures-core = { version = "0.3", default-features = false, features = ["std"] }
@@ -218,10 +218,10 @@ cursor-icon = "1.2"
 bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
+static_assertions = "1.1"
 
-# FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard
-# per D-block U21; deterministic + faster than std SipHash for small keys
-# like RenderId)
+# FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard;
+# deterministic + faster than std SipHash for small keys like RenderId)
 rustc-hash = "2.1"
 
 # STRING INTERNING - Used by flui-assets

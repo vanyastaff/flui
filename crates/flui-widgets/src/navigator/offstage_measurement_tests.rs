@@ -1,7 +1,7 @@
-//! ADR-0021 U2 **acceptance gate**: can a post-frame callback measure a route that
+//! **Acceptance gate**: can a post-frame callback measure a route that
 //! was forced offstage in the *same* frame?
 //!
-//! # The question, and why it gates U2
+//! # The question, and why it matters
 //!
 //! `HeroController._maybeStartHeroTransition` (`heroes.dart:964-973`) does exactly
 //! two things before it measures anything:
@@ -19,7 +19,7 @@
 //! (`routes.dart:1951-1962`, `:2221-2231`), marking the route's subtree dirty, and
 //! the frame's build + layout then runs before the post-frame phase.
 //!
-//! If FLUI's frame order does not deliver that, U2's `PostFrameHandle` seam would be
+//! If FLUI's frame order does not deliver that, the `PostFrameHandle` seam would be
 //! built on a false assumption and every flight would start from a stale rect.
 //!
 //! # Why the route under test is a *newly pushed* one
@@ -30,8 +30,8 @@
 //! built or laid out. The post-frame callback either sees geometry this frame's
 //! pipeline produced, or it sees nothing.
 //!
-//! U1.5 (ADR-0021 §7c) is what makes this answerable at all: before it,
-//! `pump_frame` never drained the post-frame queue.
+//! Draining the post-frame queue from `pump_frame` is what makes this answerable
+//! at all: before that, `pump_frame` never drained it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,8 +72,8 @@ fn offstage_nodes(owner: &PipelineOwner) -> Vec<RenderId> {
 /// very next `pump_frame` runs.
 ///
 /// Red-check: reorder `Scheduler::drive_frame` to `end_frame()` before `pipeline()`
-/// (the pre-U1.5 production order). The callback then observes zero offstage nodes
-/// and this test fails.
+/// (the earlier production order, before the post-frame queue was drained here).
+/// The callback then observes zero offstage nodes and this test fails.
 #[test]
 fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_callback() {
     let navigator = NavigatorHandle::new();
@@ -145,7 +145,7 @@ fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_
 
 /// The other half of the claim: the geometry the callback sees is *real*, not a
 /// zero-sized placeholder. `RenderOffstage` lays its child out under the incoming
-/// constraints and reports `constraints.smallest()` (ADR-0020 U5.0); under the
+/// constraints and reports `constraints.smallest()`; under the
 /// theater's tight constraints that is the full route size, so an offstage page is
 /// measurable — which is the entire point of `ModalRoute.offstage`.
 #[test]

@@ -1,6 +1,6 @@
 //! [`AnimatedBuilder`] — rebuilds a subtree each time a [`Listenable`] changes.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::Listenable;
 use flui_view::prelude::BuildContext;
@@ -9,10 +9,9 @@ use flui_view::{
 };
 
 /// The boxed rebuild closure: invoked on every tick to produce the current
-/// subtree. `Arc` so the owning [`AnimatedBuilder`] stays `Clone` (a view is
-/// re-cloned on every rebuild) and `Send + Sync` so the view satisfies the
-/// `StatefulView` bounds.
-type BuilderFn = Arc<dyn Fn() -> BoxedView + Send + Sync>;
+/// subtree. `Rc` keeps the owning [`AnimatedBuilder`] cheap to clone when the
+/// view is re-cloned on rebuild; the closure itself is UI-owner-local.
+type BuilderFn = Rc<dyn Fn() -> BoxedView>;
 
 /// Rebuilds whatever its `builder` returns whenever `listenable` notifies.
 ///
@@ -38,11 +37,11 @@ impl AnimatedBuilder {
     pub fn new<V, F>(listenable: Arc<dyn Listenable>, builder: F) -> Self
     where
         V: IntoView,
-        F: Fn() -> V + Send + Sync + 'static,
+        F: Fn() -> V + 'static,
     {
         Self {
             listenable,
-            builder: Arc::new(move || builder().into_view().boxed()),
+            builder: Rc::new(move || builder().into_view().boxed()),
         }
     }
 }

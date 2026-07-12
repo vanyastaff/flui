@@ -1,4 +1,4 @@
-//! ADR-0021 U1: `PipelineOwner::{transform_to, local_to_global, global_to_local}`.
+//! ADR-0021: `PipelineOwner::{transform_to, local_to_global, global_to_local}`.
 //!
 //! # Parity oracles
 //!
@@ -171,7 +171,7 @@ fn transform_to_is_identity_for_a_node_and_itself() {
 
 /// An ancestor that reports a `paint_transform` contributes it — this is the
 /// case a naive offset-only accumulation gets silently wrong, and the reason
-/// ADR-0021 §3 S4 exists.
+/// ADR-0021 exists.
 #[test]
 fn transform_to_respects_a_render_transform_ancestor() {
     let scale = Matrix4::scaling(2.0, 3.0, 1.0);
@@ -278,7 +278,7 @@ fn transform_to_returns_none_when_ancestor_is_not_an_ancestor() {
 
 /// `RenderBox::local_to_global` and `global_to_local` were identity stubs on the
 /// trait (`render_box.rs:192-199`) and could not be anything else — a FLUI render
-/// object has no parent link. ADR-0021 U1 moved them to the pipeline, which owns
+/// object has no parent link. ADR-0021 moved them to the pipeline, which owns
 /// the tree, and made them real.
 #[test]
 fn local_to_global_is_no_longer_identity() {

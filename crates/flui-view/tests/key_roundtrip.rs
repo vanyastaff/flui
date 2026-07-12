@@ -1,7 +1,7 @@
-//! Round-trip test for `ElementNode::key` storage (plan §U7 / FR-022).
+//! Round-trip test for `ElementNode::key` storage (FR-022).
 //!
-//! Phase 1 §U7 introduces a `key: Option<Box<dyn ViewKey>>` field on
-//! `ElementNode`, populated from `View::key()` at every mount /
+//! `ElementNode` carries a `key: Option<Box<dyn ViewKey>>` field,
+//! populated from `View::key()` at every mount /
 //! insert / update boundary. Phase 2's keyed reconciler reads this
 //! field directly — never crossing the typed-`V` boundary. The
 //! round-trip discipline below proves the field stores the cloned
@@ -165,7 +165,7 @@ fn covers_fr022_key_roundtrip_global_key() {
 fn covers_fr022_key_roundtrip_key_newtype() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    // U10 added `impl ViewKey for Key` so this assertion is possible.
+    // `Key` implements `ViewKey`, so this assertion is possible.
     let probe = Key::from_str("k1");
     let view = TestView::with_key("k", probe);
     let id = tree.mount_root(&view, &mut owner.element_owner_mut());
@@ -242,7 +242,7 @@ fn edge_global_key_is_global() {
 
 // ----------------------------------------------------------------------------
 // Negative regression: the side-index hash still aligns with the new
-// key field for global keys (R13 / R14 path). Catches future drift
+// key field for global keys. Catches future drift
 // where the side-index gets populated but the new `key` field is
 // silently skipped.
 // ----------------------------------------------------------------------------

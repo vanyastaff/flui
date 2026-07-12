@@ -27,7 +27,7 @@ performance-overlay = []
 
 [dependencies]
 # Core FLUI crates
-flui-view = { path = "../flui-view", version = "0.2.0" }
+flui-view = { path = "../flui-view", version = "0.2.0", features = ["runtime-internals"] }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
 flui-objects = { path = "../flui-objects", version = "0.2.0" }
@@ -53,7 +53,7 @@ flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
 tracing.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
-# WindowRuntime owner inbox (bounded typed mailbox, ADR-0027 §4)
+# UiRealm owner inbox (bounded typed mailbox)
 crossbeam-channel.workspace = true
 anyhow.workspace = true
 raw-window-handle.workspace = true
@@ -69,6 +69,7 @@ wasm-bindgen-futures = "0.4"
 android-activity = { version = "0.6", features = ["native-activity"] }
 
 [dev-dependencies]
+static_assertions.workspace = true
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.
@@ -77,7 +78,7 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
-# Enable flui-view's `test-utils` feature in test builds so the ADR-0017 U1
+# Enable flui-view's `test-utils` feature in test builds so the
 # wiring test can plant a layout-builder registry entry. Same pattern; the
 # `register_layout_builder_for_test` hook stays out of release builds.
 flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }

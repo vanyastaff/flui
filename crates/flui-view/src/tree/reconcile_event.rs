@@ -1,7 +1,7 @@
 //! `ReconcileEvent` — structured trace stream for the keyed
 //! child reconciler.
 //!
-//! Plan §U13 / FR-035. Emitted on the PRODUCTION path: the slab
+//! FR-035. Emitted on the PRODUCTION path: the slab
 //! reconciler `reconcile_children_by_id` emits `Reuse` / `Reorder` /
 //! `Unmount` per child, while the single child-minting site
 //! [`ElementTree::insert`](super::ElementTree::insert) emits `Mount` for
@@ -34,7 +34,7 @@
 //! | `slot`                 | `u64`  | New slot index for the child                                      |
 //! | `view_type_id`         | `str`  | `format!("{:?}", TypeId)` — Debug is the only stable identifier   |
 //! | `from_parent`          | `u64`  | `0` when absent (paired with `from_parent_present`)               |
-//! | `from_parent_present`  | `bool` | `true` only on cross-parent reparent (FR-030, plan §U17)          |
+//! | `from_parent_present`  | `bool` | `true` only on cross-parent reparent (FR-030)                     |
 
 use std::any::TypeId;
 

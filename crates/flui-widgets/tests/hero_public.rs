@@ -1,4 +1,4 @@
-//! Public-API tests for `Hero` (ADR-0021 U6).
+//! Public-API tests for `Hero`.
 //!
 //! Driven through the real `flui_widgets::prelude` surface, a real `Vsync`, and a
 //! `HeadlessBinding` frame — the production path. If `Hero` or `HeroController` were
@@ -40,7 +40,7 @@ const SETTLE: usize = 16;
 
 /// A `Navigator` whose route transitions tick against `vsync` — and **nothing else**.
 /// No `HeroControllerScope`, no manual `add_observer`: the Navigator creates its own
-/// default `HeroController`, so heroes fly with zero boilerplate (ADR-0021 §7m). This
+/// default `HeroController`, so heroes fly with zero boilerplate. This
 /// is exactly what an app author writes.
 fn app(vsync: &Vsync, navigator: &NavigatorHandle) -> impl View {
     VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone()))
@@ -109,7 +109,7 @@ fn a_hero_push_flight_runs_and_settles() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(hero_page());
+    let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
     let (max, end) = run(&mut laid, &owner, SETTLE);
 
     assert_eq!(max, 1, "exactly one shuttle flew");
@@ -128,14 +128,14 @@ fn a_hero_pop_flight_runs_and_settles() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(hero_page());
+    let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
     assert_eq!(
         run(&mut laid, &owner, SETTLE).1,
         0,
         "the push flight settled first"
     );
 
-    assert!(navigator.pop());
+    assert!(laid.enter_owner_scope(|| navigator.pop()));
     let (max, end) = run(&mut laid, &owner, SETTLE);
 
     assert_eq!(max, 1, "the pop flew its own shuttle");
@@ -145,7 +145,7 @@ fn a_hero_pop_flight_runs_and_settles() {
 
 /// **A stateful hero child survives the default placeholder** (`heroes_test.dart:1674`).
 /// The source hero's child is frozen offstage during the flight, not rebuilt — FLUI's
-/// fixed chain preserves its element with no `GlobalKey` (ADR-0021 §7k).
+/// fixed chain preserves its element with no `GlobalKey`.
 ///
 /// Red-check: revert `HeroState::build` to the toggling shape — the source child is
 /// rebuilt when the flight starts and `create_state` runs twice.
@@ -192,7 +192,7 @@ fn a_stateful_hero_child_survives_the_default_placeholder() {
 
     // Push a matching hero page: the seeded page's hero becomes the flight's *source*
     // and its child is frozen offstage while the shuttle carries a fresh copy.
-    let _push = navigator.push(hero_page());
+    let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
     run(&mut laid, &owner, SETTLE);
 
     assert_eq!(
@@ -257,15 +257,17 @@ fn a_destination_lost_mid_flight_does_not_panic_or_leak() {
         rebuild: Arc::new(Mutex::new(None)),
     };
     let gate_for_page = gate.clone();
-    let _push = navigator.push(
-        PageRoute::<i32>::new(move |_ctx, _p, _s| {
-            Center::new()
-                .child(gate_for_page.clone())
-                .into_view()
-                .boxed()
-        })
-        .transition_duration(TRANSITION),
-    );
+    let _push = laid.enter_owner_scope(|| {
+        navigator.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                Center::new()
+                    .child(gate_for_page.clone())
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(TRANSITION),
+        )
+    });
     // Let the flight get airborne, then lose the destination hero.
     let (airborne, _) = run(&mut laid, &owner, 3);
     assert_eq!(airborne, 1, "a shuttle took off");
@@ -294,12 +296,12 @@ fn a_same_tag_divert_does_not_stack_shuttles() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _b = navigator.push(hero_page());
+    let _b = laid.enter_owner_scope(|| navigator.push(hero_page()));
     let (max_push, _) = run(&mut laid, &owner, 3);
     assert_eq!(max_push, 1, "the first flight is airborne");
 
     // A third page, same tag, mid-flight, then run to completion.
-    let _c = navigator.push(hero_page());
+    let _c = laid.enter_owner_scope(|| navigator.push(hero_page()));
     let (max_divert, end) = run(&mut laid, &owner, SETTLE);
 
     assert_eq!(
@@ -323,24 +325,26 @@ fn no_flight_over_a_popup_route() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _popup = navigator.push(
-        PopupRoute::<i32>::new(|_ctx, _p, _s| {
-            Center::new()
-                .child(Hero::new(
-                    ValueKey::new("shared"),
-                    SizedBox::new(30.0, 20.0),
-                ))
-                .into_view()
-                .boxed()
-        })
-        .transition_duration(TRANSITION),
-    );
+    let _popup = laid.enter_owner_scope(|| {
+        navigator.push(
+            PopupRoute::<i32>::new(|_ctx, _p, _s| {
+                Center::new()
+                    .child(Hero::new(
+                        ValueKey::new("shared"),
+                        SizedBox::new(30.0, 20.0),
+                    ))
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(TRANSITION),
+        )
+    });
     let (max, _end) = run(&mut laid, &owner, SETTLE);
     assert_eq!(max, 0, "a popup is not a PageRoute: no hero flight ever");
 }
 
 // ============================================================================
-// Advanced hooks (§7n) — public surface, better-than-Flutter placeholder shape
+// Advanced hooks — public surface, better-than-Flutter placeholder shape
 // ============================================================================
 
 #[derive(Clone)]
@@ -372,23 +376,25 @@ fn create_rect_tween_shapes_the_public_flight() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(
-        PageRoute::<i32>::new(move |_ctx, _p, _s| {
-            let transforms_for_tween = Arc::clone(&transforms_for_route);
-            Center::new()
-                .child(
-                    Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
-                        .create_rect_tween(move |begin, end| CountingRectTween {
-                            begin,
-                            end,
-                            transforms: Arc::clone(&transforms_for_tween),
-                        }),
-                )
-                .into_view()
-                .boxed()
-        })
-        .transition_duration(TRANSITION),
-    );
+    let _push = laid.enter_owner_scope(|| {
+        navigator.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                let transforms_for_tween = Arc::clone(&transforms_for_route);
+                Center::new()
+                    .child(
+                        Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+                            .create_rect_tween(move |begin, end| CountingRectTween {
+                                begin,
+                                end,
+                                transforms: Arc::clone(&transforms_for_tween),
+                            }),
+                    )
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(TRANSITION),
+        )
+    });
 
     let (max, _end) = run(&mut laid, &owner, 3);
 
@@ -414,23 +420,25 @@ fn flight_shuttle_builder_replaces_the_public_shuttle() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(
-        PageRoute::<i32>::new(move |_ctx, _p, _s| {
-            let builds_for_builder = Arc::clone(&builds_for_route);
-            Center::new()
-                .child(
-                    Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
-                        .flight_shuttle_builder(move |_animation, direction, _from, _to| {
-                            assert_eq!(direction, FlightDirection::Push);
-                            builds_for_builder.fetch_add(1, Ordering::SeqCst);
-                            ColoredBox::new(Color::RED)
-                        }),
-                )
-                .into_view()
-                .boxed()
-        })
-        .transition_duration(TRANSITION),
-    );
+    let _push = laid.enter_owner_scope(|| {
+        navigator.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                let builds_for_builder = Arc::clone(&builds_for_route);
+                Center::new()
+                    .child(
+                        Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+                            .flight_shuttle_builder(move |_animation, direction, _from, _to| {
+                                assert_eq!(direction, FlightDirection::Push);
+                                builds_for_builder.fetch_add(1, Ordering::SeqCst);
+                                ColoredBox::new(Color::RED)
+                            }),
+                    )
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(TRANSITION),
+        )
+    });
 
     let (max, _end) = run(&mut laid, &owner, 3);
 
@@ -518,7 +526,7 @@ fn custom_placeholder_preserves_hero_child_state_through_push_and_pop() {
     assert_eq!(creations.load(Ordering::SeqCst), 1, "initial child");
     assert_eq!(live.load(Ordering::SeqCst), 1, "one route child is mounted");
 
-    let _push = navigator.push(hero_page());
+    let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
     assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "push landed");
     assert_eq!(
         creations.load(Ordering::SeqCst),
@@ -531,7 +539,7 @@ fn custom_placeholder_preserves_hero_child_state_through_push_and_pop() {
         "the route child stayed mounted"
     );
 
-    assert!(navigator.pop());
+    assert!(laid.enter_owner_scope(|| navigator.pop()));
     assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "pop landed");
     assert_eq!(
         creations.load(Ordering::SeqCst),
@@ -581,7 +589,8 @@ fn push_and_pop_hand_the_matching_direction_to_the_shuttle_builder() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(direction_recording_page(Arc::clone(&seen)));
+    let _push =
+        laid.enter_owner_scope(|| navigator.push(direction_recording_page(Arc::clone(&seen))));
     assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "the push settled");
     assert_eq!(
         seen.lock().as_slice(),
@@ -589,7 +598,7 @@ fn push_and_pop_hand_the_matching_direction_to_the_shuttle_builder() {
         "the push flight is handed Push"
     );
 
-    assert!(navigator.pop());
+    assert!(laid.enter_owner_scope(|| navigator.pop()));
     assert_eq!(run(&mut laid, &owner, SETTLE).1, 0, "the pop settled");
     assert_eq!(
         seen.lock().last(),
@@ -635,7 +644,7 @@ fn a_divert_rebuilds_the_shuttle_through_the_hook() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _b = navigator.push(make_page());
+    let _b = laid.enter_owner_scope(|| navigator.push(make_page()));
     assert_eq!(
         run(&mut laid, &owner, 3).0,
         1,
@@ -648,7 +657,7 @@ fn a_divert_rebuilds_the_shuttle_through_the_hook() {
     );
 
     // A third same-tag page mid-flight diverts the airborne flight.
-    let _c = navigator.push(make_page());
+    let _c = laid.enter_owner_scope(|| navigator.push(make_page()));
     run(&mut laid, &owner, SETTLE);
     assert!(
         builds.load(Ordering::SeqCst) > after_first,
@@ -681,22 +690,24 @@ fn a_custom_placeholder_is_shown_during_the_flight() {
         "no placeholder is shown before the flight"
     );
 
-    let _push = navigator.push(
-        PageRoute::<i32>::new(move |_ctx, _p, _s| {
-            Center::new()
-                .child(
-                    Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0)).placeholder(
-                        |size| {
-                            SizedBox::new(size.width.0, size.height.0)
-                                .child(ColoredBox::new(Color::GREEN))
-                        },
-                    ),
-                )
-                .into_view()
-                .boxed()
-        })
-        .transition_duration(TRANSITION),
-    );
+    let _push = laid.enter_owner_scope(|| {
+        navigator.push(
+            PageRoute::<i32>::new(move |_ctx, _p, _s| {
+                Center::new()
+                    .child(
+                        Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0)).placeholder(
+                            |size| {
+                                SizedBox::new(size.width.0, size.height.0)
+                                    .child(ColoredBox::new(Color::GREEN))
+                            },
+                        ),
+                    )
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(TRANSITION),
+        )
+    });
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
     assert!(shuttles(&owner) >= 1, "a flight is airborne");
@@ -714,7 +725,7 @@ fn a_custom_placeholder_is_shown_during_the_flight() {
 }
 
 // ============================================================================
-// U6 follow-up (§7m) — automatic attach, scope.none, nested isolation, manual path
+// Automatic attach, scope.none, nested isolation, manual path
 // ============================================================================
 
 /// `HeroControllerScope::none` blocks the auto-default: no controller under it, so no
@@ -732,7 +743,7 @@ fn a_hero_controller_scope_none_disables_flights() {
     let mut laid = lay_out_animated(root, tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(hero_page());
+    let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
     let (max, _end) = run(&mut laid, &owner, SETTLE);
 
     assert_eq!(max, 0, "HeroControllerScope::none disables hero flights");
@@ -757,7 +768,7 @@ fn a_controller_from_a_scope_flies_heroes() {
     let mut laid = lay_out_animated(root, tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(hero_page());
+    let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
     let (max, end) = run(&mut laid, &owner, SETTLE);
 
     assert_eq!(max, 1, "the scope's controller flies exactly one shuttle");
@@ -812,18 +823,20 @@ fn a_hero_under_a_disabled_hero_mode_does_not_fly_publicly() {
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
     let owner = laid.pipeline_owner();
 
-    let _push = navigator.push(
-        PageRoute::<i32>::new(|_ctx, _p, _s| {
-            HeroMode::new(Center::new().child(Hero::new(
-                ValueKey::new("shared"),
-                SizedBox::new(30.0, 20.0),
-            )))
-            .enabled(false)
-            .into_view()
-            .boxed()
-        })
-        .transition_duration(TRANSITION),
-    );
+    let _push = laid.enter_owner_scope(|| {
+        navigator.push(
+            PageRoute::<i32>::new(|_ctx, _p, _s| {
+                HeroMode::new(Center::new().child(Hero::new(
+                    ValueKey::new("shared"),
+                    SizedBox::new(30.0, 20.0),
+                )))
+                .enabled(false)
+                .into_view()
+                .boxed()
+            })
+            .transition_duration(TRANSITION),
+        )
+    });
 
     let (max, end) = run(&mut laid, &owner, SETTLE);
     assert_eq!(max, 0, "a disabled HeroMode grounds the hero");

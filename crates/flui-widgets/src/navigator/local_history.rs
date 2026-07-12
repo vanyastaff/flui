@@ -37,6 +37,7 @@
 // seam stops matching the ADR that specified it.
 #![allow(dead_code)]
 
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -47,7 +48,7 @@ use parking_lot::Mutex;
 /// Fired when its entry leaves the local history — by a pop or an explicit
 /// [`remove`](LocalHistoryEntryHandle::remove). Flutter's
 /// `LocalHistoryEntry.onRemove` (`routes.dart:711`).
-pub(crate) type OnRemoveCallback = Arc<dyn Fn() + Send + Sync>;
+pub(crate) type OnRemoveCallback = Rc<dyn Fn()>;
 
 /// One live entry. Flutter's `LocalHistoryEntry` (`routes.dart:708-729`),
 /// minus `impliesAppBarDismissal` (no `AppBar`; ADR-0025).
@@ -98,8 +99,8 @@ impl LocalHistoryEntry {
 
     /// Called when this entry leaves the history (`routes.dart:711`).
     #[must_use]
-    pub(crate) fn on_remove(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_remove = Some(Arc::new(callback));
+    pub(crate) fn on_remove(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_remove = Some(Rc::new(callback));
         self
     }
 }
@@ -261,13 +262,13 @@ pub(crate) struct LocalHistoryHandle {
     registry: LocalHistoryRegistry,
     /// The route's rebuild hook for the empty↔non-empty edges — the
     /// `changed_internal_state` half `add`/`remove` owe (`routes.dart:886-895`).
-    changed_internal_state: Arc<dyn Fn() + Send + Sync>,
+    changed_internal_state: Rc<dyn Fn()>,
 }
 
 impl LocalHistoryHandle {
     pub(crate) fn new(
         registry: LocalHistoryRegistry,
-        changed_internal_state: Arc<dyn Fn() + Send + Sync>,
+        changed_internal_state: Rc<dyn Fn()>,
     ) -> Self {
         Self {
             registry,
@@ -300,7 +301,7 @@ impl LocalHistoryHandle {
         LocalHistoryEntryHandle {
             inner,
             registry: Arc::downgrade(&self.registry.inner),
-            changed_internal_state: Arc::clone(&self.changed_internal_state),
+            changed_internal_state: Rc::clone(&self.changed_internal_state),
         }
     }
 }
@@ -321,7 +322,7 @@ impl std::fmt::Debug for LocalHistoryHandle {
 pub(crate) struct LocalHistoryEntryHandle {
     inner: Arc<EntryInner>,
     registry: Weak<RegistryInner>,
-    changed_internal_state: Arc<dyn Fn() + Send + Sync>,
+    changed_internal_state: Rc<dyn Fn()>,
 }
 
 impl LocalHistoryEntryHandle {

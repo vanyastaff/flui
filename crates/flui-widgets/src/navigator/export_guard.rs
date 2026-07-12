@@ -3,7 +3,7 @@
 //!
 //! # Why not `source.contains(name)`
 //!
-//! Because it is wrong twice. ADR-0020 U5.4 exports `RouteBindingSlot`, which
+//! Because it is wrong twice. The navigator seam exports `RouteBindingSlot`, which
 //! *contains* the string `RouteBinding` — the private capability it deliberately
 //! hides. A substring scan flags the safe export and would tempt someone to relax
 //! the guard rather than fix it. Splitting each `pub use` line into identifiers

@@ -23,7 +23,7 @@ parking_lot = { workspace = true }
 # overflow spills to heap.
 smallvec = { workspace = true }
 tracing = { workspace = true }
-# Logging (merged from flui-log in PR-C-1 D-block plan U1-U3).
+# Logging (merged from flui-log).
 # `tracing-subscriber` powers `flui_foundation::log::Logger::try_init`;
 # `tracing-forest` is gated behind the optional `pretty` feature for the
 # hierarchical desktop development backend.

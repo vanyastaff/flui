@@ -23,7 +23,7 @@ use crate::{
 use super::{PipelineOwner, subtree_arena::ensure_stack};
 
 // ============================================================================
-// Phase-agnostic accessors / setters / insertion (Mythos Step 7)
+// Phase-agnostic accessors / setters / insertion
 // ============================================================================
 
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
@@ -65,7 +65,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     // ========================================================================
-    // Cross-thread mark-dirty handle (Mythos Step 8)
+    // Cross-thread mark-dirty handle
     // ========================================================================
 
     /// Returns a clone of the cross-thread mark-dirty handle.
@@ -151,7 +151,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Returns the constraints to apply to the root render object on
     /// the next layout pass (if no cached constraints yet).
     ///
-    /// **D-block PR-A1 U23:** see [`Self::set_root_constraints`].
+    /// See [`Self::set_root_constraints`].
     #[inline]
     pub fn root_constraints(&self) -> Option<BoxConstraints> {
         self.root_constraints
@@ -161,7 +161,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// next layout pass when no cached constraints exist yet
     /// (first-frame initialization).
     ///
-    /// **D-block PR-A1 U23:** the binding layer (`flui-view` /
+    /// The binding layer (`flui-view` /
     /// `flui-app` / `flui-hot-reload`) calls this once after
     /// constructing the pipeline + before the first `run_frame`
     /// invocation. On subsequent frames the root's cached
@@ -200,7 +200,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     // ========================================================================
-    // Coordinate conversion (ADR-0021 U1)
+    // Coordinate conversion (ADR-0021)
     // ========================================================================
 
     /// The committed laid-out size of a **box** node, or `None` if `id` is
@@ -219,7 +219,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Flutter's `RenderObject.getTransformTo` (`object.dart:3686`), **narrowed
     /// to a strict descendant → ancestor walk**: Flutter also handles two nodes
     /// that merely share a common ancestor, by inverting the target's half of the
-    /// path. Nothing in FLUI needs that yet (ADR-0021 §3, S4), and the narrow
+    /// path. Nothing in FLUI needs that yet, and the narrow
     /// walk needs no inverse, so it cannot fail on a singular matrix.
     ///
     /// # When this returns `None`
@@ -282,7 +282,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // `child`'s parent *is* `parent` — the walk above established it — so
             // the tree's parent/children links are inconsistent if this misses.
             // Not a `?`: a silent `None` here would masquerade as "not an
-            // ancestor" and mask the corruption (ADR-0021 U1).
+            // ancestor" and mask the corruption.
             let child_index = parent_node
                 .children()
                 .iter()
@@ -402,13 +402,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// 1. collect the subtree's ids;
     /// 2. call [`RenderObject::detach`](crate::traits::RenderObject::detach)
-    ///    on every id in the subtree (ADR-0013 D1) — the tree-lifecycle
+    ///    on every id in the subtree (ADR-0013) — the tree-lifecycle
     ///    counterpart of `attach`, and the only place a render object can
     ///    tear down an `attach`-time subscription;
     /// 3. evict every id from ALL dirty queues (live + mid-phase) so
     ///    no phase walks a freed slot's stale entry;
     /// 4. cascade-remove the nodes (each freed slot's generation bumps
-    ///    — outstanding ids go stale, D2);
+    ///    — outstanding ids go stale);
     /// 5. clear `root_id` when the root itself was removed.
     ///
     /// `Drop` on render objects remains strictly node-local (decoded
@@ -429,7 +429,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return 0;
         }
 
-        // ADR-0013 D1: detach every node in the subtree before eviction —
+        // ADR-0013: detach every node in the subtree before eviction —
         // a render object that subscribed to a `Listenable` in `attach`
         // gets a chance to unsubscribe here. Not a correctness
         // prerequisite (the handle it holds is generational and already
@@ -465,8 +465,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// worst case O(tree) when nothing claims the position.
     pub fn hit_test(&self, position: Offset, result: &mut crate::hit_testing::HitTestResult) -> bool
     where
-        // The child-recursion callback must be Send + Sync (ctx trait
-        // bounds, U19 inheritance); it captures &self, so the phase
+        // The child-recursion callback must be Send + Sync (inherited
+        // ctx trait bounds); it captures &self, so the phase
         // marker must be Sync. Every phase is a ZST — always satisfied
         // at call sites, spelled out for the generic impl.
         Phase: Sync,
@@ -511,7 +511,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         };
 
-        // ADR-0015 D4: composite-resolved follower offsets. Gated behind
+        // ADR-0015: composite-resolved follower offsets. Gated behind
         // both side tables being empty — true for the overwhelming
         // majority of trees (followers are rare: tooltips, dropdowns,
         // overlays), so this whole branch is a single cheap `is_empty`
@@ -550,10 +550,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             result.push_transform(t);
         }
         // A resolved follower offset rides the SAME transform-stack
-        // lifecycle as `hit_test_transform` (ADR-0015 D4) — the same
+        // lifecycle as `hit_test_transform` (ADR-0015) — the same
         // translation the paint/GPU path applies via
         // `backend.push_offset(resolved)` (renderer.rs:1586), lifted to a
-        // `Matrix4` (D5: exact and lossless — the composer only ever
+        // `Matrix4` (exact and lossless — the composer only ever
         // shifts coordinate space via translation).
         if let Some(r) = follower_offset {
             result.push_transform(Matrix4::translation(r.dx.get(), r.dy.get(), 0.0));
@@ -563,7 +563,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // resolved offset — the SAME position-shift pattern `hit_child`
         // below already applies for ordinary child offsets, applied here
         // by the WALK rather than the object: `RenderFollowerLayer::hit_test`
-        // stays a plain structural forward (ADR-0015 D4).
+        // stays a plain structural forward (ADR-0015).
         let position = match follower_offset {
             Some(r) => position - r,
             None => position,
@@ -614,12 +614,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // is still on the stack, so this entry captures it.
             //
             // A render object that listens for pointer events (RenderListener)
-            // advertises a handler here; it rides on the entry so
-            // `HitTestResult::dispatch` can invoke it. Additive: every other
-            // render object returns `None`, leaving today's handler-less entry.
+            // advertises its data-only pointer target here; it rides on the
+            // entry so dispatch can resolve the owner-local handler. Every
+            // other render object returns `None`, leaving a target-less entry.
             let entry = crate::hit_testing::HitTestEntry::new(id);
-            let entry = match render_object.pointer_event_handler() {
-                Some(handler) => entry.handler(handler),
+            let entry = match render_object.pointer_target() {
+                Some(target) => entry.pointer_target(target),
                 None => entry,
             };
             let entry = entry.cursor(render_object.mouse_cursor());
@@ -937,7 +937,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let id = self.render_tree.insert(node);
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 
-        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag from the
+        // Bootstrap the IS_REPAINT_BOUNDARY flag from the
         // render_object's static answer before the dirty pushes (so
         // the compositing walk has accurate boundary info on first
         // run_compositing).
@@ -986,7 +986,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .insert_box_child(parent_id, render_object)?;
         let child_depth = parent_depth + 1;
 
-        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag from the
+        // Bootstrap the IS_REPAINT_BOUNDARY flag from the
         // child render_object's static answer before any compositing
         // walk runs.
         self.bootstrap_repaint_boundary_flag(child_id);
@@ -1046,7 +1046,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .insert_sliver_child(parent_id, render_object)?;
         let child_depth = parent_depth + 1;
 
-        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag from the
+        // Bootstrap the IS_REPAINT_BOUNDARY flag from the
         // child render_object's static answer before any compositing
         // walk runs.
         self.bootstrap_repaint_boundary_flag(child_id);
@@ -1079,7 +1079,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let id = self.render_tree.insert(node);
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 
-        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag (matches the
+        // Bootstrap the IS_REPAINT_BOUNDARY flag (matches the
         // `insert` / `insert_child_render_object` paths so every code
         // path that adds nodes leaves the compositing flag in sync
         // with the trait answer).
@@ -1116,11 +1116,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Bootstraps the `IS_REPAINT_BOUNDARY` storage flag from the render
     /// object's static trait answer (`RenderObject::is_repaint_boundary()`).
     ///
-    /// **D-block PR-A2 U33 (memo R26b).** Every node-insert path
+    /// Every node-insert path
     /// ([`Self::insert`], [`Self::insert_child_render_object`],
     /// [`Self::insert_render_node`]; [`Self::set_root_render_object`]
     /// inherits via `insert`) calls this immediately after the tree
-    /// `insert` so the compositing-bits walk (U34) has accurate
+    /// `insert` so the compositing-bits walk has accurate
     /// boundary info via the storage flag from frame 1.
     ///
     /// **Current consumer scope:** the compositing-bits walk consults
@@ -1131,12 +1131,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// trait answer; the bootstrap flag is the optimization target
     /// for a later sweep that swaps the paint check too).
     ///
-    /// Pre-U33 the storage flag was effectively `false` for every node
-    /// from the moment it entered the tree, which forced the
-    /// compositing walk to fall through to the trait answer
-    /// (`render_object().is_repaint_boundary()`) at every check site —
-    /// a virtual dispatch and a divergence risk if a future caller
-    /// flipped the flag dynamically.
+    /// Before this bootstrap existed, the storage flag was effectively
+    /// `false` for every node from the moment it entered the tree,
+    /// which forced the compositing walk to fall through to the trait
+    /// answer (`render_object().is_repaint_boundary()`) at every check
+    /// site — a virtual dispatch and a divergence risk if a future
+    /// caller flipped the flag dynamically.
     ///
     /// No-op if `id` is not present (defensive — every call site holds
     /// a freshly-inserted id, but a stale id passes through silently
@@ -1307,7 +1307,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// up the ancestor chain and pushing the **relayout boundary** onto
     /// `dirty.needs_layout` for the next `run_layout` pass.
     ///
-    /// **D-block PR-A1 U15** (memo D3) — ports Flutter's `markNeedsLayout`
+    /// Ports Flutter's `markNeedsLayout`
     /// walk (`.flutter/.../object.dart:2658-2700`). Thin forwarder: the walk
     /// logic lives in `DirtyTracker::mark_needs_layout` so it is
     /// unit-testable without a full owner. The `scheduler` and `render_tree`
@@ -1361,7 +1361,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Sets whether semantics are enabled.
     ///
-    /// **ADR-0014 D1.** Lazily creates a [`SemanticsOwner`](flui_semantics::SemanticsOwner) on the
+    /// Lazily creates a [`SemanticsOwner`](flui_semantics::SemanticsOwner) on the
     /// `false` → `true` transition (unless one was already installed via
     /// [`Self::set_semantics_owner`] — e.g. a platform binding that needs
     /// its own update callback — in which case that owner is kept as-is),
@@ -1378,7 +1378,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// `insert()`'s "new nodes need layout and paint" seeding) — without
     /// it, nothing would ever push the first `run_semantics` assembly pass.
     ///
-    /// No OS accessibility bridge exists yet (ADR-0014 D6): a lazily-created
+    /// No OS accessibility bridge exists yet (ADR-0014): a lazily-created
     /// owner is constructed with a no-op platform callback. The assembled
     /// tree is inspected via [`Self::semantics_owner`], the render harness,
     /// or `debug_dump_semantics_tree` until a real bridge lands.
@@ -1516,7 +1516,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// A no-op semantics-update callback for a freshly lazily-created
 /// [`SemanticsOwner`](flui_semantics::SemanticsOwner).
 ///
-/// FLUI has no OS accessibility bridge yet (ADR-0014 D6) — there is
+/// FLUI has no OS accessibility bridge yet (ADR-0014) — there is
 /// nowhere for a real platform callback to forward
 /// [`flui_semantics::SemanticsNodeUpdate`] batches to. Swallowing updates
 /// here is an explicit, documented placeholder (not a silent gap): the

@@ -188,7 +188,7 @@ impl DirtyTracker {
                 };
                 // Idempotent flag set — the AtomicRenderFlags fetch-or is a
                 // no-op when the bit is already set. The walk does NOT
-                // short-circuit on "already marked": even with U23's
+                // short-circuit on "already marked": even with the
                 // `run_layout` → `layout_dirty_root` wiring (which clears
                 // NEEDS_LAYOUT after each successful layout via
                 // `layout_subtree_borrowed`), a stale flag can persist
@@ -836,7 +836,7 @@ mod tests {
     // Mid-phase routing + drain tests
     // =========================================================================
 
-    /// Direct test of the U22 mid-phase routing → drain integration using a
+    /// Direct test of the mid-phase routing → drain integration using a
     /// DirtyTracker pair directly (no PipelineOwner needed for this path).
     #[test]
     fn mid_phase_layout_marks_route_to_side_queue_then_drain_back() {

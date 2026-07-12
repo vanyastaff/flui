@@ -2,7 +2,7 @@
 //!
 //! Extracted from `RenderSliverListLazy::perform_layout` (U3b) so both the
 //! build strategy ([`super::sliver_list_lazy::RenderSliverListLazy`]) and the
-//! request strategy ([`super::sliver_list::RenderSliverList`], U4.2) drive
+//! request strategy ([`super::sliver_list::RenderSliverList`]) drive
 //! the same geometry engine without duplicating per-frame virtualizer
 //! bookkeeping.
 //!
@@ -187,7 +187,7 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 /// Drives the full virtualized-band layout pass for one sliver scroll frame.
 ///
 /// This is the shared algorithm for `RenderSliverListLazy` (build strategy,
-/// U3b) and `RenderSliverList` (request strategy, U4.2).  Both share the
+/// U3b) and `RenderSliverList` (request strategy).  Both share the
 /// virtualizer geometry bookkeeping; the absent-in-band action is the only
 /// point of divergence and is delegated to the caller.
 ///

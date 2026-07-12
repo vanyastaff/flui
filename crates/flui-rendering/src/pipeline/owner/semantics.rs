@@ -137,7 +137,7 @@ fn build_semantics_fragment(
 /// Body of [`build_semantics_fragment`].
 ///
 /// `force_merge` is `true` while this call is inside an ancestor's
-/// `is_merging_semantics_of_descendants` scope (ADR-0014 D3/Slice B):
+/// `is_merging_semantics_of_descendants` scope (ADR-0014):
 /// once set, it suppresses this node's own boundary decision for the rest
 /// of the subtree — even a nested node that independently declares
 /// `is_semantics_boundary` folds into the merge-collapsing ancestor's
@@ -159,13 +159,13 @@ fn build_semantics_fragment_impl(
     let forms_boundary = !force_merge && (is_root || config.is_semantics_boundary());
     // Once a `MergeSemantics`-equivalent boundary starts a merge scope,
     // every descendant — however deep — inherits `force_merge` and can
-    // never spawn its own node (Slice B: `is_merging_semantics_of_descendants`).
+    // never spawn its own node (`is_merging_semantics_of_descendants`).
     let child_force_merge =
         force_merge || (forms_boundary && config.is_merging_semantics_of_descendants());
 
     let mut child_nodes = Vec::new();
     let mut merge_rect = rect;
-    // D5: `excludes_semantics_subtree` (RenderExcludeSemantics parity) skips
+    // `excludes_semantics_subtree` (RenderExcludeSemantics parity) skips
     // this node's children entirely — the node's own config above is still
     // built and boundary/merge-decided normally.
     if !node_excludes_semantics_subtree(node) {

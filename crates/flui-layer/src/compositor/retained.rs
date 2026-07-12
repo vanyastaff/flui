@@ -1,6 +1,6 @@
 //! Retained-layer tracking for [].
 //!
-//! Extracted from `compositor.rs` in Mythos Step 10. The compositor
+//! Extracted from `compositor.rs`. The compositor
 //! tracks retained layer subtrees across frames -- separate concern
 //! from `SceneBuilder` construction logic.
 

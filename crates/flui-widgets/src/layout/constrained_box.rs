@@ -37,11 +37,18 @@ impl RenderView for ConstrainedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderConstrainedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderConstrainedBox::new(self.constraints)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_additional_constraints(self.constraints);
     }
 

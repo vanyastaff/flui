@@ -222,8 +222,8 @@ impl Scene {
     /// programmer error in a single callback from the rest. A poisoned
     /// callback yields one [`LayerError::CallbackPoisoned`] entry in the
     /// returned vec; subsequent callbacks still fire. This mirrors the
-    /// rendering crate's `Poisoned` shape introduced in Mythos Step 12 of
-    /// the `flui-rendering` chain (commit `dc0fa1ad`).
+    /// rendering crate's `Poisoned` shape (commit `dc0fa1ad` in the
+    /// `flui-rendering` chain).
     ///
     /// [`LayerError::CallbackPoisoned`]: crate::LayerError::CallbackPoisoned
     #[tracing::instrument(skip_all, name = "fire_composition_callbacks", fields(n = self.composition_callbacks.len()))]
@@ -339,7 +339,7 @@ impl Default for Scene {
 
 // `Scene: Send` is auto-derived from its fields (`LayerTree`, `LinkRegistry`,
 // `Vec<CompositionCallback>` whose payload is `FnOnce() + Send + 'static`).
-// No `unsafe impl` is needed -- Mythos Step 3 deletion.
+// No `unsafe impl` is needed.
 
 // ============================================================================
 // SCENE BUILDER INTEGRATION
@@ -463,7 +463,7 @@ mod tests {
     fn test_scene_send() {
         fn assert_send<T: Send>() {}
         assert_send::<Scene>();
-        // SceneSnapshot moves by value into the raster mailbox (ADR-0027 §5) —
+        // SceneSnapshot moves by value into the raster mailbox —
         // it must be Send. Deliberately not asserting Sync: nothing shares a
         // SceneSnapshot across threads, only moves it once.
         assert_send::<crate::SceneSnapshot>();
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_scene_drop_consumes() {
-        // Mythos Step 8: `Scene::dispose(self)` (which just called
+        // `Scene::dispose(self)` (which just called
         // `drop(self)`) was deleted; `drop(scene)` is the idiomatic
         // replacement.
         let scene = Scene::from_layer(
@@ -511,7 +511,7 @@ mod tests {
     }
 
     // ========================================================================
-    // COMPOSITION CALLBACK TESTS (U2)
+    // COMPOSITION CALLBACK TESTS
     // ========================================================================
 
     #[test]
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_composition_callback_poison_isolation() {
-        // Mythos Step 9: a panicking callback must be caught and reported as
+        // A panicking callback must be caught and reported as
         // `LayerError::CallbackPoisoned` without preventing subsequent
         // callbacks from firing. This mirrors the rendering crate's
         // `Poisoned` shape (commit dc0fa1ad).
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn test_scene_builder_pop_underflow() {
-        // Mythos Step 9: SceneBuilder::pop returns Result instead of
+        // SceneBuilder::pop returns Result instead of
         // panicking on empty stack. `try_pop` stays as the panic-free
         // probe form.
         let mut tree = LayerTree::new();

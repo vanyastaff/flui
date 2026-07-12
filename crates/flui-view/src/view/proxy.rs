@@ -34,7 +34,7 @@ use super::view::View;
 ///     }
 /// }
 /// ```
-pub trait ProxyView: Clone + Send + Sync + 'static + Sized {
+pub trait ProxyView: Clone + 'static + Sized {
     /// Get the child View.
     fn child(&self) -> &dyn View;
 }
@@ -85,11 +85,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for DummyChild {

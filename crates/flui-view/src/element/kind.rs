@@ -1,7 +1,7 @@
 //! Closed `ElementKind` discriminated union for element storage.
 //!
-//! Plan §U6 / KTD-1 / FR-019, FR-020. Phase 1 ships only the **shape**:
-//! the enum + sub-trait surface + `AnimationListener`. Phase 1 §U8
+//! FR-019, FR-020. Phase 1 ships only the **shape**:
+//! the enum + sub-trait surface + `AnimationListener`. Phase 1
 //! wires the dispatch path (an identity-shim that delegates to the
 //! legacy `Box<dyn ElementBase>` storage). Phase 2 introduces the
 //! production routing through the typed match arms.
@@ -71,9 +71,9 @@ use crate::view::{
 ///
 /// Blanket impl below tags every `StatelessElement<V> =
 /// Element<V, Single, StatelessBehavior>` automatically; no widget
-/// author writes this trait by hand. Phase 1 §U6 introduces the trait
+/// author writes this trait by hand. Phase 1 introduces the trait
 /// as a marker so the [`ElementKind::Stateless`] variant has a
-/// type-discriminated home; Phase 2 §U15 routes the typed dispatch
+/// type-discriminated home; Phase 2 routes the typed dispatch
 /// through it.
 pub trait StatelessElementBase: ElementBase {}
 
@@ -151,7 +151,7 @@ pub trait NotificationElementBase: ElementBase {}
 
 impl<V> StatelessElementBase for Element<V, Single, StatelessBehavior>
 where
-    V: StatelessView + Clone + Send + Sync + 'static,
+    V: StatelessView + Clone + 'static,
     StatelessBehavior: super::behavior::ElementBehavior<V, Single>,
     Element<V, Single, StatelessBehavior>: ElementBase,
 {
@@ -159,7 +159,7 @@ where
 
 impl<V> StatefulElementBase for Element<V, Single, StatefulBehavior<V>>
 where
-    V: StatefulView + Clone + Send + Sync + 'static,
+    V: StatefulView + Clone + 'static,
     StatefulBehavior<V>: super::behavior::ElementBehavior<V, Single>,
     Element<V, Single, StatefulBehavior<V>>: ElementBase,
 {
@@ -167,7 +167,7 @@ where
 
 impl<V> ProxyElementBase for Element<V, Single, ProxyBehavior>
 where
-    V: ProxyView + Clone + Send + Sync + 'static,
+    V: ProxyView + Clone + 'static,
     ProxyBehavior: super::behavior::ElementBehavior<V, Single>,
     Element<V, Single, ProxyBehavior>: ElementBase,
 {
@@ -175,7 +175,7 @@ where
 
 impl<V> InheritedElementBase for Element<V, Single, InheritedBehavior<V>>
 where
-    V: InheritedView + Clone + Send + Sync + 'static,
+    V: InheritedView + Clone + 'static,
     InheritedBehavior<V>: super::behavior::ElementBehavior<V, Single>,
     Element<V, Single, InheritedBehavior<V>>: ElementBase,
 {
@@ -191,7 +191,7 @@ where
 // directly.
 impl<V> RenderElementBase<Variable> for Element<V, Variable, RenderBehavior<V>>
 where
-    V: RenderView + Clone + Send + Sync + 'static,
+    V: RenderView + Clone + 'static,
     RenderBehavior<V>: super::behavior::ElementBehavior<V, Variable>,
     Element<V, Variable, RenderBehavior<V>>: ElementBase,
 {
@@ -207,7 +207,7 @@ where
 // extends ProxyWidget`), so a `ParentDataElement` routes to the `Proxy` variant.
 impl<V> StatefulElementBase for Element<V, Single, AnimatedBehavior<V>>
 where
-    V: AnimatedView + Clone + Send + Sync + 'static,
+    V: AnimatedView + Clone + 'static,
     AnimatedBehavior<V>: super::behavior::ElementBehavior<V, Single>,
     Element<V, Single, AnimatedBehavior<V>>: ElementBase,
 {
@@ -215,7 +215,7 @@ where
 
 impl<V> ProxyElementBase for Element<V, Single, ParentDataBehavior>
 where
-    V: ParentDataView + Clone + Send + Sync + 'static,
+    V: ParentDataView + Clone + 'static,
     ParentDataBehavior: super::behavior::ElementBehavior<V, Single>,
     Element<V, Single, ParentDataBehavior>: ElementBase,
 {
@@ -227,7 +227,7 @@ where
 // sub-trait is the type-safe home — no unsealed `Box<dyn ElementBase>`.
 impl<V> RootElementBase for crate::view::RootRenderElement<V>
 where
-    V: crate::view::View + Clone + Send + Sync + 'static,
+    V: crate::view::View + Clone + 'static,
     crate::view::RootRenderElement<V>: ElementBase,
 {
 }
@@ -241,7 +241,7 @@ impl ErrorElementBase for crate::view::ErrorElement {}
 /// Captured handle to a `Listenable` that a `StatefulElement` subscribes
 /// to, plus the listener-id used to detach on unmount.
 ///
-/// Plan §U6 + KTD-1. Phase 1 ships the **struct shape only** — the
+/// Phase 1 ships the **struct shape only** — the
 /// listener is not yet attached to any `StatefulElement` (that wiring
 /// lands when `AnimatedBehavior` joins the dispatch in a later phase).
 /// The shape is in place now so the [`ElementKind::Stateful`] variant
@@ -256,8 +256,8 @@ impl ErrorElementBase for crate::view::ErrorElement {}
 /// (`create_element` for the View). The thunk closure captures the
 /// listenable handle AT THAT MOMENT and returns it on every call, so
 /// the dispatcher can re-acquire the handle without ever crossing the
-/// typed-`V` boundary again. KTD-1 spells out the alternative (passing
-/// `&dyn StatefulElementBase` into the closure) and rejects it because
+/// typed-`V` boundary again. The alternative — passing
+/// `&dyn StatefulElementBase` into the closure — was rejected because
 /// it would require a runtime downcast that defeats FR-021.
 pub struct AnimationListener {
     /// Captured listenable provider.
@@ -332,8 +332,8 @@ impl fmt::Debug for AnimationListener {
 /// `Option<AnimationListener>` so `AnimatedBehavior` (a Phase 2/3
 /// composition over `StatefulBehavior`) can attach a per-element
 /// listenable subscription without introducing a separate
-/// `ElementKind::Animated` variant. KTD-1 rules out the separate
-/// variant because `AnimationBehavior` *composes* `StatefulBehavior`
+/// `ElementKind::Animated` variant. The separate variant is ruled out
+/// because `AnimationBehavior` *composes* `StatefulBehavior`
 /// rather than peering it (confirmed by
 /// `crates/flui-view/UNIFIED_ELEMENT.md:67`).
 #[non_exhaustive]
@@ -400,7 +400,7 @@ impl ElementKind {
     /// Create a stateless-family element kind.
     pub fn stateless<V>(view: &V) -> Self
     where
-        V: StatelessView + crate::view::View + Clone + Send + Sync + 'static,
+        V: StatelessView + crate::view::View + Clone + 'static,
         StatelessBehavior: ElementBehavior<V, Single>,
         Element<V, Single, StatelessBehavior>: ElementBase,
     {
@@ -413,7 +413,7 @@ impl ElementKind {
     /// Create a stateful-family element kind.
     pub fn stateful<V>(view: &V) -> Self
     where
-        V: StatefulView + crate::view::View + Clone + Send + Sync + 'static,
+        V: StatefulView + crate::view::View + Clone + 'static,
         StatefulBehavior<V>: ElementBehavior<V, Single>,
         Element<V, Single, StatefulBehavior<V>>: ElementBase,
     {
@@ -429,7 +429,7 @@ impl ElementKind {
     /// Create a proxy-family element kind.
     pub fn proxy<V>(view: &V) -> Self
     where
-        V: ProxyView + crate::view::View + Clone + Send + Sync + 'static,
+        V: ProxyView + crate::view::View + Clone + 'static,
         ProxyBehavior: ElementBehavior<V, Single>,
         Element<V, Single, ProxyBehavior>: ElementBase,
     {
@@ -442,7 +442,7 @@ impl ElementKind {
     /// Create an inherited-family element kind.
     pub fn inherited<V>(view: &V) -> Self
     where
-        V: InheritedView + crate::view::View + Clone + Send + Sync + 'static,
+        V: InheritedView + crate::view::View + Clone + 'static,
         InheritedBehavior<V>: ElementBehavior<V, Single>,
         Element<V, Single, InheritedBehavior<V>>: ElementBase,
     {
@@ -455,7 +455,7 @@ impl ElementKind {
     /// Create a render-object element kind for the currently wired variable arity.
     pub fn render_variable<V>(view: &V) -> Self
     where
-        V: RenderView + crate::view::View + Clone + Send + Sync + 'static,
+        V: RenderView + crate::view::View + Clone + 'static,
         RenderBehavior<V>: ElementBehavior<V, Variable>,
         Element<V, Variable, RenderBehavior<V>>: ElementBase,
     {
@@ -468,7 +468,7 @@ impl ElementKind {
     /// Create an animated stateful-family element kind.
     pub fn animated<V>(view: &V) -> Self
     where
-        V: AnimatedView + crate::view::View + Clone + Send + Sync + 'static,
+        V: AnimatedView + crate::view::View + Clone + 'static,
         AnimatedBehavior<V>: ElementBehavior<V, Single>,
         Element<V, Single, AnimatedBehavior<V>>: ElementBase,
     {
@@ -484,7 +484,7 @@ impl ElementKind {
     /// Create a parent-data proxy-family element kind.
     pub fn parent_data<V>(view: &V) -> Self
     where
-        V: ParentDataView + crate::view::View + Clone + Send + Sync + 'static,
+        V: ParentDataView + crate::view::View + Clone + 'static,
         ParentDataBehavior: ElementBehavior<V, Single>,
         Element<V, Single, ParentDataBehavior>: ElementBase,
     {
@@ -791,7 +791,7 @@ mod tests {
     /// verify the captured handle is reachable and non-null. The
     /// thunk-capture pattern is the contract that lets the Stateful
     /// variant subscribe to a listenable without a runtime
-    /// `downcast::<V>()` (KTD-1).
+    /// `downcast::<V>()`.
     #[test]
     fn animation_listener_thunk_returns_captured_handle() {
         use flui_foundation::{ChangeNotifier, ListenerId};

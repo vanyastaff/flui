@@ -51,11 +51,18 @@ impl RenderView for ClipOval {
     type Protocol = BoxProtocol;
     type RenderObject = RenderClipOval;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderClipOval::new(self.clip_behavior)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_clip_behavior(self.clip_behavior);
     }
 
@@ -81,7 +88,8 @@ mod tests {
 
     #[test]
     fn create_render_object_defaults_to_anti_alias() {
-        let render_object = ClipOval::new().create_render_object();
+        let render_object =
+            ClipOval::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
     }
 
@@ -89,18 +97,22 @@ mod tests {
     fn create_render_object_applies_an_overridden_clip_behavior() {
         let render_object = ClipOval::new()
             .clip_behavior(Clip::HardEdge)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }
 
     #[test]
     fn update_render_object_applies_a_changed_clip_behavior() {
-        let mut render_object = ClipOval::new().create_render_object();
+        let mut render_object =
+            ClipOval::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
 
         ClipOval::new()
             .clip_behavior(Clip::HardEdge)
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }
@@ -109,11 +121,14 @@ mod tests {
     fn update_render_object_is_idempotent_for_an_unchanged_clip_behavior() {
         let mut render_object = ClipOval::new()
             .clip_behavior(Clip::HardEdge)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
 
         ClipOval::new()
             .clip_behavior(Clip::HardEdge)
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }

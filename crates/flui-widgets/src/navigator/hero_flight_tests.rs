@@ -1,4 +1,4 @@
-//! ADR-0021 U4: the flight itself.
+//! The flight itself.
 //!
 //! A manifest becomes a shuttle in an overlay entry, two frozen placeholders, and a
 //! driven `RectTween`. These tests pin the observable half of that: what is in the
@@ -111,10 +111,10 @@ fn fly(
     source: PageRoute<i32>,
     destination: PageRoute<i32>,
 ) -> TransitionHandle {
-    let _source = navigator.push(source);
+    let _source = harness.enter_owner_scope(|| navigator.push(source));
     harness.tick();
     let transition = destination.transition_handle();
-    let _destination = navigator.push(destination);
+    let _destination = harness.enter_owner_scope(|| navigator.push(destination));
     harness.tick();
     transition
 }
@@ -180,7 +180,7 @@ fn no_flight_when_only_one_route_is_a_page_route() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _page = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _page = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
 
     let popup = PopupRoute::<i32>::new(|_ctx, _a, _s| {
@@ -192,7 +192,7 @@ fn no_flight_when_only_one_route_is_a_page_route() {
             .into_view()
             .boxed()
     });
-    let _popup = navigator.push(popup);
+    let _popup = harness.enter_owner_scope(|| navigator.push(popup));
     harness.tick();
 
     assert_eq!(controller.flights().len(), 0);
@@ -427,7 +427,7 @@ fn the_flight_entry_is_removed_and_heroes_restored_when_animation_settles() {
 
     // Land it: the destination route's entrance completes.
     let animation = transition.controller().expect("installed");
-    animation.set_value(1.0);
+    harness.enter_owner_scope(|| animation.set_value(1.0));
     assert_eq!(animation.status(), AnimationStatus::Completed);
     harness.tick();
 
@@ -471,7 +471,7 @@ fn the_flight_entry_is_removed_and_heroes_restored_when_animation_settles() {
 /// `start_flight` freezes the destination hero at its measured size, so its render box
 /// keeps that size for the whole flight — re-reading it and preserving it give the same
 /// answer. The `& end.size` is kept because it is what Flutter does, and because it
-/// stops being a no-op the moment a `placeholderBuilder` (U5) can hand back a
+/// stops being a no-op the moment a `placeholderBuilder` can hand back a
 /// differently-sized placeholder. The assertion below is a regression guard, not a
 /// red-checkable proof; mutating `on_tick` to re-read the size leaves it green.
 ///
@@ -484,7 +484,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _source = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _source = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
 
     // The destination hero is **pushed down** by a growing sibling. It cannot be moved
@@ -514,7 +514,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
     })
     .transition_duration(TRANSITION);
     let transition = destination.transition_handle();
-    let _destination = navigator.push(destination);
+    let _destination = harness.enter_owner_scope(|| navigator.push(destination));
     harness.tick();
 
     let flight = controller
@@ -534,7 +534,8 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
 
     // Tick the flight: the proxy's parent is the destination route's animation.
     let animation = transition.controller().expect("installed");
-    animation.set_value(0.25);
+    harness.enter_owner_scope(|| animation.set_value(0.25));
+    harness.tick();
 
     let target_after = flight.target_rect();
     assert_eq!(
@@ -567,7 +568,7 @@ fn rect_origin(rect: Rect) -> (f32, f32) {
 }
 
 // ============================================================================
-// Divert (U5.1) — a same-tag flight interrupted mid-air is redirected in place
+// Divert — a same-tag flight interrupted mid-air is redirected in place
 // ============================================================================
 
 /// **push interrupted by pop.** Open a page, then immediately go back while its hero
@@ -580,7 +581,7 @@ fn rect_origin(rect: Rect) -> (f32, f32) {
 /// begin/end swapped (the shuttle now heads back to where it came from).
 ///
 /// Red-check: in `FlightManager::start`, replace the `existing.divert(…); return;`
-/// with the U4 end-and-restart (`self.flights.lock().remove(&tag)` + `finish` + a fresh
+/// with an end-and-restart (`self.flights.lock().remove(&tag)` + `finish` + a fresh
 /// `start`). The entry id then changes and the begin/end are the fresh push tween.
 #[test]
 fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
@@ -588,22 +589,22 @@ fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _a = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
     let b = hero_page("shared", 60.0, 45.0);
     let b_transition = b.transition_handle();
-    let _b = navigator.push(b);
+    let _b = harness.enter_owner_scope(|| navigator.push(b));
     harness.tick();
 
     // The push flight is airborne, parked mid-entrance so the pop genuinely reverses.
-    b_transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.5));
     let push_flight = controller.flights().get(&tag("shared")).expect("airborne");
     let push_entry = push_flight.entry_id();
     let push_begin = push_flight.begin_rect();
     let push_end = push_flight.target_rect();
 
     // Go back: B pops while its hero is still in flight.
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
 
     assert_eq!(controller.flights().len(), 1, "still exactly one flight");
@@ -662,7 +663,7 @@ fn a_same_tag_divert_keeps_one_active_flight_and_one_overlay_entry() {
     assert_eq!(controller.flights().len(), 1);
 
     // A third page, same tag, pushed while the first flight is still airborne.
-    let _third = navigator.push(hero_page("shared", 90.0, 70.0));
+    let _third = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 90.0, 70.0)));
     harness.tick();
 
     assert_eq!(
@@ -707,15 +708,15 @@ fn a_divert_does_not_deadlock() {
         let controller = install(&navigator);
         let mut harness = mount_navigator(&navigator);
 
-        let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+        let _a = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
         harness.tick();
         let b = hero_page("shared", 60.0, 45.0);
         let b_transition = b.transition_handle();
-        let _b = navigator.push(b);
+        let _b = harness.enter_owner_scope(|| navigator.push(b));
         harness.tick();
-        b_transition.controller().expect("installed").set_value(0.5);
+        harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.5));
 
-        assert!(navigator.pop());
+        assert!(harness.enter_owner_scope(|| navigator.pop()));
         harness.tick();
 
         assert_eq!(controller.flights().len(), 1);
@@ -740,15 +741,15 @@ fn a_diverted_flight_retires_only_after_it_finally_settles() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _a = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
     let b = hero_page("shared", 60.0, 45.0);
     let b_transition = b.transition_handle();
-    let _b = navigator.push(b);
+    let _b = harness.enter_owner_scope(|| navigator.push(b));
     harness.tick();
-    b_transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.5));
 
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
 
     assert_eq!(controller.flights().len(), 1, "airborne after the divert");
@@ -759,19 +760,13 @@ fn a_diverted_flight_retires_only_after_it_finally_settles() {
     );
 
     // Let the pop settle: B's animation runs to dismissed.
-    b_transition.controller().expect("installed").set_value(0.0);
+    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.0));
+    harness.tick();
     assert_eq!(
         controller.flights().len(),
         0,
         "the settled flight left the active set"
     );
-    assert_eq!(
-        controller.flights().retired_count(),
-        1,
-        "parked, awaiting a safe drop"
-    );
-
-    harness.tick();
     assert_eq!(
         controller.flights().retired_count(),
         0,
@@ -847,8 +842,9 @@ impl ViewState<Mover> for MoverState {
 /// the shuttle `BoxedView`, the animation, and via `HeroHandle::owner` the
 /// `PipelineOwner`) until some unrelated hero activity happens.
 ///
-/// The middle assertions pin the retire-not-drop discipline itself: the moment the
-/// status listener runs, the flight is out of the active set but still parked.
+/// The flight lands from owner-local rebuild, not from the data-plane status
+/// listener. The same frame removes it from the active set and drains the retired
+/// queue at end-of-frame.
 ///
 /// Red-check: in `FlightManager::finish`, delete the `self.schedule_drain()` call — the
 /// only remaining drain is `MeasurementPass`'s head, and with no second transition
@@ -872,29 +868,57 @@ fn a_completed_flight_is_drained_after_its_frame_without_another_transition() {
         "nothing retired yet"
     );
 
-    // Land it. The status listener runs synchronously inside `set_value`.
+    // Land it. The data-plane status listener records the terminal status; the
+    // owner-local shuttle drains it on the next frame.
     let animation = transition.controller().expect("installed");
-    animation.set_value(1.0);
+    harness.enter_owner_scope(|| animation.set_value(1.0));
 
-    assert_eq!(
-        controller.flights().len(),
-        0,
-        "removed from the active set the instant its listener runs"
-    );
-    assert_eq!(
-        controller.flights().retired_count(),
-        1,
-        "parked in `retired`, not yet dropped — we were inside its listener"
-    );
-
-    // One frame later, and **no second hero transition**, `retired` is empty.
     harness.tick();
 
+    assert_eq!(controller.flights().len(), 0, "the flight ended");
     assert_eq!(
         controller.flights().retired_count(),
         0,
         "the end-of-frame drain ran; the flight graph was released without waiting \
          for another measurement pass"
+    );
+}
+
+/// If the animation settles outside its owner scope, the data-plane listener only
+/// records a terminal status. Owner-local flight cleanup still waits for the next
+/// owner frame.
+#[test]
+fn settling_outside_owner_scope_waits_for_the_next_owner_frame() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page("shared", 60.0, 45.0),
+    );
+
+    let animation = transition.controller().expect("installed");
+    animation.set_value(1.0); // deliberately outside the owner scope
+
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "outside owner scope only records the terminal status"
+    );
+    assert_eq!(
+        controller.flights().retired_count(),
+        0,
+        "nothing owner-local has retired yet"
+    );
+
+    harness.tick();
+    assert_eq!(controller.flights().len(), 0, "the owner frame retires it");
+    assert_eq!(
+        controller.flights().retired_count(),
+        0,
+        "and drains it at the frame tail"
     );
 }
 
@@ -929,31 +953,27 @@ fn many_flights_landing_in_one_frame_schedule_one_drain() {
         .transition_duration(TRANSITION)
     };
 
-    let _source = navigator.push(two_heroes("one", "two", 30.0, 40.0));
+    let _source =
+        harness.enter_owner_scope(|| navigator.push(two_heroes("one", "two", 30.0, 40.0)));
     harness.tick();
     let destination = two_heroes("one", "two", 60.0, 80.0);
     let transition = destination.transition_handle();
-    let _destination = navigator.push(destination);
+    let _destination = harness.enter_owner_scope(|| navigator.push(destination));
     harness.tick();
 
     assert_eq!(controller.flights().len(), 2, "two tags, two flights");
     assert_eq!(controller.flights().drains_scheduled(), 0);
 
     let animation = transition.controller().expect("installed");
-    animation.set_value(1.0);
+    harness.enter_owner_scope(|| animation.set_value(1.0));
+    harness.tick();
 
-    assert_eq!(controller.flights().retired_count(), 2, "both parked");
+    assert_eq!(controller.flights().len(), 0, "both flights ended");
+    assert_eq!(controller.flights().retired_count(), 0, "both drained");
     assert_eq!(
         controller.flights().drains_scheduled(),
         1,
         "two flights, one coalesced drain"
-    );
-
-    harness.tick();
-    assert_eq!(
-        controller.flights().retired_count(),
-        0,
-        "both drained together"
     );
 }
 
@@ -974,20 +994,20 @@ fn a_pop_flight_interrupted_by_a_push_diverts_in_place() {
     let mut harness = mount_navigator(&navigator);
 
     // Push A, then B, and settle B so the push flight ends cleanly.
-    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _a = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
     let b = hero_page("shared", 60.0, 45.0);
     let b_transition = b.transition_handle();
-    let _b = navigator.push(b);
+    let _b = harness.enter_owner_scope(|| navigator.push(b));
     harness.tick();
-    b_transition.controller().expect("installed").set_value(1.0);
+    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(1.0));
     harness.tick();
     assert_eq!(controller.flights().len(), 0, "the push flight settled");
 
     // Pop B: a fresh pop flight B→A. Keep it airborne, mid-reverse.
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
-    b_transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.5));
     let pop_flight = controller
         .flights()
         .get(&tag("shared"))
@@ -996,7 +1016,7 @@ fn a_pop_flight_interrupted_by_a_push_diverts_in_place() {
     let pop_entry = pop_flight.entry_id();
 
     // Push C while the pop is still flying.
-    let _c = navigator.push(hero_page("shared", 90.0, 70.0));
+    let _c = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 90.0, 70.0)));
     harness.tick();
 
     assert_eq!(
@@ -1040,13 +1060,13 @@ fn a_same_direction_divert_transfers_the_placeholders() {
     let _controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _a = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
-    let _b = navigator.push(hero_page("shared", 60.0, 45.0));
+    let _b = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 60.0, 45.0)));
     harness.tick();
 
     // A third page diverts the airborne A→B push into A→C.
-    let _c = navigator.push(hero_page("shared", 90.0, 70.0));
+    let _c = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 90.0, 70.0)));
     harness.tick();
 
     // Routes: 0 seeded, 1 = A, 2 = B (new source), 3 = C (new destination).
@@ -1074,7 +1094,7 @@ fn a_same_direction_divert_transfers_the_placeholders() {
 }
 
 // ============================================================================
-// U5.2 — onTick fade-out when the destination is lost mid-flight
+// onTick fade-out when the destination is lost mid-flight
 // ============================================================================
 
 /// A page whose hero can be removed from outside the tree, without touching the route
@@ -1160,7 +1180,7 @@ fn a_destination_lost_mid_flight_fades_out_without_ending_the_flight() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _a = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
 
     let gate = HeroGate::showing("shared");
@@ -1173,14 +1193,14 @@ fn a_destination_lost_mid_flight_fades_out_without_ending_the_flight() {
     })
     .transition_duration(TRANSITION);
     let b_transition = b.transition_handle();
-    let _b = navigator.push(b);
+    let _b = harness.enter_owner_scope(|| navigator.push(b));
     harness.tick();
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     let entry = flight.entry_id().expect("has an overlay entry");
 
     let controller_b = b_transition.controller().expect("installed");
-    controller_b.set_value(0.5);
+    harness.enter_owner_scope(|| controller_b.set_value(0.5));
     assert_eq!(
         flight.opacity(),
         1.0,
@@ -1192,13 +1212,15 @@ fn a_destination_lost_mid_flight_fades_out_without_ending_the_flight() {
     harness.tick();
 
     // Advance: the first post-loss tick arms the fade; the next drives it down.
-    controller_b.set_value(0.6);
+    harness.enter_owner_scope(|| controller_b.set_value(0.6));
+    harness.tick();
     assert_eq!(
         controller.flights().len(),
         1,
         "the destination was lost, not the animation — the flight lives on"
     );
-    controller_b.set_value(0.8);
+    harness.enter_owner_scope(|| controller_b.set_value(0.8));
+    harness.tick();
 
     let faded = flight.opacity();
     assert!(
@@ -1229,7 +1251,7 @@ fn a_faded_out_flight_still_removes_its_entry_when_the_animation_settles() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _a = navigator.push(hero_page("shared", 30.0, 20.0));
+    let _a = harness.enter_owner_scope(|| navigator.push(hero_page("shared", 30.0, 20.0)));
     harness.tick();
 
     let gate = HeroGate::showing("shared");
@@ -1242,7 +1264,7 @@ fn a_faded_out_flight_still_removes_its_entry_when_the_animation_settles() {
     })
     .transition_duration(TRANSITION);
     let b_transition = b.transition_handle();
-    let _b = navigator.push(b);
+    let _b = harness.enter_owner_scope(|| navigator.push(b));
     harness.tick();
 
     let entry = controller
@@ -1254,14 +1276,14 @@ fn a_faded_out_flight_still_removes_its_entry_when_the_animation_settles() {
     let entries_with_flight = navigator.overlay().entry_ids().len();
 
     let controller_b = b_transition.controller().expect("installed");
-    controller_b.set_value(0.5);
+    harness.enter_owner_scope(|| controller_b.set_value(0.5));
     gate.remove_hero();
     harness.tick();
-    controller_b.set_value(0.8);
+    harness.enter_owner_scope(|| controller_b.set_value(0.8));
     assert_eq!(controller.flights().len(), 1, "fading");
 
     // Settle the driver: B's entrance completes.
-    controller_b.set_value(1.0);
+    harness.enter_owner_scope(|| controller_b.set_value(1.0));
     harness.tick();
 
     assert_eq!(
@@ -1335,7 +1357,7 @@ fn a_default_flight_eases_on_fast_out_slow_in() {
         hero_page("shared", 30.0, 20.0),
         hero_page("shared", 60.0, 45.0),
     );
-    transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     let tween = RectTween {
@@ -1372,7 +1394,7 @@ fn a_push_eases_on_the_destination_hero_curve() {
         hero_page("shared", 30.0, 20.0),
         hero_page_with("shared", 60.0, 45.0, |hero| hero.curve(Threshold::new(0.9))),
     );
-    transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     assert_rect_close(
@@ -1406,13 +1428,13 @@ fn a_default_pop_eases_symmetrically_with_the_push() {
         hero_page("shared", 30.0, 20.0),
         hero_page("shared", 60.0, 45.0),
     );
-    transition.controller().expect("installed").set_value(1.0);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
     harness.tick();
     assert_eq!(controller.flights().len(), 0, "the push flight settled");
 
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
-    transition.controller().expect("installed").set_value(0.7);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.7));
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     let tween = RectTween {
@@ -1446,13 +1468,13 @@ fn a_pop_eases_on_the_source_hero_reverse_curve() {
             hero.reverse_curve(Threshold::new(0.9))
         }),
     );
-    transition.controller().expect("installed").set_value(1.0);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
     harness.tick();
     assert_eq!(controller.flights().len(), 0, "the push flight settled");
 
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
-    transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     assert_rect_close(
@@ -1480,12 +1502,12 @@ fn a_diverted_flight_drops_the_reverse_curve() {
         hero_page("shared", 30.0, 20.0),
         hero_page("shared", 60.0, 45.0),
     );
-    transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
 
     // Pop while the push flight is airborne: a push→pop divert, same flight object.
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
-    transition.controller().expect("installed").set_value(0.5);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     assert_eq!(
@@ -1645,26 +1667,26 @@ fn a_pop_push_divert_resumes_from_the_old_manifest_animation_value() {
     // Push A, then B; settle the push flight.
     let b = linear_page(60.0, 45.0);
     let b_transition = b.transition_handle();
-    let _a = navigator.push(linear_page(30.0, 20.0));
+    let _a = harness.enter_owner_scope(|| navigator.push(linear_page(30.0, 20.0)));
     harness.tick();
-    let _b = navigator.push(b);
+    let _b = harness.enter_owner_scope(|| navigator.push(b));
     harness.tick();
-    b_transition.controller().expect("installed").set_value(1.0);
+    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(1.0));
     harness.tick();
     assert_eq!(controller.flights().len(), 0, "the push flight settled");
 
     // Pop B, parked asymmetrically: manifest.animation.value = 0.7, proxy = 0.3.
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
-    b_transition.controller().expect("installed").set_value(0.7);
+    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.7));
 
     // Push C while the pop flies: a pop→push divert to a new destination.
     let c = linear_page(90.0, 70.0);
     let c_transition = c.transition_handle();
-    let _c = navigator.push(c);
+    let _c = harness.enter_owner_scope(|| navigator.push(c));
     harness.tick();
     // Park C's entrance at an interior value so nothing settles under the assertion.
-    c_transition.controller().expect("installed").set_value(0.1);
+    harness.enter_owner_scope(|| c_transition.controller().expect("installed").set_value(0.1));
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     assert_eq!(

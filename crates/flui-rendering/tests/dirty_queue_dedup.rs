@@ -1,4 +1,4 @@
-//! D-block PR-A1 U22 — dirty-queue dedup + mid-phase routing tests.
+//! Dirty-queue dedup + mid-phase routing tests.
 //!
 //! Verifies [`PipelineOwner::add_node_needing_layout`] (and paint /
 //! compositing / semantics siblings) dedup against in-queue
@@ -9,8 +9,8 @@
 //! the next outer-loop iteration.
 //!
 //! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U22
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D7
+//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
+//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
 use flui_objects::RenderColoredBox;
 use flui_rendering::pipeline::{DirtyNode, PipelineOwner};
@@ -28,7 +28,7 @@ fn fresh_owner_with_one_node() -> (PipelineOwner, flui_foundation::RenderId) {
 // ============================================================================
 
 #[test]
-fn u22_repeated_add_layout_dedups_to_single_entry() {
+fn repeated_add_layout_dedups_to_single_entry() {
     let (mut owner, id) = fresh_owner_with_one_node();
     // Clear whatever insert() pushed so we start from empty.
     owner.clear_all_dirty_nodes();
@@ -48,7 +48,7 @@ fn u22_repeated_add_layout_dedups_to_single_entry() {
 }
 
 #[test]
-fn u22_repeated_add_paint_dedups_to_single_entry() {
+fn repeated_add_paint_dedups_to_single_entry() {
     let (mut owner, id) = fresh_owner_with_one_node();
     owner.clear_all_dirty_nodes();
 
@@ -64,7 +64,7 @@ fn u22_repeated_add_paint_dedups_to_single_entry() {
 }
 
 #[test]
-fn u22_repeated_add_compositing_dedups_to_single_entry() {
+fn repeated_add_compositing_dedups_to_single_entry() {
     let (mut owner, id) = fresh_owner_with_one_node();
     owner.clear_all_dirty_nodes();
 
@@ -80,7 +80,7 @@ fn u22_repeated_add_compositing_dedups_to_single_entry() {
 }
 
 #[test]
-fn u22_repeated_add_semantics_dedups_to_single_entry() {
+fn repeated_add_semantics_dedups_to_single_entry() {
     let (mut owner, id) = fresh_owner_with_one_node();
     owner.clear_all_dirty_nodes();
 
@@ -100,7 +100,7 @@ fn u22_repeated_add_semantics_dedups_to_single_entry() {
 // ============================================================================
 
 #[test]
-fn u22_distinct_ids_remain_distinct_queue_entries() {
+fn distinct_ids_remain_distinct_queue_entries() {
     let mut owner = PipelineOwner::new();
     let id_a = owner
         .render_tree_mut()
@@ -131,13 +131,13 @@ fn u22_distinct_ids_remain_distinct_queue_entries() {
 /// integration with `run_layout` / `run_paint` / `run_semantics`
 /// (where the flag does get flipped by the phase loop) is covered
 /// by the wire-up commit's regression below
-/// (`u22_drained_mid_marks_become_dirty_entries`) and by the lib-
+/// (`drained_mid_marks_become_dirty_entries`) and by the lib-
 /// scoped pipeline tests that exercise the private field directly.
 ///
 /// This test verifies the empty-case drain shape: no mid marks ⇒
 /// `drain_mid_layout_marks()` returns 0 + leaves dirty unchanged.
 #[test]
-fn u22_drain_helper_returns_zero_when_mid_queue_empty() {
+fn drain_helper_returns_zero_when_mid_queue_empty() {
     let (mut owner, _id) = fresh_owner_with_one_node();
     owner.clear_all_dirty_nodes();
 
@@ -151,10 +151,10 @@ fn u22_drain_helper_returns_zero_when_mid_queue_empty() {
 // ============================================================================
 
 // ============================================================================
-// P1 regression — Codex 3294365736: drain mid-marks at phase end
+// Regression — drain mid-marks at phase end
 // ============================================================================
 
-/// PR #147 Codex review (comment_id=3294365736) P1: routing marks
+/// Regression guard: routing marks
 /// to `mid_layout_marks` without a drain call leaves them
 /// unreachable. The fix wires `drain_mid_layout_marks()` into
 /// `run_layout`'s outer `while` loop (drained per-iteration so
@@ -163,11 +163,11 @@ fn u22_drain_helper_returns_zero_when_mid_queue_empty() {
 /// phases).
 ///
 /// This regression test verifies the wiring by hand-flipping
-/// `debug_doing_layout` (the U23 wiring will do this via real
+/// `debug_doing_layout` (a later change wires this up via real
 /// `run_layout` invocation) and asserting that drained mid-marks
 /// land on `dirty`.
 #[test]
-fn u22_drained_mid_marks_become_dirty_entries() {
+fn drained_mid_marks_become_dirty_entries() {
     let mut owner = PipelineOwner::new();
     let id_a = owner
         .render_tree_mut()
@@ -200,13 +200,13 @@ fn u22_drained_mid_marks_become_dirty_entries() {
     // Step 4: indirect mid-mark verification — the wired drain calls
     // in run_layout/run_paint/run_semantics are exercised by the
     // existing pipeline lib tests; this test pins the drain contract
-    // separately. Real mid-phase routing tests live in U23 once
-    // run_layout calls into the new layout_dirty_root path.
+    // separately. Real mid-phase routing tests live alongside
+    // `run_layout_wiring.rs`, which drives layout_dirty_root directly.
     let _ = id_b;
 }
 
 #[test]
-fn u22_clear_all_dirty_nodes_clears_mid_layout_marks_too() {
+fn clear_all_dirty_nodes_clears_mid_layout_marks_too() {
     let mut owner = PipelineOwner::new();
     // PipelineOwner::insert (vs render_tree_mut.insert_box) pushes
     // to both layout + paint dirty queues — that's the path that

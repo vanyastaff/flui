@@ -6,9 +6,8 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext},
     hit_testing::{
-        CursorIcon, DeviceId, EventPropagation, HitTestBehavior, InputEvent, MouseEnterCallback,
-        MouseExitCallback, MouseHoverCallback, MouseTrackerAnnotation, PointerEvent,
-        PointerEventExt, PointerEventHandler,
+        CursorIcon, DeviceId, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
+        MouseHoverCallback, MouseTrackerAnnotation, PointerTarget,
     },
     parent_data::BoxParentData,
     traits::RenderBox,
@@ -26,6 +25,9 @@ pub struct RenderMouseRegion {
     on_enter: Option<MouseEnterCallback>,
     on_hover: Option<MouseHoverCallback>,
     on_exit: Option<MouseExitCallback>,
+    /// Owner-local pointer target delivering hover `Move` events; the
+    /// executable hover adapter lives in the interaction lane (ADR-0027).
+    hover_target: Option<PointerTarget>,
     cursor: CursorIcon,
     valid_for_mouse_tracker: bool,
     opaque: bool,
@@ -39,6 +41,7 @@ impl Default for RenderMouseRegion {
             on_enter: None,
             on_hover: None,
             on_exit: None,
+            hover_target: None,
             cursor: CursorIcon::Default,
             valid_for_mouse_tracker: true,
             opaque: true,
@@ -67,6 +70,17 @@ impl RenderMouseRegion {
     /// Sets the exit callback.
     pub fn set_on_exit(&mut self, callback: Option<MouseExitCallback>) {
         self.on_exit = callback;
+    }
+
+    /// The pointer target advertised for hover delivery, if any.
+    #[must_use]
+    pub const fn hover_target(&self) -> Option<PointerTarget> {
+        self.hover_target
+    }
+
+    /// Sets the owner-local pointer target that delivers hover events.
+    pub fn set_hover_target(&mut self, target: Option<PointerTarget>) {
+        self.hover_target = target;
     }
 
     /// Returns the active cursor.
@@ -128,17 +142,6 @@ impl RenderMouseRegion {
         self.behavior = behavior;
         true
     }
-
-    fn hover_handler(&self) -> Option<PointerEventHandler> {
-        let on_hover = self.on_hover.clone()?;
-        Some(std::sync::Arc::new(move |event: &PointerEvent| {
-            if matches!(event, PointerEvent::Move(_)) {
-                let device_id = InputEvent::Pointer(event.clone()).device_id().unwrap_or(0);
-                on_hover(device_id, event.position());
-            }
-            EventPropagation::Continue
-        }))
-    }
 }
 
 impl std::fmt::Debug for RenderMouseRegion {
@@ -146,6 +149,7 @@ impl std::fmt::Debug for RenderMouseRegion {
         f.debug_struct("RenderMouseRegion")
             .field("has_enter", &self.on_enter.is_some())
             .field("has_hover", &self.on_hover.is_some())
+            .field("has_hover_target", &self.hover_target.is_some())
             .field("has_exit", &self.on_exit.is_some())
             .field("cursor", &self.cursor)
             .field("valid_for_mouse_tracker", &self.valid_for_mouse_tracker)
@@ -221,8 +225,8 @@ impl RenderBox for RenderMouseRegion {
         hit_target && self.opaque
     }
 
-    fn pointer_event_handler(&self) -> Option<PointerEventHandler> {
-        self.hover_handler()
+    fn pointer_target(&self) -> Option<PointerTarget> {
+        self.hover_target
     }
 
     fn mouse_cursor(&self) -> CursorIcon {

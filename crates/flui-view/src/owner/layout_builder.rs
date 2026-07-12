@@ -1,4 +1,4 @@
-//! The build-during-layout seam (ADR-0017, unit U1).
+//! The build-during-layout seam.
 //!
 //! # Why this exists
 //!
@@ -27,7 +27,7 @@
 //!
 //! # Not a public feature
 //!
-//! This is seam infrastructure. `LayoutBuilder` is public after ADR-0017 U4,
+//! This is seam infrastructure. `LayoutBuilder` is public,
 //! but only its element registers here; app code never touches the registry.
 
 use std::{collections::HashMap, sync::Arc};
@@ -203,7 +203,7 @@ impl BuildOwner {
     ///
     /// # Non-convergence
     ///
-    /// Bounded at [`MAX_LAYOUT_BUILD_PASSES`]. Exceeding it means a builder's
+    /// Bounded at `MAX_LAYOUT_BUILD_PASSES`. Exceeding it means a builder's
     /// output changes the constraints that builder receives. In debug this is a
     /// `BUG:` panic (an internal-invariant violation per `docs/PANIC-POLICY.md`);
     /// in release it logs and paints the last settled tree rather than spinning.
@@ -262,8 +262,8 @@ fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, 
 
 /// Test-only access to the otherwise crate-private registry.
 ///
-/// Exists because ADR-0017 U1 ships the seam **inert** — no widget registers
-/// into it until U3 — so the only way for `flui-binding` / `flui-app` to prove
+/// Exists because the seam ships **inert** — no widget registers
+/// into it until `LayoutBuilder` lands — so the only way for `flui-binding` / `flui-app` to prove
 /// their frame paths actually run the seam is to plant an entry by hand.
 #[cfg(any(test, feature = "test-utils"))]
 impl BuildOwner {
@@ -328,9 +328,9 @@ mod tests {
 
     /// A render-family leaf view, mirroring `build_owner.rs`'s `TestView`.
     ///
-    /// Stands in for the `LayoutBuilder` view that U3 will add: U1 only needs
-    /// *some* element that owns *some* render node, so the liveness and
-    /// scheduling paths can be exercised without a real builder.
+    /// Stands in for the `LayoutBuilder` view this seam will eventually add:
+    /// this test only needs *some* element that owns *some* render node, so
+    /// the liveness and scheduling paths can be exercised without a real builder.
     #[derive(Clone)]
     struct TestView;
 
@@ -338,11 +338,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for TestView {
@@ -655,7 +663,7 @@ mod tests {
         assert_eq!(cell.constraints(), Some(constraints(32.0)));
     }
 
-    /// The seam is inert until a widget registers into it (ADR-0017 U2–U4):
+    /// The seam is inert until a widget registers into it:
     /// a full frame over an empty registry converges in one pass and paints.
     #[test]
     fn layout_builder_frame_over_empty_registry_converges() {

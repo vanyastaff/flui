@@ -854,7 +854,7 @@ impl FloatingHeaderMode for FloatingPinnedMode {
 /// Flutter parity: `RenderSliverFloatingPersistentHeader` (`:508-787`) and
 /// `RenderSliverFloatingPinnedPersistentHeader` (`:797-836`).
 ///
-/// # Snap-animation controller injection (ADR-0013 D2)
+/// # Snap-animation controller injection
 ///
 /// Like [`RenderAnimatedSize`](crate::RenderAnimatedSize), this render
 /// object never builds its own [`AnimationController`] — it receives one
@@ -872,7 +872,7 @@ pub type RenderSliverFloatingPinnedPersistentHeader =
 /// why this pair is generic while Scrolling/Pinned are not.
 pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     core: PersistentHeaderCore,
-    /// Injected, already-built controller (ADR-0013 D2). `None` means this
+    /// Injected, already-built controller. `None` means this
     /// header never snaps/expands — `maybe_start_snap_animation` becomes an
     /// inert no-op.
     controller: Option<AnimationController>,
@@ -1045,8 +1045,8 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// Diverges from the oracle in one respect: the oracle's controller is
     /// lazily built on the FIRST call (`_controller ??= AnimationController(
     /// ..., duration: duration)`), so `duration` is silently ignored on every
-    /// later call. FLUI's controller is always already-built (ADR-0013 D2 —
-    /// there is no "first creation" moment to gate on), so this method
+    /// later call. FLUI's controller is always already-built —
+    /// there is no "first creation" moment to gate on, so this method
     /// applies `duration` via `set_duration` on every call instead —
     /// documented divergence, not a silent behavior change.
     fn update_animation(&mut self, duration: Duration, end_value: f32, curve: ArcCurve) {

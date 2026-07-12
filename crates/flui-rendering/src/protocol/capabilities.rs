@@ -136,7 +136,7 @@ pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: Pare
 
     /// Gets a child's current geometry (after layout).
     ///
-    /// # Direct vs Proxy semantic (D-block PR-A1b U19 — review fix #14)
+    /// # Direct vs Proxy semantic
     ///
     /// For `BoxLayoutCtx<A, P>` in **Direct** storage mode (constructed
     /// via `new` / `with_children` / `with_layout_callback`), this
@@ -153,8 +153,8 @@ pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: Pare
     ///
     /// Today this divergence is moot: Proxy storage is entered only
     /// from the blanket bridge, which is called with a fresh Direct
-    /// ctx that has no sibling pre-layout. When U20 wires the
-    /// disjoint-borrow walk, this becomes load-bearing — callers must
+    /// ctx that has no sibling pre-layout. Once the disjoint-borrow
+    /// walk is wired, this becomes load-bearing — callers must
     /// invoke `layout_child(i)` to populate the cache rather than rely
     /// on sibling pre-population.
     fn child_geometry(&self, index: usize) -> Option<&L::Geometry>;

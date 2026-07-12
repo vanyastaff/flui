@@ -6,9 +6,9 @@
 //!
 //! Corresponds to Flutter's `PaintingBinding` mixin from
 //! `painting/binding.dart`. Flutter's shader-warm-up subsystem was
-//! deleted in Mythos chain step 2 (decorative; `execute()` was a stub
-//! and no production caller relied on it). Real offscreen-canvas-backed
-//! warm-up is tracked in `crates/flui-painting/ARCHITECTURE.md`
+//! deleted (decorative; `execute()` was a stub and no production
+//! caller relied on it). Real offscreen-canvas-backed warm-up is
+//! tracked in `crates/flui-painting/ARCHITECTURE.md`
 //! `## Outstanding refactors`.
 //!
 //! # Features
@@ -344,7 +344,7 @@ impl SystemFontsNotifier {
 ///
 /// Corresponds to Flutter's `PaintingBinding` mixin.
 ///
-/// # Trimmed surface (Mythos chain U2/U3)
+/// # Trimmed surface
 ///
 /// Flutter's shader-warm-up subsystem was deleted -- the trait had one
 /// stub impl whose `execute()` body documented "in a real implementation,

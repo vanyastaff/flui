@@ -24,13 +24,13 @@
 //!
 //! # History: this was wrong, and its comment said otherwise
 //!
-//! Until ADR-0020 U5.0 this laid the child out at `BoxConstraints::tight(Size::ZERO)`
-//! and returned `Size::ZERO`, under a comment asserting "Flutter parity". Two
+//! This used to lay the child out at `BoxConstraints::tight(Size::ZERO)`
+//! and return `Size::ZERO`, under a comment asserting "Flutter parity". Two
 //! defects followed: the child never reached its real geometry, and under a
 //! **tight** parent the box violated its own constraints (`constraints.smallest`
 //! is the tight size, not zero). See
-//! [`ADR-0020`](../../../../docs/adr/ADR-0020-transition-modal-route-seam.md) §2,
-//! Seam 4. Under *loose* constraints `smallest` is zero, which is why the defect
+//! [`ADR-0020`](../../../../docs/adr/ADR-0020-transition-modal-route-seam.md).
+//! Under *loose* constraints `smallest` is zero, which is why the defect
 //! hid for so long.
 //!
 //! # Rust-native improvements

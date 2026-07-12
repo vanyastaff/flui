@@ -24,8 +24,8 @@
 //!    Under tight(800×600) it would legitimately occupy 800×600.
 //!
 //!    Historical note: this used to return `Size::ZERO` unconditionally, which
-//!    violated tight constraints (the old "FLUI-DEV-001"). Fixed by ADR-0020
-//!    U5.0; `loose(200)` is now a size-legibility choice, not a panic dodge.
+//!    violated tight constraints (the old "FLUI-DEV-001"). Fixed by ADR-0020;
+//!    `loose(200)` is now a size-legibility choice, not a panic dodge.
 //!
 //! Widget → render-object mapping:
 //! - `Visibility(visible=true)`  → child's render object directly

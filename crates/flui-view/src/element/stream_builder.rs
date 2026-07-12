@@ -1,16 +1,16 @@
-//! `StreamBuilder` — build from the latest event of a stream (ADR-0018, unit U5).
+//! `StreamBuilder` — build from the latest event of a stream.
 //!
 //! # Public shape
 //!
 //! Exported from `flui-view::element` and re-exported by `flui-widgets` plus its
-//! prelude after the ADR-0018 U6 parity gate. The keyed identity shape is signed
+//! prelude once the design passed its Flutter-parity gate. The keyed identity shape is signed
 //! off by the repository owner; this repository has no separate api-design-lead
 //! role. The state type is public only because Rust requires a public associated
 //! `State` type for a public `StatefulView` implementation; it remains opaque.
 //!
 //! # Sibling of `FutureBuilder`
 //!
-//! Same seams (U1 `RebuildHandle`, U2 `AsyncDriver`, U3 `AsyncSnapshot`), same
+//! Same seams (`RebuildHandle`, `AsyncDriver`, `AsyncSnapshot`), same
 //! keyed identity, same shared [`Slot`]. The difference is the fold set and one
 //! load-bearing subtlety about *when* the task is first polled.
 //!
@@ -49,8 +49,7 @@
 //! `Stream<Item = Result<T, E>>` does the same, so an error leaves the state
 //! `Active` and polling continues.
 
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{pin::Pin, rc::Rc, sync::Arc};
 
 use flui_foundation::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
@@ -69,7 +68,7 @@ pub type BoxedResultStream<T, E> = Pin<Box<dyn Stream<Item = Result<T, E>> + Sen
 
 /// Produces the stream to listen to. `Fn`, not `FnOnce`: the view is cloned on
 /// every rebuild. Called once per subscription.
-pub type StreamFactory<T, E> = Arc<dyn Fn() -> BoxedResultStream<T, E> + Send + Sync>;
+pub type StreamFactory<T, E> = Rc<dyn Fn() -> BoxedResultStream<T, E>>;
 
 /// Fold a stream event into the shared snapshot, honouring the generation guard.
 ///
@@ -106,9 +105,9 @@ impl<K: Clone, T, E> Clone for StreamBuilder<K, T, E> {
     fn clone(&self) -> Self {
         Self {
             key: self.key.clone(),
-            make: Arc::clone(&self.make),
+            make: Rc::clone(&self.make),
             initial_data: self.initial_data.clone(),
-            builder: Arc::clone(&self.builder),
+            builder: Rc::clone(&self.builder),
         }
     }
 }
@@ -171,7 +170,7 @@ where
             token: None,
             key: None,
             initial_key: self.key.clone(),
-            initial_make: Arc::clone(&self.make),
+            initial_make: Rc::clone(&self.make),
             initial_data: self.initial_data.clone(),
         }
     }
@@ -325,7 +324,7 @@ where
         // An absent key is Flutter's null stream: no subscription, snapshot stays
         // where `initial` left it.
         if let Some(key) = self.initial_key.clone() {
-            let make = Arc::clone(&self.initial_make);
+            let make = Rc::clone(&self.initial_make);
             self.subscribe(key, &make);
         }
     }
@@ -437,7 +436,7 @@ mod tests {
 
         fn factory(&self) -> StreamFactory<Payload, Boom> {
             let channel = Arc::clone(&self.channel);
-            Arc::new(move || {
+            Rc::new(move || {
                 channel.subscriptions.fetch_add(1, Ordering::Relaxed);
                 Box::pin(Controlled {
                     channel: Arc::clone(&channel),
@@ -472,7 +471,7 @@ mod tests {
 
     /// Records every snapshot the builder was handed.
     fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
-        Arc::new(move |_ctx, snapshot| {
+        Rc::new(move |_ctx, snapshot| {
             log.lock().push(Seen {
                 state: snapshot.connection_state(),
                 data: snapshot.data().map(|payload| payload.0),
@@ -590,7 +589,7 @@ mod tests {
             sender.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(7)));
+        .with_initial_data(Rc::new(|| Payload(7)));
 
         let _harness = Harness::mount(&view);
         assert_eq!(
@@ -723,7 +722,7 @@ mod tests {
             sender.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(9)));
+        .with_initial_data(Rc::new(|| Payload(9)));
 
         let mut harness = Harness::mount(&view);
         assert_eq!(
@@ -787,7 +786,7 @@ mod tests {
             first.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99)));
+        .with_initial_data(Rc::new(|| Payload(99)));
         let mut harness = Harness::mount(&view);
 
         first.data(1);
@@ -800,7 +799,7 @@ mod tests {
             second.factory(),
             recording_builder(Arc::clone(&log)),
         )
-        .with_initial_data(Arc::new(|| Payload(99)));
+        .with_initial_data(Rc::new(|| Payload(99)));
         harness.update(&next);
 
         assert_eq!(

@@ -1,4 +1,4 @@
-//! ADR-0021 U1.5: every runner path drives the ONE shared frame ordering.
+//! Every runner path drives the ONE shared frame ordering.
 //!
 //! # Why a source scan, and what it is *not* evidence of
 //!
@@ -14,7 +14,7 @@
 //! This scan therefore proves exactly one thing, and it is a real thing: **no
 //! frame site hand-rolls the begin/draw/end sequence.** A site that reintroduced
 //! `handle_draw_frame()` would drain post-frame callbacks before its pipeline —
-//! the bug U1.5 exists to remove — and this test would go red. It is a
+//! the bug this test exists to catch — and this test would go red. It is a
 //! regression guard, not a proof of the android body's runtime behavior. Stated
 //! rather than implied.
 

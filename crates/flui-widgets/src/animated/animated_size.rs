@@ -125,8 +125,8 @@ impl std::fmt::Debug for AnimatedSize {
 
 /// State for [`AnimatedSize`] — owns the persistent [`AnimationController`]
 /// that `RenderAnimatedSize` subscribes to directly in its own `attach`
-/// (ADR-0013 D2: the render object is handed an already-built controller and
-/// never sees a `Vsync`/`Scheduler` itself).
+/// (the render object is handed an already-built controller and never sees
+/// a `Vsync`/`Scheduler` itself).
 pub struct AnimatedSizeState {
     controller: AnimationController,
     vsync: Option<Vsync>,
@@ -231,7 +231,10 @@ impl RenderView for AnimatedSizeRenderView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderAnimatedSize;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderAnimatedSize::new(
             self.controller.clone(),
             self.curve.clone(),
@@ -241,7 +244,11 @@ impl RenderView for AnimatedSizeRenderView {
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         // Targeted setters only. `render_object` is the SAME persistent
         // instance across every rebuild (only `create_render_object` builds a
         // new one) — the controller is not re-passed here, it is the
@@ -288,18 +295,22 @@ mod tests {
 
     #[test]
     fn create_render_object_installs_the_given_alignment_and_clip_behavior() {
-        let render_object = render_view(Alignment::BOTTOM_RIGHT, Clip::None).create_render_object();
+        let render_object = render_view(Alignment::BOTTOM_RIGHT, Clip::None)
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
         assert_eq!(render_object.clip_behavior(), Clip::None);
     }
 
     #[test]
     fn update_render_object_reconfigures_alignment_and_clip_behavior_via_targeted_setters() {
-        let mut render_object =
-            render_view(Alignment::CENTER, Clip::HardEdge).create_render_object();
+        let mut render_object = render_view(Alignment::CENTER, Clip::HardEdge)
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::CENTER);
 
-        render_view(Alignment::TOP_LEFT, Clip::AntiAlias).update_render_object(&mut render_object);
+        render_view(Alignment::TOP_LEFT, Clip::AntiAlias).update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);

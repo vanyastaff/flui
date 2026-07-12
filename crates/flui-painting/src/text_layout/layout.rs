@@ -1,7 +1,7 @@
 // PORT-TARGET: flui-widgets::RichText, flui-widgets::TextField
 //! `TextLayout` -- cosmic-text-backed shaped text buffer.
 //!
-//! Mythos chain U6 extracted these from the 1,243-LOC
+//! Extracted from the 1,243-LOC
 //! `text_layout.rs` god module. Holds the global `FONT_SYSTEM`
 //! singleton (lazy `OnceLock<Mutex<FontSystem>>`; per-shape lock;
 //! off the per-command hot path) plus the `TextLayout` struct that

@@ -15,18 +15,18 @@
 //! carries:
 //!   - `target: RenderId` (data-typed, not dyn-dispatched),
 //!   - `transform: Option<Matrix4>` (lazy globalization),
-//!   - `handler: Option<PointerEventHandler>` (closure-based),
+//!   - `pointer_target: Option<PointerTarget>` (data-only owner-lane identity),
 //!   - `scroll_handler: Option<ScrollEventHandler>`,
 //!   - `cursor: CursorIcon`.
 //!
 //! The interaction-side entry covers every responsibility the
 //! rendering-side one expressed (transform + local target identity)
 //! plus the runtime-dispatch concerns the rendering-side never
-//! grew (handler, cursor). Workspace audit (`rg 'impl HitTestTarget'`)
+//! grew (pointer target identity, cursor). Workspace audit (`rg 'impl HitTestTarget'`)
 //! showed ONE production impl (`RenderView`) and TWO file-private
 //! `DummyTarget` stubs -- the trait-dispatch surface had been
 //! parallel-implemented rather than adopted, in violation of the
-//! cycle-2 PR #100/U21 parallel-type prohibition.
+//! cycle-2 PR #100 parallel-type prohibition.
 //!
 //! The previous `HitTestEntry` struct, its `Debug` impl, and the
 //! file-private `DummyTarget` were deleted. The inherent `hit_test`

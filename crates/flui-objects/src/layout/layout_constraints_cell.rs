@@ -1,5 +1,5 @@
 //! [`LayoutConstraintsCell`] — the render-object → element channel of the
-//! build-during-layout seam (ADR-0017, unit U1).
+//! build-during-layout seam (ADR-0017).
 //!
 //! # What this is
 //!

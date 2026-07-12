@@ -1,6 +1,7 @@
 //! [`GridView`] — a scrollable 2-D grid of eagerly or lazily-built children.
 
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_rendering::delegates::{
@@ -110,7 +111,7 @@ impl GridView {
         builder: F,
     ) -> Self
     where
-        F: Fn(usize) -> Option<BoxedView> + Send + Sync + 'static,
+        F: Fn(usize) -> Option<BoxedView> + 'static,
     {
         Self {
             scroll_direction: Axis::Vertical,
@@ -176,7 +177,7 @@ impl StatelessView for GridView {
             SliverGridLazy::new(
                 Arc::clone(&self.grid_delegate),
                 delegate.item_count,
-                Arc::clone(&delegate.builder),
+                Rc::clone(&delegate.builder),
             )
             .boxed()
         } else {

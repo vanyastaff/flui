@@ -1,7 +1,7 @@
 //! [`PageRoute`] and [`PopupRoute`] — the two public route shapes.
 //!
-//! ADR-0020 U5.4. These are the first routes with an animation that an app author
-//! can construct, and the API sign-off gate that lets them out (§7e).
+//! These are the first routes with an animation that an app author
+//! can construct, and the API sign-off gate that lets them out.
 //!
 //! # Flutter parity
 //!
@@ -15,7 +15,7 @@
 //!
 //! Flutter needs two types because `PageRoute` is an abstract class you subclass,
 //! and `PageRouteBuilder` is the escape hatch for people who would rather pass
-//! closures. Rust has no subclassing, and ADR-0020 §7e declines to export
+//! closures. Rust has no subclassing, and this crate declines to export
 //! `TransitionRoute` / `ModalRoute` as extensible bases until a trait shape is
 //! designed and signed off. So [`PageRoute`] *is* the builder: it takes a
 //! [`RoutePageBuilder`] and an optional [`RouteTransitionsBuilder`], and every
@@ -24,13 +24,13 @@
 //! One consequence, stated rather than hidden: **`PageRoute` is not extensible.**
 //! An app cannot today write a route with custom `buildPage` *state* (Flutter's
 //! `CupertinoPageRoute` pattern). Closures cover the cases that matter now; the
-//! trait shape is U5.5's problem.
+//! trait shape is a problem for a later pass.
 //!
 //! # What these two fix that `ModalRoute` alone cannot
 //!
 //! `opaque` and the transition family. A [`PageRoute`] is `opaque` — once its
 //! entrance transition completes, the routes beneath it leave the widget tree
-//! unless they set `maintain_state` (U5.3's `RenderTheater` work). A
+//! unless they set `maintain_state` (`RenderTheater`'s skip-count work). A
 //! [`PopupRoute`] is not: the page under a dialog stays visible.
 //!
 //! And `PageRoute` coordinates its `secondaryAnimation` only with other
@@ -48,7 +48,7 @@
 //! [`RouteTransitionsBuilder`]: super::overlay_route::RouteTransitionsBuilder
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_types::Color;
@@ -68,9 +68,9 @@ const DEFAULT_TRANSITION_DURATION: Duration = Duration::from_millis(300);
 /// Erase a page closure into a [`RoutePageBuilder`].
 fn page_builder<F>(page: F) -> RoutePageBuilder
 where
-    F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + Send + Sync + 'static,
+    F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static,
 {
-    Arc::new(page)
+    Rc::new(page)
 }
 
 /// Generate `Route` + `NavigatorRoute` for a newtype that wraps a [`ModalRoute`].
@@ -79,7 +79,7 @@ where
 /// on the modal beneath them. Fifteen forwarding methods, written once.
 macro_rules! delegate_modal_route {
     ($ty:ident) => {
-        impl<T: Send + Sync + Clone + 'static> Route for $ty<T> {
+        impl<T: Send + Clone + 'static> Route for $ty<T> {
             type Output = T;
 
             fn settings(&self) -> &RouteSettings {
@@ -147,7 +147,7 @@ macro_rules! delegate_modal_route {
             }
         }
 
-        impl<T: Send + Sync + Clone + 'static> NavigatorRoute for $ty<T> {
+        impl<T: Send + Clone + 'static> NavigatorRoute for $ty<T> {
             fn content_builder(&self) -> RouteContentBuilder {
                 self.modal.content_builder()
             }
@@ -157,7 +157,7 @@ macro_rules! delegate_modal_route {
             }
         }
 
-        impl<T: Send + Sync + Clone + 'static> fmt::Debug for $ty<T> {
+        impl<T: Send + Clone + 'static> fmt::Debug for $ty<T> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_struct(stringify!($ty))
                     .field("name", &self.modal.settings().name())
@@ -204,15 +204,12 @@ pub struct PageRoute<T> {
     modal: ModalRoute<T>,
 }
 
-impl<T: Send + Sync + Clone + 'static> PageRoute<T> {
+impl<T: Send + Clone + 'static> PageRoute<T> {
     /// A page route showing `page`, with a 300 ms jump-cut transition.
     #[must_use]
     pub fn new<F>(page: F) -> Self
     where
-        F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static,
     {
         Self {
             modal: ModalRoute::new(DEFAULT_TRANSITION_DURATION, page_builder(page))
@@ -230,11 +227,9 @@ impl<T: Send + Sync + Clone + 'static> PageRoute<T> {
     pub fn transitions<F>(mut self, transitions: F) -> Self
     where
         F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation, BoxedView) -> BoxedView
-            + Send
-            + Sync
             + 'static,
     {
-        self.modal = self.modal.transitions(Arc::new(transitions));
+        self.modal = self.modal.transitions(Rc::new(transitions));
         self
     }
 
@@ -289,10 +284,10 @@ impl<T: Send + Sync + Clone + 'static> PageRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> PageRoute<T> {
+impl<T: Send + Clone + 'static> PageRoute<T> {
     /// The modal handle, whose `set_offstage` is the seam `HeroController` drives
     /// to measure a route's final hero geometry (`heroes.dart:967`). Test-facing
-    /// until U3 gives it a production caller.
+    /// until `HeroController` gives it a production caller.
     #[cfg(test)]
     pub(crate) fn modal_handle(&self) -> super::modal_route::ModalHandle {
         self.modal.handle()
@@ -340,16 +335,13 @@ pub struct PopupRoute<T> {
     modal: ModalRoute<T>,
 }
 
-impl<T: Send + Sync + Clone + 'static> PopupRoute<T> {
+impl<T: Send + Clone + 'static> PopupRoute<T> {
     /// A popup showing `page`, with a 300 ms jump-cut transition, an invisible
     /// non-dismissible barrier, and `maintain_state = true`.
     #[must_use]
     pub fn new<F>(page: F) -> Self
     where
-        F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static,
     {
         Self {
             // `PopupRoute.opaque => false`, `maintainState => true`
@@ -366,11 +358,9 @@ impl<T: Send + Sync + Clone + 'static> PopupRoute<T> {
     pub fn transitions<F>(mut self, transitions: F) -> Self
     where
         F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation, BoxedView) -> BoxedView
-            + Send
-            + Sync
             + 'static,
     {
-        self.modal = self.modal.transitions(Arc::new(transitions));
+        self.modal = self.modal.transitions(Rc::new(transitions));
         self
     }
 
@@ -430,7 +420,7 @@ impl<T: Send + Sync + Clone + 'static> PopupRoute<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> PopupRoute<T> {
+impl<T: Send + Clone + 'static> PopupRoute<T> {
     /// See [`PageRoute::transition_handle`].
     #[cfg(test)]
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {

@@ -216,7 +216,7 @@ impl SemanticsTree {
 
     /// Adds `child_id` as a child of `parent_id`.
     ///
-    /// **Auto-detach semantics (U11)** — if `child_id` is currently
+    /// **Auto-detach semantics** — if `child_id` is currently
     /// attached to a different parent, it is removed from that parent's
     /// children vector first. Re-attaching to the same parent is a
     /// short-circuit no-op (`SemanticsNode::add_child` carries the
@@ -246,9 +246,9 @@ impl SemanticsTree {
         }
 
         // Reject attaching an ancestor of `parent_id` under it (would
-        // create an N-cycle). The cascading `remove` (U13) would follow
-        // such a cycle to unbounded recursion + stack overflow; this
-        // guard makes cycles impossible to enter via the public API.
+        // create an N-cycle). The cascading `remove` would follow such
+        // a cycle to unbounded recursion + stack overflow; this guard
+        // makes cycles impossible to enter via the public API.
         if self.is_ancestor_of(child_id, parent_id) {
             tracing::warn!(
                 ?parent_id,
@@ -877,7 +877,7 @@ mod tests {
 }
 
 // ============================================================================
-// SLAB-TREE HYGIENE TESTS (U11 — add_child auto-detach + U13 — remove cascade)
+// SLAB-TREE HYGIENE TESTS (add_child auto-detach + remove cascade)
 // ============================================================================
 
 #[cfg(test)]
@@ -892,7 +892,7 @@ mod slab_hygiene_tests {
         SemanticsNode::new()
     }
 
-    // ----- U11 add_child auto-detach -----
+    // ----- add_child auto-detach -----
 
     #[test]
     fn add_child_attaches_under_new_parent() {
@@ -986,7 +986,7 @@ mod slab_hygiene_tests {
         assert_eq!(tree.len(), 0);
     }
 
-    // ----- U13 remove cascade + remove_shallow -----
+    // ----- remove cascade + remove_shallow -----
 
     #[test]
     fn remove_cascades_to_descendants() {

@@ -135,7 +135,7 @@ impl ElementBuildContext {
 
     /// Nearest in-scope `InheritedElement` of view type `type_id`, in **O(1)**.
     ///
-    /// Shared helper for U9 (`depend_on_inherited`) and U10 (`get_inherited`);
+    /// Shared helper for `depend_on_inherited` and `get_inherited`;
     /// only the dependent-recording side differs.
     ///
     /// Reads the resolved inherited scope
@@ -156,7 +156,7 @@ impl ElementBuildContext {
     /// `ControlFlow::Break`, or `None` if every ancestor is exhausted
     /// without a break.
     ///
-    /// Shared helper for the U11 trio
+    /// Shared helper for the ancestor-finder trio
     /// ([`find_ancestor_view`](BuildContext::find_ancestor_view),
     /// [`find_ancestor_state`](BuildContext::find_ancestor_state),
     /// [`find_root_ancestor_state`](BuildContext::find_root_ancestor_state)).
@@ -239,8 +239,7 @@ impl BuildContext for ElementBuildContext {
         //
         // Records this element in the matched InheritedElement's
         // dependent map so a subsequent rebuild with
-        // `update_should_notify == true` schedules us for rebuild
-        // (R16, plan §U9).
+        // `update_should_notify == true` schedules us for rebuild.
         //
         // Flutter parity: `framework.dart:5081`
         // `dependOnInheritedWidgetOfExactType` -> the matched
@@ -265,7 +264,7 @@ impl BuildContext for ElementBuildContext {
 
         // Capture self's depth before we hand `node` out so we can
         // record it as the dependent's depth (used by
-        // BuildOwner::schedule_build_for during R16 notify).
+        // BuildOwner::schedule_build_for during dependency-change notify).
         let self_depth = self.depth;
         let self_id = self.element_id;
 
@@ -298,8 +297,8 @@ impl BuildContext for ElementBuildContext {
 
     fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Same ancestor walk as depend_on_inherited, but does NOT
-        // record a dependency. Reserved for U10 — for now we share the
-        // walk + downcast logic and skip the `record_dependent` call.
+        // record a dependency — we share the walk + downcast logic and
+        // skip the `record_dependent` call.
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
@@ -401,9 +400,8 @@ impl BuildContext for ElementBuildContext {
         // because it surfaces `&dyn ElementBase` but not the matching
         // ancestor's id, and root-most matching needs the id to fetch
         // state via the second borrow. Keeping the helper minimal
-        // (no id-yielding variant) is a YAGNI call for U11; if U12 or
-        // a future unit needs id-yielding walks we can widen the
-        // surface then.
+        // (no id-yielding variant) is a YAGNI call; if a future need
+        // arises for id-yielding walks we can widen the surface then.
         //
         // Flutter parity: `framework.dart:5146`
         // `findRootAncestorStateOfType<T>` — Flutter walks
@@ -559,7 +557,7 @@ impl BuildContext for ElementBuildContext {
         // `_NotificationElement.onNotification` handler with the typed
         // notification and stopping when one returns `true`.
         //
-        // Plan §U13 / R10 / AE6. Single-`dyn`-boundary discipline per
+        // Single-`dyn`-boundary discipline per
         // Constitution Principle 4: the walk uses `&dyn ElementBase` (the
         // existing tree shape) but the handler call site is the only
         // place a typed downcast happens, in the listener Element's own
@@ -993,6 +991,7 @@ mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
     use crate::{StatelessView, View};
+    use static_assertions::assert_not_impl_any;
 
     #[derive(Clone)]
     struct TestView {
@@ -1149,9 +1148,8 @@ mod tests {
     }
 
     #[test]
-    fn test_context_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<ElementBuildContext>();
+    fn context_is_owner_local() {
+        assert_not_impl_any!(ElementBuildContext: Send, Sync);
     }
 
     /// `BuildCtx` is the context handed to a live `build()`, so it is always

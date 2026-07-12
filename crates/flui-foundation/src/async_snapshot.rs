@@ -1,8 +1,8 @@
 //! [`ConnectionState`] and [`AsyncSnapshot`] — the data model for
-//! `FutureBuilder` / `StreamBuilder` (ADR-0018, unit U3).
+//! `FutureBuilder` / `StreamBuilder`.
 //!
 //! Pure data: no futures, no executor, no widget. The state machine lives here
-//! so the builders (U4/U5) are thin, and so `flui-material` never has to
+//! so the builders stay thin, and so `flui-material` never has to
 //! re-declare it.
 //!
 //! # Verified against the reference
@@ -409,7 +409,7 @@ mod tests {
         assert!(!error_to_data.has_error(), "after_data clears error");
     }
 
-    // ── FutureBuilder transition table (ADR-0018 D4) ────────────────────────
+    // ── FutureBuilder transition table ───────────────────────────────────────
     //
     // Transcribed from `_FutureBuilderState` and the oracles in
     // `.flutter/packages/flutter/test/widgets/async_test.dart`.
@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(settled.data(), Some(&NoClone(9)));
     }
 
-    // ── StreamBuilder fold table (ADR-0018 D4) ──────────────────────────────
+    // ── StreamBuilder fold table ─────────────────────────────────────────────
 
     #[test]
     fn stream_initial_without_initial_data_is_nothing() {

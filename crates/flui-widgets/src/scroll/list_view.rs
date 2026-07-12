@@ -1,7 +1,7 @@
 //! [`ListView`] — a scrollable list of fixed-height items (static or lazy-built).
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
@@ -24,8 +24,8 @@ use crate::scroll::{
 /// - **Lazy** ([`ListView::builder`]): children built on demand from a
 ///   closure, only for the viewport-visible + cache band. Backed by
 ///   [`SliverList`] (variable-height, element-owned). Wired into both
-///   `HeadlessBinding::pump_frame` and the production `AppBinding::draw_frame`
-///   (U4.3 + U4.4 convergence).
+///   `HeadlessBinding::pump_frame` and the production `AppBinding::draw_frame`,
+///   where the child-manager wiring and its test coverage converge.
 ///
 ///   **First-frame settling (Flutter divergence):** lazy children are built
 ///   *after* the frame's paint, so the first frame a viewport band appears it
@@ -92,7 +92,7 @@ impl ListView {
     /// Panics if `item_extent_estimate` is not finite and positive.
     pub fn builder<F>(item_count: usize, item_extent_estimate: f32, builder: F) -> Self
     where
-        F: Fn(usize) -> Option<BoxedView> + Send + Sync + 'static,
+        F: Fn(usize) -> Option<BoxedView> + 'static,
     {
         Self {
             scroll_direction: Axis::Vertical,
@@ -166,7 +166,7 @@ impl StatelessView for ListView {
             SliverList::new(
                 delegate.item_count,
                 self.item_extent_estimate,
-                Arc::clone(&delegate.builder),
+                Rc::clone(&delegate.builder),
             )
             .boxed()
         } else {

@@ -1,6 +1,6 @@
 //! [`RouteHistory`] and `flush_history_updates` — the route stack.
 //!
-//! ADR-0019 U2. Private, and **pure data**: this module touches no element tree,
+//! Private, and **pure data**: this module touches no element tree,
 //! no build owner, no render pipeline, and no overlay. `route_stack_flush_is_pure_data`
 //! enforces that mechanically.
 //!
@@ -19,20 +19,20 @@
 //!
 //! 1. **The overlay rearrange is hoisted out of the flush.** Flutter ends
 //!    `_flushHistoryUpdates` with `overlay?.rearrange(_allRouteOverlayEntries)`.
-//!    U2 has no overlay, so the flush ends after disposal and U3's `Navigator`
-//!    performs the rearrange immediately afterwards. Ordering is preserved:
-//!    Flutter also rearranges *after* `_disposeRouteEntry` (`:4609-4613`). The
-//!    `rearrangeOverlay: false` argument that `pop` and `removeRoute` pass
-//!    (`:5671`, `:5747`) therefore has nothing to select here; it is recorded on
-//!    [`FlushOutcome`] for U3 to honour.
+//!    This module has no overlay, so the flush ends after disposal and the
+//!    `Navigator` view performs the rearrange immediately afterwards. Ordering
+//!    is preserved: Flutter also rearranges *after* `_disposeRouteEntry`
+//!    (`:4609-4613`). The `rearrangeOverlay: false` argument that `pop` and
+//!    `removeRoute` pass (`:5671`, `:5747`) therefore has nothing to select
+//!    here; it is recorded on [`FlushOutcome`] for the `Navigator` to honour.
 //!
 //! 2. **Routes are named by [`RouteId`], not by object.** Flutter passes `Route`
 //!    objects to `didChangeNext` / `didChangePrevious` / `didPopNext` and to
 //!    observers. Handing out `&mut dyn ErasedRoute` for one entry while the
 //!    history holds the rest is not expressible; ids preserve identity, ordering
-//!    and arity, which is everything the oracles assert. U5's `TransitionRoute`
-//!    needs the *next route's animation*, so it will need a lookup handle — noted
-//!    in ADR-0019 §7a.
+//!    and arity, which is everything the oracles assert. A `TransitionRoute`
+//!    needs the *next route's animation*, so it will need a lookup handle —
+//!    noted as a follow-up.
 
 use std::fmt;
 use std::sync::Arc;
@@ -59,9 +59,9 @@ use super::route::{
 /// route below it, so `previous` is `null`; `null != notAnnounced` is **true**, and
 /// `didChangePrevious(null)` fires exactly once. Collapsing the sentinel into
 /// `None` makes `None != None` false and the call is silently never made — which
-/// is what U4's parity re-check found FLUI doing. `ModalRoute` drives
+/// is what a parity re-check found FLUI doing. `ModalRoute` drives
 /// `changedInternalState()` from `didChangePrevious`, so a bottom modal route
-/// would have missed its initial internal-state init at U5.
+/// would have missed its initial internal-state init.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Announced {
     /// Flutter's `notAnnounced`: nothing has been announced yet.
@@ -249,7 +249,7 @@ impl RouteEntry {
         // (`routes.dart:90-92`) → `entry.finalize()` → `currentState = dispose` —
         // and only then does `handlePop` call `onPopInvokedWithResult(true, …)`
         // (`navigator.dart:3372`). So the route is already finalized when its
-        // callback runs. Found by U4's parity re-check; matters once `PopScope`
+        // callback runs. Found by a parity re-check; matters once `PopScope`
         // callbacks can inspect navigator state.
         if self.route.finished_when_popped() {
             self.state = RouteLifecycle::Dispose;
@@ -409,10 +409,10 @@ pub(crate) struct RouteHistory {
     /// Flutter's `_flushingHistory` + `_debugLocked` (`:4453`).
     flushing: bool,
     /// What the most recent flush left for the caller to apply. Flutter performs
-    /// the overlay work inline; U2 is pure data, so it hands it out instead.
+    /// the overlay work inline; this module is pure data, so it hands it out instead.
     last_outcome: Option<FlushOutcome>,
-    /// Lifecycle transitions raised by routes through a `RouteBinding`
-    /// (ADR-0020 U5.1). Drained at the head of every flush, and again after each
+    /// Lifecycle transitions raised by routes through a `RouteBinding`.
+    /// Drained at the head of every flush, and again after each
     /// pass, so a command raised *during* the walk settles before `flush` returns.
     commands: RouteCommandQueue,
     /// How many `flush_once` passes the last `flush` ran. Test-facing: a deferred
@@ -601,7 +601,7 @@ impl RouteHistory {
     }
 
     /// `seed_initial`, under an id the caller minted so it can bind the route
-    /// first (ADR-0020 U5.4). A seeded `PageRoute` needs its binding before
+    /// first. A seeded `PageRoute` needs its binding before
     /// `install()`, exactly as a pushed one does.
     pub(crate) fn seed_initial_with_id<R: Route>(
         &mut self,
@@ -632,7 +632,7 @@ impl RouteHistory {
         self.push_with_id(RouteId::next(), route)
     }
 
-    /// `push`, under an id the caller minted (ADR-0020 U5.1).
+    /// `push`, under an id the caller minted.
     pub(crate) fn push_with_id<R: Route>(
         &mut self,
         id: RouteId,
@@ -789,12 +789,12 @@ impl RouteHistory {
     ///
     /// If re-entered. Flutter guards the same invariant with `_debugLocked` +
     /// `_flushingHistory` (`:4452-4453`). A route's transition callback firing
-    /// mid-flush is the way in (U5), so this is a framework invariant and
+    /// mid-flush is the way in, so this is a framework invariant and
     /// `PANIC-POLICY` permits the panic.
     pub(crate) fn flush(&mut self, rearrange_overlay: bool) {
         // A *recursive* `flush` is still forbidden and still loud. Route callbacks
         // no longer reach this path: they enqueue a `RouteCommand` instead
-        // (ADR-0020 U5.1, `binding.rs` Correction 1), so this assert now guards
+        // (see `binding.rs` Correction 1), so this assert now guards
         // only genuine framework misuse.
         assert!(
             !self.flushing,
@@ -1092,11 +1092,12 @@ impl RouteHistory {
     /// Force the re-entrancy flag, so `reentrant_flush_panics_with_bug` can
     /// exercise the guard directly.
     ///
-    /// Through U2's surface re-entrancy is *structurally* unreachable: a `Route`
-    /// hook receives only `&mut self` and cannot reach the history. The guard
-    /// exists for U5, where a zero-duration transition's completion callback
-    /// re-enters via `notify_push_completed` mid-flush. Testing it directly
-    /// rather than shipping it untested follows the ADR-0018 U4 precedent.
+    /// Through this module's public surface re-entrancy is *structurally*
+    /// unreachable: a `Route` hook receives only `&mut self` and cannot reach
+    /// the history. The guard exists for the case where a zero-duration
+    /// transition's completion callback re-enters via `notify_push_completed`
+    /// mid-flush. Testing it directly rather than shipping it untested
+    /// follows established precedent.
     pub(crate) fn force_flushing_for_test(&mut self) {
         self.flushing = true;
     }

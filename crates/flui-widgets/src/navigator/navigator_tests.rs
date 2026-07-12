@@ -1,4 +1,4 @@
-//! ADR-0019 U3 tests for the private `Navigator`.
+//! Tests for the private `Navigator`.
 //!
 //! # Parity oracles
 //!
@@ -9,8 +9,9 @@
 //! `'Can push, pop, and replace in sequence'`, `'removeRoute'`.
 //! Expected values are read from `navigator.dart`, not from running this code.
 //!
-//! Unlike `tests.rs` (U2's pure-data suite), these drive a real element tree.
+//! Unlike `tests.rs` (the route stack's pure-data suite), these drive a real element tree.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -112,7 +113,7 @@ fn navigator_with(built: &Built) -> (NavigatorHandle, Harness) {
 /// The overlay's layer elements, bottom → top. `Navigator → Overlay → Stack → …`.
 fn layers(harness: &mut Harness) -> Vec<ElementId> {
     let root = harness.root();
-    // ADR-0021 §7m: `Navigator::build` wraps its `Overlay` in a `HeroControllerScope`
+    // `Navigator::build` wraps its `Overlay` in a `HeroControllerScope`
     // (a `.none`), so the overlay is now one level below the navigator's element.
     let scope = harness.only_child(root);
     let overlay = harness.only_child(scope);
@@ -146,7 +147,7 @@ fn navigator_first_route_builds_on_first_frame() {
 /// Note what this does **not** prove. Making `seed_initial` flush per seed leaves
 /// this test green: three sequential flushes reach the same end state and deliver
 /// the same observer order. The single-flush property is only observable through
-/// the additions queue's LIFO drain, which U2's
+/// the additions queue's LIFO drain, which the route stack's
 /// `push_adds_route_and_notifies_observer_lifo` already pins. Said plainly rather
 /// than claimed here.
 ///
@@ -229,8 +230,8 @@ fn navigator_pop_removes_top_route_and_completes_result() {
     assert_eq!(layers(&mut harness).len(), 1, "the top layer is gone");
 }
 
-/// `remove_route` completes the future too — the U2 invariant, now through the
-/// widget. Oracle: `'remove a route whose value is awaited'`.
+/// `remove_route` completes the future too — the route stack's invariant, now
+/// through the widget. Oracle: `'remove a route whose value is awaited'`.
 ///
 /// Red-check: same as above (`entry.remove()` loop) for the overlay half; for the
 /// result half, make `handle_complete` skip `did_complete`.
@@ -319,14 +320,14 @@ fn navigator_can_pop_matches_flutter_contract() {
 /// `Navigator::of` from inside a route's content resolves to the navigator that
 /// owns the route — the route's `BuildContext` is a descendant of it.
 ///
-/// **This is not Flutter's self-check**, and U3 could not implement one.
+/// **This is not Flutter's self-check**, and this widget could not implement one.
 /// `Navigator.of` first tests whether `context` *is* the `NavigatorState`'s own
 /// element (`navigator.dart:2947`), which matters only for a context obtained via
 /// `GlobalKey<NavigatorState>.currentContext`. FLUI's `walk_strict_ancestors`
 /// starts at the parent, and during `build` the element's own node is a hole, so
 /// no `BuildContext` API can reach its own state. Since FLUI has no
 /// `GlobalKey<NavigatorState>` the case is unreachable — recorded as a correction
-/// to ADR-0019 §3.3, which assumed `Navigator::of` would have to close this gap.
+/// to an earlier assumption that `Navigator::of` would have to close this gap.
 ///
 /// Red-check: make `maybe_of` return `None`. (Swapping it to `find_root_state`
 /// leaves this test green — with one navigator, nearest *is* root. The nested
@@ -538,7 +539,8 @@ fn navigator_drops_overlay_entries_of_disposed_routes() {
 }
 
 /// Pushing from *inside* a route's build must be possible without deadlock, and
-/// must not run under the element-tree borrow — ADR-0019 §3.2's whole point.
+/// must not run under the element-tree borrow — the whole point of cloning an
+/// owned handle instead of taking one under that borrow.
 ///
 /// This is the shape that would hang if `Navigator::of` did anything but clone an
 /// owned handle: the lookup runs under the tree borrow, and the push takes the
@@ -577,14 +579,14 @@ fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 }
 
 // ============================================================================
-// THE ROUTE-ANIMATION SEAM (ADR-0020 U5.1)
+// THE ROUTE-ANIMATION SEAM
 // ============================================================================
 
 /// A zero-duration transition route: it parks in `Pushing`, then completes its
 /// entrance from inside `did_push` — i.e. inside the flush that pushed it — and
 /// finalizes itself from inside `did_pop`.
 ///
-/// This is the shape U5.2's `TransitionRoute` will have, minus the
+/// This is the shape `TransitionRoute` will have, minus the
 /// `AnimationController`.
 struct ZeroDurationRoute {
     settings: RouteSettings,
@@ -597,7 +599,7 @@ impl ZeroDurationRoute {
         let built = built.clone();
         Self {
             settings: RouteSettings::named(name),
-            builder: Arc::new(move |_ctx| {
+            builder: Rc::new(move |_ctx| {
                 built.0.lock().push(name);
                 SizedBox::new(10.0, 10.0).into_view().boxed()
             }),
@@ -636,7 +638,7 @@ impl Route for ZeroDurationRoute {
 
 impl NavigatorRoute for ZeroDurationRoute {
     fn content_builder(&self) -> RouteContentBuilder {
-        Arc::clone(&self.builder)
+        Rc::clone(&self.builder)
     }
 
     fn binding_slot(&self) -> Option<&RouteBindingSlot> {
@@ -703,7 +705,7 @@ fn a_route_that_raises_nothing_stays_pushing() {
     }
     impl NavigatorRoute for Animating {
         fn content_builder(&self) -> RouteContentBuilder {
-            Arc::clone(&self.builder)
+            Rc::clone(&self.builder)
         }
     }
 
@@ -712,7 +714,7 @@ fn a_route_that_raises_nothing_stays_pushing() {
 
     handle.push(Animating {
         settings: RouteSettings::named("stuck"),
-        builder: Arc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
+        builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
     });
     harness.tick();
 
@@ -724,7 +726,7 @@ fn a_route_that_raises_nothing_stays_pushing() {
 // ARCHITECTURE GUARDS
 // ============================================================================
 
-/// ADR-0019 §3.2: the `Navigator` must reach its overlay through an `Arc`, never
+/// The `Navigator` must reach its overlay through an `Arc`, never
 /// through a `GlobalKey` — whose registry lookup would take a second lock under
 /// the element-tree borrow.
 ///
@@ -752,7 +754,7 @@ fn navigator_uses_no_global_key() {
     }
 }
 
-/// U4 exports a **signed-off surface and nothing more**. The route stack's
+/// This crate exports a **signed-off surface and nothing more**. The route stack's
 /// internals must stay private: leaking `RouteHistory`, `RouteLifecycle`,
 /// `RouteEntry`, `ErasedRoute`, `AnyResult`, `FlushOutcome`, `Observation` or the
 /// overlay's bookkeeping would freeze implementation detail into semver.
@@ -777,32 +779,32 @@ fn public_no_internal_route_stack_exports() {
         "Observation",
         "Notification",
         "RoutePopDisposition",
-        // ADR-0020: the route-animation seam stays private. U5.4 exports the
-        // opaque `RouteBindingSlot`, *not* the `RouteBinding` inside it — which is
-        // why this check matches whole identifiers.
+        // The route-animation seam stays private. Only the
+        // opaque `RouteBindingSlot` is exported, *not* the `RouteBinding` inside it —
+        // which is why this check matches whole identifiers.
         "RouteBinding",
         "RouteRegistries",
         "RouteCommand",
         "TransitionRoute",
         "ModalRoute",
-        // ADR-0021 U6 signed off the public `Hero` / `HeroController` baseline; §7n
-        // additionally exports `FlightDirection` because `flight_shuttle_builder` takes it.
+        // The public `Hero` / `HeroController` baseline additionally exports
+        // `FlightDirection` because `flight_shuttle_builder` takes it.
         // The support seams below stay private implementation detail.
         "ModalHandle",
         "Measurement",
         "RouteSubtree",
-        // ADR-0021 U3.5: the Hero registry and handles. The public widget hides these
+        // The Hero registry and handles. The public widget hides these
         // details behind `Hero::new(tag: impl ViewKey, child)`.
         "HeroTag",
         "HeroRegistry",
         "HeroScope",
-        // ADR-0021 §7p: `HeroMode` is public; the inherited carrier of its AND-composed
+        // `HeroMode` is public; the inherited carrier of its AND-composed
         // `enabled` flag stays private.
         "HeroModeScope",
         "HeroHandle",
         "HeroState",
         "HeroFlightManifest",
-        // ADR-0021 U6: `Hero` and `HeroController` are the signed-off public surface;
+        // `Hero` and `HeroController` are the signed-off public surface;
         // everything else stays crate-private (or, for `HeroState`, `pub` but never
         // re-exported — reachable only as `<Hero as StatefulView>::State`).
         "HeroFlight",
@@ -810,12 +812,12 @@ fn public_no_internal_route_stack_exports() {
         "Shuttle",
         "ShuttleState",
         "FlightPlan",
-        // ADR-0019's deferred `PopScope` landed 2026-07-10: the widget is
+        // The deferred `PopScope` landed 2026-07-10: the widget is
         // public; the route-side registry and its ambient carrier stay private.
         "PopEntryRegistry",
         "PopEntryScope",
-        // ADR-0025 U1: the local-history mechanism is crate-private; the
-        // public surface (U2) is gated on the first Catalog consumer.
+        // The local-history mechanism is crate-private; the
+        // public surface is gated on the first Catalog consumer.
         "LocalHistoryRegistry",
         "LocalHistoryScope",
         "LocalHistoryHandle",
@@ -826,10 +828,10 @@ fn public_no_internal_route_stack_exports() {
     super::export_guard::assert_not_exported("lib.rs", LIB, &INTERNAL);
 }
 
-/// `Overlay` / `OverlayEntry` / `OverlayHandle` stay **private** after U4.
+/// `Overlay` / `OverlayEntry` / `OverlayHandle` stay **private**.
 ///
 /// `Navigator` needs them, but exporting Flutter's `Overlay` surface is a separate
-/// parity gate (ADR-0019 §5 U5, with `ModalRoute` and `OverlayPortal`). Nothing in
+/// parity gate, with `ModalRoute` and `OverlayPortal`. Nothing in
 /// the signed-off `Navigator` surface names them.
 ///
 /// Red-check: add `pub mod overlay;` to `lib.rs`.
@@ -923,7 +925,7 @@ fn navigator_push_and_remove_until_clears_down_to_the_kept_route() {
     );
 }
 
-/// ADR-0022 U3 — the per-route focus scope. Each `ModalRoute` wraps its page in
+/// The per-route focus scope. Each `ModalRoute` wraps its page in
 /// `FocusScope::with_external_node` (`routes.dart:1201-1202`) and, while current,
 /// holds the manager's **active scope** (FLUI's analogue of `setFirstFocus`
 /// chaining, `routes.dart:1692`, `:1137`): pushing a cover unfocuses a field left
@@ -1149,7 +1151,7 @@ fn pop_scope_callbacks_may_call_back_into_the_navigator() {
             [true, false],
             "both callbacks re-entered the navigator; the second reads the \
              post-pop stack (the route is already finalized when its callback \
-             runs — ADR-0019 §7d correction 2, `routes.dart:90-92`)"
+             runs — a correction against `routes.dart:90-92`)"
         );
         let _ = done.send(());
     });
@@ -1162,7 +1164,7 @@ fn pop_scope_callbacks_may_call_back_into_the_navigator() {
 }
 
 // ============================================================================
-// Local history — ADR-0025 U1 (routes.dart:747-973)
+// Local history (routes.dart:747-973)
 // ============================================================================
 
 mod local_history {
@@ -1368,7 +1370,7 @@ mod local_history {
 
     /// `on_remove` may call back into the navigator on **both** trigger paths
     /// — the deferred in-flush pop and the direct `remove()` — because neither
-    /// runs under the history lock (ADR-0025 §3.3.1; the `7b038dee` shape).
+    /// runs under the history lock (the `7b038dee` shape).
     ///
     /// Red-check: fire `on_remove` inside `ModalRoute::did_pop` instead of
     /// deferring — the pop phase hangs into the watchdog.
@@ -1410,7 +1412,7 @@ mod local_history {
     }
 
     /// `remove()` fires exactly once and is idempotent (`routes.dart:902-927`,
-    /// with the atomic linearization of ADR-0025 §3.3.2); once the last entry
+    /// with atomic linearization); once the last entry
     /// is gone, the next pop takes the route.
     #[test]
     fn remove_fires_once_and_releases_the_internal_claim() {
@@ -1587,8 +1589,7 @@ mod local_history {
 /// The pop is what triggers it: the revealed route restores the field it
 /// remembers, so the listener fires from inside the flush.
 ///
-/// Red-check: call `activate_focus_scope` from those hooks again — the pop hangs
-/// and the watchdog fails.
+/// Red-check: call `activate_focus_scope` from those hooks again — the pop hangs.
 #[test]
 fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
     use std::time::Duration;
@@ -1598,64 +1599,52 @@ fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
     use crate::navigator::PageRoute;
     use crate::{Focus, SizedBox as Box2};
 
-    const BUDGET: Duration = Duration::from_secs(10);
-    let (done, finished) = std::sync::mpsc::channel();
+    let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+    let manager = FocusManager::global();
+    manager.unfocus();
 
-    std::thread::spawn(move || {
-        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
+    let built = Built::default();
+    let (handle, mut harness) = navigator_with(&built);
 
-        let built = Built::default();
-        let (handle, mut harness) = navigator_with(&built);
+    let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let field = FocusNode::with_debug_label("deadlock-field");
+    let field_for_page = Arc::clone(&field);
+    let observed_for_page = Arc::clone(&observed);
+    let navigator = handle.clone();
 
-        let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
-        let field = FocusNode::with_debug_label("deadlock-field");
-        let field_for_page = Arc::clone(&field);
-        let observed_for_page = Arc::clone(&observed);
-        let navigator = handle.clone();
+    let _a = handle.push(
+        PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            let observed = Arc::clone(&observed_for_page);
+            let navigator = navigator.clone();
+            Focus::new(Box2::new(10.0, 10.0))
+                .focus_node(Arc::clone(&field_for_page))
+                .on_focus_change(move |_focused| {
+                    // The re-entrant read that deadlocks under the lock.
+                    observed.lock().push(navigator.can_pop());
+                })
+                .into_view()
+                .boxed()
+        })
+        .transition_duration(Duration::ZERO),
+    );
+    harness.tick();
+    field.request_focus();
 
-        let _a = handle.push(
-            PageRoute::<i32>::new(move |_ctx, _p, _s| {
-                let observed = Arc::clone(&observed_for_page);
-                let navigator = navigator.clone();
-                Focus::new(Box2::new(10.0, 10.0))
-                    .focus_node(Arc::clone(&field_for_page))
-                    .on_focus_change(move |_focused| {
-                        // The re-entrant read that deadlocks under the lock.
-                        observed.lock().push(navigator.can_pop());
-                    })
-                    .into_view()
-                    .boxed()
-            })
+    // Cover it, then reveal it: the reveal restores the remembered focus
+    // from inside the flush, firing the user listener.
+    let _b = handle.push(
+        PageRoute::<i32>::new(|_ctx, _p, _s| Box2::new(10.0, 10.0).into_view().boxed())
             .transition_duration(Duration::ZERO),
-        );
-        harness.tick();
-        field.request_focus();
-
-        // Cover it, then reveal it: the reveal restores the remembered focus
-        // from inside the flush, firing the user listener.
-        let _b = handle.push(
-            PageRoute::<i32>::new(|_ctx, _p, _s| Box2::new(10.0, 10.0).into_view().boxed())
-                .transition_duration(Duration::ZERO),
-        );
-        harness.tick();
-        assert!(handle.pop());
-        harness.tick();
-
-        assert!(
-            !observed.lock().is_empty(),
-            "the focus listener must actually have fired — otherwise this test \
-             proves nothing about where it runs"
-        );
-
-        manager.unfocus();
-        let _ = done.send(());
-    });
+    );
+    harness.tick();
+    assert!(handle.pop());
+    harness.tick();
 
     assert!(
-        finished.recv_timeout(BUDGET).is_ok(),
-        "a focus listener calling back into the navigator deadlocked — the \
-         route's focus activation ran under the history lock"
+        !observed.lock().is_empty(),
+        "the focus listener must actually have fired — otherwise this test \
+         proves nothing about where it runs"
     );
+
+    manager.unfocus();
 }

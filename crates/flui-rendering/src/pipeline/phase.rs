@@ -3,12 +3,12 @@
 //! Per docs/designs/2026-05-20-mythos-flui-rendering-redesign.md, the
 //! `PipelineOwner` carries a phantom type parameter `Phase: PipelinePhase`
 //! that lifts the runtime "what frame phase am I in" question into the
-//! type system. Mythos Step 7 (2026-05-20) finalized the design: each
+//! type system. The design was finalized on 2026-05-20: each
 //! `run_*` method now lives only on its phase's impl block, so calling
 //! `run_paint` on `<Idle>` or `run_layout` on `<Compositing>` is a
 //! compile error, not a runtime assert.
 //!
-//! # Compile-time enforcement examples (Mythos Step 13 + Step 7)
+//! # Compile-time enforcement examples
 //!
 //! `run_layout`, `run_compositing`, `run_paint`, and `run_semantics`
 //! each live on the matching phase's impl block. Calling them on the
@@ -45,7 +45,7 @@
 //! ```
 //!
 //! The legitimate transition sequence type-checks and runs. Each `run_*`
-//! returns [`crate::error::RenderResult<()>`] (Mythos Step 12); `?` or
+//! returns [`crate::error::RenderResult<()>`]; `?` or
 //! `expect` propagates panics-turned-errors from third-party render
 //! objects:
 //!

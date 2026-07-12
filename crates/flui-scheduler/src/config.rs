@@ -13,9 +13,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use flui_foundation::{BindingBase, HasInstance};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+use flui_foundation::{BindingBase, HasInstance};
 
 use crate::{frame::FrameTiming, scheduler::Scheduler};
 

@@ -1,18 +1,18 @@
 //! [`HeroController`] — the measurement half of Flutter's hero machinery.
 //!
-//! ADR-0021 U3 (the controller) and U3.5 (the manifests). [`HeroController`] and
-//! [`FlightDirection`] are public (§7l/§7n); the manifests, measurement, and flight
+//! [`HeroController`] and
+//! [`FlightDirection`] are public; the manifests, measurement, and flight
 //! machinery below stay `pub(crate)`.
 //!
 //! This is the observer that decides *when* a flight starts, *where* its destination
 //! will be, and *which heroes* fly. It records [`HeroFlightManifest`] values for
 //! diagnostics/tests and hands valid ones to the private flight manager. The flight
 //! itself — the overlay entry, `RectTween`, shuttle, and driving animation — lives in
-//! `hero_flight.rs` (U4).
+//! `hero_flight.rs`.
 //!
 //! The pieces it stands on already exist: the private [`Hero`] view, the per-route
 //! [`HeroRegistry`] behind an ambient [`HeroScope`], and [`HeroHandle`] with its
-//! `start_flight` / `end_flight` placeholder machinery (`hero.rs`, U3.5). The
+//! `start_flight` / `end_flight` placeholder machinery (`hero.rs`). The
 //! controller still does not call `start_flight` directly — the private `HeroFlight`
 //! does that when launched.
 //!
@@ -45,28 +45,28 @@
 //! piece of that is a seam this ADR built, and this controller is the first thing
 //! that composes them:
 //!
-//! | Step | Seam | Landed in |
-//! |---|---|---|
-//! | `toRoute.offstage = …` (`:967`) | [`ModalHandle::set_offstage`] via the navigator's modal registry | U3 |
-//! | `didChangeTop` (`navigator.dart:4590-4596`) | `Notification::TopChanged`, delivered outside the history lock | U2 + §7f |
-//! | offstage ⇒ `animation.value == 1.0` (`routes.dart:1958`) | the `ModalRoute` animation proxies | U3 |
-//! | `addPostFrameCallback` (`:968`) | [`PostFrameHandle`] | U2 |
-//! | the callback runs *after* layout commits | `Scheduler::drive_frame` | U1.5 |
-//! | `to.subtreeContext` (`:1014`) | [`RouteSubtree`] | U2 |
-//! | `subtreeContext.findRenderObject()!.size` (`:952`) | `PipelineOwner::box_size` | U1 |
-//! | `getTransformTo(navigatorRenderObject)` (`:1029`) | `PipelineOwner::transform_to` | U1 |
-//! | `navigator` on an observer (`navigator.dart:779`) | [`NavigatorObserver::did_attach`] | U2 |
-//! | `Hero._allHeroesFor(subtreeContext)` (`:1014`) | per-route `HeroRegistry`, filled by registration rather than an element walk | U3.5 |
-//! | `_boundingBoxFor(hero, route.subtreeContext)` (`:501-509`) | `HeroHandle::bounding_box_in` | U3.5 |
+//! | Step | Seam |
+//! |---|---|
+//! | `toRoute.offstage = …` (`:967`) | [`ModalHandle::set_offstage`] via the navigator's modal registry |
+//! | `didChangeTop` (`navigator.dart:4590-4596`) | `Notification::TopChanged`, delivered outside the history lock |
+//! | offstage ⇒ `animation.value == 1.0` (`routes.dart:1958`) | the `ModalRoute` animation proxies |
+//! | `addPostFrameCallback` (`:968`) | [`PostFrameHandle`] |
+//! | the callback runs *after* layout commits | `Scheduler::drive_frame` |
+//! | `to.subtreeContext` (`:1014`) | [`RouteSubtree`] |
+//! | `subtreeContext.findRenderObject()!.size` (`:952`) | `PipelineOwner::box_size` |
+//! | `getTransformTo(navigatorRenderObject)` (`:1029`) | `PipelineOwner::transform_to` |
+//! | `navigator` on an observer (`navigator.dart:779`) | [`NavigatorObserver::did_attach`] |
+//! | `Hero._allHeroesFor(subtreeContext)` (`:1014`) | per-route `HeroRegistry`, filled by registration rather than an element walk |
+//! | `_boundingBoxFor(hero, route.subtreeContext)` (`:501-509`) | `HeroHandle::bounding_box_in` |
 //!
 //! # What is deliberately absent
 //!
-//! The customization hooks landed in §7n: `Hero::create_rect_tween`,
+//! The customization hooks: `Hero::create_rect_tween`,
 //! `Hero::flight_shuttle_builder` (with the no-foreign-`BuildContext` divergence),
 //! FLUI's state-preserving `Hero::placeholder` (in place of Flutter's lossy
 //! `placeholderBuilder`), and `Hero::curve` / `Hero::reverse_curve` with Flutter's
 //! `Curves.fastOutSlowIn` default (`heroes.dart:181`). `FlightDirection` is public
-//! for the shuttle builder, and `HeroMode` grounds a subtree (§7p). Still absent:
+//! for the shuttle builder, and `HeroMode` grounds a subtree. Still absent:
 //! `transitionOnUserGestures`.
 //!
 //! The private surface stays private: `HeroTag`, `HeroRegistry`, `HeroScope`,
@@ -87,14 +87,15 @@
 //! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
 //! [`RouteSubtree`]: super::subtree::RouteSubtree
 
-// A `Navigator` now auto-attaches a `HeroController` in production (§7m), so the
+// A `Navigator` now auto-attaches a `HeroController` in production, so the
 // controller and its flight path are live. What stays test-only are the `pub(crate)`
 // introspection accessors (`scheduled_count`, `measurements`, `manifests`) the tests
 // read to assert the measurement pass; their `dead_code` in a non-test build cascades
 // into the `ModalHandle` / `RouteBinding` / `HeroRegistry` seams. The allow keeps a
-// seam from being deleted and re-derived later, out of step with the ADR.
+// seam from being deleted and re-derived later, out of step with the design.
 #![allow(dead_code)]
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -142,8 +143,8 @@ impl FlightDirection {
 /// What one post-frame measurement resolved.
 ///
 /// The route-level measurement that precedes manifest collection and flight launch.
-/// Keeping it recorded separately proves the U1/U1.5/U2/U3 seams still compose into a
-/// destination rect before U4 consumes matching hero pairs.
+/// Keeping it recorded separately proves the underlying seams still compose into a
+/// destination rect before that data is consumed to match hero pairs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Measurement {
     /// `None` when neither route was animating; see [`FlightDirection::classify`].
@@ -222,7 +223,7 @@ pub struct HeroController {
     /// `HeroController._flights` (`heroes.dart:850`), one per tag in the air.
     flights: Arc<FlightManager>,
     /// `HeroController.createRectTween` (`heroes.dart:847`): the fallback rect-tween
-    /// factory for heroes that set none of their own. `None` = linear. ADR-0021 §7n D-N.1.
+    /// factory for heroes that set none of their own. `None` = linear.
     default_rect_factory: Option<RectTweenFactory>,
 }
 
@@ -254,11 +255,11 @@ impl HeroController {
     #[must_use]
     pub fn with_rect_tween<F, A>(factory: F) -> Arc<Self>
     where
-        F: Fn(Rect, Rect) -> A + Send + Sync + 'static,
+        F: Fn(Rect, Rect) -> A + 'static,
         A: Animatable<Rect> + Send + Sync + 'static,
     {
         Arc::new(Self {
-            default_rect_factory: Some(Arc::new(move |begin, end| {
+            default_rect_factory: Some(Rc::new(move |begin, end| {
                 Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
             })),
             ..Self::default()
@@ -296,7 +297,7 @@ impl HeroController {
     /// Runs **inside an observer callback**, so it does exactly two kinds of work:
     /// registry lookups behind their own mutexes, and scheduling. No element-tree
     /// read, no render-tree read, no `history` mutation. (Those would be legal since
-    /// ADR-0021 §7f moved notification out from under the lock — but they would be
+    /// notification is delivered outside the history lock — but they would be
     /// wrong: nothing has laid out yet.)
     fn maybe_start(&self, from: Option<RouteId>, to: Option<RouteId>) {
         let Some(navigator) = self.navigator() else {
@@ -307,8 +308,8 @@ impl HeroController {
             return;
         };
         // `if (toRoute == fromRoute || toRoute is! PageRoute || fromRoute is! PageRoute)`
-        // (`:916-920`). ADR-0020 §7e already encoded `is PageRoute` as
-        // `TransitionGroup::Page`, because FLUI's routes name each other by id.
+        // (`:916-920`). `TransitionGroup::Page` already encodes `is PageRoute`,
+        // because FLUI's routes name each other by id.
         if from == to
             || !Self::is_page_route(&navigator, from)
             || !Self::is_page_route(&navigator, to)
@@ -351,22 +352,16 @@ impl HeroController {
             return;
         };
 
-        // `toRoute.offstage = toRoute.animation!.value == 0.0;` (`:967`)
-        //
-        // Only a destination that has not begun entering is worth hiding: one already
-        // part-way through its transition is on screen, and hiding it would flicker.
-        destination.set_offstage(to_animation.value() == 0.0);
-
-        self.scheduled.fetch_add(1, Ordering::SeqCst);
         let measurements = Arc::clone(&self.measurements);
         let manifests = Arc::clone(&self.manifests);
         let flights = Arc::clone(&self.flights);
         let default_rect_factory = self.default_rect_factory.clone();
-        post_frame.schedule(move |_timing| {
+        let measured_destination = destination.clone();
+        let schedule_result = post_frame.schedule_local(move |_timing| {
             let pass = MeasurementPass {
                 navigator: &navigator,
                 source: &source,
-                destination: &destination,
+                destination: &measured_destination,
                 from,
                 to,
                 direction,
@@ -375,6 +370,18 @@ impl HeroController {
             };
             pass.run(&measurements, &manifests);
         });
+        if let Err(error) = schedule_result {
+            tracing::warn!(
+                ?error,
+                "hero measurement could not enter the owner-local post-frame lane"
+            );
+            return;
+        }
+
+        // Only hide the destination after its restoring measurement is guaranteed
+        // to be queued. A failed local-lane registration must never strand it.
+        destination.set_offstage(to_animation.value() == 0.0);
+        self.scheduled.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Flutter tests `nextRoute is PageRoute` on the Dart type; FLUI's routes name
@@ -395,7 +402,7 @@ impl HeroController {
 /// the two routes' heroes by tag.
 ///
 /// It runs in the **post-frame** phase of the frame the offstage flip dirtied, so
-/// `box_size` and `transform_to` answer against committed layout (ADR-0021 §7c).
+/// `box_size` and `transform_to` answer against committed layout.
 /// Reading them from `did_change_top` instead would answer `None`, or worse, answer
 /// with the *previous* frame's geometry.
 ///
@@ -465,7 +472,7 @@ impl MeasurementPass<'_> {
 
         // Hand the flight manager the capability it needs to drain finished flights at
         // end-of-frame, before any of them can finish. Same handle the pass itself was
-        // scheduled through, so it targets the binding's scheduler (ADR-0021 §7c).
+        // scheduled through, so it targets the binding's scheduler.
         self.flights
             .set_post_frame(self.navigator.post_frame_handle());
 
@@ -482,7 +489,7 @@ impl MeasurementPass<'_> {
     ///
     /// A manifest with **no direction** never flies: Flutter's `flightType == null`
     /// arm builds no manifest at all (`:1030`). The measurement is still recorded,
-    /// because a manifest is what U3.5 promised and a flight is what U4 adds.
+    /// because a manifest is measurement data, independent of whether a flight launches.
     fn launch(&self, manifest: &HeroFlightManifest, from_hero: &HeroHandle, to_hero: &HeroHandle) {
         let Some(direction) = manifest.direction else {
             return;
@@ -617,8 +624,8 @@ impl NavigatorObserver for HeroController {
 
     /// `NavigatorObserver._navigators[this] = navigator` (`navigator.dart:3836`).
     ///
-    /// **A controller cannot be shared by two mounted navigators** (ADR-0021 §7m,
-    /// D-U6.5; Flutter's "can not be shared", `:4010-4027`). If it is already attached
+    /// **A controller cannot be shared by two mounted navigators** (Flutter's "can
+    /// not be shared", `:4010-4027`). If it is already attached
     /// to a still-mounted navigator, the second attach is refused and logged: the
     /// controller stays with the first (whose heroes keep flying), and the second
     /// navigator's heroes do not fly rather than the controller silently pointing at
@@ -653,7 +660,7 @@ impl NavigatorObserver for HeroController {
     /// `assert(topRoute.isCurrent)` says as much.
     fn did_change_top(&self, top: RouteId, previous_top: Option<RouteId>) {
         // Flutter asserts `topRoute.isCurrent` here (`heroes.dart:855`). FLUI cannot:
-        // ADR-0021 §7f delivers notifications *outside* the history lock and permits an
+        // notifications are delivered *outside* the history lock and permit an
         // observer to mutate the stack from a callback, so a re-entrant push can leave
         // `top` transiently not-current by the time this fires. The flight path is
         // guarded downstream anyway (`route_peer`/`route_modal` return `None` for a

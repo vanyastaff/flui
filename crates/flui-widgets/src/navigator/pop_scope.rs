@@ -27,6 +27,7 @@
 //!   Flutter's re-register-on-route-change `didChangeDependencies` dance
 //!   (`pop_scope.dart:150-166`) collapses.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -37,7 +38,7 @@ use parking_lot::Mutex;
 
 /// Reports a pop attempt's outcome: `true` — the route is leaving; `false` —
 /// the pop was refused (a veto, this scope's or a sibling's).
-pub type PopInvokedCallback = Arc<dyn Fn(bool) + Send + Sync>;
+pub type PopInvokedCallback = Rc<dyn Fn(bool)>;
 
 // ============================================================================
 // The registry (route side)
@@ -198,8 +199,8 @@ impl PopScope {
     /// actually popped, `false` when a veto refused it — Flutter's
     /// `onPopInvokedWithResult` minus the result (`pop_scope.dart:106`).
     #[must_use]
-    pub fn on_pop_invoked(mut self, callback: impl Fn(bool) + Send + Sync + 'static) -> Self {
-        self.on_pop_invoked = Some(Arc::new(callback));
+    pub fn on_pop_invoked(mut self, callback: impl Fn(bool) + 'static) -> Self {
+        self.on_pop_invoked = Some(Rc::new(callback));
         self
     }
 }

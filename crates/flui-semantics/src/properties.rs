@@ -170,7 +170,7 @@ impl From<SmolStr> for AttributedString {
 }
 
 // ============================================================================
-// AttributedString concat helper (U16)
+// AttributedString concat helper
 // ============================================================================
 
 /// Concatenates two attributed strings in a text-direction-aware manner.
@@ -229,7 +229,7 @@ pub fn concat_attributed_string(
 }
 
 // ============================================================================
-// SemanticsAction mask constants (U16)
+// SemanticsAction mask constants
 // ============================================================================
 
 /// Bitmask of `SemanticsAction` variants that can be absorbed from a child

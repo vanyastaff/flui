@@ -1,11 +1,10 @@
-//! Acceptance + edge-case tests for U14 — `GlobalKey` register / unregister,
+//! Acceptance + edge-case tests for `GlobalKey` register / unregister,
 //! same-frame state migration, and `current_element` / `current_state`
 //! lookup.
 //!
-//! Plan reference: `docs/plans/2026-05-21-002-feat-framework-spine-repair-plan.md` §U14.
-//! Brainstorm R-IDs: R13 (register on mount), R14 (push to inactive queue
-//! on unmount + state migration on same-frame remount + finalize_inactive
-//! at end-of-frame), R15 (lookup methods).
+//! Covers: registering on mount, pushing to the inactive queue on
+//! unmount with same-frame state migration on remount (finalized at
+//! end-of-frame), and the lookup methods.
 //!
 //! Flutter parity:
 //! - `framework.dart:3148`  — `_globalKeyRegistry` (BuildOwner.globalKeyRegistry).
@@ -13,10 +12,15 @@
 //! - `framework.dart:4636`  — `deactivateChild` (push onto `_inactiveElements`).
 //! - `framework.dart:2099`  — `_InactiveElements` queue + finalization ordering.
 //!
-//! These tests are written TEST-FIRST per the unit's execution discipline:
-//! they fail against the U13 tip (`current_element`/`current_state` return
-//! `None`; reconciliation creates fresh state on remount). U14's impl makes
-//! them pass.
+//! These tests are written TEST-FIRST: before this wiring lands,
+//! `current_element`/`current_state` return `None` and reconciliation
+//! creates fresh state on remount; the implementation below makes them
+//! pass.
+
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 
@@ -140,10 +144,10 @@ fn set_sentinel(
 }
 
 // ============================================================================
-// AE4 happy path — `current_state` after mount
+// Happy path — `current_state` after mount
 // ============================================================================
 
-/// AE4 happy path. After a keyed stateful element is mounted under a root,
+/// After a keyed stateful element is mounted under a root,
 /// `key.current_element()` returns the element's id and `key.current_state()`
 /// surfaces the same `&KeyedCounterState` the framework stored on the
 /// element.
@@ -183,10 +187,10 @@ fn global_key_current_state_after_mount() {
 }
 
 // ============================================================================
-// AE4 state migration — same-frame reparenting preserves state identity
+// State migration — same-frame reparenting preserves state identity
 // ============================================================================
 
-/// AE4 state migration. The keyed element is unmounted from one parent
+/// The keyed element is unmounted from one parent
 /// slot and re-inserted under a different parent (same frame). The
 /// underlying state survives the move — `count` AND a sentinel mutated
 /// after the first mount stay intact, proving the state was migrated,
@@ -264,10 +268,10 @@ fn global_key_state_migrates_to_new_parent_slot() {
 }
 
 // ============================================================================
-// AE5 cleanup — full unmount drops the GlobalKey registration
+// Cleanup — full unmount drops the GlobalKey registration
 // ============================================================================
 
-/// AE5 cleanup. After a keyed element is unmounted and the end-of-frame
+/// After a keyed element is unmounted and the end-of-frame
 /// `finalize_tree` drains the inactive queue, `current_element` and
 /// `current_state` must return `None`. The registry entry is cleared
 /// once the element is truly gone.
@@ -391,10 +395,6 @@ fn global_key_construction_accepts_any_type() {
 /// The element's state identity (id + sentinel) must survive every
 /// reparent — no fresh state is ever created. The registry stays at
 /// exactly one entry throughout.
-///
-/// Per plan §"Risks & Mitigations" U14: "Mitigation: Test-first per AE4
-/// explicit. … Write a stress test that mounts→unmounts→re-mounts at
-/// different slot 100x and asserts state identity."
 #[test]
 #[serial_test::serial(global_key_registry)]
 fn global_key_state_preserved_across_100_reparents() {

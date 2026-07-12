@@ -49,7 +49,7 @@
 //! let maybe_id = ViewId::new_checked(0); // None
 //! let valid_id = ViewId::new_checked(1); // Some(ViewId(1))
 //! ```
-// F9 — `#[expect]` over `#[allow]` (edition-2024 idiom): this module
+// `#[expect]` over `#[allow]` (edition-2024 idiom): this module
 // still contains genuine `unsafe` (the `*_unchecked` zip/new
 // constructors wrap `NonZeroUsize::new_unchecked`, a documented
 // caller-guarantees-non-zero contract). The `expect` will fire an
@@ -102,11 +102,12 @@ pub(crate) type Index = usize;
 /// Uses `NonZeroUsize` for niche optimization - `Option<RawId>` has the same
 /// size as `RawId` because the compiler uses 0 as the `None` representation.
 ///
-/// `RawId` stays part of the public surface (F23 considered downgrading it to
-/// `pub(crate)` but kept it `pub`): U1/F1 made `Id::from_raw(raw: RawId)` a
+/// `RawId` stays part of the public surface (downgrading it to
+/// `pub(crate)` was considered but rejected): `Id::from_raw(raw: RawId)` is a
 /// safe public constructor with a public doc-test, and downstream tests round-
 /// trip through `Id::into_raw() -> RawId` + `RawId::unzip`. The internal
-/// `Index` alias, which had no downstream consumers, is the part F23 narrows.
+/// `Index` alias has no downstream consumers and remains the only part
+/// considered for narrowing.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RawId(NonZeroUsize);
@@ -242,7 +243,7 @@ pub trait Marker: 'static + WasmNotSendSync + Debug {}
 /// // assert_eq!(view, element); // Would not compile!
 /// assert_eq!(element.index(), 0);
 /// ```
-// F7 — the marker `T` appears only as a compile-time domain tag, never
+// The marker `T` appears only as a compile-time domain tag, never
 // behind a reference or owned by the id. `PhantomData<fn() -> T>` makes
 // `Id<T>` *invariant*-free over `T` while still requiring `T`, and —
 // crucially — keeps `Id<T>: Send + Sync` regardless of `T`'s own auto
@@ -714,7 +715,7 @@ ids! {
         /// `RenderObject`s handle layout and painting. They form a separate tree
         /// optimized for performance-critical operations.
         ///
-        /// Generational ([`GenId`]) since the D2 amendment: the render slab
+        /// Generational ([`GenId`]): the render slab
         /// reuses slots, and any id-keyed retained cache or async repaint wake
         /// would otherwise alias a freed-and-reused slot (ABA — stale pixels
         /// under a different node). `RenderTree` accessors perform the
@@ -722,7 +723,7 @@ ids! {
         pub type RenderId Render;
 
         /// Realm ID - **generational** key identifying one `UiRealm`
-        /// incarnation (ADR-0027 §6).
+        /// incarnation.
         ///
         /// Generational so a recreated realm never compares equal to its
         /// predecessor: closing and reopening a realm's window mints a fresh
@@ -1281,7 +1282,7 @@ mod tests {
     // GenId (generational, RenderId) tests
     // -----------------------------------------------------------------------
 
-    /// D2 — pack/unpack round-trip + 1-based `new` convention.
+    /// Pack/unpack round-trip + 1-based `new` convention.
     #[test]
     fn gen_id_round_trip_and_one_based_new() {
         let generation = NonZeroU32::new(7).unwrap();
@@ -1294,7 +1295,7 @@ mod tests {
         assert_eq!(one_based.generation(), NonZeroU32::MIN);
     }
 
-    /// D2 — ABA safety: same slot, different generation → distinct ids.
+    /// ABA safety: same slot, different generation → distinct ids.
     #[test]
     fn gen_id_stale_generation_is_distinct() {
         let gen1 = NonZeroU32::new(1).unwrap();
@@ -1307,14 +1308,14 @@ mod tests {
         );
     }
 
-    /// D2 — zero input panics (1-based invariant).
+    /// Zero input panics (1-based invariant).
     #[test]
     #[should_panic(expected = "GenId::new requires n >= 1")]
     fn gen_id_new_zero_panics() {
         let _ = RenderId::new(0);
     }
 
-    /// D2 — `GenId` satisfies `TreeId` without `Identifier` (no `.get()`;
+    /// `GenId` satisfies `TreeId` without `Identifier` (no `.get()`;
     /// the `compile_fail` doc-test on `GenId` enforces the absence).
     #[test]
     fn gen_id_implements_tree_id_not_identifier() {
@@ -1378,7 +1379,7 @@ mod tests {
     // ElementId (generational) tests
     // -----------------------------------------------------------------------
 
-    /// E1 — niche/size: `Option<ElementId>` must have the same size as `ElementId`.
+    /// Niche/size: `Option<ElementId>` must have the same size as `ElementId`.
     /// The all-zero bit pattern is unreachable because generation >= 1.
     #[test]
     fn element_id_niche_size() {
@@ -1394,7 +1395,7 @@ mod tests {
         );
     }
 
-    /// E1 — pack/unpack round-trip for `new_gen`.
+    /// Pack/unpack round-trip for `new_gen`.
     #[test]
     fn element_id_new_gen_round_trip() {
         let generation = NonZeroU32::new(7).unwrap();
@@ -1403,7 +1404,7 @@ mod tests {
         assert_eq!(id.generation(), generation, "generation must round-trip");
     }
 
-    /// E1 — `new(n)` preserves 1-based convention: `new(1).index() == 0`.
+    /// `new(n)` preserves 1-based convention: `new(1).index() == 0`.
     #[test]
     fn element_id_new_one_based() {
         let id = ElementId::new(1);
@@ -1419,14 +1420,14 @@ mod tests {
         assert_eq!(id2.generation(), NonZeroU32::new(1).unwrap());
     }
 
-    /// E1 — zero input panics with a helpful message.
+    /// Zero input panics with a helpful message.
     #[test]
     #[should_panic(expected = "ElementId::new requires n >= 1")]
     fn element_id_new_zero_panics() {
         let _ = ElementId::new(0);
     }
 
-    /// E1 — index cap: `new(n)` panics when the 0-based slab index `n - 1`
+    /// Index cap: `new(n)` panics when the 0-based slab index `n - 1`
     /// exceeds `u32::MAX` (the packed index field is 32 bits). 64-bit hosts
     /// only — on a 32-bit `usize` the literal itself would overflow.
     #[test]
@@ -1436,7 +1437,7 @@ mod tests {
         let _ = ElementId::new(u32::MAX as usize + 2);
     }
 
-    /// E1 — `new_gen` round-trips at the maximum generation. The
+    /// `new_gen` round-trips at the maximum generation. The
     /// overflow *policy* (retire-by-panic when a slot is recycled past
     /// `u32::MAX`) lives in `ElementTree::bump_generation`; this only
     /// checks the id packs/unpacks the boundary value losslessly.
@@ -1448,7 +1449,7 @@ mod tests {
         assert_eq!(id.generation(), max_gen);
     }
 
-    /// E1 — Debug / Display output contains discriminating fields.
+    /// Debug / Display output contains discriminating fields.
     #[test]
     fn element_id_display_debug() {
         let generation = NonZeroU32::new(3).unwrap();
@@ -1463,7 +1464,7 @@ mod tests {
         );
     }
 
-    /// E1 — distinct (index, generation) pairs produce distinct ids.
+    /// Distinct (index, generation) pairs produce distinct ids.
     #[test]
     fn element_id_eq_uses_full_packed_value() {
         let gen1 = NonZeroU32::new(1).unwrap();
@@ -1476,7 +1477,7 @@ mod tests {
         assert_eq!(id_a, ElementId::new_gen(0, gen1));
     }
 
-    /// E1 — `TreeId` bound: `ElementId` must satisfy `TreeId` without `Identifier`.
+    /// `TreeId` bound: `ElementId` must satisfy `TreeId` without `Identifier`.
     #[test]
     fn element_id_implements_tree_id() {
         fn needs_tree_id<I: TreeId>(id: I) -> I {
@@ -1487,7 +1488,7 @@ mod tests {
         assert_eq!(id, returned);
     }
 
-    /// E1 — `ElementId` does NOT accidentally implement `Identifier`.
+    /// `ElementId` does NOT accidentally implement `Identifier`.
     /// This is a compile-time check enforced by the absence of the impl.
     /// We verify at runtime that the two traits are distinct by confirming
     /// `ViewId` (which does impl `Identifier`) can call `.get()` but `ElementId`
@@ -1504,7 +1505,7 @@ mod tests {
         assert_eq!(elem.index(), 4); // 0-based
     }
 
-    /// E1 — `as_u64` returns the raw packed value; useful for tracing.
+    /// `as_u64` returns the raw packed value; useful for tracing.
     #[test]
     fn element_id_as_u64_nonzero() {
         let id = ElementId::new(1);
@@ -1515,7 +1516,7 @@ mod tests {
         assert_eq!(id.as_u64(), gen_bits | idx_bits);
     }
 
-    /// E1 — serde round-trip through a real format (`serde_json`): an
+    /// Serde round-trip through a real format (`serde_json`): an
     /// `ElementId` serialises to its packed `u64` and deserialises back to an
     /// equal id, preserving both index and generation.
     #[test]
@@ -1531,7 +1532,7 @@ mod tests {
         assert_eq!(back.generation().get(), 3);
     }
 
-    /// E1 — the deserialiser rejects a packed `u64` whose high 32 bits
+    /// The deserialiser rejects a packed `u64` whose high 32 bits
     /// (generation) are zero — a tampered/foreign value that could otherwise
     /// fabricate a generation-0 id that no live slot ever mints.
     #[test]

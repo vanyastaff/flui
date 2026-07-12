@@ -1,7 +1,7 @@
-//! ADR-0021 U2 seam 1: `PostFrameHandle` targets the **binding's** scheduler.
+//! `PostFrameHandle` targets the **binding's** scheduler.
 //!
 //! `HeadlessBinding` owns a binding-local `Scheduler`; production drives the
-//! `Scheduler::instance()` singleton (ADR-0021 §7c). A capability that silently
+//! `Scheduler::instance()` singleton. A capability that silently
 //! fell back to the singleton would leave headless callbacks undrained *and* let a
 //! headless test "prove" a production path it never touched.
 //!
@@ -10,11 +10,13 @@
 
 mod common;
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use common::{lay_out, tight};
+use common::{lay_out, loose, tight};
 use flui_foundation::HasInstance;
 use flui_scheduler::Scheduler;
 use flui_view::prelude::*;
@@ -57,6 +59,79 @@ impl StatefulView for PostFrameProbe {
 
 struct PostFrameProbeState {
     observations: Observations,
+}
+
+#[derive(Clone)]
+struct LocalPostFrameProbe {
+    pipeline: Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    observed_committed_geometry: Arc<AtomicBool>,
+    desired_width: Arc<AtomicUsize>,
+    rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
+}
+
+impl View for LocalPostFrameProbe {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for LocalPostFrameProbe {
+    type State = LocalPostFrameProbeState;
+
+    fn create_state(&self) -> Self::State {
+        LocalPostFrameProbeState {
+            pipeline: Arc::clone(&self.pipeline),
+            observed_committed_geometry: Arc::clone(&self.observed_committed_geometry),
+            desired_width: Arc::clone(&self.desired_width),
+            rebuild: Arc::clone(&self.rebuild),
+        }
+    }
+}
+
+struct LocalPostFrameProbeState {
+    pipeline: Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    observed_committed_geometry: Arc<AtomicBool>,
+    desired_width: Arc<AtomicUsize>,
+    rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
+}
+
+impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        *self.rebuild.lock() = Some(ctx.rebuild_handle());
+        let handle = ctx
+            .post_frame_handle()
+            .expect("the binding must install a PostFrameHandle");
+        let pipeline = Arc::clone(&self.pipeline);
+        let observed = Arc::clone(&self.observed_committed_geometry);
+        let owner_local = Rc::new(Cell::new(false));
+        let callback_local = Rc::clone(&owner_local);
+
+        handle
+            .schedule_local(move |_timing| {
+                callback_local.set(true);
+                let owner = pipeline.read();
+                let render_tree = owner.render_tree();
+                let root = render_tree
+                    .iter()
+                    .map(|(id, _)| id)
+                    .find(|id| render_tree.parent(*id).is_none())
+                    .expect("the mounted subtree should have a render root");
+                observed.store(
+                    callback_local.get()
+                        && owner.box_size(root)
+                            == Some(flui_types::Size::new(
+                                flui_types::geometry::px(64.0),
+                                flui_types::geometry::px(18.0),
+                            )),
+                    Ordering::SeqCst,
+                );
+            })
+            .expect("init_state runs inside the headless owner scope");
+    }
+
+    fn build(&self, _view: &LocalPostFrameProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(self.desired_width.load(Ordering::SeqCst) as f32, 18.0)
+    }
 }
 
 impl ViewState<PostFrameProbe> for PostFrameProbeState {
@@ -170,5 +245,51 @@ fn the_scheduled_callback_observes_this_frames_committed_layout() {
     assert!(
         saw_committed_layout.load(Ordering::SeqCst),
         "a post-frame callback must see geometry this frame's pipeline committed"
+    );
+}
+
+/// Owner-local callbacks may capture `Rc` state and still observe geometry committed
+/// by the same real headless frame. Registration happens in `init_state`, proving the
+/// binding activates its owner scope around lifecycle work rather than only around a
+/// test helper call immediately before scheduling.
+#[test]
+fn an_owner_local_post_frame_callback_observes_committed_geometry() {
+    let pipeline = Arc::new(parking_lot::RwLock::new(
+        flui_rendering::pipeline::PipelineOwner::new(),
+    ));
+    let observed = Arc::new(AtomicBool::new(false));
+    let desired_width = Arc::new(AtomicUsize::new(32));
+    let rebuild = Arc::new(Mutex::new(None));
+    let mut laid = common::lay_out_with_pipeline_owner(
+        LocalPostFrameProbe {
+            pipeline: Arc::clone(&pipeline),
+            observed_committed_geometry: Arc::clone(&observed),
+            desired_width: Arc::clone(&desired_width),
+            rebuild: Arc::clone(&rebuild),
+        },
+        loose(100.0),
+        Arc::clone(&pipeline),
+    );
+
+    assert_eq!(
+        pipeline.read().box_size(laid.root()),
+        Some(flui_types::Size::new(
+            flui_types::geometry::px(32.0),
+            flui_types::geometry::px(18.0),
+        )),
+        "bootstrap geometry must differ from the geometry expected by the callback"
+    );
+    desired_width.store(64, Ordering::SeqCst);
+    rebuild
+        .lock()
+        .as_ref()
+        .expect("init_state captured a rebuild handle")
+        .schedule();
+
+    laid.pump_for(Duration::from_millis(16));
+
+    assert!(
+        observed.load(Ordering::SeqCst),
+        "the owner-local callback must run after this frame commits geometry"
     );
 }

@@ -1,7 +1,7 @@
 //! Canvas transform operations: translate, scale, rotate, skew,
 //! transform, set_transform, transform_matrix.
 //!
-//! Mythos chain U4 extracted these from the 3,305-LOC `canvas.rs`
+//! These were extracted from the 3,305-LOC `canvas.rs`
 //! god module. Each method mutates `self.transform` directly; the
 //! current transform is baked into every `DrawCommand` at emission
 //! time so the GPU backend can apply it without consulting external

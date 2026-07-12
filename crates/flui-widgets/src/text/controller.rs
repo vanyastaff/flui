@@ -21,7 +21,7 @@ struct ControllerInner {
     /// The focus node of the [`EditableText`](super::EditableText) currently
     /// driven by this controller — published in its `init_state`, cleared in
     /// `dispose`. This is how a tap on the enclosing `TextField` focuses *its
-    /// own* field rather than a scope-walk guess (ADR-0022 U4).
+    /// own* field rather than a scope-walk guess.
     focus_node_id: Option<flui_interaction::FocusNodeId>,
 }
 
@@ -286,7 +286,7 @@ impl TextEditingController {
 
     /// The focus node of the `EditableText` this controller currently drives,
     /// or `None` between mounts. Published by `EditableTextState::init_state`
-    /// and cleared by its `dispose` (ADR-0022 U4).
+    /// and cleared by its `dispose`.
     pub(crate) fn focus_node_id(&self) -> Option<flui_interaction::FocusNodeId> {
         self.inner
             .lock()

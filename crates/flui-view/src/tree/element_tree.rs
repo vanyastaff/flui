@@ -74,16 +74,16 @@ pub struct ElementNode {
     /// Cloned `View::key()` for the view this element currently holds,
     /// or `None` when the view is keyless.
     ///
-    /// Plan §U7 / FR-022. Populated at every `insert`/`mount_root_*`
+    /// FR-022. Populated at every `insert`/`mount_root_*`
     /// call site (cloned via `ViewKey::clone_key`) and re-cloned at
     /// every `update` boundary so the field stays in lock-step with
-    /// the view value the element actually holds. Phase 2's keyed
+    /// the view value the element actually holds. The keyed
     /// reconciler reads this field directly via `key()` / `key_hash()`
     /// — no `downcast::<V>()` needed.
     ///
-    /// Coexists with `registered_global_key_hash` in Phase 1 for
+    /// Coexists with `registered_global_key_hash` for
     /// backward compatibility; the side-index field is reduced to a
-    /// derived value in Phase 2 §U17 and removed when the GlobalKey
+    /// derived value and removed when the GlobalKey
     /// registry consolidation lands.
     pub(crate) key: Option<Box<dyn ViewKey>>,
     /// Hash of the `GlobalKey` registered for this element, if any.
@@ -94,7 +94,7 @@ pub struct ElementNode {
     /// `true`. Read at end-of-frame `BuildOwner::finalize_tree` to
     /// unregister the entry from `BuildOwner::global_keys`.
     ///
-    /// Plan §U14 / R13 / R14. Flutter parity: keys are tracked on the
+    /// Flutter parity: keys are tracked on the
     /// element itself in `framework.dart:2884`-ish via `Element._widget`
     ///   + `Widget.key`; we mirror the effect with a side-channel hash
     ///     because our `View` value is owned by `ElementCore` and not
@@ -267,9 +267,9 @@ impl ElementNode {
     /// Borrow the cloned `View::key()` this element was mounted with,
     /// or `None` for a keyless element.
     ///
-    /// Phase 2's keyed reconciler reads this directly to build its
+    /// The keyed reconciler reads this directly to build its
     /// `old_keyed: HashMap<u64, ElementId>` index — no view-typed
-    /// `downcast::<V>()` needed. Plan §U7 / FR-022.
+    /// `downcast::<V>()` needed. FR-022.
     pub fn key(&self) -> Option<&dyn ViewKey> {
         self.key.as_deref()
     }
@@ -366,7 +366,7 @@ pub struct ElementTree {
     /// compare in [`ElementTree::resolve_index`] and resolves to `None`
     /// instead of the unrelated element that later reuses the slot. This is
     /// the use-after-free-by-id guard the old nested `Box` graph never needed
-    /// but the slab arena does (ABA safety — Codex E1 P1).
+    /// but the slab arena does (ABA safety).
     generations: Vec<NonZeroU32>,
     /// Root element ID.
     root: Option<ElementId>,
@@ -421,7 +421,7 @@ impl ElementTree {
     ///
     /// Panics if `slab_index` exceeds `u32::MAX` — the element tree cannot hold
     /// more than `u32::MAX` live slots because [`ElementId`] packs the index
-    /// into 32 bits. This is the index-cap bound (Codex E1 P2).
+    /// into 32 bits. This is the index-cap bound.
     fn alloc_id(&mut self, slab_index: usize) -> ElementId {
         let index = slab_index_to_u32(slab_index);
         let generation = if let Some(&g) = self.generations.get(slab_index) {
@@ -469,7 +469,7 @@ impl ElementTree {
     /// the generation can no longer be advanced without wrapping to a value a
     /// stale id might still hold. Retiring on overflow (panic) keeps the ABA
     /// guarantee absolute rather than reintroducing a 1-in-2³² collision
-    /// window (Codex E1 P2 generation-overflow policy). `u32::MAX` recycles of
+    /// window under the generation-overflow policy. `u32::MAX` recycles of
     /// a single slot is unreachable in practice.
     fn bump_generation(&mut self, index: usize) {
         let g = &mut self.generations[index];
@@ -530,7 +530,7 @@ impl ElementTree {
     /// * `owner` - Split-borrow handle into the `BuildOwner`
     ///   ([`ElementOwner`](crate::ElementOwner)) threaded into the
     ///   element's `mount` call so `GlobalKey` registration / dirty
-    ///   scheduling can take effect during initial mount. Plan §U8.
+    ///   scheduling can take effect during initial mount.
     ///
     /// Returns the ElementId of the root element.
     #[allow(clippy::needless_pass_by_value)] // Arc is cloned into element, taking Option by value is idiomatic
@@ -554,8 +554,8 @@ impl ElementTree {
         }
 
         let mut node = ElementNode::new(element, None, 0);
-        // Plan §U7 / FR-022: store the cloned `View::key()` on the
-        // node so Phase 2's keyed reconciler can index by it without
+        // FR-022: store the cloned `View::key()` on the
+        // node so the keyed reconciler can index by it without
         // crossing the typed-`V` boundary.
         node.set_key(view.key().map(ViewKey::clone_key));
 
@@ -564,7 +564,7 @@ impl ElementTree {
         // (fresh slot → gen 1; reused slot → the bumped post-free value).
         let id = self.alloc_id(slab_index);
 
-        // Plan §U15: stamp the element with its own ElementId BEFORE
+        // Stamp the element with its own ElementId BEFORE
         // `mount` so the Variable-arity reconciler can read it back
         // when emitting ReconcileEvent's `parent` field.
         self.nodes[slab_index].element_mut().set_self_id(id);
@@ -580,7 +580,7 @@ impl ElementTree {
         // Mount the element (now it has PipelineOwner set)
         self.nodes[slab_index].element_mut().mount(None, 0, owner);
 
-        // R13: register GlobalKey on mount. The root element's view is
+        // Register GlobalKey on mount. The root element's view is
         // queried here because the dispatch boundary at `Element::mount`
         // can't read the typed `View::key()` (V isn't bounded by View
         // there). Doing the check here keeps the wiring at the level
@@ -611,8 +611,6 @@ impl ElementTree {
     /// fresh element being created. Its `ElementId` and persistent
     /// state survive. Flutter parity:
     /// `framework.dart:4571` `_retakeInactiveElement`.
-    ///
-    /// Plan §U14 / R14.
     pub fn insert(
         &mut self,
         view: &dyn View,
@@ -620,7 +618,7 @@ impl ElementTree {
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
-        // R14 / ADV-1 state migration. Before creating a fresh element,
+        // ADV-1 state migration. Before creating a fresh element,
         // check whether `view` has a `GlobalKey` whose hash points at an
         // existing element. If it is inactive, pull it back; if it is still
         // active under a different parent, forget it from that parent and move
@@ -665,13 +663,13 @@ impl ElementTree {
 
         let mut node = ElementNode::new(element, Some(parent), slot);
         node.depth = parent_depth + 1;
-        // Plan §U7 / FR-022.
+        // FR-022.
         node.set_key(view.key().map(ViewKey::clone_key));
 
         let slab_index = self.nodes.insert(node);
         let id = self.alloc_id(slab_index);
 
-        // Plan §U15: same self-id stamping as mount_root.
+        // Same self-id stamping as mount_root.
         self.nodes[slab_index].element_mut().set_self_id(id);
 
         // Resolve this child's inherited scope from the parent's now that the
@@ -690,7 +688,7 @@ impl ElementTree {
             .element_mut()
             .mount(Some(parent), slot, owner);
 
-        // R13: register the GlobalKey hash → id mapping.
+        // Register the GlobalKey hash → id mapping.
         if let Some(hash) = global_key_hash_of(view) {
             register_global_key_with_collision_check(owner, hash, id);
             self.nodes[slab_index].registered_global_key_hash = Some(hash);
@@ -1059,7 +1057,7 @@ impl ElementTree {
     /// gets back ownership) OR `None` for a soft removal (the node
     /// still lives in the slab). Returns `None` if `id` doesn't exist.
     ///
-    /// Plan §U14 / R14. Threads the split-borrow `owner` handle.
+    /// Threads the split-borrow `owner` handle.
     pub fn remove(
         &mut self,
         id: ElementId,
@@ -1069,7 +1067,7 @@ impl ElementTree {
         // to `None` here rather than touching the slot's new occupant.
         let index = self.resolve_index(id)?;
 
-        // R14 soft-remove for keyed elements: push to inactive queue
+        // Soft-remove for keyed elements: push to inactive queue
         // without slab-removing. State stays intact for same-frame
         // remount.
         if self.nodes[index].registered_global_key_hash.is_some() {
@@ -1095,7 +1093,7 @@ impl ElementTree {
         }
 
         // Eager path for un-keyed elements. Drop any stale
-        // `did_change_dependencies` flag (plan §U14) — the dependent
+        // `did_change_dependencies` flag — the dependent
         // leaves the active tree before its rebuild ever runs.
         owner.clear_pending_dependency_change(id);
         self.nodes[index].element_mut().unmount(owner);
@@ -1165,8 +1163,7 @@ impl ElementTree {
     ///
     /// This bypasses the soft-remove path even for keyed elements:
     /// the slab entry is freed and the `GlobalKey` registration is
-    /// cleared via `ElementOwner::unregister_global_key`. Plan §U14 /
-    /// R14. Flutter parity: `framework.dart:2118`
+    /// cleared via `ElementOwner::unregister_global_key`. Flutter parity: `framework.dart:2118`
     /// `_unmountAll` — the finalization phase that drains
     /// `_inactiveElements` doesn't push back into the queue.
     pub fn remove_finalized(
@@ -1184,7 +1181,7 @@ impl ElementTree {
             owner.unregister_global_key(hash);
         }
 
-        // Drop any stale `did_change_dependencies` flag (plan §U14) —
+        // Drop any stale `did_change_dependencies` flag —
         // the dependent leaves the tree before its rebuild ever runs.
         owner.clear_pending_dependency_change(id);
         self.nodes[index].element_mut().unmount(owner);
@@ -1206,9 +1203,9 @@ impl ElementTree {
     /// element. Threads the split-borrow owner handle into the
     /// update call.
     ///
-    /// Plan §U7 / FR-022: re-clones `View::key()` into the node so the
+    /// FR-022: re-clones `View::key()` into the node so the
     /// stored key tracks whatever the new view carries. `View::can_update`
-    /// (FR-028 / U11) already ensures the keys match on a successful
+    /// (FR-028) already ensures the keys match on a successful
     /// update — the re-clone preserves that invariant explicitly rather
     /// than relying on the caller having already filtered by it.
     pub fn update(&mut self, id: ElementId, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
@@ -1284,7 +1281,7 @@ fn slab_index_to_u32(index: usize) -> u32 {
 }
 
 // ============================================================================
-// GlobalKey helpers (plan §U14 / R13, R14)
+// GlobalKey helpers
 // ============================================================================
 
 /// Extract the `GlobalKey` hash from a view's `View::key()` result, if
@@ -1431,7 +1428,7 @@ fn retake_inactive_global_key(
     // `framework.dart:4581` (`element.update(newWidget)`) right after
     // activating.
     node.element_mut().update(view, owner);
-    // Plan §U7 / FR-022: re-clone the key from the new view value so
+    // FR-022: re-clone the key from the new view value so
     // the stored key tracks the re-taken element's current
     // configuration — the deactivated element's old key may match
     // structurally (`is_global_key` is true on both sides) but the
@@ -1454,7 +1451,7 @@ fn retake_inactive_global_key(
         "ElementTree::insert retook inactive element for GlobalKey state migration"
     );
 
-    // Plan §U17 / SC-003: emit ReconcileEvent::Reparent. The element
+    // SC-003: emit ReconcileEvent::Reparent. The element
     // came from the inactive queue (Lifecycle::Inactive → Active), so
     // `from_parent: None` per ADV-1 branch case 1 — there is no prior
     // *active* parent at the moment of reparent; the donor parent
@@ -1654,7 +1651,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Generational staleness (ABA safety — Codex E1 P1)
+    // Generational staleness (ABA safety)
     // -----------------------------------------------------------------------
 
     /// The core ABA guard: an id that addressed a since-freed slot must NOT
@@ -1764,7 +1761,7 @@ mod tests {
         assert_eq!(tree.iter_nodes().count(), tree.len());
     }
 
-    /// Generation-overflow policy (Codex E1 P2): a slot recycled `u32::MAX`
+    /// Generation-overflow policy: a slot recycled `u32::MAX`
     /// times retires by panic rather than wrapping to a value a stale id might
     /// still hold. We drive the boundary directly by pinning the slot's
     /// counter to `u32::MAX` and freeing it once more.

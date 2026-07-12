@@ -195,7 +195,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // precisely because a Dart render object *does* hold `parent` and `owner`
     // (`box.dart:3062`, `:3113`, both implemented via `getTransformTo`).
     //
-    // ADR-0021 U1 removed them and put the real thing on the pipeline, which
+    // ADR-0021 removed them and put the real thing on the pipeline, which
     // does own the tree:
     //
     //   PipelineOwner::transform_to(descendant, ancestor)
@@ -435,13 +435,13 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
-    /// The pointer-event handler this box contributes to its hit entry.
+    /// The data-only pointer target this box contributes to its hit entry.
     ///
     /// Default `None`; override (e.g. `RenderListener`) to receive pointer
     /// events that land on this box. The blanket `RenderObject<BoxProtocol>`
     /// impl forwards to this — concrete types override here, not on
-    /// `RenderObject`. See [`RenderObject::pointer_event_handler`].
-    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+    /// `RenderObject`. See [`RenderObject::pointer_target`].
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
         None
     }
 
@@ -538,7 +538,7 @@ pub use flui_types::layout::TextBaseline;
 /// This blanket impl bridges the typed RenderBox API (with Arity/ParentData)
 /// and the protocol-specific `RenderObject<P>` trait needed for storage.
 ///
-/// # Architecture Note (D-block PR-A1b U19 / companion memo D5)
+/// # Architecture Note
 ///
 /// The `perform_layout_raw` body **is** the real bridge — it receives a
 /// protocol-erased `&mut dyn BoxLayoutCtxErased`, reconstructs a typed
@@ -549,9 +549,9 @@ pub use flui_types::layout::TextBaseline;
 /// [`RenderBox::perform_layout`]. The completion size is read back from
 /// the inner context's geometry and returned to the pipeline.
 ///
-/// Pre-U19 this method returned `*self.size()` as a no-op placeholder
-/// (companion memo §D5: D-1 AE1 demonstrably returned `Size::ZERO` for
-/// fresh boxes). The real bridge is now live.
+/// This method used to return `*self.size()` as a no-op placeholder,
+/// which demonstrably returned `Size::ZERO` for fresh boxes. The real
+/// bridge is now live.
 ///
 /// `hit_test_raw` is still a placeholder — hit testing flows through
 /// `RenderBox::hit_test()` with `BoxHitTestContext` and is wired
@@ -569,7 +569,7 @@ where
         &mut self,
         ctx: &mut <BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
-        // D-block PR-A1b U19 / memo D5 — the real bridge.
+        // The real bridge.
         //
         // The pipeline / `RenderEntry::layout_leaf_only` hands us a
         // `&mut dyn BoxLayoutCtxErased` (the GAT for `BoxProtocol`
@@ -747,8 +747,8 @@ where
         <T as RenderBox>::hit_test_transform(self, size)
     }
 
-    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
-        <T as RenderBox>::pointer_event_handler(self)
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+        <T as RenderBox>::pointer_target(self)
     }
 
     fn mouse_cursor(&self) -> CursorIcon {

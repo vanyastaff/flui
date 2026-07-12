@@ -5,16 +5,20 @@
 //! per-reparent, not O(tree size).
 //!
 //! Models a single-element reparent via the inactive-queue
-//! reactivation path (§U17 wiring). The 10-node subtree case the
-//! plan envisions requires the full Variable-arity descent which
-//! shares scope with KTD-9 — deferred. Single-element reparent
+//! reactivation path. The 10-node subtree case the
+//! plan envisions requires the full Variable-arity descent, which
+//! is deferred and out of scope for this bench. Single-element reparent
 //! exercises the same code path (`try_retake_inactive` +
 //! `ReconcileEvent::Reparent` emission) so the latency signal is
 //! representative.
 
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.
-#![allow(missing_docs)]
+//
+// ADR-0027: ElementBuildContext's current test/bench seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(missing_docs, clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 
@@ -141,9 +145,9 @@ fn bench_reparent(c: &mut Criterion) {
             |b, &outer_size| {
                 // `PerIteration` interleaves setup with measurement.
                 // The batched alternative (`LargeInput`) batched all
-                // setups first, then measured — and the GlobalKey
-                // REGISTRY singleton meant only the last setup's
-                // handle survived, panicking earlier-iter measurements.
+                // setups first, then measured — and the legacy fixture
+                // adapter kept only the last setup's handle, panicking
+                // earlier-iteration measurements.
                 b.iter_batched(
                     || setup_tree(outer_size),
                     |(tree, owner, key, leaf_id)| {

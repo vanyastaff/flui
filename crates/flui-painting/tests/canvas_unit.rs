@@ -1,5 +1,5 @@
 //! Canvas unit tests extracted from `crates/flui-painting/src/canvas/mod.rs`
-//! during Mythos chain U8.
+//! when the module was split into concern-based submodules.
 //!
 //! These tests live as integration tests so the new submodule split
 //! (`canvas/{mod,state,transform,clipping,drawing,scoped,composition,sugar}.rs`)
@@ -101,7 +101,7 @@ fn test_canvas_restore_without_save() {
     assert_eq!(canvas.len(), 1);
 }
 
-/// Mythos chain U10 wired a `debug_assert!` in `Canvas::finish` to
+/// `Canvas::finish` wires a `debug_assert!` to
 /// catch unrestored `save()` calls during test runs. Release builds
 /// preserve Flutter parity (silent finalisation via `tracing::warn!`).
 ///
@@ -175,10 +175,10 @@ fn test_canvas_clear_commands_preserves_state() {
     assert_eq!(dl.len(), 0);
 }
 
-// ===== draw_polyline (Cycle 5 U11 / audit P-6) =====
+// ===== draw_polyline =====
 
 /// `draw_polyline` over N points records N-1 line segments. The
-/// `windows(2)` shape (Cycle 5 U11 / audit P-6) handles `N < 2`
+/// `windows(2)` shape handles `N < 2`
 /// correctly by yielding zero pairs, matching the pre-change
 /// behaviour exactly.
 #[test]

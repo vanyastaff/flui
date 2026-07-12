@@ -32,7 +32,7 @@ use flui_foundation::ElementId;
 ///
 /// [`ElementBase::as_inherited`]: crate::view::ElementBase::as_inherited
 /// [`as_inherited_mut`]: crate::view::ElementBase::as_inherited_mut
-pub trait InheritedElementAccess: Send + Sync {
+pub trait InheritedElementAccess {
     /// Borrow the inherited view as `&dyn Any` so the caller can
     /// downcast to the concrete `V` (the `InheritedView` type).
     ///

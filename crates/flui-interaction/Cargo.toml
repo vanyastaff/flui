@@ -28,12 +28,14 @@ smallvec = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+thiserror = { workspace = true }
 dpi = "0.1.2"
 
 # Async runtime
 tokio = { workspace = true, features = ["time", "sync", "macros", "rt"] }
 
 [dev-dependencies]
+static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 # `tracing-subscriber` is a dev-only dependency — the observability tests
 # install a `fmt::TestWriter` subscriber to exercise span emission on hot

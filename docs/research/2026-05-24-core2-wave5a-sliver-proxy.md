@@ -12,7 +12,7 @@
 
 Land the **first production `RenderSliver` implementations** in the
 project. Before this wave only one `impl RenderSliver` existed — a
-test stub in `tests/u20_layout_dirty_root.rs`. Wave 5a ships four
+test stub in `tests/layout_dirty_root.rs`. Wave 5a ships four
 small Single-arity Sliver→Sliver render objects analogous to Wave 4's
 Box pointer/proxy family, establishing the convention that the
 remaining sliver waves (5b: bridges, 5c: lists, 6: extended) will

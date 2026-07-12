@@ -12,20 +12,20 @@
 //!    `match` on `ElementKind` without a `_` arm fails to compile
 //!    once the enum gains a new variant. The
 //!    `classify_compile_check` function below is the canary: it
-//!    matches every Phase 1 §U6 variant by name AND ends with
+//!    matches every current `ElementKind` variant by name AND ends with
 //!    `_ => …`, so it is *forward-safe* (compiles after a future
 //!    variant addition) and *backward-strict* (the named arms catch
 //!    any rename or removal at compile time).
 //! 2. **Every variant currently in the enum is exercised by name**
-//!    — the eight named arms together cover the Phase 1 §U6
-//!    closed set (`Stateless`, `Stateful`, `Proxy`, `Inherited`,
+//!    — the eight named arms together cover the closed
+//!    set (`Stateless`, `Stateful`, `Proxy`, `Inherited`,
 //!    `RenderLeaf`, `RenderSingle`, `RenderOptional`,
 //!    `RenderVariable`). A contributor who renames a variant
 //!    sees a compile-fail at the matching arm.
 //!
-//! The CI feature-flagged stub-variant smoke (plan §U33 referencing
-//! §U6) is deferred — the Phase 3 PR opens with this in-test
-//! compile-time guard plus the future-proof wildcard. A real
+//! The CI feature-flagged stub-variant smoke is deferred — this change
+//! lands with the in-test compile-time guard plus the future-proof
+//! wildcard. A real
 //! `cfg(feature = "test-non-exhaustive-smoke")` stub-variant test
 //! that gates a CI smoke job is the natural next step (post-merge,
 //! not blocking) — tracked under `docs/plans/2026-05-22-005-...md`
@@ -33,7 +33,7 @@
 
 use flui_view::element::ElementKind;
 
-/// Match-canary: every Phase 1 §U6 variant named explicitly, plus
+/// Match-canary: every `ElementKind` variant named explicitly, plus
 /// a `_` arm so a future variant addition does NOT silently
 /// regress this test. The function is `#[allow(dead_code)]`
 /// because the test below only references its address, not the

@@ -82,12 +82,12 @@ pub use box_protocol::{
     // Protocol
     BoxProtocol,
     // Per-child layout state (moved here from the deleted
-    // children_access.rs in Mythos Step 5b)
+    // children_access.rs)
     ChildState,
     ErasedBoxLayoutCtx,
     ErasedChildState,
 };
-// Erased layout-context trait (D-block PR-A1b U19 / memo D5).
+// Erased layout-context trait.
 //
 // **Deliberately NOT re-exported** at the `protocol::*` level (PR #141
 // Copilot review feedback, comment 3293746269):

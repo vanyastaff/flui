@@ -1,4 +1,4 @@
-//! `RasterOwner` — the raster mailbox + outcome-channel boundary (ADR-0027 §4/§5/§7).
+//! `RasterOwner` — the raster mailbox + outcome-channel boundary.
 //!
 //! Compositing hands one owned [`SceneSnapshot`] per presentation frame to a
 //! raster owner at exactly one seam: the **raster mailbox**. The mailbox is
@@ -8,22 +8,22 @@
 //! at submit time.
 //!
 //! Two structurally separate channels carry outcomes off this module, never
-//! the owner's general inbox (ADR-0027 §5: riding the inbox would deadlock
+//! the owner's general inbox (riding the inbox would deadlock
 //! shutdown, since the inbox flips to drain-and-refuse before an outcome is
 //! ready to send):
 //!
 //! - A **lossy telemetry ack** channel ([`RasterAck`]: presented, dropped,
-//!   surface-outdated, device-lost) — useful for diagnostics and
-//!   surface-generation feedback, never load-bearing for correctness. A full
-//!   channel drops the newest ack and logs it rather than ever blocking the
-//!   pump loop.
+//! surface-outdated, device-lost) — useful for diagnostics and
+//! surface-generation feedback, never load-bearing for correctness. A full
+//! channel drops the newest ack and logs it rather than ever blocking the
+//! pump loop.
 //! - A **load-bearing one-shot shutdown-completion** channel, returned
-//!   separately from [`RasterOwner::new`]. Kept structurally apart from the
-//!   telemetry channel so no volume of lossy acks (e.g. a frame superseded a
-//!   thousand times) can ever block or displace the one signal a consumer
-//!   actually needs to observe reliably (ADR-0027 §7). Nothing in this
-//!   module ever performs a blocking channel send — the shutdown-completion
-//!   signal is `try_send`, same as every ack.
+//! separately from [`RasterOwner::new`]. Kept structurally apart from the
+//! telemetry channel so no volume of lossy acks (e.g. a frame superseded a
+//! thousand times) can ever block or displace the one signal a consumer
+//! actually needs to observe reliably. Nothing in this
+//! module ever performs a blocking channel send — the shutdown-completion
+//! signal is `try_send`, same as every ack.
 //!
 //! [`RasterOwner`] is generic over [`RasterBackend`] (defined in
 //! [`crate::raster`], unchanged by this module) so the mailbox/channel
@@ -60,7 +60,7 @@ use crate::raster::RasterBackend;
 const ACK_CHANNEL_CAPACITY: usize = 16;
 
 /// The shutdown-completion one-shot channel's capacity — always exactly 1:
-/// the signal fires at most once per owner (ADR-0027 §7), and giving it a
+/// the signal fires at most once per owner, and giving it a
 /// dedicated channel (rather than folding it into the lossy telemetry ack
 /// channel) is the point of this design — an unbounded flood of telemetry
 /// acks can never block or displace it.
@@ -83,7 +83,7 @@ struct MailboxState {
     pending_resize: Option<(u32, u32)>,
     /// Set by [`RasterHandle::shutdown`]; refuses further submits and tells
     /// the next pump with an empty mailbox to signal shutdown-complete
-    /// (ADR-0027 §7) and stop.
+    /// and stop.
     shutting_down: bool,
 }
 
@@ -93,7 +93,7 @@ struct MailboxState {
 /// [`RasterSubmitError::OwnerGone`] from [`RasterSubmitError::ShuttingDown`]),
 /// the lossy telemetry ack sender, and the load-bearing one-shot
 /// shutdown-completion sender — kept on a channel structurally separate
-/// from the ack channel (ADR-0027 §7) so no volume of telemetry can ever
+/// from the ack channel so no volume of telemetry can ever
 /// block or displace the completion signal.
 struct RasterMailbox {
     state: Mutex<MailboxState>,
@@ -132,7 +132,7 @@ impl RasterMailbox {
 // ---------------------------------------------------------------------------
 
 /// One outcome of a submitted [`SceneSnapshot`], delivered on the lossy
-/// telemetry channel returned by [`RasterOwner::new`] (ADR-0027 §5). Never
+/// telemetry channel returned by [`RasterOwner::new`]. Never
 /// load-bearing for correctness — see the module docs for why shutdown
 /// completion rides a separate, guaranteed channel instead of a variant
 /// here.
@@ -154,7 +154,7 @@ pub enum RasterAck {
     /// A frame was dropped because its surface generation no longer matches
     /// the currently-configured surface — either rejected proactively
     /// before ever reaching the backend (the frame's stamped generation is
-    /// older than the owner's current one, ADR-0027 §6) or reported by the
+    /// older than the owner's current one, or reported by the
     /// backend itself during render.
     SurfaceOutdated {
         /// The rejected frame's epoch.
@@ -163,7 +163,7 @@ pub enum RasterAck {
         stale: SurfaceGeneration,
         /// The owner's current surface generation — the value the consumer
         /// should stamp its next `SceneSnapshot` with. The consumer
-        /// reconfigures against it and marks a full repaint (ADR-0027 §5).
+        /// reconfigures against it and marks a full repaint.
         current: SurfaceGeneration,
     },
     /// The GPU device was lost while rendering this frame.
@@ -171,7 +171,7 @@ pub enum RasterAck {
     /// This is the only ack for a device-loss condition — the frame did not
     /// present, but that fact is implied by `DeviceLost` itself; a separate
     /// [`RasterAck::Dropped`] for the same frame would double-report one
-    /// condition (ADR-0027 §5: one ack per condition). Recovery is the
+    /// condition (one ack per condition). Recovery is the
     /// consumer's job, off-thread, never inline under a lock.
     DeviceLost {
         /// The frame that was being rendered when the device was lost.
@@ -193,7 +193,7 @@ pub enum RasterAck {
 pub enum FrameDropReason {
     /// A newer [`RasterHandle::submit`] replaced this frame in the mailbox
     /// before [`RasterOwner::pump`] ever started it — the mailbox is
-    /// latest-frame-wins, not a queue (ADR-0027 §4).
+    /// latest-frame-wins, not a queue.
     Superseded,
     /// [`RasterBackend::render_scene`] returned an error that is neither
     /// device loss nor a surface-outdated condition (those get their own
@@ -254,7 +254,7 @@ impl RasterHandle {
     /// The mailbox is structurally capacity-1: a submit can never observe
     /// the queue-is-full backpressure a bounded channel would — the newest
     /// frame always wins, and the frame it replaces is acked, never
-    /// silently discarded (ADR-0027 §4).
+    /// silently discarded.
     ///
     /// # Errors
     ///
@@ -272,8 +272,8 @@ impl RasterHandle {
             }
             if let Some(superseded) = state.pending_frame.replace(frame) {
                 tracing::trace!(
-                    epoch = ?superseded.epoch,
-                    "raster mailbox: pending frame superseded by a newer submit"
+                epoch = ?superseded.epoch,
+                "raster mailbox: pending frame superseded by a newer submit"
                 );
                 // Sent while `state` is still held: the owner cannot
                 // observe the just-inserted replacement frame until it
@@ -300,7 +300,7 @@ impl RasterHandle {
     /// Coalesces a resize request into the mailbox: any number of pending
     /// requests collapse into the most recent one, applied on the owner's
     /// next [`RasterOwner::pump`] before that pump renders a pending frame
-    /// (ADR-0027 §4).
+    //
     ///
     /// Infallible and best-effort: a resize against a shut-down or dropped
     /// owner is a harmless no-op — there is nothing left to apply it to.
@@ -314,7 +314,7 @@ impl RasterHandle {
     /// Begins shutdown: refuses further [`Self::submit`]s, wakes a blocked
     /// [`RasterOwner::run_until_shutdown`], and lets it finish (or drop) any
     /// already-pending frame before it signals completion on the dedicated
-    /// one-shot channel [`RasterOwner::new`] returns (ADR-0027 §7).
+    /// one-shot channel [`RasterOwner::new`] returns.
     ///
     /// Idempotent — calling it more than once has the same effect as
     /// calling it once.
@@ -367,7 +367,7 @@ pub enum PumpOutcome {
 }
 
 /// The raster owner: solely owns a [`RasterBackend`] and drains the mailbox
-/// (ADR-0027 §5). Never `Sync` — `Sync`-ness is inherited from `B`, and this
+// Never `Sync` — `Sync`-ness is inherited from `B`, and this
 /// type adds no `unsafe impl` of its own; a backend that is itself `!Sync`
 /// (the wgpu `Renderer`) keeps `RasterOwner<Renderer>` `!Sync` for free.
 ///
@@ -379,7 +379,7 @@ pub struct RasterOwner<B: RasterBackend> {
     backend: B,
     mailbox: Arc<RasterMailbox>,
     /// The surface generation this owner currently considers valid
-    /// (ADR-0027 §6). Bumped whenever this owner applies a resize or the
+    // Bumped whenever this owner applies a resize or the
     /// backend itself reports the surface as outdated — both are
     /// surface-(re)configure events. A pending frame stamped with any other
     /// generation is rejected before [`RasterBackend::render_scene`] is
@@ -388,13 +388,13 @@ pub struct RasterOwner<B: RasterBackend> {
     /// Latches once the shutdown-completion signal has been sent, so a
     /// later [`Self::pump`] call on an already-shut-down, empty mailbox
     /// reports [`PumpOutcome::ShutdownComplete`] again without re-sending
-    /// on the one-shot channel (ADR-0027 §7: it fires exactly once).
+    /// on the one-shot channel (it fires exactly once).
     has_signaled_shutdown_complete: bool,
 }
 
 impl<B: RasterBackend> RasterOwner<B> {
     /// Builds the owner alongside its [`RasterHandle`] and two outcome
-    /// channels (ADR-0027 §5/§7):
+    /// channels:
     ///
     /// - A lossy telemetry ack [`Receiver`] — draining it is optional
     ///   (diagnostics / surface-generation feedback), never required for
@@ -444,7 +444,7 @@ impl<B: RasterBackend> RasterOwner<B> {
     /// One synchronous pump: applies the latest coalesced resize (if any),
     /// renders the pending frame (if any), then acks the outcome.
     ///
-    /// This is the in-process baseline's per-frame call (ADR-0027 §5): the
+    /// This is the in-process baseline's per-frame call: the
     /// owner-thread caller invokes it once per frame; no thread is spawned
     /// and no work happens off this call.
     #[tracing::instrument(level = "trace", skip(self))]
@@ -459,13 +459,13 @@ impl<B: RasterBackend> RasterOwner<B> {
         if let Some((width, height)) = resize {
             self.backend.resize(width, height);
             // A resize reconfigures the surface — bump the generation this
-            // owner considers valid (ADR-0027 §6) so a frame stamped
+            // owner considers valid so a frame stamped
             // against the pre-resize surface is rejected below rather than
             // rendered into a torn-down swapchain.
             self.current_surface_generation = self.current_surface_generation.next();
             tracing::debug!(
-                surface_generation = ?self.current_surface_generation,
-                "raster owner: surface reconfigured by resize"
+            surface_generation = ?self.current_surface_generation,
+            "raster owner: surface reconfigured by resize"
             );
         }
 
@@ -494,11 +494,11 @@ impl<B: RasterBackend> RasterOwner<B> {
             let stale = frame.surface_generation;
             let current = self.current_surface_generation;
             tracing::warn!(
-                epoch = ?frame.epoch,
-                ?stale,
-                ?current,
-                "raster owner: frame stamped with a stale surface generation, \
-                 rejecting before render"
+            epoch = ?frame.epoch,
+            ?stale,
+            ?current,
+            "raster owner: frame stamped with a stale surface generation, \
+            rejecting before render"
             );
             self.mailbox.send_ack(RasterAck::SurfaceOutdated {
                 epoch: frame.epoch,
@@ -514,7 +514,7 @@ impl<B: RasterBackend> RasterOwner<B> {
 
         // `DamageRegion::Full` is the only variant that exists today
         // (flui-layer's own doc: fine-grained damage is an additive,
-        // `#[non_exhaustive]`-guarded follow-up, ADR-0027 §5), so
+        // `#[non_exhaustive]`-guarded follow-up, so
         // `frame.damage` is not yet inspected here — there is exactly one
         // correct action regardless of its value. Revisit this call once a
         // `Partial` variant lands and `RasterBackend` gains a
@@ -534,7 +534,7 @@ impl<B: RasterBackend> RasterOwner<B> {
     /// Blocking loop for a dedicated raster thread (or this module's own
     /// threaded test double): parks on the mailbox's condvar until a frame,
     /// a resize, or shutdown is pending, pumps once, and repeats until a
-    /// pump observes [`PumpOutcome::ShutdownComplete`] (ADR-0027 §5/§7).
+    /// pump observes [`PumpOutcome::ShutdownComplete`].
     pub fn run_until_shutdown(mut self) {
         loop {
             {
@@ -553,7 +553,7 @@ impl<B: RasterBackend> RasterOwner<B> {
     }
 
     /// Classifies a [`RasterBackend::render_scene`] failure into its ack and
-    /// [`PumpOutcome`] (ADR-0027 §5): device loss and surface-outdated
+    /// [`PumpOutcome`]: device loss and surface-outdated
     /// conditions each get their own dedicated ack; everything else is a
     /// generic [`FrameDropReason::RenderFailed`], logged at `error` level
     /// since it is the catch-all bucket an operator needs to see.
@@ -571,8 +571,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             }
             EngineError::SurfaceLost | EngineError::SurfaceValidation => {
                 // The backend itself detected the surface is gone — a
-                // surface-(re)configure event just like a resize (ADR-0027
-                // §6), so it bumps the same generation counter a resize
+                // surface-(re)configure event just like a resize, so it bumps the same generation counter a resize
                 // does. Every frame the consumer has already stamped
                 // against the old generation (including any submitted
                 // before it observes this ack) is rejected by the
@@ -618,7 +617,7 @@ impl<B: RasterBackend> Drop for RasterOwner<B> {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — the ADR-0027 §5 mandated threaded protocol harness
+// Tests — the mandated threaded protocol harness
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -762,8 +761,8 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // 1b. regression: the Superseded ack must never be observed after the
-    //     Presented ack for the frame that superseded it, under a real race
-    //     (not the Barrier-separated determinism of test 1 above).
+    // Presented ack for the frame that superseded it, under a real race
+    // (not the Barrier-separated determinism of test 1 above).
     // -----------------------------------------------------------------------
 
     #[test]
@@ -815,11 +814,11 @@ mod tests {
             let acks: Vec<RasterAck> = ack_rx.try_iter().collect();
             let superseded_index = acks.iter().position(|ack| {
                 matches!(
-                    ack,
-                    RasterAck::Dropped {
-                        epoch,
-                        reason: FrameDropReason::Superseded,
-                    } if *epoch == epoch1
+                ack,
+                RasterAck::Dropped {
+                epoch,
+                reason: FrameDropReason::Superseded,
+                } if *epoch == epoch1
                 )
             });
             let presented_epoch2_index = acks
@@ -838,7 +837,7 @@ mod tests {
                 assert!(
                     superseded_index < presented_epoch2_index,
                     "Superseded ack for epoch1 must precede the Presented ack \
-                     for the epoch2 frame that replaced it: {acks:?}"
+ for the epoch2 frame that replaced it: {acks:?}"
                 );
             }
         }
@@ -892,7 +891,7 @@ mod tests {
             start.wait();
             handle.shutdown();
             // The dedicated one-shot channel is the load-bearing completion
-            // signal (ADR-0027 §7) — block on it directly, the way a real
+            // signal — block on it directly, the way a real
             // consumer would, rather than only inferring completion from
             // the thread join.
             shutdown_complete_rx
@@ -1009,7 +1008,7 @@ mod tests {
         assert_eq!(outcome, PumpOutcome::DeviceLost(epoch));
         assert_eq!(ack_rx.try_recv().unwrap(), RasterAck::DeviceLost { epoch });
         // Exactly one ack: DeviceLost does not also emit a Dropped ack for
-        // the same frame (ADR-0027 §5: one ack per condition).
+        // the same frame (one ack per condition).
         assert!(ack_rx.try_recv().is_err());
     }
 
@@ -1028,7 +1027,7 @@ mod tests {
 
         let outcome = owner.pump();
         // A backend-reported surface-outdated condition bumps the owner's
-        // tracked generation the same way a resize does (ADR-0027 §6), so
+        // tracked generation the same way a resize does, so
         // `current` is ZERO.next() — the frame's own stamp (`stale`) stays
         // ZERO, distinct from it.
         let stale = SurfaceGeneration::ZERO;
@@ -1059,7 +1058,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 8. stale surface generation is rejected before render (ADR-0027 §6)
+    // 8. stale surface generation is rejected before render
     // -----------------------------------------------------------------------
 
     #[test]
@@ -1108,14 +1107,14 @@ mod tests {
             assert_eq!(
                 backend.full_repaint_calls, 0,
                 "mark_full_repaint is only called on the render path, never \
-                 for a proactively-rejected frame"
+ for a proactively-rejected frame"
             );
         });
     }
 
     // -----------------------------------------------------------------------
-    // 9. pump after shutdown-complete does not re-signal (ADR-0027 §7: the
-    //    one-shot fires exactly once)
+    // 9. pump after shutdown-complete does not re-signal (the
+    // one-shot fires exactly once)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -1133,7 +1132,7 @@ mod tests {
         assert!(
             shutdown_complete_rx.try_recv().is_err(),
             "a second pump on an already-shut-down, empty mailbox must not \
-             re-signal shutdown complete"
+ re-signal shutdown complete"
         );
         assert!(
             ack_rx.try_iter().next().is_none(),

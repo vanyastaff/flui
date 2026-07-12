@@ -92,10 +92,9 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// # Registry access
     ///
-    /// Reads the thread-local / process-wide registry handle installed
-    /// by the active `WidgetsBinding` (production) or by the test
-    /// harness via [`crate::test_only_set_global_key_registry`]. When
-    /// no handle is installed the method returns `None` — this is the
+    /// Reads the registry handle activated by the current owner-thread realm
+    /// scope (or by the legacy test harness adapter). When no realm is active
+    /// the method returns `None` — this is the
     /// quiescent state expected in pure-unit tests that bypass the
     /// framework binding.
     ///
@@ -126,7 +125,7 @@ impl<T: 'static> GlobalKey<T> {
     /// The callback shape (`R` returned, state borrowed for the duration
     /// of the call) lets callers extract a snapshot without leaking the
     /// borrow into the rest of `build()`. Same pattern as
-    /// [`BuildContextExt::find_state`](crate::BuildContextExt::find_state) (plan §U11).
+    /// [`BuildContextExt::find_state`](crate::BuildContextExt::find_state).
     ///
     /// Flutter parity: `framework.dart:3170`
     /// `GlobalKey<T extends State>.currentState` — returns `T?` after
@@ -141,7 +140,7 @@ impl<T: 'static> GlobalKey<T> {
         let element_id = self.current_element()?;
 
         // `with_registry` yields `Option<...>` itself (None when no
-        // handle is installed), `with_element` yields another
+        // realm/fixture handle is active), `with_element` yields another
         // `Option<...>` (None when the id is no longer in the tree),
         // and the inner closure also yields `Option<R>` (None when
         // the state downcast fails). Triple-Option flattens to one

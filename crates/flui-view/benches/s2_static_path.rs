@@ -1,4 +1,4 @@
-//! U3 — S2 static-path tuple-permutation algorithm sketch bench.
+//! S2 static-path tuple-permutation algorithm sketch bench.
 //!
 //! Resolves the spec's Deferred S2 question against a synthetic mock: does a
 //! compile-time-specialised reconciliation algorithm for the static-tuple
@@ -8,8 +8,8 @@
 //! Phase 0 (this bench) does **not** modify production reconciliation code —
 //! the spec FR-016 commits to "both paths share the same algorithm" absent a
 //! strong S2 inversion. The companion [`docs/research/2026-05-22-s2-static-path-sketch.md`]
-//! synthesises these numbers into a verdict; the U4 gate report consumes that
-//! verdict to decide whether to re-open FR-016 before Phase 2 lands the
+//! synthesises these numbers into a verdict; the gate report consumes that
+//! verdict to decide whether to re-open FR-016 before a later phase lands the
 //! production reconciler.
 //!
 //! # The static-path observation
@@ -39,9 +39,9 @@
 //!
 //! # Why a placeholder reconciler
 //!
-//! Same justification as the U2 S1 bench: the production keyed reconciler
-//! does not land until Phase 2 U12 (and its callers don't get rewired until
-//! U15). The S2 question is an *algorithm-shape* question at the static-tuple
+//! Same justification as the S1 storage-shape bench: the production keyed reconciler
+//! does not land until a later phase (and its callers don't get rewired until
+//! still later). The S2 question is an *algorithm-shape* question at the static-tuple
 //! grain, not a *production-reconciler* question. The minimal kernel that
 //! isolates algorithm-shape cost is a per-position TypeId-comparison loop
 //! (specialised) vs a HashMap-build-and-probe loop (linear). That is what we
@@ -49,7 +49,7 @@
 //!
 //! # Plan / spec references
 //!
-//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`] U3
+//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]
 //! - [`specs/004-view-element-core/spec.md`] Deferred S2, FR-016
 
 // Bench harness, not public API; `criterion_group!` generates the

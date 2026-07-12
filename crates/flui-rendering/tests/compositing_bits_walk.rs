@@ -1,36 +1,36 @@
-//! D-block PR-A2 U34/U35 — compositing-bits walk in `run_compositing`.
+//! Compositing-bits walk in `run_compositing`.
 //!
-//! Verifies the U34 rewrite of `PipelineOwner::run_compositing`: per
+//! Verifies the rewrite of `PipelineOwner::run_compositing`: per
 //! Flutter `RenderObject._updateCompositingBits`
 //! (`.flutter/.../object.dart:3226-3258`), the method now recursively
 //! walks each dirty subtree, OR-ing children's `NEEDS_COMPOSITING`
 //! into self, and forcing `NEEDS_COMPOSITING = true` for any node
 //! whose `IS_REPAINT_BOUNDARY` flag is set or whose
-//! `always_needs_compositing()` trait answer is true. Post-U34 the
+//! `always_needs_compositing()` trait answer is true. After the walk the
 //! `NEEDS_COMPOSITING_BITS_UPDATE` flag is also cleared, matching
 //! Flutter's per-walk state transitions.
 //!
-//! Also covers U33 bootstrap (IS_REPAINT_BOUNDARY auto-populated at
-//! insert) and U35 unconditional `WAS_REPAINT_BOUNDARY` write at
+//! Also covers the IS_REPAINT_BOUNDARY bootstrap (auto-populated at
+//! insert) and the unconditional `WAS_REPAINT_BOUNDARY` write at
 //! paint.
 //!
 //! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U33-U35
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D3-3, §R26b
+//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
+//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
 use flui_types::geometry::px;
 
 // ============================================================================
-// U33 bootstrap — IS_REPAINT_BOUNDARY storage flag set at insert
+// IS_REPAINT_BOUNDARY bootstrap — storage flag set at insert
 // ============================================================================
 
-/// PR-A2 U33 happy path: insert a RenderPadding (trait answer
+/// Happy path: insert a RenderPadding (trait answer
 /// `is_repaint_boundary() == false`) and verify the storage flag
 /// reflects the trait answer.
 #[test]
-fn u33_bootstrap_sets_is_repaint_boundary_flag_from_trait_answer() {
+fn bootstrap_sets_is_repaint_boundary_flag_from_trait_answer() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -47,15 +47,14 @@ fn u33_bootstrap_sets_is_repaint_boundary_flag_from_trait_answer() {
     assert_eq!(
         padding_node.is_repaint_boundary_flag(),
         padding_node.is_repaint_boundary(),
-        "post-insert IS_REPAINT_BOUNDARY storage flag must reflect trait answer \
-         (U33 bootstrap)",
+        "post-insert IS_REPAINT_BOUNDARY storage flag must reflect trait answer",
     );
 }
 
-/// U33: insert_child_render_object path also calls bootstrap (each
-/// insert site is independently audited per memo R26b).
+/// `insert_child_render_object` path also calls bootstrap — each
+/// insert site independently populates the storage flag.
 #[test]
-fn u33_bootstrap_runs_on_insert_child_render_object_path() {
+fn bootstrap_runs_on_insert_child_render_object_path() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -73,13 +72,13 @@ fn u33_bootstrap_runs_on_insert_child_render_object_path() {
 }
 
 // ============================================================================
-// U34 — run_compositing walks subtree + clears NEEDS_COMPOSITING_BITS_UPDATE
+// run_compositing walks subtree + clears NEEDS_COMPOSITING_BITS_UPDATE
 // ============================================================================
 
-/// U34 happy path: mark a node for compositing-bits update + invoke
+/// Happy path: mark a node for compositing-bits update + invoke
 /// `run_compositing` → flag must be cleared post-walk.
 #[test]
-fn u34_run_compositing_clears_needs_compositing_bits_update_flag() {
+fn run_compositing_clears_needs_compositing_bits_update_flag() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -117,18 +116,17 @@ fn u34_run_compositing_clears_needs_compositing_bits_update_flag() {
     );
 }
 
-/// U34: a node whose flag was cleared between enqueue and run
+/// A node whose flag was cleared between enqueue and run
 /// (e.g., parent's walk processed this child mid-iteration) hits the
 /// `update_subtree_compositing_bits` early-return path. The walk
 /// short-circuits at the entry and leaves NEEDS_COMPOSITING alone.
 ///
-/// **PR-A2 Codex review #3294562493:** post-fix
-/// `add_node_needing_compositing_bits_update` sets the flag on
-/// enqueue so an unflagged enqueue is no longer possible. To exercise
+/// Since a fix landed, `add_node_needing_compositing_bits_update` sets
+/// the flag on enqueue so an unflagged enqueue is no longer possible. To exercise
 /// the short-circuit path the test now manually clears the flag
 /// after enqueue (simulating the parent-cleared-me-mid-walk case).
 #[test]
-fn u34_run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
+fn run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -173,13 +171,13 @@ fn u34_run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
     );
 }
 
-/// PR-A2 Codex #3294562493 regression: enqueueing via
+/// Regression guard: enqueueing via
 /// `add_node_needing_compositing_bits_update` MUST set the
 /// `NEEDS_COMPOSITING_BITS_UPDATE` flag on the node, so that
 /// `run_compositing`'s per-entry short-circuit can't silently drop
 /// the queued work.
 #[test]
-fn u34_add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
+fn add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -214,9 +212,9 @@ fn u34_add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
     );
 }
 
-/// U34: empty dirty queue → run_compositing is a fast-path no-op.
+/// Empty dirty queue → run_compositing is a fast-path no-op.
 #[test]
-fn u34_run_compositing_empty_queue_is_no_op() {
+fn run_compositing_empty_queue_is_no_op() {
     let owner = PipelineOwner::new();
     let owner = owner.into_layout();
     let mut owner = owner.into_compositing();
@@ -225,12 +223,12 @@ fn u34_run_compositing_empty_queue_is_no_op() {
         .expect("empty queue: run_compositing returns Ok immediately");
 }
 
-/// U34: parent + child both dirty for compositing-bits update; walk
+/// Parent + child both dirty for compositing-bits update; walk
 /// processes parent first (shallow-first sort), clears parent's flag,
 /// recurses into child, clears child's flag. Both flags cleared
 /// post-walk.
 #[test]
-fn u34_run_compositing_walks_parent_then_child() {
+fn run_compositing_walks_parent_then_child() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);

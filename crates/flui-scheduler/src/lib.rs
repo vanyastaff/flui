@@ -110,8 +110,9 @@
 //! - Native platforms (Windows, macOS, Linux) via `std::time`
 //! - WebAssembly via `performance.now()`
 //!
-//! All types are [`Send`] + [`Sync`] and safe for use in multi-threaded
-//! contexts.
+//! Cross-thread scheduler capabilities are [`Send`] + [`Sync`]. Bindings may
+//! additionally own a deliberately owner-affine `LocalPostFrameLane` for UI
+//! callbacks that capture `Rc`/`RefCell` state.
 //!
 //! ## Prelude
 //!
@@ -151,7 +152,7 @@ pub use config::{
     PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, SchedulingStrategy,
     TimingsCallback, default_scheduling_strategy, set_time_dilation, time_dilation,
 };
-pub use post_frame::PostFrameHandle;
+pub use post_frame::{LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle};
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
 /// name `Scheduler::drive_frame`'s `vsync_time` without depending on `web_time`.

@@ -1,4 +1,4 @@
-//! Phase 3 §U23 (US4 AS2): verify `#[derive(StatelessView, ::bon::Builder)]`
+//! This test (US4 AS2) verifies that the `#[derive(StatelessView, ::bon::Builder)]`
 //! stack compiles AND the resulting widget is usable through both
 //! authoring surfaces.
 //!

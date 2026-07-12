@@ -11,7 +11,7 @@
 //! Canvas::draw_rect() → DisplayList::push(DrawRect) → PictureLayer → WgpuPainter
 //! ```
 //!
-//! # Concern split (Mythos chain U5)
+//! # Concern split
 //!
 //! The 2,434-LOC `display_list.rs` god module was split into six
 //! concern-based files: this `mod.rs` plus five submodules.

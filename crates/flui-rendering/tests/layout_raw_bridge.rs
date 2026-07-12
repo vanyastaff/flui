@@ -1,5 +1,5 @@
-//! D-block PR-A1b U19 — `RenderObject<BoxProtocol>::perform_layout_raw`
-//! blanket-impl bridge integration tests.
+//! `RenderObject<BoxProtocol>::perform_layout_raw` blanket-impl bridge
+//! integration tests.
 //!
 //! These exercise the **real layout path** through the trait-erased
 //! `perform_layout_raw` signature: a Direct-storage `BoxLayoutCtx` is
@@ -10,12 +10,8 @@
 //! `Proxy` storage variant and calls `T::perform_layout`. The asserted
 //! result is the computed `Size` returned to the caller.
 //!
-//! Coverage matches plan U19 §404-407: Leaf (`RenderColoredBox`),
-//! Single (`RenderPadding`), Variable (`RenderFlex`).
-//!
-//! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U19
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D5
+//! Coverage spans Leaf (`RenderColoredBox`), Single (`RenderPadding`),
+//! and Variable (`RenderFlex`) arities.
 
 use std::sync::{Arc, Mutex};
 
@@ -37,19 +33,19 @@ use flui_tree::{Leaf, Single, Variable};
 use flui_types::{Size, geometry::px};
 
 // ============================================================================
-// U19 §404 — Leaf bridge: RenderColoredBox via blanket perform_layout_raw
+// Leaf bridge: RenderColoredBox via blanket perform_layout_raw
 // ============================================================================
 
-/// Plan U19 §405 happy path: `RenderColoredBox` (Leaf arity) layout via
-/// the blanket bridge returns the correctly constrained `Size`.
+/// Happy path: `RenderColoredBox` (Leaf arity) layout via the blanket
+/// bridge returns the correctly constrained `Size`.
 ///
-/// Pre-U19 the blanket `perform_layout_raw` shipped as a no-op
+/// Previously the blanket `perform_layout_raw` shipped as a no-op
 /// returning `*self.size()` — for a fresh `RenderColoredBox` that meant
-/// `Size::ZERO`. After U19 the blanket impl drives the user's
+/// `Size::ZERO`. Now the blanket impl drives the user's
 /// `RenderBox::perform_layout`, which constrains `preferred_size`
 /// against the parent's constraints and completes layout.
 #[test]
-fn u19_leaf_bridge_returns_constrained_size() {
+fn leaf_bridge_returns_constrained_size() {
     let mut obj = RenderColoredBox::red(100.0, 50.0);
     let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
 
@@ -72,7 +68,7 @@ fn u19_leaf_bridge_returns_constrained_size() {
         size,
         Size::new(px(100.0), px(50.0)),
         "Leaf bridge must return the user's perform_layout-completed size, \
-         not Size::ZERO (pre-U19 placeholder behaviour)",
+         not Size::ZERO (prior placeholder behaviour)",
     );
 }
 
@@ -80,7 +76,7 @@ fn u19_leaf_bridge_returns_constrained_size() {
 /// `preferred_size` to the parent constraints, yielding the requested
 /// size when constraints permit it.
 #[test]
-fn u19_leaf_bridge_honours_loose_constraints() {
+fn leaf_bridge_honours_loose_constraints() {
     let mut obj = RenderColoredBox::blue(80.0, 40.0);
     let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
 
@@ -95,10 +91,10 @@ fn u19_leaf_bridge_honours_loose_constraints() {
 }
 
 // ============================================================================
-// U19 §406 — Single bridge: RenderPadding via blanket perform_layout_raw
+// Single bridge: RenderPadding via blanket perform_layout_raw
 // ============================================================================
 
-/// Plan U19 §406 happy path: `RenderPadding` (Single arity) layout via
+/// Happy path: `RenderPadding` (Single arity) layout via
 /// the blanket bridge forwards to
 /// `T::perform_layout(BoxLayoutContext<Single, BoxParentData>)`, which
 /// deflates the parent constraints, calls `ctx.layout_child(0,
@@ -111,7 +107,7 @@ fn u19_leaf_bridge_honours_loose_constraints() {
 /// final size returned by the bridge equals `parent_constraints.max`
 /// when those are loose enough.
 #[test]
-fn u19_single_bridge_pads_child_and_returns_total_size() {
+fn single_bridge_pads_child_and_returns_total_size() {
     let mut obj = RenderPadding::all(10.0);
 
     // Parent gives us up to 200×100 of space. Padding deflates by
@@ -162,10 +158,10 @@ fn u19_single_bridge_pads_child_and_returns_total_size() {
 }
 
 // ============================================================================
-// U19 §407 — Variable bridge: RenderFlex via blanket perform_layout_raw
+// Variable bridge: RenderFlex via blanket perform_layout_raw
 // ============================================================================
 
-/// Plan U19 §407 happy path: `RenderFlex` (Variable arity, with typed
+/// Happy path: `RenderFlex` (Variable arity, with typed
 /// `FlexParentData`) via the blanket bridge correctly walks the child
 /// slice. Validates two things:
 ///
@@ -198,7 +194,7 @@ fn u19_single_bridge_pads_child_and_returns_total_size() {
 /// as inflexible — `total_flex = 0` and the layout would collapse to
 /// `(0, 0)` per the `if total_flex > 0` guard in `RenderFlex`).
 #[test]
-fn u19_variable_bridge_walks_child_slice_with_typed_parent_data() {
+fn variable_bridge_walks_child_slice_with_typed_parent_data() {
     let mut obj = RenderFlex::row();
 
     // Two children with distinct flex factors so we can verify typed
@@ -286,7 +282,7 @@ fn u19_variable_bridge_walks_child_slice_with_typed_parent_data() {
 /// helper hands `RenderColoredBox::perform_layout_raw` an erased ctx
 /// and the result matches the user's `perform_layout` output.
 #[test]
-fn u19_with_leaf_erased_ctx_matches_direct_bridge_call() {
+fn with_leaf_erased_ctx_matches_direct_bridge_call() {
     let mut obj = RenderColoredBox::green(60.0, 30.0);
     let constraints = BoxConstraints::tight(Size::new(px(60.0), px(30.0)));
 
@@ -321,7 +317,7 @@ fn u19_with_leaf_erased_ctx_matches_direct_bridge_call() {
 /// size the zero-child path returns — it must not assume children are present
 /// just because the typed wrapper has `Variable` arity.
 #[test]
-fn u19_variable_bridge_handles_zero_children() {
+fn variable_bridge_handles_zero_children() {
     let mut obj = RenderFlex::row();
     // min=0 / max=300; the default MainAxisSize::Max fills the bounded main axis.
     let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(100.0));
@@ -363,7 +359,7 @@ fn u19_variable_bridge_handles_zero_children() {
 /// because its layout shape (no parent constraints, own-configuration
 /// driven) doesn't fit the `RenderBox::perform_layout(ctx)` signature.
 #[test]
-fn u19_render_view_adapter_bridge_smoke() {
+fn render_view_adapter_bridge_smoke() {
     use flui_rendering::view::{RenderView, RenderViewAdapter, ViewConfiguration};
 
     // Tight configuration: logical_size = (200, 150) at 1x DPR.

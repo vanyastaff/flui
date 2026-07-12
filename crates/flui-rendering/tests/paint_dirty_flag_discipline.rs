@@ -1,4 +1,4 @@
-//! D-block U35 — paint dirty-flag discipline.
+//! Paint dirty-flag discipline.
 //!
 //! Validates the Core.0 exit criterion: "a RepaintBoundary-isolated repaint
 //! clears `needs_paint` only on painted nodes." The paint walk
@@ -18,13 +18,13 @@ use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, trait
 use flui_types::geometry::px;
 
 // ============================================================================
-// U35 Test 1 — RepaintBoundary bootstrap sets IS_REPAINT_BOUNDARY flag true
+// Test 1 — RepaintBoundary bootstrap sets IS_REPAINT_BOUNDARY flag true
 // ============================================================================
 
 /// Insert a `RenderRepaintBoundary` and verify the storage flag reflects the
 /// trait answer (`is_repaint_boundary() == true`).
 #[test]
-fn u35_repaint_boundary_bootstrap_sets_flag_true() {
+fn repaint_boundary_bootstrap_sets_flag_true() {
     let mut owner = PipelineOwner::new();
     let boundary_id = owner.insert(Box::new(RenderRepaintBoundary::new())
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -40,7 +40,7 @@ fn u35_repaint_boundary_bootstrap_sets_flag_true() {
     );
     assert!(
         node.is_repaint_boundary_flag(),
-        "IS_REPAINT_BOUNDARY storage flag must be true after insert (U33 bootstrap)",
+        "IS_REPAINT_BOUNDARY storage flag must be true after insert",
     );
     assert_eq!(
         node.is_repaint_boundary_flag(),
@@ -50,13 +50,13 @@ fn u35_repaint_boundary_bootstrap_sets_flag_true() {
 }
 
 // ============================================================================
-// U35 Test 2 — paint clears needs_paint on all painted nodes
+// Test 2 — paint clears needs_paint on all painted nodes
 // ============================================================================
 
 /// Build tree: Root(Padding) -> Child(ColoredBox). Run full pipeline. Assert
 /// both nodes have `needs_paint == false` after paint.
 #[test]
-fn u35_paint_clears_needs_paint_on_painted_nodes() {
+fn paint_clears_needs_paint_on_painted_nodes() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -100,7 +100,7 @@ fn u35_paint_clears_needs_paint_on_painted_nodes() {
 }
 
 // ============================================================================
-// U35 Test 3 — RepaintBoundary isolates subtree paint
+// Test 3 — RepaintBoundary isolates subtree paint
 // ============================================================================
 
 /// Build tree: Root(Padding) -> RepaintBoundary -> Leaf(ColoredBox).
@@ -108,7 +108,7 @@ fn u35_paint_clears_needs_paint_on_painted_nodes() {
 /// Run paint again. Assert leaf's flag cleared, root's flag remains false
 /// (boundary isolation — root was never flagged dirty again).
 #[test]
-fn u35_repaint_boundary_isolates_subtree_paint() {
+fn repaint_boundary_isolates_subtree_paint() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -180,7 +180,7 @@ fn u35_repaint_boundary_isolates_subtree_paint() {
 }
 
 // ============================================================================
-// U35 Test 4 — only painted nodes clear flag; clean nodes stay clean
+// Test 4 — only painted nodes clear flag; clean nodes stay clean
 // ============================================================================
 
 /// Build a linear tree: Root(Padding) -> Middle(Padding) -> Leaf(ColoredBox).
@@ -191,7 +191,7 @@ fn u35_repaint_boundary_isolates_subtree_paint() {
 /// clears) every reachable node, while unreached nodes would retain their
 /// flag (validated by the tracing::warn residue scan in `run_paint`).
 #[test]
-fn u35_unpainted_unreached_nodes_still_clear_flag() {
+fn unpainted_unreached_nodes_still_clear_flag() {
     let mut owner = PipelineOwner::new();
 
     // Linear chain: root -> middle -> leaf.

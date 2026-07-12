@@ -65,18 +65,25 @@ impl<C: ViewSeq> fmt::Debug for Stack<C> {
 
 impl<C> flui_view::RenderView for Stack<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderStack;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderStack::new()
             .with_alignment(self.alignment)
             .with_fit(self.fit)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_alignment(self.alignment);
         render_object.set_fit(self.fit);
     }
@@ -153,19 +160,26 @@ impl<C: ViewSeq> fmt::Debug for IndexedStack<C> {
 
 impl<C> flui_view::RenderView for IndexedStack<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderIndexedStack;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderIndexedStack::new()
             .with_alignment(self.alignment)
             .with_fit(self.fit)
             .with_index(self.index)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_alignment(self.alignment);
         render_object.set_fit(self.fit);
         render_object.set_index(self.index);
@@ -193,7 +207,7 @@ mod tests {
     #[test]
     fn stack_create_render_object_defaults_to_top_left_and_loose_fit() {
         let stack: Stack = Stack::new(Vec::new());
-        let render_object = stack.create_render_object();
+        let render_object = stack.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
         assert_eq!(render_object.fit(), StackFit::Loose);
     }
@@ -203,20 +217,24 @@ mod tests {
         let stack: Stack = Stack::new(Vec::new())
             .alignment(Alignment::CENTER)
             .fit(StackFit::Expand);
-        let render_object = stack.create_render_object();
+        let render_object = stack.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::CENTER);
         assert_eq!(render_object.fit(), StackFit::Expand);
     }
 
     #[test]
     fn stack_update_render_object_reconfigures_alignment_and_fit() {
-        let mut render_object = Stack::<Vec<BoxedView>>::new(Vec::new()).create_render_object();
+        let mut render_object = Stack::<Vec<BoxedView>>::new(Vec::new())
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
 
         let updated: Stack = Stack::new(Vec::new())
             .alignment(Alignment::BOTTOM_RIGHT)
             .fit(StackFit::Expand);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
         assert_eq!(render_object.fit(), StackFit::Expand);
@@ -243,7 +261,7 @@ mod tests {
     #[test]
     fn indexed_stack_create_render_object_defaults_to_index_zero() {
         let stack: IndexedStack = IndexedStack::new(Vec::new());
-        let render_object = stack.create_render_object();
+        let render_object = stack.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.index(), Some(0));
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
         assert_eq!(render_object.fit(), StackFit::Loose);
@@ -255,7 +273,7 @@ mod tests {
             .index(None)
             .alignment(Alignment::CENTER)
             .fit(StackFit::Expand);
-        let render_object = stack.create_render_object();
+        let render_object = stack.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.index(), None);
         assert_eq!(render_object.alignment(), Alignment::CENTER);
         assert_eq!(render_object.fit(), StackFit::Expand);
@@ -263,15 +281,18 @@ mod tests {
 
     #[test]
     fn indexed_stack_update_render_object_reconfigures_index_alignment_and_fit() {
-        let mut render_object =
-            IndexedStack::<Vec<BoxedView>>::new(Vec::new()).create_render_object();
+        let mut render_object = IndexedStack::<Vec<BoxedView>>::new(Vec::new())
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.index(), Some(0));
 
         let updated: IndexedStack = IndexedStack::new(Vec::new())
             .index(Some(3))
             .alignment(Alignment::BOTTOM_RIGHT)
             .fit(StackFit::Expand);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.index(), Some(3));
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);

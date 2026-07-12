@@ -6,7 +6,7 @@
 //! every other render object in this crate, this one drives its **own**
 //! layout over time: it holds an [`AnimationController`] (built and
 //! registered with a `Vsync` by the owning `AnimatedSize` view, then handed
-//! in at construction — ADR-0013 D2, `docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`)
+//! in at construction, see `docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`)
 //! and subscribes to it in [`attach`](RenderBox::attach), so a controller
 //! tick re-marks this node dirty on its own, decoupled from any widget
 //! rebuild.
@@ -78,7 +78,7 @@ pub enum AnimatedSizeState {
 /// changes.
 ///
 /// Mirrors Flutter's `RenderAnimatedSize`. See the module docs for the
-/// retarget state machine and the constructor for the ADR-0013 D2 injection
+/// retarget state machine and the constructor for the controller-injection
 /// contract (this object never builds or sees a `Vsync`/`Scheduler`).
 pub struct RenderAnimatedSize {
     inner: AligningShiftedBox,
@@ -107,7 +107,7 @@ pub struct RenderAnimatedSize {
 
 impl RenderAnimatedSize {
     /// Creates a render object driven by an **already-built** `controller`
-    /// (ADR-0013 D2 — this object never constructs a controller, and never
+    /// (this object never constructs a controller, and never
     /// sees a `Vsync`/`Scheduler`; the owning `AnimatedSize` view builds and
     /// registers the controller and passes it in here).
     pub fn new(

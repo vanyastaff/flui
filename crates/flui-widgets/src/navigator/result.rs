@@ -1,6 +1,6 @@
 //! The pop-result channel: [`Completer`] and [`RouteResult`].
 //!
-//! ADR-0019 U2. Private; nothing here is exported.
+//! Private; nothing here is exported.
 //!
 //! # Flutter parity
 //!
@@ -30,7 +30,7 @@
 //!
 //! `flui-widgets` must not depend on an async runtime (ADR-0018). This is ~40
 //! lines of `std::task`, and the future is polled by the frame-driven
-//! `AsyncDriver` that ADR-0018 U2 already installed.
+//! `AsyncDriver` that ADR-0018 already installed.
 
 use std::future::Future;
 use std::pin::Pin;

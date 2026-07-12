@@ -40,11 +40,18 @@ impl RenderView for Baseline {
     type Protocol = BoxProtocol;
     type RenderObject = RenderBaseline;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderBaseline::new(self.kind, px(self.distance))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_baseline(self.kind);
         render_object.set_baseline_offset(px(self.distance));
     }

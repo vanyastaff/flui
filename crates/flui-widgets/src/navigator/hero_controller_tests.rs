@@ -1,9 +1,9 @@
-//! ADR-0021 U3, Tasks B+C: the `HeroController` measurement skeleton.
+//! The `HeroController` measurement skeleton.
 //!
-//! These tests prove that the seams built in U1 (`box_size` / `transform_to`), U1.5
-//! (post-frame after layout), U2 (observer attachment, `RouteSubtree`,
-//! `PostFrameHandle`), §7f (notification outside the history lock) and U3 (the
-//! offstage animation proxies) **compose** into a destination rect.
+//! These tests prove that the seams built for measurement — `box_size` / `transform_to`,
+//! post-frame after layout, observer attachment, `RouteSubtree`,
+//! `PostFrameHandle`, notification outside the history lock, and the
+//! offstage animation proxies — **compose** into a destination rect.
 //!
 //! They do not prove the flight overlay itself; `hero_flight_tests` owns that layer.
 
@@ -135,11 +135,11 @@ fn a_top_change_schedules_exactly_one_post_frame_measurement() {
 
     // The seeded `SimpleRoute` is not a `PageRoute`, so pushing over it is not a
     // flight: `fromRoute is! PageRoute` (`heroes.dart:916-920`).
-    let _first = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
     assert_eq!(controller.scheduled_count(), 0);
 
     // PageRoute -> PageRoute: eligible.
-    let _second = navigator.push(page_route());
+    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
     assert_eq!(
         controller.scheduled_count(),
         1,
@@ -164,11 +164,11 @@ fn a_non_page_route_schedules_nothing() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _page = navigator.push(page_route());
+    let _page = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
 
     let popup = PopupRoute::<i32>::new(|_ctx, _a, _s| SizedBox::new(5.0, 5.0).into_view().boxed());
-    let _popup = navigator.push(popup);
+    let _popup = harness.enter_owner_scope(|| navigator.push(popup));
     harness.tick();
 
     assert_eq!(controller.scheduled_count(), 0);
@@ -186,8 +186,8 @@ fn a_non_page_route_schedules_nothing() {
 ///    marks its overlay entry dirty;
 /// 2. the frame rebuilds the route's page with that completed animation, lays it out,
 ///    and commits;
-/// 3. the post-frame callback of *that same frame* (ADR-0021 §7c) resolves the
-///    route's `RouteSubtree` (U2) and reads `box_size` / `transform_to` (U1).
+/// 3. the post-frame callback of *that same frame* resolves the
+///    route's `RouteSubtree` and reads `box_size` / `transform_to`.
 ///
 /// So the measurement is the destination's **final** geometry, taken before its
 /// entrance transition has moved a pixel.
@@ -211,11 +211,11 @@ fn the_post_frame_callback_measures_the_offstage_destination_in_the_same_frame()
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
     let from = navigator.current().expect("pushed");
 
-    let _second = navigator.push(page_route());
+    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
     let to = navigator.current().expect("pushed");
     assert_eq!(controller.scheduled_count(), 1);
 
@@ -260,12 +260,12 @@ fn the_destination_is_restored_onstage_by_the_measurement() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
 
     let second = page_route();
     let modal = second.modal_handle();
-    let _second = navigator.push(second);
+    let _second = harness.enter_owner_scope(|| navigator.push(second));
     assert!(modal.offstage(), "forced offstage by did_change_top");
 
     harness.tick();
@@ -279,7 +279,7 @@ fn the_destination_is_restored_onstage_by_the_measurement() {
 /// override.
 ///
 /// The source is parked mid-entrance first. The harness mounts no `VsyncScope`, so a
-/// route's controller never advances on its own (ADR-0020 U5.2); `reverse()` from a
+/// route's controller never advances on its own; `reverse()` from a
 /// resting `0.0` snaps straight to `Dismissed`, and a `Dismissed` source is not a
 /// pop — it is a route that never entered. Parking it at `0.5` is what makes the
 /// reversal observable, and it is what a real 300 ms transition would look like when
@@ -292,12 +292,12 @@ fn popping_classifies_the_flight_as_a_pop() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
 
     let second = page_route();
     let transition = second.transition_handle();
-    let _second = navigator.push(second);
+    let _second = harness.enter_owner_scope(|| navigator.push(second));
     harness.tick();
 
     // Park the source mid-entrance, so popping it reverses rather than snapping to
@@ -308,7 +308,7 @@ fn popping_classifies_the_flight_as_a_pop() {
     source.set_value(0.5);
     source.forward().expect("a parked controller can resume");
 
-    assert!(navigator.pop());
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
     harness.tick();
 
     let directions: Vec<_> = controller
@@ -346,7 +346,7 @@ fn a_detached_controller_is_inert() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
     let before = controller.scheduled_count();
 
@@ -360,7 +360,7 @@ fn a_detached_controller_is_inert() {
     assert!(controller.navigator().is_none());
 
     // The stack still exists — `NavigatorHandle` owns it — so this pushes for real.
-    let _second = navigator.push(page_route());
+    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
 
     assert_eq!(
@@ -386,10 +386,10 @@ fn a_measurement_whose_navigator_vanished_before_the_frame_records_nothing() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
 
-    let _second = navigator.push(page_route());
+    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
     assert_eq!(controller.scheduled_count(), 1, "the measurement is queued");
     assert!(controller.measurements().is_empty(), "but has not run");
 
@@ -402,40 +402,26 @@ fn a_measurement_whose_navigator_vanished_before_the_frame_records_nothing() {
     );
 }
 
-/// The measurement is scheduled from an observer callback, which since ADR-0021 §7f
-/// runs with no navigator lock held. Installing a `HeroController` — which reaches
-/// back through its `NavigatorHandle` for `route_modal`, `route_peer` and
+/// The measurement is scheduled from an observer callback, which runs with no
+/// navigator lock held. Installing a `HeroController` — which reaches back
+/// through its owner-local `NavigatorHandle` for `route_modal`, `route_peer` and
 /// `post_frame_handle` from inside `did_change_top` — must not deadlock.
 ///
-/// A deadlock hangs rather than fails, so the body runs on a worker thread.
-///
 /// Red-check: in `NavigatorShared::mutate`, call `apply(outcome)` inside the
-/// `history.lock()` scope; this times out.
+/// `history.lock()` scope; this test hangs.
 #[test]
 fn a_hero_controller_does_not_deadlock_the_observer_callback() {
-    const BUDGET: Duration = Duration::from_secs(10);
-
     let navigator = seeded_navigator();
     let controller = install(&navigator);
 
-    let navigator_for_worker = navigator.clone();
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut harness = mount_navigator(&navigator_for_worker);
-        let _first = navigator_for_worker.push(page_route());
-        harness.tick();
-        let _second = navigator_for_worker.push(page_route());
-        harness.tick();
-        assert!(navigator_for_worker.pop());
-        harness.tick();
-        let _ = done.send(());
-    });
+    let mut harness = mount_navigator(&navigator);
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
+    harness.tick();
+    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
+    harness.tick();
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
+    harness.tick();
 
-    assert!(
-        finished.recv_timeout(BUDGET).is_ok(),
-        "a HeroController reaching back through its NavigatorHandle from \
-         did_change_top deadlocked the flush"
-    );
     assert_eq!(controller.measurements().len(), 2);
 }
 
@@ -460,8 +446,8 @@ fn a_controller_observes_only_the_navigator_that_attached_it() {
     let mut harness = mount_navigator(&outer);
     let mut inner_harness = mount_navigator(&inner);
 
-    let _outer_push = outer.push(page_route());
-    let _outer_push2 = outer.push(page_route());
+    let _outer_push = harness.enter_owner_scope(|| outer.push(page_route()));
+    let _outer_push2 = harness.enter_owner_scope(|| outer.push(page_route()));
     harness.tick();
 
     assert_eq!(outer_controller.scheduled_count(), 1);
@@ -471,8 +457,8 @@ fn a_controller_observes_only_the_navigator_that_attached_it() {
         "the inner controller heard nothing about the outer navigator"
     );
 
-    let _inner_push = inner.push(page_route());
-    let _inner_push2 = inner.push(page_route());
+    let _inner_push = inner_harness.enter_owner_scope(|| inner.push(page_route()));
+    let _inner_push2 = inner_harness.enter_owner_scope(|| inner.push(page_route()));
     inner_harness.tick();
 
     assert_eq!(inner_controller.scheduled_count(), 1);
@@ -487,9 +473,9 @@ fn every_eligible_top_change_gets_its_own_measurement() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(page_route());
-    let _second = navigator.push(page_route());
-    let _third = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
+    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
+    let _third = harness.enter_owner_scope(|| navigator.push(page_route()));
     assert_eq!(controller.scheduled_count(), 2, "page->page, page->page");
 
     harness.tick();
@@ -533,12 +519,12 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
         "this binding installed no post-frame capability"
     );
 
-    let _first = navigator.push(page_route());
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
     harness.tick();
 
     let second = page_route();
     let modal = second.modal_handle();
-    let _second = navigator.push(second);
+    let _second = harness.enter_owner_scope(|| navigator.push(second));
 
     assert_eq!(
         controller.scheduled_count(),
@@ -556,8 +542,33 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
     assert!(controller.measurements().is_empty());
 }
 
+/// A present but inactive owner-local capability is also a typed scheduling
+/// failure. The controller must enqueue successfully before hiding the route;
+/// otherwise an owner-scope mistake would strand the destination offstage.
+#[test]
+fn inactive_local_lane_never_strands_the_destination_offstage() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
+    harness.tick();
+
+    let second = page_route();
+    let modal = second.modal_handle();
+    let _second = navigator.push(second); // deliberately outside the owner scope
+
+    assert_eq!(controller.scheduled_count(), 0);
+    assert!(
+        !modal.offstage(),
+        "InactiveLane must be handled before the destination is hidden"
+    );
+    harness.tick();
+    assert!(!modal.offstage());
+}
+
 // ============================================================================
-// ADR-0021 U4 — hero discovery and manifests
+// Hero discovery and manifests
 // ============================================================================
 
 /// A `PageRoute` whose page is a single `Hero` with `tag_name`, sized `w`x`h`.
@@ -599,11 +610,13 @@ fn controller_collects_matching_tags_and_records_one_manifest() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(hero_page_route("shared", 30.0, 20.0));
+    let _first =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("shared", 30.0, 20.0)));
     harness.tick();
     let from = navigator.current().expect("pushed");
 
-    let _second = navigator.push(hero_page_route("shared", 60.0, 45.0));
+    let _second =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("shared", 60.0, 45.0)));
     let to = navigator.current().expect("pushed");
     harness.tick();
 
@@ -645,10 +658,12 @@ fn controller_ignores_tags_present_on_only_one_route() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let _first = navigator.push(hero_page_route("only-here", 30.0, 20.0));
+    let _first =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("only-here", 30.0, 20.0)));
     harness.tick();
 
-    let _second = navigator.push(hero_page_route("only-there", 60.0, 45.0));
+    let _second =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("only-there", 60.0, 45.0)));
     harness.tick();
 
     assert_eq!(
@@ -717,7 +732,7 @@ fn controller_skips_a_hero_that_left_its_route_before_the_measuring_frame() {
     })
     .transition_duration(TRANSITION);
     let source_modal = source.modal_handle();
-    let _first = navigator.push(source);
+    let _first = harness.enter_owner_scope(|| navigator.push(source));
     harness.tick();
 
     // Drop the hero, and dirty the source's overlay entry so the same frame that
@@ -725,7 +740,8 @@ fn controller_skips_a_hero_that_left_its_route_before_the_measuring_frame() {
     keep_hero.store(false, Ordering::SeqCst);
     source_modal.set_maintain_state(false);
 
-    let _second = navigator.push(hero_page_route("shared", 60.0, 45.0));
+    let _second =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("shared", 60.0, 45.0)));
     harness.tick();
 
     assert_eq!(controller.measurements().len(), 1, "it still measured");
@@ -772,8 +788,8 @@ fn a_non_finite_rect_is_never_flown() {
     assert!(!is_valid_flight(nan, finite), "a NaN origin");
 }
 
-/// **A `HeroController` cannot be shared by two mounted navigators** (ADR-0021 §7m,
-/// D-U6.5; Flutter's "can not be shared", `navigator.dart:4010-4027`). The second
+/// **A `HeroController` cannot be shared by two mounted navigators** (Flutter's
+/// "can not be shared", `navigator.dart:4010-4027`). The second
 /// navigator's attach is refused: the controller stays with the first, sound, rather
 /// than silently pointing at the second.
 ///
@@ -816,7 +832,7 @@ fn a_hero_controller_shared_by_two_mounted_navigators_keeps_the_first() {
     let _ = &mut second_harness;
 }
 
-/// **Automatic attach adds exactly one controller** (ADR-0021 §7m, D-U6.2): a bare
+/// **Automatic attach adds exactly one controller**: a bare
 /// `Navigator` with no `HeroControllerScope` creates its own default `HeroController`.
 ///
 /// Red-check: delete the `None => { … observers.push(HeroController::new()) }` arm from
@@ -832,7 +848,7 @@ fn a_bare_navigator_auto_defaults_exactly_one_controller() {
     );
 }
 
-/// **A hand-attached controller suppresses the auto-default** (D-U6.4): the marker
+/// **A hand-attached controller suppresses the auto-default**: the marker
 /// `NavigatorObserver::observes_hero_flights` lets `init_state` skip the default, so
 /// there is exactly one controller — not the manual one plus a default.
 ///

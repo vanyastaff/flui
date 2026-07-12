@@ -1,6 +1,6 @@
 //! [`NavigatorObserver`] and the two observation queues.
 //!
-//! ADR-0019 U2. Private; nothing here is exported.
+//! Private; nothing here is exported.
 //!
 //! # Flutter parity
 //!
@@ -32,7 +32,7 @@
 //! `RouteHistory::flush` puts it into `FlushOutcome`, and `NavigatorShared::apply`
 //! hands it to [`deliver`] *after* releasing the history mutex. That is what makes
 //! the [`NavigatorHandle`] an observer holds usable from `did_push`: it can read the
-//! stack, and it can mutate it (ADR-0021 §7f).
+//! stack, and it can mutate it.
 //!
 //! Oracles: `test/widgets/navigator_test.dart` — `'initial route trigger observer
 //! in the right order'`, `'Push and pop should trigger the observers'`.
@@ -41,10 +41,10 @@
 //!
 //! Flutter hands observers the `Route` itself. Handing out `&mut dyn ErasedRoute`
 //! while the history holds it is not expressible, and this layer is pure data by
-//! design (ADR-0019 U2). Ids preserve identity, ordering and arity — everything
+//! design. Ids preserve identity, ordering and arity — everything
 //! the oracles assert. An observer that needs more resolves the id through the
 //! [`NavigatorHandle`] it is handed at [`did_attach`] — which is what
-//! `HeroController` will do (ADR-0021 U2, seam 2).
+//! `HeroController` will do.
 //!
 //! [`did_attach`]: NavigatorObserver::did_attach
 
@@ -82,9 +82,9 @@ use super::route::RouteId;
 /// than between them and `did_change_top`, because they need the history borrow.
 /// They are route-internal — they drive secondary animations, which no observer
 /// surface exposes — so an observer sees a strictly more settled stack, never a
-/// different one. ADR-0021 §7f.
+/// different one.
 #[allow(unused_variables)]
-pub trait NavigatorObserver: Send + Sync {
+pub trait NavigatorObserver {
     /// This observer was registered on a navigator that is now mounted.
     ///
     /// Flutter's `NavigatorObserver._navigators[observer] = this`
@@ -109,7 +109,7 @@ pub trait NavigatorObserver: Send + Sync {
     ///
     /// The default is `false`. `HeroController` overrides it to `true`, and a
     /// `Navigator` reads it to decide whether to auto-create its own default
-    /// controller (ADR-0021 §7m, D-U6.4): a hand-attached controller suppresses the
+    /// controller: a hand-attached controller suppresses the
     /// auto-default, so `add_observer` and automatic attach never double up. This is a
     /// self-declaration, **not** a downcast — FR-033 is untouched.
     fn observes_hero_flights(&self) -> bool {

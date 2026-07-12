@@ -1,16 +1,16 @@
-//! D-block PR-A1 U23 — `run_layout` wiring to `layout_dirty_root`.
+//! `run_layout` wiring to `layout_dirty_root`.
 //!
-//! Verifies the U23 rewrite: `PipelineOwner::run_layout` now calls
+//! Verifies the rewrite: `PipelineOwner::run_layout` now calls
 //! `layout_dirty_root` per dirty entry (using cached / root
 //! constraints from `cached_or_root_constraints`) instead of the
 //! legacy `layout_node_with_children` no-op recursion. The result
 //! is that `run_layout` actually computes geometries — previously
 //! it walked the tree but invoked no per-node layout (audit-confirmed
-//! no-op stub before U23).
+//! no-op stub before this rewrite).
 //!
 //! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U23
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D1
+//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
+//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
@@ -20,20 +20,20 @@ use flui_types::{Size, geometry::px};
 // run_layout actually lays out via layout_dirty_root + root_constraints
 // ============================================================================
 
-/// PR-A1 U23 happy path: `run_layout` on a freshly-inserted
+/// Happy path: `run_layout` on a freshly-inserted
 /// Padding → ColoredBox tree (no cached state) uses
 /// `root_constraints` to drive the first layout pass.
 ///
-/// Pre-U23: `run_layout` walked the dirty queue + recursed via
+/// Before the `run_layout` rewrite: it walked the dirty queue + recursed via
 /// `layout_node_with_children` which never invoked
 /// `perform_layout_raw` on anyone — geometries stayed at default
 /// (`Size::ZERO`). Test would have asserted `None` geometry.
 ///
-/// Post-U23: `run_layout` calls `layout_dirty_root` per dirty entry,
+/// After the rewrite: `run_layout` calls `layout_dirty_root` per dirty entry,
 /// sourcing constraints from `root_constraints`. ColoredBox lays out
 /// to its preferred size; Padding wraps it.
 #[test]
-fn u23_run_layout_uses_root_constraints_to_drive_first_frame() {
+fn run_layout_uses_root_constraints_to_drive_first_frame() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -66,8 +66,8 @@ fn u23_run_layout_uses_root_constraints_to_drive_first_frame() {
         Some(Size::new(px(50.0), px(50.0))),
         "post-run_layout Padding(5) wrapping ColoredBox(40×40) must \
          have geometry 50×50 — verifies run_layout actually invokes \
-         per-node layout via layout_dirty_root (pre-U23 this was \
-         None / Size::ZERO)",
+         per-node layout via layout_dirty_root (before the rewrite this \
+         was None / Size::ZERO)",
     );
     assert!(
         !padding_node.needs_layout(),
@@ -85,7 +85,7 @@ fn u23_run_layout_uses_root_constraints_to_drive_first_frame() {
 /// (not root_constraints) — verifies the priority order documented
 /// on the helper.
 #[test]
-fn u23_run_layout_uses_cached_constraints_on_frame_two() {
+fn run_layout_uses_cached_constraints_on_frame_two() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(2.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -142,7 +142,7 @@ fn u23_run_layout_uses_cached_constraints_on_frame_two() {
 /// their parent's perform_layout) skips with `tracing::warn!`. Test
 /// verifies `run_layout` returns `Ok(())` instead of erroring.
 #[test]
-fn u23_run_layout_skips_dirty_entry_with_no_constraints() {
+fn run_layout_skips_dirty_entry_with_no_constraints() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -172,7 +172,7 @@ fn u23_run_layout_skips_dirty_entry_with_no_constraints() {
 // ============================================================================
 
 #[test]
-fn u23_root_constraints_setter_round_trip() {
+fn root_constraints_setter_round_trip() {
     let mut owner = PipelineOwner::new();
     assert_eq!(owner.root_constraints(), None);
 
@@ -185,16 +185,16 @@ fn u23_root_constraints_setter_round_trip() {
 }
 
 // ============================================================================
-// PR-A1 U23 P2 review fixes — Copilot 3294417924/3294417942/3294417957
+// root_constraints setter review fixes
 // ============================================================================
 
-/// PR #148 Copilot review (comment_id=3294417957): setting
+/// Regression guard: setting
 /// `root_constraints` should auto-mark the root dirty so the next
-/// `run_layout` invocation picks up the change. Pre-fix the binding
+/// `run_layout` invocation picks up the change. Before this fix the binding
 /// had to call `mark_needs_layout(root_id)` separately — silent
 /// no-relayout footgun.
 #[test]
-fn u23_set_root_constraints_auto_marks_root_dirty() {
+fn set_root_constraints_auto_marks_root_dirty() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -227,7 +227,7 @@ fn u23_set_root_constraints_auto_marks_root_dirty() {
     );
 }
 
-/// PR #148 Copilot review (comment_id=3294417924): `run_layout` must
+/// Regression guard: `run_layout` must
 /// skip dirty-queue entries whose `NEEDS_LAYOUT` flag was already
 /// cleared earlier in the iteration (e.g., parent's layout_child
 /// callback already laid out the child).
@@ -242,7 +242,7 @@ fn u23_set_root_constraints_auto_marks_root_dirty() {
 ///    run_layout's iteration encounters it next; needs_layout()
 ///    returns false → skipped.
 #[test]
-fn u23_run_layout_skips_already_cleaned_dirty_entries() {
+fn run_layout_skips_already_cleaned_dirty_entries() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);

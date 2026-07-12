@@ -1,10 +1,10 @@
-//! ADR-0021 U3, Task A: `ModalRoute.offstage` swaps the **animation proxies**.
+//! `ModalRoute.offstage` swaps the **animation proxies**.
 //!
 //! # Why this exists at all
 //!
 //! `HeroController` measures a route's *final* geometry one frame before the flight
-//! starts. Forcing the route offstage keeps it laid out but unpainted (ADR-0020
-//! U5.0) — and that alone is not enough. A route half-way through its entrance
+//! starts. Forcing the route offstage keeps it laid out but unpainted
+//! — and that alone is not enough. A route half-way through its entrance
 //! transition lays out half-way through its entrance transition, offstage or not.
 //! Flutter's setter therefore does two more things (`routes.dart:1958-1961`):
 //!
@@ -15,11 +15,11 @@
 //!
 //! so `buildPage` and `buildTransitions` see `1.0`/completed and `0.0`/dismissed.
 //! *That* is what makes the offstage frame lay out the destination where it will
-//! finally rest. ADR-0020 §7d deferred this; without it every hero flight would
+//! finally rest. This was deferred at first; without it every hero flight would
 //! start from the wrong rect, and no test in the tree would have noticed.
 //!
 //! These tests read the animations the **builders actually receive**, not the
-//! route's private cells — the divergence ADR-0021 §7d warned about.
+//! route's private cells — a divergence noted earlier.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,8 +94,8 @@ fn mounted(navigator: &NavigatorHandle) -> Harness {
 /// Park the route's controller mid-entrance.
 ///
 /// The harness mounts no `VsyncScope`, so a route's `AnimationController` falls back
-/// to its own wall-clock ticker and `Harness::tick_by` cannot drive it (ADR-0020
-/// U5.2, `binding.rs::RouteVsync`). Every transition-route test in this crate drives
+/// to its own wall-clock ticker and `Harness::tick_by` cannot drive it (see
+/// `binding.rs::RouteVsync`). Every transition-route test in this crate drives
 /// the controller by hand for the same reason.
 fn park_mid_transition(transition: &TransitionHandle, value: f32) {
     let controller = transition

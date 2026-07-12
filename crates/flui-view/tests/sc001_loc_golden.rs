@@ -13,8 +13,7 @@
 //! What the source MUST NOT contain (also asserted below):
 //!   - `Box::new(`  — no manual boxing at the build call site.
 //!   - `impl View for Greeting`  — the derive emits this.
-//!   - `impl_stateless_view!(`  — the declarative macro is deleted
-//!     in §U24.
+//!   - `impl_stateless_view!(`  — the declarative macro is deleted.
 //!   - `.into_view()`  — the framework normalizes; the author
 //!     never types it.
 //!
@@ -59,7 +58,7 @@ fn covers_sc001_greeting_uses_no_forbidden_syntax() {
             "impl View for Greeting",
             "explicit View impl block (derive emits it)",
         ),
-        ("impl_stateless_view!(", "deleted declarative macro (§U24)"),
+        ("impl_stateless_view!(", "deleted declarative macro"),
         (
             ".into_view()",
             "framework normalizes — author never types this",

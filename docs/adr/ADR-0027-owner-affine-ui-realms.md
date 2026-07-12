@@ -49,8 +49,8 @@ ADR-0002 (Proposed, 2026-06-09) drew the Send boundary: control plane `!Send`/th
 
 ### Today's reality (audited 2026-07-11; unchanged facts, condensed)
 
-- The entire frame runs inline on one platform event-loop thread; no raster thread; frame core is tokio-free. All trees hang off the `AppBinding` `OnceLock` singleton (`flui-app/src/app/binding.rs:226-232`) with lock-as-ownership (`Arc<RwLock<PipelineOwner>>` shared by 3 holders; `Arc<Mutex<Renderer>>` in four runners).
-- The public `Send + Sync` tax traces to `BindingBase: Sized + Send + Sync + 'static` (`flui-foundation/src/binding.rs:106`), forced by `static OnceLock` storage. Zero production code moves views/elements/contexts/callbacks across threads. `docs/FOUNDATIONS.md:110` (C5) already promises the drop; `flui-view/src/context/build_context.rs:49` still carries the bound. The GlobalKey registry is a process-global static (`flui-view/src/key/registry.rs:130`).
+- The entire frame runs inline on one platform event-loop thread; no raster thread; frame core is tokio-free. The widget tree is now owned by `UiRealm`; renderer/gesture/scheduler services remain transitional `AppBinding` singleton state (`Arc<RwLock<PipelineOwner>>` shared by multiple holders; `Arc<Mutex<Renderer>>` in runners).
+- The public `Send + Sync` tax traces to framework seams that still feed process-global scheduler/gesture/post-frame services. Zero production code moves views/elements/contexts/callbacks across threads. `docs/FOUNDATIONS.md` C5 already promises the drop; `flui-view/src/context/build_context.rs` still carries the bound. GlobalKey selection is now a realm-entry TLS stack with nested/unwind restoration, not a process-global active registry.
 - Cross-thread delivery is broken today: `ForegroundExecutor` is an unbounded flume queue with no wake (`flui-platform/src/executor.rs:181`), drained only by the Win32 pump, **never drained on macOS**, thread-per-task under winit; no executor shutdown protocol; no thread-identity enforcement at the platform boundary.
 - The correct machinery half-exists and is generalized, not replaced: `PipelineOwnerHandle` (bounded 256, typed `ChannelFull`/`OwnerGone`, wake-on-send, generation-stale drops), `RebuildHandle` set-dedup inbox, `PostFrameHandle`, `AsyncDriver` (one mid-frame poll, `debug_assert_ne!(phase, PersistentCallbacks)`), `Scene: Send` moved by value, `Renderer: Send + !Sync` single-mutator by convention, `RasterBackend` seam.
 
@@ -107,7 +107,7 @@ Scheduling splits by level: `UiRealm::UpdateScheduler` (logical update prioritie
 | `UiCommandSender` | `Clone + Send + Sync` — enqueue-and-wake capability, closed vocabulary |
 | `Renderer` | `Send + !Sync` — movable to a raster owner, never shared |
 
-The compiler guarantees: a UI tree cannot be handed to a worker; the renderer cannot be mutated from two threads; workers receive owned immutable inputs and return results instead of writing into the tree; cross-thread interaction exists only through sanctioned capabilities. This is stronger than `Arc<RwLock<App>>`-style "multithreading", which serializes on locks and grows a deadlock graph. Negative bounds are pinned by `compile_fail` doctests (the `flui-foundation/src/id.rs` idiom); positive ones by the `assert_send/assert_sync` test idiom.
+The compiler guarantees: a UI tree cannot be handed to a worker; the renderer cannot be mutated from two threads; workers receive owned immutable inputs and return results instead of writing into the tree; cross-thread interaction exists only through sanctioned capabilities. This is stronger than `Arc<RwLock<App>>`-style "multithreading", which serializes on locks and grows a deadlock graph. Negative bounds are pinned by compile-time `assert_not_impl_any!` checks (or `compile_fail` tests for public types); positive ones by the `assert_send/assert_sync` test idiom.
 
 Within one realm the UI transaction is serial: lifecycle, state mutation, reconciliation, build, layout, logical paint order, focus/navigation, commit. **Single-writer transaction, not single-threaded framework.** What actually runs in parallel: different realms; raster/compositor vs UI; image decode; font loading/shaping; SVG/path processing; tessellation; shader/pipeline preparation; asset I/O; heavy user computation; later — independent large repaint boundaries (G1–G4).
 
@@ -172,6 +172,16 @@ Structural isolation first, version arithmetic second:
 
 ### 7. Shutdown protocol (per realm)
 
+This section is the **target protocol**, not a claim that realm teardown has
+fully landed. The current desktop and Android blocking runners detach their
+transitional owner host after the event loop exits. The web runner cannot yet
+do so: `WebPlatform::run` installs RAF and returns immediately, and the
+platform exposes no detach callback whose lifetime encloses that registration.
+Web therefore retains its owner host for the page lifetime until the explicit
+RAF detach/quit hook is implemented. The raster shutdown handshake below is
+already represented by its mailbox seam; full per-realm orchestration remains
+a migration step.
+
 0. `AppRuntime` detaches the realm's platform callbacks — synchronous delivery stops before state teardown.
 1. The realm stops accepting frames; the owner inbox flips to drain-and-refuse (`OwnerGone`).
 2. Worker jobs are cancelled; in-flight results hit the refused inbox or fail freshness.
@@ -189,8 +199,10 @@ Structural isolation first, version arithmetic second:
 ### 9. Public API consequences
 
 - `View`, `BuildContext`, `ViewState`, `ElementBase`, the view-family traits, notifications, and the `flui-foundation` callback aliases **lose `Send + Sync`** (C5/C1). The data plane keeps its bounds (ADR-0002 table).
-- **Closed command vocabulary**: the cross-thread surface is domain-specific — `request_redraw` (coalesced), `submit_result` (stamped worker results), the raster handle verbs. The generic run-a-closure primitive is crate-private (`pub(crate) invoke`); a public arbitrary-closure executor would bypass the typed commands and is rejected as a standing constraint. Raw channels never appear in public signatures (SP-6).
-- **Stability posture**: `UiRealm`, `UiCommandSender`, `SceneSnapshot`, ack/error enums ship `#[non_exhaustive]` and documented **UNSTABLE — internal until the ADR-0027 ownership extraction completes**; they stay out of the prelude, and no embedder-facing stability is implied while the at-most-one transitional guard exists. `AppRuntime` as a public type appears only with the multi-realm instantiation policy (no speculative surface).
+- **Closed command vocabulary**: the cross-thread surface is domain-specific — `request_redraw` (coalesced), owner-queued hot reload, `submit_result` (stamped worker results), and the raster handle verbs. The generic run-a-closure primitive is crate-private (`pub(crate) invoke`); a public arbitrary-closure executor would bypass the typed commands and is rejected as a standing constraint. Raw channels never appear in public signatures (SP-6).
+- **Current stability posture**: the transitional `UiRealm`, its dispatcher, command sender, and command/error protocol are `pub(crate)` implementation details of `flui-app`; they are not an embedder API and carry no compatibility promise. The `flui-view/runtime-internals` feature and its doc-hidden registry-activation method are an internal workspace composition seam used only by `flui-app` and the plugin pipeline, not a stable opt-in API for downstream crates. A future public realm/runtime capability surface is designed separately after ownership extraction; it is not obtained by making these transitional types public.
+- Public snapshot/raster protocol types that already cross crate boundaries remain explicitly unstable/non-exhaustive as documented at their definitions. `AppRuntime` and `PresentationRuntime` in this ADR describe the target ownership model only; this slice does **not** claim those public runtime types or the multi-realm instantiation policy are implemented.
+- **Pre-1.0 API break acknowledgement:** the callback reentrancy gate adds private queue state to `WindowCallbacks`, so downstream struct literals must migrate to `WindowCallbacks::new`/`Default`; `DispatchEventResult` gains an explicit deferred state and resolved constructor (field-literal construction migrates to `resolved`); the hot-reload host hook now returns a must-retain RAII registration instead of installing a process-lifetime function pointer. These are intentional contract corrections and require the next pre-1.0 semver release note/version decision before publication. `PluginPipeline::mount` keeps its existing by-value root signature.
 - Every public type documents its thread affinity and where callbacks execute. Nothing goes `pub` for tests.
 - No new `BuildContext` capability here; if one appears, its token joins `check-frame-capability-scope.sh` in the same change (#22).
 
@@ -224,6 +236,10 @@ The Send-boundary table; parallel-layout gates **G1–G4** and non-goals (no con
 **Negative / trade-offs**
 - A large staged migration (~104 `instance()` call sites, ~40–50 bound edits, 4 runner rewrites) — each landing coherent, no shims left behind.
 - Until singleton retirement, the realm shell enforces **at-most-one instance** (typed error) — a per-realm type over process-global internals would be a lying API; the guard and the runner's transitional TLS slot retire with the extraction.
+- **Intentional pre-1.0 break:** `HeadlessBinding` loses its incidental `Send + Sync`
+  auto-traits and becomes owner-thread create/use/drop (`!Send + !Sync`). This is
+  the test-runtime equivalent of `UiRealm` ownership, not a compatibility shim;
+  cross-thread work uses Send-safe handles rather than moving the binding.
 - The baseline raster owner is synchronous — no frame-time win until the raster-thread ADR; stated plainly, with the threaded harness as the non-negotiable companion.
 - GlobalKey/focus scoping diverges from Flutter's process-global registries (sanctioned leapfrog zone; recoverable by 1-realm policy where cross-surface identity is wanted).
 - Bounded lanes can reject sends; producers handle typed, payload-returning backpressure.
@@ -237,12 +253,12 @@ The Send-boundary table; parallel-layout gates **G1–G4** and non-goals (no con
 
 ## Migration strategy (dependency-ordered; every step a coherent landing)
 
-1. **Contracts first (this change):** realm shell in `flui-app` with the at-most-one guard and bounded Idle-drained inbox wired into the live desktop frame loop; `RealmId`/`FrameEpoch`/`SurfaceGeneration`/`ResourceGeneration` + `GenerationGate` in foundation; `SceneSnapshot` in flui-layer; raster mailbox + lossy ack lane + one-shot shutdown + synchronous owner + threaded protocol harness in flui-engine; compile-time affinity contracts; invariant tests. No frame-transaction behavior change.
+1. **Contracts first (landed):** realm shell in `flui-app` with the at-most-one guard, realm-owned `WidgetsBinding`, scoped GlobalKey activation, an unwind-safe platform-neutral FIFO dispatch gate (desktop/Android/wasm), and a bounded Idle-drained inbox wired into the live desktop frame loop; `RealmId`/`FrameEpoch`/`SurfaceGeneration`/`ResourceGeneration` + `GenerationGate` in foundation; `SceneSnapshot` in flui-layer; raster mailbox + lossy ack lane + one-shot shutdown + synchronous owner + threaded protocol harness in flui-engine; compile-time affinity contracts; invariant tests. No frame-transaction behavior change.
 2. **Widgets singleton extraction + bound drop** — *re-sequenced 2026-07-11 after a landing attempt surfaced the real coupling.* The singleton exit and the GlobalKey registry recapture landed alone (they are bound-independent). The bound drop itself cascades past flui-view into three seams that must be designed first, in this order:
-   2a. **Post-frame local lane**: `PostFrameHandle::schedule` requires `Send` callbacks (they queue in the process-global Scheduler), but the primary consumer — the ADR-0021 hero machinery — schedules view-capturing callbacks from the owner thread. Needs `schedule_local` (owner-local storage drained by `end_frame`; a realm field after the Scheduler step, a TLS lane transitionally).
+   2a. **Post-frame local lane — landed 2026-07-11.** `LocalPostFrameLane` is structurally owner-affine and owned by `UiRealm`/`HeadlessBinding`; `PostFrameHandle` stays `Clone + Send + Sync` and carries only a lane identity ticket. `schedule_local` accepts non-`Send` captures only while that lane is the active owner scope. Shared and local registrations use one scheduler gate and one callback-id sequence, so `end_frame` preserves Flutter's total registration order and drain-before-invoke semantics. The weak TLS ticket registry is transitional: it retires when `Scheduler` becomes realm-owned and the handle can point directly at realm-local storage.
    2b. **Gesture-callback token**: gesture callbacks (`Arc<dyn Fn + Send + Sync>`) are stored inside render objects, and `RenderObject: Send + Sync` stays (data plane). Dropping callback bounds therefore requires render objects to hold a `Send` dispatch token routed to realm-owned closures instead of the closures themselves — the step-3a gesture redesign, which must precede or accompany the bound drop.
    2c. **`NavigatorHandle` thread contract**: today documented `Send + Sync`, but it reaches route storage which holds views. Under this ADR navigation is realm-serial; the handle drops the cross-thread promise and cross-thread navigation rides `UiCommandSender`.
-   With 2a–2c in place, the bound drop (`View`/`BuildContext`/`ViewState`/callback aliases + the ~24 machinery bounds + widgets-layer cascade: `Route`, `NavigatorObserver`, `WidgetsBindingObserver`, `ViewSeq` container bounds) lands as one wave, together with moving `widgets` into the realm.
+   With 2a–2c in place, the bound drop (`View`/`BuildContext`/`ViewState`/callback aliases + the ~24 machinery bounds + widgets-layer cascade: `Route`, `NavigatorObserver`, `WidgetsBindingObserver`, `ViewSeq` container bounds) lands as one wave. Widget ownership has already moved into the realm and is not blocked on that wave.
 3. **Remaining singleton retirement, ADR-0002 order:** Gesture (delete dual-instance) → App (`AppBinding` dissolves into `AppRuntime` + realm construction) → Renderer-orchestration (runners adopt the raster owner; `Arc<Mutex<Renderer>>` deleted) → Scheduler last (ticker-handle design first; `UpdateScheduler`/`FrameClock` split lands here). `FocusManager::global()` retires via `FocusCoordinator` + ambient capability + `FocusHandle`. The at-most-one guard, the TLS runner slot, and the test-lock family retire at the end of this step.
 4. **Worker service + Phase 1.5 decode** on `BackgroundExecutor` under §6 freshness classes.
 5. **PresentationRuntime reification** (FrameClock, per-presentation FocusTree, 1-realm-N-presentations) when the second presentation type (headless embedder or multi-window) becomes a real consumer.

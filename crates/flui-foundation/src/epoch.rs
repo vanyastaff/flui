@@ -1,5 +1,5 @@
 //! Monotonic generation/version counters for the owner-affine ui-realm
-//! protocol (ADR-0027 §6).
+//! protocol.
 //!
 //! Three distinct newtypes guard three distinct kinds of staleness. They are
 //! **not interchangeable** — each is checked against its own authority, and
@@ -23,7 +23,7 @@
 //! `is_current()` in one step.
 //!
 //! Channel identity — not epoch arithmetic — is the isolation boundary across
-//! `UiRealm` recreation (ADR-0027 §6): these counters are never compared
+//! `UiRealm` recreation: these counters are never compared
 //! across two different runtimes' lifetimes, only within one.
 //!
 //! # Example
@@ -101,7 +101,7 @@ macro_rules! epoch_counters {
 }
 
 epoch_counters! {
-    /// A `UiRealm`'s monotonic per-frame counter (ADR-0027 §6).
+    /// A `UiRealm`'s monotonic per-frame counter.
     ///
     /// Minted by the runtime's scheduler; subsumes `Scene::frame_number`
     /// (one fact, one place — `Scene` keeps its field for now but the
@@ -117,8 +117,8 @@ epoch_counters! {
     /// current, otherwise it is dropped with a trace event, never a panic.
     pub struct FrameEpoch;
 
-    /// Generation counter bumped on every raster surface (re)configure
-    /// (ADR-0027 §6): resize, device-lost recovery, or any other event that
+    /// Generation counter bumped on every raster surface (re)configure:
+    /// resize, device-lost recovery, or any other event that
     /// invalidates the previously-configured surface.
     ///
     /// Owned by the engine seam. A frame in flight declares the
@@ -130,7 +130,7 @@ epoch_counters! {
 
     /// Generational identity for worker-produced cache resources — image
     /// decode, tessellation, and text-shaping cache slots — following the
-    /// same generational pattern as [`GenId`](crate::GenId) (ADR-0027 §6).
+    /// same generational pattern as [`GenId`](crate::GenId).
     ///
     /// Guards a cache slot against being read after its producer moved past
     /// it: a worker result is applied at commit only if its declared
@@ -138,7 +138,7 @@ epoch_counters! {
     pub struct ResourceGeneration;
 }
 
-/// The canonical commit-time freshness gate for worker results (ADR-0027 §6).
+/// The canonical commit-time freshness gate for worker results.
 ///
 /// A worker result is applied only if its declared [`ResourceGeneration`] is
 /// still current on the gate it was stamped against; otherwise the owner
@@ -200,7 +200,7 @@ impl GenerationGate {
     #[must_use]
     pub fn bump(&self) -> ResourceGeneration {
         // `Relaxed` throughout this type: the gate has a single logical
-        // writer (the owner thread, ADR-0027 §6) and readers only ever
+        // writer (the owner thread) and readers only ever
         // compare a previously-read `ResourceGeneration` for equality
         // against the live one — no other memory is published through this
         // atomic that a reader must observe as a consequence of seeing a

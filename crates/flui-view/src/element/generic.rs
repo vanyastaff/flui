@@ -58,7 +58,7 @@ use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
 ///
 /// This struct contains all common element state and lifecycle logic,
 /// parameterized by:
-/// - `V`: The View type (must be Clone + Send + Sync + 'static)
+/// - `V`: The View type (must be Clone + 'static)
 /// - `A`: The arity type (Leaf, Single, Optional, Variable)
 ///
 /// # Type Parameters
@@ -82,7 +82,7 @@ use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
 /// enabling generic code internally.
 pub struct ElementCore<V, A>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     /// The current View configuration.
@@ -131,7 +131,7 @@ where
 
     /// This element's own `ElementId` in the surrounding `ElementTree`.
     ///
-    /// Plan §U15: stamped by `ElementTree::insert` /
+    /// Stamped by `ElementTree::insert` /
     /// `mount_root_with_pipeline_owner` immediately after slab insertion
     /// (via [`ElementBase::set_self_id`](crate::ElementBase::set_self_id),
     /// forwarded to [`Self::set_self_id`]) so the element can schedule its
@@ -156,7 +156,7 @@ where
 
 impl<V, A> ElementCore<V, A>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     /// Create a new ElementCore with the given view.
@@ -184,7 +184,7 @@ where
 
     /// Set this element's own `ElementId`. Called by
     /// [`crate::tree::ElementTree`] immediately after slab insertion
-    /// via [`crate::view::ElementBase::set_self_id`]. Plan §U15.
+    /// via [`crate::view::ElementBase::set_self_id`].
     pub(crate) fn set_self_id(&mut self, id: ElementId) {
         self.self_id = Some(id);
     }
@@ -333,7 +333,7 @@ where
 
     /// Update this element with a new View of the same type.
     ///
-    /// FR-021 (Phase 3 §U27): dispatch routes through
+    /// FR-021: dispatch routes through
     /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`)
     /// which discriminates on `TypeId` and extracts the typed inner
     /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
@@ -359,19 +359,19 @@ where
     }
 
     // ========================================================================
-    // Dispatch-internal setters (Phase 1 §U8)
+    // Dispatch-internal setters
     //
     // These are `pub(crate)` because `crate::element::dispatch` needs to
     // mutate `ElementCore::view` and `ElementCore::dirty` without
-    // ElementCore::update_view's body owning them. Phase 3 §U27
-    // replaces the dispatch function body and may retire these
+    // ElementCore::update_view's body owning them. A future dispatch
+    // function-body rewrite may retire these
     // setters; until then they keep the dispatch module free of
     // direct field access to ElementCore's private state.
     // ========================================================================
 
     /// Replace the stored view. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
-    /// `TypeId`-keyed `Box::downcast::<V>` succeeds (Phase 3 §U27).
+    /// `TypeId`-keyed `Box::downcast::<V>` succeeds.
     pub(crate) fn replace_view_for_dispatch(&mut self, view: V) {
         self.view = view;
     }
@@ -532,7 +532,7 @@ where
         })
     }
 
-    /// An owned, `'static` [`RebuildHandle`] for this element (ADR-0018 U1).
+    /// An owned, `'static` [`crate::RebuildHandle`] for this element.
     ///
     /// Inert until the element is mounted: before `ElementTree::insert` stamps
     /// `self_id` and `on_mount` installs the scheduler there is nothing to
@@ -572,7 +572,7 @@ where
 
 impl<V, A> std::fmt::Debug for ElementCore<V, A>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

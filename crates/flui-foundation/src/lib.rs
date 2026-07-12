@@ -151,15 +151,15 @@ pub mod binding;
 pub mod callbacks;
 pub mod clock;
 pub mod consts;
-// Monotonic generation/version counters for the window-runtime protocol
-// (ADR-0027 §6): FrameEpoch, SurfaceGeneration, ResourceGeneration.
+// Monotonic generation/version counters for the window-runtime protocol:
+// FrameEpoch, SurfaceGeneration, ResourceGeneration.
 pub mod epoch;
 pub mod id;
 pub mod key;
 pub mod wasm;
 
-// Logging - cross-platform tracing backend (merged from flui-log in
-// D-block PR-C-1 per docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md U1).
+// Logging - cross-platform tracing backend (merged from flui-log; see
+// docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
 pub mod log;
 
 // Reactive programming - change notification and observables
@@ -190,8 +190,7 @@ pub use callbacks::{
 pub use clock::{ManualClock, MonotonicClock, SystemClock};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
-// Window-runtime generation/version counters + commit-time freshness gate
-// (ADR-0027 §6).
+// Window-runtime generation/version counters + commit-time freshness gate.
 pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
 // Diagnostics
 pub use debug::{
@@ -213,7 +212,7 @@ pub use id::{
     Marker,
     ObserverId,
     RawId,
-    // Realm identity (ADR-0027 §6) — one UiRealm incarnation
+    // Realm identity — one UiRealm incarnation
     RealmId,
     RenderId,
     SemanticsId,

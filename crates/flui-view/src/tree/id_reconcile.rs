@@ -1267,7 +1267,7 @@ mod tests {
     }
 
     /// `flui::reconcile` emission coverage on the LIVE slab path
-    /// (catalog #3 / the work KTD-9 named). The production reconciler
+    /// (catalog #3). The production reconciler
     /// emits one typed [`ReconcileEvent`](super::ReconcileEvent) per
     /// child disposition so devtools / selection-persistence subscribers
     /// reconstruct each frame's outcome WITHOUT a tree diff. Before this
@@ -1360,7 +1360,7 @@ mod tests {
         /// exercised OUTSIDE a collector scope it can latch "no interest"
         /// and the first captured reconcile then observes zero events.
         /// Building the prior state with raw inserts keeps every emit
-        /// inside a `capture` — the same discipline the §U18 corpus uses
+        /// inside a `capture` — the same discipline the reconciler test corpus uses
         /// (it mounts its initial tree directly, never via a warmup
         /// reconcile).
         fn seed(

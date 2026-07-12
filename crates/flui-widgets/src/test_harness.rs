@@ -1,10 +1,10 @@
 //! A headless widget harness for `flui-widgets`' **in-crate** unit tests.
 //!
 //! `tests/common::lay_out` is an integration-test module and cannot be reached
-//! from `src/`, so private modules — `overlay` (ADR-0019 U1) and `navigator` (U3)
+//! from `src/`, so private modules — `overlay` and `navigator`
 //! — need their own. This is the trimmed equivalent: it keeps `lay_out`'s
 //! load-bearing ordering (**binding first, so the async driver is installed before
-//! the mount `build_scope`**, ADR-0018 U6) and drops the geometry helpers.
+//! the mount `build_scope`**) and drops the geometry helpers.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,21 +75,23 @@ pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapa
     match post_frame {
         PostFrameCapability::Installed => binding.install_build_capabilities(&mut build_owner),
         // The async driver still goes in: withholding it too would change *which*
-        // capability the test is about (ADR-0018 U6 makes the mount `build_scope`
-        // depend on it).
+        // capability the test is about — the mount `build_scope` depends on it.
         PostFrameCapability::Absent => {
             build_owner.set_async_driver(binding.scheduler().async_driver().clone());
         }
     }
 
-    let root_element = tree.mount_root_with_pipeline_owner(
-        &root,
-        Some(Arc::clone(&pipeline_owner)),
-        &mut build_owner.element_owner_mut(),
-    );
+    let root_element = binding.enter_owner_scope(|| {
+        let root_element = tree.mount_root_with_pipeline_owner(
+            &root,
+            Some(Arc::clone(&pipeline_owner)),
+            &mut build_owner.element_owner_mut(),
+        );
 
-    build_owner.schedule_build_for(root_element, 0);
-    build_owner.build_scope(&mut tree);
+        build_owner.schedule_build_for(root_element, 0);
+        build_owner.build_scope(&mut tree);
+        root_element
+    });
 
     let root_render = {
         let owner = pipeline_owner.read();
@@ -105,9 +107,11 @@ pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapa
         guard.set_root_id(Some(root_render));
         guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(800.0), px(600.0)))));
     }
-    build_owner
-        .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
-        .expect("headless frame should succeed");
+    binding.enter_owner_scope(|| {
+        build_owner
+            .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
+            .expect("headless frame should succeed");
+    });
 
     binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
 
@@ -120,6 +124,10 @@ pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapa
 }
 
 impl Harness {
+    /// Run an owner-side test action under the binding's full local scope.
+    pub(crate) fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
+        self.binding.enter_owner_scope(callback)
+    }
     /// The root element id.
     pub(crate) fn root(&self) -> ElementId {
         self.root_element
@@ -160,7 +168,7 @@ impl Harness {
     /// The binding's **own** scheduler — never `Scheduler::instance()`.
     ///
     /// A post-frame callback registered here is drained by `pump_frame`'s
-    /// `Scheduler::drive_frame`, after the pipeline commits layout (ADR-0021 §7c).
+    /// `Scheduler::drive_frame`, after the pipeline commits layout.
     pub(crate) fn scheduler(&self) -> &flui_scheduler::Scheduler {
         self.binding.scheduler()
     }

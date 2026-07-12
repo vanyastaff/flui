@@ -125,9 +125,9 @@ pub mod bezier;
 pub mod bounds;
 /// External-crate interop bridges. Gated per-bridge feature (`kurbo`), so the
 /// module is absent from default builds until a consumer opts in (lands ahead
-/// of its Core.2 consumer by design — N-geom PR 3, U8).
+/// of its Core.2 consumer by design).
 #[cfg(feature = "kurbo")]
-pub mod bridges; // PORT-CHECK-OK-SP4: kurbo bridge intentionally precedes its Core.2 consumer (U8); feature-gated, not speculative.
+pub mod bridges; // PORT-CHECK-OK-SP4: kurbo bridge intentionally precedes its Core.2 consumer; feature-gated, not speculative.
 pub mod circle;
 pub mod corner;
 pub mod corners;

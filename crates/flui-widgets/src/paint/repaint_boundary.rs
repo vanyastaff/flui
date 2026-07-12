@@ -33,11 +33,18 @@ impl RenderView for RepaintBoundary {
     type Protocol = BoxProtocol;
     type RenderObject = RenderRepaintBoundary;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderRepaintBoundary::new()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // A repaint boundary carries no configuration — nothing to update.
     }
 

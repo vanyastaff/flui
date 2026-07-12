@@ -1,20 +1,21 @@
-//! The route stack — ADR-0019 U2. **Private, and pure data.**
+//! The route stack. **Private, and pure data.**
 //!
 //! There is no `Navigator` here, and no widget. This module is the layer beneath
 //! one: a `Vec<RouteEntry>`, the lifecycle state machine, the flush algorithm,
-//! the observer queues, and the pop-result channel. ADR-0019's central
+//! the observer queues, and the pop-result channel. The central
 //! observation is that all of it is a pure function over route entries —
 //! `_flushHistoryUpdates` never touches Flutter's element tree, and its only
-//! tree-visible effect is the `overlay.rearrange` at the very end, which U3 will
-//! perform. So this layer is testable with no element tree, no build owner, no
-//! render pipeline, and no overlay, and `route_stack_flush_is_pure_data`
-//! enforces that mechanically rather than on trust.
+//! tree-visible effect is the `overlay.rearrange` at the very end, which the
+//! `Navigator` view performs. So this layer is testable with no element tree, no
+//! build owner, no render pipeline, and no overlay, and
+//! `route_stack_flush_is_pure_data` enforces that mechanically rather than on
+//! trust.
 //!
-//! U3 added the `Navigator` view, `NavigatorState` and the owned
-//! `NavigatorHandle` on top: the `navigator` and `overlay_route` modules are the
+//! The `Navigator` view, `NavigatorState` and the owned
+//! `NavigatorHandle` sit on top: the `navigator` and `overlay_route` modules are the
 //! only files here that may touch the widget tree or the overlay.
 //!
-//! U4 exported the signed-off baseline surface from the crate root and prelude.
+//! The signed-off baseline surface is exported from the crate root and prelude.
 //! The pure route-stack internals stay private, and the `Box<dyn Any + Send>`
 //! pop-result boundary remains an implementation detail behind typed public
 //! methods (`pop_with`, `remove_route_with`, `maybe_pop_with`).
@@ -28,7 +29,7 @@
 //!
 //! The public baseline now includes `Navigator`, `PageRoute` / `PopupRoute`,
 //! `Hero` / `HeroController` / `HeroControllerScope` / `HeroMode`, and the Hero
-//! customization hooks (ADR-0021 §7n/§7o). Still deferred: Navigator 2.0,
+//! customization hooks. Still deferred: Navigator 2.0,
 //! restoration, named-route generation, `PopScope`, `LocalHistoryRoute`, per-route
 //! focus scope, and nested-navigator hero flights.
 

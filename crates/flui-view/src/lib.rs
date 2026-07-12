@@ -69,6 +69,11 @@
 // `element/element.rs`, `view/view.rs`: a one-type family module named after
 // its type is the catalog's house style (matches flui-widgets/flui-objects).
 #![allow(clippy::module_inception)]
+// ADR-0027: the owner-plane view/element/build/global-key graph is intentionally
+// `!Send`, while existing internal handles are still `Arc`-shaped. Do not restore
+// `Send + Sync` to UI callbacks or tree owners to satisfy this lint; a focused
+// owner-local handle migration can replace these with `Rc` later.
+#![allow(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Modules
@@ -85,11 +90,11 @@ pub mod seq; // PORT-CHECK-OK-SP4: seq/Children API surface; consumed via prelud
 pub mod tree;
 pub mod view;
 
-// Test-only global-key registry shims. Live in `lib.rs` rather than
+// Legacy test-only global-key registry shims. Live in `lib.rs` rather than
 // `key/mod.rs` so the public name is `flui_view::test_only_*` — short,
-// clearly tagged as test-only via the prefix. Production code installs
-// the registry handle inside `WidgetsBinding`; tests bypass the binding
-// and need this entrypoint.
+// clearly tagged as test-only via the prefix. Production code activates
+// the registry handle owned by `WidgetsBinding`; integration fixtures that
+// bypass a binding still need this entrypoint until they adopt scoped harnesses.
 mod test_only_global_key_registry {
     use std::sync::Arc;
 
@@ -102,14 +107,15 @@ mod test_only_global_key_registry {
     };
 
     /// Install the given `ElementTree` + `BuildOwner` as the
-    /// process-wide registry source for `GlobalKey::current_*` lookups.
+    /// current-thread registry source for `GlobalKey::current_*` lookups.
     ///
     /// Tests in `tests/global_key.rs` install a handle pointing to a
     /// local tree, run their assertions, then call
     /// [`test_only_clear_global_key_registry`].
     ///
-    /// **Not for production code.** Production binds the handle inside
-    /// `WidgetsBinding::new`.
+    /// **Not for production code.** Production activates the realm-owned
+    /// binding handle only inside `UiRealm::enter`.
+    #[doc(hidden)]
     pub fn test_only_set_global_key_registry(
         tree: &Arc<RwLock<ElementTree>>,
         owner: &Arc<RwLock<BuildOwner>>,
@@ -128,9 +134,10 @@ mod test_only_global_key_registry {
         let _ = install_registry(handle);
     }
 
-    /// Clear the process-wide registry handle. No-op if no handle was
+    /// Clear the current-thread registry handle. No-op if no handle was
     /// installed. Tests call this in their teardown so subsequent
     /// tests start from a quiescent state.
+    #[doc(hidden)]
     pub fn test_only_clear_global_key_registry() {
         let _ = take_registry();
     }
@@ -168,13 +175,12 @@ pub use element::{RootElement, RootElementImpl};
 pub use element::{StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{ElementId, RenderId};
-// Logging re-exports from flui_foundation::log (merged from flui-log in
-// D-block PR-C-1 U2).
+// Logging re-exports from flui_foundation::log (merged from flui-log).
 pub use flui_foundation::log::{Level, Logger, debug, error, info, trace, warn};
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
-// Test-only handle for `GlobalKey::current_*` lookup. Production code
-// installs the handle via `WidgetsBinding`; tests bypass the binding.
+// Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
+// activates the handle through `UiRealm::enter`; tests bypass the binding.
 pub use test_only_global_key_registry::{
     test_only_clear_global_key_registry, test_only_set_global_key_registry,
 };
@@ -185,9 +191,9 @@ pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement,
     ErrorView, ErrorViewBuilder, FlutterError, InheritedElement, InheritedView, IntoElement,
     IntoView, Memo, ParentDataConfig, ParentDataElement, ParentDataView, ProxyElement, ProxyView,
-    RenderElement, RenderView, RootRenderElement, RootRenderView, StatefulElement, StatefulView,
-    StatelessElement, StatelessView, View, ViewExt, ViewState, clear_error_view_builder,
-    set_error_view_builder,
+    RenderElement, RenderObjectContext, RenderObjectContextError, RenderView, RootRenderElement,
+    RootRenderView, StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt,
+    ViewState, clear_error_view_builder, set_error_view_builder,
 };
 
 // ============================================================================
@@ -204,7 +210,7 @@ pub mod prelude {
     pub use flui_foundation::{ElementId, RenderId};
     // The proc-macro derives ship from `flui-macros` but are surfaced
     // here so a single `use flui_view::prelude::*;` picks them up
-    // alongside the supporting trait — Phase 3 §U23.
+    // alongside the supporting trait.
     //
     // The re-export deliberately preserves the macro names
     // (`StatelessView`, `StatefulView`) so they sit alongside the
@@ -233,8 +239,8 @@ pub mod prelude {
         tree::{ElementNode, ElementTree},
         view::{
             AnimatedView, BoxedView, InheritedView, IntoView, Memo, ParentDataConfig,
-            ParentDataView, ProxyView, RenderView, StatefulView, StatelessView, View, ViewExt,
-            ViewState,
+            ParentDataView, ProxyView, RenderObjectContext, RenderObjectContextError, RenderView,
+            StatefulView, StatelessView, View, ViewExt, ViewState,
         },
     };
 }

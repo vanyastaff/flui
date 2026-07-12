@@ -1,7 +1,7 @@
 //! [`Route`] — the typed route trait — and [`ErasedRoute`], the type-erased view
 //! of it that a heterogeneous route stack can hold.
 //!
-//! ADR-0019 U2. Private; nothing here is exported.
+//! Private; nothing here is exported.
 //!
 //! # Flutter parity
 //!
@@ -18,7 +18,7 @@
 //! Behavior is unchanged: `did_pop` still completes the future, `did_complete`
 //! still applies the `result ?? currentResult` fallback.
 //!
-//! # The type-erasure boundary (ADR-0019 §4) — **private, unauthorized**
+//! # The type-erasure boundary — **private, unauthorized**
 //!
 //! `Vec<Box<dyn Route<Output = T>>>` cannot hold routes with different `T`, so
 //! the stack holds `Box<dyn ErasedRoute>` and a pop result crosses a
@@ -26,8 +26,8 @@
 //! Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked
 //! `pop<T>`), but Rust would not otherwise need it.
 //!
-//! **This does not authorize the public shape.** ADR-0019 U4 Gate 2 still owns
-//! that decision, and the erasure is confined to this private module until then.
+//! **This does not authorize the public shape.** A later API sign-off gate still
+//! owns that decision, and the erasure is confined to this private module until then.
 //! Note also that `flui-widgets` is outside port-check's FR-036 (`dyn`-boundary
 //! registry, trigger 9) and FR-033 (downcast) scopes, so **no gate would have
 //! caught this** — which is a reason to keep it private, not a licence to export.
@@ -46,7 +46,7 @@ use super::result::{Completer, RouteResult};
 pub(crate) type AnyResult = Box<dyn Any + Send>;
 // Deliberately **not** public. `NavigatorHandle::pop_with<T>` takes a typed `T`
 // and erases it here, so the erasure is an implementation detail rather than a
-// shape callers must name. ADR-0019 U4 signed off the boundary, not its exposure.
+// shape callers must name. The boundary was signed off, not its exposure.
 
 /// Process-unique route identity.
 ///
@@ -61,7 +61,7 @@ pub struct RouteId(u64);
 impl RouteId {
     /// Mint the next id.
     ///
-    /// `pub(crate)` since ADR-0020 U5.1: `NavigatorHandle::push_bound` needs the
+    /// `pub(crate)` because `NavigatorHandle::push_bound` needs the
     /// id **before** the route is boxed, so it can hand the route a
     /// `RouteBinding` pre-bound to it.
     pub(crate) fn next() -> Self {
@@ -78,9 +78,9 @@ impl RouteId {
 
 /// Flutter's `RouteSettings` (`navigator.dart:670-687`), minus `arguments`.
 ///
-/// `arguments: Object?` is deferred with named-route generation (ADR-0019 §6):
+/// `arguments: Object?` is deferred with named-route generation:
 /// nothing produces or reads it yet, and adding it would mean a second erased
-/// `dyn Any` field before the U4 gate has ruled on the first one.
+/// `dyn Any` field before the sign-off gate has ruled on the first one.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RouteSettings {
     name: Option<String>,
@@ -137,7 +137,7 @@ pub enum PushCompletion {
     /// *dispose* of a route sitting in `Removing` moves one flush earlier.
     Immediate,
     /// The route is animating in. The entry parks in `Pushing` until
-    /// `RouteHistory::notify_push_completed` fires — U5's `TransitionRoute` seam,
+    /// `RouteHistory::notify_push_completed` fires — the `TransitionRoute` seam,
     /// and the analogue of Flutter's `whenCompleteOrCancel`.
     Animating,
 }
@@ -146,12 +146,12 @@ pub enum PushCompletion {
 ///
 /// Flutter's `Route<T>` (`navigator.dart:161`), minus the framework-owned state
 /// (see the module docs) and minus everything the `OverlayRoute` /
-/// `TransitionRoute` / `ModalRoute` layers add (ADR-0019 §2.4). U2 implements the
+/// `TransitionRoute` / `ModalRoute` layers add. This trait implements the
 /// floor: no overlay entries, no animation, no barrier.
 ///
 /// Every hook has a default, so a test route is a struct with one line.
 #[allow(unused_variables)]
-pub trait Route: Send + Sync + 'static {
+pub trait Route: 'static {
     /// The value a `pop` of this route delivers.
     type Output: Send + 'static;
 
@@ -198,7 +198,7 @@ pub trait Route: Send + Sync + 'static {
     }
 
     /// Flutter's `Route.install()` (`navigator.dart:257`) — an empty default
-    /// there too. `OverlayRoute` overrides it to create overlay entries (U3).
+    /// there too. `OverlayRoute` overrides it to create overlay entries.
     fn install(&mut self) {}
 
     /// Flutter's `Route.didPush()` (`:270`).
@@ -256,7 +256,7 @@ pub trait Route: Send + Sync + 'static {
 ///
 /// Object-safe by construction: no associated type, no generics, and the only
 /// value crossing the boundary is an [`AnyResult`].
-pub(crate) trait ErasedRoute: Send + Sync {
+pub(crate) trait ErasedRoute {
     fn id(&self) -> RouteId;
 
     /// Flutter's `Route._installed` (`navigator.dart:180`). Read by
@@ -312,7 +312,7 @@ impl<R: Route> RouteRecord<R> {
     /// Box `route` under an id minted by the caller.
     ///
     /// `NavigatorHandle::push_bound` mints first so it can bind the route to its
-    /// own id before boxing (ADR-0020 U5.1).
+    /// own id before boxing.
     pub(crate) fn erase_with_id(
         id: RouteId,
         route: R,
@@ -394,12 +394,11 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
         let value = match result {
             None => self.route.current_result(),
             Some(erased) => {
-                // The ADR-0019 §4 pop-result boundary. A heterogeneous route stack
+                // The pop-result type-erasure boundary. A heterogeneous route stack
                 // cannot carry each route's `Output`, so `pop` erases and the owning
-                // record downcasts back. Signed off in ADR-0019 *Public API and
-                // sign-off (U4)*; the only downcast in `flui-widgets`, and
-                // port-check's FR-033/widgets grep keeps it that way.
-                let typed = erased.downcast::<R::Output>(); // PORT-CHECK-OK-DOWNCAST: ADR-0019 §4
+                // record downcasts back. Signed off as the only downcast in
+                // `flui-widgets`, and port-check's FR-033/widgets grep keeps it that way.
+                let typed = erased.downcast::<R::Output>(); // PORT-CHECK-OK-DOWNCAST: signed-off pop-result erasure boundary, see module docs
                 if let Ok(value) = typed {
                     Some(*value)
                 } else {
@@ -407,7 +406,7 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
                         route = self.id.get(),
                         expected = std::any::type_name::<R::Output>(),
                         "pop result has the wrong type for this route; completing with None. \
-                         Flutter throws a cast error here (ADR-0019 §4)"
+                         Flutter throws a cast error here"
                     );
                     None
                 }

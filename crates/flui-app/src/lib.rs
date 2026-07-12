@@ -1,7 +1,7 @@
 //! FLUI Application Framework
 //!
-//! This crate provides the application framework for FLUI, combining:
-//! - `WidgetsBinding` from flui-view (build phase)
+//! This crate provides the application framework for FLUI, hosting:
+//! - an owner-affine `UiRealm` with `WidgetsBinding` (build phase)
 //! - `PipelineOwner` from flui_rendering (layout/paint phases)
 //! - `GestureBinding` from flui_interaction (input handling + event coalescing)
 //!
@@ -10,7 +10,8 @@
 //! ```text
 //! flui_app
 //!   ├── app/
-//!   │   ├── binding.rs      - WidgetsFlutterBinding (combines all bindings)
+//!   │   ├── binding.rs      - transitional process service host
+//!   │   ├── ui_realm.rs     - owner-affine widget runtime
 //!   │   ├── config.rs       - AppConfig
 //!   │   └── lifecycle.rs    - AppLifecycle
 //!   │
@@ -20,16 +21,8 @@
 //!       └── flags.rs        - DebugFlags
 //! ```
 //!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_app::WidgetsFlutterBinding;
-//!
-//! fn main() {
-//!     let binding = WidgetsFlutterBinding::instance();
-//!     // Use binding to manage the application lifecycle
-//! }
-//! ```
+//! Applications normally enter through [`run_app`] or
+//! [`run_app_with_config`]; the runner constructs and owns the UI realm.
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
@@ -54,8 +47,7 @@ pub use bindings::{
     GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
     SemanticsBinding, WidgetsBinding,
 };
-// Convenience re-exports from flui_foundation::log (merged from flui-log in
-// D-block PR-C-1 U2).
+// Convenience re-exports from flui_foundation::log (merged from flui-log).
 pub use flui_foundation::log::{Level, Logger, debug, error, info, trace, warn};
 // Convenience re-exports from flui-view
 pub use flui_view::{

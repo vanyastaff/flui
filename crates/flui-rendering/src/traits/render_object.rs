@@ -172,7 +172,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// Performs layout with a protocol-erased layout context.
     ///
     /// Called by `RenderEntry::layout_leaf_only()` (leaf path) and the
-    /// pipeline's `layout_dirty_root` (U20, parent+children
+    /// pipeline's `layout_dirty_root` (the parent+children
     /// disjoint-borrow path). Returns either the computed geometry on
     /// success, or a typed [`RenderError`] on contract violation.
     ///
@@ -184,12 +184,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///
     /// # Signature evolution
     ///
-    /// 1. **Pre-U19** — `fn perform_layout_raw(&mut self, constraints:
+    /// 1. **Originally** — `fn perform_layout_raw(&mut self, constraints:
     ///    ProtocolConstraints<P>) -> ProtocolGeometry<P>`. Blanket impl
     ///    shipped as a no-op returning `*self.size()` because the trait
-    ///    surface didn't carry children (companion memo D5).
+    ///    surface didn't carry children.
     ///
-    /// 2. **D-block PR-A1b U19 (PR #141)** — signature changed to
+    /// 2. **PR #141** — signature changed to
     ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::LayoutCtxErased<'_>) -> ProtocolGeometry<P>`
     ///    so the blanket impl can construct a typed [`BoxLayoutCtx`]
     ///    with children access. Contract-violation signalling went
@@ -544,21 +544,22 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         None
     }
 
-    /// The pointer-event handler this render object contributes to its hit
+    /// The data-only pointer target this render object contributes to its hit
     /// entry, if any.
     ///
-    /// When a hit lands on this node, the pipeline attaches the returned handler
-    /// to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
-    /// [`HitTestResult::dispatch`](crate::hit_testing::HitTestResult) then
-    /// invokes it with the (locally-transformed) [`PointerEvent`], honoring the
-    /// returned [`EventPropagation`]. Default `None` — only a render object that
-    /// listens for pointer events (e.g. `RenderListener`) overrides it. This is
-    /// the arena analogue of Flutter's `RenderPointerListener` registering
-    /// itself as the `HitTestEntry`'s target.
+    /// When a hit lands on this node, the pipeline attaches the returned
+    /// identity to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
+    /// pointer dispatch resolves it through the owner-local interaction lane
+    /// and invokes the registered handler with the locally transformed
+    /// [`PointerEvent`]. Delivery is leaf-first to every target with no
+    /// propagation result (ADR-0027). Default `None` — only a render object
+    /// that listens for pointer events (e.g. `RenderListener`) overrides it.
+    /// The executable callback never lives in render storage; this is the
+    /// arena analogue of Flutter's `RenderPointerListener` registering itself
+    /// as the `HitTestEntry`'s target.
     ///
     /// [`PointerEvent`]: crate::hit_testing::PointerEvent
-    /// [`EventPropagation`]: crate::hit_testing::EventPropagation
-    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
         None
     }
 
@@ -597,7 +598,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// object's entire child subtree.
     ///
     /// Consulted by `flui-rendering`'s `run_semantics` assembly walk
-    /// (ADR-0014 D5) before it recurses into children — the least-privilege
+    /// (ADR-0014) before it recurses into children — the least-privilege
     /// counterpart of Flutter's `visitChildrenForSemantics` override that
     /// `RenderExcludeSemantics` uses to visit no children while excluding.
     /// This node's own config is still built and merged/boundary-decided
@@ -689,9 +690,9 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// concrete type name. Concrete impls may override to provide a
     /// shorter / more human-readable name.
     ///
-    /// Mythos Step 12 (2026-05-20): introduced alongside the
-    /// `std::panic::catch_unwind` plumbing that turns trait-call panics
-    /// into `RenderError::Poisoned` rather than process aborts.
+    /// Introduced 2026-05-20 alongside the `std::panic::catch_unwind`
+    /// plumbing that turns trait-call panics into `RenderError::Poisoned`
+    /// rather than process aborts.
     fn debug_name(&self) -> &'static str {
         core::any::type_name::<Self>()
     }
@@ -700,7 +701,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     // Pipeline Integration
     // ========================================================================
     //
-    // Historical note (U2 exemplar refactor, see docs/PORT.md): the trait
+    // Historical note (see docs/PORT.md): the trait
     // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
     // It was a leaky abstraction -- framework bookkeeping that only existed
     // on the trait because Flutter's Dart classes are flat. The bit now lives
@@ -803,7 +804,7 @@ mod tests {
         assert!(!leaf.skip_paint());
         assert_eq!(leaf.paint_transform(Size::ZERO), None);
         assert_eq!(leaf.hit_test_transform(Size::ZERO), None);
-        assert!(leaf.pointer_event_handler().is_none());
+        assert!(leaf.pointer_target().is_none());
         assert_eq!(leaf.mouse_cursor(), CursorIcon::Default);
         assert!(
             leaf.mouse_tracker_annotation(flui_foundation::RenderId::new(1))

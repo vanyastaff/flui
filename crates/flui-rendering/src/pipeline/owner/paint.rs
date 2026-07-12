@@ -86,7 +86,7 @@ impl PipelineOwner<PaintPhase> {
                     let (layer_tree, link_registry, follower_correlations) = composer.finish();
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
 
-                    // ADR-0015 D3: resolve each paint-phase-correlated
+                    // ADR-0015: resolve each paint-phase-correlated
                     // follower's composite-resolved offset against the SAME
                     // fully-built layer_tree/link_registry the GPU path
                     // (flui-engine's `render_layer_recursive`) resolves
@@ -307,7 +307,7 @@ impl PipelineOwner<PaintPhase> {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
                 FragmentOp::Push(scope) => {
-                    // ADR-0015 D2: capture the RenderId -> LayerId
+                    // ADR-0015: capture the RenderId -> LayerId
                     // correlation as a near-free byproduct of pushing a
                     // Layer::Follower — `node_id` is already in scope from
                     // this fragment-op replay loop, and `push_layer` hands
@@ -398,10 +398,10 @@ struct FragmentComposer {
     /// [`Self::push_layer`] pushing a `Layer::Leader`/`Layer::Follower`.
     /// Handed to `Scene::with_links` by the binding layer so `flui-engine`
     /// can resolve follower positions at render time against this same
-    /// frame's fully-built `tree` (design research plan §4.3).
+    /// frame's fully-built `tree` (design research plan).
     link_registry: LinkRegistry,
     /// `(RenderId, LayerId)` correlation for each `Layer::Follower` pushed
-    /// this paint pass (ADR-0015 D2) — the general `RenderId -> LayerId`
+    /// this paint pass (ADR-0015) — the general `RenderId -> LayerId`
     /// primitive independently wanted by the snapshot/harness subtree-scoping
     /// TODOs (`testing/snapshot.rs`, `testing/harness.rs`), shipped narrowed
     /// to followers for now. `run_paint` resolves each entry post-paint via
@@ -460,7 +460,7 @@ impl FragmentComposer {
     /// Inserts `layer` under the current stack top, returning its freshly
     /// minted `LayerId` — the caller (`paint_subtree_impl`'s fragment-op
     /// replay loop) uses this to record the `RenderId -> LayerId`
-    /// correlation for `Layer::Follower` pushes (ADR-0015 D2).
+    /// correlation for `Layer::Follower` pushes (ADR-0015).
     fn push_layer(&mut self, layer: Layer) -> LayerId {
         self.seal_picture();
         // Extract the link-registry-relevant fields BEFORE `layer` moves
@@ -489,7 +489,7 @@ impl FragmentComposer {
     }
 
     /// Records a `(RenderId, LayerId)` correlation for a pushed
-    /// `Layer::Follower` node (ADR-0015 D2).
+    /// `Layer::Follower` node (ADR-0015).
     fn record_follower_correlation(&mut self, render_id: RenderId, follower_layer_id: LayerId) {
         self.follower_correlations
             .push((render_id, follower_layer_id));
@@ -606,7 +606,7 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
         // stored as the final on-screen transform. `target_offset` is
         // recorded as-authored (not origin-shifted): resolving it against
         // the leader's position is deliberately deferred past this pass
-        // (design research plan §4/§8 — a `flui-engine`/`flui-layer`
+        // (design research plan — a `flui-engine`/`flui-layer`
         // follow-up, not performed here).
         FragmentScope::Follower {
             link,
@@ -746,7 +746,7 @@ mod tests {
         }
     }
 
-    /// Slice A: painting a tree containing a single follower node yields
+    /// Painting a tree containing a single follower node yields
     /// exactly one `(RenderId, LayerId)` correlation, whose `LayerId`
     /// names the pushed `Layer::Follower` node.
     #[test]
@@ -792,7 +792,7 @@ mod tests {
         );
     }
 
-    /// Slice B: a leader+follower pair under two DIFFERENT `Layer::Offset`
+    /// A leader+follower pair under two DIFFERENT `Layer::Offset`
     /// ancestors (the cross-repaint-boundary case) populates
     /// `last_follower_offsets` with the correctly-resolved displaced
     /// offset — the same value `flui_layer::resolve_follower_offset`
@@ -864,9 +864,9 @@ mod tests {
         );
     }
 
-    /// Slice B: an unlinked follower with `show_when_unlinked == false`
+    /// An unlinked follower with `show_when_unlinked == false`
     /// produces no `last_follower_offsets` entry, and is recorded in
-    /// `last_hidden_follower_ids` so the hit-test walk (Slice C) can skip
+    /// `last_hidden_follower_ids` so the hit-test walk can skip
     /// its subtree instead of silently falling through to normal
     /// traversal.
     #[test]

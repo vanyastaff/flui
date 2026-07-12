@@ -72,16 +72,23 @@ impl<C: ViewSeq> fmt::Debug for Viewport<C> {
 
 impl<C> flui_view::RenderView for Viewport<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderViewport;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         // Push the axis through on rebuild (reconciliation reuses the render
         // object), not just the scroll offset — otherwise a vertical↔horizontal
         // change keeps the stale axis from construction.
@@ -157,16 +164,23 @@ impl<C: ViewSeq> fmt::Debug for ShrinkWrappingViewport<C> {
 
 impl<C> flui_view::RenderView for ShrinkWrappingViewport<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderShrinkWrappingViewport;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         // Reconciliation reuses the render object across rebuilds, so a
         // vertical↔horizontal axis change on the widget must be pushed through
         // (not just the scroll offset) — otherwise layout keeps the stale axis

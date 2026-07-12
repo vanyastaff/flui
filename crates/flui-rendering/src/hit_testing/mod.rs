@@ -17,7 +17,7 @@
 //!   dispatch.
 //! - [`HitTestEntry`]: re-exported from
 //!   [`flui_interaction::routing::HitTestEntry`] -- carries
-//!   `target: RenderId`, optional handler/scroll_handler/cursor.
+//!   `target: RenderId`, optional pointer_target/scroll_handler/cursor.
 //! - [`HitTestBehavior`]: re-exported from
 //!   [`flui_interaction::routing::HitTestBehavior`] -- standard
 //!   `DeferToChild` / `Opaque` / `Translucent` enum.
@@ -78,14 +78,16 @@ mod transform;
 // imports compile unchanged.
 pub use entry::HitTestEntry;
 pub use flui_interaction::routing::HitTestBehavior;
-// Pointer-event dispatch surface: a `RenderObject` advertises a
-// `PointerEventHandler` (see `RenderObject::pointer_event_handler`) that the
-// pipeline attaches to its hit entry; `HitTestResult::dispatch` then invokes it
-// with a `PointerEvent`, honoring the returned `EventPropagation`.
+// Pointer-event dispatch surface: a `RenderObject` advertises a data-only
+// `PointerTarget` (see `RenderObject::pointer_target`) that the pipeline
+// attaches to its hit entry; dispatch resolves the target through the
+// owner-local interaction lane and delivers the locally transformed
+// `PointerEvent` leaf-first to every target (ADR-0027 — executable callbacks
+// never live in render storage). `EventPropagation` remains scroll-only.
 pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
 pub use flui_interaction::routing::{
     DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
-    MouseTrackerAnnotation, PointerEventHandler,
+    MouseTrackerAnnotation, PointerTarget,
 };
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;

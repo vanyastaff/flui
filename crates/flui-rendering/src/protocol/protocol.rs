@@ -71,7 +71,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// a protocol-erased render-object trait method without per-protocol
     /// dispatch in the caller.
     ///
-    /// **D-block PR-A1b U19 (companion memo D5):** for `BoxProtocol` this
+    /// For `BoxProtocol` this
     /// resolves to `dyn BoxLayoutCtxErased + 'ctx`; for `SliverProtocol`
     /// to `dyn SliverLayoutCtxErased + 'ctx`. Each per-protocol trait
     /// exposes the small protocol-shared surface (constraints, child ops)
@@ -115,8 +115,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// Flutter parity for those parameters lands later in Core.2 alongside
     /// the intrinsic-dimension protocol.
     ///
-    /// Added in D-block PR-A1 U17 (companion memo D3) so that
-    /// [`PipelineOwner::mark_needs_layout`] (U15) has a meaningful
+    /// This bootstrap exists so that
+    /// [`PipelineOwner::mark_needs_layout`] has a meaningful
     /// `is_relayout_boundary` answer to read once nodes have laid out at
     /// least once. Pre-bootstrap, all nodes report `false` and propagation
     /// runs to root — the correct fallback (root is the implicit boundary).
@@ -179,10 +179,10 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// the caller's stack inside the trait method, the erased coercion
     /// borrows it, and the borrow expires when `f` returns.
     ///
-    /// **D-block PR-A1b U19 (companion memo D5):** used by
+    /// Used by
     /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only) for
     /// the leaf / single-node layout path. The pipeline's
-    /// `layout_dirty_root` (U20) constructs its own typed context with
+    /// `layout_dirty_root` constructs its own typed context with
     /// children access via disjoint borrows and bypasses this helper.
     fn with_leaf_erased_ctx<R>(
         constraints: <Self::Layout as LayoutCapability>::Constraints,
