@@ -599,9 +599,8 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(Arc::new(|| {
-        AppBinding::instance().wake_frame();
-    })) {
+    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
+    {
         Ok(realm) => realm,
         Err(e) => {
             tracing::error!(error = %e, "UiRealm construction failed");
@@ -641,9 +640,8 @@ where
     // Therefore: no lock ordering conflict.
     {
         let widgets = ui_realm.widgets();
-        widgets.set_on_need_frame(|| {
-            AppBinding::instance().wake_frame();
-        });
+        let wake = AppBinding::instance().frame_wake_callback();
+        widgets.set_on_need_frame(move || wake());
     }
 
     // Wire `on_build_scheduled` on the BuildOwner so a dirty-element
@@ -658,9 +656,8 @@ where
     {
         let widgets = ui_realm.widgets();
         widgets.with_build_owner_mut(|build_owner| {
-            build_owner.set_on_build_scheduled(|| {
-                AppBinding::instance().wake_frame();
-            });
+            let wake = AppBinding::instance().frame_wake_callback();
+            build_owner.set_on_build_scheduled(move || wake());
         });
     }
 
@@ -1005,9 +1002,8 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(Arc::new(|| {
-        AppBinding::instance().wake_frame();
-    })) {
+    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
+    {
         Ok(realm) => realm,
         Err(error) => {
             tracing::error!(%error, "UiRealm construction failed");
@@ -1239,9 +1235,8 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(Arc::new(|| {
-        AppBinding::instance().wake_frame();
-    })) {
+    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
+    {
         Ok(realm) => realm,
         Err(error) => {
             tracing::error!(%error, "UiRealm construction failed");

@@ -82,7 +82,7 @@ pub struct AppBinding {
     gestures: GestureBinding,
 
     /// Whether a redraw is needed
-    needs_redraw: AtomicBool,
+    needs_redraw: Arc<AtomicBool>,
 
     /// Whether the app is initialized
     initialized: AtomicBool,
@@ -102,7 +102,7 @@ pub struct AppBinding {
     lifecycle: Mutex<DefaultLifecycle>,
 
     /// Active platform window (set during run_desktop).
-    active_window: Mutex<Option<Arc<dyn PlatformWindow>>>,
+    active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
 
     /// Controller registry for implicit animations (VsyncScope-driven).
     ///
@@ -140,11 +140,39 @@ pub struct AppBinding {
     now_secs_override: AtomicU64,
 }
 
+#[derive(Clone)]
+struct FrameWakeHandle {
+    needs_redraw: Arc<AtomicBool>,
+    active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+}
+
+impl FrameWakeHandle {
+    fn wake_frame(&self) {
+        self.needs_redraw.store(true, Ordering::Relaxed);
+        let window = self.active_window.lock().as_ref().cloned();
+        if let Some(window) = window {
+            window.request_redraw();
+            tracing::trace!("wake_frame: platform window request_redraw sent");
+        }
+    }
+
+    fn into_callback(self) -> Arc<dyn Fn() + Send + Sync> {
+        Arc::new(move || self.wake_frame())
+    }
+}
+
 impl AppBinding {
     /// Create a new AppBinding.
     fn new() -> Self {
         // Ensure the global Scheduler singleton is initialized
         let _ = Scheduler::instance();
+
+        let needs_redraw = Arc::new(AtomicBool::new(false));
+        let active_window = Arc::new(Mutex::new(None));
+        let wake_handle = FrameWakeHandle {
+            needs_redraw: Arc::clone(&needs_redraw),
+            active_window: Arc::clone(&active_window),
+        };
 
         // Create shared pipeline owner first (elements need Arc access)
         let shared_pipeline_owner =
@@ -160,12 +188,15 @@ impl AppBinding {
         // Lock order is safe: the callback fires while the CALLER holds
         // the pipeline-owner lock, and `wake_frame` acquires only the
         // `active_window` leaf Mutex — never the owner, never `widgets`.
-        // `AppBinding::instance()` is resolved lazily at fire time, not
-        // captured, so this closure cannot re-enter `new()` during
-        // singleton construction (dirty marks only happen after init).
+        // The callback captures only a small Send + Sync wake capability, not
+        // `AppBinding` itself. That matters after ADR-0027 made
+        // `AppBinding::instance()` thread-local: a worker-thread dirty mark
+        // must wake the owner binding, not resolve/create a worker-local TLS
+        // binding and set redraw state there.
+        let visual_wake = wake_handle.clone();
         shared_pipeline_owner
             .write()
-            .set_on_need_visual_update(|| AppBinding::instance().wake_frame());
+            .set_on_need_visual_update(move || visual_wake.wake_frame());
 
         // Animation-wake wiring: scheduling a frame callback (a ticker
         // tick) fires this hook on the scheduler's false→true
@@ -176,9 +207,7 @@ impl AppBinding {
         // starves and the animation freezes. Same lock-safety argument as
         // the visual-update hook above: `wake_frame` touches only the
         // `active_window` leaf Mutex.
-        Scheduler::instance().set_on_frame_scheduled(Some(std::sync::Arc::new(|| {
-            AppBinding::instance().wake_frame();
-        })));
+        Scheduler::instance().set_on_frame_scheduled(Some(wake_handle.into_callback()));
 
         // Create RendererBinding sharing the SAME PipelineOwner
         let renderer =
@@ -187,13 +216,13 @@ impl AppBinding {
         Self {
             renderer: RwLock::new(renderer),
             gestures: GestureBinding::new(),
-            needs_redraw: AtomicBool::new(false),
+            needs_redraw,
             initialized: AtomicBool::new(false),
             frames_rendered: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
             shared_pipeline_owner,
             lifecycle: Mutex::new(DefaultLifecycle::new()),
-            active_window: Mutex::new(None),
+            active_window,
             vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
             #[cfg(test)]
@@ -215,6 +244,17 @@ impl AppBinding {
         }
 
         INSTANCE.with(|binding| *binding)
+    }
+
+    pub(crate) fn frame_wake_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
+        self.wake_handle().into_callback()
+    }
+
+    fn wake_handle(&self) -> FrameWakeHandle {
+        FrameWakeHandle {
+            needs_redraw: Arc::clone(&self.needs_redraw),
+            active_window: Arc::clone(&self.active_window),
+        }
     }
 
     /// Check if the binding is initialized.
@@ -629,10 +669,7 @@ impl AppBinding {
     /// callback that is executing while `AppBinding::widgets` is held —
     /// the two locks are disjoint.
     pub fn wake_frame(&self) {
-        self.needs_redraw.store(true, Ordering::Relaxed);
-        if let Some(()) = self.with_window(|w| w.request_redraw()) {
-            tracing::trace!("wake_frame: platform window request_redraw sent");
-        }
+        self.wake_handle().wake_frame();
     }
 
     /// Check if a redraw is needed.
@@ -1038,6 +1075,31 @@ mod tests {
             binding.needs_redraw(),
             "an owner dirty mark must wake the binding via the \
              visual-update notifier wired in AppBinding::new",
+        );
+    }
+
+    #[test]
+    fn cross_thread_dirty_handle_wakes_owner_binding_not_worker_tls() {
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+
+        let handle = binding.shared_pipeline_owner.read().handle();
+        std::thread::spawn(move || {
+            handle
+                .request_mark_dirty(
+                    flui_foundation::RenderId::new(1),
+                    0,
+                    flui_rendering::pipeline::DirtyKind::Paint,
+                )
+                .expect("dirty request should enqueue");
+        })
+        .join()
+        .expect("worker thread should not panic");
+
+        assert!(
+            binding.needs_redraw(),
+            "cross-thread dirty requests must wake the owner binding captured \
+             during AppBinding construction, not resolve a worker-local TLS binding"
         );
     }
 
