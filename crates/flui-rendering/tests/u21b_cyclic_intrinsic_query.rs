@@ -6,7 +6,7 @@
 //! the *borrowed* intrinsic walk, which derives a shared `&RenderNode` from a
 //! raw `NodePtr` for each of the queried node's children to read their parent
 //! data. `links().children()` lists are NOT statically acyclic
-//! (`LayoutCycleGuard`, [`u21_layout_cycle`]), so a cyclic edge can name a slot
+//! (`LayoutCycleGuard`, [`layout_cycle_guard`]), so a cyclic edge can name a slot
 //! whose `&mut` is live on an ancestor frame. Reading it ungated is aliasing UB
 //! (Stacked/Tree Borrows). The fix gates every deref on
 //! `SubtreeArena::is_in_flight` and skips in-flight slots.
@@ -17,7 +17,7 @@
 //! Refs:
 //!   * crates/flui-rendering/src/pipeline/owner/subtree_arena.rs
 //!     (`build_intrinsic_child_parent_data`)
-//!   * tests/u21_layout_cycle.rs (the layout-cycle siblings)
+//!   * tests/layout_cycle_guard.rs (the layout-cycle siblings)
 
 use flui_foundation::Diagnosticable;
 use flui_objects::RenderColoredBox;

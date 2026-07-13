@@ -66,11 +66,18 @@ impl RenderView for IntrinsicWidth {
     type Protocol = BoxProtocol;
     type RenderObject = RenderIntrinsicWidth;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderIntrinsicWidth::new(self.step_width, self.step_height)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_step_width(self.step_width);
         render_object.set_step_height(self.step_height);
     }
@@ -141,7 +148,8 @@ mod tests {
         let widget = IntrinsicWidth::new()
             .with_step_width(40.0)
             .with_step_height(25.0);
-        let render_object = widget.create_render_object();
+        let render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.step_width(), Some(40.0));
         assert_eq!(render_object.step_height(), Some(25.0));
     }
@@ -149,7 +157,8 @@ mod tests {
     #[test]
     fn create_render_object_defaults_to_no_step() {
         let widget = IntrinsicWidth::new();
-        let render_object = widget.create_render_object();
+        let render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.step_width(), None);
         assert_eq!(render_object.step_height(), None);
     }
@@ -157,14 +166,18 @@ mod tests {
     #[test]
     fn update_render_object_applies_changed_steps() {
         let widget = IntrinsicWidth::new();
-        let mut render_object = widget.create_render_object();
+        let mut render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.step_width(), None);
         assert_eq!(render_object.step_height(), None);
 
         let updated = IntrinsicWidth::new()
             .with_step_width(10.0)
             .with_step_height(15.0);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.step_width(), Some(10.0));
         assert_eq!(render_object.step_height(), Some(15.0));
@@ -175,12 +188,16 @@ mod tests {
         let widget = IntrinsicWidth::new()
             .with_step_width(10.0)
             .with_step_height(15.0);
-        let mut render_object = widget.create_render_object();
+        let mut render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.step_width(), Some(10.0));
         assert_eq!(render_object.step_height(), Some(15.0));
 
         let updated = IntrinsicWidth::new();
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.step_width(), None);
         assert_eq!(render_object.step_height(), None);

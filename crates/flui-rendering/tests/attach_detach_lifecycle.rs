@@ -1,4 +1,4 @@
-//! ADR-0013 Slice B milestone — the `attach`/`detach` tree-lifecycle hook.
+//! ADR-0013 milestone — the `attach`/`detach` tree-lifecycle hook.
 //!
 //! Proves the pipeline actually fires `RenderObject::attach`/`detach` at
 //! insert/remove, that the handed-over `RepaintHandle` is bound to the

@@ -10,7 +10,9 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html>
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -27,7 +29,7 @@ use crate::{
 };
 
 /// Callback for multi-tap events
-pub type MultiTapCallback = Arc<dyn Fn(MultiTapDetails) + Send + Sync>;
+pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;
 
 /// Details about a multi-tap gesture
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +76,7 @@ pub struct MultiTapGestureRecognizer {
     required_pointer_count: usize,
 
     /// Callbacks
-    callbacks: Arc<Mutex<MultiTapCallbacks>>,
+    callbacks: Rc<RefCell<MultiTapCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<MultiTapState>>,
@@ -161,7 +163,7 @@ impl MultiTapGestureRecognizer {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             required_pointer_count,
-            callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
             max_time_window: Duration::from_millis(100), // 100ms to get all pointers down
@@ -181,7 +183,7 @@ impl MultiTapGestureRecognizer {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             required_pointer_count,
-            callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
             settings: Arc::new(Mutex::new(settings)),
             max_time_window: Duration::from_millis(100),
@@ -201,18 +203,18 @@ impl MultiTapGestureRecognizer {
     /// Set the multi-tap callback
     pub fn with_on_multi_tap(
         self: Arc<Self>,
-        callback: impl Fn(MultiTapDetails) + Send + Sync + 'static,
+        callback: impl Fn(MultiTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_multi_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_multi_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the multi-tap cancel callback
     pub fn with_on_multi_tap_cancel(
         self: Arc<Self>,
-        callback: impl Fn(MultiTapDetails) + Send + Sync + 'static,
+        callback: impl Fn(MultiTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_multi_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_multi_tap_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -323,7 +325,7 @@ impl MultiTapGestureRecognizer {
                 drop(state);
 
                 // Call callback
-                if let Some(callback) = self.callbacks.lock().on_multi_tap.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_multi_tap.clone() {
                     let details = MultiTapDetails {
                         pointer_count: count,
                         positions,
@@ -367,7 +369,7 @@ impl MultiTapGestureRecognizer {
             drop(state);
 
             // Call cancel callback
-            if let Some(callback) = self.callbacks.lock().on_multi_tap_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_multi_tap_cancel.clone() {
                 let details = MultiTapDetails {
                     pointer_count: count,
                     positions,
@@ -468,8 +470,8 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        self.callbacks.lock().on_multi_tap = None;
-        self.callbacks.lock().on_multi_tap_cancel = None;
+        self.callbacks.borrow_mut().on_multi_tap = None;
+        self.callbacks.borrow_mut().on_multi_tap_cancel = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

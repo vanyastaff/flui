@@ -1,7 +1,7 @@
 //! `ReconcileEvent` — structured trace stream for the keyed
 //! child reconciler.
 //!
-//! Plan §U13 / FR-035. Emitted on the PRODUCTION path: the slab
+//! FR-035. Emitted on the PRODUCTION path: the slab
 //! reconciler `reconcile_children_by_id` emits `Reuse` / `Reorder` /
 //! `Unmount` per child, while the single child-minting site
 //! [`ElementTree::insert`](super::ElementTree::insert) emits `Mount` for
@@ -34,16 +34,15 @@
 //! | `slot`                 | `u64`  | New slot index for the child                                      |
 //! | `view_type_id`         | `str`  | `format!("{:?}", TypeId)` — Debug is the only stable identifier   |
 //! | `from_parent`          | `u64`  | `0` when absent (paired with `from_parent_present`)               |
-//! | `from_parent_present`  | `bool` | `true` only on cross-parent reparent (FR-030, plan §U17)          |
+//! | `from_parent_present`  | `bool` | `true` only on cross-parent reparent (FR-030)                     |
 
 use std::any::TypeId;
 
 use flui_foundation::ElementId;
 
 /// Disposition recorded by the keyed reconciler for a single child
-/// slot. `#[non_exhaustive]` per FR-035 + SC-011 so adding a new
-/// disposition (e.g. an `Async` suspend variant) is not a breaking
-/// change.
+/// slot. `#[non_exhaustive]` per FR-035 so adding a new disposition
+/// (e.g. an `Async` suspend variant) is not a breaking change.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]

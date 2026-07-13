@@ -1,0 +1,202 @@
+//! A headless widget harness for `flui-widgets`' **in-crate** unit tests.
+//!
+//! `tests/common::lay_out` is an integration-test module and cannot be reached
+//! from `src/`, so private modules — `overlay` and `navigator`
+//! — need their own. This is the trimmed equivalent: it keeps `lay_out`'s
+//! load-bearing ordering (**binding first, so the async driver is installed before
+//! the mount `build_scope`**) and drops the geometry helpers.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use flui_binding::HeadlessBinding;
+use flui_foundation::ElementId;
+use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::pipeline::PipelineOwner;
+use flui_types::Size;
+use flui_types::geometry::px;
+use flui_view::View;
+use parking_lot::RwLock;
+
+/// A mounted, laid-out widget tree.
+pub(crate) struct Harness {
+    binding: HeadlessBinding,
+    root_element: ElementId,
+    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    /// Held for the harness's whole lifetime, so every mounted test serializes on
+    /// the process-global `FocusManager`: a `ModalRoute` activates a focus scope the
+    /// moment it becomes current (`modal_route.rs`), so *any* Navigator mount writes
+    /// global focus state — not just the focus tests. Reentrant, so a focus test may
+    /// also lock explicitly on the same thread.
+    _focus_guard: parking_lot::ReentrantMutexGuard<'static, ()>,
+}
+
+/// Serializes every test that touches the process-global `FocusManager`.
+///
+/// **Reentrant**: [`mount`] takes it for the returned [`Harness`]'s lifetime — so a
+/// test never has to remember to — and a focus test that *also* locks it explicitly
+/// (for pre-mount manager setup) nests on the same thread without deadlock. nextest
+/// isolates test *binaries*, not the threads inside one, so two focus-touching tests
+/// in this crate's lib binary would otherwise clobber each other's primary focus and
+/// active scope under `cargo test`'s in-process parallelism.
+pub(crate) static FOCUS_TEST_LOCK: parking_lot::ReentrantMutex<()> =
+    parking_lot::ReentrantMutex::new(());
+
+/// Mount `root` as the render-tree root and drive one frame.
+pub(crate) fn mount(root: impl View) -> Harness {
+    mount_with_capabilities(root, PostFrameCapability::Installed)
+}
+
+/// Whether the binding hands `BuildContext` a [`PostFrameHandle`] at all.
+///
+/// `BuildContext::post_frame_handle()` returns an `Option`, so "no post-frame
+/// capability" is a real, reachable configuration — an embedder that drives frames
+/// itself, or any binding that simply never calls `install_build_capabilities`.
+/// Code that acquires the handle must behave when it is absent, and the only way to
+/// test that is to mount without one.
+///
+/// [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PostFrameCapability {
+    Installed,
+    Absent,
+}
+
+/// [`mount`], but able to withhold the post-frame capability.
+pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapability) -> Harness {
+    // Serialize on the global FocusManager before touching the tree; held until the
+    // Harness drops (see FOCUS_TEST_LOCK). Reentrant, so an explicit lock composes.
+    let focus_guard = FOCUS_TEST_LOCK.lock();
+    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let mut build_owner = flui_view::BuildOwner::new();
+    let mut tree = flui_view::ElementTree::new();
+
+    let mut binding = HeadlessBinding::new();
+    match post_frame {
+        PostFrameCapability::Installed => binding.install_build_capabilities(&mut build_owner),
+        // The async driver still goes in: withholding it too would change *which*
+        // capability the test is about — the mount `build_scope` depends on it.
+        PostFrameCapability::Absent => {
+            build_owner.set_async_driver(binding.scheduler().async_driver().clone());
+        }
+    }
+
+    let root_element = binding.enter_owner_scope(|| {
+        let root_element = tree.mount_root_with_pipeline_owner(
+            &root,
+            Some(Arc::clone(&pipeline_owner)),
+            &mut build_owner.element_owner_mut(),
+        );
+
+        build_owner.schedule_build_for(root_element, 0);
+        build_owner.build_scope(&mut tree);
+        root_element
+    });
+
+    let root_render = {
+        let owner = pipeline_owner.read();
+        let render_tree = owner.render_tree();
+        render_tree
+            .iter()
+            .map(|(id, _)| id)
+            .find(|id| render_tree.parent(*id).is_none())
+            .expect("the mounted subtree should have a render root")
+    };
+    {
+        let mut guard = pipeline_owner.write();
+        guard.set_root_id(Some(root_render));
+        guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(800.0), px(600.0)))));
+    }
+    binding.enter_owner_scope(|| {
+        build_owner
+            .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
+            .expect("headless frame should succeed");
+    });
+
+    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+
+    Harness {
+        binding,
+        root_element,
+        pipeline_owner,
+        _focus_guard: focus_guard,
+    }
+}
+
+impl Harness {
+    /// Run an owner-side test action under the binding's full local scope.
+    pub(crate) fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
+        self.binding.enter_owner_scope(callback)
+    }
+    /// The root element id.
+    pub(crate) fn root(&self) -> ElementId {
+        self.root_element
+    }
+
+    /// Drive a frame **without** dirtying the root, so only what an
+    /// `OverlayHandle` / `OverlayEntry` scheduled through its `RebuildHandle`
+    /// rebuilds. Every rebuild assertion depends on this: a root-dirtying pump
+    /// would rebuild the whole tree and prove nothing.
+    pub(crate) fn tick(&mut self) {
+        self.binding.pump_frame(Duration::ZERO);
+    }
+
+    /// Replace the root view and settle.
+    ///
+    /// Goes through `ElementTree::update`, whose dispatch is keyed by `TypeId`, so
+    /// the root's *type* must not change between frames. Toggling a field on one
+    /// root type is how a subtree gets unmounted.
+    pub(crate) fn swap_root(&mut self, new_root: impl View) {
+        self.binding.swap_root_view(self.root_element, &new_root);
+        self.binding.pump_frame(Duration::ZERO);
+    }
+
+    /// The ordered children of `parent`, read through the public `ElementNode`
+    /// surface (`parent()` + `slot()`); `child_ids()` is crate-private.
+    pub(crate) fn children_of(&mut self, parent: ElementId) -> Vec<ElementId> {
+        let mut kids: Vec<(usize, ElementId)> = self
+            .binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_, node)| node.parent() == Some(parent))
+            .map(|(id, node)| (node.slot(), id))
+            .collect();
+        kids.sort_unstable();
+        kids.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// The binding's **own** scheduler — never `Scheduler::instance()`.
+    ///
+    /// A post-frame callback registered here is drained by `pump_frame`'s
+    /// `Scheduler::drive_frame`, after the pipeline commits layout.
+    pub(crate) fn scheduler(&self) -> &flui_scheduler::Scheduler {
+        self.binding.scheduler()
+    }
+
+    /// The shared pipeline owner, so a post-frame callback can read committed
+    /// geometry from inside the frame.
+    pub(crate) fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
+        Arc::clone(&self.pipeline_owner)
+    }
+
+    /// The `debug_name()` of every render object currently in the tree.
+    ///
+    /// The one structural probe a widget-level test has: it says *which* render
+    /// objects a view built, without duplicating the render-layer harness in
+    /// `flui-objects`, which is where their behavior is pinned.
+    pub(crate) fn render_debug_names(&self) -> Vec<&'static str> {
+        let owner = self.pipeline_owner.read();
+        owner
+            .render_tree()
+            .iter()
+            .map(|(_, node)| node.debug_name())
+            .collect()
+    }
+
+    /// The only child of `parent`.
+    pub(crate) fn only_child(&mut self, parent: ElementId) -> ElementId {
+        let kids = self.children_of(parent);
+        assert_eq!(kids.len(), 1, "expected exactly one child of {parent:?}");
+        kids[0]
+    }
+}

@@ -68,19 +68,47 @@ pub use ui_events::pointer::{
 /// Indicates whether the event was consumed by the handler and whether
 /// the platform's default behavior should be suppressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DispatchEventResult {
     /// If false, the event was consumed and should not propagate further
     pub propagate: bool,
     /// If true, the platform's default handling should be suppressed
     pub default_prevented: bool,
+    deferred: bool,
+}
+
+impl DispatchEventResult {
+    /// Create a resolved callback outcome.
+    #[must_use]
+    pub const fn resolved(propagate: bool, default_prevented: bool) -> Self {
+        Self {
+            propagate,
+            default_prevented,
+            deferred: false,
+        }
+    }
+
+    /// Provisional outcome for an input event queued by a reentrant platform
+    /// callback. FLUI will deliver the event after the current callback
+    /// returns; suppressing propagation and platform defaults prevents the
+    /// native backend from acting on it a second time in the meantime.
+    pub const DEFERRED: Self = Self {
+        propagate: false,
+        default_prevented: true,
+        deferred: true,
+    };
+
+    /// Whether delivery was queued behind a reentrant callback and the final
+    /// user callback outcome is therefore not available yet.
+    #[must_use]
+    pub const fn is_deferred(self) -> bool {
+        self.deferred
+    }
 }
 
 impl Default for DispatchEventResult {
     fn default() -> Self {
-        Self {
-            propagate: true,
-            default_prevented: false,
-        }
+        Self::resolved(true, false)
     }
 }
 

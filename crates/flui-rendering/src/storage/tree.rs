@@ -239,16 +239,16 @@ impl RenderTree {
     ///    `add_node_needing_*` registration methods directly when adding
     ///    nodes to an already-owned tree.
     ///
-    /// # Cycle 4 R-12
+    /// # Documentation note
     ///
-    /// Pre-cycle the docstring promised "This will attach all existing nodes
-    /// to the new owner" — the impl never did that (silent no-op on existing
-    /// nodes). The lie was a real Constitution Principle 6 violation in the
-    /// docstring layer. Per audit R-12 the cycle-4 cleanup is the lower-cost
-    /// **honest-doc** path; Flutter parity (`RenderObject::attach` recursive
-    /// subtree walk) is a follow-up audit item that needs an
-    /// `attached: AtomicBool` on `RenderState<P>::flags` + owner-dirty-list
-    /// re-registration plumbing not yet in place.
+    /// An earlier version of this docstring claimed this method would
+    /// attach all existing nodes to the new owner, but the implementation
+    /// never did that — it silently no-ops on nodes already in the tree.
+    /// This doc has been corrected to describe the actual (store-only)
+    /// behavior rather than the aspirational one. Full Flutter parity
+    /// (`RenderObject::attach`'s recursive subtree walk) is still pending
+    /// work: it needs an `attached: AtomicBool` on `RenderState<P>::flags`
+    /// plus owner-dirty-list re-registration plumbing that doesn't exist yet.
     pub fn set_owner(&mut self, owner: Option<Arc<RwLock<PipelineOwner>>>) {
         self.owner = owner;
     }
@@ -384,16 +384,15 @@ impl RenderTree {
     /// Returns `None` if any id is missing from the slab OR if `ids`
     /// contains duplicates.
     ///
-    /// # Use case (D-block PR-A1b3 U20.1)
+    /// # Use case
     ///
     /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
     /// uses this to pre-acquire the entire subtree's `&mut RenderNode`
     /// borrows up front, then drives `perform_layout_raw` recursively
     /// against an index-into-pre-acquired-pool — eliminating the
-    /// recursive raw-pointer reborrow pattern that the prior U20
-    /// implementation used (latent Stacked/Tree Borrows UB, see
-    /// PR #144 review). All borrows live in one stack frame so the
-    /// aliasing model is satisfied: `&mut Slab` is borrowed once,
+    /// recursive raw-pointer reborrow pattern the prior implementation
+    /// used (latent Stacked/Tree Borrows UB). All borrows live in one
+    /// stack frame so the aliasing model is satisfied: `&mut Slab` is borrowed once,
     /// N disjoint `&mut RenderNode` borrows on distinct slots are
     /// returned, no nested reborrow.
     ///
@@ -495,8 +494,8 @@ impl RenderTree {
     /// are orphaned in the slab; use [`Self::remove_recursive`] for full
     /// cascade.
     ///
-    /// Cycle 3 T-1: this is the [`TreeWrite::remove_shallow`] primitive
-    /// the trait builds the cascade-by-default `remove` on top of.
+    /// This is the [`TreeWrite::remove_shallow`] primitive the trait builds
+    /// its cascade-by-default `remove` on top of.
     pub fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
@@ -521,11 +520,11 @@ impl RenderTree {
 
     /// Removes a node and all its descendants recursively.
     ///
-    /// Returns the number of nodes removed. Cycle 3 T-1: equivalent to
-    /// [`TreeWrite::remove`] (which now cascades by default) with a
-    /// count instead of the returned root node. Prefer `TreeWrite::remove`
-    /// for new code; this inherent stays for in-crate callers that want
-    /// the count.
+    /// Returns the number of nodes removed. Equivalent to
+    /// [`TreeWrite::remove`] (which now cascades by default), except it
+    /// returns a count instead of the removed root node. Prefer
+    /// `TreeWrite::remove` for new code; this inherent method stays for
+    /// in-crate callers that want the count.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
         // Iterative: collect the subtree up front (explicit-stack
         // pre-order with cycle protection), then remove in REVERSE
@@ -589,40 +588,39 @@ impl RenderTree {
     /// stored order). Returns an empty `Vec` if `root_id` is not in
     /// the tree.
     ///
-    /// # Use case (D-block PR-A1b3 U20.1)
+    /// # Use case
     ///
     /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
     /// passes the result into
     /// [`Self::get_subtree_mut`] to pre-acquire every subtree node's
     /// `&mut RenderNode` borrow in one stack frame, eliminating the
     /// recursive raw-pointer reborrow pattern (latent Stacked / Tree
-    /// Borrows UB) the prior U20 implementation used.
+    /// Borrows UB) the prior implementation used.
     ///
     /// # Implementation
     ///
     /// Iterative DFS with an explicit `Vec` stack so deep trees do
     /// not overflow Rust's call stack (the layout walk has no other
-    /// depth limit until U21's cycle guard lands). Children are
-    /// pushed in reverse so they pop in stored order — preserves
-    /// pre-order with children-left-to-right.
+    /// depth limit beyond the pipeline's own layout-cycle guard).
+    /// Children are pushed in reverse so they pop in stored order —
+    /// preserves pre-order with children-left-to-right.
     ///
-    /// # Cycle protection (PR #145 review fix)
+    /// # Cycle protection
     ///
     /// Carries a `visited` `HashSet<RenderId>` to short-circuit on
     /// repeated ids. Without this guard, a malformed tree containing
     /// a parent / child cycle (which `RenderNode::add_child` does not
-    /// prevent; full cycle protection arrives in U21) would loop
-    /// forever — repeatedly re-pushing the cycle's nodes onto `stack`
-    /// while `out` grows unbounded → hang / OOM. The visited-set
-    /// short-circuit terminates the walk on the first repeated id and
-    /// produces a deduplicated `Vec<RenderId>` suitable for
-    /// [`Self::get_subtree_mut`] (which requires pairwise uniqueness).
-    /// The cyclic edge itself is silently dropped; full
+    /// prevent) would loop forever — repeatedly re-pushing the cycle's
+    /// nodes onto `stack` while `out` grows unbounded → hang / OOM. The
+    /// visited-set short-circuit terminates the walk on the first
+    /// repeated id and produces a deduplicated `Vec<RenderId>` suitable
+    /// for [`Self::get_subtree_mut`] (which requires pairwise
+    /// uniqueness). The cyclic edge itself is silently dropped; full
     /// [`RenderError::LayoutCycle`](crate::error::RenderError::LayoutCycle)
-    /// reporting is U21's job — this fix is the minimum-disruption
-    /// termination guard so the pre-acquired-subtree walk does not
-    /// regress on cycles vs the prior PR #144 stack-overflow failure
-    /// mode.
+    /// reporting happens elsewhere, in the pipeline's layout-cycle
+    /// guard — this fix is the minimum-disruption termination guard
+    /// so the pre-acquired-subtree walk does not regress on cycles vs
+    /// the prior stack-overflow failure mode.
     ///
     /// # Complexity
     ///
@@ -638,11 +636,10 @@ impl RenderTree {
             return out;
         }
         let mut stack: Vec<RenderId> = vec![root_id];
-        // PR #145 review fix: visited-set short-circuits on repeated
-        // ids so a cyclic tree terminates instead of hanging /
-        // OOMing. Pre-sized to a conservative guess (small trees are
-        // the common case; HashSet grows by power-of-two doubling
-        // otherwise).
+        // The visited-set short-circuits on repeated ids so a cyclic
+        // tree terminates instead of hanging / OOMing. Pre-sized to a
+        // conservative guess (small trees are the common case; HashSet
+        // grows by power-of-two doubling otherwise).
         let mut visited: std::collections::HashSet<RenderId> =
             std::collections::HashSet::with_capacity(16);
         while let Some(id) = stack.pop() {
@@ -786,9 +783,8 @@ impl RenderTree {
     ///
     /// # Implementation
     ///
-    /// Cycle 4 R-26: iterative loop + `SmallVec<[RenderId; 32]>`
-    /// work-stack rather than recursive `visit_depth_first_from`.
-    /// Three wins:
+    /// Uses an iterative loop with a `SmallVec<[RenderId; 32]>` work-stack
+    /// rather than a recursive `visit_depth_first_from`. Three wins:
     /// - **No stack overflow** on pathological tree depths
     ///   (recursion blew at ~5000 with default Rust stack; the
     ///   iterative version is unbounded).
@@ -808,12 +804,12 @@ impl RenderTree {
     /// **reverse** order so the work-stack pops them in original
     /// child-order (mirrors Flutter's `visitChildren` shape).
     ///
-    /// PR #116 review (cycle 4 wave 4 follow-up): the prior comment
-    /// claimed `extend_from_slice`. That was a copy-paste error from
-    /// an earlier draft; reversing in-place via `iter().rev()` is
-    /// required for pre-order pop-order and `extend_from_slice` would
-    /// need a temporary reversed allocation, defeating the no-alloc
-    /// goal. The body matches the doc now.
+    /// A prior version of this comment claimed `extend_from_slice`.
+    /// That was a copy-paste error from an earlier draft; reversing
+    /// in-place via `iter().rev()` is required for pre-order
+    /// pop-order and `extend_from_slice` would need a temporary
+    /// reversed allocation, defeating the no-alloc goal. The body
+    /// matches the doc now.
     pub fn visit_depth_first<F>(&self, mut f: F)
     where
         F: FnMut(RenderId, &RenderNode),
@@ -872,7 +868,7 @@ impl RenderTree {
 
 // Send + Sync auto-derive.
 //
-// U2 exemplar refactor removed the `RwLock<Box<dyn RenderObject<P>>>` field
+// A prior refactor removed the `RwLock<Box<dyn RenderObject<P>>>` field
 // on `RenderEntry<P>` and replaced it with plain `Box<dyn RenderObject<P>>`.
 // All transitive components are Send + Sync:
 //   - Slab<RenderNode> auto-derives Send + Sync from RenderNode.
@@ -934,10 +930,10 @@ impl TreeWrite<RenderId> for RenderTree {
     }
 
     fn remove_shallow(&mut self, id: RenderId) -> Option<Self::Node> {
-        // Cycle 3 T-1: the trait's `remove` default impl now cascades
-        // post-order via this primitive. `remove_shallow` keeps the
-        // pre-cycle non-cascade behaviour for reparenting workflows
-        // (re-attach the descendants under a new parent immediately).
+        // The trait's `remove` default impl cascades post-order via this
+        // primitive. `remove_shallow` itself keeps the original
+        // non-cascading behavior for reparenting workflows (re-attach the
+        // descendants under a new parent immediately).
 
         // Update root if removing root
         if self.root == Some(id) {
@@ -1198,7 +1194,7 @@ mod tests {
     }
 
     // ========================================================================
-    // get_subtree_mut (D-block PR-A1b3 U20.1)
+    // get_subtree_mut
     // ========================================================================
 
     #[test]
@@ -1234,9 +1230,8 @@ mod tests {
         // Drop the disjointness check's borrow before the order check.
         drop(refs);
 
-        // PR #145 review fix (Copilot 3294267590): verify refs[i]
-        // CORRESPONDS to ids[i] — not just disjoint / correct count.
-        // Write a distinct marker via refs[i] (depth = i + 100), drop
+        // Verify refs[i] CORRESPONDS to ids[i] — not just disjoint /
+        // correct count. Write a distinct marker via refs[i] (depth = i + 100), drop
         // the Vec, read back via tree.get(ids[i]) to confirm
         // position-by-position alignment. The +100 offset avoids
         // collision with depths set by insert_box_child (these were
@@ -1260,7 +1255,6 @@ mod tests {
         }
     }
 
-    /// PR #145 review fix (Codex 3294268624 + Copilot 3294267583):
     /// `collect_subtree_ids` must terminate on cyclic trees instead of
     /// hanging / OOMing. The visited-set short-circuit dedups repeated
     /// ids on the DFS stack.
@@ -1337,7 +1331,7 @@ mod tests {
     }
 
     // ========================================================================
-    // collect_subtree_ids (D-block PR-A1b3 U20.1)
+    // collect_subtree_ids
     // ========================================================================
 
     #[test]
@@ -1417,7 +1411,7 @@ mod tests {
     }
 
     /// Pairs `collect_subtree_ids` with `get_subtree_mut` — the canonical
-    /// U20.1 usage pattern. Should always yield Some, and the returned
+    /// usage pattern. Should always yield Some, and the returned
     /// Vec length should equal the collected id count.
     #[test]
     fn collect_subtree_ids_feeds_get_subtree_mut() {
@@ -1437,12 +1431,11 @@ mod tests {
         assert_eq!(refs.len(), 4);
     }
 
-    /// Cycle 4 PR #116 review fix: pre-order traversal of the
-    /// iterative `visit_depth_first` must yield root, then each
-    /// subtree in child-insertion order. The reverse-push trick is
-    /// the load-bearing detail; this test would catch any future
-    /// "simpler" rewrite that pushes children forward and prints
-    /// siblings in reverse.
+    /// Pre-order traversal of the iterative `visit_depth_first` must
+    /// yield root, then each subtree in child-insertion order. The
+    /// reverse-push trick is the load-bearing detail; this test would
+    /// catch any future "simpler" rewrite that pushes children forward
+    /// and prints siblings in reverse.
     ///
     /// Tree shape (insertion order matches child order):
     /// ```text

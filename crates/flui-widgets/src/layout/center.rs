@@ -59,11 +59,18 @@ impl RenderView for Center {
     type Protocol = BoxProtocol;
     type RenderObject = RenderCenter;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.build_render_object();
     }
 
@@ -91,7 +98,8 @@ mod tests {
 
     #[test]
     fn create_render_object_defaults_match_flutter() {
-        let render_object = Center::new().create_render_object();
+        let render_object =
+            Center::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.width_factor(), None);
         assert_eq!(render_object.height_factor(), None);
     }
@@ -99,19 +107,24 @@ mod tests {
     #[test]
     fn create_render_object_uses_the_given_width_and_height_factor() {
         let center = Center::new().width_factor(0.5).height_factor(2.0);
-        let render_object = center.create_render_object();
+        let render_object =
+            center.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.width_factor(), Some(0.5));
         assert_eq!(render_object.height_factor(), Some(2.0));
     }
 
     #[test]
     fn update_render_object_applies_a_changed_width_and_height_factor() {
-        let mut render_object = Center::new().create_render_object();
+        let mut render_object =
+            Center::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.width_factor(), None);
         assert_eq!(render_object.height_factor(), None);
 
         let updated = Center::new().width_factor(1.5).height_factor(3.0);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.width_factor(), Some(1.5));
         assert_eq!(render_object.height_factor(), Some(3.0));
@@ -122,12 +135,15 @@ mod tests {
         let mut render_object = Center::new()
             .width_factor(0.5)
             .height_factor(0.5)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.width_factor(), Some(0.5));
         assert_eq!(render_object.height_factor(), Some(0.5));
 
         let updated = Center::new();
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.width_factor(), None);
         assert_eq!(render_object.height_factor(), None);

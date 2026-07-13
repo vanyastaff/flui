@@ -1,6 +1,6 @@
 //! Integration tests for `SceneBuilder` + `SceneCompositor`.
 //!
-//! Extracted from `src/compositor.rs` inline tests in Mythos Step 10.
+//! Extracted from `src/compositor.rs` inline tests.
 
 use flui_foundation::LayerId;
 use flui_layer::{CanvasLayer, Layer, LayerTree, SceneBuilder, SceneCompositor};
@@ -259,7 +259,7 @@ fn test_scene_compositor_retain() {
     assert_eq!(compositor.retained_layers().len(), 1);
 }
 
-// `release` and `clear_retained` removed in U1 (zero-consumer scaffolding).
+// `release` and `clear_retained` were removed as zero-consumer scaffolding.
 // SceneCompositor retention is currently write-only; reset must go through
 // a fresh `SceneCompositor::new()`. Tests covering those deleted methods
 // were removed alongside the methods.

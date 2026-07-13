@@ -2,7 +2,7 @@
 //! `get_offset_for_caret`, `get_position_for_offset`,
 //! `get_line_metrics`, `get_boxes_for_selection`, `get_word_boundary`.
 //!
-//! Mythos chain U7 extracted these from the 990-LOC `text_painter.rs`
+//! Extracted from the 990-LOC `text_painter.rs`
 //! god module. All methods here depend on the cached layout
 //! (`TextLayoutCache`) populated by [`super::measure`]'s `layout()`.
 

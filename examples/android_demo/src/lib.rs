@@ -147,7 +147,7 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
 #[no_mangle]
 fn android_main(app: AndroidApp) {
     // Initialize logging to Android logcat (via flui_foundation::log, merged
-    // from flui-log in D-block PR-C-1 U2).
+    // from flui-log).
     flui_foundation::log::Logger::new()
         .with_filter("info,flui_engine=debug,wgpu=warn")
         .with_level(flui_foundation::log::Level::DEBUG)

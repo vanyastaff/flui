@@ -533,12 +533,13 @@ where
     }
 
     /// Records a child-build request for `logical_index` under this sliver
-    /// (U4.2 request-strategy seam).
+    /// — the producer half of the request-strategy seam.
     ///
     /// Unlike [`Self::build_and_layout_box_child`], no render object is
-    /// supplied — the element tree (U4.3) decides what to build and where to
-    /// insert it.  The request is deposited into the arena's
-    /// `pending_child_requests` sink; after the walk releases its borrows,
+    /// supplied — the element tree decides what to build and where to
+    /// insert it, once the consumer half (child-manager wiring) lands; until
+    /// then the request is simply parked.  The request is deposited into the
+    /// arena's `pending_child_requests` sink; after the walk releases its borrows,
     /// the pipeline moves it to
     /// [`PipelineOwner::take_pending_child_requests`](crate::pipeline::PipelineOwner::take_pending_child_requests)
     /// for the binding layer.
@@ -563,8 +564,9 @@ where
     ///
     /// `RenderSliverList` calls this once per layout pass after
     /// `walk_virtualizer_band` returns. The pipeline moves the signal to
-    /// `PipelineOwner::take_pending_retain_bands`; the binding layer (U4.3)
-    /// drives `SparseChildren::retain_band` from it, evicting out-of-band lazy
+    /// `PipelineOwner::take_pending_retain_bands`; the binding layer, once
+    /// the consumer half (child-manager wiring) lands, drives
+    /// `SparseChildren::retain_band` from it, evicting out-of-band lazy
     /// children on the element side and bypassing `dispose_box_child` to avoid
     /// the ABA double-remove.
     pub fn emit_retain_band(&mut self, first: usize, last: usize) {

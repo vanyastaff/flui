@@ -66,11 +66,10 @@ use super::view::View;
 ///
 /// # Why the name
 ///
-/// Cycle 4 R-11 renamed this trait from `ParentData` to
-/// `ParentDataConfig` so it no longer collides with
-/// `flui_rendering::ParentData` (the actual render-object storage
-/// trait carrying `Any` + downcasting). The two traits serve
-/// different concerns:
+/// This trait is named `ParentDataConfig` rather than `ParentData` so it
+/// does not collide with `flui_rendering::ParentData` (the actual
+/// render-object storage trait carrying `Any` + downcasting). The two
+/// traits serve different concerns:
 ///
 /// - `flui_view::ParentDataConfig` (this trait): marker for the
 ///   widget-side **configuration value**, what a `ParentDataView`
@@ -78,11 +77,10 @@ use super::view::View;
 /// - `flui_rendering::ParentData`: the render-side **storage trait**
 ///   that a `RenderObject` carries.
 ///
-/// Same-name trait collision pre-cycle forced every workspace
-/// consumer importing both crates to fully-qualify or alias one of
-/// them. The rename matches Flutter's `ParentDataWidget` naming:
-/// the widget **configures** the parent-data; it is not itself the
-/// parent-data.
+/// A same-name trait would force every workspace consumer importing both
+/// crates to fully-qualify or alias one of them. The distinct name
+/// matches Flutter's `ParentDataWidget` naming: the widget **configures**
+/// the parent-data; it is not itself the parent-data.
 pub trait ParentDataConfig: flui_rendering::parent_data::ParentData + Clone + Default {}
 
 /// Blanket: any concrete `flui-rendering` parent-data type
@@ -117,12 +115,12 @@ impl<T: flui_rendering::parent_data::ParentData + Clone + Default> ParentDataCon
 /// | Positioned | Stack | left, top, right, bottom, width, height |
 /// | Flexible | Flex | flex, fit |
 /// | TableCell | Table | row, column span |
-pub trait ParentDataView: Clone + Send + Sync + 'static + Sized {
+pub trait ParentDataView: Clone + 'static + Sized {
     /// The type of parent data this View provides.
     ///
-    /// Cycle 4 R-11: bound is `ParentDataConfig` (was `ParentData`,
-    /// renamed to disambiguate from `flui_rendering::ParentData`).
-    /// The associated-type name `ParentData` is kept because no
+    /// The trait bound is `ParentDataConfig` (rather than `ParentData`,
+    /// which was renamed to disambiguate from `flui_rendering::ParentData`).
+    /// The associated-type name `ParentData` is kept as-is because no
     /// cross-crate collision can occur on associated-type names.
     type ParentData: ParentDataConfig;
 
@@ -198,11 +196,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for DummyChild {

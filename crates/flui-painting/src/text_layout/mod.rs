@@ -2,10 +2,10 @@
 //!
 //! Provides text shaping, measurement, and layout capabilities.
 //!
-//! # Concern split (Mythos chain U6)
+//! # Concern split
 //!
 //! The 1,243-LOC `text_layout.rs` god module was split into a
-//! `text_layout/` directory. Following plan U8 / audit P-3, the
+//! `text_layout/` directory. As part of that cleanup, the
 //! parallel stub `TextLayout` (used when the optional text feature
 //! was disabled) was deleted along with the feature flag itself.
 //! cosmic-text-backed layout is now the only path; the shared

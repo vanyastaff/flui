@@ -2,7 +2,7 @@
 // `missing_debug_implementations` stays suppressed because wgpu's resource
 // handles (Device, Queue, Texture, Buffer, etc.) intentionally do not impl
 // Debug (large, not human-readable). The `dead_code` global suppression was
-// removed in Mythos U10; surviving `#[allow(dead_code)]` markers are scoped
+// removed; surviving `#[allow(dead_code)]` markers are scoped
 // to specific modules where forward-looking infrastructure has named consumers
 // that are not yet wired up.
 #![allow(missing_debug_implementations)]
@@ -109,6 +109,11 @@ pub(crate) mod superellipse;
 /// is gated on the `wgpu-backend` feature.
 pub mod raster;
 
+/// The raster mailbox + dedicated ack channel boundary
+/// ([`RasterOwner`]/[`RasterHandle`]/[`RasterAck`]).
+/// Generic over [`RasterBackend`]; unconditional like `raster` itself.
+pub mod raster_owner;
+
 // ============================================================================
 // BACKENDS
 // ============================================================================
@@ -126,20 +131,24 @@ pub use commands::{dispatch_command, dispatch_commands};
 pub use error::{EngineError, EngineResult, Recoverability};
 // Re-export layer types from flui-layer
 pub use flui_layer::{
-    CanvasLayer, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor,
-    ShaderMaskLayer,
+    CanvasLayer, DamageRegion, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder,
+    SceneCompositor, SceneSnapshot, ShaderMaskLayer,
 };
 // Re-export Paint from flui_painting
 pub use flui_painting::Paint;
-// Cycle 4 E-9: CommandRenderer trait split into render-visitor
+// CommandRenderer trait split into render-visitor
 // (CommandRenderer, ~34 methods) + layer-tree state-stack
 // (LayerStateStack, 13 methods). Backends that only emit
 // commands implement CommandRenderer only; compositors implement
-// both. See traits.rs E-9 commentary.
+// both. See traits.rs for the split's commentary.
 pub use traits::{CommandRenderer, LayerStateStack};
 // RasterBackend: the frame-driver swap point. The trait is unconditional;
 // only the wgpu impl is feature-gated.
 pub use raster::RasterBackend;
+// Raster mailbox + dedicated ack channel boundary.
+pub use raster_owner::{
+    FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError,
+};
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
 // wgpu backend exports

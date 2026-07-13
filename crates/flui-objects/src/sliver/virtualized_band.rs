@@ -2,7 +2,7 @@
 //!
 //! Extracted from `RenderSliverListLazy::perform_layout` (U3b) so both the
 //! build strategy ([`super::sliver_list_lazy::RenderSliverListLazy`]) and the
-//! request strategy ([`super::sliver_list::RenderSliverList`], U4.2) drive
+//! request strategy ([`super::sliver_list::RenderSliverList`]) drive
 //! the same geometry engine without duplicating per-frame virtualizer
 //! bookkeeping.
 //!
@@ -187,7 +187,7 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 /// Drives the full virtualized-band layout pass for one sliver scroll frame.
 ///
 /// This is the shared algorithm for `RenderSliverListLazy` (build strategy,
-/// U3b) and `RenderSliverList` (request strategy, U4.2).  Both share the
+/// U3b) and `RenderSliverList` (request strategy).  Both share the
 /// virtualizer geometry bookkeeping; the absent-in-band action is the only
 /// point of divergence and is delegated to the caller.
 ///
@@ -220,8 +220,8 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 ///   ([`OffBandDisposal::ElementOwned`]).
 /// - `on_dispose(logical_i)`: called for each off-band child **after**
 ///   `ctx.dispose_box_child` enqueues the deferred removal (only fires for
-///   `RenderOwned`).  Use this to fire caller-side cleanup hooks (e.g.
-///   `dispose_hook` in `RenderSliverListLazy`).
+///   `RenderOwned`). Use this for data bookkeeping inside the render/layout
+///   layer, not for owner-plane UI callbacks.
 ///
 /// ## Returns
 ///
@@ -345,7 +345,8 @@ where
 
     // ── 5. Dispose off-band children ──────────────────────────────────────
     // For `RenderOwned` slivers, `dispose_box_child` enqueues the render-node
-    // removal (U3c D2: Remove → Insert ordering D3 in `layout_dirty_root`).
+    // removal (U3c — the queued removal must be ordered before the
+    // corresponding insert in `layout_dirty_root`).
     // For `ElementOwned` slivers, we skip this entirely: the element tree drives
     // eviction via `SparseChildren::retain_band` using the `cache_first`/
     // `cache_last` band returned below, preventing the ABA double-remove that

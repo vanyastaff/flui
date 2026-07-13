@@ -96,14 +96,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// Implementations must:
 /// 1. Call `init_instances()` exactly once during construction
-/// 2. Store the singleton in a static `OnceLock`
-/// 3. Provide `instance()` returning `&'static Self`
+/// 2. Store the singleton in owner-thread-local storage
+/// 3. Provide `instance()` returning `&'static Self` for that owner thread
 ///
-/// # Thread Safety
+/// # Owner Runtime
 ///
-/// Bindings are guaranteed to be initialized only once, even in
-/// multi-threaded environments, due to `OnceLock` semantics.
-pub trait BindingBase: Sized + Send + Sync + 'static {
+/// ADR-0027 makes bindings owner-runtime objects. They may hold owner-local
+/// callback registries and therefore are not required to be `Send + Sync`.
+pub trait BindingBase: Sized + 'static {
     /// Initialize the binding's instances.
     ///
     /// This is called exactly once when the binding is first created.
@@ -136,7 +136,8 @@ pub trait HasInstance: BindingBase {
 
     /// Get the singleton instance.
     ///
-    /// Creates the instance on first call, returns cached instance thereafter.
+    /// Creates the current owner thread's instance on first call and returns
+    /// that cached owner-local instance thereafter.
     fn instance() -> &'static Self;
 
     /// Ensure the binding is initialized and return the instance.
@@ -185,36 +186,29 @@ macro_rules! impl_binding_singleton {
             };
 
             fn instance() -> &'static Self {
-                static INSTANCE: std::sync::OnceLock<$binding> = std::sync::OnceLock::new();
-                let inst = INSTANCE.get_or_init(<$binding>::new);
-                // INITIALIZED is flipped AFTER `<Self>::new()` returns
-                // (audit I-3 fix). Pre-fix, the store fired *inside* the
-                // `get_or_init` closure before `new()` returned, so an
-                // init-time panic would leave `INITIALIZED == true` while
-                // the `OnceLock` stayed empty (per `OnceLock::get_or_init`
-                // contract: "If this function panics, the cell is
-                // unchanged"). A subsequent `is_initialized() → true` →
-                // `instance()` caller would then either re-panic or, on
-                // contention, observe incoherent state.
-                //
-                // The flip happens only on the successful path *after*
-                // `OnceLock` has accepted the value. The steady state is a
-                // single atomic CAS (false → true) that is a no-op on
-                // every call past the first (F4): on an already-initialized
-                // instance the `false` expectation fails and the CAS
-                // returns `Err` without performing the `Release` store, so
-                // the per-call cost on the hot path is one load + a failed
-                // CAS rather than an unconditional `Release` write to a
-                // shared cache line. The `let _ =` discards the result —
-                // both the first-call `Ok(false)` and steady-state
-                // `Err(true)` are expected and benign.
-                let _ = Self::INITIALIZED.compare_exchange(
-                    false,
-                    true,
-                    std::sync::atomic::Ordering::Release,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                inst
+                std::thread_local! {
+                    static INSTANCE: std::cell::OnceCell<&'static $binding> =
+                        const { std::cell::OnceCell::new() };
+                }
+
+                INSTANCE.with(|instance| {
+                    let inst = instance.get_or_init(|| {
+                        let leaked: &'static mut $binding = Box::leak(Box::new(<$binding>::new()));
+                        leaked as &'static $binding
+                    });
+                    // INITIALIZED is flipped AFTER `<Self>::new()` returns.
+                    // If construction panics, `OnceCell` remains empty and
+                    // this store is not reached. The flag intentionally tracks
+                    // process-wide "initialized at least once"; the singleton
+                    // value itself is owner-thread-local under ADR-0027.
+                    let _ = Self::INITIALIZED.compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::Release,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    *inst
+                })
             }
         }
     };
@@ -393,13 +387,12 @@ mod tests {
         });
         assert!(result.is_err(), "PanicBinding::new must propagate panic");
 
-        // Post-condition: `INITIALIZED` MUST still be `false`. Pre-I-3
+        // Post-condition: `INITIALIZED` MUST still be `false`. Before this
         // fix this assertion failed — the closure flipped `INITIALIZED`
         // to `true` BEFORE `new()` was called.
         assert!(
             !PanicBinding::is_initialized(),
-            "init panic incorrectly flipped INITIALIZED to true \
-             (regression of audit I-3)"
+            "init panic incorrectly flipped INITIALIZED to true"
         );
     }
 }

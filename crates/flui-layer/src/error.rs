@@ -1,6 +1,6 @@
 //! Structured errors for the layer crate.
 //!
-//! Added in Mythos Step 9 alongside the `catch_unwind` plumbing on
+//! Added alongside the `catch_unwind` plumbing on
 //! `Scene::fire_composition_callbacks` and the `Result`-returning
 //! `SceneBuilder::pop`.
 //!

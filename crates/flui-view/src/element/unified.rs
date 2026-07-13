@@ -51,7 +51,7 @@ use crate::{
 /// ```
 pub struct Element<V, A, B>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
     B: ElementBehavior<V, A>,
 {
@@ -65,7 +65,7 @@ where
 
 impl<V, A, B> Element<V, A, B>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
     B: ElementBehavior<V, A>,
 {
@@ -101,7 +101,7 @@ where
 
 impl<V, A, B> std::fmt::Debug for Element<V, A, B>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
     B: ElementBehavior<V, A> + std::fmt::Debug,
 {
@@ -129,7 +129,7 @@ where
 // already-true invariant visible to the type system.
 impl<V, A, B> ElementBase for Element<V, A, B>
 where
-    V: View + Clone + Send + Sync + 'static,
+    V: View + Clone + 'static,
     A: ElementArity,
     B: ElementBehavior<V, A>,
 {
@@ -153,7 +153,7 @@ where
     }
 
     fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        // Plan §U12 / FR-024 (c): expose the underlying `&dyn ViewKey`
+        // FR-024 (c): expose the underlying `&dyn ViewKey`
         // so the reconciler can do semantic `key_eq` on a hash hit and
         // reject silent collisions across distinct keys with the same
         // `u64`. `core.view().key()` already returns
@@ -162,7 +162,7 @@ where
     }
 
     fn set_self_id(&mut self, id: ElementId) {
-        // Plan §U15: forward to `ElementCore::set_self_id` so the
+        // Forward to `ElementCore::set_self_id` so the
         // Variable-arity reconciler stamp can use the real parent id.
         self.core.set_self_id(id);
     }
@@ -212,7 +212,7 @@ where
     }
 
     // ========================================================================
-    // Inherited-element protocol (U9 / R4)
+    // Inherited-element protocol
     //
     // Delegates to the behavior; only `InheritedBehavior<V>` returns
     // `Some(...)`. Every other behavior keeps the trait-default `None`.
@@ -227,7 +227,7 @@ where
     }
 
     // ========================================================================
-    // Ancestor-finder protocol (U11 / R6, R7, R8)
+    // Ancestor-finder protocol
     //
     // Both accessors route through the behavior. `view_as_any` is
     // uniform across every behavior — the View configuration always
@@ -245,7 +245,7 @@ where
     }
 
     // ========================================================================
-    // RenderObject-finder protocol (U12 / R9)
+    // RenderObject-finder protocol
     //
     // Routes through the behavior. Only `RenderBehavior<V>` overrides
     // the default `None` — and even then, returns `None` until
@@ -266,7 +266,7 @@ where
     }
 
     // ========================================================================
-    // Notification handler protocol (U13 / R10)
+    // Notification handler protocol
     //
     // Routes through the behavior. The trait-default `false` keeps
     // non-listener elements out of the bubble walk. Production
@@ -274,7 +274,7 @@ where
     // override `ElementBehavior::on_notification` to translate the
     // object-safe `(TypeId, &dyn Any)` shape into the typed
     // `NotifiableElement<N>` callback at the impl site — single dyn
-    // boundary at dispatch only (plan §D3, Constitution Principle 4).
+    // boundary at dispatch only (Constitution Principle 4).
     // ========================================================================
 
     fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn Any) -> bool {
@@ -282,7 +282,7 @@ where
     }
 
     // ========================================================================
-    // Dependency-change typed-hook dispatch (U14 / R16, audit V-19)
+    // Dependency-change typed-hook dispatch
     //
     // Routes through the behavior. Only `StatefulBehavior<V>` and
     // `AnimatedBehavior<V>` override the default no-op — they forward
@@ -306,7 +306,7 @@ where
         let old_view = self.core.view().clone();
         if self.core.update_view(new_view) {
             // Notify behavior of update
-            self.behavior.on_update(&self.core);
+            self.behavior.on_update(&self.core, owner);
             self.behavior.on_view_updated(&self.core, &old_view, owner);
         }
     }

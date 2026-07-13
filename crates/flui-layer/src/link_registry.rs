@@ -181,9 +181,10 @@ impl LinkRegistry {
     ///
     /// Takes `link` by value because [`LayerLink`] is `Copy` and 8 bytes
     /// — passing by reference would force an extra indirection at the
-    /// call site for no semantic benefit. The other LinkRegistry
-    /// accessors (`register_leader`, `unregister_leader`) already
-    /// took `LayerLink` by value; U18 unifies the signature shape.
+    /// call site for no semantic benefit. This matches the other
+    /// LinkRegistry accessors (`register_leader`, `unregister_leader`),
+    /// which already take `LayerLink` by value, keeping the signature
+    /// shape uniform across the type.
     pub fn get_leader(&self, link: LayerLink) -> Option<&LeaderInfo> {
         self.leaders.get(&link)
     }

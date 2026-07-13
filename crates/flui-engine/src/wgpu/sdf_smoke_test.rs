@@ -4,10 +4,10 @@
 //! functions from [`shaders/common/sdf.wgsl`](crate::wgpu::shaders) into
 //! Rust helpers, then samples both at known points to verify:
 //!
-//! 1. **Corner-region divergence (AE4):** At a sample inside the
+//! 1. **Corner-region divergence:** At a sample inside the
 //!    corner-curvature zone, the superellipse SDF produces a measurably
 //!    different distance than the rrect SDF. This locks in that the SDF
-//!    is doing different math than the U8/U9 default-fallback rrect
+//!    is doing different math than the default-fallback rrect
 //!    approximation — a regression to the fallback would surface here.
 //!
 //! 2. **Inner-rect parity:** Deep inside the inner (non-corner) rect, both

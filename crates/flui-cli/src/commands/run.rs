@@ -623,6 +623,16 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Whether a `Cargo.toml` declares a FLUI dependency.
+///
+/// The package names are hyphenated (`flui-app`) — that is what the templates
+/// emit and what Cargo expects. The underscore spelling is accepted too, since
+/// a hand-written manifest may rename the dependency to its crate name.
+fn has_flui_dependency(cargo_toml: &str) -> bool {
+    let normalized = cargo_toml.replace('-', "_");
+    normalized.contains("flui_app") || normalized.contains("flui_widgets")
+}
+
 /// Ensure we're in a FLUI project directory.
 fn ensure_flui_project() -> CliResult<()> {
     if find_worker_hot_reload_project()?.is_some() {
@@ -637,11 +647,10 @@ fn ensure_flui_project() -> CliResult<()> {
         });
     }
 
-    // Check for FLUI dependency
     let content = std::fs::read_to_string(cargo_toml)?;
-    if !content.contains("flui_app") && !content.contains("flui_widgets") {
+    if !has_flui_dependency(&content) {
         return Err(CliError::NotFluiProject {
-            reason: "flui_app or flui_widgets dependency not found in Cargo.toml".to_string(),
+            reason: "flui-app or flui-widgets dependency not found in Cargo.toml".to_string(),
         });
     }
 
@@ -791,4 +800,20 @@ fn select_default_device() -> CliResult<String> {
 
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     Err(CliError::NoDefaultDevice)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_flui_dependency;
+
+    /// `flui create` emits hyphenated dep names; `flui run` must recognise the
+    /// project it just generated.
+    #[test]
+    fn generated_manifest_is_recognised_as_a_flui_project() {
+        assert!(has_flui_dependency(
+            r#"flui-app = { path = "../../crates/flui-app" }"#
+        ));
+        assert!(has_flui_dependency(r#"flui_widgets = "0.2.0""#));
+        assert!(!has_flui_dependency(r#"serde = "1.0""#));
+    }
 }

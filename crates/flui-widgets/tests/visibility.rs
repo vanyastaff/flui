@@ -70,16 +70,48 @@ fn maintain_state_true_and_hidden_wraps_the_child_in_an_offstage_offstage() {
     );
 
     let offstage_id = laid.find_by_render_type("RenderOffstage");
-    // RenderOffstage's offstage = true branch collapses to Size::ZERO (the
-    // child is still tight-laid-out at zero so its state stays valid, but
-    // is not painted/hit-tested) -- see offstage.rs's perform_layout.
+    // `RenderOffstage` takes `constraints.smallest()` when offstage (Flutter's
+    // `sizedByParent => offstage`). Under `loose(1000)` that is zero. The child
+    // is laid out at its full size regardless — asserted in the test below.
     assert_eq!(
         laid.size(offstage_id),
         size(0.0, 0.0),
-        "visible = false with maintain_state must collapse to zero size \
+        "visible = false with maintain_state must take constraints.smallest() \
          while keeping the child attached (state preserved, not removed)",
     );
     // The child render node must still be present in the tree (state kept
     // alive), unlike the maintain_state = false replacement path.
     assert_eq!(laid.render_node_count(), 2, "RenderOffstage + the child");
+}
+
+/// The widget-level consequence of `RenderOffstage`'s layout contract: a
+/// hidden-but-maintained child is laid out at its **full size**, not collapsed to zero.
+///
+/// Flutter's `RenderOffstage.performLayout` does `child?.layout(constraints)`
+/// with the real constraints (`proxy_box.dart:3919-3925`); only the `Offstage`
+/// box itself shrinks to `constraints.smallest`. This is what makes
+/// `ModalRoute.offstage` able to measure a route at its final geometry.
+///
+/// Red-check: lay the child out at `BoxConstraints::tight(Size::ZERO)` in
+/// `RenderOffstage::perform_layout`; the child measures 0×0.
+#[test]
+fn maintain_state_true_and_hidden_lays_the_child_out_at_full_size() {
+    let laid = lay_out(
+        Visibility::new(SizedBox::new(30.0, 20.0))
+            .maintain_state(true)
+            .visible(false),
+        loose(1000.0),
+    );
+
+    let offstage_id = laid.find_by_render_type("RenderOffstage");
+    assert_eq!(
+        laid.size(offstage_id),
+        size(0.0, 0.0),
+        "the Offstage box takes constraints.smallest() — zero, under loose"
+    );
+    assert_eq!(
+        laid.size(laid.only_child(offstage_id)),
+        size(30.0, 20.0),
+        "but the hidden child reaches its real geometry"
+    );
 }

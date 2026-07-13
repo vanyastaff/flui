@@ -59,19 +59,57 @@ pub fn tight(width: f32, height: f32) -> BoxConstraints {
 /// `constraints`. Panics on any pipeline error so a regression is loud.
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    lay_out_with_pipeline_owner_and_binding(
+        root,
+        constraints,
+        pipeline_owner,
+        HeadlessBinding::new(),
+    )
+}
+
+/// [`lay_out`] with a caller-provided pipeline owner, for probes that must retain
+/// the same owner before their lifecycle callback is mounted.
+pub fn lay_out_with_pipeline_owner(
+    root: impl View,
+    constraints: BoxConstraints,
+    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+) -> LaidOut {
+    lay_out_with_pipeline_owner_and_binding(
+        root,
+        constraints,
+        pipeline_owner,
+        HeadlessBinding::new(),
+    )
+}
+
+fn lay_out_with_pipeline_owner_and_binding(
+    root: impl View,
+    constraints: BoxConstraints,
+    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    mut binding: HeadlessBinding,
+) -> LaidOut {
     let mut build_owner = BuildOwner::new();
     let mut tree = ElementTree::new();
 
-    let root_id = tree.mount_root_with_pipeline_owner(
-        &root,
-        Some(Arc::clone(&pipeline_owner)),
-        &mut build_owner.element_owner_mut(),
-    );
+    // The binding is created FIRST so its async driver can be installed on the
+    // `BuildOwner` before the mount `build_scope` below. `FutureBuilder` /
+    // `StreamBuilder` subscribe in `init_state`, which runs inside that pass — with
+    // no driver installed they would silently never poll.
+    binding.install_build_capabilities(&mut build_owner);
 
-    // Reconcile + mount the whole subtree (children's render objects attach to
-    // their parent render objects during this pass).
-    build_owner.schedule_build_for(root_id, 0);
-    build_owner.build_scope(&mut tree);
+    let root_id = binding.enter_owner_scope(|| {
+        let root_id = tree.mount_root_with_pipeline_owner(
+            &root,
+            Some(Arc::clone(&pipeline_owner)),
+            &mut build_owner.element_owner_mut(),
+        );
+
+        // Reconcile + mount the whole subtree (children's render objects attach to
+        // their parent render objects during this pass).
+        build_owner.schedule_build_for(root_id, 0);
+        build_owner.build_scope(&mut tree);
+        root_id
+    });
 
     // The render-tree root is the single render object with no render parent —
     // works whether the root widget is itself a `RenderView` (e.g. `Padding`)
@@ -99,19 +137,25 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         guard.set_root_id(Some(root_render_id));
         // Setting fresh root constraints marks the root dirty for layout.
         guard.set_root_constraints(Some(constraints));
-        // Mirror the production frame path: swap the owner out (leaving a
-        // Default placeholder under the still-shared Arc), run all phases by
-        // value, then restore.
-        let owner = std::mem::take(&mut *guard);
-        let (owner, result) = owner.run_frame();
-        result.expect("headless frame should succeed");
-        *guard = owner;
+    }
+
+    {
+        // Mirror the production frame path exactly: `HeadlessBinding::pump_frame`
+        // and `AppBinding::draw_frame` both run the ADR-0017 layout<->build
+        // fixpoint, not a bare `PipelineOwner::run_frame`. Bootstrapping with
+        // `run_frame` here would leave a `LayoutBuilder`'s child unbuilt on the
+        // very frame these tests assert about.
+        binding.enter_owner_scope(|| {
+            build_owner
+                .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
+                .expect("headless frame should succeed");
+        });
     }
 
     // Bootstrap done (mounted, rooted, first frame run): hand the three owners to
-    // a tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
+    // the tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
     // for geometry reads. `pump`/`tick`/`pump_for` route through the binding.
-    let binding = HeadlessBinding::with_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
 
     LaidOut {
         binding,
@@ -136,6 +180,10 @@ pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsy
 }
 
 impl LaidOut {
+    /// Run an owner-side action under the headless binding's local runtime scope.
+    pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
+        self.binding.enter_owner_scope(callback)
+    }
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
         self.root_render_id
@@ -237,6 +285,20 @@ impl LaidOut {
     /// build inbox), drains it, and re-runs layout/paint. No root dirtying.
     pub fn pump_for(&mut self, dt: Duration) {
         self.binding.pump_frame(dt);
+    }
+
+    /// The binding's **own** scheduler — never `Scheduler::instance()`.
+    ///
+    /// `pump_for` drives this one; a post-frame callback parked anywhere else is
+    /// never drained.
+    pub fn binding_scheduler(&self) -> flui_scheduler::Scheduler {
+        self.binding.scheduler().clone()
+    }
+
+    /// The shared pipeline owner, so a post-frame callback can read committed
+    /// geometry from inside the frame.
+    pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
+        Arc::clone(&self.pipeline_owner)
     }
 
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a
@@ -373,7 +435,9 @@ impl LaidOut {
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         owner.hit_test(position, &mut result);
-        result.dispatch(event);
+        // Dispatch resolves owner-local targets, so it must run inside this
+        // binding's interaction lane scope (same lane the tree mounted under).
+        self.binding.enter_owner_scope(|| result.dispatch(event));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
@@ -391,7 +455,7 @@ impl LaidOut {
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| result.dispatch(&event));
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
@@ -407,7 +471,7 @@ impl LaidOut {
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| result.dispatch(&event));
     }
 
     /// A pointer-move to `(x, y)` — to drive slop / drag handling.
@@ -422,7 +486,7 @@ impl LaidOut {
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| result.dispatch(&event));
     }
 
     /// A pointer-cancel routed to the entries hit at `(x, y)` — the headless
@@ -437,7 +501,7 @@ impl LaidOut {
         let event = flui_interaction::events::make_cancel_event(
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| result.dispatch(&event));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic secondary-button
@@ -457,7 +521,7 @@ impl LaidOut {
             flui_interaction::events::PointerType::Mouse,
             PointerButton::Secondary,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| result.dispatch(&event));
     }
 
     /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
@@ -475,7 +539,7 @@ impl LaidOut {
             flui_interaction::events::PointerType::Mouse,
             PointerButton::Secondary,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| result.dispatch(&event));
     }
 }
 
@@ -490,7 +554,6 @@ impl LaidOut {
 /// gesture deadlines with no `thread::sleep`.
 pub struct LaidOutScoped {
     laid: LaidOut,
-    binding: HeadlessBinding,
     /// Next contact's pointer id (1-based; `0` is not a valid `PointerId`). Each
     /// `dispatch_pointer_down` allocates a fresh id so two sequential taps use
     /// distinct ids — what a real `GestureBinding` does per contact, and what
@@ -511,10 +574,11 @@ pub struct LaidOutScoped {
 pub fn lay_out_with_arena(root: impl View, constraints: BoxConstraints) -> LaidOutScoped {
     let binding = HeadlessBinding::new();
     let scoped = GestureArenaScope::new(binding.arena().clone(), root);
-    let laid = lay_out(scoped, constraints);
+    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let laid =
+        lay_out_with_pipeline_owner_and_binding(scoped, constraints, pipeline_owner, binding);
     LaidOutScoped {
         laid,
-        binding,
         next_pointer: Cell::new(1),
         current_pointer: Cell::new(0),
     }
@@ -529,7 +593,7 @@ impl LaidOutScoped {
     /// Advance the virtual clock by `dt` and fire any gesture deadline that has
     /// now elapsed — the deterministic, sleep-free frame tick.
     pub fn pump(&mut self, dt: Duration) {
-        self.binding.pump_frame(dt);
+        self.laid.binding.pump_frame(dt);
     }
 
     /// Spin until `Instant::now()` returns a value strictly greater than the
@@ -582,7 +646,8 @@ impl LaidOutScoped {
         Self::advance_gesture_clock();
         let pointer = self.begin_contact();
         let event = make_down_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
@@ -591,7 +656,8 @@ impl LaidOutScoped {
     pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
         let pointer = self.current_contact();
         let event = make_up_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
@@ -604,7 +670,8 @@ impl LaidOutScoped {
         Self::advance_gesture_clock();
         let pointer = self.current_contact();
         let event = make_move_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
@@ -613,7 +680,8 @@ impl LaidOutScoped {
     pub fn dispatch_pointer_cancel(&self, x: f32, y: f32) {
         let pointer = self.current_contact();
         let event = make_cancel_event_for_id(pointer, PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 

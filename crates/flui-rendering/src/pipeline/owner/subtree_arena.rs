@@ -84,7 +84,7 @@ use crate::{
 /// The wrapper is `Copy` so the layout-child closure can capture the
 /// pointer by value without `Arc` ceremony.  `Send + Sync` is declared
 /// because [`LayoutChildCallback`] inherits those bounds from
-/// `BoxLayoutCtxErased: Send + Sync` (U19 design).  Single-thread
+/// `BoxLayoutCtxErased: Send + Sync`.  Single-thread
 /// access is enforced at the [`SubtreeArena::check_thread`] entry.
 #[derive(Clone, Copy)]
 struct NodePtr(*mut RenderNode);
@@ -105,8 +105,7 @@ unsafe impl Sync for NodePtr {}
 /// Pre-acquired set of N disjoint `&mut RenderNode` borrows on a
 /// subtree, indexed by [`RenderId`] for O(1) lookup.
 ///
-/// **D-block PR-A1b3 U20.1 / Phase 2 SubtreeArena extraction:** replaces
-/// the prior `TreePtr` + recursive-tree-reborrow scheme (PR #144) that
+/// Replaces the prior `TreePtr` + recursive-tree-reborrow scheme that
 /// surfaced as latent Stacked / Tree Borrows UB.  The new scheme acquires
 /// ALL subtree `&mut RenderNode` borrows in ONE call to
 /// [`RenderTree::get_subtree_mut`] (single `&mut Slab` reborrow scope),
@@ -177,15 +176,15 @@ pub(super) struct SubtreeArena<'tree> {
     /// `&mut self`.  `Mutex` for the same reason as `pending_builds`
     /// (the layout-child closure requires `&SubtreeArena: Send + Sync`).
     pending_removes: Mutex<Vec<(flui_foundation::RenderId, flui_foundation::RenderId)>>,
-    /// Child-build requests from `RenderSliverList` (U4.2): `(sliver_id,
+    /// Child-build requests from `RenderSliverList`: `(sliver_id,
     /// logical_index)` pairs recorded when an absent in-band child is
     /// encountered.  Unlike `pending_builds`, no render object is pre-built
-    /// here — the element tree (U4.3) decides what to build.  Drained after
+    /// here — the element tree decides what to build.  Drained after
     /// `pending_builds` in `layout_dirty_root` and moved into
     /// `PipelineOwner::pending_child_requests` for the binding layer.  Same
     /// `Mutex` discipline.
     pending_child_requests: Mutex<Vec<(flui_foundation::RenderId, usize)>>,
-    /// Retain-band signals from element-owned slivers (U4.3 removal half).
+    /// Retain-band signals from element-owned slivers.
     ///
     /// Each entry is `(sliver_id, cache_first, cache_last)` — the `[first,
     /// last)` band the sliver retained this pass.  Drained after the walk
@@ -268,7 +267,7 @@ impl<'tree> SubtreeArena<'tree> {
         assert!(
             current == self.owner_thread,
             "SubtreeArena accessed from non-owner thread: \
-             owner = {:?}, current = {:?}. The U20 layout walk \
+             owner = {:?}, current = {:?}. The layout walk \
              requires the layout_child callback to fire on the \
              same thread as PipelineOwner::layout_dirty_root \
              (the pipeline phase holds &mut self synchronously). \
@@ -335,8 +334,8 @@ impl<'tree> SubtreeArena<'tree> {
     }
 
     /// Takes the child-build requests recorded by request-strategy slivers
-    /// (U4.2) during this walk.  Returns `(sliver_id, logical_index)` pairs
-    /// for the binding layer to service after the frame (U4.3).  Called in
+    /// during this walk.  Returns `(sliver_id, logical_index)` pairs
+    /// for the binding layer to service after the frame.  Called in
     /// `layout_dirty_root` AFTER `take_pending_builds` (Remove → Insert →
     /// Request ordering) and AFTER `drop(arena)` so no `NodePtr` alias is
     /// live.
@@ -352,7 +351,7 @@ impl<'tree> SubtreeArena<'tree> {
     /// `NodePtr` alias is live when the results are consumed.
     ///
     /// Symmetric to [`Self::take_pending_child_requests`].  The binding layer
-    /// (U4.3) drives `SparseChildren::retain_band` from these entries.
+    /// drives `SparseChildren::retain_band` from these entries.
     pub(super) fn take_pending_retain_bands(
         &self,
     ) -> Vec<(flui_foundation::RenderId, usize, usize)> {
@@ -446,15 +445,15 @@ impl<'tree> SubtreeArena<'tree> {
 }
 
 // ============================================================================
-// PR-A1 U21 — RAII layout-cycle guard
+// RAII layout-cycle guard
 // ============================================================================
 
 /// RAII guard that sets `id`'s in-flight flag in [`SubtreeArena::by_id`]
 /// on construction and clears it on drop.
 ///
-/// **D-block PR-A1 U21 (companion memo D6):** detects re-entry into a
-/// node's `layout_subtree_borrowed` call (the situation where a user
-/// `perform_layout` body calls `ctx.layout_child` for an ancestor id
+/// Detects re-entry into a node's `layout_subtree_borrowed` call (the
+/// situation where a user `perform_layout` body calls `ctx.layout_child`
+/// for an ancestor id
 /// whose layout is already in flight up the stack).  On collision the
 /// constructor returns [`crate::error::RenderError::LayoutCycle`]
 /// instead of attempting a second [`NodePtr`] reborrow (which would be
@@ -503,8 +502,7 @@ impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
             // `layout_subtree_borrowed` already logs the propagated
             // Err at tracing::error when it collapses descendant Err
             // to Size::ZERO.  Logging here at error too would produce
-            // 2 log lines per cycle event (PR #146 Copilot review
-            // comment 3294315141).  The API-boundary error log is the
+            // 2 log lines per cycle event.  The API-boundary error log is the
             // user-facing one; this debug-level log retains the
             // collision-point diagnostic for tracing.
             tracing::debug!(
@@ -584,7 +582,7 @@ pub(super) fn ensure_stack<R>(f: impl FnOnce() -> R) -> R {
 /// Each shared `&RenderNode` this derives must not alias a live
 /// `&mut RenderNode` for the same slot. `links().children()` lists are NOT
 /// statically acyclic — a cyclic edge whose child is also an in-flight ancestor
-/// is a reachable input (`LayoutCycleGuard`, `tests/u21_layout_cycle.rs`) — so
+/// is a reachable input (`LayoutCycleGuard`, `tests/layout_cycle_guard.rs`) — so
 /// this function gates every deref on [`SubtreeArena::is_in_flight`] and yields
 /// `None` for any in-flight slot, exactly like the canonical position/offset
 /// sites in this file (the `set_offset` loop). The remaining preconditions:
@@ -659,7 +657,7 @@ unsafe fn build_intrinsic_child_parent_data(
 ///    helper while the binding is live.
 /// 2. At any moment, no two concurrent reborrows of the SAME
 ///    [`NodePtr`] exist.  Sequential call levels (parent → child →
-///    grandchild) reborrow DIFFERENT slots — preserved by the U21
+///    grandchild) reborrow DIFFERENT slots — preserved by the
 ///    `LayoutCycleGuard` (returns
 ///    [`crate::error::RenderError::LayoutCycle`] on re-entry into
 ///    a slot already in flight up the stack).
@@ -688,7 +686,7 @@ unsafe fn layout_subtree_borrowed_impl(
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<flui_types::Size> {
-    // U21 cycle guard: set `id`'s in-flight flag FIRST — before any
+    // Cycle guard: set `id`'s in-flight flag FIRST — before any
     // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
     // guard's `enter` returns Err(LayoutCycle) here, so the aliasing
     // shared-read that would otherwise fire on a cyclic child never
@@ -1052,7 +1050,7 @@ unsafe fn layout_subtree_borrowed_impl(
         entry.state_mut().set_geometry(geometry);
         entry.state_mut().set_constraints(constraints);
 
-        // Bootstrap relayout boundary (U17).
+        // Bootstrap the relayout boundary now that constraints are populated.
         let has_parent = entry.links().parent().is_some();
         let sized_by_parent = entry.render_object().sized_by_parent();
         <BoxProtocol as Protocol>::bootstrap_relayout_boundary(
@@ -1319,7 +1317,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     id: flui_foundation::RenderId,
     constraints: SliverConstraints,
 ) -> crate::error::RenderResult<SliverGeometry> {
-    // U21 cycle guard: set `id`'s in-flight flag FIRST — before any
+    // Cycle guard: set `id`'s in-flight flag FIRST — before any
     // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
     // guard's `enter` returns Err(LayoutCycle) here so the aliasing
     // shared read that would otherwise fire never happens.
@@ -1640,7 +1638,7 @@ mod tests {
     /// Concrete adversarial tests (re-entrant layout_child, LayoutCycleGuard
     /// rejection, cross-thread panic, pending-sink ordering) live in the
     /// integration test files under `tests/` where a full `PipelineOwner` is
-    /// available: `tests/u20_layout_dirty_root.rs` and `tests/u21_layout_cycle.rs`.
+    /// available: `tests/layout_dirty_root.rs` and `tests/layout_cycle_guard.rs`.
     #[test]
     fn new_with_zero_ids_produces_empty_arena() {
         // Exercise `SubtreeArena::new` with the matched-length empty case
@@ -1773,8 +1771,8 @@ mod tests {
         assert!(third.is_ok(), "entry after drop must succeed");
     }
 
-    /// Verify that all three pending sinks drain and leave themselves empty
-    /// (pending-sink-after-drop ordering, including the U4.2 request sink).
+    /// Verify that all three pending sinks (builds, removes, child
+    /// requests) drain and leave themselves empty.
     #[test]
     fn pending_sink_drains_are_idempotent() {
         let arena: SubtreeArena<'_> = SubtreeArena {

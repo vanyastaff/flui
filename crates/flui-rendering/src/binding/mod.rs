@@ -17,8 +17,8 @@
 //! flui_app::RenderingFlutterBinding implements RendererBinding
 //! ```
 //!
-//! Mythos Step 4 (2026-05-20): the three-trait stack (`PipelineManifold`,
-//! `HitTestDispatcher`, `ViewHitTestable`) was collapsed. See
+//! The three-trait stack (`PipelineManifold`, `HitTestDispatcher`,
+//! `ViewHitTestable`) was collapsed on 2026-05-20. See
 //! `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md` Section 12.
 
 use std::sync::Arc;
@@ -78,12 +78,12 @@ use crate::{
 /// 6. **Compositing** - Send layers to GPU
 /// 7. **Semantics** - `PipelineOwner::<Semantics>::run_semantics`
 ///
-/// Mythos Step 7 (2026-05-20) lifted these phase methods out of
-/// `PipelineOwner<Idle>` and onto their phase-typed impls. The
+/// These phase methods were lifted out of `PipelineOwner<Idle>` and
+/// onto their phase-typed impls on 2026-05-20. The
 /// orchestrator is [`PipelineOwner::<Idle>::run_frame`], which
 /// composes the four phase transitions and returns the owner back at
 /// `Idle` plus the produced layer tree.
-pub trait RendererBinding: Send + Sync {
+pub trait RendererBinding {
     // ========================================================================
     // Pipeline / Manifold (formerly PipelineManifold)
     // ========================================================================
@@ -127,8 +127,7 @@ pub trait RendererBinding: Send + Sync {
     ///
     /// This is the root of the PipelineOwner tree. Multi-window scenarios
     /// own multiple PipelineOwner instances side-by-side; the previous
-    /// `PipelineOwner::adopt_child` hierarchical API was removed in
-    /// Mythos Step 9.
+    /// `PipelineOwner::adopt_child` hierarchical API was removed.
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner>;
 
     /// Creates the root pipeline owner.
@@ -140,18 +139,19 @@ pub trait RendererBinding: Send + Sync {
     }
 
     // ========================================================================
-    // RenderView Management (R-6 reshape — cycle 4 Wave 2 U-1)
+    // RenderView Management
     // ========================================================================
     //
-    // Pre-cycle this section exposed `render_views()` returning a
+    // This section used to expose `render_views()` returning a
     // `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` — a triple-lock
     // topology baked into the trait surface. Every consumer had to reason
     // about the outer `HashMap` lock, the inner `Arc<RwLock<RenderView>>`
-    // lock, and the implicit map-entry refcount. Cycle 4 R-6 audit
-    // flagged it as a Cycle-2 PR #100/U22 newtype-getter violation at
-    // trait level.
+    // lock, and the implicit map-entry refcount. An audit flagged it as a
+    // newtype-getter violation at trait level: a getter returning a raw
+    // lock forces every caller to re-derive its own locking discipline
+    // instead of the trait stating what operation is needed.
     //
-    // Post-cycle the trait surface exposes four primitives:
+    // The trait surface now exposes four primitives instead:
     //   - `render_view(id)`         — single lookup, refcount bump
     //   - `render_view_ids()`       — owned `Vec<u64>` snapshot
     //   - `insert_render_view`      — single-write
@@ -240,14 +240,10 @@ pub trait RendererBinding: Send + Sync {
 
     /// Returns the mouse tracker for hover notification.
     ///
-    /// Cycle 4 U-6: the return type changed from
-    /// `&RwLock<MouseTracker>` to `&MouseTracker`. The interaction-
-    /// side [`flui_interaction::MouseTracker`] is `Clone` with
-    /// interior mutability (`Arc<Mutex<inner>>`), so the outer
-    /// `RwLock` wrapper the rendering-side tracker required is
-    /// double-wrapping. Implementers now expose the tracker
-    /// directly; callers needing a snapshot clone the handle
-    /// (cheap -- `Arc`-bump).
+    /// The return type is `&MouseTracker` rather than `&RwLock<MouseTracker>`.
+    /// The interaction-side [`flui_interaction::MouseTracker`] is
+    /// owner-local, so executable mouse callbacks do not force the whole
+    /// binding to be `Send + Sync`.
     fn mouse_tracker(&self) -> &MouseTracker;
 
     // ========================================================================
@@ -316,11 +312,11 @@ pub trait RendererBinding: Send + Sync {
     fn handle_metrics_changed(&self) {
         let mut force_frame = false;
 
-        // R-6 reshape: ids-then-lookup iteration. The outer-container
-        // lock is released between snapshot collection and per-view
-        // writes; previously this method held the read-lock on the
-        // container for the duration of every view's write-lock, which
-        // is the exact nested-lock topology the audit flagged.
+        // Ids-then-lookup iteration: the outer-container lock is released
+        // between snapshot collection and per-view writes. Previously this
+        // method held the read-lock on the container for the duration of
+        // every view's write-lock, which is the exact nested-lock topology
+        // the trait reshape above was meant to avoid.
         for view_id in self.render_view_ids() {
             if let Some(view) = self.render_view(view_id) {
                 let mut view_guard = view.write();
@@ -364,12 +360,11 @@ pub trait RendererBinding: Send + Sync {
         action: flui_semantics::SemanticsAction,
         _args: Option<flui_semantics::ActionArgs>,
     ) {
-        // Cycle 4 R-2: pre-cycle the body panicked via `unimplemented!()`
-        // — a Constitution Principle 6 violation reachable from every
-        // assistive-tech action dispatch. Post-cycle: emit a
-        // `tracing::warn!` with the action context and return without
-        // panicking. When `SemanticsOwner` integration lands the warn
-        // is swapped for the real dispatch.
+        // This body used to panic via `unimplemented!()` — a Constitution
+        // Principle 6 violation reachable from every assistive-tech action
+        // dispatch. It now emits a `tracing::warn!` with the action context
+        // and returns without panicking. When `SemanticsOwner` integration
+        // lands, the warning is swapped for the real dispatch.
         if self.render_view(view_id).is_some() {
             tracing::warn!(
                 view_id,
@@ -507,12 +502,6 @@ mod tests {
 
     // Verify the trait is object-safe.
     fn _assert_renderer_binding_object_safe(_: &dyn RendererBinding) {}
-
-    #[test]
-    fn test_renderer_binding_send_sync() {
-        fn assert_send_sync<T: Send + Sync + ?Sized>() {}
-        assert_send_sync::<dyn RendererBinding>();
-    }
 
     /// Minimal `RendererBinding` implementer exercising the trait's default
     /// methods (`add_render_view_with_config`, `create_view_configuration_for`,

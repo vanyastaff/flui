@@ -46,16 +46,23 @@ impl<C: ViewSeq> fmt::Debug for SliverFixedExtentList<C> {
 
 impl<C> flui_view::RenderView for SliverFixedExtentList<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverFixedExtentList;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSliverFixedExtentList::new(self.item_extent)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_item_extent(self.item_extent);
     }
 
@@ -108,10 +115,14 @@ mod tests {
     #[test]
     fn update_render_object_applies_a_changed_item_extent() {
         let list = SliverFixedExtentList::new(30.0, Vec::<flui_view::BoxedView>::new());
-        let mut render_object = list.create_render_object();
+        let mut render_object =
+            list.create_render_object(&flui_view::RenderObjectContext::detached());
 
         let updated = SliverFixedExtentList::new(75.0, Vec::<flui_view::BoxedView>::new());
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         // No public getter on RenderSliverFixedExtentList; confirm via Debug
         // that the field actually changed rather than merely not panicking.

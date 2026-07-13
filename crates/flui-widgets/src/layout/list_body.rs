@@ -64,16 +64,20 @@ impl<C: ViewSeq> fmt::Debug for ListBody<C> {
 
 impl<C> flui_view::RenderView for ListBody<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderListBody;
 
-    fn create_render_object(&self) -> RenderListBody {
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> RenderListBody {
         RenderListBody::with_axis_direction(self.axis_direction())
     }
 
-    fn update_render_object(&self, render_object: &mut RenderListBody) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut RenderListBody,
+    ) {
         render_object.set_axis_direction(self.axis_direction());
     }
 
@@ -100,21 +104,24 @@ mod tests {
     #[test]
     fn create_render_object_defaults_to_top_to_bottom() {
         let list_body: ListBody = ListBody::new(Vec::new());
-        let render_object = list_body.create_render_object();
+        let render_object =
+            list_body.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.axis_direction(), AxisDirection::TopToBottom);
     }
 
     #[test]
     fn create_render_object_reverse_vertical_is_bottom_to_top() {
         let list_body: ListBody = ListBody::new(Vec::new()).reverse(true);
-        let render_object = list_body.create_render_object();
+        let render_object =
+            list_body.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.axis_direction(), AxisDirection::BottomToTop);
     }
 
     #[test]
     fn create_render_object_horizontal_is_left_to_right() {
         let list_body: ListBody = ListBody::new(Vec::new()).main_axis(Axis::Horizontal);
-        let render_object = list_body.create_render_object();
+        let render_object =
+            list_body.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.axis_direction(), AxisDirection::LeftToRight);
     }
 
@@ -123,20 +130,25 @@ mod tests {
         let list_body: ListBody = ListBody::new(Vec::new())
             .main_axis(Axis::Horizontal)
             .reverse(true);
-        let render_object = list_body.create_render_object();
+        let render_object =
+            list_body.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.axis_direction(), AxisDirection::RightToLeft);
     }
 
     #[test]
     fn update_render_object_applies_a_changed_axis_direction() {
         let list_body: ListBody = ListBody::new(Vec::new());
-        let mut render_object = list_body.create_render_object();
+        let mut render_object =
+            list_body.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.axis_direction(), AxisDirection::TopToBottom);
 
         let updated: ListBody = ListBody::new(Vec::new())
             .main_axis(Axis::Horizontal)
             .reverse(true);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.axis_direction(), AxisDirection::RightToLeft);
     }

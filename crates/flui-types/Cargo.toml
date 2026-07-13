@@ -9,8 +9,8 @@ description = "Core types for Flui framework - geometry, layout, styling"
 repository.workspace = true
 
 [dependencies]
-# Geometry primitives — split out into its own Layer-0 crate in D-block
-# PR-C-2 (U7 bridge). flui-types re-exports `pub use flui_geometry as geometry`
+# Geometry primitives — split out into its own Layer-0 crate.
+# flui-types re-exports `pub use flui_geometry as geometry`
 # so existing `flui_types::geometry::*` consumers continue to compile.
 flui-geometry = { path = "../flui-geometry", version = "0.2.0" }
 
@@ -24,7 +24,7 @@ serde = { workspace = true, optional = true, features = ["rc"] }
 # Stack-allocated Vec for small collections (animation curves, color stops)
 smallvec = { workspace = true }
 
-# Note: mint and glam optional deps were dropped in D-block PR-C-2 (U6+U7);
+# Note: mint and glam optional deps were dropped from flui-types;
 # the mint/glam interop now lives in flui-geometry. flui-types still exposes
 # `mint` and `glam` feature flags but they FORWARD to flui-geometry/{mint,glam}
 # (see [features] below) — no direct flui-types code uses those crates after
@@ -50,7 +50,7 @@ serde = ["dep:serde", "flui-geometry/serde"]
 # === Performance ===
 # SIMD acceleration for flui-types' own color.rs SSE/NEON code paths.
 # (flui-geometry's matrix/vector SIMD now comes from glam, always-on — there is
-# no longer a flui-geometry `simd` feature to forward to. N-geom PR 2, Option D.)
+# no longer a flui-geometry `simd` feature to forward to.)
 simd = []
 
 # === Interoperability ===

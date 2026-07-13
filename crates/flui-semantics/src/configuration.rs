@@ -147,12 +147,12 @@ pub struct SemanticsConfiguration {
     /// Thickness for this node.
     thickness: f64,
 
-    /// Semantic role for this node (U15).
+    /// Semantic role for this node.
     ///
     /// Defaults to [`SemanticsRole::None`]. Consumed by the platform
     /// adapter to produce the correct accessibility role (Button,
     /// TextField, Header, etc.). The 28-variant [`SemanticsRole`] enum
-    /// gets a runtime storage site here — pre-cycle it lived in the
+    /// gets a runtime storage site here — previously it lived in the
     /// codebase but had no per-node configuration slot.
     role: SemanticsRole,
 }
@@ -859,7 +859,7 @@ impl SemanticsConfiguration {
     }
 
     // ========================================================================
-    // Role (U15)
+    // Role
     // ========================================================================
 
     /// Sets the [`SemanticsRole`] for this node.
@@ -902,7 +902,7 @@ impl SemanticsConfiguration {
     }
 
     /// Absorbs the semantic information from another configuration,
-    /// Flutter-faithfully (U16).
+    /// Flutter-faithfully.
     ///
     /// Merges follow Flutter
     /// [`semantics.dart:6790-6862`](../../../../.flutter/flutter-master/packages/flutter/lib/src/semantics/semantics.dart)
@@ -917,7 +917,7 @@ impl SemanticsConfiguration {
     /// - **Tags** — merge as a set (deduplication handled by
     ///   `add_tag`).
     /// - **Label / hint** — *concatenate* via [`concat_attributed_string`]
-    ///   using the operands' text directions; pre-U16 first-wins
+    ///   using the operands' text directions; the earlier first-wins
     ///   semantics produced "Submit" + "loading state" → "Submit",
     ///   losing the child's hint. Flutter joins them into "Submit
     ///   loading state."
@@ -1144,7 +1144,7 @@ mod tests {
         assert!(!config.is_merging_semantics_of_descendants());
     }
 
-    /// ADR-0014 Slice B: `is_merging_semantics_of_descendants` is an
+    /// ADR-0014: `is_merging_semantics_of_descendants` is an
     /// independent additive flag, mirroring the existing
     /// `is_semantics_boundary` boolean-config convention (plain getter/setter
     /// pair, not routed through the `SemanticsFlags` bitset).
@@ -1303,7 +1303,7 @@ mod tests {
     }
 
     // ========================================================================
-    // U15 + U16 tests (role + Flutter-faithful absorb)
+    // Role + Flutter-faithful absorb tests
     // ========================================================================
 
     #[test]

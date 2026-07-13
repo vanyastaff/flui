@@ -89,6 +89,8 @@ pub mod damage;
 mod error;
 mod link_registry;
 mod scene;
+// The owned per-window per-frame raster package.
+mod scene_snapshot;
 
 pub mod layer;
 // Layer-tree test harness. Compiled only for this crate's own tests
@@ -161,6 +163,7 @@ pub use layer::{
 // ============================================================================
 pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};
 pub use scene::{CompositionCallback, Scene};
+pub use scene_snapshot::{DamageRegion, SceneSnapshot};
 // ============================================================================
 // RE-EXPORTS - Tree
 // ============================================================================
@@ -202,6 +205,8 @@ pub mod prelude {
     pub use crate::{Layer, LayerBounds, LayerId, LayerNode, LayerTree};
     // Compositor
     pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor, resolve_follower_offset};
+    // Raster boundary
+    pub use crate::{DamageRegion, SceneSnapshot};
     // Transform layers
     pub use crate::{OffsetLayer, TransformLayer};
     // Platform types

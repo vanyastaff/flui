@@ -1,5 +1,5 @@
 //! Integration tests for `GridView::builder` (RenderSliverGridLazy → the
-//! lazy-sliver element-wiring backend, U4.3).
+//! lazy-sliver element-wiring backend).
 //!
 //! Mirrors `lazy_list.rs`'s frame-sequence model: `pump_frame` calls
 //! `service_child_requests` after `run_frame`, so two `tick` calls settle a

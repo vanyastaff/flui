@@ -69,11 +69,18 @@ impl RenderView for FittedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFittedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderFittedBox::new(self.fit, self.alignment, self.clip)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_fit(self.fit);
         render_object.set_alignment(self.alignment);
         render_object.set_clip_behavior(self.clip);
@@ -101,7 +108,8 @@ mod tests {
 
     #[test]
     fn create_render_object_defaults_match_flutter() {
-        let render_object = FittedBox::new().create_render_object();
+        let render_object =
+            FittedBox::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.fit(), BoxFit::Contain);
         assert_eq!(render_object.alignment(), Alignment::CENTER);
         assert_eq!(render_object.clip_behavior(), Clip::None);
@@ -113,7 +121,8 @@ mod tests {
             .fit(BoxFit::Cover)
             .alignment(Alignment::TOP_LEFT)
             .clip(Clip::AntiAlias);
-        let render_object = fitted_box.create_render_object();
+        let render_object =
+            fitted_box.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.fit(), BoxFit::Cover);
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
@@ -121,7 +130,8 @@ mod tests {
 
     #[test]
     fn update_render_object_applies_a_changed_fit_alignment_and_clip() {
-        let mut render_object = FittedBox::new().create_render_object();
+        let mut render_object =
+            FittedBox::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.fit(), BoxFit::Contain);
         assert_eq!(render_object.alignment(), Alignment::CENTER);
         assert_eq!(render_object.clip_behavior(), Clip::None);
@@ -130,7 +140,10 @@ mod tests {
             .fit(BoxFit::Fill)
             .alignment(Alignment::BOTTOM_RIGHT)
             .clip(Clip::HardEdge);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.fit(), BoxFit::Fill);
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);

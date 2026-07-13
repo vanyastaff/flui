@@ -734,7 +734,7 @@ mod tests {
         let a = Microseconds::new(100);
         let b = Microseconds::new(50);
         assert_eq!(a.saturating_sub(b), Microseconds::new(50));
-        // Underflow saturates to zero (post-U8: no negative Microseconds).
+        // Underflow saturates to zero — `Microseconds` has no negative representation.
         assert_eq!(b.saturating_sub(a), Microseconds::ZERO);
     }
 }

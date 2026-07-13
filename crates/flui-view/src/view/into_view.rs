@@ -70,8 +70,7 @@ impl<V: View> IntoView for V {
 /// (`Box::new(SomeView { … })`) are migrated to either bare
 /// `SomeView { … }` (concrete `impl IntoView` via the blanket) or
 /// `SomeView { … }.boxed()` (`BoxedView`, also `impl IntoView` via
-/// the blanket) at the §U28 sweep boundary — not via an interop shim
-/// on `Box<concrete>`.
+/// the blanket) — not via an interop shim on `Box<concrete>`.
 impl IntoView for Box<dyn View> {
     type View = BoxedView;
 

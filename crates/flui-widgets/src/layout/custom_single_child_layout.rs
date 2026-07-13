@@ -49,11 +49,18 @@ impl RenderView for CustomSingleChildLayout {
     type Protocol = BoxProtocol;
     type RenderObject = RenderCustomSingleChildLayoutBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderCustomSingleChildLayoutBox::new(self.delegate.clone())
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_delegate(self.delegate.clone());
     }
 
@@ -80,8 +87,8 @@ mod tests {
 
     #[test]
     fn create_render_object_installs_the_given_delegate() {
-        let render_object =
-            CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate)).create_render_object();
+        let render_object = CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate))
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(
             render_object
                 .delegate()
@@ -93,8 +100,8 @@ mod tests {
 
     #[test]
     fn update_render_object_replaces_the_delegate() {
-        let mut render_object =
-            CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate)).create_render_object();
+        let mut render_object = CustomSingleChildLayout::new(Arc::new(CenterLayoutDelegate))
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(
             render_object
                 .delegate()
@@ -102,8 +109,10 @@ mod tests {
                 .is::<CenterLayoutDelegate>()
         );
 
-        CustomSingleChildLayout::new(Arc::new(AspectRatioDelegate::new(2.0)))
-            .update_render_object(&mut render_object);
+        CustomSingleChildLayout::new(Arc::new(AspectRatioDelegate::new(2.0))).update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert!(
             render_object

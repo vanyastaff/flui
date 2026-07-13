@@ -46,10 +46,9 @@
 // downstream consumers via the fully-qualified path
 // `flui_rendering::protocol::box_protocol::BoxLayoutCtxErased` without
 // being pulled into scope by a glob `use flui_rendering::protocol::*`.
-// PR #141 Copilot review feedback (comment 3293746269): a glob re-export
-// of the erased trait collides with `LayoutContextApi`'s method names
-// (`constraints` / `layout_child` / `position_child` overlap by design)
-// and triggers ambiguous-method E0034 in widget
+// A glob re-export of the erased trait collides with `LayoutContextApi`'s
+// method names (`constraints` / `layout_child` / `position_child` overlap
+// by design) and triggers ambiguous-method E0034 in widget
 // code. The submodule-pub approach surfaces the trait at one explicit
 // path without polluting the common namespace. The most-used surfaces
 // (`BoxLayoutCtx`, `BoxProtocol`, `LayoutContextApi`, …) are still
@@ -82,15 +81,14 @@ pub use box_protocol::{
     // Protocol
     BoxProtocol,
     // Per-child layout state (moved here from the deleted
-    // children_access.rs in Mythos Step 5b)
+    // children_access.rs)
     ChildState,
     ErasedBoxLayoutCtx,
     ErasedChildState,
 };
-// Erased layout-context trait (D-block PR-A1b U19 / memo D5).
+// Erased layout-context trait.
 //
-// **Deliberately NOT re-exported** at the `protocol::*` level (PR #141
-// Copilot review feedback, comment 3293746269):
+// **Deliberately NOT re-exported** at the `protocol::*` level:
 // `BoxLayoutCtxErased::constraints` / `layout_child` / `position_child`
 // overlap with `LayoutContextApi`'s method names by design (both view
 // the same operations from different angles); putting the trait into

@@ -1,4 +1,4 @@
-//! SC-014 — `column!` with 17 children fails to compile with the
+//! `column!` with 17 children fails to compile with the
 //! FR-034 friendly diagnostic substring.
 //!
 //! Driven by `crates/flui-view/tests/trybuild_ui.rs` via trybuild

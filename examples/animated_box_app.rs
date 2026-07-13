@@ -42,11 +42,18 @@ impl RenderView for AnimatedBox {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderColoredBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderColoredBox::red(60.0, 60.0)
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // This example never rebuilds the view tree; the animation
         // listener mutates the render object directly each tick.
     }

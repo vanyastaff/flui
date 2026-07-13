@@ -125,17 +125,35 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 ### 9. Sanctioned `dyn`-boundary registry (FR-036)
 
-**FR-036 — every `Box<dyn …>` / `&dyn …` / `Arc<dyn …>` / `Rc<dyn …>` introduction (and every type alias of that shape) in the framework crates must either (a) name a sanctioned trait from the inline allowlist, (b) match a language-runtime exempt pattern (`Pin<Box<dyn Future>>`, `Box<dyn Iterator>`, `&dyn Fn*` callback parameters), or (c) carry an explicit `// PORT-CHECK-OK-DYN:` marker on the same line.** Phase 3.1 §U30 of the view/element core-contracts plan installs this trigger as the canonical FR-036 enforcement layer.
+**FR-036 — every `Box<dyn …>` / `&dyn …` / `Arc<dyn …>` / `Rc<dyn …>` introduction (and every type alias of that shape) in the framework crates must either (a) name a sanctioned trait from the inline allowlist, (b) match a language-runtime exempt pattern (`Pin<Box<dyn Future>>`, `Pin<Box<dyn Stream>>`, `Box<dyn Iterator>`, `&dyn Fn*` callback parameters), or (c) carry an explicit `// PORT-CHECK-OK-DYN:` marker on the same line.** Phase 3.1 §U30 of the view/element core-contracts plan installs this trigger as the canonical FR-036 enforcement layer.
+
+**Registry addition (2026-07-09, ADR-0018 U5):** `dyn Stream` joins `dyn Future` and `dyn Iterator` as a language-runtime exempt. `Stream` is the async `Iterator` — a trait from `futures-core` (trait-only: no executor, no combinators, no proc macros) that `StreamBuilder` polls by hand through `std::future::poll_fn`, because `futures-core` deliberately ships no `StreamExt::next()`. It is erased for the same reason `Future` is: the concrete stream type is the caller's, and a `StatefulView` cannot be generic over it and stay object-safe as a `dyn View`. This is a registry entry, not a loosening — an unsanctioned `Box<dyn Foo>` in the framework crates still fails trigger 9.
+
+**Registry addition (2026-07-09, ADR-0019 U4):** `crates/flui-widgets/src` enters the scope, and four traits are registered with it. `ErasedRoute` — the public `Navigator` holds `Vec<Box<dyn ErasedRoute>>` because a heterogeneous route stack cannot be generic over each route's result type (ADR-0019 §4). `NavigatorObserver` — `Arc<dyn NavigatorObserver>`, the observer chain, exactly as `Listenable` / `WidgetsBindingObserver` already are. `ScrollPhysics` and `ImageProvider` — **pre-existing** public delegate boundaries (`SharedScrollPhysics`, `Image`'s provider) that were simply never under a gate, because this crate was outside every `dyn` scope until now; registering them is the honest alternative to waiving them. Bringing the widget catalog into scope is the point: before U4 its erased boundaries shipped unguarded.
+
+**Registry addition (2026-07-10, ADR-0021 §7n):** `Animatable` is registered for `Hero::create_rect_tween`. The hook stores a `Box<dyn Animatable<Rect>>`, matching Flutter's `CreateRectTween` shape while staying value-only: the tween receives two rects, exposes `transform(t)`, and has no tree, scheduler, or render-owner access. This is an animation-transform boundary, not a new widget/render-object boundary; `tests/hero_public.rs::create_rect_tween_shapes_the_public_flight` proves a flight samples it.
 
 **Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
 
-**Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase` / `RootElementBase` / `ErrorElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
+**Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase` / `RootElementBase` / `ErrorElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `Animatable` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
 
-**Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`).
+**Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`) **and the public widget catalog** (`crates/flui-widgets/src`, added 2026-07-09 by ADR-0019 U4).
 
 **Multi-line declaration handling:** the scan does NOT use `rg -U` multiline mode (mixing multi-line output blocks with line-oriented `grep -Ev` filters partial-filters multi-line matches → false positives and silent bypasses). The single-line scan catches rustfmt-formatted code (which collapses `Box<dyn Trait>` to one line whenever possible).
 
 **Back-references:** [specs/004-view-element-core/spec.md FR-036](../specs/004-view-element-core/spec.md), [Phase 3.1 §U30](plans/2026-05-22-005-feat-view-element-core-contracts-plan.md).
+
+### FR-033/widgets. Type-erased downcasts in the widget catalog (ADR-0019 U4)
+
+**Every `downcast::<…>` / `downcast_ref::<…>` / `downcast_mut::<…>` in `crates/flui-widgets/src` must carry a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker on the same line.**
+
+There is exactly one sanctioned site: `RouteRecord::did_complete` in `crates/flui-widgets/src/navigator/route.rs`, where a pop result crosses the `Box<dyn Any + Send>` boundary and is downcast back to the owning route's `Output`.
+
+Why the boundary exists: `Navigator::pop(result)` is called from deep inside a route's subtree, which knows its result type; the navigator, holding `Vec<Box<dyn ErasedRoute>>`, does not. Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked `pop<T>`), but Rust would not otherwise need it. **The public shape is signed off in [`ADR-0019`](adr/ADR-0019-navigator-routing-seam.md) *Public API and sign-off (U4)*.**
+
+Why the guard exists: before U4, `flui-widgets` was outside both FR-036 (trigger 9) and FR-033, so this erasure — the first in the public catalog — would have landed with **no gate at all**. On a type mismatch FLUI logs via `tracing::error!` and completes the future with `None`; Flutter throws a cast error. Per [`PANIC-POLICY.md`](PANIC-POLICY.md), a wrong `pop` type is caller error, not a framework invariant, so it must not panic.
+
+**Enforcement:** `scripts/port-check.sh`, reported as `FR-033/widgets`. It is a spec-style grep, not a numbered refusal trigger — the numbered trigger for erased boundaries is #9 (FR-036).
 
 ### 10. Parallel cross-crate type definitions
 
@@ -323,6 +341,29 @@ The two sentinel patterns are `"is not supported by the"` and `"rendering as Src
 
 **Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/wgpu/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/wgpu/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
 
+### 22. A **lifecycle-only frame capability** acquired inside a `build` / layout / paint body
+
+**The capabilities.** A *frame capability* lets code reach into a frame from outside one. Two exist, and both are guarded by this trigger:
+
+| Capability | Introduced | What it does |
+|---|---|---|
+| `rebuild_handle()` | [`ADR-0018`](adr/ADR-0018-async-builder-seam.md) U1 | `RebuildHandle::schedule()` marks its element dirty for the **next** frame. |
+| `post_frame_handle()` | [`ADR-0021`](adr/ADR-0021-hero-flight-seam.md) U2 | `PostFrameHandle::schedule()` queues work for the **end of the current** frame. |
+
+**Why:** acquiring a handle inside `build` and scheduling from it is an unbounded rebuild loop (rebuild) or a callback fired against the very frame that is still building (post-frame). Acquiring one inside `perform_layout`, `paint`, or a compositing walk would touch the tree *after* `build_scope` has already run for this frame, so the dirty element would be laid out and painted stale.
+
+[`FOUNDATIONS.md`](FOUNDATIONS.md) permits an out-of-catalog `mark_needs_build` driver **only** when "gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`". This is that gate.
+
+**Sanctioned shape:** acquire the handle in `ViewState::init_state` or `did_change_dependencies`, store it in the state, and fire it later from a completion callback (any thread). The framework's own `make_build_ctx` mints both outside any guarded body, which is why the trigger scopes to function bodies rather than to the token.
+
+**Guarded functions:** `build`, `build_into_views`, `perform_layout`, `layout_node_with_children`, `paint`, `paint_raw`, `run_paint`, `run_layout`, `run_compositing`, `compose`, `composite`.
+
+**Implementation:** a line regex cannot express "inside a function body", so this trigger delegates to [`scripts/check-frame-capability-scope.sh`](../scripts/check-frame-capability-scope.sh) — a brace-depth scanner that enters a guarded function at its opening `{`, leaves at the matching `}`, strips line comments, and flags **any capability token** in between. Adding a new capability is one entry in the scanner's `capabilities` list plus a fixture case. The scanner has its own accept/reject fixtures under `scripts/fixtures/frame-capability/`; run `scripts/check-frame-capability-scope.sh --self-test` to verify the scanner itself.
+
+> **How this trigger nearly shipped a hole.** ADR-0021 U2 added `post_frame_handle()` and documented it as following the same lifecycle-only rule — but the scanner only ever matched the `rebuild_handle` token, so a `ctx.post_frame_handle()` inside `build()` passed port-check. The rule was prose, not a guard. A capability added to `BuildContext` must be added to `capabilities` in the same change; the self-test now asserts that **both** tokens are reported by the rejected fixture, so a scanner that silently matched only one would fail its own self-test.
+
+**Allowlist:** none. Nothing in `crates/` acquires a frame capability in a guarded body today.
+
 ### Reactive lint promotion
 
 Triggers grow reactively. A new trigger is added to this list when an anti-pattern is caught in review; it does not pre-exist its first observation.
@@ -418,8 +459,8 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Object?` (nullable untyped) | `Option<Box<dyn Any + Send>>` at FFI boundary only — usually a sign the source needs a typed enum | Flag with `// TODO(port): typed-enum candidate`. |
 | `void` (return) | `()` | Never `Result<(), ()>` — use `Result<(), ErrorType>` if fallible. |
 | `Never` (return) | `!` (never type) or `core::convert::Infallible` | Diverging fns use `-> !`; type-system slot for "this Result branch is impossible" uses `Infallible`. |
-| `Function` (untyped) | **forbidden** — narrow to `fn(Args) -> R` (zero-overhead fn pointer) or `Box<dyn Fn(Args) -> R + Send + Sync>` (owned callback storage, sanctioned by FR-029 #5) | Typed function pointers always win when the call site has a fixed signature. |
-| `typedef Cb = void Function(int)` | `type Cb = fn(i32);` for zero-overhead; `type Cb = Box<dyn Fn(i32) + Send + Sync>;` for owned storage | Owned-storage variant carries the `+ Send + Sync` bound to interop with `Listenable` plumbing. |
+| `Function` (untyped) | **forbidden** — narrow to `fn(Args) -> R` (zero-overhead fn pointer), `Rc<dyn Fn(Args) -> R>` for owner-authored UI callbacks, or `Box/Arc<dyn Fn(Args) -> R + Send + Sync>` only for data-plane/shared-service storage | Typed function pointers always win when the call site has a fixed signature. ADR-0027 forbids teaching `Send + Sync` as the default UI callback shape. |
+| `typedef Cb = void Function(int)` | `type Cb = fn(i32);` for zero-overhead; `type Cb = Rc<dyn Fn(i32)>` for owner-local UI storage; `Box/Arc<dyn Fn(i32) + Send + Sync>` only for data-plane/shared-service storage | Owner-plane callbacks may capture `Rc<Cell<_>>`; data-plane callbacks must not capture UI state. |
 | `Symbol` | `&'static str` or `core::any::TypeId` | Use `TypeId` for the `InheritedView` registry; use `&'static str` for `debug_name` slots. |
 | `DateTime` | `std::time::SystemTime` (wall clock) or `std::time::Instant` (monotonic) | Use `Instant` for frame timing; `SystemTime` for serialised timestamps only. |
 | `Duration` | `std::time::Duration` | 1:1. |
@@ -457,8 +498,8 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Notification` | `Notification` trait (sanctioned by FR-029) + `NotifiableElement` | `flui-view`. Bubble dispatch via element walk. |
 | `ChangeNotifier` | `Listenable` trait (sanctioned by FR-029) | `flui-foundation`. Multiple impls; `ChangeNotifier` struct is a default fan-out impl. |
 | `ValueNotifier<T>` | `ValueNotifier<T>` struct implementing `Listenable` | `flui-foundation`. |
-| `ValueChanged<T>` callback | `Arc<dyn Fn(T) + Send + Sync>` (owned storage — matches `crates/flui-foundation/src/callbacks.rs:70`) or `&dyn Fn(T)` (borrowed param) | Storage form sanctioned by FR-029 #5. `Arc` not `Box` because the listener registry clones callbacks across notifier fan-out. Note: `crates/flui-foundation/ARCHITECTURE.md:62` is stale and still says `Box<dyn Fn(T)>` — graft pending. |
-| `VoidCallback` | `Arc<dyn Fn() + Send + Sync>` (storage — matches `crates/flui-foundation/src/callbacks.rs:51`) or `&dyn Fn()` (param) | Same. |
+| `ValueChanged<T>` callback | `Rc<dyn Fn(T)>` for owner-authored widget/view callbacks; `Arc<dyn Fn(T) + Send + Sync>` only for data-plane/shared-service callback aliases such as `flui-foundation::ValueChanged` | ADR-0027 split: widget authoring is owner-local; listener registries or cross-thread services keep explicit thread-safe aliases. |
+| `VoidCallback` | `Rc<dyn Fn()>` for owner-authored widget/view callbacks; `Arc<dyn Fn() + Send + Sync>` only for data-plane/shared-service aliases such as `flui-foundation::VoidCallback` | Same split. Do not add `Send + Sync` to public widget callbacks unless the callback is actually executed off the owner lane. |
 | `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (active; see `## Index`). |
 | `Listenable` (Dart base class) | `Listenable` trait — `flui-foundation` | Multiple-source: also see `Animation` for animation-as-listenable. |
 | `mixin Foo on Bar` | `trait Foo` + `#[delegate(Foo)]` via `ambassador` (workspace dep) | See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "mixin". |
@@ -515,7 +556,7 @@ Patterns, not types. When a Dart construct could compile to multiple Rust shapes
 |---|---|---|
 | `(int x) => x * 2` (arrow lambda) | `\|x: i32\| x * 2` | Type annotation usually elided. |
 | `(int x) { return x * 2; }` (block lambda) | `\|x: i32\| { x * 2 }` | Same. |
-| `void Function() cb = () { ... };` (storage) | `let cb: Box<dyn Fn() + Send + Sync> = Box::new(\|\| { ... });` | Storage form per FR-029 #5. |
+| `void Function() cb = () { ... };` (storage) | `let cb: Rc<dyn Fn()> = Rc::new(\|\| { ... });` for owner-plane UI storage; use `Arc<dyn Fn() + Send + Sync>` only for explicit data-plane/shared-service storage | ADR-0027 owner-local callback default. |
 | `cb()` (invocation) | `cb()` | Boxed closures call directly. |
 | capture by reference (Dart default) | move closures explicitly with `move \|\| { ... }` when crossing threads | Rust closure capture is inferred; `move` forces by-value. |
 
@@ -978,7 +1019,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 21 refusal triggers plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

@@ -2,8 +2,8 @@
 //!
 //! This example demonstrates how to use Tickers for smooth animations,
 //! including manual and auto-scheduling tickers, muting, and elapsed time
-//! tracking. Post-U15, both modes share a single [`Ticker`] type — the
-//! constructor selects the driving mode.
+//! tracking. Both modes share a single [`Ticker`] type — the constructor
+//! selects the driving mode.
 //!
 //! Run with: `cargo run --example animation_ticker -p flui-scheduler`
 

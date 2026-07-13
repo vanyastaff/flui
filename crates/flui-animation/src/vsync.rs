@@ -54,10 +54,27 @@ struct RegisteredController {
     last_gen: u64,
 }
 
+/// A nested registry: a `TickerMode`'s subtree registry, ticked through its
+/// parent unless the parent is muted.
+struct RegisteredChild {
+    id: VsyncRegistration,
+    child: Vsync,
+}
+
 #[derive(Default)]
 struct VsyncInner {
     controllers: Vec<RegisteredController>,
+    /// Nested registries — Flutter's `TickerMode` mutes a *subtree*'s tickers
+    /// (`ticker_provider.dart:397`); FLUI's widgets take their `Vsync` from the
+    /// ambient `VsyncScope`, so a subtree's registry is a child of the one
+    /// above it and muting is structural: a muted registry ticks neither its
+    /// own controllers nor its children's. That is Flutter's
+    /// `_updateEffectiveMode` AND (`ticker_provider.dart:246-252`) — a nested
+    /// enabled `TickerMode` cannot re-enable a muted ancestor, because the
+    /// ancestor never forwards the tick.
+    children: Vec<RegisteredChild>,
     next_id: u64,
+    muted: bool,
 }
 
 /// A shared, restart-aware controller registry driven once per frame.
@@ -106,7 +123,80 @@ impl Vsync {
         self.inner.lock().controllers.retain(|c| c.id != id);
     }
 
-    /// The number of currently registered controllers.
+    /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
+    /// to it — unless this registry is [`muted`](Self::set_muted).
+    ///
+    /// A cycle would hang the tick walk; nesting a registry under itself (or
+    /// under one of its own descendants) is a caller bug, so it is refused and
+    /// logged rather than linked.
+    pub fn attach_child(&self, child: &Vsync) -> Option<VsyncRegistration> {
+        if child.contains(self) {
+            tracing::error!(
+                "BUG: a Vsync registry cannot be nested inside itself or its own \
+                 descendant; the child is not attached and its controllers will not tick"
+            );
+            return None;
+        }
+        let mut inner = self.inner.lock();
+        let id = VsyncRegistration(inner.next_id);
+        inner.next_id += 1;
+        inner.children.push(RegisteredChild {
+            id,
+            child: child.clone(),
+        });
+        Some(id)
+    }
+
+    /// Detach the child registry previously attached under `id`. Idempotent.
+    pub fn detach_child(&self, id: VsyncRegistration) {
+        self.inner.lock().children.retain(|c| c.id != id);
+    }
+
+    /// Whether both handles name the **same** registry (`Arc` identity) — how a
+    /// consumer tells "the ambient registry changed" from "same registry, fresh
+    /// clone".
+    #[must_use]
+    pub fn is_same(&self, other: &Vsync) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    /// Whether `other` is this registry or one of its (transitive) children.
+    fn contains(&self, other: &Vsync) -> bool {
+        if Arc::ptr_eq(&self.inner, &other.inner) {
+            return true;
+        }
+        let children: Vec<Vsync> = self
+            .inner
+            .lock()
+            .children
+            .iter()
+            .map(|registered| registered.child.clone())
+            .collect();
+        children.iter().any(|child| child.contains(other))
+    }
+
+    /// Whether this registry is muted — its controllers and every nested
+    /// registry stop advancing (`ticker.dart:124-128`'s `muted` semantics,
+    /// lifted to the registry a `TickerMode` owns).
+    #[must_use]
+    pub fn is_muted(&self) -> bool {
+        self.inner.lock().muted
+    }
+
+    /// Mute or unmute this registry: while muted it delivers no ticks, to its
+    /// own controllers or to a nested registry's.
+    ///
+    /// **The clock keeps running.** Run anchors are absolute, so an unmuted
+    /// controller lands where the wall clock says it should be — it does not
+    /// resume from where it stopped. That is Flutter's `Ticker.muted`
+    /// convention: "a ticker's clock can still run, but the callback will not
+    /// be called" (`ticker.dart:102-104`).
+    pub fn set_muted(&self, muted: bool) {
+        self.inner.lock().muted = muted;
+    }
+
+    /// The number of controllers registered **with this registry**, not
+    /// counting nested ones (see [`attach_child`](Self::attach_child)).
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.lock().controllers.len()
@@ -128,11 +218,30 @@ impl Vsync {
     /// infinite redraw after all animations settle.
     #[must_use]
     pub fn has_running(&self) -> bool {
-        self.inner
-            .lock()
-            .controllers
-            .iter()
-            .any(|c| c.controller.status().is_running())
+        let (mine, children) = {
+            let inner = self.inner.lock();
+            // A muted registry advances nothing — not its own controllers, not a
+            // nested registry's — so nothing under it can hold the frame loop
+            // open.
+            if inner.muted {
+                return false;
+            }
+            (
+                inner
+                    .controllers
+                    .iter()
+                    .any(|c| c.controller.status().is_running()),
+                inner
+                    .children
+                    .iter()
+                    .map(|registered| registered.child.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        // Nested registries hold real controllers: a `TickerMode` (and so every
+        // `Hero` child) puts its subtree's animations in one, and a frame-loop
+        // gate that only looked at this level would stall them after one frame.
+        mine || children.iter().any(Vsync::has_running)
     }
 
     /// Advance every registered, running controller to virtual instant
@@ -144,19 +253,82 @@ impl Vsync {
     /// tick it with the raw seconds elapsed since that anchor. A non-running
     /// controller is skipped (its anchor is set on the frame it next starts), so
     /// a disposed-but-not-unregistered controller is simply not ticked.
+    ///
+    /// # The registry lock is **not** held while ticking
+    ///
+    /// `tick_at` fires the controller's status and value listeners, and a listener
+    /// may legitimately [`unregister`](Self::unregister): a route whose exit
+    /// transition reaches `dismissed` disposes itself from that very listener, and
+    /// disposal unregisters its controller. Holding the lock across `tick_at` made
+    /// that re-entrant — and `parking_lot::Mutex` is not reentrant, so it
+    /// deadlocked rather than panicked.
+    ///
+    /// So each controller is looked up, its bookkeeping updated, and the lock
+    /// dropped *before* it is ticked. Ticking one controller at a time, rather than
+    /// snapshotting them all up front, preserves the property the old loop had:
+    /// a controller that an **earlier** controller's listener starts during this
+    /// same call (a `Scrollable` handing off to its fling controller) is anchored
+    /// and ticked in this frame, not the next.
+    ///
+    /// A controller *registered* during this call is not ticked until the next
+    /// frame, and one *unregistered* during it is skipped from that point on.
+    ///
+    // ponytail: linear scan per controller. The registry holds a handful of
+    // controllers; if it ever holds hundreds, key it by `VsyncRegistration`.
     pub fn tick_all(&self, now_secs: f64) {
-        let mut inner = self.inner.lock();
-        for registered in &mut inner.controllers {
-            let generation = registered.controller.run_generation();
-            if generation != registered.last_gen || registered.run_start_secs.is_none() {
-                registered.last_gen = generation;
-                registered.run_start_secs = Some(now_secs);
-            }
-            if registered.controller.status().is_running() {
-                // `run_start_secs` is `Some` here — set in the branch above on
-                // this same call if it was `None`.
-                let run_start = registered.run_start_secs.unwrap_or(now_secs);
-                registered.controller.tick_at(now_secs - run_start);
+        let (registrations, children, muted) = {
+            let inner = self.inner.lock();
+            (
+                inner
+                    .controllers
+                    .iter()
+                    .map(|registered| registered.id)
+                    .collect::<Vec<_>>(),
+                inner
+                    .children
+                    .iter()
+                    .map(|registered| registered.child.clone())
+                    .collect::<Vec<_>>(),
+                inner.muted,
+            )
+        };
+
+        // A muted registry delivers no tick — not to its own controllers, not
+        // to a nested registry's. The anchors are absolute and left alone, so
+        // the clock keeps running underneath: an unmute lands the animation
+        // where the wall clock says (`ticker.dart:102-104`).
+        if muted {
+            return;
+        }
+
+        for child in children {
+            child.tick_all(now_secs);
+        }
+
+        for id in registrations {
+            let due = {
+                let mut inner = self.inner.lock();
+                let Some(registered) = inner.controllers.iter_mut().find(|c| c.id == id) else {
+                    continue; // A previous tick's listener unregistered it.
+                };
+
+                let generation = registered.controller.run_generation();
+                if generation != registered.last_gen || registered.run_start_secs.is_none() {
+                    registered.last_gen = generation;
+                    registered.run_start_secs = Some(now_secs);
+                }
+                if registered.controller.status().is_running() {
+                    // `run_start_secs` is `Some` here — set in the branch above on
+                    // this same call if it was `None`.
+                    let run_start = registered.run_start_secs.unwrap_or(now_secs);
+                    Some((registered.controller.clone(), now_secs - run_start))
+                } else {
+                    None
+                }
+            };
+
+            if let Some((controller, elapsed)) = due {
+                controller.tick_at(elapsed);
             }
         }
     }
@@ -181,6 +353,165 @@ mod tests {
 
     fn controller(ms: u64) -> AnimationController {
         AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()))
+    }
+
+    /// A muted registry delivers no ticks — neither to its own controllers nor
+    /// to a nested registry's — while the **clock keeps running**: Flutter's
+    /// `Ticker.muted` is "a ticker's clock can still run, but the callback will
+    /// not be called" (`ticker.dart:102-104`), so an unmuted animation lands
+    /// where the wall clock says it should be, not where it stopped.
+    ///
+    /// (FLUI's own `Ticker::mute` freezes elapsed time instead. That type is a
+    /// different layer and has no consumer here; this registry follows the
+    /// `Ticker.muted` *convention*, which is what `TickerMode` mutes.)
+    ///
+    /// Red-check: drop the `if muted { return; }` guard in `tick_all` — the
+    /// muted controller advances and the freeze assertion fails.
+    #[test]
+    fn a_muted_registry_delivers_no_ticks_while_its_clock_runs_on() {
+        let parent = Vsync::new();
+        let child = Vsync::new();
+        parent.attach_child(&child).expect("nested");
+
+        let outer = controller(1000);
+        let inner = controller(1000);
+        parent.register(outer.clone());
+        child.register(inner.clone());
+        let _ = outer.forward();
+        let _ = inner.forward();
+
+        parent.tick_all(0.0);
+        parent.tick_all(0.5);
+        assert!(
+            (outer.value() - 0.5).abs() < 1e-3,
+            "the parent's controller ran"
+        );
+        assert!(
+            (inner.value() - 0.5).abs() < 1e-3,
+            "and the tick reached the nested registry"
+        );
+
+        // Mute the child only: the parent keeps running, the child freezes.
+        child.set_muted(true);
+        parent.tick_all(0.8);
+        assert!(
+            (outer.value() - 0.8).abs() < 1e-3,
+            "the parent is unaffected"
+        );
+        assert!(
+            (inner.value() - 0.5).abs() < 1e-3,
+            "a muted registry does not advance"
+        );
+
+        // Unmute: the clock kept running, so the next tick lands at the wall
+        // clock's position — Flutter's documented `Ticker.muted` convention.
+        child.set_muted(false);
+        parent.tick_all(0.9);
+        assert!(
+            (inner.value() - 0.9).abs() < 1e-3,
+            "an unmuted registry catches up with the clock that kept running \
+             (`ticker.dart:102-104`), it does not resume from where it stopped"
+        );
+
+        outer.dispose();
+        inner.dispose();
+    }
+
+    /// Muting is **structural**, so nesting composes as Flutter's
+    /// `_updateEffectiveMode` AND (`ticker_provider.dart:246-252`): an inner
+    /// registry that is itself unmuted still never advances while an ancestor
+    /// is muted — the ancestor simply never forwards the tick. There is no
+    /// flag to compose, and no way to get the composition wrong.
+    #[test]
+    fn a_muted_ancestor_starves_an_unmuted_descendant() {
+        let outer = Vsync::new();
+        let middle = Vsync::new();
+        let inner = Vsync::new();
+        outer.attach_child(&middle).expect("nested");
+        middle.attach_child(&inner).expect("nested");
+
+        let animation = controller(1000);
+        inner.register(animation.clone());
+        let _ = animation.forward();
+
+        middle.set_muted(true);
+        assert!(!inner.is_muted(), "the innermost registry is enabled");
+
+        outer.tick_all(0.0);
+        outer.tick_all(0.5);
+        assert_eq!(
+            animation.value(),
+            0.0,
+            "a muted ancestor starves the enabled descendant"
+        );
+
+        // Unmute: the first tick through anchors this run's `t = 0` (a
+        // controller that has never been ticked has no anchor yet), the next
+        // one advances it.
+        middle.set_muted(false);
+        outer.tick_all(1.0);
+        outer.tick_all(1.4);
+        assert!(
+            animation.value() > 0.0,
+            "the tick flows through the unmuted ancestor"
+        );
+
+        animation.dispose();
+    }
+
+    /// A cycle would hang the tick walk, so nesting a registry inside itself
+    /// (or inside one of its own descendants) is refused, not linked.
+    #[test]
+    fn a_cyclic_nesting_is_refused() {
+        let outer = Vsync::new();
+        let inner = Vsync::new();
+        outer.attach_child(&inner).expect("nested");
+
+        assert!(
+            inner.attach_child(&outer).is_none(),
+            "nesting an ancestor under its own descendant is refused"
+        );
+        assert!(
+            outer.attach_child(&outer).is_none(),
+            "and so is nesting a registry under itself"
+        );
+
+        // The tick walk still terminates.
+        outer.tick_all(0.0);
+    }
+
+    /// The frame-loop gate asks `has_running`. A `TickerMode` — and therefore
+    /// every `Hero` child — puts its subtree's controllers in a **nested**
+    /// registry, so a gate that only looked at the top level would report "no
+    /// animation" and stall them after a single frame.
+    ///
+    /// Red-check: drop the recursion in `has_running` — the nested controller is
+    /// invisible and the first assertion fails.
+    #[test]
+    fn has_running_sees_controllers_in_nested_registries() {
+        let parent = Vsync::new();
+        let child = Vsync::new();
+        parent.attach_child(&child).expect("nested");
+
+        let animation = controller(1000);
+        child.register(animation.clone());
+        assert!(!parent.has_running(), "nothing is running yet");
+
+        let _ = animation.forward();
+        assert!(
+            parent.has_running(),
+            "a running controller in a nested registry keeps the frame loop alive"
+        );
+
+        // A muted registry cannot advance anything, so it cannot keep the loop
+        // alive either.
+        child.set_muted(true);
+        assert!(
+            !parent.has_running(),
+            "a muted registry's controllers do not hold the frame loop open"
+        );
+
+        animation.dispose();
     }
 
     #[test]
@@ -254,5 +585,74 @@ mod tests {
         );
 
         controller.dispose();
+    }
+
+    /// A status listener that unregisters its own controller — what a route does
+    /// when its exit transition reaches `dismissed` and it disposes itself — must
+    /// not deadlock.
+    ///
+    /// Regression: `tick_all` used to hold the registry lock across `tick_at`, so
+    /// the listener's `unregister` re-entered a non-reentrant `parking_lot::Mutex`
+    /// and hung. Found by the first end-to-end `PopupRoute` pop and recorded in
+    /// ADR-0020 ("A real deadlock in `flui-animation`, found by the first end-to-end
+    /// pop").
+    #[test]
+    fn a_listener_may_unregister_from_inside_tick_all() {
+        let vsync = Vsync::new();
+        let controller =
+            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let registration = vsync.register(controller.clone());
+
+        let slot: Arc<Mutex<Option<VsyncRegistration>>> = Arc::new(Mutex::new(Some(registration)));
+        let vsync_for_listener = vsync.clone();
+        let slot_for_listener = Arc::clone(&slot);
+        controller.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed
+                && let Some(registration) = slot_for_listener.lock().take()
+            {
+                vsync_for_listener.unregister(registration);
+            }
+        }));
+
+        controller.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0);
+        vsync.tick_all(0.2); // past the 100 ms duration → Completed → unregisters
+
+        assert!(slot.lock().is_none(), "the listener ran and unregistered");
+        assert_eq!(vsync.len(), 0, "and the registry dropped the controller");
+
+        controller.dispose();
+    }
+
+    /// The converse: registering from inside a listener is also legal, and the new
+    /// controller simply waits for the next frame.
+    #[test]
+    fn a_listener_may_register_from_inside_tick_all() {
+        let vsync = Vsync::new();
+        let driver =
+            AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let _driver_reg = vsync.register(driver.clone());
+
+        let late = AnimationController::new(Duration::from_millis(100), Arc::new(Scheduler::new()));
+        let vsync_for_listener = vsync.clone();
+        let late_for_listener = late.clone();
+        let registered = Arc::new(Mutex::new(false));
+        let registered_for_listener = Arc::clone(&registered);
+        driver.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed && !*registered_for_listener.lock() {
+                *registered_for_listener.lock() = true;
+                vsync_for_listener.register(late_for_listener.clone());
+            }
+        }));
+
+        driver.forward().expect("fresh controller forwards");
+        vsync.tick_all(0.0);
+        vsync.tick_all(0.2);
+
+        assert!(*registered.lock());
+        assert_eq!(vsync.len(), 2, "the late controller joined the registry");
+
+        driver.dispose();
+        late.dispose();
     }
 }

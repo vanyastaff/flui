@@ -1,8 +1,8 @@
 //! Custom clipper delegate for custom clipping shapes.
 //!
-//! [`CustomClipper`] allows users to define custom clipping paths for
-//! render objects. It is used by `RenderClipRect`, `RenderClipRRect`,
-//! and `RenderClipPath`.
+//! [`CustomClipper`] allows users to define owner-local custom clipping
+//! shapes. Current render objects do not store these delegates directly;
+//! path-based render effects use owner-lane targets instead.
 
 use std::{any::Any, fmt::Debug};
 
@@ -45,7 +45,7 @@ use flui_types::{Point, Rect, Size};
 ///     }
 /// }
 /// ```
-pub trait CustomClipper<T: Clone>: Send + Sync + Debug {
+pub trait CustomClipper<T: Clone>: Debug {
     /// Get the clip shape for the given size.
     ///
     /// Called whenever the size changes or when `should_reclip` returns true.

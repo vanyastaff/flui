@@ -89,10 +89,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
-use flui_interaction::PointerEvent;
 use flui_interaction::arena::{GestureArena, run_pointer_lifecycle};
+use flui_interaction::{
+    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, PointerEvent,
+};
 use flui_interaction::{ManualClock, MonotonicClock};
 use flui_rendering::pipeline::PipelineOwner;
+use flui_scheduler::{BoxedTask, LocalPostFrameLane, Scheduler, TaskToken};
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 use parking_lot::RwLock;
 
@@ -118,6 +121,17 @@ struct TreeBinding {
 /// mounted tree triple (via [`with_tree`](Self::with_tree)) and drives a
 /// restart-aware animation-controller registry ([`Vsync`]). Drive it with
 /// [`pump_frame`](Self::pump_frame).
+///
+/// # Thread ownership
+///
+/// A `HeadlessBinding` must be created, used, and dropped on one owner thread.
+/// It is intentionally `!Send + !Sync`: owner-local post-frame callbacks may
+/// capture `Rc`/`Cell`/`RefCell`. Frame, input, and tree-update entry points
+/// activate the binding's local callback lane for their full dynamic extent;
+/// embedders performing lifecycle work through raw owner access must wrap it in
+/// [`enter_owner_scope`](Self::enter_owner_scope). Cross-thread test work must
+/// communicate through the existing Send-safe scheduler capabilities, never
+/// move or share the binding itself.
 #[derive(Debug)]
 pub struct HeadlessBinding {
     /// The single virtual time authority. Every time-based read flows from here.
@@ -133,6 +147,15 @@ pub struct HeadlessBinding {
     /// The mounted tree this binding rebuilds + renders each frame. `None` for a
     /// gesture-only binding ([`new`](Self::new)); `Some` once tree-bound.
     tree: Option<TreeBinding>,
+    /// Owns the frame-driven async task driver. Binding-local, not
+    /// the `Scheduler::instance()` singleton, so headless tests stay isolated and
+    /// parallel-safe; the *driver step* is the same `drive_async_tasks` method
+    /// `AppBinding::draw_frame` calls.
+    scheduler: Scheduler,
+    /// Owner-affine post-frame callback storage, active across every owner entry.
+    local_post_frame: LocalPostFrameLane,
+    /// Owner-affine interaction callback storage, active across every owner entry.
+    interaction_lane: InteractionLane,
 }
 
 impl HeadlessBinding {
@@ -147,15 +170,86 @@ impl HeadlessBinding {
     /// [`dispatch_pointer`](Self::dispatch_pointer).
     #[must_use]
     pub fn new() -> Self {
+        Self::try_new().expect("BUG: interaction lane identity exhausted")
+    }
+
+    /// Try to create a headless binding with a fresh owner-local interaction lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError::IdentifierExhausted`] if the private
+    /// interaction lane identity space has no unused value remaining.
+    pub fn try_new() -> Result<Self, InteractionDispatchError> {
         let clock = ManualClock::new();
         let arena =
             GestureArena::binding_driven(Arc::new(clock.clone()) as Arc<dyn MonotonicClock>);
-        Self {
+        let scheduler = Scheduler::new();
+        let local_post_frame = scheduler.local_post_frame_lane();
+        let interaction_lane = InteractionLane::try_new()?;
+        Ok(Self {
             clock,
             arena,
             vsync: Vsync::new(),
             tree: None,
-        }
+            scheduler,
+            local_post_frame,
+            interaction_lane,
+        })
+    }
+
+    /// Install this binding's build-time capabilities on `build_owner`.
+    ///
+    /// The **one** place a headless caller wires the two capabilities a view can
+    /// acquire from its `BuildContext`, both naming *this* binding's scheduler:
+    /// the async driver and the post-frame handle.
+    ///
+    /// Must run **before** the root is mounted: a `ViewState::init_state` during
+    /// that first `build_scope` already asks for them. `bind_tree` re-installs for
+    /// owners bound afterwards.
+    ///
+    /// Naming the `Scheduler::instance()` singleton here would leave every headless
+    /// post-frame callback undrained — nothing drives the singleton's frames in a
+    /// headless process.
+    pub fn install_build_capabilities(&self, build_owner: &mut flui_view::BuildOwner) {
+        build_owner.set_async_driver(self.scheduler.async_driver().clone());
+        build_owner.set_post_frame_handle(self.local_post_frame.post_frame_handle());
+        build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
+    }
+
+    /// Enter this binding's owner scope for initial mount/build lifecycle work.
+    ///
+    /// Harnesses call this around the first `mount_root` + `build_scope`, so a
+    /// lifecycle callback receives the same active local post-frame lane as it
+    /// does during [`pump_frame`](Self::pump_frame).
+    pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
+        self.local_post_frame
+            .enter(|| self.interaction_lane.enter(callback))
+    }
+
+    /// The Send-safe interaction dispatch handle for this binding's owner lane.
+    #[must_use]
+    pub fn interaction_dispatch_handle(&self) -> InteractionDispatchHandle {
+        self.interaction_lane.dispatch_handle()
+    }
+
+    /// The binding's scheduler, which owns the frame-driven async task driver.
+    ///
+    /// Binding-local: two `HeadlessBinding`s never share a task set, so async
+    /// tests stay parallel-safe.
+    #[must_use]
+    pub fn scheduler(&self) -> &Scheduler {
+        &self.scheduler
+    }
+
+    /// Queue `future` for polling in this binding's next
+    /// [`pump_frame`](Self::pump_frame).
+    ///
+    /// The headless test helper: spawn a future (or a channel
+    /// receiver a test completes between frames), pump, and observe that the
+    /// frame saw it. Dropping the returned token cancels the task.
+    #[must_use = "dropping the TaskToken immediately cancels the task"]
+    pub fn spawn_local(&self, future: BoxedTask) -> TaskToken {
+        self.scheduler.spawn_local(future)
     }
 
     /// Create a tree-bound binding from already-bootstrapped owners.
@@ -177,12 +271,47 @@ impl HeadlessBinding {
         pipeline_owner: Arc<RwLock<PipelineOwner>>,
     ) -> Self {
         let mut binding = Self::new();
-        binding.tree = Some(TreeBinding {
+        binding.bind_tree(build_owner, tree, pipeline_owner);
+        binding
+    }
+
+    /// Attach an already-bootstrapped tree to this binding.
+    ///
+    /// Use this (rather than [`with_tree`](Self::with_tree)) when the tree must be
+    /// mounted *before* it is attached — a `FutureBuilder`/`StreamBuilder`
+    /// subscribes in `init_state`, which runs during the mount `build_scope`, so
+    /// the build capabilities and their owner-local lane have to be installed
+    /// and active before mounting:
+    ///
+    /// ```rust,ignore
+    /// let mut binding = HeadlessBinding::new();
+    /// binding.install_build_capabilities(&mut build_owner);
+    /// binding.enter_owner_scope(|| {
+    ///     // …mount + build_scope…
+    /// });
+    /// binding.bind_tree(build_owner, tree, pipeline_owner);
+    /// ```
+    pub fn bind_tree(
+        &mut self,
+        build_owner: BuildOwner,
+        tree: ElementTree,
+        pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    ) {
+        // Widgets spawn into the driver this binding's frame step
+        // polls — the binding-local one, never `Scheduler::instance()`. Idempotent:
+        // installing it again is a no-op if the caller already did.
+        let mut build_owner = build_owner;
+        build_owner.set_async_driver(self.scheduler.async_driver().clone());
+        // The post-frame capability must name THIS binding's
+        // scheduler — the one `pump_frame`'s `drive_frame` drains — never the
+        // `Scheduler::instance()` singleton, which nothing drives headlessly.
+        build_owner.set_post_frame_handle(self.local_post_frame.post_frame_handle());
+        build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
+        self.tree = Some(TreeBinding {
             build_owner,
             tree,
             pipeline_owner,
         });
-        binding
     }
 
     /// Register `controller` with this binding's [`Vsync`] so each
@@ -291,8 +420,12 @@ impl HeadlessBinding {
     /// so the sweep observes the hold and defers — and lets every overlapping
     /// detector add its recognizers before the single `close`.
     pub fn dispatch_pointer(&self, event: &PointerEvent, route: impl FnOnce(&PointerEvent)) {
-        route(event);
-        run_pointer_lifecycle(&self.arena, event);
+        self.local_post_frame.enter(|| {
+            self.interaction_lane.enter(|| {
+                route(event);
+                run_pointer_lifecycle(&self.arena, event);
+            });
+        });
     }
 
     /// Replace the element rooted at `root_id` with `new_root` and schedule it
@@ -313,19 +446,27 @@ impl HeadlessBinding {
     /// Panics if the binding is not tree-bound (built via
     /// [`with_tree`](Self::with_tree)).
     pub fn swap_root_view(&mut self, root_id: ElementId, new_root: &dyn View) {
-        let Some(tree_binding) = self.tree.as_mut() else {
-            panic!(
-                "swap_root_view requires a tree-bound binding (built via HeadlessBinding::with_tree)"
-            );
-        };
-        // Split borrow: `build_owner` and `tree` are distinct fields of
-        // `TreeBinding`, so the borrow checker accepts simultaneous borrows of
-        // each through the single `&mut TreeBinding`.
-        let mut owner = tree_binding.build_owner.element_owner_mut();
-        tree_binding.tree.update(root_id, new_root, &mut owner);
-        // Guarantee the element is in the dirty heap even if `dispatch_view_update`
-        // only set the internal atomic flag (not the owner's dirty heap).
-        owner.schedule_build_for(root_id, 0);
+        let Self {
+            tree,
+            local_post_frame,
+            interaction_lane,
+            ..
+        } = self;
+        local_post_frame.enter(|| interaction_lane.enter(|| {
+            let Some(tree_binding) = tree.as_mut() else {
+                panic!(
+                    "swap_root_view requires a tree-bound binding (built via HeadlessBinding::with_tree)"
+                );
+            };
+            // Split borrow: `build_owner` and `tree` are distinct fields of
+            // `TreeBinding`, so the borrow checker accepts simultaneous borrows of
+            // each through the single `&mut TreeBinding`.
+            let mut owner = tree_binding.build_owner.element_owner_mut();
+            tree_binding.tree.update(root_id, new_root, &mut owner);
+            // Guarantee the element is in the dirty heap even if `dispatch_view_update`
+            // only set the internal atomic flag (not the owner's dirty heap).
+            owner.schedule_build_for(root_id, 0);
+        }));
     }
 
     /// Advance one deterministic frame by `dt`.
@@ -367,49 +508,98 @@ impl HeadlessBinding {
     /// ([`with_tree`](Self::with_tree)); a gesture-only binding stops after step 3,
     /// so a bare controller can still be driven deterministically.
     pub fn pump_frame(&mut self, dt: Duration) {
-        // 1. Advance the virtual clock. Every subsequent read sees the new instant.
-        self.clock.advance(dt);
+        let Self {
+            clock,
+            arena,
+            vsync,
+            tree,
+            scheduler,
+            local_post_frame,
+            interaction_lane,
+        } = self;
+        local_post_frame.enter(|| {
+            interaction_lane.enter(|| {
+                // 1. Advance the virtual clock. Every subsequent read sees the new instant.
+                clock.advance(dt);
 
-        // 2. Fire gesture deadlines at the NEW time. A long-press deadline that has
-        //    now elapsed fires here, inside the frame.
-        self.arena.poll_deadlines();
+                // 2. Fire gesture deadlines at the NEW time. A long-press deadline that has
+                //    now elapsed fires here, inside the frame.
+                arena.poll_deadlines();
 
-        // 3. Tick the registered controllers on the virtual timeline. The
-        //    registry is restart-aware: it re-anchors each controller's run on a
-        //    `run_generation` bump and ticks only running controllers with the
-        //    raw seconds elapsed since that run's anchor.
-        let now_secs = self.clock.elapsed().as_secs_f64();
-        self.vsync.tick_all(now_secs);
+                // 3. Tick the registered controllers on the virtual timeline. The
+                //    registry is restart-aware: it re-anchors each controller's run on a
+                //    `run_generation` bump and ticks only running controllers with the
+                //    raw seconds elapsed since that run's anchor.
+                let now_secs = clock.elapsed().as_secs_f64();
+                vsync.tick_all(now_secs);
 
-        // 4 + 5. Tree-bound only: drain the build inbox (filled by steps 2-3) and
-        //        run the render pipeline frame. The pipeline owner is shared via
-        //        `Arc<RwLock<…>>`, so take it out under the write lock, run the
-        //        frame by value, and restore — the production frame path.
-        if let Some(tree_binding) = self.tree.as_mut() {
-            tree_binding.build_owner.build_scope(&mut tree_binding.tree);
+                // 4-7. THE shared frame ordering:
+                //
+                //      begin (transient + microtasks + ONE async-driver poll)
+                //   -> handle_draw_frame (persistent callbacks)
+                //   -> the pipeline, below, in the persistent slot
+                //   -> end_frame (post-frame callbacks, timing, notify)
+                //   -> Idle
+                //
+                // The desktop / android / wasm runners call the SAME `Scheduler::drive_frame`
+                // on the `Scheduler::instance()` singleton; this binding calls it on its
+                // binding-local scheduler. A post-frame callback therefore observes THIS
+                // frame's committed layout in both, which is what `HeroController` needs.
+                //
+                // `drive_async_tasks` is no longer called here: the scheduler owns that
+                // step now. It still runs before `build_scope`, in
+                // `handle_begin_frame`'s mid-frame slot.
+                //
+                // `Scheduler` is `Arc`-backed and `Clone`, so the handle taken here shares
+                // the callback queues with `self.scheduler` — cloning it merely releases
+                // the borrow on `self` for the pipeline closure.
+                let scheduler = scheduler.clone();
+                let vsync_time = flui_scheduler::Instant::now();
+                scheduler.drive_frame(vsync_time, || Self::run_pipeline(tree));
+            });
+        });
+    }
 
-            let mut guard = tree_binding.pipeline_owner.write();
-            let owner = std::mem::take(&mut *guard);
-            let (owner, result) = owner.run_frame();
-            // A headless frame over an already-mounted, rooted tree must succeed;
-            // a pipeline error here is a regression, surfaced loudly (the harness
-            // and production frame path expect the same).
-            result.expect("headless pump_frame: pipeline run_frame should succeed");
-            *guard = owner;
-            // Guard dropped here so the pipeline write-lock is free for the
-            // service calls below.
-            drop(guard);
+    /// The pipeline step: build → layout (with the build-during-layout fixpoint)
+    /// → paint, plus the lazy-sliver service pass. Runs inside
+    /// [`Scheduler::drive_frame`]'s persistent slot.
+    fn run_pipeline(tree: &mut Option<TreeBinding>) {
+        let Some(tree_binding) = tree.as_mut() else {
+            return;
+        };
 
-            // 6. Service lazy-sliver child requests. Layout may have emitted
-            //    build requests for absent children and retain-band signals for
-            //    eviction. Drain both buffers, call each registered ChildManager
-            //    to build/evict, run a second build_scope for newly-built child
-            //    subtrees, mark slivers needing re-layout, and finalize evicted
-            //    elements. This is a no-op when no lazy slivers are mounted.
-            tree_binding
-                .build_owner
-                .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
-        }
+        // Drain the build inbox, filled by the vsync tick and the async-driver
+        // poll that ran before this closure.
+        tree_binding.build_owner.build_scope(&mut tree_binding.tree);
+
+        // `run_frame_with_layout_builders` is the shared
+        // layout<->build fixpoint — it settles every build-during-layout node
+        // before paint, then delegates to `PipelineOwner::run_frame`. It is a
+        // plain `run_frame` while the registry is empty. `AppBinding::draw_frame`
+        // calls the SAME helper: a builder that settles headlessly but not on
+        // screen would be a silent correctness bug, so neither path may
+        // hand-roll the loop.
+        //
+        // The owner is threaded by lock, not by value: the helper takes it out
+        // per layout pass and restores it before running the builders, whose
+        // `build_scope` mounts render objects through this same lock.
+        let result = tree_binding
+            .build_owner
+            .run_frame_with_layout_builders(&mut tree_binding.tree, &tree_binding.pipeline_owner);
+        // A headless frame over an already-mounted, rooted tree must succeed;
+        // a pipeline error here is a regression, surfaced loudly (the harness
+        // and production frame path expect the same).
+        result.expect("headless pump_frame: pipeline run_frame should succeed");
+
+        // Service lazy-sliver child requests. Layout may have emitted build
+        // requests for absent children and retain-band signals for eviction.
+        // Drain both buffers, call each registered ChildManager to build/evict,
+        // run a second build_scope for newly-built child subtrees, mark slivers
+        // needing re-layout, and finalize evicted elements. This is a no-op when
+        // no lazy slivers are mounted.
+        tree_binding
+            .build_owner
+            .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
     }
 }
 
@@ -417,4 +607,13 @@ impl Default for HeadlessBinding {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[cfg(test)]
+mod auto_trait_tests {
+    use static_assertions::assert_not_impl_any;
+
+    use super::HeadlessBinding;
+
+    assert_not_impl_any!(HeadlessBinding: Send, Sync);
 }

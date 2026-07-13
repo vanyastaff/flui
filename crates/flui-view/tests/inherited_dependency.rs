@@ -2,18 +2,16 @@
 //! `InheritedBehavior::on_view_updated` dependent-notification, and
 //! `BuildContext::get_inherited` (non-recording read).
 //!
-//! Plan U9 coverage:
-//! - AE1 (R4): `depend_on_inherited::<T, _>` returns `Some(R)` and records
+//! Coverage:
+//! - `depend_on_inherited::<T, _>` returns `Some(R)` and records
 //!   the caller in the InheritedElement's dependent map.
-//! - AE2 (R16): rebuilding the InheritedView with a value where
+//! - Rebuilding the InheritedView with a value where
 //!   `update_should_notify` returns `true` marks dependents dirty.
 //! - Edge: no ancestor of `T` -> returns `None`, no dependent-set write.
 //! - Edge: deduplication when the same element calls `depend_on` twice.
 //! - Edge: an unmounted dependent's `ElementId` does not panic when
 //!   `schedule_build_for` is invoked.
-//!
-//! Plan U10 coverage:
-//! - AE3 (R5): `get_inherited::<T, _>` returns `Some(R)` BUT does NOT
+//! - `get_inherited::<T, _>` returns `Some(R)` BUT does NOT
 //!   record the caller in the InheritedElement's dependent map. Used for
 //!   one-time reads (settings/theme captured at mount).
 //! - Edge: no ancestor of `T` -> returns `None`, no dependent-set write.
@@ -26,7 +24,14 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![allow(clippy::unreadable_literal, clippy::unwrap_used)]
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(
+    clippy::arc_with_non_send_sync,
+    clippy::unreadable_literal,
+    clippy::unwrap_used
+)]
 
 use std::sync::Arc;
 
@@ -105,11 +110,19 @@ impl RenderView for LeafView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 }
 
 impl View for LeafView {
@@ -129,7 +142,7 @@ fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>
 }
 
 // ============================================================================
-// AE1: depend_on returns Some(value) and records the dependent
+// depend_on returns Some(value) and records the dependent
 // ============================================================================
 
 #[test]
@@ -182,13 +195,13 @@ fn depend_on_returns_value_and_records_dependent() {
 }
 
 // ============================================================================
-// AE2: rebuilding the InheritedView with update_should_notify=true marks
+// rebuilding the InheritedView with update_should_notify=true marks
 //      dependents dirty
 // ============================================================================
 
 #[test]
 fn inherited_update_notifies_dependents() {
-    // Same scaffolding as AE1
+    // Same scaffolding as the depend_on-records-dependent test above.
     let (tree, owner) = create_tree_and_owner();
 
     let provider_v1 = ThemeProvider {
@@ -358,7 +371,7 @@ fn unmounted_dependent_no_op_on_schedule() {
 }
 
 // ============================================================================
-// AE3 (U10 / R5): get_inherited returns the value WITHOUT recording a
+// get_inherited returns the value WITHOUT recording a
 // dependent — Flutter parity framework.dart:5092
 // `getInheritedWidgetOfExactType` (no `updateDependencies` call).
 // ============================================================================
@@ -387,7 +400,7 @@ fn get_inherited_returns_value_without_recording_dependent() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
 
-    // Sibling assertion to AE1: same tree shape, same closure, but `get`
+    // Sibling assertion to the depend_on-records-dependent test above: same tree shape, same closure, but `get`
     // instead of `depend_on`. The value is returned identically; only
     // the dependent-set side-effect differs.
     let color = ctx.get::<ThemeProvider, u32>(|view| view.theme.color);
@@ -399,9 +412,9 @@ fn get_inherited_returns_value_without_recording_dependent() {
 
     // Critical assertion: the dependent map is EMPTY. If `get_inherited`
     // were ever to call `record_dependent`, this would fail with
-    // `dependents().len() == 1`. The parallel to AE1
-    // (`depend_on_returns_value_and_records_dependent`) where the same
-    // tree shape yields `dependents().contains_key(&child_id) == true`
+    // `dependents().len() == 1`. The parallel to
+    // `depend_on_returns_value_and_records_dependent`, where the same
+    // tree shape yields `dependents().contains_key(&child_id) == true`,
     // is what locks down the non-recording semantic.
     let tree_guard = tree.read();
     let provider_node = tree_guard.get(provider_id).expect("provider exists");
@@ -420,7 +433,7 @@ fn get_inherited_returns_value_without_recording_dependent() {
 }
 
 // ============================================================================
-// Edge (U10): get_inherited returns None when no ancestor InheritedView
+// Edge: get_inherited returns None when no ancestor InheritedView
 // of that type exists — no dependent-set write happens because nothing
 // was found to write into.
 // ============================================================================
@@ -440,8 +453,7 @@ fn get_inherited_returns_none_when_no_ancestor() {
 }
 
 // ============================================================================
-// U14 (R16, audit V-19): wire `did_change_dependencies` to inherited
-// updates.
+// Wires `did_change_dependencies` to inherited updates.
 //
 // When `InheritedView::update_should_notify` returns `true`, the
 // dependent's typed `ViewState::did_change_dependencies` hook fires
@@ -1145,7 +1157,7 @@ mod live_inherited_during_build {
         let inner: ObservedColor = Arc::new(Mutex::new(None));
 
         // Mount the provider; its own typed `child` is never built — we attach
-        // the stacked consumers directly under it (mirroring the AE1 setup),
+        // the stacked consumers directly under it (mirroring the earlier dependent-registration setup),
         // so the throwaway `Middle` child is inert.
         let root = ThemeRoot {
             theme: MyTheme { color: 0x00FACADE },

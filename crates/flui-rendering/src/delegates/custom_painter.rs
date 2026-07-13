@@ -16,16 +16,15 @@ use flui_types::{Offset, Size};
 /// callbacks are not yet modeled; the builder accepts no operations and is
 /// consumed by platform integrations as an empty shell.
 ///
-/// Cycle 4 R-3: pre-cycle `SemanticsBuilder::new` panicked via
-/// `unimplemented!()` on construction — a Constitution Principle 6
-/// violation reachable from any consumer of
-/// `CustomPainter::semantics_builder`. Post-cycle the constructor
-/// returns an inert empty builder and emits a **one-shot**
-/// `tracing::warn!` so the missing-impl notice surfaces in logs
-/// without aborting the process and without spamming per-construction.
-/// The one-shot gate uses [`std::sync::Once`]; the `Default` impl
-/// delegates to [`Self::new`] explicitly so the warn fires through
-/// either constructor path (PR #109 review feedback).
+/// `SemanticsBuilder::new` used to panic via `unimplemented!()` on
+/// construction, which is unacceptable for any consumer of
+/// `CustomPainter::semantics_builder` reachable from production code. The
+/// constructor now returns an inert empty builder and emits a
+/// **one-shot** `tracing::warn!` so the missing-impl notice surfaces in
+/// logs without aborting the process and without spamming
+/// per-construction. The one-shot gate uses [`std::sync::Once`]; the
+/// `Default` impl delegates to [`Self::new`] explicitly so the warn
+/// fires through either constructor path.
 #[derive(Debug, Clone)]
 pub struct SemanticsBuilder {
     _private: (),
@@ -41,8 +40,8 @@ impl SemanticsBuilder {
     ///
     /// Currently a no-op shell — custom-painter semantics build operations
     /// land when `CustomPainter` exposes a real semantics-builder contract.
-    /// See audit R-3 in
-    /// `docs/research/2026-05-22-flui-rendering-engine-audit.md`.
+    /// See `docs/research/2026-05-22-flui-rendering-engine-audit.md` for
+    /// the background on this gap.
     ///
     /// On the first call per process emits a `tracing::warn!`; the
     /// `Once` gate suppresses subsequent warns to avoid per-frame log
@@ -64,8 +63,8 @@ impl SemanticsBuilder {
 impl Default for SemanticsBuilder {
     fn default() -> Self {
         // Explicit delegation so the `Once`-gated warn fires regardless of
-        // which constructor the caller picks. The `#[derive(Default)]` we
-        // had pre-fix bypassed `new()` entirely (PR #109 review feedback).
+        // which constructor the caller picks. A prior `#[derive(Default)]`
+        // bypassed `new()` entirely, which skipped the warn.
         Self::new()
     }
 }

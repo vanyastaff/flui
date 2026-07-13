@@ -1267,7 +1267,7 @@ mod tests {
     }
 
     /// `flui::reconcile` emission coverage on the LIVE slab path
-    /// (catalog #3 / the work KTD-9 named). The production reconciler
+    /// (catalog #3). The production reconciler
     /// emits one typed [`ReconcileEvent`](super::ReconcileEvent) per
     /// child disposition so devtools / selection-persistence subscribers
     /// reconstruct each frame's outcome WITHOUT a tree diff. Before this
@@ -1337,9 +1337,9 @@ mod tests {
         /// Assert the captured events carry exactly the expected
         /// `(kind, slot)` dispositions as a MULTISET. Both sides are
         /// sorted before comparison so a test does not depend on the
-        /// HashMap-iteration order of the keyed-middle phase (the SC-008
-        /// multiset contract) — `expected` is written in natural emission
-        /// order at the call site.
+        /// HashMap-iteration order of the keyed-middle phase's multiset
+        /// contract — `expected` is written in natural emission order
+        /// at the call site.
         fn assert_dispositions(events: &[CollectedEvent], expected: &[(ReconcileEventKind, u64)]) {
             let sort_key = |(kind, slot): &(ReconcileEventKind, u64)| (*kind as u8, *slot);
             let mut actual: Vec<(ReconcileEventKind, u64)> =
@@ -1360,7 +1360,7 @@ mod tests {
         /// exercised OUTSIDE a collector scope it can latch "no interest"
         /// and the first captured reconcile then observes zero events.
         /// Building the prior state with raw inserts keeps every emit
-        /// inside a `capture` — the same discipline the §U18 corpus uses
+        /// inside a `capture` — the same discipline the reconciler test corpus uses
         /// (it mounts its initial tree directly, never via a warmup
         /// reconcile).
         fn seed(
@@ -1520,7 +1520,7 @@ mod tests {
             );
         }
 
-        /// The S_3 permutation corpus (SC-002 / FR-024(b)) on the slab:
+        /// The S_3 permutation corpus (FR-024(b)) on the slab:
         /// for each of the 6 permutations of keyed `[1, 2, 3]`, the
         /// disposition multiset matches the keyed-reconcile contract AND
         /// every key's element moves to its permuted slot (never rebuilt).

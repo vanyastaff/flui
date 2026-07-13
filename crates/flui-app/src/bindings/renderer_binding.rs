@@ -84,11 +84,11 @@ pub struct RenderingFlutterBinding {
 
     /// Mouse tracker for hover notification.
     ///
-    /// Cycle 4 U-6: switched from the deleted rendering-side
+    /// Switched from the deleted rendering-side
     /// `flui_rendering::input::MouseTracker` to the canonical
     /// `flui_interaction::MouseTracker`. The latter is `Clone` with
     /// `Arc<Mutex<inner>>` interior mutability, so the previous
-    /// `RwLock<...>` outer wrap is dropped -- it was double-wrapping
+    /// `RwLock<...>` outer wrap was dropped -- it was double-wrapping
     /// the same mutability concern.
     mouse_tracker: MouseTracker,
 
@@ -142,8 +142,8 @@ impl RenderingFlutterBinding {
     /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
     /// that elements use, ensuring a single PipelineOwner instance at runtime.
     pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
-        // Cycle 4 U-6: the pre-cycle dummy `MouseTrackerHitTest`
-        // callback constructed here is gone -- the canonical
+        // The dummy `MouseTrackerHitTest` callback that used to be
+        // constructed here is gone -- the canonical
         // `flui_interaction::MouseTracker` is parameterless. The
         // hit-test function is passed at the `update_*` call site
         // by the gesture binding, not stored on the tracker.
@@ -379,13 +379,13 @@ impl RendererBinding for RenderingFlutterBinding {
         &self.root_pipeline_owner
     }
 
-    // R-6 reshape (cycle 4 Wave 2 U-1): the pre-cycle `render_views()`
-    // returned `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` and
+    // The trait used to expose `render_views()` returning
+    // `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` directly, which
     // leaked the implementer's lock topology through the trait surface.
-    // Post-cycle the trait exposes four primitives; the
+    // The trait now exposes four narrow primitives instead; the
     // `self.render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>`
-    // private field stays as private storage (HashMap is still the
-    // canonical container; we just don't expose the lock graph anymore).
+    // field stays as private storage (HashMap is still the
+    // canonical container -- it just isn't exposed as a lock graph anymore).
     fn render_view(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
         self.render_views.read().get(&view_id).cloned()
     }
@@ -643,10 +643,9 @@ mod tests {
     fn test_render_view_management() {
         let binding = RenderingFlutterBinding::instance();
 
-        // Add a render view (R-6 reshape: use the new
-        // `add_render_view_with_config` default-impl helper which
-        // delegates to `insert_render_view` after deriving the
-        // view-configuration).
+        // Add a render view via the `add_render_view_with_config`
+        // default-impl helper, which delegates to `insert_render_view`
+        // after deriving the view configuration.
         let view = Arc::new(RwLock::new(RenderView::new()));
         binding.add_render_view_with_config(1, view.clone());
 

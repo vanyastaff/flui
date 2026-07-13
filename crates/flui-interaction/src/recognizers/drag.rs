@@ -9,7 +9,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html>
 
-use std::{sync::Arc, time::Instant};
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::Instant};
 
 use flui_types::{
     Offset,
@@ -108,15 +108,15 @@ pub struct DragEndDetails {
 pub use crate::processing::Velocity;
 
 /// Callback fired when a pointer contacts the screen and might begin a drag.
-pub type DragDownCallback = Arc<dyn Fn(DragDownDetails) + Send + Sync>;
+pub type DragDownCallback = Rc<dyn Fn(DragDownDetails)>;
 /// Callback fired when the drag is recognized (slop crossed and arena won).
-pub type DragStartCallback = Arc<dyn Fn(DragStartDetails) + Send + Sync>;
+pub type DragStartCallback = Rc<dyn Fn(DragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
-pub type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
+pub type DragUpdateCallback = Rc<dyn Fn(DragUpdateDetails)>;
 /// Callback fired when the pointer lifts and the drag completes.
-pub type DragEndCallback = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
+pub type DragEndCallback = Rc<dyn Fn(DragEndDetails)>;
 /// Callback fired when the gesture is cancelled (e.g. the arena rejects it).
-pub type DragCancelCallback = Arc<dyn Fn() + Send + Sync>;
+pub type DragCancelCallback = Rc<dyn Fn()>;
 
 /// Recognizes drag gestures
 ///
@@ -158,7 +158,7 @@ pub struct DragGestureRecognizer {
     start_behavior: DragStartBehavior,
 
     /// Callbacks
-    callbacks: Arc<Mutex<DragCallbacks>>,
+    callbacks: Rc<RefCell<DragCallbacks>>,
 
     /// Current drag state
     drag_state: Arc<Mutex<DragState>>,
@@ -238,7 +238,7 @@ impl DragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
-            callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
@@ -254,7 +254,7 @@ impl DragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
-            callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(settings)),
         })
@@ -319,45 +319,39 @@ impl DragGestureRecognizer {
     /// movement threshold is met.
     pub fn with_on_down(
         self: Arc<Self>,
-        callback: impl Fn(DragDownDetails) + Send + Sync + 'static,
+        callback: impl Fn(DragDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_down = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag start callback
     pub fn with_on_start(
         self: Arc<Self>,
-        callback: impl Fn(DragStartDetails) + Send + Sync + 'static,
+        callback: impl Fn(DragStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag update callback
     pub fn with_on_update(
         self: Arc<Self>,
-        callback: impl Fn(DragUpdateDetails) + Send + Sync + 'static,
+        callback: impl Fn(DragUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag end callback
-    pub fn with_on_end(
-        self: Arc<Self>,
-        callback: impl Fn(DragEndDetails) + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_end = Some(Arc::new(callback));
+    pub fn with_on_end(self: Arc<Self>, callback: impl Fn(DragEndDetails) + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag cancel callback
-    pub fn with_on_cancel(
-        self: Arc<Self>,
-        callback: impl Fn() + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_cancel = Some(Arc::new(callback));
+    pub fn with_on_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -376,7 +370,7 @@ impl DragGestureRecognizer {
         drop(state); // Release lock before callback
 
         // Call on_down callback (pointer contact before drag starts)
-        if let Some(callback) = self.callbacks.lock().on_down.clone() {
+        if let Some(callback) = self.callbacks.borrow().on_down.clone() {
             let details = DragDownDetails {
                 global_position: position,
                 local_position: position,
@@ -421,7 +415,7 @@ impl DragGestureRecognizer {
                             .add_position(Instant::now(), position);
                         drop(state); // Release lock before calling callback
 
-                        if let Some(callback) = self.callbacks.lock().on_start.clone() {
+                        if let Some(callback) = self.callbacks.borrow().on_start.clone() {
                             let details = DragStartDetails {
                                 global_position: start_position,
                                 local_position: start_position,
@@ -448,7 +442,7 @@ impl DragGestureRecognizer {
 
                     drop(state); // Release lock before calling callback
 
-                    if let Some(callback) = self.callbacks.lock().on_update.clone() {
+                    if let Some(callback) = self.callbacks.borrow().on_update.clone() {
                         let details = DragUpdateDetails {
                             global_position: position,
                             local_position: position,
@@ -476,7 +470,7 @@ impl DragGestureRecognizer {
             state.state = DragPhase::Ready;
             drop(state); // Release lock before calling callback
 
-            if let Some(callback) = self.callbacks.lock().on_end.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                 let details = DragEndDetails {
                     velocity,
                     global_position: position,
@@ -501,7 +495,7 @@ impl DragGestureRecognizer {
             state.state = DragPhase::Cancelled;
             drop(state);
 
-            if let Some(callback) = self.callbacks.lock().on_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_cancel.clone() {
                 callback();
             }
 
@@ -598,7 +592,7 @@ impl GestureRecognizer for DragGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        let mut callbacks = self.callbacks.lock();
+        let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_down = None;
         callbacks.on_start = None;
         callbacks.on_update = None;

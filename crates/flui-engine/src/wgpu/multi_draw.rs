@@ -22,7 +22,7 @@
 //!
 //! **Result:** 75% CPU reduction for draw submission!
 //!
-//! # Cycle 4 wave 5 E-10
+//! # Trimmed to the live surface
 //!
 //! The batcher was trimmed to the surface `WgpuPainter::
 //! flush_all_instanced_batches` actually exercises:
@@ -44,10 +44,10 @@
 //! have observable effect via `stats()`, which is covered by the
 //! debug-build log in painter.
 
-// Cycle 4 wave 5 E-10: `DrawIndexedIndirectArgs` struct + impl
-// deleted. The bytemuck::Pod wrapper for `wgpu::util::
+// The `DrawIndexedIndirectArgs` struct and its impl were deleted. The
+// bytemuck::Pod wrapper for `wgpu::util::
 // DrawIndexedIndirectArgs` was used only by the previous
-// `DrawIndirect` wrapper struct (also deleted this wave); the
+// `DrawIndirect` wrapper struct (also deleted alongside it); the
 // surviving `MultiDrawBatcher` accumulates stats and lets painter
 // drive the actual `wgpu::util::DrawIndexedIndirectArgs` construction
 // at the submission callsite. Reintroduce the Pod wrapper here if a
@@ -55,7 +55,7 @@
 
 /// Pipeline identifier for grouping draws
 ///
-/// Cycle 4 wave 5 E-10: `PipelineId::Texture` was dropped --
+/// `PipelineId::Texture` was dropped --
 /// `WgpuPainter::flush_all_instanced_batches` only batches
 /// rect / circle / arc / shadow; textured drawing has its own
 /// dispatch path that doesn't route through this enum.

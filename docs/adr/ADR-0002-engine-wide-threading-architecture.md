@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Proposed
+- **Status:** Superseded by [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (2026-07-11; it absorbs the Send-boundary table, G1–G4 gates, non-goals, and migration order)
 - **Date:** 2026-06-09
 - **Deciders:** @vanyastaff *(pending sign-off)*
 - **Scope:** workspace-wide — `flui-foundation`, `flui-scheduler`, `flui-rendering`, `flui-painting`/`flui-layer`, `flui-view`, `flui-interaction`, `flui-app`/`flui-platform`

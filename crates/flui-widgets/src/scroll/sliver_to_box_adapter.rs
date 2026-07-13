@@ -34,11 +34,18 @@ impl RenderView for SliverToBoxAdapter {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverToBoxAdapter;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSliverToBoxAdapter::new()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // The adapter carries no configuration — nothing to update.
     }
 

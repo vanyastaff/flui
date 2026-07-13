@@ -68,7 +68,7 @@ impl AtlasRect {
 
 /// Texture atlas entry
 ///
-/// Cycle 4 wave 5 E-10: dropped the `image_id: u32` field. It was
+/// The `image_id: u32` field was dropped from this struct. It was
 /// set on construction but read by zero consumers in the workspace
 /// -- the `HashMap<u32, AtlasEntry>` keying inside `TextureAtlas`
 /// is the canonical ID source, and the field was duplicate
@@ -366,14 +366,13 @@ impl TextureAtlas {
         }
     }
 
-    // Cycle 4 wave 5 E-10: `get_entry(image_id)` and `texture()`
-    // getters deleted. Workspace grep returned zero callers for
-    // either; the entries `HashMap` is queried internally via
-    // `insert_image` / `pack_image` paths, and the texture is
-    // consumed exclusively through `create_view()` (live).
-    // `Texture` is wgpu's own type so the alternative `&self.texture`
-    // accessor is trivial to reintroduce if a future consumer needs
-    // direct access.
+    // The `get_entry(image_id)` and `texture()` getters were deleted.
+    // Workspace grep returned zero callers for either; the entries
+    // `HashMap` is queried internally via `insert_image` / `pack_image`
+    // paths, and the texture is consumed exclusively through
+    // `create_view()` (live). `Texture` is wgpu's own type so the
+    // alternative `&self.texture` accessor is trivial to reintroduce if
+    // a future consumer needs direct access.
 
     /// Create a [`wgpu::TextureView`] for the atlas texture.
     ///

@@ -120,9 +120,9 @@ impl RectInstance {
         }
     }
 
-    // Cycle 4 E-5: deleted `RectInstance::rounded_rect(rect, color,
-    // single_radius)` (uniform-corner shortcut). Zero callsites --
-    // production paths use `rounded_rect_corners` (per-corner).
+    // `RectInstance::rounded_rect(rect, color, single_radius)` (the
+    // uniform-corner shortcut) was deleted. Zero callsites -- production
+    // paths use `rounded_rect_corners` (per-corner).
 
     /// Create an instance with per-corner radii (baked-AABB fast path).
     ///
@@ -247,15 +247,15 @@ impl RectInstance {
         self
     }
 
-    // Cycle 4 E-5: deleted `RectInstance::with_transform(scale_x,
-    // scale_y, translate_x, translate_y)` (per-instance transform
-    // setter; zero callsites -- transform comes from the painter's
-    // matrix stack, not from per-instance helpers).
-    // `with_clip_rsuperellipse` was retained against the audit's
-    // recommendation: 1 live callsite in the `painter` module
-    // (`instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)`)
-    // -- audit text claimed zero callsites but missed the method-style
-    // dispatch on `instance` (vs type-path `RectInstance::`).
+    // `RectInstance::with_transform(scale_x, scale_y, translate_x,
+    // translate_y)` (a per-instance transform setter) was deleted;
+    // zero callsites -- transform comes from the painter's matrix
+    // stack, not from per-instance helpers.
+    // `with_clip_rsuperellipse` was kept despite an earlier code-review
+    // pass recommending its removal: it has 1 live callsite in the
+    // `painter` module (`instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)`)
+    // -- that earlier pass had reported zero callsites but missed the
+    // method-style dispatch on `instance` (vs type-path `RectInstance::`).
 
     /// Get wgpu vertex buffer layout for instance data.
     ///
@@ -412,8 +412,8 @@ impl CircleInstance {
         }
     }
 
-    // Cycle 4 E-5: deleted `CircleInstance::ellipse(center, radius_x,
-    // radius_y, color)`. Zero call sites — production paths use
+    // `CircleInstance::ellipse(center, radius_x, radius_y, color)` was
+    // deleted. Zero call sites — production paths use
     // `CircleInstance::new` with scale_xy. When per-axis radii independent of
     // the canvas scale are needed it relands with a concrete first consumer.
 
@@ -542,7 +542,7 @@ impl ArcInstance {
         }
     }
 
-    // Cycle 4 E-5: deleted `ArcInstance::ellipse(...)` (zero call sites).
+    // `ArcInstance::ellipse(...)` was deleted (zero call sites).
     // Re-lands with a concrete consumer when needed. All SrcOver arcs now use
     // `with_affine_transform`; an elliptical arc folds `M_world * diag(rx, ry)`
     // into `linear_cols` (mirroring `oval`).
@@ -646,13 +646,14 @@ impl TextureInstance {
         }
     }
 
-    // Cycle 4 E-5: deleted `TextureInstance::with_rotation(dst_rect,
-    // angle, tint)`. Zero callsites -- production paths use
+    // `TextureInstance::with_rotation(dst_rect, angle, tint)` was
+    // deleted. Zero callsites -- production paths use
     // `TextureInstance::with_uv` (canonical, 5 callsites in
     // painter) and the painter's matrix stack handles rotation
-    // composition. `TextureInstance::with_uv` was retained against
-    // the audit's recommendation because it IS live (audit text
-    // claimed otherwise; grep proved 5 painter callsites).
+    // composition. `TextureInstance::with_uv` was kept despite an
+    // earlier code-review pass recommending its removal, because it
+    // IS live (that pass claimed otherwise; grep proved 5 painter
+    // callsites).
 
     /// Create a textured quad with custom UV and a raw `[f32; 4]` tint.
     ///

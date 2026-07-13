@@ -9,7 +9,7 @@
 Three rules, in priority order. They override convenience, never each other.
 
 1. **Port the core, loyal to behavior.** The three-tree model (View → Element → Render), lifecycle, the layout/paint/hit-test protocol, and reconciliation are ported 1:1 from `.flutter/`. *Structure* is Rust-native (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`); *behavior* stays loyal. "Make the core better" reverts to Flutter semantics — see [`STRATEGY.md`](STRATEGY.md).
-2. **Leapfrog the edges.** Where Flutter has *no strong contract* — animation curves, velocity prediction, color interpolation, input smoothing — propose the market-best abstraction now, not the Flutter one. Breaking changes are cheap today and ossify once consumers exist; do not defer a better shape to "later". (This never touches the widget-tree mental model rule #1 protects.)
+2. **Leapfrog the edges.** Where Flutter has *no strong contract* — animation curves, velocity prediction, color interpolation, input smoothing — propose the market-best abstraction now, not the Flutter one. Breaking changes are cheap today and ossify once consumers exist; do not defer a better shape to "later". (This never touches the widget-tree mental model rule #1 protects.) **Sanctioned leapfrog zones (ADR-0027):** multi-window ownership, runtime/scheduling topology, concurrency architecture, and presentation architecture — Flutter is the behavioral reference for widget-tree semantics, *not* for process/thread/window topology; a review must not reject `UiRealm`-model divergence (realm-scoped GlobalKey/focus, per-realm schedulers) as forbidden drift.
 3. **Done means verified against the reference.** "Implemented" is not "done", and a green gate is necessary but not sufficient. Before claiming parity or completion, verify against `.flutter/` and the render harness — see [Definition of Done](#definition-of-done-anti-cheating).
 
 ---
@@ -140,7 +140,7 @@ Additionally, CI gates on:
 
 ## Architecture Constraints (port methodology)
 
-These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 21 refusal triggers plus FR-033.
+These are enforced by `scripts/port-check.sh` in CI and locally via `just port-check`. Violating them will fail CI. See [`docs/PORT.md`](docs/PORT.md) for the full list of 22 refusal triggers plus FR-033.
 
 | Rule | Why |
 |------|-----|
@@ -153,10 +153,11 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 | **Sanctioned `dyn` boundaries only** — see the allowlist in port-check.sh trigger #9 | FR-036 registry |
 | **No locks in public API** (`pub fn -> MutexGuard`, `pub field: Mutex<...>`) | SP-6: locks behind private fields |
 | **No `println!`/`eprintln!`/`dbg!`** in foundation/tree/macros crates | Use `tracing` macros |
+| **No lifecycle-only frame capability inside `build`/`perform_layout`/`paint`** — `rebuild_handle()` (ADR-0018) and `post_frame_handle()` (ADR-0021) are acquired in `ViewState::init_state` / `did_change_dependencies` and fired later | Trigger #22: scheduling from a frame phase is an unbounded rebuild loop, or a callback against the frame still running. Adding a capability to `BuildContext` means adding its token to `scripts/check-frame-capability-scope.sh` in the same change |
 
 ## Testing Quirks
 
-- **CI runs nextest with `--test-threads=1`** due to a pre-existing flui-app singleton-state flake
+- **CI runs nextest fully parallel.** flui-app's bindings are process-global singletons, but nextest gives each test its own process; the in-process race on `semantics_enabled` is serialized by `SEMANTICS_TEST_LOCK`. A new test that mutates shared binding state must take that lock.
 - **`flui-platform` tests are excluded from CI** (STATUS_HEAP_CORRUPTION investigation in progress)
 - **Render-object harness** — every concrete `RenderBox`/`RenderSliver` must have harness tests. See [`crates/flui-rendering/docs/TESTING.md`](crates/flui-rendering/docs/TESTING.md) for the `RenderTester`/`Probe` API and catalog rules. The catalog CI guard (`render_object_harness.rs`) verifies every exported type appears in `RENDER_OBJECT_TYPES` and has a matching `harness_*` test.
 - **Coverage**: `just coverage` (requires `cargo-llvm-cov`)
@@ -203,7 +204,7 @@ CI runs on PR + push to main. Jobs (all gated on `checks`):
 1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh` (incl. the `[lints] workspace = true` drift guard), `port-check.sh`
 2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
 3. **deny** — `cargo deny check` (advisories, bans, licenses, sources; config: `deny.toml`)
-4. **test** — `cargo nextest run --workspace --exclude flui-platform --test-threads 1` (lib **and** integration targets; Linux only)
+4. **test** — `cargo nextest run --workspace --exclude flui-platform` (lib **and** integration targets; Linux only)
 5. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking)
 6. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
 7. **msrv** — `cargo check --workspace --all-targets` on Rust 1.96 (the declared MSRV; other jobs run latest stable)
@@ -227,7 +228,7 @@ When you hit a build/test error:
 2. **Clippy warning** → run `just clippy` to see workspace-wide. Fix the warning, don't suppress it.
 3. **`unimplemented!()`/`todo!()` in production** → implement or gate behind `cfg(test)` / platform-init exemption.
 4. **Render-object harness failure** → every exported `RenderBox`/`RenderSliver` must appear in `RENDER_OBJECT_TYPES` with a matching `harness_*` test. See `crates/flui-rendering/docs/TESTING.md`.
-5. **Test flake (flui-app singleton)** → CI uses `--test-threads=1`. If tests fail locally with parallelism, try single-threaded.
+5. **Test flake (flui-app singleton)** → a test is mutating process-global binding state without taking `SEMANTICS_TEST_LOCK` (or an equivalent guard). Serialize it; do not reach for `--test-threads=1`.
 6. **Type mismatch across crate boundary** → check if you're using the wrong ID type (1-based vs 0-based). See ID offset pattern above.
 
 ## Definition of Done (anti-cheating)
@@ -257,3 +258,4 @@ An agent reporting "done" makes a claim that later work is built on. A green gat
 - **Logging via `tracing` only** — no `println!`, `eprintln!`, or `dbg!` in shipped code
 - **Verify before committing** — for flui-rendering work: `cargo test -p flui-rendering`, `cargo fmt --package flui-rendering -- --check`, `cargo clippy -p flui-rendering --all-targets -- -D warnings`
 - **Prefer behavior-first ports** — translate Flutter semantics into Rust-native structure, keep edge-case behavior loyal
+- **No internal process-ID markers in code** — comments, doc-comments, file names, and function/test names must not encode private review/planning history (`Cycle N`, `audit T-N`/`R-N`/`E-N`, `PR #NNN review`, `Codex/Copilot P#`, bare `U##` step-citations, spec `SC-NNN` success-criteria numbers). State the invariant or rationale in plain English instead — a reader shouldn't need `docs/research/`, `docs/plans/`, or a spec doc that may not outlive the project to understand why the code is shaped this way. `FR-NNN` and `ADR-NNNN` stay exempt only where they're mechanically load-bearing (e.g. grepped by `scripts/port-check.sh` triggers FR-033/FR-036) — not as a blanket pass for any formal-looking ID. Workspace swept clean 2026-07-12; don't reintroduce the pattern.

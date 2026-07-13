@@ -1,23 +1,23 @@
 //! `RenderSliverList` — request-strategy lazily-virtualized list of Box children.
 //!
-//! # U4.2 — producer half only (INERT without U4.3)
+//! # Producer half only (inert without a child-manager consumer)
 //!
-//! This type uses the **request-strategy seam** introduced in U4.2: when an
+//! This type uses the **request-strategy seam**: when an
 //! in-band child is absent it calls [`SliverLayoutContext::request_child_build`],
 //! which pushes `(sliver_id, logical_index)` into the arena's request sink.
 //! After the layout pass the pipeline moves those requests to
 //! `PipelineOwner::take_pending_child_requests` — the binding-layer entry point
-//! that the element tree (U4.3) will consume.
+//! that the element tree will eventually consume.
 //!
-//! **`RenderSliverList` is inert until U4.3 wires up a child manager** — it
+//! **`RenderSliverList` is inert until a child manager is wired up** — it
 //! emits requests but nothing services them, so absent children never appear.
 //! This matches Flutter's `RenderSliverList` behavior without a `childManager`:
 //! the list reports the virtualizer's estimate geometry but renders nothing for
 //! unbuilt slots.  Document the inert behavior loudly; do not paper over it.
 //!
-//! This seam is **provisional**: U4.3 end-to-end validation may refine the
-//! `(RenderId, usize)` payload or the drain ordering.  The rework surface is
-//! intentionally small.
+//! This seam is **provisional**: end-to-end validation of the consumer half may
+//! refine the `(RenderId, usize)` payload or the drain ordering.  The rework
+//! surface is intentionally small.
 //!
 //! # Design notes
 //!
@@ -47,22 +47,22 @@ use super::virtualized_band::{OffBandDisposal, walk_virtualizer_band};
 // RENDER OBJECT
 // ============================================================================
 
-/// A request-strategy lazily-virtualized `SliverList` (U4.2 producer half).
+/// A request-strategy lazily-virtualized `SliverList` (producer half).
 ///
 /// Lays out arena-resident children from the visible-plus-cache band and emits
 /// build requests for absent slots via
 /// [`SliverLayoutContext::request_child_build`].  The requests accumulate in
-/// `PipelineOwner::take_pending_child_requests` for the element tree (U4.3).
+/// `PipelineOwner::take_pending_child_requests` for the element tree to consume.
 ///
-/// **Inert without a U4.3 child manager** — absent children are requested but
-/// never built until U4.3 wires the response path.
+/// **Inert without a child manager** — absent children are requested but
+/// never built until a child manager wires up the response path.
 ///
 /// # Flutter parity
 ///
 /// Corresponds to Flutter's `RenderSliverList` whose `childManager`
 /// (`SliverMultiBoxAdaptorElement`) services `createChild` calls.  In FLUI the
-/// element manager is the U4.3 `LazySliverElement`; this object is the render
-/// half of that split.
+/// element manager is the (not-yet-landed) `LazySliverElement`; this object is
+/// the render half of that split.
 ///
 /// # Construction
 ///
@@ -77,7 +77,7 @@ use super::virtualized_band::{OffBandDisposal, walk_virtualizer_band};
 pub struct RenderSliverList {
     // ── item count ───────────────────────────────────────────────────────────
     /// Total known item count (may be updated via `set_item_count` once
-    /// U4.3 learns the real count from the data source).
+    /// the child manager learns the real count from the data source).
     item_count: usize,
 
     // ── virtualization state ─────────────────────────────────────────────────
@@ -171,12 +171,12 @@ impl Diagnosticable for RenderSliverList {
             None,
         );
         props.add_double("pending_correction", self.pending_correction, Some("px"));
-        // Always-set flag to make the inert-until-U4.3 state visible in
-        // diagnostics output during development.
+        // Always-set flag to make the inert-until-child-manager state visible
+        // in diagnostics output during development.
         props.add_flag(
             "inert_without_child_manager",
             true,
-            "no U4.3 child manager wired — requests emit but are unserviced",
+            "no child manager wired — requests emit but are unserviced",
         );
     }
 }
@@ -214,9 +214,10 @@ impl RenderSliver for RenderSliverList {
             // which should not occur on the layout thread.  Returning `None`
             // signals NoChild, matching the honestly-inert posture of this type.
             &mut |_logical_i| None,
-            // Absent strategy: emit a request via the U4.2 seam.  The element
-            // tree (U4.3) services it post-frame.  `dense_count` is ignored —
-            // the element tree decides the insert position.
+            // Absent strategy: emit a request via the request-strategy seam.
+            // The element tree services it post-frame, once a child manager
+            // is wired up.  `dense_count` is ignored — the element tree
+            // decides the insert position.
             &mut |logical_i, _dense_count, _box_constraints, ctx| {
                 ctx.request_child_build(logical_i)
             },

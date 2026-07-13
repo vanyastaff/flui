@@ -241,10 +241,7 @@ fn main() {
     // Register input callback for logging
     window.on_input(Box::new(|input| {
         tracing::trace!("Input: {:?}", input);
-        flui_platform::traits::DispatchEventResult {
-            propagate: true,
-            default_prevented: false,
-        }
+        flui_platform::traits::DispatchEventResult::resolved(true, false)
     }));
 
     // Request first frame

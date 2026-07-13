@@ -29,8 +29,8 @@ use crate::{
 // lived in `crates/flui-rendering/src/children_access.rs` alongside a
 // 500-LOC closure-based iterator (`ChildrenAccess`) and the
 // `ChildHandle` wrapper in `child_handle.rs` -- both fought the borrow
-// checker for users that never appeared, so Mythos Step 5b deleted them
-// outright. `ChildState<P>` itself stays because it IS the data shape
+// checker for users that never appeared, so they were deleted outright.
+// `ChildState<P>` itself stays because it IS the data shape
 // `BoxLayoutContextApi::layout_child` / `position_child` /
 // `child_geometry` / `child_parent_data` need.
 
@@ -91,7 +91,7 @@ impl Protocol for BoxProtocol {
     type HitTest = BoxHitTest;
     type DefaultParentData = BoxParentData;
 
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
     type LayoutCtxErased<'ctx> = dyn BoxLayoutCtxErased + 'ctx;
 
     type LayoutCache = crate::storage::BoxLayoutCache;
@@ -100,7 +100,7 @@ impl Protocol for BoxProtocol {
         "box"
     }
 
-    /// D-block PR-A1 U17 — override the default no-op with the actual
+    /// Overrides the default no-op with the actual
     /// Flutter-parity `compute_relayout_boundary` call.
     ///
     /// `parent_uses_size = true` (conservative default per Copilot P1 review
@@ -174,7 +174,7 @@ impl Protocol for BoxProtocol {
         Ok(())
     }
 
-    /// D-block PR-A1b U19 — wraps the given `BoxConstraints` in a typed
+    /// Wraps the given `BoxConstraints` in a typed
     /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` (no
     /// children, no callback) and hands an erased `&mut dyn
     /// BoxLayoutCtxErased` view to `f`.
@@ -186,7 +186,7 @@ impl Protocol for BoxProtocol {
     /// `LayoutContextApi` whose `Leaf`-arity body returns `Size::ZERO` /
     /// no-op (the existing semantics for a no-children context).
     ///
-    /// The pipeline's `layout_dirty_root` (U20) constructs its own typed
+    /// The pipeline's `layout_dirty_root` constructs its own typed
     /// context with children via disjoint borrows and bypasses this
     /// helper.
     fn with_leaf_erased_ctx<R>(
@@ -194,7 +194,7 @@ impl Protocol for BoxProtocol {
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = BoxLayoutCtx::<flui_tree::Leaf, BoxParentData>::new(constraints);
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
         f(erased)
     }
@@ -332,7 +332,7 @@ pub type BoxChildIntrinsicCallback<'a> = &'a (
 /// Per-child geometry storage owned by the typed wrapper when bridging
 /// from an erased context.
 ///
-/// **D-block PR-A1b U19 (companion memo D5):** when the `RenderBox`
+/// When the `RenderBox`
 /// blanket impl constructs a `BoxLayoutCtx::from_erased(...)` Proxy view
 /// of an `&mut dyn BoxLayoutCtxErased`, the typed wrapper needs to honour
 /// the [`LayoutContextApi::child_geometry`] contract
@@ -346,7 +346,7 @@ pub type BoxChildIntrinsicCallback<'a> = &'a (
 /// user-widget flow
 /// (`let s = ctx.layout_child(i, c); … ctx.child_geometry(i)`).
 ///
-/// # Storage shape (PR #141 Copilot review feedback, comment 3293746260)
+/// # Storage shape
 ///
 /// Indexed by dense child index (`0..child_count`) so a hash map is
 /// strictly worse on every dimension: lookup is `O(log n)` ↔ `O(1)`
@@ -362,13 +362,14 @@ type ProxyChildSizeCache = Vec<Option<Size>>;
 /// The children reference allows `position_child` to store offsets that
 /// will be used during painting.
 ///
-/// **D-block PR-A1b U19 (companion memo D5) — storage variants.** The
-/// context carries two storage modes:
+/// # Storage variants
+///
+/// The context carries two storage modes:
 ///
 /// 1. `Direct` (default constructors `new`, `with_children`,
 ///    `with_layout_callback`): pipeline owns the children `Vec`, child
 ///    IDs, and synchronous layout callback. This is the production path
-///    used by `RenderEntry::layout_leaf_only` (leaf shape) and U20's
+///    used by `RenderEntry::layout_leaf_only` (leaf shape) and
 ///    `layout_dirty_root` (parent+children disjoint-borrow shape).
 /// 2. `Proxy` (constructor `from_erased`): wraps `&mut dyn
 ///    BoxLayoutCtxErased` so the `RenderObject<BoxProtocol>` blanket
@@ -426,7 +427,7 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
         child_sizes: ProxyChildSizeCache,
         /// The underlying erased context (typically a pipeline-side
         /// `BoxLayoutCtx` in Direct mode).
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
         erased: &'ctx mut dyn BoxLayoutCtxErased,
     },
 }
@@ -485,7 +486,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         }
     }
 
-    /// **D-block PR-A1b U19** — constructs a Proxy-mode `BoxLayoutCtx`
+    /// Constructs a Proxy-mode `BoxLayoutCtx`
     /// that delegates child operations to the given erased context. Used by
     /// the `RenderObject<BoxProtocol>` blanket impl in
     /// [`crate::traits::RenderBox`] to hand a typed
@@ -507,7 +508,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// code from constructing Proxy contexts (a sharp tool that requires
     /// the parent_data-downcast invariants and Direct↔Proxy semantic
     /// awareness documented on [`BoxLayoutCtxErased`]).
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
     pub(crate) fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
         let constraints = erased.constraints();
         // Review fix #2: assert at construction time that the typed
@@ -534,9 +535,9 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         );
         // Pre-size the dense `Vec<Option<Size>>` cache to the erased
         // ctx's child_count — one allocation per Proxy construction, no
-        // per-`layout_child` reallocation. PR #141 Copilot review fix:
-        // swapped from `HashMap<usize, Size>` (sparse + hashing on hot
-        // path) to indexed `Vec<Option<Size>>` (O(1) access, contiguous).
+        // per-`layout_child` reallocation. Uses indexed `Vec<Option<Size>>`
+        // (O(1) access, contiguous) rather than `HashMap<usize, Size>`
+        // (sparse + hashing on the hot path).
         let child_count = erased.child_count();
         Self {
             storage: BoxLayoutCtxStorage::Proxy {
@@ -702,7 +703,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 }
 
 // ============================================================================
-// BOX LAYOUT CTX ERASED (D-block PR-A1b U19 / memo D5)
+// BOX LAYOUT CTX ERASED
 // ============================================================================
 
 /// Protocol-typed but **arity- and parent-data-erased** view of a box layout
@@ -710,18 +711,17 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// [`RenderObject<BoxProtocol>::perform_layout_raw`](crate::traits::RenderObject::perform_layout_raw)
 /// boundary.
 ///
-/// # Motivation (D-block PR-A1b U19 / companion memo D5)
+/// # Motivation
 ///
-/// Pre-U19, the blanket impl `impl<T: RenderBox> RenderObject<BoxProtocol> for T`
+/// Before this trait existed, the blanket impl `impl<T: RenderBox> RenderObject<BoxProtocol> for T`
 /// could not bridge to the user's typed `RenderBox::perform_layout(ctx:
 /// &mut BoxLayoutCtx<Self::Arity, Self::ParentData>)` because the trait
 /// surface only carried protocol-typed constraints (no children, no
 /// layout-callback). As a consequence, the blanket `perform_layout_raw`
-/// shipped as a no-op returning the cached `*self.size()` — D-1's AE1
-/// concretely showed `Size::ZERO` for fresh boxes (companion memo §D5).
+/// shipped as a no-op returning the cached `*self.size()`, which
+/// concretely showed `Size::ZERO` for fresh boxes.
 ///
-/// `BoxLayoutCtxErased` is the trait-object-friendly wrapper picked in
-/// memo D5: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
+/// `BoxLayoutCtxErased` is the trait-object-friendly wrapper: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
 /// constructs a typed [`BoxLayoutCtx<'_, A, P>`], the trait blanket impl
 /// below coerces it to `&mut dyn BoxLayoutCtxErased`, and the
 /// `RenderObject<BoxProtocol>` blanket impl in
@@ -744,8 +744,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// # Sliver counterpart
 ///
 /// [`SliverLayoutCtxErased`](super::sliver_protocol::SliverLayoutCtxErased) is the
-/// analogous trait for sliver layout. The sliver bridge is stubbed for
-/// D-block — see [`crate::traits::RenderSliver`].
+/// analogous trait for sliver layout. The sliver bridge is currently
+/// stubbed — see [`crate::traits::RenderSliver`].
 ///
 /// # Thread-safety
 ///
@@ -1353,7 +1353,7 @@ impl BoxHitTestEntry {
 ///
 /// # Transform accumulation
 ///
-/// Cycle 4 wave 5 R-24: `current_transform()` previously folded the
+/// `current_transform()` previously folded the
 /// entire `transform_stack: Vec<Matrix4>` via
 /// `iter().fold(IDENTITY, |acc, t| acc * t)` -- O(N) matrix-multiply
 /// chain on every hit-test entry. Hit testing is hot-path; a 30-deep
@@ -1374,14 +1374,15 @@ impl BoxHitTestEntry {
 /// (the driver subtracts the child's `RenderState.offset`). Returns
 /// whether the child subtree was hit.
 // `Send + Sync` mechanically required by `HitTestContextApi`'s bounds
-// (inherited like `LayoutChildCallback`'s — see U19); the walk itself
+// (inherited like `LayoutChildCallback`'s bound); the walk itself
 // is control-plane single-threaded.
 pub type HitTestChildCallback<'a> =
     &'a mut (dyn FnMut(usize, Option<Offset>) -> bool + Send + Sync);
 
 /// Box-protocol hit-test context: local-space position, the entry
 /// path under construction, the live child recursion supplied by the
-/// pipeline driver, and the transform stack (R-24 cached composition).
+/// pipeline driver, and the transform stack (with a cached composition,
+/// see [`BoxHitTestCtx::current_transform`]).
 pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
@@ -1438,8 +1439,8 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
 
     /// Returns the current accumulated transform.
     ///
-    /// O(1) -- reads the cached composition. See type-level doc for
-    /// the R-24 incremental-composition design.
+    /// O(1) -- reads the cached composition. See the type-level doc for
+    /// the incremental-composition design.
     pub fn current_transform(&self) -> Matrix4 {
         self.composed_transform
     }
@@ -1502,7 +1503,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn push_transform(&mut self, transform: Matrix4) {
-        // R-24: keep the cached composition in sync. One mat-mult
+        // Keep the cached composition in sync. One mat-mult
         // per push amortizes O(stack_depth) hit-test queries down
         // to O(1).
         self.transform_stack.push(transform);
@@ -1510,7 +1511,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn pop_transform(&mut self) {
-        // R-24: a popped factor cannot be "un-multiplied" cheaply
+        // A popped factor cannot be "un-multiplied" cheaply
         // (would require matrix inverse + multiply, ~5x cost of a
         // forward fold and numerically fragile). Full re-fold over
         // the now-shorter stack is the cleanest fix; hit-test stacks
@@ -1590,7 +1591,7 @@ mod tests {
         assert!(!ctx.is_hit(outside));
     }
 
-    /// Cycle 4 wave 5 R-24: incremental transform composition must
+    /// Incremental transform composition must
     /// stay numerically identical to the prior O(N) fold path.
     /// Builds a 3-deep stack and asserts the cached
     /// `current_transform()` equals the explicit `fold(IDENTITY, |a, t| a * t)`.

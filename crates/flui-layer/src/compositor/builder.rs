@@ -1,8 +1,8 @@
 //! Stack-based [] for constructing layer hierarchies.
 //!
-//! Extracted from `compositor.rs` in Mythos Step 10. The builder is the
+//! Extracted from `compositor.rs`. The builder is the
 //! canonical scene-construction API; `LayerTree::push_*` helpers were
-//! deleted in Step 5.
+//! deleted separately.
 
 use flui_foundation::LayerId;
 use flui_types::{

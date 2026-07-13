@@ -46,7 +46,7 @@ Each wave is one PR-sized unit. Effort: S/M/L/XL. Axis tags from §2. All file:l
 
 ### Wave 1 — Perf harness *(perf · M)* — **the enabling work; build first**
 *Why first:* until this exists, every "faster than Flutter" claim is unfalsifiable (analysis §4). It is purely **additive** (new bench files + spans), zero contract risk, and it is what converts the GC-free thesis from inferential to measured.
-- **U1a** `crates/flui-rendering/benches/layout.rs` (criterion, `harness=false`) — build representative trees (flat 1K leaves; deep 1K chain; wide Flex/Stack N=10/100/1000), bench `owner.run_layout()` / `layout_dirty_root()`. Reuse fixtures from `tests/u23_run_layout_wiring.rs`.
+- **U1a** `crates/flui-rendering/benches/layout.rs` (criterion, `harness=false`) — build representative trees (flat 1K leaves; deep 1K chain; wide Flex/Stack N=10/100/1000), bench `owner.run_layout()` / `layout_dirty_root()`. Reuse fixtures from `tests/run_layout_wiring.rs`.
 - **U1b** `crates/flui-rendering/benches/paint.rs` — bench `run_paint()` + `run_compositing()` over the same trees.
 - **U1c** per-phase `#[tracing::instrument(name="layout"/"paint"/"compositing")]` spans on `owner.rs:1098/2065/1895`.
 - **U1d** extend `flui-scheduler` `FrameTiming` (`frame.rs:541`) with `phase_durations: [Milliseconds; 4]`, populated by the scheduler around each pipeline call → the frame-time-histogram oracle for ROADMAP:182, **without** re-enabling `flui-devtools`.

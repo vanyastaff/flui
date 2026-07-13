@@ -146,7 +146,7 @@ pub async fn main() {
 
 /// Master function that draws all demo sections.
 fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let section_gap = 30.0;
     let mut y_offset = 20.0;
@@ -291,7 +291,7 @@ fn ofs(dx: f32, dy: f32) -> Offset<Pixels> {
 
 /// 1. Basic filled rectangles
 fn draw_basic_shapes(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let colors = [
         (Color::RED, "Red"),
@@ -312,7 +312,7 @@ fn draw_basic_shapes(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 2. Rounded rects with varying radii
 fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let radii = [5.0, 15.0, 30.0, 50.0];
     let colors = [
@@ -338,7 +338,7 @@ fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 3. Circles and ovals
 fn draw_circles_and_ovals(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     // Filled circles
     let circle_colors = [
@@ -372,7 +372,7 @@ fn draw_circles_and_ovals(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 4. Lines and stroked shapes
 fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     // Lines of varying widths
     let widths = [1.0, 2.0, 3.0, 5.0, 8.0];
@@ -411,7 +411,7 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 5. Dashed lines
 fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let patterns: &[(&[f32], &str)] = &[
         (&[10.0, 5.0], "10-5"),
@@ -432,7 +432,7 @@ fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 6. Paths & polygons (star, triangle, pentagon, custom bezier)
 fn draw_paths(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 
@@ -478,7 +478,7 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 7. Arcs
 fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -509,7 +509,7 @@ fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 8. Gradients
 fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 
@@ -601,7 +601,7 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 9. Transforms
 fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 
@@ -690,7 +690,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 10. Clipping
 fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 
@@ -764,7 +764,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 11. Double rounded rect
 fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 
@@ -811,7 +811,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 12. Text rendering
 fn draw_text(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let sizes = [12.0, 16.0, 20.0, 28.0, 36.0];
     let mut text_y = y;
@@ -829,7 +829,7 @@ fn draw_text(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
 /// 13. Opacity & blending
 fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
-    // Painter trait deleted in Mythos U5; methods are inherent on WgpuPainter
+    // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 

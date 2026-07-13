@@ -1,0 +1,563 @@
+<!-- Rust Code Studio task breakdown for ADR-0027 interaction routing. -->
+
+# Tasks: ADR-0027 owner-routed interaction routes
+
+- **Spec:** [`spec.md`](spec.md)   ·   **Updated:** `2026-07-13`
+
+## Task list
+
+*Ordered. Each task is small enough for one /dev-task, except the explicitly atomic
+cross-crate migrations whose intermediate states would violate the architecture or
+Flutter semantics. This file is the durable source of truth. Status: ☐ todo ·
+◐ in-progress · ☑ done · ⊘ blocked.*
+
+| # | Task outcome | Acceptance slice | Owner lead | Blocked by | Status |
+|---|--------------|------------------|------------|------------|--------|
+| 1 | Land the inert `InteractionLane`, non-ABA IDs, owner-local registry, resolved-route storage, and typed errors without changing production dispatch. | Lane/gesture/cell/route auto-traits; `WrongThread`, `InactiveRealm`, `WrongRealm`, `OwnerGone`, `TargetGone`, and `StaleRoute`; borrows end before invoke/drop; stale identities cannot alias reused slots or realms. | `systems-perf-lead` | — | ☑ done |
+| 2 | Give `UiRealm` and `HeadlessBinding` one interaction lane, activate it with owner scopes, add the narrow `RenderObjectContext`, and eliminate the test harness's double binding. | LIFO/unwind-safe activation; wrong-realm and two-realm isolation; create/update can register and replace handlers; headless pointer helpers use the same binding/lane as the mounted tree. | `chief-architect` | 1 | ☑ done |
+| 3 | Atomically migrate ordinary pointer delivery to data-only targets and one resolver/invoker used by cached and direct dispatch. | Every-target leaf-first synchronous delivery with local transforms and no `EventPropagation::Stop`; Down resolves/caches before arena close; Move reuses; Up/Cancel delivers before sweep/release; unmount/rebuild lifetime rules; per-target panic continuation and cleanup before unwind. | `api-design-lead` | 2 | ☑ done |
+| 4 | Atomically owner-localize `GestureBinding`, arena members, recognizers, and gesture callback storage, including the minimum View/State bound ripple. | No gesture callback remains behind `Arc<Mutex<_>>` or `Send + Sync`; no gesture-detail token/queue bridge; long-press, double-tap, tap, and pan retain Flutter ordering through real `HeadlessBinding`; render data remains `Send + Sync`. | `systems-perf-lead` | 3 | ☑ done |
+| 5 | Atomically migrate `MouseRegion` and mouse tracking to data-only targets with owner-local strong annotations. | Enter/hover/exit are local callbacks; previous annotations survive long enough to emit Exit after removal; new/current annotation diffing and panic/drop behavior are covered without executable closures in render storage. | `api-design-lead` | 4 | ☑ done |
+| 6 | Complete ADR-0027 step 2c with a realm-local `NavigatorHandle` and `UiCommandSender` as the only cross-thread navigation ingress. | Navigation mutations are owner-thread capabilities; no generic UI-thread executor or cross-thread closure API; wrong/dead realm behavior is typed and tested. | `api-design-lead` | 2 | ☑ done |
+| 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ☑ done |
+| 8 | Verify Flutter parity, destruction/reentrancy safety, public API shape, and measured routing cost across the completed slice. | Cached/direct parity; unmount/rebuild/stale-route/realm teardown cases; `DropProbe` owner-thread/outside-borrow coverage; nested/reentrant and panic cleanup; Criterion 1/4/16-target baselines and common-Move allocation evidence; semver/API review. | `qa-lead` | 7 | ☑ done |
+| 9 | Reconcile ADR-0027 and project documentation with the implementation, run final gates, and complete `/spec-verify`. | ADR status and consequences match shipped ownership; architecture/API docs contain no obsolete closure path; format, inventory, port-check, clippy, tests, doctests, docs, and applicable platform/render gates pass with evidence. | `chief-architect` | 8 | ☑ done |
+
+## Critical path
+
+`1 → 2 → 3 → 4 → 5 → 7 → 8 → 9`
+
+The navigation work is a branch, `2 → 6 → 7`: it can proceed after realm/context
+ownership lands, but the final bound wave cannot close until both the interaction path
+and navigation ownership contract are complete.
+
+## Cross-crate ripples
+
+- **Task 1:** `flui-interaction` gains the lane, IDs, registry, routes, errors, and
+  auto-trait tests; downstream crates must not consume the inert surface yet.
+- **Task 2:** `flui-app`, `flui-binding`, `flui-view`, and widget test support gain
+  lane ownership/activation and `RenderObjectContext`; existing post-frame owner scopes
+  must remain intact.
+- **Task 3:** `flui-interaction`, `flui-rendering`, `flui-objects`, `flui-view`,
+  `flui-widgets`, binding callers, and integration tests change together because
+  `PointerEventHandler`, `HitTestEntry`, and ordinary propagation are public seams.
+- **Task 4:** recognizers, arena storage, `GestureBinding`, widgets, View/State bounds,
+  and headless gesture tests move together; `.flutter/` is the behavioral reference for
+  dispatch/arena ordering.
+- **Task 5:** `flui-interaction`, `flui-objects`, `flui-widgets`, mouse-tracker users,
+  and tests move together so previous annotation lifetime is never temporarily lost.
+- **Task 6:** navigation surfaces in `flui-app`/widgets and command ingress in the
+  embedding/runtime layer must agree on the realm-local versus cross-thread boundary.
+- **Task 7:** the remaining `flui-view`, widgets, app/binding, and example/compiler
+  fallout is one workspace-wide API-bound audit; it must not weaken data-plane traits.
+- **Tasks 8–9:** public API/semver tooling, benchmarks, Flutter parity harnesses, ADRs,
+  architecture docs, examples, and CI inventories must be updated from the final shape.
+
+## Notes
+
+| Task | Size | Required sign-off |
+|------|------|-------------------|
+| 1 | L | `chief-architect`, `api-design-lead` |
+| 2 | XL | `api-design-lead`, `qa-lead` |
+| 3 | XL | `chief-architect`, `qa-lead` |
+| 4 | XL | `chief-architect`, `api-design-lead`, `qa-lead` |
+| 5 | L | `qa-lead`, `chief-architect` |
+| 6 | L | `chief-architect`, `qa-lead` |
+| 7 | XL | `chief-architect`, `qa-lead` |
+| 8 | L | `systems-perf-lead`, maintainer reviewer |
+| 9 | M | `docs-engineer`, release/gate reviewer |
+
+- Tasks 3, 4, and 5 are intentionally atomic despite their size. Splitting any of them
+  would land a data-only entry without a resolver, a mixed local/`Send` gesture graph,
+  or broken mouse Exit lifetime. Each still runs through one `/dev-task` with internal
+  RED → GREEN → REFACTOR checkpoints and a single coherent landing.
+- This worktree already contains overlapping ADR-0027 changes. Implementation writes
+  must be serialized, scoped to the active task, and reviewed against the pre-existing
+  diff before every patch; do not reset, stash, or rewrite unrelated user changes.
+- 2026-07-12 Task 4 checkpoint: `flui-interaction` recognizer callback storage has
+  been owner-localized for tap/double-tap/long-press/drag/multi-tap/tap-and-drag/
+  scale/force-press, with a regression proving `Rc<Cell<_>>` works in a tap callback.
+  `cargo check -p flui-interaction --tests`, `cargo fmt --package flui-interaction
+  -- --check`, and `cargo test -p flui-interaction
+  tap_callback_accepts_owner_local_rc_state` pass. Follow-up owner-local fallout in
+  `flui-view` removed `WidgetsBindingObserver: Send + Sync`, updated the stale
+  `BoxedView`/`BoxedElement`/`ElementTree`/`BuildContext` thread-safety assertions,
+  and kept `BuildOwner`'s frame-request hook as the `Send + Sync` data-plane wake
+  rather than letting it capture the owner-local `WidgetsBinding`; `cargo check -p
+  flui-view --tests` and `cargo fmt --package flui-view -- --check` pass. The
+  `RouteBinding::wake` callback is now owner-local too, because it reaches the
+  owning `NavigatorShared`; `cargo fmt --package flui-widgets -- --check` passes.
+  The remaining `flui-widgets --lib` frontier is down to the two animation-listener
+  seams (`HeroFlight::proxy.add_listener` and
+  `TransitionRoute::controller.add_status_listener`). That is not a reason to
+  restore `Send + Sync` to UI callbacks: it is the Task 6/7 `Navigator`/animation
+  owner-lane bridge seam, where render-safe `Animation/Listenable` data must remain
+  `Send + Sync` while route/widget actions execute on the owner lane.
+- 2026-07-12 Task 4 closure checkpoint: recognizer callback aliases now use
+  owner-local `Rc<dyn Fn>` rather than `Arc<dyn Fn>` across tap, double-tap,
+  long-press, drag, multi-tap, tap-and-drag, scale, and force-press.
+  `MultiDragStartCallback` also moved from `Arc<dyn Fn + Send + Sync>` stored
+  behind `Arc<Mutex<Option<_>>>` to `Rc<dyn Fn>` stored behind
+  `Rc<RefCell<Option<_>>>`. Recognizer handles, arena members, pointer states,
+  settings, and returned `MultiDragHandle` objects keep their existing shared
+  data/identity contracts; the executable gesture callback plane is owner-local.
+  Evidence: `cargo check -p flui-interaction --tests`, `cargo test -p
+  flui-interaction on_start_accepts_owner_local_rc_state --lib`, `cargo test
+  -p flui-interaction tap_callback_accepts_owner_local_rc_state --lib`, `cargo
+  test -p flui-interaction multidrag --lib`, `cargo test -p flui-interaction
+  --lib`, `cargo check -p flui-widgets --tests`, `cargo test -p
+  flui-interaction --test headless_long_press`, `cargo test -p flui-widgets
+  --test gesture_detector_advanced`, `cargo fmt -p flui-interaction -p
+  flui-widgets --check`, `cargo clippy -p flui-interaction -p flui-widgets
+  --all-targets -- -D warnings`, and a grep guard for stale recognizer
+  callback `Arc`/`Send + Sync` storage pass.
+- 2026-07-12 follow-up checkpoint: the two `flui-widgets --lib` animation-listener
+  seams are now bridged without weakening the data plane. `HeroFlight` no longer
+  captures `FlightInner`/`FlightManager` in `ProxyAnimation` callbacks: value ticks
+  rebuild the owner-local `Shuttle`, `ShuttleState::build` runs `on_tick`, and the
+  `Send + Sync` status listener writes only a terminal-status flag. `TransitionRoute`
+  no longer captures `TransitionInner` in the controller status listener: the listener
+  queues `AnimationStatus` values, and owner-local `ModalScope::build` drains and
+  applies route effects. `Focus::on_focus_change` now uses the same bridge pattern:
+  the global focus listener records focus edges and schedules rebuild; the user
+  handler runs from owner-local build, so callbacks may capture `NavigatorHandle`.
+  `PageRoute`/`PopupRoute` page and transition builders no longer require
+  `Send + Sync`; route builders are UI owner-plane. Test-only worker-thread deadlock
+  harnesses that moved `NavigatorHandle` across threads were rewritten as direct
+  owner-thread scenarios. Temporary `clippy::arc_with_non_send_sync` allowances were
+  added to `flui-interaction`, `flui-view`, and `flui-widgets` with ADR-0027 comments:
+  they document the current `Arc`-shaped owner-local handle graph and must not be
+  interpreted as permission to restore `Send + Sync` to UI callbacks. Evidence:
+  `cargo check -p flui-widgets --lib`, `cargo check -p flui-widgets --tests`,
+  `cargo test -p flui-widgets transition_route --lib`, `cargo test -p flui-widgets
+  hero_flight --lib`, `cargo test -p flui-widgets hero_seam --lib`,
+  `cargo test -p flui-widgets focus --lib`, and `cargo clippy -p flui-widgets
+  --all-targets -- -D warnings` pass.
+- 2026-07-12 owner-plane hardening checkpoint: `FocusChangeHandler` moved from
+  `Arc<dyn Fn(bool)>` to `Rc<dyn Fn(bool)>`, and `FocusState`'s live handler cell
+  moved from `Arc<Mutex<Option<_>>>` to `Rc<RefCell<Option<_>>>`. The global
+  `FocusManager` listener still captures only `Arc<Mutex<Vec<bool>>>` plus the
+  rebuild handle: that queue is a data-only bridge from the `Send + Sync` manager
+  seam into owner-local `build`, not executable UI ownership. Evidence:
+  `cargo check -p flui-widgets --lib`, `cargo check -p flui-widgets --tests`,
+  `cargo test -p flui-widgets focus --lib`, `cargo fmt --package flui-widgets
+  -- --check`, and `cargo clippy -p flui-widgets --all-targets -- -D warnings`
+  pass.
+- 2026-07-12 route-builder hardening checkpoint: route and overlay builder
+  closures moved from `Arc<dyn Fn>` to owner-local `Rc<dyn Fn>`:
+  `RouteContentBuilder`, `RoutePageBuilder`, `RouteTransitionsBuilder`, and
+  private `OverlayBuilder`. `RouteAnimation`, animation controllers,
+  `ChangeNotifier`, and overlay/navigator handles remain `Arc` where they are
+  data-plane or shared-handle seams. The `TransitionRoute` status bridge also
+  gained a data-only `ChangeNotifier` wake so status changes without a value tick
+  (for example `reverse()` from 1.0) still schedule owner-local `ModalScope`
+  build to drain queued statuses; no executable UI callback moved into the
+  `Send + Sync` listener. Evidence: `cargo check -p flui-widgets --lib`,
+  `cargo check -p flui-widgets --tests`, `cargo test -p flui-widgets
+  modal_route_tests --lib`, `cargo test -p flui-widgets page_route_tests --lib`,
+  `cargo test -p flui-widgets navigator --lib`, `cargo test -p flui-widgets
+  focus --lib`, `cargo fmt --package flui-widgets -- --check`, and `cargo
+  clippy -p flui-widgets --all-targets -- -D warnings` pass.
+- 2026-07-12 local-history/pop-scope hardening checkpoint: owner-plane route
+  callbacks moved from `Arc<dyn Fn>` to `Rc<dyn Fn>` for `PopInvokedCallback`,
+  `LocalHistoryEntry::on_remove`, and local-history's route-local
+  `changed_internal_state` hook. Registry and entry handles remain `Arc` for
+  now; this checkpoint only removes thread-safe ownership from executable
+  callback payloads without changing the shared handle graph. Evidence:
+  `cargo check -p flui-widgets --lib`, `cargo check -p flui-widgets --tests`,
+  `cargo test -p flui-widgets local_history --lib`, `cargo test -p flui-widgets
+  pop_scope --lib`, `cargo test -p flui-widgets navigator --lib`,
+  `cargo fmt --package flui-widgets -- --check`, and `cargo clippy -p
+  flui-widgets --all-targets -- -D warnings` pass.
+- 2026-07-12 hero-hook hardening checkpoint: hero customization hooks moved to
+  owner-local `Rc` callback payloads: `RectTweenFactory`, `ShuttleBuilder`, and
+  `PlaceholderBuilder`. `Hero::create_rect_tween`,
+  `HeroController::with_rect_tween`, and `Hero::flight_shuttle_builder` no
+  longer require `Send + Sync` on the user factory/builder closure. The produced
+  `Animatable<Rect>` remains `Send + Sync` for now because it is animation data,
+  not executable UI ownership. Evidence: `cargo check -p flui-widgets --lib`,
+  `cargo check -p flui-widgets --tests`, `cargo test -p flui-widgets
+  hero_flight --lib`, `cargo test -p flui-widgets hero_controller --lib`,
+  `cargo test -p flui-widgets hero_tests --lib`, `cargo fmt --package
+  flui-widgets -- --check`, and `cargo clippy -p flui-widgets --all-targets --
+  -D warnings` pass.
+- 2026-07-12 lazy-builder/animated-builder hardening checkpoint: lazy sliver
+  item builders moved from `Arc<dyn Fn(usize) -> Option<BoxedView>>` to
+  owner-local `Rc<dyn Fn(...)>` across `flui-view::SliverList`,
+  `SliverGridLazy`, their adaptor managers, and `flui-widgets`
+  `SliverChildBuilderDelegate` / `ListView::builder` / `GridView::builder`.
+  `AnimatedBuilder`'s rebuild closure also moved from `Arc<dyn Fn()>` to
+  `Rc<dyn Fn()>`. Render/data seams were intentionally left alone:
+  `ClipPath`'s clipper and `AnimatedSize::on_end` still enter render-object
+  storage and need a separate render-plane bridge. `flui-view` integration
+  tests/benchmarks that directly construct `ElementBuildContext` keep scoped
+  ADR-0027 `arc_with_non_send_sync` allowances because that API still takes
+  `Arc<RwLock<ElementTree/BuildOwner>>`; do not read those test allowances as
+  permission to restore `Send + Sync` to owner-plane view/element state.
+  Evidence: `cargo check -p flui-view --tests`, `cargo check -p flui-widgets
+  --tests`, `cargo test -p flui-view sliver_adaptor --lib`, `cargo test -p
+  flui-widgets lazy_list`, `cargo test -p flui-widgets lazy_grid`, `cargo test
+  -p flui-widgets --test implicit_animations`, `cargo test -p flui-widgets
+  --test fade_transition`, `cargo test -p flui-widgets --test
+  rotation_transition`, `cargo test -p flui-widgets --test scale_transition`,
+  `cargo fmt --package flui-view --package flui-widgets -- --check`, and
+  `cargo clippy -p flui-view -p flui-widgets --all-targets -- -D warnings`
+  pass.
+- 2026-07-12 layout-builder hardening checkpoint: `LayoutWidgetBuilder` moved
+  from `Arc<dyn Fn(&dyn BuildContext, BoxConstraints) -> BoxedView>` to
+  owner-local `Rc<dyn Fn(...)>`. This keeps `LayoutBuilder`'s constraint-driven
+  build callback in the UI owner plane; no render/data-plane storage is changed.
+  Evidence: `cargo check -p flui-view --tests`, `cargo test -p flui-view
+  layout_builder --lib`, `cargo test -p flui-widgets --test layout_builder`,
+  `cargo fmt --package flui-view --package flui-widgets -- --check`, and
+  `cargo clippy -p flui-view -p flui-widgets --all-targets -- -D warnings`
+  pass.
+- 2026-07-12 async-builder hardening checkpoint: `FutureFactory`,
+  `StreamFactory`, `InitialDataFactory`, and `SnapshotBuilder` moved from
+  `Arc<dyn Fn + Send + Sync>` to owner-local `Rc<dyn Fn>`. The async
+  data-plane boundary remains intact: produced `BoxedResultFuture` and
+  `BoxedResultStream` are still `Send`, and the shared snapshot slot remains
+  `Arc<Mutex<_>>` because spawned tasks write it and the owner reads it.
+  Evidence: `cargo check -p flui-view --tests`, `cargo check -p flui-widgets
+  --tests`, `cargo test -p flui-view future_builder --lib`, `cargo test -p
+  flui-view stream_builder --lib`, `cargo test -p flui-widgets --test
+  future_builder`, `cargo test -p flui-widgets --test stream_builder`, and
+  `cargo clippy -p flui-view -p flui-widgets --all-targets -- -D warnings`
+  pass.
+- 2026-07-12 refresh-indicator hardening checkpoint:
+  `RefreshIndicator::on_refresh` moved from `Arc<dyn Fn() + Send + Sync>` to
+  owner-local `Rc<dyn Fn()>`. The callback fires from `GestureDetector`'s
+  owner-lane pan-end closure and does not enter render-object storage, the
+  mouse/focus global trackers, or an async task. Evidence: `cargo check -p
+  flui-widgets --tests` and `cargo test -p flui-widgets --test scroll
+  refresh_indicator` pass.
+- 2026-07-12 shader-mask owner-lane checkpoint: `RenderShaderMask` no longer
+  stores `ShaderCallback = Arc<dyn Fn(Rect) -> Shader + Send + Sync>`.
+  Bounds-dependent shader factories live in `InteractionLane` as owner-local
+  `Rc<dyn Fn(Rect<Pixels>) -> Shader>` cells and render objects carry only the
+  data-plane `ShaderMaskTarget` plus a static fallback `Shader`. The harness
+  still proves the factory receives the local `Offset.zero & size` bounds by
+  running paint inside an active lane. Evidence: `cargo test -p
+  flui-interaction shader_mask_factory_accepts_owner_local_rc_state --lib`,
+  `cargo test -p flui-objects shader_mask --lib`, `cargo test -p
+  flui-objects harness_shader_mask_callback_receives_local_not_offset_rect
+  --test render_object_harness`, and `cargo check -p flui-interaction -p
+  flui-rendering -p flui-view -p flui-objects --tests` pass.
+- 2026-07-12 custom-clipper owner-lane checkpoint: `RenderClip<S>` no longer
+  stores `CustomClipper<S> = Arc<dyn Fn(Size) -> S + Send + Sync>`.
+  `RenderClipRRect` carries data-only `BorderRadius`, `RenderClipPath` keeps
+  the existing data-plane `PathClipTarget`, and `RenderPhysicalShape` now
+  carries `PathClipTarget` instead of a mandatory render-stored closure.
+  The feature-gated `flui-rendering::delegates::CustomClipper` trait also no
+  longer requires `Send + Sync`; production render objects do not store it.
+  Evidence: `cargo check -p flui-objects -p flui-widgets -p flui-rendering
+  --tests`, `cargo test -p flui-objects clip --lib`, `cargo test -p
+  flui-objects physical_model --lib`, `cargo test -p flui-objects
+  harness_clip_rrect_data_clip_source_sets_custom_clipper_flag --test
+  render_object_harness`, `cargo test -p flui-objects harness_physical_shape
+  --test render_object_harness`, and `cargo test -p flui-rendering
+  test_inset_clipper --lib --features experimental-delegates` pass.
+- 2026-07-12 focus-rect-provider hardening checkpoint: `RectProvider` moved
+  from `Arc<dyn Fn() -> Option<Rect<Pixels>> + Send + Sync>` to owner-local
+  `Rc<dyn Fn() -> Option<Rect<Pixels>>>`. `FocusNode` was already owner-local
+  through `KeyEventHandler = Rc<dyn Fn>`, so requiring thread-safe geometry
+  providers was an obsolete bound. Evidence: `cargo test -p flui-interaction
+  rect_provider_accepts_owner_local_rc_state --lib` and `cargo check -p
+  flui-interaction -p flui-widgets --tests` pass.
+- 2026-07-12 Task 7 closure audit: public widget/view authoring callbacks now
+  accept owner-local captures. A scan of `flui-widgets`/`flui-view` callback
+  APIs finds `Rc<dyn Fn>` / unbounded `impl Fn + 'static` for listener,
+  gesture, mouse, focus, shortcuts/actions, async builders, layout builders,
+  lazy sliver builders, navigator builders/hooks, overlays, refresh, clip path,
+  shader mask, and path clipper authoring. Remaining `Send + Sync` callable
+  seams are classified outside the owner-authored UI callback plane:
+  frame/pipeline wake callbacks, viewport/semantics/listenable data listeners,
+  deferred render-object mutation updaters, `Curve`/`Animatable` data strategy
+  objects, and `RenderSliverListLazy::child_source`, a low-level render-owned
+  factory that directly creates `Box<dyn RenderObject>` for render tests/benches;
+  the production `ListView::builder`/`SliverList` path is element-owned and
+  uses an owner-local `Rc` builder. Task 8 owns the broader verification/API
+  review rather than expanding Task 7 with another behavior migration.
+- 2026-07-12 mouse-region owner-lane checkpoint: `MouseRegion` callbacks moved
+  from `Arc<dyn Fn + Send + Sync>` to owner-local `Rc<dyn Fn>`, and
+  `RenderMouseRegion` no longer stores executable enter/hover/exit callbacks.
+  Render hit entries now carry a data-only `MouseTrackerAnnotation { region_id,
+  target }`; the target resolves through `InteractionLane` to a strong
+  owner-local callback cell. `MouseTracker` is owner-local (`Rc<RefCell<_>>`)
+  with a thread-local global, derives active regions only from mouse
+  annotations, preserves previous resolved annotations long enough to emit
+  exit after target unregistration/removal, and continues later mouse callbacks
+  before resuming the first panic. Hover remains ordinary pointer dispatch,
+  matching Flutter's `RenderMouseRegion.handleEvent`; `MouseTracker` handles
+  enter/exit/cursor updates. `BindingBase` and `RendererBinding` were updated
+  to owner-runtime semantics so binding singletons are thread-local instead of
+  process-global `Sync` objects. Evidence: `cargo test -p flui-interaction
+  mouse_tracker --lib`, `cargo test -p flui-objects harness_mouse_region
+  --test render_object_harness`, `cargo test -p flui-widgets --test
+  mouse_region`, `cargo test -p flui-foundation binding --lib`, `cargo check
+  -p flui-app --tests`, and `cargo clippy -p flui-foundation -p
+  flui-interaction -p flui-rendering -p flui-objects -p flui-view -p
+  flui-widgets -p flui-app --all-targets -- -D warnings` pass.
+- 2026-07-12 Navigator ownership checkpoint (Task 6): `NavigatorHandle` is now
+  structurally owner-affine (`!Send + !Sync`) while `NavigatorCommandTarget` and
+  `NavigatorCommand` are the Send/Sync data-plane tokens. The command target
+  stores only an opaque id plus owner `ThreadId`; the owner resolves it through
+  a thread-local weak registry, so `NavigatorShared` and its route/view/observer
+  storage never become cross-thread state. Cross-thread navigation enters
+  through `UiCommandSender::send_navigation` and the closed `UiCommand::Navigation`
+  vocabulary; the crate-internal closure `invoke` remains non-public and is not
+  a navigation API. Route pushes stay owner-local because route builders carry
+  owner-plane views. Typed error coverage exists for wrong-thread and dead-target
+  application, and `UiRealm::drain_commands` drops dead navigation commands at
+  the commit point. Evidence: `cargo test -p flui-widgets navigator_command
+  --lib`, `cargo test -p flui-widgets
+  navigator_handle_is_owner_affine_but_command_target_is_send_sync --lib`,
+  `cargo test -p flui-widgets --lib`, `cargo test -p flui-app --lib`,
+  `cargo fmt -p flui-widgets -p flui-app`, and `cargo clippy -p flui-widgets
+  -p flui-app --all-targets -- -D warnings` pass.
+- 2026-07-12 app-root authoring checkpoint (Task 7): the `flui-app` root-view
+  bootstrap path no longer requires `Send + Sync` on app-authored roots.
+  `run_app`, `run_app_with_config`, Android/web/desktop internal runners, and
+  `AppBinding::attach_root_widget*` now require only owner-plane `View` /
+  `StatelessView` + `Clone + 'static`. Platform callbacks still carry only the
+  stamped realm dispatcher, renderer handles, and typed events after the root is
+  attached; no root view crosses a thread boundary. Regression tests prove an
+  `Rc<Cell<_>>` root can be named by the runner entrypoints and attached through
+  `AppBinding` while data-plane wake/callback capabilities keep their `Send +
+  Sync` bounds. Evidence: `cargo test -p flui-app
+  attach_root_widget_accepts_owner_local_root_state --lib`, `cargo test -p
+  flui-app runner_entrypoints_accept_owner_local_root_state --lib`, `cargo test
+  -p flui-app --lib`, `cargo fmt -p flui-app`, and `cargo clippy -p flui-app
+  --all-targets -- -D warnings` pass.
+- 2026-07-12 key/action owner-local checkpoint (Task 7): the focus/key/action
+  authoring surface no longer requires thread-safe UI callbacks.
+  `FocusManager::global()` is now an owner-thread singleton backed by
+  thread-local storage, and `FocusChangeCallback`, `KeyEventCallback`,
+  `KeyEventHandler`, `CallbackAction`, erased action handlers,
+  `CallbackShortcuts`, `Shortcuts`, and `EditableText` focus/key handlers use
+  owner-local `Rc` callback payloads. `Intent` is also owner-local (`Any`
+  only), and `Shortcuts` stores `Rc<dyn Intent>` so custom shortcut intents may
+  carry `Rc<Cell<_>>` state. Data-plane seams remain unchanged: pointer/scroll
+  routing, `RectProvider`, render objects, controller/listenable notifiers, and
+  frame wake capabilities keep their existing thread-safe boundaries. Evidence:
+  `cargo test -p flui-interaction focus --lib`, `cargo test -p flui-widgets
+  shortcut_intents_accept_owner_local_rc_payloads --lib`, `cargo test -p
+  flui-widgets shortcuts --lib`, `cargo test -p flui-widgets --lib`, `cargo
+  fmt -p flui-interaction -p flui-widgets`, and `cargo clippy -p
+  flui-interaction -p flui-widgets --all-targets -- -D warnings` pass.
+- 2026-07-12 `AnimatedSize::on_end` bridge checkpoint (Task 7):
+  `AnimatedSize::on_end` moved from `Arc<dyn Fn() + Send + Sync>` to
+  owner-local `Rc<dyn Fn()>`. `RenderAnimatedSize` no longer stores, updates,
+  subscribes, or invokes the user callback; it only keeps the render/layout
+  controller listener that marks layout dirty. The owning `AnimatedSizeState`
+  subscribes to the controller status channel with a data-only `Send + Sync`
+  listener that increments an atomic completion counter and schedules a rebuild
+  via `RebuildHandle`; owner-local `build` drains the counter and invokes the
+  latest callback. Evidence: `cargo test -p flui-widgets --test animated_size
+  animated_size_on_end_accepts_owner_local_rc_state`, `cargo test -p
+  flui-widgets --test animated_size`, `cargo test -p flui-objects
+  animated_size --lib`, `cargo test -p flui-objects --test
+  render_object_harness harness_render_animated_size`, `cargo clippy -p
+  flui-objects -p flui-widgets --all-targets -- -D warnings`, and stale-pattern
+  grep for render-level `on_end` callback storage pass.
+- 2026-07-12 `AnimationListener` provider checkpoint (Task 7):
+  `AnimationListener::listenable_provider` moved from
+  `Box<dyn Fn() -> Arc<dyn Listenable> + Send + Sync>` to owner-local
+  `Rc<dyn Fn() -> Arc<dyn Listenable>>`. The thunk only re-clones the
+  captured listenable in the element owner plane; the listenable itself remains
+  the data-plane rebuild source. Evidence: `cargo test -p flui-view
+  animation_listener --lib`, `cargo check -p flui-view --tests`, `cargo clippy
+  -p flui-view --all-targets -- -D warnings`, and `cargo fmt -p flui-view
+  --check` pass.
+- 2026-07-12 test-authoring cleanup checkpoint (Task 7): stale test helpers
+  stopped requiring thread-safe user closures where the production API is
+  owner-local. `Listener` integration counters now use `Rc<Cell<_>>`, route page
+  builder observations use `Rc<RefCell<_>>`, and the hero page-configuration
+  helper accepts/captures `Rc<Cell<_>>` state. This does not weaken any
+  render/data-plane boundary; it prevents tests from accidentally reintroducing
+  `Send + Sync` as an authoring requirement. Evidence: `cargo test -p
+  flui-widgets --test listener`, `cargo test -p flui-widgets --test routes
+  page_route_push_builds_the_page_and_completes_its_entrance`, `cargo test -p
+  flui-widgets a_push_eases_on_the_destination_hero_curve --lib`, `cargo fmt -p
+  flui-widgets -- --check`, `git diff --check`, and `cargo clippy -p
+  flui-widgets --all-targets -- -D warnings` pass.
+- 2026-07-12 stale callback-doc cleanup checkpoint (Task 7/9 prep): examples and
+  docs no longer teach `Send + Sync` as the UI callback shape. `ProxyView`'s
+  gesture example and `Memo`'s stale-closure tripwire now model owner-local
+  `Rc<dyn Fn()>`; `flui-interaction` README/gesture docs describe the
+  ADR-0027 owner-local callback versus data-plane token split instead of saying
+  every recognizer/callback is thread-safe. Evidence: `cargo test -p flui-view
+  stale_closure_tripwire_documents_known_limitation --lib`, `cargo test -p
+  flui-widgets --test listener`, `cargo fmt -p flui-view -p flui-widgets --
+  --check`, `git diff --check`, `cargo clippy -p flui-view -p flui-widgets
+  --all-targets -- -D warnings`, and a stale-doc `rg` scan pass.
+- 2026-07-12 navigator binding owner-local checkpoint (Task 7): private
+  executable route lifecycle callbacks stopped using thread-safe ownership.
+  `RouteBinding::wake` moved from `Arc<dyn Fn()>` to `Rc<dyn Fn()>`, and
+  `CompletedSignal` moved from `Mutex<Vec<Arc<dyn Fn()>>>` to owner-local
+  `RefCell<Vec<Rc<dyn Fn()>>>` plus a `Cell<bool>` completion bit. The command
+  queue, route ids, transition peer registry handles, route entries, modal
+  handles, and approved `NavigatorCommandTarget` data-plane token remain
+  separate from executable callbacks. Evidence: `cargo check -p flui-widgets
+  --tests`, `cargo test -p flui-widgets route_binding_wake_accepts_owner_local_rc_state
+  --lib`, `cargo test -p flui-widgets completed_signal_accepts_owner_local_rc_state
+  --lib`, `cargo test -p flui-widgets transition_route --lib`, `cargo fmt -p
+  flui-widgets -p flui-view -- --check`, `git diff --check`, stale-pattern `rg`
+  over navigator binding/callers, and `cargo clippy -p flui-widgets
+  --all-targets -- -D warnings` pass.
+- 2026-07-12 persistent-header stretch checkpoint (Task 7): executable
+  `on_stretch_trigger` callback storage was removed from
+  `OverScrollHeaderStretchConfiguration`. Render layout now raises a data-only
+  `StretchTriggerSignal` (`Arc<AtomicU64>` counter) when the existing edge
+  crossing condition fires. This keeps `RenderSliverPersistentHeader` free of
+  user closures while preserving the bridge needed for a future owner/widget
+  layer to drain the counter and invoke an owner-local `Rc` callback. Evidence:
+  `cargo check -p flui-objects --tests`, `cargo test -p flui-objects
+  stretch_trigger_signal_is_data_plane_and_clone_shared --lib`, `cargo test -p
+  flui-objects --test render_object_harness
+  harness_sliver_persistent_header_stretch_reports_data_signal_on_crossing`,
+  stale-pattern `rg` for `on_stretch_trigger` / render-level callback storage,
+  `cargo fmt -p flui-objects -p flui-widgets -p flui-view -- --check`,
+  `git diff --check`, and `cargo clippy -p flui-objects -p flui-widgets
+  --all-targets -- -D warnings` pass.
+- 2026-07-12 lazy-sliver disposal checkpoint (Task 7): the render-side
+  `RenderSliverListLazy::dispose_hook` executable callback was removed instead
+  of kept as a compatibility shim. Off-band render-owned children are still
+  disposed through `SliverLayoutContext::dispose_box_child`; any owner-plane
+  lifecycle work must happen above the render object boundary. The shared
+  `walk_virtualizer_band` `on_dispose` hook remains internal data bookkeeping,
+  explicitly not a UI callback seam. Evidence: `cargo check -p flui-objects
+  --tests`, `cargo test -p flui-objects sliver_list_lazy --lib`, `cargo test
+  -p flui-objects --test render_object_harness
+  harness_sliver_list_lazy_zero_items_reports_zero_geometry`, `cargo test -p
+  flui-objects --test harness_snapshot snapshot_lazy_sliver_visible_band`, and
+  stale-pattern `rg` for `dispose_hook` / `Arc<dyn Fn(usize) + Send + Sync>`
+  pass.
+- 2026-07-12 pointer-router owner-local checkpoint (Task 7):
+  `PointerRouteHandler` and `GlobalPointerHandler` moved from
+  `Arc<dyn Fn(&PointerEvent) + Send + Sync>` to owner-local
+  `Rc<dyn Fn(&PointerEvent)>`, and `PointerRouter` storage moved from
+  `RwLock` to `RefCell`. `PointerRouter::global()` was removed because
+  gesture routing is owned by the `GestureBinding` inside the active
+  `UiRealm`/`HeadlessBinding`, not by a process-global singleton. Snapshot
+  before dispatch, per-pointer-before-global ordering, and reentrant add/remove
+  semantics are preserved. Evidence: `cargo check -p flui-interaction --tests`,
+  `cargo test -p flui-interaction pointer_route_handler_accepts_owner_local_rc_state
+  --lib`, `cargo test -p flui-interaction pointer_router --lib`, and stale-doc/API
+  `rg` for `PointerRouter::global` / `GestureBinding::instance` /
+  thread-safe pointer-router callback aliases pass.
+- 2026-07-12 pointer-signal resolver owner-local checkpoint (Task 7):
+  `SignalCallback` moved from `Arc<dyn Fn(PointerEvent) + Send + Sync>` to
+  owner-local `Rc<dyn Fn(PointerEvent)>`, and `PointerSignalResolver` storage
+  moved from `Arc<Mutex<_>>` to `Rc<RefCell<_>>`. The resolver is no longer
+  asserted as data-plane `Send + Sync`; pointer signal callbacks execute on the
+  owner lane. Priority ordering, last-registered-wins tie breaking, unregister,
+  clear, and `resolve_and_accept` semantics are preserved. Evidence:
+  `cargo check -p flui-interaction --tests`, `cargo test -p flui-interaction
+  signal_resolver --lib`, `cargo test -p flui-interaction
+  signal_callback_accepts_owner_local_rc_state --lib`, and stale-pattern `rg`
+  for signal callback `Arc`/`Send + Sync` storage pass.
+- 2026-07-12 raw-input owner-local checkpoint (Task 7): `RawInputCallback`
+  moved from `Arc<dyn Fn(RawPointerEvent) + Send + Sync>` to owner-local
+  `Rc<dyn Fn(RawPointerEvent)>`, and `RawInputHandler` internal state moved
+  from `Arc<Mutex<_>>` / `Arc<AtomicBool>` to `Rc<RefCell<_>>` / `Rc<Cell<_>>`.
+  Raw input is now an owner-runtime direct-input facility instead of a
+  cross-thread callback container. Event conversion, delta tracking,
+  enable/disable behavior, reset, and pointer-position queries are preserved.
+  Evidence: `cargo check -p flui-interaction --tests`, `cargo test -p
+  flui-interaction raw_input --lib`, and stale-pattern `rg` for raw input
+  callback `Arc`/`Send + Sync` storage pass.
+- 2026-07-12 scroll-target owner-local checkpoint (Task 7):
+  `ScrollEventHandler` was removed from `HitTestEntry`. Hit-test entries now
+  store only the data-plane `ScrollTarget` identity, while the executable
+  scroll callback lives in the active `InteractionLane` as owner-local `Rc`
+  state. `dispatch_scroll` still applies each entry's local transform and
+  preserves leaf-first `EventPropagation::Stop` bubbling semantics; unavailable
+  targets are skipped with diagnostics rather than putting closures back into
+  render/hit-test data. Evidence: `cargo check -p flui-interaction --tests`,
+  `cargo test -p flui-interaction dispatch_scroll --lib`, `cargo test -p
+  flui-interaction interaction_lane --lib`, and stale-pattern `rg` for
+  `ScrollEventHandler` / `scroll_handler` / scroll callback `Arc + Send + Sync`
+  storage pass.
+- 2026-07-12 ClipPath owner-lane bridge checkpoint (Task 7):
+  `flui-widgets::ClipPath::new` no longer requires `Send + Sync` and stores
+  the user `Fn(Size) -> Path` as owner-local `Rc`. The executable clipper is
+  registered in `InteractionLane` as a `PathClipTarget`; `RenderClipPath`
+  stores only that data-plane token and resolves it through the active owner
+  lane during paint/hit-test. Detached render-object construction intentionally
+  does not install or invoke the user closure. Low-level render-only
+  `RenderClip::with_clipper` remains as a `Send + Sync` strategy API, and
+  `ClipRRect`'s private closure remains pure data derived from radius fields.
+  Evidence: `cargo check -p flui-interaction -p flui-rendering -p flui-view
+  -p flui-objects -p flui-widgets --tests`, `cargo test -p flui-interaction
+  path_clipper_accepts_owner_local_rc_state --lib`, `cargo test -p
+  flui-objects render_clip_path_resolves_owner_local_path_target --lib`,
+  `cargo test -p flui-objects clip --lib`, `cargo test -p flui-widgets
+  clip_path --lib`, `cargo test -p flui-widgets --test clip`, and stale-pattern
+  `rg` for public `ClipPath` `Send + Sync` / render-storage clipper bridge
+  pass.
+- 2026-07-13 Task 8 verification checkpoint: Flutter
+  `gestures/binding.dart` was re-checked for the pointer-route contract:
+  `_hitTests` is cached at Down, reused for Move, removed at Up/Cancel, and
+  every hit-test entry is delivered even after an earlier target throws. FLUI's
+  owner-routed model preserves the retained-path behavior, with the Rust
+  adaptation that per-target panics are captured, later targets still run, and
+  the first panic resumes only after mandatory cleanup. Safety evidence:
+  `cargo test -p flui-interaction interaction_lane --lib`, `cargo test -p
+  flui-interaction --test interaction_lane`, `cargo test -p flui-interaction
+  down_caches_route_and_up_delivers_after_target_unregisters --lib`, `cargo
+  test -p flui-interaction cached_route --lib`, `cargo test -p
+  flui-interaction per_target_panic --lib`, `cargo test -p flui-interaction
+  mouse_tracker --lib`, `cargo test -p flui-interaction
+  flush_pending_moves_with_resampling_off_dispatches_directly --lib`, `cargo
+  test -p flui-interaction
+  flush_with_resampling_on_dispatches_move_not_drops_it --lib`, and `cargo
+  test -p flui-interaction dispatch_scroll --lib` pass. Perf/allocation
+  evidence: added `pointer_route_bench` with 1/4/16-target Criterion baselines
+  for route resolution, cached common-Move invocation, and direct dispatch;
+  `cargo bench -p flui-interaction --bench pointer_route_bench -- --sample-size
+  10 --measurement-time 1 --warm-up-time 1` reports cached common-Move
+  invocation at approximately 31 ns / 39 ns / 63 ns for 1/4/16 targets, direct
+  dispatch at approximately 124 ns / 194 ns / 563 ns, and route resolution at
+  approximately 77 ns / 98 ns / 282 ns. Added
+  `pointer_route_hot_path.rs`, whose counted test proves cached Move route
+  invocation allocates zero heap after setup; `cargo test -p flui-interaction
+  --test pointer_route_hot_path` passes. API/semver evidence:
+  `cargo public-api` diff against `HEAD~1` shows expected MAJOR-class
+  pre-1.0 changes (`RectProvider` from `Arc + Send + Sync` to owner-local
+  `Rc`, plus additive `ShaderMaskTarget` / `resolve_shader_mask_target`);
+  `cargo semver-checks check-release -p flui-interaction --baseline-rev
+  HEAD~1` passes because it does not detect that type-alias bound break, so
+  the public-api diff is the authoritative classification for that slice.
+  Broader `cargo semver-checks check-release -p flui-interaction
+  --baseline-rev origin/main` correctly requires a new major/pre-1.0 breaking
+  release for the ADR-0027 branch: public owner-runtime types intentionally
+  lose `Send`/`Sync`, old executable closure fields/methods disappear, and
+  hit-test/mouse/focus traversal APIs change shape. `cargo doc -p
+  flui-interaction --no-deps`, `cargo fmt -p flui-interaction -- --check`,
+  `git diff --check`, `cargo clippy -p flui-interaction --all-targets --
+  -D warnings`, and `cargo bench -p flui-interaction --bench
+  pointer_route_bench --no-run` pass.
+- 2026-07-13 Task 9 verification checkpoint: ADR-0027 and port docs now match
+  the shipped owner-affine interaction-routing wave. The ADR records the
+  landed owner-routed callback seams, `NavigatorHandle` owner-affinity,
+  `UiCommandSender` navigation ingress, typed render/hit-test targets, and
+  the required pre-1.0 breaking release classification. `docs/PORT.md`,
+  `crates/flui-view/UNIFIED_ELEMENT.md`, and
+  `crates/flui-foundation/src/callbacks.rs` no longer teach `Send + Sync` as
+  the default shape for owner-authored UI callbacks; they distinguish
+  owner-plane `Rc<dyn Fn...>` storage from data-plane/shared-service
+  `Arc`/`Box + Send + Sync` storage. A stale-pattern scan for the old callback
+  and gesture/Navigator wording is clean. Final gates: `just fmt-check`,
+  `just inventory-check`, `just port-check`, `git diff --check`,
+  `just clippy`, `cargo nextest run --workspace --exclude flui-platform`
+  (6247 passed, 4 skipped), `just test-doc`, and
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude flui-platform
+  --no-deps --document-private-items` pass. `flui-platform` tests remain
+  intentionally excluded from the final test gate because AGENTS.md documents
+  those native platform contract tests as excluded from CI while the Linux
+  platform stubs are under investigation.
+- Tasks 3–5 must check the corresponding `.flutter/` sources before claiming parity.
+  A green gate without behavioral evidence does not satisfy their acceptance slices.
+- No task may introduce a generic UI-thread executor, queue the current pointer event,
+  or move executable callbacks into `Send + Sync` render storage.

@@ -66,16 +66,23 @@ impl<C: ViewSeq> fmt::Debug for SliverFillViewport<C> {
 
 impl<C> flui_view::RenderView for SliverFillViewport<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverFillViewport;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSliverFillViewport::new(self.viewport_fraction)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_viewport_fraction(self.viewport_fraction);
     }
 
@@ -130,10 +137,14 @@ mod tests {
     #[test]
     fn update_render_object_applies_a_changed_viewport_fraction() {
         let sliver = SliverFillViewport::new(1.0, Vec::<flui_view::BoxedView>::new());
-        let mut render_object = sliver.create_render_object();
+        let mut render_object =
+            sliver.create_render_object(&flui_view::RenderObjectContext::detached());
 
         let updated = SliverFillViewport::new(0.5, Vec::<flui_view::BoxedView>::new());
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         // No public getter on RenderSliverFillViewport; confirm via Debug
         // that the field actually changed rather than merely not panicking.

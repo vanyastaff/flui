@@ -5,7 +5,7 @@
 //! storage unit that gets wrapped by the `RenderNode` enum for heterogeneous
 //! tree storage.
 //!
-//! # U2 exemplar refactor (2026-05-20)
+//! # Single-writer ownership (no lock around the trait object)
 //!
 //! The render object is owned by plain value (`Box<dyn RenderObject<P>>`),
 //! not wrapped in a lock. Mutable access goes through `&mut self`, which the
@@ -246,10 +246,9 @@ impl<P: Protocol> RenderEntry<P> {
     /// `constraints.smallest()`, a `RenderPadding` sizes to just the
     /// padding box, etc.).
     ///
-    /// The method is named `layout_leaf_only` (PR #141 Codex review
-    /// comment 3293746309 P1) so the constraint is compile-time
-    /// obvious at every callsite — callers must explicitly name the
-    /// leaf-only intent rather than calling a generic `layout()`.
+    /// The method is named `layout_leaf_only` so the constraint is
+    /// compile-time obvious at every callsite — callers must explicitly
+    /// name the leaf-only intent rather than calling a generic `layout()`.
     ///
     /// # When to use
     ///
@@ -257,21 +256,22 @@ impl<P: Protocol> RenderEntry<P> {
     ///    children-absent is correct (Text, Image, ColoredBox, …).
     /// 2. **Single-node layout tests** — fixtures where the pipeline is
     ///    not involved (most of `crates/flui-rendering/tests/*.rs`,
-    ///    including the U19 bridge tests' direct
-    ///    `perform_layout_raw` invocations).
+    ///    including bridge tests' direct `perform_layout_raw`
+    ///    invocations).
     ///
-    /// # Production non-leaf path (U20, not yet landed)
+    /// # Production non-leaf path
     ///
-    /// `PipelineOwner::layout_dirty_root` obtains disjoint mut refs via
-    /// `RenderTree::get_parent_and_children_mut` and constructs a typed
+    /// `PipelineOwner::layout_dirty_root` is the production entry point
+    /// for parent-children layout: it obtains disjoint mut refs via
+    /// `RenderTree::get_subtree_mut` and constructs a typed
     /// `BoxLayoutCtx` with the child slice via
     /// [`crate::protocol::BoxLayoutCtx::with_layout_callback`] —
-    /// bypassing this method entirely. Until U20 lands, callers wanting
-    /// parent-children layout should either:
-    /// (a) hold off until U20, or
-    /// (b) directly construct a `BoxLayoutCtx` with `with_layout_callback`
+    /// bypassing this method entirely. Callers wanting parent-children
+    /// layout should either go through `PipelineOwner::layout_dirty_root`
+    /// or directly construct a `BoxLayoutCtx` with `with_layout_callback`
     /// and invoke `render_object.perform_layout_raw(&mut typed_ctx)`
-    /// against an erased view, replicating what U20 will do internally.
+    /// against an erased view, replicating what `layout_dirty_root` does
+    /// internally.
     ///
     /// # Mechanics
     ///
@@ -283,7 +283,7 @@ impl<P: Protocol> RenderEntry<P> {
     ///
     /// The `perform_layout_raw` call is wrapped in
     /// [`std::panic::catch_unwind`]; a panic surfaces as
-    /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12), and
+    /// [`crate::error::RenderError::Poisoned`], and
     /// a contract violation returned as `Err(RenderError::ContractViolation)`
     /// by `perform_layout_raw` propagates via the `Result` chain. On
     /// the error path the state's geometry is **not** updated — the
@@ -316,14 +316,14 @@ impl<P: Protocol> RenderEntry<P> {
         let render_object = &mut *self.render_object;
         let constraints_for_ctx = constraints.clone();
 
-        // D-block PR-A1b U19 — wrap constraints in a leaf-mode erased
-        // ctx scoped to the inner closure. The protocol's
-        // `with_leaf_erased_ctx` constructs a typed `BoxLayoutCtx::new` /
-        // `SliverLayoutCtx::new` on its own stack frame and lends an
-        // erased `&mut dyn` view; the borrow expires when the FnOnce
-        // closure returns, keeping the storage local to this call.
+        // Wrap constraints in a leaf-mode erased ctx scoped to the inner
+        // closure. The protocol's `with_leaf_erased_ctx` constructs a
+        // typed `BoxLayoutCtx::new` / `SliverLayoutCtx::new` on its own
+        // stack frame and lends an erased `&mut dyn` view; the borrow
+        // expires when the FnOnce closure returns, keeping the storage
+        // local to this call.
         //
-        // # Error-handling shape (follow-up to PR #141 #5 Option A)
+        // # Error-handling shape
         //
         // `perform_layout_raw` returns `RenderResult<ProtocolGeometry<P>>`
         // — contract violations flow through the `Err(...)` channel of
@@ -392,13 +392,13 @@ impl<P: Protocol> RenderEntry<P> {
         self.state.set_geometry(geometry.clone());
         self.state.set_constraints(constraints);
 
-        // D-block PR-A1 U17 — bootstrap the per-instance
-        // `IS_RELAYOUT_BOUNDARY` flag now that constraints are populated.
-        // For `BoxProtocol`, dispatches to `compute_relayout_boundary`
-        // (Flutter `!parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent`);
-        // for `SliverProtocol`, no-op (relayout-boundary semantics not used).
-        // Pre-bootstrap, `PipelineOwner::mark_needs_layout` (U15) treats
-        // every node as non-boundary and walks to root.
+        // Bootstrap the per-instance `IS_RELAYOUT_BOUNDARY` flag now
+        // that constraints are populated. For `BoxProtocol`, dispatches
+        // to `compute_relayout_boundary` (Flutter `!parent_uses_size ||
+        // sized_by_parent || constraints.is_tight() || !has_parent`);
+        // for `SliverProtocol`, no-op (relayout-boundary semantics not
+        // used). Before this bootstrap runs, `PipelineOwner::mark_needs_layout`
+        // treats every node as non-boundary and walks to root.
         let has_parent = self.links.parent().is_some();
         let sized_by_parent = self.render_object.sized_by_parent();
         <P as crate::protocol::Protocol>::bootstrap_relayout_boundary(

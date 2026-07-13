@@ -80,12 +80,22 @@ use crate::{
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
+    post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback, drain_active_lane},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
     vsync::VsyncScheduler,
 };
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
+
+fn next_scheduler_identity() -> u64 {
+    static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
+    NEXT_IDENTITY
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .expect("BUG: Scheduler identity space exhausted")
+}
 
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
@@ -349,6 +359,10 @@ struct FrameState {
 
 /// Callback registration and cancellation state
 struct CallbackState {
+    /// Globally unique identity for owner-local lane tickets.
+    identity: u64,
+    /// Linearizes shared/local post-frame registration with frame snapshots.
+    post_frame_registration: Mutex<()>,
     /// Transient callbacks - animation tickers
     transient: Mutex<Vec<CancellableTransientCallback>>,
     /// Cancelled callback IDs (lock-free)
@@ -430,6 +444,10 @@ pub struct Scheduler {
     binding: Arc<BindingState>,
     /// Task queue (priority-based, already Arc-wrapped internally)
     task_queue: TaskQueue,
+    /// Frame-driven async task driver, polled once per frame by
+    /// [`Scheduler::handle_begin_frame`] in the mid-frame slot.
+    /// The bindings no longer call it directly.
+    async_driver: crate::AsyncDriver,
 }
 
 impl std::fmt::Debug for Scheduler {
@@ -448,6 +466,21 @@ impl std::fmt::Debug for Scheduler {
     }
 }
 
+/// Shared body of [`Scheduler::request_frame`] and the async driver's wake hook.
+///
+/// Factored out so the hook can capture only `Arc<FrameState>` + `Arc<BindingState>`
+/// instead of a whole `Scheduler`. Capturing the `Scheduler` would form an
+/// `Arc` cycle (`Scheduler → AsyncDriver → hook → Scheduler`) and leak the driver.
+fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
+    let was_scheduled = frame.frame_scheduled.swap(true, Ordering::AcqRel);
+    if !was_scheduled {
+        let hook = binding.on_frame_scheduled.lock().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
 impl Scheduler {
     /// Create a new scheduler with 60 FPS target
     pub fn new() -> Self {
@@ -462,7 +495,7 @@ impl Scheduler {
     /// Create a scheduler with specific frame duration
     pub fn with_frame_duration(frame_duration: FrameDuration) -> Self {
         let target_fps = frame_duration.fps() as u32;
-        Self {
+        let scheduler = Self {
             frame: Arc::new(FrameState {
                 scheduler_phase: AtomicU8::new(SchedulerPhase::Idle as u8),
                 current_frame: Mutex::new(None),
@@ -481,6 +514,8 @@ impl Scheduler {
                 completion_waiters: Mutex::new(Vec::new()),
             }),
             callbacks: Arc::new(CallbackState {
+                identity: next_scheduler_identity(),
+                post_frame_registration: Mutex::new(()),
                 transient: Mutex::new(Vec::new()),
                 cancelled: DashMap::new(),
                 id_gen: IdGenerator::new(),
@@ -503,7 +538,21 @@ impl Scheduler {
                 on_frame_scheduled: Mutex::new(None),
             }),
             task_queue: TaskQueue::new(),
-        }
+            async_driver: crate::AsyncDriver::new(),
+        };
+
+        // The driver's wakers request a frame through the scheduler's existing
+        // coalescing path (`frame_scheduled` + `on_frame_scheduled`), so an
+        // async completion wakes an idle event loop exactly like `setState`.
+        // The hook captures the two `Arc` state blobs, never the `Scheduler`,
+        // to keep `Scheduler → AsyncDriver → hook` acyclic.
+        let frame = Arc::clone(&scheduler.frame);
+        let binding = Arc::clone(&scheduler.binding);
+        scheduler
+            .async_driver
+            .set_request_frame(move || request_frame_impl(&frame, &binding));
+
+        scheduler
     }
 
     // =========================================================================
@@ -531,6 +580,37 @@ impl Scheduler {
         self.frame
             .scheduler_phase
             .store(new_phase as u8, Ordering::Release);
+    }
+
+    /// Whether `self` and `other` are clones of the **same** scheduler — the same
+    /// callback queues, the same async driver, the same frame.
+    ///
+    /// `Scheduler` is `Arc`-backed, so this is pointer identity on the shared
+    /// callback state. It exists because `HeadlessBinding` owns a binding-local
+    /// scheduler while production drives the `Scheduler::instance()` singleton,
+    /// and a capability handed to a widget must be provably pointed at the right one.
+    #[must_use]
+    pub fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.callbacks, &other.callbacks)
+    }
+
+    pub(crate) fn identity(&self) -> u64 {
+        self.callbacks.identity
+    }
+
+    pub(crate) fn with_post_frame_registration<R>(
+        &self,
+        callback: impl FnOnce(CallbackId) -> R,
+    ) -> R {
+        let _registration = self.callbacks.post_frame_registration.lock();
+        callback(self.callbacks.id_gen.next())
+    }
+
+    /// Create an owner-affine local post-frame lane for a binding/runtime.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn local_post_frame_lane(&self) -> crate::LocalPostFrameLane {
+        crate::LocalPostFrameLane::new(self)
     }
 
     /// Check if currently in a frame
@@ -606,25 +686,51 @@ impl Scheduler {
         self.set_scheduler_phase(SchedulerPhase::MidFrameMicrotasks);
         self.flush_microtasks();
 
+        // The async-driver step: exactly one poll per frame in the mid-frame
+        // microtask slot, after transient callbacks and before persistent ones in
+        // `handle_draw_frame`. A future completing here calls `RebuildHandle::schedule()`,
+        // whose id the pipeline's `build_scope` drains — so a completion lands in THIS frame.
+        //
+        // This lives in the scheduler, not in bindings. The contract is "exactly one
+        // mid-frame poll on the right `Scheduler` instance". Owning it here enforces
+        // both structurally: `HeadlessBinding` drives its binding-local scheduler and
+        // production drives the singleton, and neither can forget the step or run it twice.
+        self.drive_async_tasks();
+
         frame_id
     }
 
-    /// Handle draw frame - called after begin frame to run rendering pipeline
+    /// Run the frame's **persistent callbacks** and priority task queue.
     ///
-    /// This corresponds to Flutter's `handleDrawFrame`.
-    /// Executes persistent callbacks (rendering pipeline).
+    /// Flutter's `handleDrawFrame` persistent phase (`scheduler/binding.dart:1343-1346`).
+    /// Leaves the scheduler in [`SchedulerPhase::PersistentCallbacks`]: the caller's
+    /// **pipeline** (build → layout → compositing → paint) occupies that slot next,
+    /// and [`end_frame`](Self::end_frame) closes the frame afterwards.
+    ///
+    /// # This no longer finishes the frame
+    ///
+    /// This method now leaves the scheduler in `PersistentCallbacks` after running
+    /// persistent callbacks. Previously it also drained the post-frame queue and
+    /// returned to `Idle`, which meant every post-frame callback ran *before* the
+    /// pipeline it was supposed to observe. Use [`drive_frame`](Self::drive_frame),
+    /// or pair this with `end_frame`.
+    ///
+    /// # Panics
+    ///
+    /// Debug-asserts an illegal phase transition if no frame is open
+    /// (`handle_begin_frame` was not called).
     #[tracing::instrument(skip(self))]
     pub fn handle_draw_frame(&self) {
-        // Phase 3: PersistentCallbacks (rendering pipeline)
+        // Phase 3: PersistentCallbacks (the pipeline's slot)
         self.set_scheduler_phase(SchedulerPhase::PersistentCallbacks);
 
         // Reset budget at start of rendering
         self.frame.budget.lock().reset();
 
-        // Execute persistent frame callbacks (rendering pipeline)
-        // Copy FrameTiming once outside the loop to avoid re-locking per callback.
-        // Clone callbacks to release the lock before invoking (callbacks may
-        // call scheduler methods that take other locks).
+        // Execute persistent frame callbacks. Copy FrameTiming once outside the
+        // loop to avoid re-locking per callback. Clone callbacks to release the
+        // lock before invoking (callbacks may call scheduler methods that take
+        // other locks).
         let timing_snapshot = *self.frame.current_frame.lock();
         if let Some(timing) = timing_snapshot {
             let persistent_callbacks: Vec<_> = {
@@ -649,7 +755,32 @@ impl Scheduler {
         if !self.is_deadline_near() {
             self.task_queue.execute_until(Priority::Idle);
         }
+    }
 
+    /// Close the frame: run its **post-frame callbacks**, record timing, notify
+    /// waiters, and return to [`SchedulerPhase::Idle`].
+    ///
+    /// Flutter's `handleDrawFrame` post-frame phase
+    /// (`scheduler/binding.dart:1349-1358`). Called **after** the pipeline has
+    /// committed layout and paint, so a post-frame callback observes this frame's
+    /// geometry — the contract `HeroController` depends on
+    /// (`heroes.dart:968`).
+    ///
+    /// A callback registered *from* a post-frame callback runs on the **next**
+    /// frame: the queue is drained into a local buffer before any callback is
+    /// invoked, so re-registrations land in the now-empty queue. Flutter behaves
+    /// the same way (`scheduler/binding.dart:1350-1351`).
+    ///
+    /// Each callback runs **exactly once** — the queue is drained, not iterated.
+    ///
+    /// # Panics
+    ///
+    /// Debug-asserts an illegal phase transition unless the scheduler is in
+    /// `PersistentCallbacks` (i.e. `handle_draw_frame` ran). To finish a frame
+    /// *without* running its post-frame callbacks, use
+    /// [`abort_frame`](Self::abort_frame).
+    #[tracing::instrument(skip(self))]
+    pub fn end_frame(&self) {
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
 
@@ -667,24 +798,46 @@ impl Scheduler {
             // Record timing for batched reporting
             self.binding.pending_timings.lock().push(timing);
 
-            // Execute post-frame callbacks
-            let callbacks: Vec<_> = {
+            // Drain BEFORE invoking: a post-frame callback that registers another
+            // one must not have it run in this same frame.
+            let mut callbacks: Vec<LocalPostFrameEntry> = {
+                let _registration = self.callbacks.post_frame_registration.lock();
                 let mut cbs = self.callbacks.post_frame.lock();
-                cbs.drain(..).collect()
+                let mut snapshot: Vec<_> = cbs
+                    .drain(..)
+                    .map(|entry| LocalPostFrameEntry {
+                        id: entry.id,
+                        callback: entry.callback as OwnerPostFrameCallback,
+                    })
+                    .collect();
+                snapshot.extend(drain_active_lane(self.identity()));
+                snapshot
             };
 
-            for cancellable in callbacks {
-                if self.callbacks.cancelled.contains_key(&cancellable.id) {
-                    continue;
+            callbacks.sort_unstable_by_key(|entry| entry.id.get());
+            let callback_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                for entry in callbacks {
+                    if self.callbacks.cancelled.contains_key(&entry.id) {
+                        continue;
+                    }
+                    (entry.callback)(&timing);
                 }
-                (cancellable.callback)(&timing);
-            }
+            }));
 
             // Clear processed cancellations
             self.callbacks.cancelled.clear();
 
             // Notify frame completion futures
             self.notify_frame_completion(&timing);
+
+            if let Err(payload) = callback_result {
+                self.frame
+                    .scheduler_phase
+                    .store(SchedulerPhase::Idle as u8, Ordering::Release);
+                *self.frame.current_vsync_time.lock() = None;
+                *self.frame.last_frame_end.lock() = Some(Instant::now());
+                std::panic::resume_unwind(payload);
+            }
         }
 
         // Return to idle
@@ -695,6 +848,111 @@ impl Scheduler {
         *self.frame.last_frame_end.lock() = Some(Instant::now());
     }
 
+    /// Abandon the open frame: return to [`SchedulerPhase::Idle`] **without**
+    /// running its post-frame callbacks.
+    ///
+    /// Flutter's `finally { _schedulerPhase = idle; _currentFrameTimeStamp = null; }`
+    /// (`scheduler/binding.dart:1364-1374`): when a persistent callback throws, the
+    /// post-frame loop is skipped but the phase is still reset. The queued
+    /// callbacks survive and run on the next completed frame.
+    ///
+    /// # Who calls this, and why it is not a `Drop` guard
+    ///
+    /// [`drive_frame`](Self::drive_frame) **does** catch a panicking pipeline: it
+    /// `catch_unwind`s, calls this, then `resume_unwind`s. So this runs *between*
+    /// the catch and the resume — the panic payload is already captured and nothing
+    /// here executes during unwinding. A caller that drives a frame by hand
+    /// (`handle_begin_frame` + `handle_draw_frame`) and panics must call this itself.
+    ///
+    /// A `Drop` guard would be wrong twice. It would have to force
+    /// `PersistentCallbacks -> Idle`, which
+    /// [`can_transition_to`](crate::SchedulerPhase::can_transition_to) forbids, so
+    /// the validated setter's `debug_assert!` would fire *while already panicking* —
+    /// a double panic, i.e. `abort`. And running any user callback during unwind is a
+    /// second hazard for no benefit. Hence an explicit, non-panicking call that
+    /// bypasses the phase validator by design: the one sanctioned way out of a
+    /// half-open frame.
+    ///
+    /// Completion waiters **are** notified: an aborted frame is a frame that
+    /// finished, badly. Leaving them queued would hang `end_of_frame()` forever.
+    ///
+    /// Idempotent: a no-op when no frame is open.
+    pub fn abort_frame(&self) {
+        if self.phase() == SchedulerPhase::Idle {
+            return;
+        }
+
+        let timing = self.frame.current_frame.lock().take();
+
+        // Raw store: this is the deliberate exception to the forward-only phase
+        // machine. `set_scheduler_phase` would `debug_assert!` on
+        // `PersistentCallbacks -> Idle`.
+        self.frame
+            .scheduler_phase
+            .store(SchedulerPhase::Idle as u8, Ordering::Release);
+        *self.frame.current_vsync_time.lock() = None;
+        *self.frame.last_frame_end.lock() = Some(Instant::now());
+        self.callbacks.cancelled.clear();
+
+        if let Some(timing) = timing {
+            self.notify_frame_completion(&timing);
+        }
+
+        tracing::warn!("frame aborted; its post-frame callbacks were not run");
+    }
+
+    /// The one shared frame ordering: **begin → persistent → pipeline → post-frame → idle.**
+    ///
+    /// Every frame driver goes through here — `HeadlessBinding::pump_frame` on its
+    /// binding-local scheduler, and the desktop / android / wasm runners on the
+    /// `Scheduler::instance()` singleton — so headless and production cannot drift.
+    ///
+    /// `pipeline` is the binding's build → layout → compositing → paint step. It
+    /// runs in the [`SchedulerPhase::PersistentCallbacks`] slot without being
+    /// registered as a callback: FLUI's bindings own their element tree by value,
+    /// so no `Fn` closure could drive it the way Flutter's `drawFrame` does.
+    ///
+    /// # Errors and panics
+    ///
+    /// A pipeline that **returns** an error value is a completed frame: `end_frame`
+    /// runs, post-frame callbacks fire, exactly once.
+    ///
+    /// A pipeline that **panics** is an abandoned frame. The panic is caught,
+    /// [`abort_frame`](Self::abort_frame) resets the phase **without running any
+    /// post-frame callback**, and the panic is then resumed unchanged. The queued
+    /// callbacks survive to the next completed frame. This is Flutter's
+    /// `try { persistent; postFrame } finally { phase = idle; }`
+    /// (`scheduler/binding.dart:1341-1374`), where a throwing persistent callback
+    /// skips the post-frame loop but still resets the phase.
+    ///
+    /// The recovery runs *between* `catch_unwind` and `resume_unwind` — the panic
+    /// payload is already captured, so nothing here executes during unwinding, and
+    /// no `Drop` guard is involved (see `abort_frame` for why a guard would
+    /// `abort` the process). Without this, a panicking pipeline would leave the
+    /// frame open at `PersistentCallbacks` and the *next* `handle_begin_frame`
+    /// would attempt the illegal `PersistentCallbacks -> TransientCallbacks`
+    /// transition.
+    ///
+    /// Under `panic = "abort"` nothing is caught and the process dies with the
+    /// frame open, which is moot.
+    pub fn drive_frame<R>(&self, vsync_time: Instant, pipeline: impl FnOnce() -> R) -> R {
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+        self.handle_begin_frame(vsync_time);
+        self.handle_draw_frame();
+
+        match catch_unwind(AssertUnwindSafe(pipeline)) {
+            Ok(result) => {
+                self.end_frame();
+                result
+            }
+            Err(payload) => {
+                self.abort_frame();
+                resume_unwind(payload)
+            }
+        }
+    }
+
     /// Execute a complete frame (convenience method)
     ///
     /// Calls handle_begin_frame and handle_draw_frame in sequence.
@@ -702,9 +960,14 @@ impl Scheduler {
     /// call handle_begin_frame and handle_draw_frame separately.
     #[tracing::instrument(skip(self))]
     pub fn execute_frame(&self) -> FrameId {
+        // begin → persistent → end. The non-pipeline convenience path (warm-up
+        // frames, tests); `drive_frame` is the same sequence with a pipeline in
+        // the persistent slot. Preserves this method's original behavior: the
+        // frame completes and its post-frame callbacks run.
         let vsync_time = Instant::now();
         let frame_id = self.handle_begin_frame(vsync_time);
         self.handle_draw_frame();
+        self.end_frame();
         frame_id
     }
 
@@ -797,13 +1060,81 @@ impl Scheduler {
     /// frame is already pending the hook stays silent — one wake per
     /// scheduled frame.
     pub fn request_frame(&self) {
-        let was_scheduled = self.frame.frame_scheduled.swap(true, Ordering::AcqRel);
-        if !was_scheduled {
-            let hook = self.binding.on_frame_scheduled.lock().clone();
-            if let Some(hook) = hook {
-                hook();
-            }
-        }
+        request_frame_impl(&self.frame, &self.binding);
+    }
+
+    // =========================================================================
+    // Async Task Driver
+    // =========================================================================
+
+    /// The frame-driven task driver.
+    ///
+    /// Clone it to spawn tasks from elsewhere; every clone shares one task set.
+    #[must_use]
+    pub fn async_driver(&self) -> &crate::AsyncDriver {
+        &self.async_driver
+    }
+
+    /// Queue `future` for polling on the frame thread, and request a frame.
+    ///
+    /// Thin forwarder to [`AsyncDriver::spawn_local`](crate::AsyncDriver::spawn_local).
+    /// Dropping the returned [`TaskToken`](crate::TaskToken) cancels the task.
+    #[must_use = "dropping the TaskToken immediately cancels the task"]
+    pub fn spawn_local(&self, future: crate::BoxedTask) -> crate::TaskToken {
+        self.async_driver.spawn_local(future)
+    }
+
+    /// Spawn `future`, polling it once inline (Flutter's synchronous-`.then`
+    /// window). `None` when it completed on that first poll.
+    ///
+    /// Thin forwarder to [`AsyncDriver::spawn_local_eager`](crate::AsyncDriver::spawn_local_eager).
+    #[must_use = "dropping the TaskToken immediately cancels the task"]
+    pub fn spawn_local_eager(&self, future: crate::BoxedTask) -> Option<crate::TaskToken> {
+        self.async_driver.spawn_local_eager(future)
+    }
+
+    /// **The** async-driver step of a frame — the single call site both bindings
+    /// use (`HeadlessBinding::pump_frame` and `AppBinding::draw_frame`).
+    ///
+    /// Polls every task whose waker fired, on the calling thread. A future
+    /// completing here calls `RebuildHandle::schedule()`, whose id the *same*
+    /// frame's `build_scope` then drains — so a completion is observed without
+    /// waiting an extra frame.
+    ///
+    /// # Where this sits in a frame
+    ///
+    /// Flutter's `SchedulerPhase.midFrameMicrotasks`: after the frame's transient
+    /// callbacks (animation ticks), before its persistent callbacks (build →
+    /// layout → paint). Both bindings call it in exactly that slot, between
+    /// `vsync.tick_all` and `build_scope`.
+    ///
+    /// **Called by [`handle_begin_frame`](Self::handle_begin_frame), once per
+    /// frame**. Previously, each binding called it directly. The real invariant is
+    /// *one mid-frame poll per frame, on the right `Scheduler` instance*. Moving
+    /// the call into the scheduler enforces both structurally and lets the pipeline
+    /// take the persistent slot it always semantically occupied.
+    ///
+    /// Still `pub`: a test may drive one poll directly. It does not mutate the
+    /// phase (the machine is strictly forward-only — `MidFrameMicrotasks -> Idle`
+    /// is not a legal transition). It asserts the invariant that actually
+    /// matters: **never poll while the scheduler is running persistent
+    /// callbacks**, i.e. inside build / layout / paint.
+    ///
+    /// Returns the number of tasks polled.
+    pub fn drive_async_tasks(&self) -> usize {
+        debug_assert_ne!(
+            self.phase(),
+            SchedulerPhase::PersistentCallbacks,
+            "BUG: the async driver must not poll during build/layout/paint; the \
+             driver step belongs between the transient and persistent callbacks"
+        );
+        self.async_driver.poll_ready()
+    }
+
+    /// Number of tasks the async driver holds.
+    #[must_use]
+    pub fn pending_task_count(&self) -> usize {
+        self.async_driver.pending_task_count()
     }
 
     /// Install the platform wake hook fired when a frame is first
@@ -842,11 +1173,12 @@ impl Scheduler {
     /// "Post-frame callbacks ... are called exactly once" and cannot be
     /// cancelled before they fire. Returns `()` — no cancellation handle.
     pub fn add_post_frame_callback(&self, callback: PostFrameCallback) {
-        let id = self.callbacks.id_gen.next();
-        self.callbacks
-            .post_frame
-            .lock()
-            .push(CancellablePostFrameCallback { id, callback });
+        self.with_post_frame_registration(|id| {
+            self.callbacks
+                .post_frame
+                .lock()
+                .push(CancellablePostFrameCallback { id, callback });
+        });
     }
 
     // =========================================================================
@@ -1665,6 +1997,167 @@ impl Default for SchedulerBuilder {
 
 #[cfg(test)]
 mod tests {
+
+    // =========================================================================
+    // Async Driver Integration
+    // =========================================================================
+
+    /// Requirement 1: tasks are polled in the `MidFrameMicrotasks` phase.
+    ///
+    /// `handle_begin_frame` performs the poll itself in that phase —
+    /// the bindings no longer call `drive_async_tasks` directly. Replaces
+    /// `handle_begin_frame_does_not_poll_async_tasks`, which pinned the old
+    /// binding-owned contract.
+    #[test]
+    fn handle_begin_frame_polls_async_tasks_once_in_the_mid_frame_phase() {
+        use std::sync::atomic::AtomicUsize;
+        let scheduler = Scheduler::new();
+        let observed = Arc::new(Mutex::new(None));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let observed_for_task = Arc::clone(&observed);
+        let polls_for_task = Arc::clone(&polls);
+        let probe = scheduler.clone();
+
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            polls_for_task.fetch_add(1, Ordering::Release);
+            *observed_for_task.lock() = Some(probe.phase());
+        }));
+
+        scheduler.handle_begin_frame(Instant::now());
+
+        assert_eq!(
+            polls.load(Ordering::Acquire),
+            1,
+            "exactly one driver poll per frame, performed by the scheduler"
+        );
+        assert_eq!(
+            *observed.lock(),
+            Some(SchedulerPhase::MidFrameMicrotasks),
+            "the future must be polled in the microtask phase — never during \
+             persistent callbacks, i.e. never inside build/layout/paint"
+        );
+        assert_eq!(
+            scheduler.phase(),
+            SchedulerPhase::MidFrameMicrotasks,
+            "the poll must not advance the phase"
+        );
+    }
+
+    /// The poll happens on **this** scheduler instance, not on a global. Headless
+    /// bindings own a binding-local `Scheduler`; production drives the singleton.
+    /// A driver step on the wrong instance would be a divergence between the two.
+    #[test]
+    fn each_scheduler_instance_polls_only_its_own_async_driver() {
+        let a = Scheduler::new();
+        let b = Scheduler::new();
+        let polled_a = Arc::new(AtomicBool::new(false));
+        let polled_a_task = Arc::clone(&polled_a);
+        let _token = a.spawn_local(Box::pin(async move {
+            polled_a_task.store(true, Ordering::Release);
+        }));
+
+        b.handle_begin_frame(Instant::now());
+        assert!(
+            !polled_a.load(Ordering::Acquire),
+            "driving `b`'s frame must not poll `a`'s task"
+        );
+
+        a.handle_begin_frame(Instant::now());
+        assert!(polled_a.load(Ordering::Acquire));
+    }
+
+    /// Requirement 6: polling during build/layout/paint is a `BUG:` panic in
+    /// debug. A persistent frame callback runs in `PersistentCallbacks`, so
+    /// calling the driver step from one must trip the guard.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "BUG: the async driver must not poll during build/layout/paint")]
+    fn drive_async_tasks_panics_if_called_during_persistent_callbacks() {
+        let scheduler = Scheduler::new();
+        let probe = scheduler.clone();
+        scheduler.add_persistent_frame_callback(Arc::new(move |_timing: &FrameTiming| {
+            probe.drive_async_tasks();
+        }));
+
+        scheduler.handle_begin_frame(Instant::now());
+        scheduler.handle_draw_frame();
+    }
+
+    /// The driver step is callable from the bindings' `Idle` phase — FLUI's
+    /// binding frame path is decoupled from the scheduler's phase machine.
+    #[test]
+    fn drive_async_tasks_is_callable_outside_a_scheduler_frame() {
+        let scheduler = Scheduler::new();
+        let polled = Arc::new(AtomicBool::new(false));
+        let polled_for_task = Arc::clone(&polled);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            polled_for_task.store(true, Ordering::Release);
+        }));
+
+        assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
+        assert_eq!(scheduler.drive_async_tasks(), 1);
+        assert!(polled.load(Ordering::Acquire));
+    }
+
+    /// A task's waker requests a frame through the scheduler's existing
+    /// coalescing path (`frame_scheduled` + `on_frame_scheduled`).
+    #[test]
+    fn async_task_wake_requests_a_frame_through_the_scheduler_hook() {
+        let scheduler = Scheduler::new();
+        let wakes = Arc::new(AtomicU64::new(0));
+        let wakes_for_hook = Arc::clone(&wakes);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            wakes_for_hook.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        let stored: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        let stored_for_task = Arc::clone(&stored);
+        let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+            *stored_for_task.lock() = Some(cx.waker().clone());
+            std::task::Poll::<()>::Pending
+        })));
+        // `spawn_local` requested the frame that will first poll the task.
+        assert_eq!(wakes.load(Ordering::Relaxed), 1);
+
+        // Consume the pending-frame flag as a real frame would.
+        scheduler.handle_begin_frame(Instant::now());
+        scheduler.drive_async_tasks();
+        let waker = stored.lock().clone().expect("waker stored");
+
+        waker.wake_by_ref();
+        waker.wake_by_ref();
+        waker.wake_by_ref();
+        assert_eq!(
+            wakes.load(Ordering::Relaxed),
+            2,
+            "repeated wakes between frames request exactly one frame"
+        );
+        assert!(scheduler.is_frame_scheduled());
+    }
+
+    /// Requirement 7: the microtask queue keeps its existing behavior — the
+    /// driver step does not drain or reorder it.
+    #[test]
+    fn drive_async_tasks_does_not_disturb_microtasks() {
+        let scheduler = Scheduler::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_for_task = Arc::clone(&ran);
+        scheduler.schedule_microtask(Box::new(move || {
+            ran_for_task.store(true, Ordering::Release);
+        }));
+
+        scheduler.drive_async_tasks();
+        assert!(
+            !ran.load(Ordering::Acquire),
+            "the driver step must not drain the microtask queue"
+        );
+
+        scheduler.handle_begin_frame(Instant::now());
+        assert!(
+            ran.load(Ordering::Acquire),
+            "handle_begin_frame still flushes"
+        );
+    }
     use super::*;
 
     #[test]
@@ -1679,7 +2172,12 @@ mod tests {
         // (TransientCallbacks already executed)
         assert_eq!(scheduler.phase(), SchedulerPhase::MidFrameMicrotasks);
 
+        // `handle_draw_frame` no longer finishes the frame. It hands the
+        // `PersistentCallbacks` slot to the caller's pipeline.
         scheduler.handle_draw_frame();
+        assert_eq!(scheduler.phase(), SchedulerPhase::PersistentCallbacks);
+
+        scheduler.end_frame();
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
     }
 
@@ -1971,7 +2469,7 @@ mod tests {
     fn test_persistent_callback_fires_every_frame() {
         // Flutter parity: binding.dart:773 "Persistent frame callbacks
         // cannot be unregistered. Once registered, they are called for every
-        // frame for the lifetime of the application." Pre-U31 commit FLUI
+        // frame for the lifetime of the application." FLUI previously
         // diverged with `remove_persistent_frame_callback`; reverted to
         // strict Flutter contract.
         let scheduler = Scheduler::new();

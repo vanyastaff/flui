@@ -57,6 +57,11 @@
 // `flex/flex.rs`, `text/text.rs`: a one-type family module named after its
 // type is the catalog's house style (matches `flui-view`/`flui-objects`).
 #![allow(clippy::module_inception)]
+// ADR-0027: navigator/overlay/hero/focus widget state is owner-local, but the
+// current handle graph still uses `Arc` at many internal seams. Do not restore
+// `Send + Sync` to UI callbacks or route/page builders to satisfy this lint; a
+// focused owner-local handle migration can replace these with `Rc` later.
+#![allow(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Modules
@@ -66,6 +71,7 @@ mod support;
 
 pub mod animated;
 pub mod app;
+mod async_builders;
 pub mod clip;
 mod container;
 pub mod flex;
@@ -73,6 +79,22 @@ pub mod icon;
 pub mod image;
 pub mod interaction;
 pub mod layout;
+// Headless widget harness shared by the in-crate unit tests of the private
+// `overlay` / `navigator` modules. `tests/common` is an integration-test module
+// and cannot be reached from `src/`.
+#[cfg(test)]
+mod test_harness;
+
+/// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
+/// route stack, its lifecycle, the flush algorithm and the result channel are
+/// private; the signed-off surface is re-exported from the crate root below.
+pub mod navigator;
+// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. Deliberately
+// private: nothing here is exported from the crate root or the prelude until
+// the parity + sign-off gate lands. `Navigator` is the intended in-crate
+// consumer. (A `///` doc here would be concatenated with the module's own
+// `//!` docs and resolve its intra-doc links in the crate root.)
+mod overlay;
 pub mod paint;
 pub mod scroll;
 pub mod semantics;
@@ -95,12 +117,16 @@ pub use flui_types::platform::Brightness;
 pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedSize, AnimatedSizeState,
-    VsyncScope,
+    TickerMode, TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect};
 // `Image` widget over `RenderImage`; provider types live in the same module.
 // `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
 // need only import from `flui-widgets`, not from lower-level crates.
+pub use async_builders::{
+    BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,
+    SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
+};
 pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
@@ -111,14 +137,17 @@ pub use image::{
     DirectImageProvider, FileImage, Image, ImageProvider, ImageProviderError, MemoryImage,
 };
 pub use interaction::{
-    AbsorbPointer, GestureArenaScope, GestureDetector, GestureDetectorState, IgnorePointer,
-    Listener, MouseRegion, Offstage, Visibility,
+    AbsorbPointer, Action, ActionOutcome, Actions, CallbackAction, CallbackShortcuts, Focus,
+    FocusChangeHandler, FocusScope, FocusScopeState, FocusState, GestureArenaScope,
+    GestureDetector, GestureDetectorState, IgnorePointer, Intent, Listener, MouseRegion,
+    NextFocusAction, NextFocusIntent, Offstage, PreviousFocusAction, PreviousFocusIntent,
+    ShortcutCallback, Shortcuts, SingleActivator, Visibility,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
-    IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox, ListBody, OverflowBox, Padding,
-    RotatedBox, SizedBox, SizedOverflowBox, Table, TableCell, TableRow, Transform,
+    IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, OverflowBox,
+    Padding, RotatedBox, SizedBox, SizedOverflowBox, Table, TableCell, TableRow, Transform,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
@@ -128,6 +157,14 @@ pub use flui_objects::OverflowBoxFit;
 // need only import from `flui_widgets`.
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
+pub use navigator::{
+    FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode, Navigator,
+    NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome, NavigatorCommandTarget,
+    NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
+    PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route, RouteAnimation,
+    RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteSettings,
+    RouteTransitionsBuilder, SimpleRoute,
+};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
@@ -140,7 +177,10 @@ pub use scroll::{
 };
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
-pub use text::{EditableText, EditableTextState, RichText, Text, TextEditingController, TextField};
+pub use text::{
+    DefaultTextStyle, EditableText, EditableTextState, RichText, Text, TextEditingController,
+    TextField,
+};
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
     RotationTransitionState, ScaleTransition, ScaleTransitionState,
@@ -201,22 +241,27 @@ pub mod prelude {
 
     // The widget catalog.
     pub use crate::{
-        AbsorbPointer, Align, AspectRatio, Baseline, Brightness, Center, ClipOval, ClipPath,
-        ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container, CustomMultiChildLayout,
-        CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox, EditableText,
-        EditableTextState, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible, Flow,
-        FractionalTranslation, FractionallySizedBox, GestureArenaScope, GestureDetector, GridView,
-        Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image, ImageAlignment, ImageFit,
-        ImageProvider, IndexedStack, IntrinsicHeight, IntrinsicWidth, LayoutId, LimitedBox,
-        ListBody, ListView, Listener, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion,
-        Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, Positioned, RepaintBoundary,
-        RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics,
-        ShrinkWrappingViewport, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, Table, TableCell, TableRow, Text, TextEditingController,
-        TextField, Theme, ThemeData, Transform, Viewport, Visibility, Wrap,
+        AbsorbPointer, Action, ActionOutcome, Actions, Align, AspectRatio, Baseline, Brightness,
+        CallbackAction, CallbackShortcuts, Center, ClipOval, ClipPath, ClipRRect, ClipRect,
+        ColoredBox, Column, ConstrainedBox, Container, CustomMultiChildLayout, CustomPaint,
+        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultTextStyle, EditableText,
+        EditableTextState, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible,
+        FlightDirection, Flow, Focus, FocusScope, FractionalTranslation, FractionallySizedBox,
+        FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero, HeroController,
+        HeroMode, Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image, ImageAlignment,
+        ImageFit, ImageProvider, IndexedStack, Intent, IntrinsicHeight, IntrinsicWidth,
+        LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, MediaQuery,
+        MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle, NextFocusAction,
+        NextFocusIntent, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding, PageRoute,
+        PopScope, PopupRoute, Positioned, PreviousFocusAction, PreviousFocusIntent,
+        RepaintBoundary, RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable,
+        Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
+        StreamBuilder, Table, TableCell, TableRow, Text, TextEditingController, TextField, Theme,
+        ThemeData, TickerMode, Transform, Viewport, Visibility, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

@@ -33,7 +33,7 @@ use crate::view::View;
 /// not by dense slot — the map is sparse because only the visible-plus-cache
 /// band is built. Ordered (`BTreeMap`) so band eviction sweeps in index order.
 ///
-/// # F4 invariant — host `child_ids` stays empty
+/// # Invariant: host `child_ids` stays empty
 ///
 /// The adaptor element that owns a `SparseChildren` must **never** append its
 /// lazy children to the host's `ElementNode::child_ids` list. If it did, a
@@ -84,9 +84,9 @@ impl SparseChildren {
 
     /// Iterate over all currently-built `(logical_index, ElementId)` pairs.
     ///
-    /// Used by the adaptor element's `on_unmount` (F3) to find and subtree-
-    /// remove every lazy child: since the host's `child_ids` is empty (F4
-    /// invariant) the generic tree-walk that covers dense children cannot
+    /// Used by the adaptor element's `on_unmount` to find and subtree-remove
+    /// every lazy child: since the host's `child_ids` stays empty by
+    /// invariant, the generic tree-walk that covers dense children cannot
     /// reach them.
     pub(crate) fn iter_built(&self) -> impl Iterator<Item = (usize, ElementId)> + '_ {
         self.by_logical_index
@@ -119,7 +119,7 @@ impl SparseChildren {
         stamp_logical_index(tree, pipeline, child, logical_index);
         self.by_logical_index.insert(logical_index, child);
 
-        // F1: `ElementTree::insert` (via `ElementCore::mount`) sets the child's
+        // `ElementTree::insert` (via `ElementCore::mount`) sets the child's
         // `dirty = true` but does NOT push it onto the build heap — only
         // `id_reconcile.rs` does that through `schedule_build_for`.  Without
         // this explicit push the second `build_scope` in
@@ -149,7 +149,7 @@ impl SparseChildren {
         let Some(child) = self.by_logical_index.remove(&logical_index) else {
             return false;
         };
-        // F2: use `remove_subtree` so the child's entire descendant subtree is
+        // Use `remove_subtree` so the child's entire descendant subtree is
         // freed.  A single-node `tree.remove` only removes the top-level element
         // and leaks every descendant (e.g. the Padding and Text inside a
         // Container child stay as orphaned slab entries and dangling render nodes).
@@ -245,11 +245,19 @@ mod tests {
         type Protocol = flui_rendering::protocol::BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for LeafBox {
@@ -271,11 +279,19 @@ mod tests {
         type Protocol = flui_rendering::protocol::BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for GlobalKeyedLeafBox {
@@ -440,7 +456,7 @@ mod tests {
         assert_eq!(surviving, vec![2, 3], "only in-band children survive");
     }
 
-    /// F1: `ensure` must push the freshly-mounted child onto the dirty heap so
+    /// `ensure` must push the freshly-mounted child onto the dirty heap so
     /// the second `build_scope` in `service_child_requests` can expand its
     /// subtree (e.g. Padding(Text)). Without `schedule_build_for` the heap is
     /// empty and child subtrees never grow past the top-level node.
@@ -462,16 +478,16 @@ mod tests {
         );
 
         // After `ensure`, the child must be on the dirty heap so the next
-        // `build_scope` can expand its own subtree (F1).
+        // `build_scope` can expand its own subtree.
         assert!(
             build_owner.dirty_count() > count_before,
-            "ensure must schedule the freshly-mounted child for build (F1 — \
+            "ensure must schedule the freshly-mounted child for build — \
              without schedule_build_for, service_child_requests runs build_scope \
-             over an empty heap and child subtrees never expand)",
+             over an empty heap and child subtrees never expand",
         );
     }
 
-    /// F2: `evict` must remove the child's *entire* descendant subtree, not
+    /// `evict` must remove the child's *entire* descendant subtree, not
     /// only the top-level element. A single-node `tree.remove` leaks every
     /// descendant element (and their render nodes), which the slab retains as
     /// orphans forever.
@@ -534,39 +550,39 @@ mod tests {
             "grandchild element must have a render node before evict"
         );
 
-        // Evict the list item — the whole subtree must disappear (F2).
+        // Evict the list item — the whole subtree must disappear.
         let removed = children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
 
         assert!(removed, "evict reports the child was present");
         assert!(
             tree.get(child).is_none(),
-            "top-level lazy child must be removed on evict (F2)",
+            "top-level lazy child must be removed on evict",
         );
         assert!(
             tree.get(grandchild).is_none(),
-            "descendant element must also be removed (F2 — single-node remove \
-             would leak this grandchild as an orphaned slab entry)",
+            "descendant element must also be removed — single-node remove \
+             would leak this grandchild as an orphaned slab entry",
         );
 
-        // F2: render nodes must also be gone after subtree eviction.
+        // Render nodes must also be gone after subtree eviction.
         let owner = pipeline.read();
         if let Some(rid) = child_render_id {
             assert!(
                 owner.render_tree().get(rid).is_none(),
-                "child render node must be removed on subtree evict (F2)",
+                "child render node must be removed on subtree evict",
             );
         }
         if let Some(rid) = grandchild_render_id {
             assert!(
                 owner.render_tree().get(rid).is_none(),
-                "grandchild render node must also be removed on subtree evict (F2 — \
-                 single-node remove leaks descendant render nodes)",
+                "grandchild render node must also be removed on subtree evict — \
+                 single-node remove leaks descendant render nodes",
             );
         }
     }
 
-    /// F5.key: a globally-keyed lazy child pushed to the inactive queue by
-    /// eviction must be slab-freed by `finalize_tree` — not left dangling.
+    /// A globally-keyed lazy child pushed to the inactive queue by eviction
+    /// must be slab-freed by `finalize_tree` — not left dangling.
     ///
     /// A globally-keyed element is soft-removed by `tree.remove` (called inside
     /// `remove_subtree`): the slab entry stays alive, the element is placed into
@@ -641,7 +657,7 @@ mod tests {
         assert_eq!(
             tree.len(),
             element_count_before,
-            "the globally-keyed element must be slab-freed by finalize_tree (F5.key)"
+            "the globally-keyed element must be slab-freed by finalize_tree"
         );
         assert!(
             tree.get(child_id).is_none(),

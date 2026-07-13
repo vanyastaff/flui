@@ -1,14 +1,14 @@
 //! `DrawCommand` -- the closed-enum vocabulary of paint operations
 //! that `flui-engine`'s wgpu backend pattern-matches for GPU lowering.
 //!
-//! Mythos chain U5 extracted these from the 2,434-LOC
-//! `display_list.rs` god module. The 29 variants are the entire
+//! These were extracted from the 2,434-LOC
+//! `display_list.rs` god module as part of a concern-based split. The 29 variants are the entire
 //! compositor draw operation vocabulary; adding a 30th is a
 //! coordinated change in `flui-painting` + `flui-engine`
 //! (+ optionally `flui-rendering`).
 //!
 //! Deliberately the same shape as `flui-layer::Layer` enum
-//! (see flui-layer Mythos chain Mapping decisions #1). The reason
+//! (see the mapping-decision rationale in `flui-layer`). The reason
 //! is identical: arbitrary trait-object commands would force a
 //! `Box<dyn Drawable>` boundary the wgpu backend cannot translate.
 

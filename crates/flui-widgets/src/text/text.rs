@@ -1,15 +1,19 @@
 //! [`Text`] — displays a run of styled text.
 
-use flui_objects::RenderParagraph;
-use flui_rendering::protocol::BoxProtocol;
 use flui_types::typography::{TextAlign, TextDirection, TextSpan, TextStyle};
-use flui_view::{RenderView, impl_render_view};
+use flui_view::element::ElementKind;
+use flui_view::prelude::*;
+
+use super::default_text_style::DefaultTextStyle;
+use super::rich_text::RichText;
 
 /// Displays a string of text with a single style.
 ///
-/// Flutter parity: `widgets/text.dart` `Text` over `RenderParagraph`. This is a
-/// leaf widget — it measures and paints the text but has no child. For
-/// multi-style runs, use [`RichText`](crate::RichText) with a [`TextSpan`] tree.
+/// Flutter parity: `widgets/text.dart` `Text` — a `StatelessWidget` that merges
+/// the ambient [`DefaultTextStyle`] with its own and builds a
+/// [`RichText`] (`text.dart:716-765`), as Flutter's does. For
+/// multi-style runs, use `RichText` with a [`TextSpan`] tree directly — it reads
+/// no ambient style, also as in Flutter.
 ///
 /// # Examples
 ///
@@ -21,7 +25,7 @@ use flui_view::{RenderView, impl_render_view};
 pub struct Text {
     data: String,
     style: Option<TextStyle>,
-    align: TextAlign,
+    align: Option<TextAlign>,
     direction: TextDirection,
     max_lines: Option<u32>,
 }
@@ -33,23 +37,25 @@ impl Text {
         Self {
             data: data.into(),
             style: None,
-            align: TextAlign::Start,
+            align: None,
             direction: TextDirection::Ltr,
             max_lines: None,
         }
     }
 
-    /// Apply a [`TextStyle`] to the whole run.
+    /// Apply a [`TextStyle`] to the whole run. Merged **over** the ambient
+    /// [`DefaultTextStyle`], field by field (`text.dart:718-720`).
     #[must_use]
     pub fn style(mut self, style: TextStyle) -> Self {
         self.style = Some(style);
         self
     }
 
-    /// Set the horizontal alignment of the text within its bounds.
+    /// Set the horizontal alignment of the text within its bounds. Unset, the
+    /// ambient [`DefaultTextStyle`]'s alignment applies, then start (`:757`).
     #[must_use]
     pub fn align(mut self, align: TextAlign) -> Self {
-        self.align = align;
+        self.align = Some(align);
         self
     }
 
@@ -60,38 +66,56 @@ impl Text {
         self
     }
 
-    /// Cap the number of lines before truncating.
+    /// Cap the number of lines before truncating. Unset, the ambient
+    /// [`DefaultTextStyle`]'s cap applies (`:765`).
     #[must_use]
     pub fn max_lines(mut self, max_lines: u32) -> Self {
         self.max_lines = Some(max_lines);
         self
     }
+}
 
-    fn span(&self) -> TextSpan {
-        match &self.style {
-            Some(style) => TextSpan::styled(self.data.clone(), style.clone()),
-            None => TextSpan::new(self.data.clone()),
+impl View for Text {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for Text {
+    /// `Text.build` (`text.dart:716-765`), reduced to the properties FLUI's text
+    /// stack carries: the ambient style merges under this run's own, and
+    /// alignment / line cap fall back to the ambient values when unset here.
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // No scope above behaves as an empty style with no alignment or cap —
+        // `DefaultTextStyle.fallback` (`text.dart:81-88`).
+        let (ambient_style, ambient_align, ambient_max_lines) = ctx
+            .depend_on::<DefaultTextStyle, _>(DefaultTextStyle::ambient)
+            .unwrap_or_default();
+
+        // `defaultTextStyle.style.merge(style)` (`:720`); FLUI's `TextStyle` has
+        // no `inherit` flag, so the merge is unconditional (all fields optional).
+        let effective_style = match &self.style {
+            Some(own) => ambient_style.merge(own),
+            None => ambient_style,
+        };
+        // An all-unset style is byte-for-byte the unstyled span.
+        let span = if effective_style == TextStyle::default() {
+            TextSpan::new(self.data.clone())
+        } else {
+            TextSpan::styled(self.data.clone(), effective_style)
+        };
+
+        let align = self
+            .align
+            .or(ambient_align)
+            // `textAlign ?? defaultTextStyle.textAlign ?? TextAlign.start` (`:757`).
+            .unwrap_or(TextAlign::Start);
+
+        let mut rich = RichText::new(span).align(align).direction(self.direction);
+        // `maxLines ?? defaultTextStyle.maxLines` (`:765`).
+        if let Some(max_lines) = self.max_lines.or(ambient_max_lines) {
+            rich = rich.max_lines(max_lines);
         }
-    }
-
-    fn build_render_object(&self) -> RenderParagraph {
-        RenderParagraph::new(self.span(), self.direction)
-            .with_text_align(self.align)
-            .with_max_lines(self.max_lines)
+        rich
     }
 }
-
-impl RenderView for Text {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderParagraph;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        self.build_render_object()
-    }
-
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        *render_object = self.build_render_object();
-    }
-}
-
-impl_render_view!(Text);

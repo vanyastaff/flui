@@ -15,9 +15,12 @@
 //! Key-routing tests serialize themselves around the global `FocusManager`
 //! singleton and clean up their registered nodes before returning.
 
-use std::sync::{
-    Arc, Mutex, MutexGuard,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    rc::Rc,
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use flui_foundation::Listenable;
@@ -88,7 +91,7 @@ impl Drop for FocusGuard {
 /// exactly, and these tests would fail if any branch were removed or the
 /// wrong method were called.
 fn make_editable_text_handler(controller: TextEditingController) -> KeyEventCallback {
-    Arc::new(move |event| {
+    Rc::new(move |event| {
         if event.state != KeyState::Down {
             return false;
         }

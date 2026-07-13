@@ -131,7 +131,7 @@ impl GestureDisposition {
 /// ```
 ///
 /// [`CustomGestureRecognizer`]: crate::sealed::CustomGestureRecognizer
-pub trait GestureArenaMember: crate::sealed::arena_member::Sealed + Send + Sync {
+pub trait GestureArenaMember: crate::sealed::arena_member::Sealed {
     /// Accept the gesture for this pointer.
     ///
     /// Called when this recognizer wins the arena for the given pointer.

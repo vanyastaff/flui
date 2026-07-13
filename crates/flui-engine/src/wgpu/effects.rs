@@ -292,8 +292,8 @@ impl ShadowParams {
         }
     }
 
-    // `elevation_1` ... `elevation_5` constructor shortcuts were deleted in
-    // cycle 4 E-4 — they had zero non-test consumers across the workspace
+    // `elevation_1` ... `elevation_5` constructor shortcuts were deleted —
+    // they had zero non-test consumers across the workspace
     // (the only docstring reference was migrated to
     // `ShadowParams::new(...)` literal-construction in the same commit).
     // The Material Design elevation curves they encoded were a higher-level
@@ -360,8 +360,8 @@ impl ShadowInstance {
 }
 
 // Blur uniform-parameter buffer (`BlurParams`) + `BlurIntensity` shorthand
-// enum + `LinearGradientBuilder` fluent-API helper were deleted in cycle 4
-// E-4: zero non-test consumers across the workspace, and the live blur
+// enum + `LinearGradientBuilder` fluent-API helper were deleted:
+// zero non-test consumers across the workspace, and the live blur
 // uniform struct (`offscreen::BlurParams`) has a different field shape that
 // the parallel `effects::BlurParams` never adopted. When a public blur API
 // lands on `WgpuPainter`, it will reach for the offscreen-side struct
@@ -427,7 +427,7 @@ mod tests {
     }
 
     // `test_gradient_builder`, `test_shadow_elevation_levels`, and
-    // `test_blur_intensity` were removed in cycle 4 E-4 alongside the
+    // `test_blur_intensity` were removed alongside the
     // `LinearGradientBuilder`, `ShadowParams::elevation_*`, and
     // `BlurIntensity` items they exercised. The remaining `GradientStop`
     // smoke test covers the only public API in this module that has live

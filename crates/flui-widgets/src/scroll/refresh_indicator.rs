@@ -34,8 +34,11 @@
 //! v1 uses a synchronous `Fn()` completion model rather than Dart's `Future`
 //! because the view layer has no async executor.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    rc::Rc,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use flui_animation::{Animation, AnimationController, Scheduler, Vsync, VsyncRegistration};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
@@ -256,7 +259,7 @@ pub struct RefreshIndicator {
     /// Caller handle for querying state and calling `finish()`.
     controller: RefreshController,
     /// Fired when the user releases after an over-threshold pull.
-    on_refresh: Arc<dyn Fn() + Send + Sync>,
+    on_refresh: Rc<dyn Fn()>,
     /// Minimum overscroll distance (logical pixels) to trigger refresh.
     threshold_px: f32,
     /// Scroll boundary / fling behaviour.
@@ -281,7 +284,7 @@ impl Default for RefreshIndicator {
         Self {
             child: Child::empty(),
             controller: RefreshController::new(),
-            on_refresh: Arc::new(|| {}),
+            on_refresh: Rc::new(|| {}),
             threshold_px: DEFAULT_THRESHOLD_PX,
             physics: Arc::new(ClampingScrollPhysics::default()),
             scroll_controller: ScrollController::new(),
@@ -329,8 +332,8 @@ impl RefreshIndicator {
     /// by calling [`RefreshController::finish`] on the controller provided to
     /// [`controller`](Self::controller).
     #[must_use]
-    pub fn on_refresh(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_refresh = Arc::new(f);
+    pub fn on_refresh(mut self, f: impl Fn() + 'static) -> Self {
+        self.on_refresh = Rc::new(f);
         self
     }
 

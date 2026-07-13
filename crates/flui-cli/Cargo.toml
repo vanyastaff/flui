@@ -23,8 +23,7 @@ flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = [
 # multi-thread `Runtime`.
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
-# Logging (via flui_foundation::log — merged from flui-log in
-# D-block PR-C-1 U2)
+# Logging (via flui_foundation::log — merged from flui-log)
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # CLI framework

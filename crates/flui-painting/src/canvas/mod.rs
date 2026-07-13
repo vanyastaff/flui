@@ -24,7 +24,7 @@
 //! 6. **Thread-safe value**: `Canvas` is `Send` (can be sent across
 //!    threads) but `!Sync` (single-threaded recording).
 //!
-//! # Concern split (Mythos chain U4)
+//! # Concern split
 //!
 //! The 3,305-LOC `canvas.rs` god module was split into seven
 //! concern-based files: this `mod.rs` plus six submodules.
@@ -179,8 +179,7 @@ impl Canvas {
     ///
     /// Consumes the canvas. On unrestored save() calls, fires
     /// `debug_assert!` (caught during tests) and `tracing::warn!`
-    /// (release-build observability). The Mythos chain U10 wired the
-    /// debug_assert; release behaviour matches Flutter's
+    /// (release-build observability); release behaviour matches Flutter's
     /// `PictureRecorder.endRecording()` silent finalisation.
     ///
     /// # Examples

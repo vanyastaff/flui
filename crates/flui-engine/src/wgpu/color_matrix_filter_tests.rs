@@ -4,12 +4,12 @@
 //!
 //! | # | Gate | Requirement |
 //! |---|------|-------------|
-//! | F1 | GPU | Identity matrix: output equals unfiltered source |
-//! | F2 | GPU | Swap-R↔B matrix: opaque red input → premul blue output |
-//! | F3 | GPU | Identity on translucent: 50% alpha survives filter correctly |
-//! | F4 | GPU | Asymmetric matrix (saturation=0) on mixed color: all channels equal (gray) — catches transpose bug |
-//! | F5 | GPU | Brightness(+0.3) on translucent green: oracle match catches premul skip |
-//! | F6 | GPU | Filter layer nested in opacity-0.5 layer: output alpha ≈ 128 (inherits parent opacity) |
+//! | 1 | GPU | Identity matrix: output equals unfiltered source |
+//! | 2 | GPU | Swap-R↔B matrix: opaque red input → premul blue output |
+//! | 3 | GPU | Identity on translucent: 50% alpha survives filter correctly |
+//! | 4 | GPU | Asymmetric matrix (saturation=0) on mixed color: all channels equal (gray) — catches transpose bug |
+//! | 5 | GPU | Brightness(+0.3) on translucent green: oracle match catches premul skip |
+//! | 6 | GPU | Filter layer nested in opacity-0.5 layer: output alpha ≈ 128 (inherits parent opacity) |
 //!
 //! All tests use `enable-wgpu-tests` feature-gate and follow the same harness
 //! pattern as `layer_blend_tests`.  The 64×64 surface avoids DX12 small-texture
@@ -260,9 +260,9 @@ mod gpu_tests {
         ]
     }
 
-    // ── F1: Identity matrix — output byte-identical to unfiltered ────────────
+    // ── Identity matrix — output byte-identical to unfiltered ────────────────
 
-    /// F1: An identity color-matrix filter must produce output bit-identical to
+    /// An identity color-matrix filter must produce output bit-identical to
     /// drawing the same rect without any filter.
     ///
     /// **Proves:**
@@ -350,7 +350,7 @@ mod gpu_tests {
                 .expect("diff of two u8 values always fits in u8");
                 assert!(
                     channel_diff <= quantization_tolerance,
-                    "F1: pixel {pixel_index} channel {channel_index} — \
+                    "pixel {pixel_index} channel {channel_index} — \
                      no_filter={a} identity_filter={b} \
                      diff={channel_diff} > tolerance {quantization_tolerance}",
                     a = nf[channel_index],
@@ -360,9 +360,9 @@ mod gpu_tests {
         }
     }
 
-    // ── F2: Swap-R↔B matrix — opaque red → premul blue ───────────────────────
+    // ── Swap-R↔B matrix — opaque red → premul blue ───────────────────────────
 
-    /// F2: A channel-swap matrix (R↔B, pass-through G and A) applied to an
+    /// A channel-swap matrix (R↔B, pass-through G and A) applied to an
     /// opaque red layer must produce opaque blue output.
     ///
     /// **Proves:**
@@ -432,12 +432,12 @@ mod gpu_tests {
         let expected = color_matrix_oracle(&swap_rb, [200.0 / 255.0, 0.0, 0.0, 1.0]);
 
         // ±2: GPU u8 quantization at offscreen boundary.
-        assert_interior_pixels_near("F2 swap-R↔B", &readback, expected, 2);
+        assert_interior_pixels_near("swap-R↔B", &readback, expected, 2);
     }
 
-    // ── F3: Translucent premul roundtrip ─────────────────────────────────────
+    // ── Translucent premul roundtrip ──────────────────────────────────────────
 
-    /// F3: An identity matrix applied to a 50%-alpha source must preserve
+    /// An identity matrix applied to a 50%-alpha source must preserve
     /// both the color channels and the alpha, proving the unpremultiply →
     /// (identity) matrix → clamp → repremultiply cycle is numerically stable
     /// for translucent inputs.
@@ -500,12 +500,12 @@ mod gpu_tests {
 
         // ±3: offscreen boundary premul quantization for translucent pixels
         // incurs one extra rounding step vs. opaque paths.
-        assert_interior_pixels_near("F3 translucent premul", &readback, expected, 3);
+        assert_interior_pixels_near("translucent premul", &readback, expected, 3);
     }
 
-    // ── F4: Asymmetric matrix (catches the transpose bug) ─────────────────────
+    // ── Asymmetric matrix (catches the transpose bug) ──────────────────────────
 
-    /// F4: `ColorMatrix::saturation(0.0)` (grayscale) applied to opaque red must
+    /// `ColorMatrix::saturation(0.0)` (grayscale) applied to opaque red must
     /// produce gray ≈ (45, 45, 45, 255), NOT greenish (54, 182, 18, 255).
     ///
     /// The saturation-0 matrix is severely asymmetric: off-diagonal weights differ
@@ -590,12 +590,12 @@ mod gpu_tests {
         );
 
         // ±3: tolerates GPU u8 quantisation at the offscreen boundary.
-        assert_interior_pixels_near("F4 saturation(0) on warm color", &readback, expected, 3);
+        assert_interior_pixels_near("saturation(0) on warm color", &readback, expected, 3);
     }
 
-    // ── F5: Non-identity matrix on translucent input ──────────────────────────
+    // ── Non-identity matrix on translucent input ───────────────────────────────
 
-    /// F5: `ColorMatrix::brightness(0.3)` applied to 50%-alpha green must produce
+    /// `ColorMatrix::brightness(0.3)` applied to 50%-alpha green must produce
     /// the oracle value, not one that skipped the unpremultiply step.
     ///
     /// **Proves (combined):**
@@ -660,16 +660,16 @@ mod gpu_tests {
 
         // ±4: translucent offscreen + clamping introduces one extra quantisation step.
         assert_interior_pixels_near(
-            "F5 brightness(+0.3) on translucent green",
+            "brightness(+0.3) on translucent green",
             &readback,
             expected,
             4,
         );
     }
 
-    // ── F6: Nested filter inside opacity layer (opacity semantics) ─────────────
+    // ── Nested filter inside opacity layer (opacity semantics) ─────────────────
 
-    /// F6: A filter layer nested inside an outer opacity-0.5 layer must composite
+    /// A filter layer nested inside an outer opacity-0.5 layer must composite
     /// at the parent's opacity (0.5), not at 1.0.
     ///
     /// **Proves:** `save_layer_with_filter` calls `effective_layer_opacity(1.0)`
@@ -739,12 +739,12 @@ mod gpu_tests {
             let alpha = pixel[3];
             assert!(
                 alpha < 200,
-                "F6: pixel {pixel_index} alpha={alpha} — filter layer must \
+                "pixel {pixel_index} alpha={alpha} — filter layer must \
                  inherit outer opacity=0.5 (expected alpha ≈ 128, not full 255)"
             );
             assert!(
                 alpha > 50,
-                "F6: pixel {pixel_index} alpha={alpha} — expected alpha ≈ 128, not 0"
+                "pixel {pixel_index} alpha={alpha} — expected alpha ≈ 128, not 0"
             );
         }
     }

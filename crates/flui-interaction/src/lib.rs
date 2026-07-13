@@ -132,6 +132,11 @@
 
 // Ship bar (wave 2): every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// ADR-0027: gesture arenas and recognizers are owner-local, but this crate still
+// exposes `Arc`-shaped handles at the arena/member seams. Do not restore
+// `Send + Sync` to executable callbacks to satisfy this lint; a future focused
+// pass can migrate the owner-local handle graph to `Rc`.
+#![allow(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Core infrastructure modules
@@ -225,7 +230,10 @@ pub use ids::{FocusNodeId, HandlerId, PointerId};
 // the crate root before the move (PR 163). External crates (`flui-rendering`,
 // `flui-app`) import it via `flui_interaction::MouseTracker`; the routing
 // path remains the canonical one for new code.
-pub use routing::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
+pub use routing::{
+    CursorChangeCallback, MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseTracker,
+    MouseTrackerAnnotation,
+};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
@@ -257,8 +265,12 @@ pub use recognizers::drag_variants::{
 pub use routing::{
     EventPropagation, EventRouter, FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy,
     GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
-    KeyEventCallback, KeyEventHandler, KeyEventResult, PointerEventHandler, PointerRouteHandler,
-    PointerRouter, ReadingOrderPolicy, RenderId, ScrollEventHandler, TransformGuard,
+    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
+    KeyEventHandler, KeyEventResult, MouseRegionCallbacks, MouseRegionTarget, PathClipTarget,
+    PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId,
+    ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss,
+    ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
+    resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{
@@ -312,7 +324,7 @@ pub mod prelude {
     // Event routing
     pub use crate::routing::{
         EventPropagation, EventRouter, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
-        HitTestable, PointerEventHandler, PointerRouter, RenderId, TransformGuard,
+        HitTestable, PointerRouter, RenderId, TransformGuard,
     };
     // Extension traits for custom types
     pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
@@ -337,11 +349,14 @@ pub mod prelude {
 }
 
 // ============================================================================
-// Static Assertions: Send + Sync (C-SEND-SYNC)
+// Static Assertions: Send + Sync (data-plane only)
 // ============================================================================
 
-/// Compile-time assertions that key types are Send + Sync.
-/// These ensure thread-safety properties are maintained.
+/// Compile-time assertions that identity/data types remain Send + Sync.
+///
+/// Gesture arenas, recognizers, and focus ownership are intentionally
+/// owner-local under ADR-0027; executable gesture callbacks must not regain a
+/// thread-safe bound through these assertions.
 #[cfg(test)]
 mod static_assertions {
     use super::*;
@@ -354,28 +369,12 @@ mod static_assertions {
     impl AssertSendSync for PointerId {}
     impl AssertSendSync for FocusNodeId {}
     impl AssertSendSync for HandlerId {}
+    impl AssertSendSync for ScrollTarget {}
+    impl AssertSendSync for PathClipTarget {}
+    impl AssertSendSync for ShaderMaskTarget {}
 
-    // Core types should be Send + Sync
-    impl AssertSendSync for FocusManager {}
-    impl AssertSendSync for GestureArena {}
+    // Data-path types should be Send + Sync
     impl AssertSendSync for HitTestResult {}
     impl AssertSendSync for HitTestEntry {}
     impl AssertSendSync for PointerEventResampler {}
-    impl AssertSendSync for PointerSignalResolver {}
-    impl AssertSendSync for crate::routing::MouseTracker {}
-
-    // Recognizers should be Send + Sync
-    impl AssertSendSync for TapGestureRecognizer {}
-    impl AssertSendSync for DragGestureRecognizer {}
-    impl AssertSendSync for ScaleGestureRecognizer {}
-    impl AssertSendSync for LongPressGestureRecognizer {}
-    impl AssertSendSync for DoubleTapGestureRecognizer {}
-    impl AssertSendSync for MultiTapGestureRecognizer {}
-    impl AssertSendSync for ForcePressGestureRecognizer {}
-    impl AssertSendSync for MultiDragGestureRecognizer {}
-    impl AssertSendSync for TapAndDragGestureRecognizer {}
-    // EagerGestureRecognizer is a `RecognizerBase` + `Arc<Mutex<GestureSettings>>`
-    // — auto `Send + Sync` via the `Arc<Mutex<...>>` field pattern, so the static
-    // assertion holds the same way as for Tap/LongPress/MultiDrag above.
-    impl AssertSendSync for EagerGestureRecognizer {}
 }

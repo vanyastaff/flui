@@ -57,16 +57,23 @@ impl<C: ViewSeq> fmt::Debug for SliverGrid<C> {
 
 impl<C> flui_view::RenderView for SliverGrid<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverGrid;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSliverGrid::new(Arc::clone(&self.grid_delegate))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_grid_delegate(Arc::clone(&self.grid_delegate));
     }
 
@@ -122,11 +129,15 @@ mod tests {
     #[test]
     fn update_render_object_replaces_the_grid_delegate() {
         let grid: SliverGrid = SliverGrid::new(delegate(2), Vec::new());
-        let mut render_object = grid.create_render_object();
+        let mut render_object =
+            grid.create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(format!("{:?}", render_object.grid_delegate()).contains("cross_axis_count: 2"));
 
         let updated: SliverGrid = SliverGrid::new(delegate(5), Vec::new());
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert!(
             format!("{:?}", render_object.grid_delegate()).contains("cross_axis_count: 5"),

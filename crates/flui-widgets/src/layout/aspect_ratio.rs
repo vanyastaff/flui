@@ -36,11 +36,18 @@ impl RenderView for AspectRatio {
     type Protocol = BoxProtocol;
     type RenderObject = RenderAspectRatio;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderAspectRatio::new(AspectRatioFactor::new_unchecked(self.aspect_ratio))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_aspect_ratio(AspectRatioFactor::new_unchecked(self.aspect_ratio));
     }
 

@@ -64,7 +64,7 @@ pub trait HitTestTarget: Send + Sync {
 ///     }
 /// }
 /// ```
-pub trait GestureCallback: Send + Sync {
+pub trait GestureCallback {
     /// The type of details passed to this callback.
     ///
     /// Using GAT allows callbacks to borrow data from the gesture recognizer
@@ -78,7 +78,7 @@ pub trait GestureCallback: Send + Sync {
 }
 
 /// A boxed gesture callback for dynamic dispatch.
-pub type BoxedCallback<D> = Box<dyn Fn(D) + Send + Sync>;
+pub type BoxedCallback<D> = Box<dyn Fn(D)>;
 
 // ============================================================================
 // PointerEventExtTrait extension trait (additional methods)

@@ -67,7 +67,8 @@ pub struct DirtyRequest {
 
 /// Errors returned by [`PipelineOwnerHandle::request_mark_dirty`].
 ///
-/// Cycle 4: `#[non_exhaustive]` future-compat marker.
+/// Marked `#[non_exhaustive]` so new variants can be added without a
+/// breaking change for downstream matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SendError {

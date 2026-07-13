@@ -1,7 +1,7 @@
 //! [`ClipPath`] — clips its child to an arbitrary [`Path`] computed from the
 //! child's bounds.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_objects::RenderClipPath;
 use flui_rendering::protocol::BoxProtocol;
@@ -10,16 +10,16 @@ use flui_types::painting::{Clip, Path};
 use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
-/// [`Path`] to clip against. `Arc` so [`ClipPath`] stays `Clone` (a view is
-/// re-cloned on every rebuild) and `Send + Sync` for the view bounds.
-type PathClipper = Arc<dyn Fn(Size) -> Path + Send + Sync>;
+/// [`Path`] to clip against. It is owner-local under ADR-0027; render storage
+/// receives only a data-plane target token.
+type PathClipper = Rc<dyn Fn(Size) -> Path>;
 
 /// Clips its child to a custom [`Path`] derived from the child's size.
 ///
-/// Flutter parity: `widgets/basic.dart` `ClipPath` over `RenderClipPath`, with a
-/// `CustomClipper<Path>` supplied as a closure `Fn(Size) -> Path`. Layout is a
-/// pass-through — only painting is clipped. `clip_behavior` defaults to
-/// [`Clip::AntiAlias`] (Flutter's `ClipPath` default).
+/// Flutter parity: `widgets/basic.dart` `ClipPath` over `RenderClipPath`, with
+/// an owner-local path factory supplied as a closure `Fn(Size) -> Path`.
+/// Layout is a pass-through — only painting is clipped. `clip_behavior`
+/// defaults to [`Clip::AntiAlias`] (Flutter's `ClipPath` default).
 #[derive(Clone)]
 pub struct ClipPath {
     clipper: PathClipper,
@@ -30,9 +30,9 @@ pub struct ClipPath {
 impl ClipPath {
     /// Clip to the path returned by `clipper` for the laid-out size, with
     /// Flutter's default anti-aliased clip behavior.
-    pub fn new(clipper: impl Fn(Size) -> Path + Send + Sync + 'static) -> Self {
+    pub fn new(clipper: impl Fn(Size) -> Path + 'static) -> Self {
         Self {
-            clipper: Arc::new(clipper),
+            clipper: Rc::new(clipper),
             clip_behavior: Clip::AntiAlias,
             child: Child::empty(),
         }
@@ -51,6 +51,29 @@ impl ClipPath {
         self.child = Child::some(child.into_view());
         self
     }
+
+    fn sync_path_clip_target(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut RenderClipPath,
+    ) {
+        let clipper = Rc::clone(&self.clipper);
+        match render_object.path_clip_target() {
+            Some(target) => {
+                if let Err(error) = ctx.replace_path_clipper(target, move |size| clipper(size)) {
+                    tracing::warn!(?error, "ClipPath clipper replacement failed");
+                }
+            }
+            None => match ctx.register_path_clipper(move |size| clipper(size)) {
+                Ok(target) => render_object.set_path_clip_target(Some(target)),
+                Err(error) => tracing::debug!(
+                    ?error,
+                    "ClipPath mounted without an active interaction lane; \
+                     custom path clipper will not be resolved"
+                ),
+            },
+        }
+    }
 }
 
 impl std::fmt::Debug for ClipPath {
@@ -65,18 +88,32 @@ impl RenderView for ClipPath {
     type Protocol = BoxProtocol;
     type RenderObject = RenderClipPath;
 
-    fn create_render_object(&self) -> Self::RenderObject {
-        let clipper = Arc::clone(&self.clipper);
-        RenderClipPath::new(self.clip_behavior).with_clipper(move |size| clipper(size))
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        let mut render_object = RenderClipPath::new(self.clip_behavior);
+        self.sync_path_clip_target(ctx, &mut render_object);
+        render_object
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_clip_behavior(self.clip_behavior);
-        // The clipper is a closure with no identity to diff (Flutter compares via
-        // `CustomClipper.shouldReclip`; the closure-based render clipper cannot),
-        // so the latest closure is always reinstalled — the next paint reads it.
-        let clipper = Arc::clone(&self.clipper);
-        render_object.set_clipper(Some(move |size| clipper(size)));
+        self.sync_path_clip_target(ctx, render_object);
+    }
+
+    fn did_unmount_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
+        if let Some(target) = render_object.path_clip_target() {
+            if let Err(error) = ctx.unregister_path_clipper(target) {
+                tracing::debug!(?error, "ClipPath clipper unregistration failed");
+            }
+            render_object.set_path_clip_target(None);
+        }
     }
 
     fn has_children(&self) -> bool {
@@ -104,36 +141,56 @@ mod tests {
     }
 
     #[test]
-    fn create_render_object_defaults_to_anti_alias_and_installs_the_clipper() {
-        let render_object = clip_path().create_render_object();
+    fn create_render_object_defaults_to_anti_alias() {
+        let render_object =
+            clip_path().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
-        assert!(
-            render_object.has_custom_clipper(),
-            "the clipper closure must always be installed on create",
-        );
+        assert!(!render_object.has_custom_clipper());
     }
 
     #[test]
     fn create_render_object_applies_an_overridden_clip_behavior() {
         let render_object = clip_path()
             .clip_behavior(Clip::HardEdge)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }
 
     #[test]
-    fn update_render_object_applies_a_changed_clip_behavior_and_reinstalls_the_clipper() {
-        let mut render_object = clip_path().create_render_object();
+    fn update_render_object_applies_a_changed_clip_behavior() {
+        let mut render_object =
+            clip_path().create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);
 
         clip_path()
             .clip_behavior(Clip::HardEdge)
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
 
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
-        assert!(
-            render_object.has_custom_clipper(),
-            "update must reinstall the (identity-less) clipper closure",
+        assert!(!render_object.has_custom_clipper());
+    }
+
+    #[test]
+    fn clipper_accepts_owner_local_rc_state() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let total = Rc::new(Cell::new(0));
+        let captured = Rc::clone(&total);
+
+        let widget = ClipPath::new(move |_size: Size| {
+            captured.set(captured.get() + 1);
+            Path::new()
+        });
+
+        let _ = widget.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(
+            total.get(),
+            0,
+            "detached render-object creation must not invoke or store the owner-local clipper"
         );
     }
 

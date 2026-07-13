@@ -503,7 +503,7 @@ impl RenderFlex {
     ///
     /// Extracted from `perform_layout`'s offset loop so that `perform_layout`
     /// (live baselines) and `compute_dry_baseline` (dry baselines) share one
-    /// positioning home — one fact, one place per ADR-0010 D2 / ADR-0012 D-B3.
+    /// positioning home — one fact, one place.
     ///
     /// Mirrors Flutter `RenderFlex.performLayout` offset loop (`flex.dart:1339+`).
     /// The returned `Vec` is parallel to `flex_sizes.child_sizes`.

@@ -240,11 +240,12 @@ impl ChangeNotifier {
     #[inline]
     fn check_disposed(&self) -> bool {
         if self.is_disposed.load(Ordering::Acquire) {
-            // F20: cfg-explicit layout. The previous `debug_assert!(false, ..)`
-            // + `tracing::warn!` in one block was misleading — in debug builds
-            // the assert diverges, so the warn! below it was dead; in release
-            // builds the assert compiled out and only the warn! ran. Splitting
-            // on `cfg(debug_assertions)` makes the intent unambiguous: debug
+            // cfg-explicit layout: an earlier version combined
+            // `debug_assert!(false, ..)` and `tracing::warn!` in one block,
+            // which was misleading — in debug builds the assert diverges, so
+            // the warn! below it was dead code; in release builds the assert
+            // compiled out and only the warn! ran. Splitting on
+            // `cfg(debug_assertions)` makes the intent unambiguous: debug
             // panics immediately (hard contract violation), release degrades
             // gracefully with a warning (Flutter parity).
             #[cfg(debug_assertions)]
@@ -273,12 +274,12 @@ impl ChangeNotifier {
     ///   on the same notifier (re-entrancy).
     /// - Before each callback fires, the listener's registration is re-checked.
     ///   If the listener was removed during notify (e.g. a previous callback
-    ///   called `remove_listener`), the callback is silently skipped (F5). A
+    ///   called `remove_listener`), the callback is silently skipped. A
     ///   listener removed mid-iteration does NOT fire.
     /// - Each callback is wrapped in `catch_unwind(AssertUnwindSafe(|| ...))`.
     ///   If a callback panics, the panic payload is logged via
-    ///   `tracing::error!` and iteration continues with the next listener
-    ///   (F6). One panicking listener does NOT abort the rest.
+    ///   `tracing::error!` and iteration continues with the next listener.
+    ///   One panicking listener does NOT abort the rest.
     ///
     /// Listeners fire in registration order (`ListenerId` ascending), matching
     /// Flutter's array-order iteration; the backing `HashMap` does not preserve
@@ -300,14 +301,14 @@ impl ChangeNotifier {
         if self.check_disposed() {
             return;
         }
-        // Audit I-4 / F16: stack-allocate the snapshot for the common case
-        // (1-4 listeners). `SmallVec<[_; 4]>` keeps inline storage capacity 4 —
-        // when there are ≤4 listeners the snapshot is purely stack memory;
-        // ≥5 listeners spills to the heap. The snapshot now carries
-        // `(ListenerId, ListenerCallback)` pairs so each entry can be
-        // re-checked against the live registration before firing (F5).
+        // Stack-allocate the snapshot for the common case (1-4 listeners).
+        // `SmallVec<[_; 4]>` keeps inline storage capacity 4 — when there are
+        // ≤4 listeners the snapshot is purely stack memory; ≥5 listeners
+        // spills to the heap. The snapshot carries `(ListenerId,
+        // ListenerCallback)` pairs so each entry can be re-checked against
+        // the live registration before firing.
         //
-        // F16: `SmallVec` is chosen over `tinyvec::ArrayVec` deliberately.
+        // `SmallVec` is chosen over `tinyvec::ArrayVec` deliberately.
         // `ListenerCallback` is `Arc<dyn Fn() + Send + Sync>`, which does NOT
         // implement `Default`; `tinyvec` requires `T: Default` for every
         // element type, so it cannot store these callbacks. `SmallVec` imposes
@@ -322,11 +323,11 @@ impl ChangeNotifier {
         // monotonically by `next_id`, so sorting by id reproduces the order in
         // which listeners were added — the backing `HashMap` does not preserve
         // insertion order. This also makes the remove-during-notify contract
-        // (F5) observe a deterministic ordering rather than arbitrary hash order.
+        // observe a deterministic ordering rather than arbitrary hash order.
         snapshot.sort_unstable_by_key(|(id, _)| *id);
 
         for (id, callback) in &snapshot {
-            // F5: re-check registration before firing. Acquires the lock
+            // Re-check registration before firing. Acquires the lock
             // briefly for the lookup and releases it before the callback runs,
             // so a listener individually removed mid-notify (by an earlier
             // callback's `remove_listener`) is skipped rather than invoked.
@@ -343,7 +344,7 @@ impl ChangeNotifier {
             {
                 continue; // Individually removed during notify; skip.
             }
-            // F6: isolate each callback's panic so one panicking listener does
+            // Isolate each callback's panic so one panicking listener does
             // not abort the remaining listeners. `AssertUnwindSafe` is sound
             // here: the callback is `Arc<dyn Fn() + Send + Sync>` invoked by
             // shared reference, and on unwind no borrowed state crosses the
@@ -551,7 +552,7 @@ impl<T: Clone + fmt::Debug> fmt::Debug for ValueNotifier<T> {
     }
 }
 
-// F11: `Default for ValueNotifier<T>` removed intentionally. A defaulted
+// `Default for ValueNotifier<T>` is removed intentionally. A defaulted
 // notifier would have a default-constructed value AND a fresh identity (no
 // listeners); two `ValueNotifier::<T>::default()` calls produce notifiers that
 // are `==` by value yet are observably distinct objects. This violates the
@@ -729,11 +730,11 @@ mod tests {
 
     #[test]
     fn valuenotifier_new_creates_distinct_notifiers() {
-        // F11: `Default for ValueNotifier<T>` was removed. Construct
-        // explicitly with `new`. Two notifiers built from the same value are
-        // `==` by value but are observably distinct objects (independent
-        // listener registries) — the exact surprise the removed Default would
-        // have hidden.
+        // `Default for ValueNotifier<T>` was removed, so notifiers are
+        // constructed explicitly with `new`. Two notifiers built from the
+        // same value are `==` by value but are observably distinct objects
+        // (independent listener registries) — the exact surprise a `Default`
+        // impl would have hidden.
         let a = ValueNotifier::new(0u32);
         let b = ValueNotifier::new(0u32);
         assert_eq!(a, b, "equal by value");
@@ -840,7 +841,7 @@ mod tests {
 
     #[test]
     fn removed_listener_does_not_fire_during_notify() {
-        // F5: a listener removed *during* iteration (by a previously-fired
+        // A listener removed *during* iteration (by a previously-fired
         // listener) must NOT fire. Given listeners A and B, where A removes B
         // mid-notify, B must not fire (post-removal skip).
         use std::sync::atomic::AtomicBool;
@@ -876,7 +877,7 @@ mod tests {
 
     #[test]
     fn listener_fires_after_panic() {
-        // F6: a panicking listener must NOT abort the remaining listeners.
+        // A panicking listener must NOT abort the remaining listeners.
         // Given 3 listeners: panic-1, listener-2, listener-3 — listener-2 and
         // listener-3 must still fire despite listener-1 panicking.
         use std::sync::atomic::AtomicBool;
@@ -983,12 +984,11 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // U6: ChangeNotifier::dispose + disposed-state assertion (R19, AE12)
+    // ChangeNotifier::dispose + disposed-state assertion
     //
     // Mirrors Flutter's `ChangeNotifier.dispose` at
     // flutter/lib/src/foundation/change_notifier.dart:181 (debugAssertNotDisposed)
-    // and :376 (dispose). Tests added first (TEST-FIRST per plan exec note);
-    // implementation follows.
+    // and :376 (dispose).
     // ------------------------------------------------------------------
 
     #[cfg(debug_assertions)]

@@ -26,7 +26,7 @@ impl PipelineOwner<Compositing> {
 
     /// Updates compositing bits for all dirty render objects.
     ///
-    /// **D-block PR-A2 U34 (memo D3-3).** Port of Flutter's
+    /// Port of Flutter's
     /// `PipelineOwner.flushCompositingBits` + per-object
     /// `RenderObject._updateCompositingBits`
     /// (`.flutter/.../object.dart:3226-3258`). For each entry in
@@ -98,8 +98,8 @@ impl PipelineOwner<Compositing> {
             self.add_node_needing_paint(id, depth);
         }
 
-        // PR #109 retain-capacity idiom (kept from pre-U34 stub): `clear()`
-        // preserves the Vec's backing capacity across frames.
+        // Retain-capacity idiom: `clear()` preserves the Vec's backing
+        // capacity across frames.
         self.scheduler.clear_compositing_queue();
         Ok(())
     }
@@ -134,12 +134,11 @@ impl PipelineOwner<Compositing> {
         // Iterate the child slice in-place — both `tree.children(id)`
         // and the recursive `update_subtree_compositing_bits` call are
         // shared borrows of `&self.render_tree`, so they coexist
-        // without a clone. Pre-fix the loop cloned children into a
-        // fresh `Vec<RenderId>` per visited node (per-node heap
-        // allocation) — flagged by Copilot #3294557204 as conflicting
-        // with the repo's documented "no per-node child clone"
-        // optimization in `RenderTree::visit_depth_first`
-        // (`storage/tree.rs:738-751`).
+        // without a clone. An earlier version of this loop cloned
+        // children into a fresh `Vec<RenderId>` per visited node (a
+        // per-node heap allocation), conflicting with the repo's
+        // documented "no per-node child clone" optimization in
+        // `RenderTree::visit_depth_first` (`storage/tree.rs:738-751`).
         //
         // Index loop (not iterator) so the loop body can call `&self`
         // recursion without holding the slice iterator across the
@@ -192,7 +191,7 @@ impl PipelineOwner<Compositing> {
 }
 
 /// Side-effects staged during a compositing-bits walk and applied
-/// after the recursion under `&mut self` (D-block PR-A2 U34).
+/// after the recursion under `&mut self`.
 ///
 /// The recursive walk in
 /// [`PipelineOwner::update_subtree_compositing_bits`] runs under

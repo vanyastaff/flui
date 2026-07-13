@@ -17,6 +17,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
+    owner::layout_builder::LayoutBuilderRegistry,
     tree::ElementTree,
     view::View,
 };
@@ -112,7 +113,7 @@ impl DirtyElement {
 
     /// Depth used to order the heap (shallowest first).
     ///
-    /// Currently consumed only by inline tests; U9+ will read it during
+    /// Currently consumed only by inline tests; a future consumer will read it during
     /// dirty-element drain dispatching. The `Ord` impl reads
     /// `self.depth` directly (private field access from the same `impl`
     /// block), so the accessor stays on the surface for future
@@ -236,6 +237,36 @@ pub struct BuildOwner {
     /// of the registry before calling service (releasing the registry lock
     /// before the potentially long service call).
     pub(crate) child_manager_registry: ChildManagerRegistry,
+
+    /// Registry of live build-during-layout nodes, one per
+    /// mounted layout-builder element, keyed by its render object's `RenderId`.
+    /// Drained every layout pass by
+    /// [`service_layout_builders`](Self::service_layout_builders).
+    ///
+    /// Empty unless a `LayoutBuilder` is mounted; the seam is inert until one is.
+    pub(crate) layout_builder_registry: LayoutBuilderRegistry,
+
+    /// The binding's frame-driven async task driver, installed by
+    /// whichever binding owns this owner. `None` until then — a tree built with
+    /// no binding cannot spawn tasks, and `BuildContext::async_driver` reports
+    /// that honestly rather than silently spawning into a driver nobody polls.
+    ///
+    /// This must be the driver the binding's frame step actually polls:
+    /// `HeadlessBinding` drives a binding-local `Scheduler`, production drives
+    /// `Scheduler::instance()`. Reaching for the singleton from a widget would
+    /// make headless tests spawn into a driver that never runs.
+    pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
+
+    /// The binding's post-frame capability. `None` when no binding
+    /// installed one, which makes `BuildContext::post_frame_handle` report the
+    /// absence rather than silently scheduling onto a global.
+    pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+
+    /// The binding's owner-local interaction dispatch capability (ADR-0027).
+    ///
+    /// `None` means the owner was built detached from a runtime interaction lane;
+    /// render-object lifecycle contexts report that as a typed inactive realm.
+    pub(crate) interaction_dispatch: Option<flui_interaction::InteractionDispatchHandle>,
 }
 
 /// An element that has been deactivated and is pending unmount.
@@ -290,7 +321,49 @@ impl BuildOwner {
             on_build_scheduled: None,
             external_inbox: Arc::new(Mutex::new(HashSet::new())),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
+            layout_builder_registry: Arc::new(Mutex::new(HashMap::new())),
+            async_driver: None,
+            post_frame_handle: None,
+            interaction_dispatch: None,
         }
+    }
+
+    /// Install the binding's async task driver.
+    ///
+    /// Called once, at wiring time, by `HeadlessBinding` and `AppBinding`. Must
+    /// be the same driver the binding's frame step polls.
+    pub fn set_async_driver(&mut self, driver: flui_scheduler::AsyncDriver) {
+        self.async_driver = Some(driver);
+    }
+
+    /// The binding's async task driver, if one was installed.
+    #[must_use]
+    pub fn async_driver(&self) -> Option<&flui_scheduler::AsyncDriver> {
+        self.async_driver.as_ref()
+    }
+
+    /// Install the binding's post-frame capability.
+    ///
+    /// Called once, at wiring time, by `HeadlessBinding` and `AppBinding`. It must
+    /// name **that binding's** scheduler — the one whose `drive_frame` drains the
+    /// queue. Headless owns a binding-local `Scheduler`; production drives the
+    /// `Scheduler::instance()` singleton.
+    pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
+        self.post_frame_handle = Some(handle);
+    }
+
+    /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
+    pub fn set_interaction_dispatch_handle(
+        &mut self,
+        handle: flui_interaction::InteractionDispatchHandle,
+    ) {
+        self.interaction_dispatch = Some(handle);
+    }
+
+    /// The binding's post-frame capability, if one was installed.
+    #[must_use]
+    pub fn post_frame_handle(&self) -> Option<&flui_scheduler::PostFrameHandle> {
+        self.post_frame_handle.as_ref()
     }
 
     /// Set the callback for when a build is scheduled.
@@ -382,8 +455,6 @@ impl BuildOwner {
     /// `inactive_elements` — every field an `Element::mount` /
     /// `unmount` / `update` path may write. The borrow checker proves
     /// non-aliasing because each field is borrowed once.
-    ///
-    /// Threading reference: `docs/plans/2026-05-21-002-feat-framework-spine-repair-plan.md` §U8, §D1.
     pub fn element_owner_mut(&mut self) -> super::ElementOwner<'_> {
         super::ElementOwner {
             global_keys: &mut self.global_keys,
@@ -398,7 +469,42 @@ impl BuildOwner {
             // only the `build_scope` drain sets `build_view`.
             build_view: None,
             child_manager_registry: &self.child_manager_registry,
+            layout_builder_registry: &self.layout_builder_registry,
+            async_driver: &self.async_driver,
+            post_frame_handle: &self.post_frame_handle,
+            interaction_dispatch: &self.interaction_dispatch,
         }
+    }
+
+    /// Build an [`ExternalBuildScheduler`] over this owner's shared inbox and
+    /// frame-request hook.
+    ///
+    /// The single construction point for the out-of-frame rebuild channel:
+    /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler)
+    /// and `ElementBuildContext::rebuild_handle` both route through it, so there
+    /// is exactly one inbox and one frame-request path.
+    pub(crate) fn external_scheduler(&self) -> ExternalBuildScheduler {
+        ExternalBuildScheduler::from_parts(
+            Arc::clone(&self.external_inbox),
+            self.on_build_scheduled.clone(),
+        )
+    }
+
+    /// A [`RebuildHandle`](super::RebuildHandle) for `element`, scheduling
+    /// through this owner's inbox.
+    pub(crate) fn rebuild_handle(&self, element: ElementId) -> super::RebuildHandle {
+        super::RebuildHandle::new(self.external_scheduler(), element)
+    }
+
+    /// Number of elements queued in the out-of-frame inbox, awaiting the next
+    /// [`build_scope`](Self::build_scope) drain.
+    ///
+    /// Observability for the `RebuildHandle` channel: a
+    /// `schedule()` from a worker thread is visible here before any frame runs.
+    /// Returns a count, never a guard — the lock stays private (SP-6).
+    #[must_use]
+    pub fn pending_external_builds(&self) -> usize {
+        self.external_inbox.lock().len()
     }
 
     /// Check if there are dirty elements.
@@ -442,6 +548,16 @@ impl BuildOwner {
         // were the root.
         let externally_scheduled: Vec<ElementId> = self.external_inbox.lock().drain().collect();
         for id in externally_scheduled {
+            // Mark dirty here, not in the caller. A `RebuildHandle`
+            // carries no reference to the element's dirty flag — it is a plain
+            // `(inbox, ElementId)` pair — so the drain is the one place that both
+            // knows the id and holds `&mut tree`. Without this the element lands
+            // on the heap but `perform_build` short-circuits on `!should_build()`,
+            // and a `build_into_views` that returns no views would reconcile the
+            // element's children away. Idempotent: `AnimatedView`'s mark-dirty
+            // callback already set the flag, and a node that has since been
+            // unmounted is a no-op lookup.
+            tree.mark_needs_build(id);
             if self.dirty_set.insert(id) {
                 let depth = tree.get(id).map_or(0, |node| node.depth);
                 self.dirty_elements
@@ -557,6 +673,10 @@ impl BuildOwner {
                         dep_sink: &dep_sink,
                     }),
                     child_manager_registry: &self.child_manager_registry,
+                    layout_builder_registry: &self.layout_builder_registry,
+                    async_driver: &self.async_driver,
+                    post_frame_handle: &self.post_frame_handle,
+                    interaction_dispatch: &self.interaction_dispatch,
                 };
                 if needs_did_change {
                     element
@@ -605,6 +725,10 @@ impl BuildOwner {
                 external_request_frame: self.on_build_scheduled.as_ref(),
                 build_view: None,
                 child_manager_registry: &self.child_manager_registry,
+                layout_builder_registry: &self.layout_builder_registry,
+                async_driver: &self.async_driver,
+                post_frame_handle: &self.post_frame_handle,
+                interaction_dispatch: &self.interaction_dispatch,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -721,7 +845,7 @@ impl BuildOwner {
         //    This releases the registry lock so that service calls that call
         //    `register_child_manager` / `unregister_child_manager` through an
         //    `ElementOwner` can re-enter the registry without deadlocking.
-        let manager_arcs: Vec<(RenderId, Arc<Mutex<dyn ChildManager + Send>>)> = {
+        let manager_arcs: Vec<(RenderId, Arc<Mutex<dyn ChildManager>>)> = {
             let registry = self.child_manager_registry.lock();
             affected_ids
                 .iter()
@@ -765,6 +889,10 @@ impl BuildOwner {
                 external_request_frame: self.on_build_scheduled.as_ref(),
                 build_view: None,
                 child_manager_registry: &self.child_manager_registry,
+                layout_builder_registry: &self.layout_builder_registry,
+                async_driver: &self.async_driver,
+                post_frame_handle: &self.post_frame_handle,
+                interaction_dispatch: &self.interaction_dispatch,
             };
 
             let did_work = manager_arc.lock().service(
@@ -887,11 +1015,15 @@ impl BuildOwner {
             external_request_frame: self.on_build_scheduled.as_ref(),
             build_view: None,
             child_manager_registry: &self.child_manager_registry,
+            layout_builder_registry: &self.layout_builder_registry,
+            async_driver: &self.async_driver,
+            post_frame_handle: &self.post_frame_handle,
+            interaction_dispatch: &self.interaction_dispatch,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).
         //
-        // `remove_finalized` (plan §U14 / R14) bypasses the soft-remove
+        // `remove_finalized` bypasses the soft-remove
         // path that `remove` takes for keyed elements. At this point
         // we've already given mid-frame state migration its chance —
         // anything still in the inactive queue is genuinely going away,
@@ -972,7 +1104,7 @@ impl BuildOwner {
     /// Atomically remove and return the element registered under
     /// `key_hash` for a reparent operation.
     ///
-    /// Plan §U17 / KTD-3 N1. Closes the race window that a
+    /// Closes the race window that a
     /// two-call sequence (`element_for_global_key` followed by
     /// `unregister_global_key`) would leave open if any other code
     /// path mutates the registry between the two calls — a real
@@ -1056,11 +1188,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for TestView {
@@ -1185,7 +1325,7 @@ mod tests {
         assert_eq!(owner.element_for_global_key(key_hash), None);
     }
 
-    /// Plan §U17 / KTD-3 N1: `take_global_key_for_reparent` returns
+    /// `take_global_key_for_reparent` returns
     /// the registered id AND removes it atomically. A second call for
     /// the same hash returns `None` — proving the second of two
     /// concurrent reparent claims (the rare same-frame collision)

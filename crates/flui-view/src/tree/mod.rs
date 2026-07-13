@@ -6,17 +6,17 @@
 //!   module) - O(N) linear child reconciliation over the slab-resident
 //!   element graph (the production reconciler after the E3 box→arena swap)
 //! - [`ReconcileEvent`] - structured trace stream for the keyed
-//!   reconciler (plan §U13 / FR-035)
+//!   reconciler (FR-035)
 
 mod element_tree;
 pub(crate) mod id_reconcile;
 pub mod reconcile_event;
 
 // `test_utils` carries the `ReconcileEventCollector` Layer fixture
-// (plan §U14 / FR-035). Gated to `cfg(test)` for in-crate test use
+// (FR-035). Gated to `cfg(test)` for in-crate test use
 // and to `feature = "test-utils"` for downstream test crates that
-// install the collector to assert on the trace stream (plan §U18 /
-// §U19 6-permutation corpus + GlobalKey reparenting tests).
+// install the collector to assert on the trace stream (the
+// 6-permutation corpus + GlobalKey reparenting tests).
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 

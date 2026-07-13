@@ -45,11 +45,18 @@ impl RenderView for LimitedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderLimitedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderLimitedBox::new(Self::cap(self.max_width), Self::cap(self.max_height))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object =
             RenderLimitedBox::new(Self::cap(self.max_width), Self::cap(self.max_height));
     }

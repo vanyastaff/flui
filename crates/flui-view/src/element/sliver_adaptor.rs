@@ -21,25 +21,28 @@
 //!    `RenderSliverList` (via the inner `RenderBehavior`) and then registers
 //!    `Arc::clone(&self.manager)` in `BuildOwner::child_manager_registry` keyed
 //!    by the sliver's `RenderId`. Registration happens in the adaptor's own
-//!    `on_mount`, NOT in the generic `behavior.rs:789` site — F8 in the plan.
+//!    `on_mount`, not in the generic `behavior.rs:789` site, because that
+//!    generic site has no way to reach this element's child-manager.
 //! 2. **service**: `BuildOwner::service_child_requests` drains the
 //!    `PipelineOwner`'s pending buffers, groups by `RenderId`, and calls
 //!    `SliverListAdaptorManager::service` — which evicts out-of-band children
 //!    via `SparseChildren::retain_band` and builds new ones via
 //!    `SparseChildren::ensure`.
 //! 3. **unmount**: `SliverListAdaptorBehavior::on_unmount` pushes all live
-//!    sparse children to `owner.push_inactive` (F3), then unregisters the
-//!    manager, then removes the render object. `finalize_tree` finds the lazy
-//!    children' descendants via each sparse child's own `child_ids`.
+//!    sparse children to `owner.push_inactive` — necessary because the host
+//!    element's own `child_ids` stays empty, so the normal dense-unmount walk
+//!    cannot reach them — then unregisters the manager, then removes the
+//!    render object. `finalize_tree` finds the lazy children' descendants via
+//!    each sparse child's own `child_ids`.
 //!
-//! # F4 invariant — host `child_ids` stays empty
+//! # Invariant: host `child_ids` stays empty
 //!
 //! `build_into_views` returns an empty `Vec` so the dense reconciler in
 //! `build_scope` never touches the lazy children. The lazy children live only
 //! in `SparseChildren::by_logical_index`; they are managed solely by
 //! `service_child_requests`.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::{RenderSliverGridLazy, RenderSliverList};
@@ -71,7 +74,7 @@ use crate::{
 /// and owns a `SliverListAdaptorManager` that services
 /// `ChildManager::service` calls post-layout.
 ///
-/// # F4 invariant
+/// # Invariant: no dense children
 ///
 /// [`has_children`](Self::has_children) returns `false` so
 /// `build_into_views` returns an empty `Vec`. The dense reconciler must
@@ -86,7 +89,7 @@ pub struct SliverList {
     pub(crate) item_extent_estimate: f32,
     /// Given a logical index, produces the item's view. Returns `None` when
     /// the index is past the end of the data source.
-    pub(crate) builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl SliverList {
@@ -99,7 +102,7 @@ impl SliverList {
     pub fn new(
         item_count: usize,
         item_extent_estimate: f32,
-        builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+        builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
         assert!(
             item_extent_estimate.is_finite() && item_extent_estimate > 0.0,
@@ -130,22 +133,26 @@ impl RenderView for SliverList {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverList;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
         RenderSliverList::new(self.item_count, self.item_extent_estimate)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &crate::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_item_count(self.item_count);
     }
 
-    /// F4 invariant: no dense children — the dense reconciler must not touch
+    /// Invariant: no dense children — the dense reconciler must not touch
     /// lazy children.
     fn has_children(&self) -> bool {
         false
     }
 
     fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {
-        // F4: no dense children to visit.
+        // No dense children to visit — this element only hosts lazy/sparse children.
     }
 }
 
@@ -158,7 +165,8 @@ impl View for SliverList {
         // Creates the adaptor element with the custom behavior instead of the
         // generic `RenderBehavior::new()` produced by `impl_render_view!`.
         // This is required so on_mount registers the ChildManager — which the
-        // generic RenderBehavior does not do (F8). Routes through the
+        // generic RenderBehavior does not do; that registration must happen
+        // in this element's own on_mount instead. Routes through the
         // `RenderVariable` variant via the blanket impl below.
         crate::element::ElementKind::RenderVariable(Box::new(SliverListAdaptorElement::new(
             self,
@@ -188,9 +196,9 @@ pub(crate) struct SliverListAdaptorManager {
     /// The element id of the adaptor host element. `None` until `on_mount`
     /// stamps it; the host is always mounted before `service` runs.
     host_element_id: Option<ElementId>,
-    /// Item factory. `Arc` so it's shared with `SliverList` and the
+    /// Item factory. `Rc` so it's shared with `SliverList` and the
     /// behavior without cloning the closure.
-    builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl std::fmt::Debug for SliverListAdaptorManager {
@@ -270,11 +278,13 @@ impl ChildManager for SliverListAdaptorManager {
 /// creation and removal) and additionally:
 /// - **mount**: stamps `host_element_id` on the manager and registers it in
 ///   `BuildOwner::child_manager_registry` keyed by the sliver's `RenderId`.
-/// - **unmount**: pushes live sparse children to the inactive queue (F3) and
-///   unregisters from the registry.
+/// - **unmount**: pushes live sparse children to the inactive queue (needed
+///   because the host's own `child_ids` stays empty, so the normal
+///   dense-unmount walk can't reach them) and unregisters from the registry.
 ///
 /// Registration happens in the adaptor's own `on_mount`, not in the generic
-/// `behavior.rs:789` site — F8 in the approved plan.
+/// `behavior.rs:789` site, because that generic site has no way to reach
+/// this element's child-manager.
 pub(crate) struct SliverListAdaptorBehavior {
     /// Handles `RenderSliverList` creation / update / removal.
     inner: RenderBehavior<SliverList>,
@@ -299,7 +309,7 @@ impl SliverListAdaptorBehavior {
             manager: Arc::new(Mutex::new(SliverListAdaptorManager {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
-                builder: Arc::clone(&view.builder),
+                builder: Rc::clone(&view.builder),
             })),
         }
     }
@@ -314,7 +324,7 @@ where
         "SliverListAdaptorElement"
     }
 
-    /// F4: returns empty — the dense reconciler must not touch lazy children.
+    /// Returns empty — the dense reconciler must not touch lazy children.
     ///
     /// The inner `RenderBehavior::build_into_views` also returns empty because
     /// `SliverList::has_children() = false`; we forward for the
@@ -349,12 +359,13 @@ where
         }
 
         // Step 3: register the manager keyed by the sliver's RenderId.
-        // F8 — this registration belongs here, NOT in generic behavior.rs:789.
+        // This registration belongs here, not in generic behavior.rs:789,
+        // since only this behavior knows about the child-manager registry.
         match self.inner.render_id {
             Some(render_id) => {
                 owner.register_child_manager(
                     render_id,
-                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager + Send>>,
+                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager>>,
                 );
                 tracing::debug!(
                     ?render_id,
@@ -373,14 +384,16 @@ where
         }
     }
 
-    /// Pushes live sparse children to the inactive queue (F3), unregisters the
-    /// manager, and removes the render object.
+    /// Pushes live sparse children to the inactive queue (the host's own
+    /// `child_ids` stays empty, so they're unreachable by the normal
+    /// dense-unmount walk), unregisters the manager, and removes the render
+    /// object.
     fn on_unmount(
         &mut self,
         core: &mut ElementCore<SliverList, Variable>,
         owner: &mut ElementOwner<'_>,
     ) {
-        // F3: host.child_ids is empty (F4 invariant), so `finalize_tree`'s
+        // The host's `child_ids` stays empty by design, so `finalize_tree`'s
         // `collect_elements_to_unmount` cannot reach the lazy children via the
         // normal dense walk. Push each sparse child to the inactive queue at
         // a sentinel depth so `finalize_tree` unmounts them and recurses into
@@ -413,8 +426,12 @@ where
         self.inner.on_unmount(core, owner);
     }
 
-    fn on_update(&mut self, core: &ElementCore<SliverList, Variable>) {
-        self.inner.on_update(core);
+    fn on_update(
+        &mut self,
+        core: &ElementCore<SliverList, Variable>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.inner.on_update(core, owner);
     }
 
     fn on_view_updated(
@@ -456,7 +473,8 @@ pub(crate) type SliverListAdaptorElement = Element<SliverList, Variable, SliverL
 // are structurally identical to their list counterparts; the differences are:
 //  - The render object is RenderSliverGridLazy instead of RenderSliverList.
 //  - The view config carries a grid_delegate instead of item_extent_estimate.
-//  - The view_type_id is TypeId::of::<SliverGridLazy>() (F4 identity).
+//  - The view_type_id is TypeId::of::<SliverGridLazy>(), which distinguishes
+//    it from `SliverList`'s element type.
 //
 // If a generic LazySliverAdaptor<V> is introduced later to deduplicate this
 // code, the behaviour contract stays the same.
@@ -470,7 +488,7 @@ pub(crate) type SliverListAdaptorElement = Element<SliverList, Variable, SliverL
 /// `SliverGridLazyAdaptorManager` that services `ChildManager::service` calls
 /// post-layout.
 ///
-/// # F4 invariant
+/// # Invariant: no dense children
 ///
 /// [`has_children`](Self::has_children) returns `false` — the dense reconciler
 /// must not touch lazy grid children.
@@ -484,7 +502,7 @@ pub struct SliverGridLazy {
     pub(crate) item_count: usize,
     /// Given a logical index, produces the item's view.  Returns `None` when
     /// the index is past the end of the data source.
-    pub(crate) builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl SliverGridLazy {
@@ -492,7 +510,7 @@ impl SliverGridLazy {
     pub fn new(
         grid_delegate: std::sync::Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
         item_count: usize,
-        builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+        builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
         Self {
             grid_delegate,
@@ -517,26 +535,30 @@ impl crate::view::RenderView for SliverGridLazy {
     type Protocol = flui_rendering::protocol::SliverProtocol;
     type RenderObject = flui_objects::RenderSliverGridLazy;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
         flui_objects::RenderSliverGridLazy::new(
             std::sync::Arc::clone(&self.grid_delegate),
             self.item_count,
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &crate::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_item_count(self.item_count);
         render_object.set_grid_delegate(std::sync::Arc::clone(&self.grid_delegate));
     }
 
-    /// F4 invariant: no dense children — the dense reconciler must not touch
+    /// Invariant: no dense children — the dense reconciler must not touch
     /// lazy grid children.
     fn has_children(&self) -> bool {
         false
     }
 
     fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn crate::view::View)) {
-        // F4: no dense children to visit.
+        // No dense children to visit — this element only hosts lazy/sparse children.
     }
 }
 
@@ -563,7 +585,7 @@ pub(crate) struct SliverGridLazyAdaptorManager {
     sparse_children: SparseChildren,
     host_element_id: Option<ElementId>,
     render_id: Option<RenderId>,
-    builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl std::fmt::Debug for SliverGridLazyAdaptorManager {
@@ -692,7 +714,7 @@ impl SliverGridLazyAdaptorBehavior {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
                 render_id: None,
-                builder: Arc::clone(&view.builder),
+                builder: Rc::clone(&view.builder),
             })),
         }
     }
@@ -737,7 +759,7 @@ where
                 self.manager.lock().render_id = Some(render_id);
                 owner.register_child_manager(
                     render_id,
-                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager + Send>>,
+                    Arc::clone(&self.manager) as Arc<Mutex<dyn ChildManager>>,
                 );
                 tracing::debug!(
                     ?render_id,
@@ -758,8 +780,9 @@ where
         core: &mut ElementCore<SliverGridLazy, Variable>,
         owner: &mut ElementOwner<'_>,
     ) {
-        // F3: push all live sparse children to the inactive queue so
-        // `finalize_tree` unmounts them and recurses into their descendants.
+        // The host's `child_ids` stays empty, so push all live sparse
+        // children to the inactive queue directly — this lets
+        // `finalize_tree` unmount them and recurse into their descendants.
         {
             let manager = self.manager.lock();
             for (_logical_index, child_id) in manager.sparse_children.iter_built() {
@@ -779,8 +802,12 @@ where
         self.inner.on_unmount(core, owner);
     }
 
-    fn on_update(&mut self, core: &ElementCore<SliverGridLazy, Variable>) {
-        self.inner.on_update(core);
+    fn on_update(
+        &mut self,
+        core: &ElementCore<SliverGridLazy, Variable>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.inner.on_update(core, owner);
     }
 
     fn on_view_updated(
@@ -838,10 +865,18 @@ mod tests {
     impl RenderView for ItemView {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(48.0)), Some(px(48.0)))
         }
-        fn update_render_object(&self, _: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for ItemView {
@@ -850,8 +885,8 @@ mod tests {
         }
     }
 
-    fn make_builder(item_count: usize) -> Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync> {
-        Arc::new(move |idx: usize| {
+    fn make_builder(item_count: usize) -> Rc<dyn Fn(usize) -> Option<BoxedView>> {
+        Rc::new(move |idx: usize| {
             if idx < item_count {
                 Some(BoxedView(Box::new(ItemView)))
             } else {
@@ -884,7 +919,8 @@ mod tests {
         assert!(result.is_err(), "negative estimate must panic");
     }
 
-    /// Valid construction sets all fields and enforces the F4 invariant.
+    /// Valid construction sets all fields and enforces the no-dense-children
+    /// invariant.
     #[test]
     fn new_succeeds_with_valid_parameters() {
         let builder = make_builder(100);
@@ -893,7 +929,7 @@ mod tests {
         assert!((view.item_extent_estimate - 48.0).abs() < f32::EPSILON);
         assert!(
             !view.has_children(),
-            "adaptor view must have no dense children (F4)"
+            "adaptor view must have no dense children"
         );
     }
 
@@ -904,18 +940,20 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let call_count_clone = Arc::clone(&call_count);
 
-        let builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync> =
-            Arc::new(move |idx: usize| {
-                call_count_clone.fetch_add(1, Ordering::Relaxed);
-                if idx < 5 {
-                    Some(BoxedView(Box::new(ItemView)))
-                } else {
-                    None
-                }
-            });
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
+            call_count_clone.fetch_add(1, Ordering::Relaxed);
+            if idx < 5 {
+                Some(BoxedView(Box::new(ItemView)))
+            } else {
+                None
+            }
+        });
 
-        let view = SliverList::new(5, 48.0, Arc::clone(&builder));
-        assert!(!view.has_children(), "F4: no dense children");
+        let view = SliverList::new(5, 48.0, Rc::clone(&builder));
+        assert!(
+            !view.has_children(),
+            "adaptor view must report no dense children"
+        );
         assert!((view.builder)(3).is_some());
         assert!((view.builder)(5).is_none());
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
@@ -1039,8 +1077,8 @@ mod tests {
     }
 
     /// `ChildManager::service` must return `true` when it evicts at least one
-    /// child that has scrolled outside the retain band. This is the off-band
-    /// eviction path (F5).
+    /// child that has scrolled outside the retain band — the off-band
+    /// eviction path.
     #[test]
     fn service_returns_true_when_children_are_evicted() {
         let (mut tree, mut build_owner, pipeline, host) = host_tree();

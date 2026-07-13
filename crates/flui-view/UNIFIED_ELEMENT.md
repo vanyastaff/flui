@@ -9,7 +9,7 @@ Successfully unified all 6 element types (StatelessElement, ProxyElement, Statef
 ### Core Components
 
 1. **Element<V, A, B>** - Unified element struct
-   - `V`: View type (Clone + Send + Sync + 'static)
+   - `V`: View type (`Clone + 'static`; owner-local under ADR-0027)
    - `A`: ElementArity (Leaf, Single, Optional, Variable)
    - `B`: ElementBehavior (Stateless, Proxy, Stateful, Render, Inherited, Animation)
 

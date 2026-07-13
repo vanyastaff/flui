@@ -1,7 +1,7 @@
 //! [`GestureDetector`] — recognizes high-level gestures (tap, long-press,
 //! double-tap, and pan/drag) from the raw pointer stream a [`Listener`] delivers.
 
-use std::sync::{Arc, Mutex};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use flui_interaction::arena::{GestureArena, SweepModel};
 use flui_interaction::{
@@ -16,11 +16,11 @@ use crate::{GestureArenaScope, Listener};
 
 /// A no-argument gesture callback (Flutter's `onTap` / `onLongPress` /
 /// `onDoubleTap`) — fired with no details when the gesture is recognized.
-type GestureCallback = Arc<dyn Fn() + Send + Sync>;
+type GestureCallback = Rc<dyn Fn()>;
 /// Pan callbacks carry the drag's details (position, delta, velocity).
-type PanStartHandler = Arc<dyn Fn(DragStartDetails) + Send + Sync>;
-type PanUpdateHandler = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
-type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
+type PanStartHandler = Rc<dyn Fn(DragStartDetails)>;
+type PanUpdateHandler = Rc<dyn Fn(DragUpdateDetails)>;
+type PanEndHandler = Rc<dyn Fn(DragEndDetails)>;
 
 /// Detects gestures on its child and invokes the matching callback.
 ///
@@ -130,16 +130,16 @@ impl GestureDetector {
     /// Called when the child is tapped (a primary-button down + up without
     /// moving past the touch slop).
     #[must_use]
-    pub fn on_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_tap = Some(Arc::new(callback));
+    pub fn on_tap(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_tap = Some(Rc::new(callback));
         self
     }
 
     /// Called when the child receives a secondary-button tap (right-click down
     /// + up without moving past the touch slop).
     #[must_use]
-    pub fn on_secondary_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_secondary_tap = Some(Arc::new(callback));
+    pub fn on_secondary_tap(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_secondary_tap = Some(Rc::new(callback));
         self
     }
 
@@ -151,8 +151,8 @@ impl GestureDetector {
     /// detector (no scope) never recognizes a long press — see
     /// [arena acquisition](Self#arena-acquisition).
     #[must_use]
-    pub fn on_long_press(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_long_press = Some(Arc::new(callback));
+    pub fn on_long_press(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_long_press = Some(Rc::new(callback));
         self
     }
 
@@ -167,37 +167,31 @@ impl GestureDetector {
     /// fires `on_tap` once. The give-up is binding-polled, so combine the two
     /// under a scope.
     #[must_use]
-    pub fn on_double_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_double_tap = Some(Arc::new(callback));
+    pub fn on_double_tap(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_double_tap = Some(Rc::new(callback));
         self
     }
 
     /// Called once when a pan/drag begins (the contact crosses the drag slop).
     #[must_use]
-    pub fn on_pan_start(
-        mut self,
-        callback: impl Fn(DragStartDetails) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_pan_start = Some(Arc::new(callback));
+    pub fn on_pan_start(mut self, callback: impl Fn(DragStartDetails) + 'static) -> Self {
+        self.on_pan_start = Some(Rc::new(callback));
         self
     }
 
     /// Called for each pointer move while a pan/drag is in progress, carrying
     /// the incremental delta since the previous update.
     #[must_use]
-    pub fn on_pan_update(
-        mut self,
-        callback: impl Fn(DragUpdateDetails) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_pan_update = Some(Arc::new(callback));
+    pub fn on_pan_update(mut self, callback: impl Fn(DragUpdateDetails) + 'static) -> Self {
+        self.on_pan_update = Some(Rc::new(callback));
         self
     }
 
     /// Called once when the pan/drag ends (pointer up), carrying the release
     /// velocity.
     #[must_use]
-    pub fn on_pan_end(mut self, callback: impl Fn(DragEndDetails) + Send + Sync + 'static) -> Self {
-        self.on_pan_end = Some(Arc::new(callback));
+    pub fn on_pan_end(mut self, callback: impl Fn(DragEndDetails) + 'static) -> Self {
+        self.on_pan_end = Some(Rc::new(callback));
         self
     }
 
@@ -265,15 +259,15 @@ struct Recognizers {
 pub struct GestureDetectorState {
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
     /// rather than a frozen capture, so a rebuild with a new closure is honored.
-    tap_slot: Arc<Mutex<Option<GestureCallback>>>,
+    tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_secondary_tap`, refreshed each `build`.
-    secondary_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
+    secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_long_press`, refreshed each `build`.
-    long_press_slot: Arc<Mutex<Option<GestureCallback>>>,
+    long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_double_tap`, refreshed each `build`.
-    double_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
+    double_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live pan callbacks, refreshed each `build`.
-    pan_slot: Arc<Mutex<PanCallbacks>>,
+    pan_slot: Rc<RefCell<PanCallbacks>>,
     /// The recognizers + arena, built once in `init_state`. `None` only in the
     /// window between `create_state` and the first `init_state` — never observed
     /// by `build`, which always runs after `init_state`.
@@ -295,11 +289,11 @@ impl StatefulView for GestureDetector {
         // Allocate the live callback slots only — recognizers are built in
         // `init_state`, which has the context needed to read the ambient arena.
         GestureDetectorState {
-            tap_slot: Arc::new(Mutex::new(self.on_tap.clone())),
-            secondary_tap_slot: Arc::new(Mutex::new(self.on_secondary_tap.clone())),
-            long_press_slot: Arc::new(Mutex::new(self.on_long_press.clone())),
-            double_tap_slot: Arc::new(Mutex::new(self.on_double_tap.clone())),
-            pan_slot: Arc::new(Mutex::new(PanCallbacks {
+            tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
+            secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
+            long_press_slot: Rc::new(RefCell::new(self.on_long_press.clone())),
+            double_tap_slot: Rc::new(RefCell::new(self.on_double_tap.clone())),
+            pan_slot: Rc::new(RefCell::new(PanCallbacks {
                 start: self.on_pan_start.clone(),
                 update: self.on_pan_update.clone(),
                 end: self.on_pan_end.clone(),
@@ -328,64 +322,58 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // Each recognizer reads its live slot OUT before invoking it, so a slot
         // lock is never held across user code (no re-entrancy / poison hazard).
         let tap = {
-            let primary_slot = Arc::clone(&self.tap_slot);
-            let secondary_slot = Arc::clone(&self.secondary_tap_slot);
+            let primary_slot = Rc::clone(&self.tap_slot);
+            let secondary_slot = Rc::clone(&self.secondary_tap_slot);
             TapGestureRecognizer::new(arena.clone())
                 .with_on_tap(move |_details| {
-                    if let Some(handler) = primary_slot.lock().ok().and_then(|guard| guard.clone())
-                    {
+                    if let Some(handler) = primary_slot.borrow().clone() {
                         handler();
                     }
                 })
                 .with_on_secondary_tap(move |_details| {
-                    if let Some(handler) =
-                        secondary_slot.lock().ok().and_then(|guard| guard.clone())
-                    {
+                    if let Some(handler) = secondary_slot.borrow().clone() {
                         handler();
                     }
                 })
         };
 
         let long_press = {
-            let slot = Arc::clone(&self.long_press_slot);
+            let slot = Rc::clone(&self.long_press_slot);
             LongPressGestureRecognizer::new(arena.clone()).with_on_long_press(move || {
-                if let Some(handler) = slot.lock().ok().and_then(|guard| guard.clone()) {
+                if let Some(handler) = slot.borrow().clone() {
                     handler();
                 }
             })
         };
 
         let double_tap = {
-            let slot = Arc::clone(&self.double_tap_slot);
+            let slot = Rc::clone(&self.double_tap_slot);
             DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap(move |_details| {
-                if let Some(handler) = slot.lock().ok().and_then(|guard| guard.clone()) {
+                if let Some(handler) = slot.borrow().clone() {
                     handler();
                 }
             })
         };
 
         let drag = {
-            let start_slot = Arc::clone(&self.pan_slot);
-            let update_slot = Arc::clone(&self.pan_slot);
-            let end_slot = Arc::clone(&self.pan_slot);
+            let start_slot = Rc::clone(&self.pan_slot);
+            let update_slot = Rc::clone(&self.pan_slot);
+            let end_slot = Rc::clone(&self.pan_slot);
             DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
                 .with_on_start(move |details| {
-                    let callback = start_slot.lock().ok().and_then(|guard| guard.start.clone());
+                    let callback = start_slot.borrow().start.clone();
                     if let Some(callback) = callback {
                         callback(details);
                     }
                 })
                 .with_on_update(move |details| {
-                    let callback = update_slot
-                        .lock()
-                        .ok()
-                        .and_then(|guard| guard.update.clone());
+                    let callback = update_slot.borrow().update.clone();
                     if let Some(callback) = callback {
                         callback(details);
                     }
                 })
                 .with_on_end(move |details| {
-                    let callback = end_slot.lock().ok().and_then(|guard| guard.end.clone());
+                    let callback = end_slot.borrow().end.clone();
                     if let Some(callback) = callback {
                         callback(details);
                     }
@@ -405,19 +393,18 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     fn build(&self, view: &GestureDetector, _ctx: &dyn BuildContext) -> impl IntoView {
         // Refresh the live callbacks the recognizers read, so a rebuild with new
         // closures is honored (the recognizers themselves persist).
-        if let Ok(mut slot) = self.tap_slot.lock() {
-            slot.clone_from(&view.on_tap);
-        }
-        if let Ok(mut slot) = self.secondary_tap_slot.lock() {
-            slot.clone_from(&view.on_secondary_tap);
-        }
-        if let Ok(mut slot) = self.long_press_slot.lock() {
-            slot.clone_from(&view.on_long_press);
-        }
-        if let Ok(mut slot) = self.double_tap_slot.lock() {
-            slot.clone_from(&view.on_double_tap);
-        }
-        if let Ok(mut slot) = self.pan_slot.lock() {
+        self.tap_slot.borrow_mut().clone_from(&view.on_tap);
+        self.secondary_tap_slot
+            .borrow_mut()
+            .clone_from(&view.on_secondary_tap);
+        self.long_press_slot
+            .borrow_mut()
+            .clone_from(&view.on_long_press);
+        self.double_tap_slot
+            .borrow_mut()
+            .clone_from(&view.on_double_tap);
+        {
+            let mut slot = self.pan_slot.borrow_mut();
             slot.start.clone_from(&view.on_pan_start);
             slot.update.clone_from(&view.on_pan_update);
             slot.end.clone_from(&view.on_pan_end);
@@ -466,11 +453,11 @@ impl GestureDetectorState {
             long_press: Arc::clone(&recognizers.long_press),
             double_tap: Arc::clone(&recognizers.double_tap),
             drag: Arc::clone(&recognizers.drag),
-            tap_slot: Arc::clone(&self.tap_slot),
-            secondary_tap_slot: Arc::clone(&self.secondary_tap_slot),
-            long_press_slot: Arc::clone(&self.long_press_slot),
-            double_tap_slot: Arc::clone(&self.double_tap_slot),
-            pan_slot: Arc::clone(&self.pan_slot),
+            tap_slot: Rc::clone(&self.tap_slot),
+            secondary_tap_slot: Rc::clone(&self.secondary_tap_slot),
+            long_press_slot: Rc::clone(&self.long_press_slot),
+            double_tap_slot: Rc::clone(&self.double_tap_slot),
+            pan_slot: Rc::clone(&self.pan_slot),
         };
 
         let down = group.clone();
@@ -496,11 +483,11 @@ struct RecognizerGroup {
     long_press: Arc<LongPressGestureRecognizer>,
     double_tap: Arc<DoubleTapGestureRecognizer>,
     drag: Arc<DragGestureRecognizer>,
-    tap_slot: Arc<Mutex<Option<GestureCallback>>>,
-    secondary_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
-    long_press_slot: Arc<Mutex<Option<GestureCallback>>>,
-    double_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
-    pan_slot: Arc<Mutex<PanCallbacks>>,
+    tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
+    double_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    pan_slot: Rc<RefCell<PanCallbacks>>,
 }
 
 impl RecognizerGroup {
@@ -522,9 +509,8 @@ impl RecognizerGroup {
 
     /// The drag recognizer participates iff any pan callback is set.
     fn drag_active(&self) -> bool {
-        self.pan_slot
-            .lock()
-            .is_ok_and(|pan| pan.start.is_some() || pan.update.is_some() || pan.end.is_some())
+        let pan = self.pan_slot.borrow();
+        pan.start.is_some() || pan.update.is_some() || pan.end.is_some()
     }
 
     /// Register every participating recognizer for this contact (tap first so it
@@ -574,6 +560,6 @@ impl RecognizerGroup {
 }
 
 /// `true` when the no-argument callback slot currently holds a handler.
-fn slot_is_some(slot: &Arc<Mutex<Option<GestureCallback>>>) -> bool {
-    slot.lock().is_ok_and(|guard| guard.is_some())
+fn slot_is_some(slot: &Rc<RefCell<Option<GestureCallback>>>) -> bool {
+    slot.borrow().is_some()
 }

@@ -1,16 +1,18 @@
 //! `RenderListener` — single-child proxy that receives pointer events landing
-//! within its bounds and routes them to a handler.
+//! within its bounds and routes them to its owner-local handler.
 //!
 //! # Flutter equivalence
 //!
 //! Behavior-faithful port of Flutter's `RenderPointerListener`
 //! (`packages/flutter/lib/src/rendering/proxy_box.dart`): the listener
-//! advertises a [`PointerEventHandler`] that the pipeline attaches to its
-//! [`HitTestEntry`](flui_rendering::hit_testing::HitTestEntry), so
-//! `HitTestResult::dispatch` invokes it. Layout and paint pass through
-//! transparently. When childless it grows to the incoming maximum constraints,
-//! matching Flutter's `computeSizeForNoChild`; only `hit_test` (registering self) and
-//! `pointer_event_handler` (advertising the callback) differ from a transparent
+//! advertises a data-only [`PointerTarget`] that the pipeline attaches to its
+//! [`HitTestEntry`](flui_rendering::hit_testing::HitTestEntry); pointer
+//! dispatch resolves the target through the owner-local interaction lane and
+//! invokes the registered handler (ADR-0027 — the executable callback never
+//! lives in render storage). Layout and paint pass through transparently.
+//! When childless it grows to the incoming maximum constraints, matching
+//! Flutter's `computeSizeForNoChild`; only `hit_test` (registering self) and
+//! `pointer_target` (advertising the identity) differ from a transparent
 //! proxy.
 
 use flui_tree::Single;
@@ -19,14 +21,19 @@ use flui_types::{Offset, Size};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::{HitTestBehavior, PointerEventHandler},
+    hit_testing::{HitTestBehavior, PointerTarget},
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
 use flui_rendering::{context::BoxDryBaselineCtx, context::BoxDryLayoutCtx};
 
-/// A render object that registers itself in the hit-test path and contributes a
-/// [`PointerEventHandler`], so pointer events reach the handler during dispatch.
+/// A render object that registers itself in the hit-test path and contributes
+/// a data-only [`PointerTarget`], so pointer dispatch resolves and invokes the
+/// owner-local handler registered for it.
+///
+/// `target` is `None` when the owning widget was mounted without an active
+/// interaction lane (e.g. a detached harness mount); such a listener still
+/// participates in hit-testing but delivers no pointer events.
 ///
 /// `behavior` controls when the listener registers itself (Flutter's
 /// `HitTestBehavior`, default [`DeferToChild`](HitTestBehavior::DeferToChild)):
@@ -40,25 +47,31 @@ use flui_rendering::{context::BoxDryBaselineCtx, context::BoxDryLayoutCtx};
 /// Layout and paint are pure pass-through.
 #[derive(Clone)]
 pub struct RenderListener {
-    handler: PointerEventHandler,
+    target: Option<PointerTarget>,
     behavior: HitTestBehavior,
     has_child: bool,
 }
 
 impl RenderListener {
-    /// Creates a listener routing hit pointer events to `handler`, with the
-    /// given hit-test `behavior`.
-    pub fn new(handler: PointerEventHandler, behavior: HitTestBehavior) -> Self {
+    /// Creates a listener whose hit entries carry `target`, with the given
+    /// hit-test `behavior`.
+    pub fn new(target: Option<PointerTarget>, behavior: HitTestBehavior) -> Self {
         Self {
-            handler,
+            target,
             behavior,
             has_child: false,
         }
     }
 
-    /// Replaces the handler.
-    pub fn set_handler(&mut self, handler: PointerEventHandler) {
-        self.handler = handler;
+    /// The pointer target advertised on this listener's hit entries.
+    #[must_use]
+    pub const fn target(&self) -> Option<PointerTarget> {
+        self.target
+    }
+
+    /// Replaces the pointer target identity.
+    pub fn set_target(&mut self, target: Option<PointerTarget>) {
+        self.target = target;
     }
 
     /// Replaces the hit-test behavior.
@@ -70,6 +83,7 @@ impl RenderListener {
 impl std::fmt::Debug for RenderListener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderListener")
+            .field("has_target", &self.target.is_some())
             .field("behavior", &self.behavior)
             .field("has_child", &self.has_child)
             .finish_non_exhaustive()
@@ -78,6 +92,7 @@ impl std::fmt::Debug for RenderListener {
 
 impl flui_foundation::Diagnosticable for RenderListener {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+        builder.add_flag("has_target", self.target.is_some(), "has_target");
         builder.add_enum("behavior", self.behavior);
         builder.add_flag("has_child", self.has_child, "has_child");
     }
@@ -144,7 +159,7 @@ impl RenderBox for RenderListener {
         hit_target
     }
 
-    fn pointer_event_handler(&self) -> Option<PointerEventHandler> {
-        Some(self.handler.clone())
+    fn pointer_target(&self) -> Option<PointerTarget> {
+        self.target
     }
 }

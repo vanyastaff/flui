@@ -27,11 +27,18 @@ impl RenderView for ColoredSquare {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderColoredBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderColoredBox::red(200.0, 200.0)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = RenderColoredBox::red(200.0, 200.0);
     }
 }

@@ -1,11 +1,37 @@
-//! `RenderOffstage` — single-child proxy that can hide its subtree
-//! completely (zero-size layout, no paint, no hit-test).
+//! `RenderOffstage` — single-child proxy that lays its subtree out **at full
+//! size** while hiding it from paint, hit-test and semantics.
 //!
 //! # Flutter equivalence
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderOffstage`](https://api.flutter.dev/flutter/rendering/RenderOffstage-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
+//! Port of Flutter's `RenderOffstage`
+//! (`packages/flutter/lib/src/rendering/proxy_box.dart:3834-3952`, master
+//! `3.33.0-0.0.pre-6280-g88e87cd963f`). The contract, read from the source:
+//!
+//! ```dart
+//! bool get sizedByParent => offstage;                                    // :3896
+//! Size computeDryLayout(c) => offstage ? c.smallest : super…;            // :3905-3910
+//! void performLayout() { if (offstage) { child?.layout(constraints); }   // :3919-3925
+//!                        else { super.performLayout(); } }
+//! bool hitTest(…)      => !offstage && super.hitTest(…);                 // :3927-3930
+//! void paint(…)        { if (offstage) return; super.paint(…); }         // :3937-3943
+//! void visitChildrenForSemantics(v) { if (offstage) return; super…; }    // :3945-3951
+//! ```
+//!
+//! The child is laid out under the **real incoming constraints** — that is the
+//! whole point of `Offstage`, and what `ModalRoute.offstage` exploits to measure
+//! a route at its final geometry before it is visible. Only the `RenderOffstage`
+//! box itself shrinks, to `constraints.smallest`.
+//!
+//! # History: this was wrong, and its comment said otherwise
+//!
+//! This used to lay the child out at `BoxConstraints::tight(Size::ZERO)`
+//! and return `Size::ZERO`, under a comment asserting "Flutter parity". Two
+//! defects followed: the child never reached its real geometry, and under a
+//! **tight** parent the box violated its own constraints (`constraints.smallest`
+//! is the tight size, not zero). See
+//! [`ADR-0020`](../../../../docs/adr/ADR-0020-transition-modal-route-seam.md).
+//! Under *loose* constraints `smallest` is zero, which is why the defect
+//! hid for so long.
 //!
 //! # Rust-native improvements
 //!
@@ -30,8 +56,10 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
 };
 
-/// A render object that, when `offstage` is true, collapses to zero
-/// size, skips painting entirely, and is unreachable by hit testing.
+/// A render object that, when `offstage` is true, lays its child out under the
+/// real incoming constraints but takes `constraints.smallest` for itself, skips
+/// painting entirely, is unreachable by hit testing, and drops its subtree from
+/// the semantics walk.
 ///
 /// When `offstage` is false, it behaves as a transparent single-child
 /// proxy: child receives the parent's constraints, the box adopts the
@@ -96,18 +124,21 @@ impl RenderBox for RenderOffstage {
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         if self.offstage {
-            // Lay out the child at zero size so its layout state stays
-            // valid (Flutter parity — the child is still part of the
-            // tree, just collapsed). We then report Size::ZERO to the
-            // parent.
+            // `performLayout`: `child?.layout(constraints)` — the **real**
+            // constraints, so the child reaches its true geometry
+            // (proxy_box.dart:3919-3925). The box itself is `sizedByParent`
+            // (`:3896`), so its size is `computeDryLayout` = `constraints.smallest`
+            // (`:3905-3910`) — **not** `Size::ZERO`, which would violate a tight
+            // parent's constraints.
+            let constraints = *ctx.constraints();
             if ctx.child_count() > 0 {
                 self.has_child = true;
-                let _ = ctx.layout_child(0, BoxConstraints::tight(Size::ZERO));
+                let _ = ctx.layout_child(0, constraints);
                 ctx.position_child(0, Offset::ZERO);
             } else {
                 self.has_child = false;
             }
-            Size::ZERO
+            constraints.smallest()
         } else {
             // Transparent proxy.
             let constraints = *ctx.constraints();
@@ -177,7 +208,8 @@ impl RenderBox for RenderOffstage {
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
     ) -> Size {
         if self.offstage {
-            Size::ZERO
+            // `computeDryLayout` (proxy_box.dart:3905-3910).
+            constraints.smallest()
         } else {
             forward_dry_layout(constraints, ctx)
         }
@@ -198,15 +230,22 @@ impl RenderBox for RenderOffstage {
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if self.offstage {
-            // Recording no child marker hides the subtree.
+            // `paint` returns without painting (proxy_box.dart:3937-3943).
             return;
         }
         ctx.paint_child();
     }
 
+    /// `visitChildrenForSemantics` returns early when offstage
+    /// (proxy_box.dart:3945-3951): this node's own config is still built, its
+    /// descendants are dropped from the walk.
+    fn excludes_semantics_subtree(&self) -> bool {
+        self.offstage
+    }
+
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if self.offstage {
-            // Unreachable while hidden — Flutter parity.
+            // `hitTest => !offstage && super.hitTest(…)` (proxy_box.dart:3927-3930).
             return false;
         }
         if !ctx.is_within_own_size() {

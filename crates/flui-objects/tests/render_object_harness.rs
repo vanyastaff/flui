@@ -19,13 +19,14 @@
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
 //! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
 //! | `RenderConstrainedBox` | `harness_constrained_box_*` | yes | — | — | yes | — |
+//! | `RenderLayoutBuilder` | `harness_layout_builder_*` | yes | — | — | yes | dry |
 //! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes | — |
 //! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes | — |
 //! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes | queries |
-//! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | — |
-//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | — |
+//! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
+//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
 //! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
-//! | `RenderFractionalTranslation` | `harness_fractional_translation_*` | yes | — | — | yes | — |
+//! | `RenderFractionalTranslation` | `harness_fractional_translation_*` | yes | — | — | yes | paint transform |
 //! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
 //! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes | — |
 //! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
@@ -38,6 +39,7 @@
 //! | `RenderPhysicalModel` | `harness_physical_model_*` | yes | yes | yes | yes | — |
 //! | `RenderPhysicalShape` | `harness_physical_shape_*` | yes | yes | yes | yes | — |
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
+//! | `RenderSubtreeAnchor` | `harness_subtree_anchor_*` | yes | yes | yes | yes | attach/detach identity |
 //! | `RenderSemanticsAnnotations` | `harness_semantics_annotations_*` | yes | — | — | yes | semantics |
 //! | `RenderMergeSemantics` | `harness_merge_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderExcludeSemantics` | `harness_exclude_semantics_*` | yes | — | — | yes | semantics |
@@ -45,8 +47,9 @@
 //! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
+//! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
-//! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order |
+//! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order, paint transform |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
@@ -73,7 +76,7 @@
 //! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | — |
 //! | `RenderConstrainedOverflowBox` | `harness_constrained_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
-//! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | — |
+//! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | paint transform |
 //! | `RenderAnimatedSize` | `harness_render_animated_size_*` | yes | — | yes | yes | state machine |
 //! | `RenderSliverScrollingPersistentHeader` | `harness_sliver_persistent_header_scrolling_*` | yes | — | — | — | — |
 //! | `RenderSliverPinnedPersistentHeader` | `harness_sliver_persistent_header_pinned_*` | yes | — | — | — | viewport wiring |
@@ -83,19 +86,11 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
-use std::{
-    any::Any,
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{AnimationController, Curves, Scheduler};
-use flui_interaction::MouseTracker;
+use flui_interaction::{InteractionLane, MouseTracker};
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
@@ -105,10 +100,7 @@ use flui_rendering::{
         MultiChildLayoutDelegate, SingleChildLayoutDelegate,
         SliverGridDelegateWithFixedCrossAxisCount,
     },
-    hit_testing::{
-        CursorIcon, EventPropagation, HitTestBehavior, HitTestResult, InputEvent,
-        MouseEnterCallback, MouseExitCallback, MouseHoverCallback, PointerEventHandler,
-    },
+    hit_testing::{CursorIcon, HitTestBehavior, HitTestResult, InputEvent, MouseRegionCallbacks},
     layer::LayerLink,
     parent_data::{
         FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
@@ -152,6 +144,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAspectRatio",
     "RenderBaseline",
     "RenderConstrainedBox",
+    "RenderLayoutBuilder",
     "RenderLimitedBox",
     "RenderOffstage",
     "RenderOpacity",
@@ -171,6 +164,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderPhysicalModel",
     "RenderPhysicalShape",
     "RenderRepaintBoundary",
+    "RenderSubtreeAnchor",
     "RenderSemanticsAnnotations",
     "RenderMergeSemantics",
     "RenderExcludeSemantics",
@@ -181,6 +175,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderListBody",
     "RenderFlow",
     "RenderTable",
+    "RenderTheater",
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
     "RenderListener",
@@ -569,15 +564,23 @@ fn harness_custom_paint_foreground_hit_test_wins() {
 
 #[test]
 fn harness_listener_passes_layout_through_and_attaches_handler() {
-    // A no-op handler — the harness verifies it reaches the hit entry (the new
-    // pipeline wiring); that it FIRES end-to-end is covered by the Listener
-    // widget's dispatch test.
-    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
+    // A lane-registered no-op target — the harness verifies its identity
+    // reaches the hit entry (the pipeline wiring); that it FIRES end-to-end is
+    // covered by the Listener widget's dispatch test.
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let target = lane.enter(|| {
+        lane.dispatch_handle()
+            .register_pointer(|_event| {})
+            .expect("register no-op pointer target")
+    });
     let run = RenderTester::mount(
         // DeferToChild over a hittable ColoredBox: the listener registers when
         // the child is hit.
-        box_node(RenderListener::new(handler, HitTestBehavior::DeferToChild))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        box_node(RenderListener::new(
+            Some(target),
+            HitTestBehavior::DeferToChild,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
     .run_frame();
@@ -587,7 +590,7 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
 
     // A pointer landing on the child hits the listener (it registers itself in
     // the leaf-first path alongside its child), and its hit entry carries the
-    // handler the pipeline attached from `pointer_event_handler()`.
+    // data-only target identity supplied by the render object.
     assert!(
         run.hit(20.0, 20.0).contains(&run.root()),
         "the listener registers itself in the hit path",
@@ -596,22 +599,21 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
     run.pipeline()
         .hit_test(Offset::new(px(20.0), px(20.0)), &mut result);
     assert!(
-        result.path().iter().any(|entry| entry.handler.is_some()),
-        "the listener's hit entry must carry a pointer handler:\n{}",
+        result
+            .path()
+            .iter()
+            .any(|entry| entry.pointer_target == Some(target)),
+        "the listener's hit entry must carry its pointer target:\n{}",
         run.diagnostics(),
     );
 }
 
 #[test]
 fn harness_listener_childless_fills_parent() {
-    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
     let constraints = loose(200.0);
-    let mut run = RenderTester::mount(box_node(RenderListener::new(
-        handler,
-        HitTestBehavior::Opaque,
-    )))
-    .with_constraints(constraints)
-    .run_frame();
+    let mut run = RenderTester::mount(box_node(RenderListener::new(None, HitTestBehavior::Opaque)))
+        .with_constraints(constraints)
+        .run_frame();
 
     assert_eq!(
         run.box_geometry(run.root()),
@@ -627,12 +629,11 @@ fn harness_listener_childless_fills_parent() {
 
 #[test]
 fn harness_listener_translucent_adds_entry_without_blocking_lower_sibling() {
-    let handler: PointerEventHandler = Arc::new(|_event| EventPropagation::Continue);
     let run = RenderTester::mount(
         box_node(RenderStack::new())
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
             .child(
-                box_node(RenderListener::new(handler, HitTestBehavior::Translucent))
+                box_node(RenderListener::new(None, HitTestBehavior::Translucent))
                     .label("top_listener"),
             ),
     )
@@ -667,15 +668,16 @@ fn harness_mouse_region_childless_fills_parent_and_self_describes() {
 
 #[test]
 fn harness_mouse_region_hit_entry_carries_cursor_and_annotation() {
-    let enters = Arc::new(AtomicUsize::new(0));
-    let enter_counter = Arc::clone(&enters);
-    let on_enter: MouseEnterCallback = Arc::new(move |_device, _position| {
-        enter_counter.fetch_add(1, Ordering::SeqCst);
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let target = lane.enter(|| {
+        lane.dispatch_handle()
+            .register_mouse_region(MouseRegionCallbacks::default())
+            .expect("register mouse-region target")
     });
 
     let mut region = RenderMouseRegion::new();
     region.set_cursor(CursorIcon::Pointer);
-    region.set_on_enter(Some(on_enter));
+    region.set_mouse_region_target(Some(target));
 
     let run = RenderTester::mount(box_node(region))
         .with_constraints(BoxConstraints::tight(Size::new(px(60.0), px(30.0))))
@@ -700,7 +702,7 @@ fn harness_mouse_region_hit_entry_carries_cursor_and_annotation() {
         .as_ref()
         .expect("mouse region must contribute MouseTrackerAnnotation");
     assert_eq!(annotation.region_id, run.root());
-    assert!(annotation.on_enter.is_some());
+    assert_eq!(annotation.target, target);
 }
 
 #[test]
@@ -726,20 +728,37 @@ fn harness_mouse_region_opaque_false_adds_entry_without_blocking_lower_sibling()
 
 #[test]
 fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
-    let hovers = Arc::new(AtomicUsize::new(0));
-    let hover_counter = Arc::clone(&hovers);
-    let on_hover: MouseHoverCallback = Arc::new(move |_device, _position| {
-        hover_counter.fetch_add(1, Ordering::SeqCst);
-    });
-    let exits = Arc::new(AtomicUsize::new(0));
-    let exit_counter = Arc::clone(&exits);
-    let on_exit: MouseExitCallback = Arc::new(move |_device, _position| {
-        exit_counter.fetch_add(1, Ordering::SeqCst);
+    let hovers = Rc::new(Cell::new(0));
+    let enters = Rc::new(Cell::new(0));
+    let exits = Rc::new(Cell::new(0));
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let (hover_target, mouse_target) = lane.enter(|| {
+        let handle = lane.dispatch_handle();
+        let hover_counter = Rc::clone(&hovers);
+        let hover_target = handle
+            .register_pointer(move |_event| {
+                hover_counter.set(hover_counter.get() + 1);
+            })
+            .expect("register mouse-region hover pointer target");
+        let enter_counter = Rc::clone(&enters);
+        let exit_counter = Rc::clone(&exits);
+        let mouse_target = handle
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::new(move |_device, _position| {
+                    enter_counter.set(enter_counter.get() + 1);
+                })),
+                on_exit: Some(Rc::new(move |_device, _position| {
+                    exit_counter.set(exit_counter.get() + 1);
+                })),
+                on_hover: None,
+            })
+            .expect("register mouse-region target");
+        (hover_target, mouse_target)
     });
 
     let mut region = RenderMouseRegion::new();
-    region.set_on_hover(Some(on_hover));
-    region.set_on_exit(Some(on_exit));
+    region.set_hover_target(Some(hover_target));
+    region.set_mouse_region_target(Some(mouse_target));
 
     let run = RenderTester::mount(box_node(region))
         .with_constraints(BoxConstraints::tight(Size::new(px(60.0), px(30.0))))
@@ -748,12 +767,14 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
     let mut inside = HitTestResult::new();
     let inside_position = Offset::new(px(10.0), px(10.0));
     run.pipeline().hit_test(inside_position, &mut inside);
-    inside.dispatch(&flui_interaction::events::make_move_event(
-        inside_position,
-        flui_interaction::events::PointerType::Mouse,
-    ));
+    lane.enter(|| {
+        inside.dispatch(&flui_interaction::events::make_move_event(
+            inside_position,
+            flui_interaction::events::PointerType::Mouse,
+        ));
+    });
     assert_eq!(
-        hovers.load(Ordering::SeqCst),
+        hovers.get(),
         1,
         "PointerEvent::Move dispatch should invoke RenderMouseRegion's hover handler",
     );
@@ -766,44 +787,49 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
         },
         &HitTestResult::new(),
     );
-    tracker.update_with_event(
-        &InputEvent::Pointer(flui_interaction::events::make_move_event(
-            inside_position,
-            flui_interaction::events::PointerType::Mouse,
-        )),
-        &inside,
-    );
-    assert_eq!(
-        hovers.load(Ordering::SeqCst),
-        1,
-        "first tracker update is an enter, not a hover",
-    );
+    lane.enter(|| {
+        tracker.update_with_event(
+            &InputEvent::Pointer(flui_interaction::events::make_move_event(
+                inside_position,
+                flui_interaction::events::PointerType::Mouse,
+            )),
+            &inside,
+        );
+    });
+    assert_eq!(enters.get(), 1, "first tracker update enters the region");
 
-    tracker.update_with_event(
-        &InputEvent::Pointer(flui_interaction::events::make_move_event(
-            inside_position,
-            flui_interaction::events::PointerType::Mouse,
-        )),
-        &inside,
-    );
+    lane.enter(|| {
+        tracker.update_with_event(
+            &InputEvent::Pointer(flui_interaction::events::make_move_event(
+                inside_position,
+                flui_interaction::events::PointerType::Mouse,
+            )),
+            &inside,
+        );
+    });
     assert_eq!(
-        hovers.load(Ordering::SeqCst),
-        2,
-        "second tracker update over the same region is a hover",
+        hovers.get(),
+        1,
+        "MouseTracker does not deliver hover; hover stays ordinary pointer dispatch",
     );
 
     let mut outside = HitTestResult::new();
     let outside_position = Offset::new(px(80.0), px(10.0));
     run.pipeline().hit_test(outside_position, &mut outside);
-    tracker.update_with_event(
-        &InputEvent::Pointer(flui_interaction::events::make_move_event(
-            outside_position,
-            flui_interaction::events::PointerType::Mouse,
-        )),
-        &outside,
-    );
+    lane.enter(|| {
+        lane.dispatch_handle()
+            .unregister_mouse_region(mouse_target)
+            .expect("unregister mouse target after prior annotation was resolved");
+        tracker.update_with_event(
+            &InputEvent::Pointer(flui_interaction::events::make_move_event(
+                outside_position,
+                flui_interaction::events::PointerType::Mouse,
+            )),
+            &outside,
+        );
+    });
     assert_eq!(
-        exits.load(Ordering::SeqCst),
+        exits.get(),
         1,
         "tracker must retain the prior annotation long enough to fire exit",
     );
@@ -1463,11 +1489,231 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
     .with_constraints(loose(200.0))
     .run_layout();
 
+    // Under LOOSE constraints `constraints.smallest()` is zero, so the box does
+    // collapse — but only incidentally. See the two tests below.
     assert_eq!(run.box_geometry(run.root()), Size::ZERO);
     assert!(run.hit(10.0, 10.0).is_empty());
     assert!(
         run.descendant_property("RenderOffstage", "offstage")
             .is_some()
+    );
+}
+
+/// An offstage child is laid out under the **real** incoming constraints and
+/// reaches its true geometry — Flutter's `child?.layout(constraints)`
+/// (`proxy_box.dart:3919-3925`). This is what `ModalRoute.offstage` exploits to
+/// measure a route at its final size before it is visible.
+///
+/// Red-check: lay the child out at `BoxConstraints::tight(Size::ZERO)` (the
+/// previous behavior); the child measures 0×0.
+#[test]
+fn harness_offstage_hidden_lays_the_child_out_at_full_size() {
+    let run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(40.0), px(40.0)),
+        "the offstage child must reach its real geometry, not collapse to zero"
+    );
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::ZERO,
+        "only the RenderOffstage box shrinks (loose ⇒ smallest is zero)"
+    );
+}
+
+/// The box takes `constraints.smallest()`, not `Size::ZERO` — Flutter's
+/// `sizedByParent => offstage` plus `computeDryLayout => constraints.smallest`
+/// (`proxy_box.dart:3896`, `:3905-3910`).
+///
+/// Under a **tight** parent those differ: `smallest` is the tight size. Returning
+/// `Size::ZERO` there violates the incoming constraints.
+///
+/// Red-check: return `Size::ZERO` from the offstage branch of `perform_layout`.
+#[test]
+fn harness_offstage_hidden_takes_constraints_smallest_under_tight_constraints() {
+    let tight = BoxConstraints::tight(Size::new(px(120.0), px(80.0)));
+    let run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(tight)
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(120.0), px(80.0)),
+        "a tight parent's constraints must be honoured while offstage"
+    );
+    assert!(run.hit(10.0, 10.0).is_empty(), "still not hit-testable");
+}
+
+/// Toggling `offstage` relayouts: the box switches between `constraints.smallest`
+/// and the child's size, and the child becomes hit-testable again.
+///
+/// Red-check: drop the `mark_needs_layout` that `set_offstage`'s change flag
+/// drives (harness `update` + `relayout`).
+#[test]
+fn harness_offstage_toggle_relayouts_and_restores_hit_testing() {
+    let mut run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+
+    let root = run.root();
+    run.update::<RenderOffstage>(root, |node| {
+        node.set_offstage(false);
+    });
+    run.relayout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(40.0), px(40.0)),
+        "visible again ⇒ the box adopts the child's size"
+    );
+
+    run.update::<RenderOffstage>(root, |node| {
+        node.set_offstage(true);
+    });
+    run.relayout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(40.0), px(40.0)),
+        "and the child is still laid out at full size"
+    );
+}
+
+/// An offstage subtree is not painted — `paint` returns early
+/// (`proxy_box.dart:3937-3943`). The child is a red `RenderColoredBox`; nothing
+/// red may reach the display list.
+///
+/// Red-check: delete the early `return` in `RenderOffstage::paint`.
+#[test]
+fn harness_offstage_hidden_does_not_paint_its_child() {
+    let hidden = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        !hidden
+            .display_commands()
+            .iter()
+            .any(|cmd| cmd.line.contains("#FF0000FF")),
+        "an offstage child must not paint: {:?}",
+        hidden
+            .display_commands()
+            .iter()
+            .map(|cmd| cmd.line.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // The same tree, visible, does paint red — so the assertion above is not
+    // vacuous (e.g. a harness that never records commands).
+    let visible = RenderTester::mount(
+        box_node(RenderOffstage::visible())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        visible
+            .display_commands()
+            .iter()
+            .any(|cmd| cmd.line.contains("#FF0000FF")),
+        "control: a visible child paints red"
+    );
+}
+
+/// An offstage subtree is dropped from the semantics walk — Flutter's
+/// `visitChildrenForSemantics` returns early (`proxy_box.dart:3945-3951`). The
+/// node's own config is still built; only its descendants vanish.
+///
+/// Red-check: delete `RenderOffstage::excludes_semantics_subtree`; the child's
+/// labelled semantics node reappears in the tree.
+#[test]
+fn harness_offstage_hidden_drops_its_semantics_subtree() {
+    let annotated = || {
+        box_node(
+            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label("Hidden"))
+                .with_container(true),
+        )
+        .child(box_node(RenderSizedBox::new(
+            Some(px(40.0)),
+            Some(px(20.0)),
+        )))
+    };
+
+    let hidden = RenderTester::mount(box_node(RenderOffstage::hidden()).child(annotated()))
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_to_semantics();
+
+    let owner = hidden.semantics_owner().expect("semantics enabled");
+    assert!(
+        !owner
+            .tree()
+            .iter()
+            .any(|(_, node)| node.label() == Some("Hidden")),
+        "an offstage subtree must not reach the semantics tree"
+    );
+
+    // Control: visible, the same child is announced — so the assertion above is
+    // not vacuous.
+    let visible = RenderTester::mount(box_node(RenderOffstage::visible()).child(annotated()))
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_to_semantics();
+
+    let owner = visible.semantics_owner().expect("semantics enabled");
+    assert!(
+        owner
+            .tree()
+            .iter()
+            .any(|(_, node)| node.label() == Some("Hidden")),
+        "control: a visible child is announced"
+    );
+}
+
+/// `computeDryLayout` returns `constraints.smallest()` when offstage
+/// (`proxy_box.dart:3905-3910`), matching what `perform_layout` reports — a dry
+/// probe must not disagree with the real pass.
+///
+/// Red-check: return `Size::ZERO` from the offstage branch of
+/// `compute_dry_layout`; the tight probe disagrees with `perform_layout`.
+#[test]
+fn harness_offstage_dry_layout_matches_constraints_smallest() {
+    let mut run = RenderTester::mount(
+        box_node(RenderOffstage::hidden())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let tight = BoxConstraints::tight(Size::new(px(120.0), px(80.0)));
+    assert_eq!(
+        run.dry_layout(run.root(), tight),
+        Size::new(px(120.0), px(80.0)),
+        "dry layout must honour a tight probe, as perform_layout does"
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), loose(200.0)),
+        Size::ZERO,
+        "and collapse under a loose probe, where smallest is zero"
     );
 }
 
@@ -1892,19 +2138,16 @@ fn harness_clip_rect_self_describes() {
 }
 
 #[test]
-fn harness_clip_rect_custom_clipper_flag() {
+fn harness_clip_rrect_data_clip_source_sets_custom_clipper_flag() {
     let run = RenderTester::mount(
-        box_node(
-            RenderClipRect::anti_alias()
-                .with_clipper(|size| Rect::from_origin_size(Point::ZERO, size)),
-        )
-        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        box_node(RenderClipRRect::anti_alias().with_border_radius(BorderRadius::circular(px(8.0))))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
     .run_layout();
 
     assert!(
-        run.descendant_property("RenderClipRect", "custom_clipper")
+        run.descendant_property("RenderClipRRect", "custom_clipper")
             .is_some()
     );
 }
@@ -1952,16 +2195,16 @@ fn harness_clip_path_wraps_child() {
 // RenderShaderMask / RenderBackdropFilter
 // ============================================================================
 
-/// A trivial shader callback for tests that don't care about the produced
-/// shader itself, only that the mask machinery ran.
-fn solid_white_shader(_bounds: Rect) -> Shader {
+/// A trivial shader for tests that don't care about the produced shader itself,
+/// only that the mask machinery ran.
+fn solid_white_shader() -> Shader {
     Shader::solid(Color::WHITE)
 }
 
 #[test]
 fn harness_shader_mask_layout_passes_through_to_child() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader))
+        box_node(RenderShaderMask::new(solid_white_shader()))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -1972,7 +2215,7 @@ fn harness_shader_mask_layout_passes_through_to_child() {
 
 #[test]
 fn harness_shader_mask_no_child_paints_nothing() {
-    let run = RenderTester::mount(box_node(RenderShaderMask::new(solid_white_shader)))
+    let run = RenderTester::mount(box_node(RenderShaderMask::new(solid_white_shader())))
         .with_constraints(loose(200.0))
         .run_frame();
 
@@ -1986,7 +2229,7 @@ fn harness_shader_mask_no_child_paints_nothing() {
 #[test]
 fn harness_shader_mask_paints_with_shader_mask_layer() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader))
+        box_node(RenderShaderMask::new(solid_white_shader()))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -1999,36 +2242,43 @@ fn harness_shader_mask_paints_with_shader_mask_layer() {
 #[test]
 fn harness_shader_mask_callback_receives_local_not_offset_rect() {
     // Regression test for the highest-risk trap in the design research
-    // plan (§4.3): the shader callback must see the node's LOCAL bounds
+    // plan: the shader factory must see the node's LOCAL bounds
     // rect even when the ShaderMask itself sits at a non-zero origin
     // within its parent — nesting under RenderPadding gives the
     // ShaderMask a non-zero accumulated origin (20, 20) so a bug that
     // passed the origin-shifted (global) rect to the callback instead of
     // the local one would be caught here.
-    let captured: Arc<std::sync::Mutex<Option<Rect>>> = Arc::new(std::sync::Mutex::new(None));
-    let captured_write = Arc::clone(&captured);
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let captured: Rc<std::cell::RefCell<Option<Rect>>> = Rc::new(std::cell::RefCell::new(None));
 
-    let run = RenderTester::mount(
-        box_node(RenderPadding::all(20.0)).child(
-            box_node(RenderShaderMask::new(move |bounds: Rect| {
-                *captured_write.lock().expect("mutex poisoned") = Some(bounds);
+    let run = lane.enter(|| {
+        let captured_write = Rc::clone(&captured);
+        let target = handle
+            .register_shader_mask(move |bounds: Rect| {
+                *captured_write.borrow_mut() = Some(bounds);
                 Shader::solid(Color::WHITE)
-            }))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-        ),
-    )
-    .with_constraints(loose(200.0))
-    .run_frame();
+            })
+            .expect("register shader mask target");
+
+        RenderTester::mount(
+            box_node(RenderPadding::all(20.0)).child(
+                box_node(RenderShaderMask::new(solid_white_shader()).with_shader_target(target))
+                    .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame()
+    });
 
     assert!(run.painted());
     let bounds = captured
-        .lock()
-        .expect("mutex poisoned")
-        .expect("shader callback must have been invoked during paint");
+        .borrow()
+        .expect("shader target must have been invoked during paint");
     assert_eq!(
         bounds,
         Rect::from_origin_size(Point::ZERO, Size::new(px(40.0), px(40.0))),
-        "shader callback must receive the LOCAL bounds rect, not the \
+        "shader factory must receive the LOCAL bounds rect, not the \
          parent-origin-shifted global rect",
     );
 }
@@ -2036,7 +2286,7 @@ fn harness_shader_mask_callback_receives_local_not_offset_rect() {
 #[test]
 fn harness_shader_mask_layer_field_round_trip() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader).with_blend_mode(BlendMode::Multiply))
+        box_node(RenderShaderMask::new(solid_white_shader()).with_blend_mode(BlendMode::Multiply))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -2058,7 +2308,7 @@ fn harness_shader_mask_layer_field_round_trip() {
 #[test]
 fn harness_shader_mask_hit_tests_through_to_child() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader))
+        box_node(RenderShaderMask::new(solid_white_shader()))
             .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
     )
     .with_size(Size::new(px(100.0), px(100.0)))
@@ -2070,7 +2320,7 @@ fn harness_shader_mask_hit_tests_through_to_child() {
 #[test]
 fn harness_shader_mask_self_describes() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader).with_blend_mode(BlendMode::Screen))
+        box_node(RenderShaderMask::new(solid_white_shader()).with_blend_mode(BlendMode::Screen))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -2119,7 +2369,7 @@ fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
 
 #[test]
 fn harness_backdrop_filter_disabled_bypasses_filter_but_still_paints_child() {
-    // Regression test for trap §4.4: `enabled` and "has a child" are TWO
+    // Regression test: `enabled` and "has a child" are TWO
     // INDEPENDENT gates. enabled=false must bypass the filter layer
     // entirely while the child STILL paints (unfiltered) — a naive
     // combined `enabled && has_child` condition would wrongly skip
@@ -2225,7 +2475,7 @@ fn harness_leader_layer_layout_uses_smallest_when_no_child() {
 #[test]
 fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
     // Regression test for the highest-risk trap in the design research
-    // plan (§7.1/§7.2): unlike ShaderMask/BackdropFilter's OWN no-child
+    // plan: unlike ShaderMask/BackdropFilter's OWN no-child
     // test (which asserts the layer is ABSENT), oracle's
     // `RenderLeaderLayer.paint` pushes its `LeaderLayer` UNCONDITIONALLY
     // (`proxy_box.dart:4513-4528`) — a childless leader is still a
@@ -2325,8 +2575,8 @@ fn harness_follower_layer_layout_uses_smallest_when_no_child() {
 
 #[test]
 fn harness_follower_layer_always_pushes_layer_even_with_zero_children() {
-    // Regression test for the highest-risk trap (design research plan
-    // §7.1/§7.2), the direct opposite of ShaderMask/BackdropFilter's own
+    // Regression test for the highest-risk trap (design research plan),
+    // the direct opposite of ShaderMask/BackdropFilter's own
     // no-child test: oracle's `RenderFollowerLayer.paint` pushes its
     // `FollowerLayer` UNCONDITIONALLY (`proxy_box.dart:4708-4721`) — the
     // no-leader/hidden decision is resolved later, not by skipping the
@@ -2389,7 +2639,7 @@ fn harness_follower_layer_hit_tests_through_to_child_structurally_only() {
     // Structural-forward half ONLY: a child positioned at the follower's
     // own layout-relative offset is hit. This does NOT cover
     // resolved-transform-aware hit-testing — that is the genuinely
-    // deferred ADR-level gap (design research plan §4.4/§8), not
+    // deferred gap (design research plan), not
     // implemented by this render object today.
     let run = RenderTester::mount(
         box_node(RenderFollowerLayer::new(LayerLink::new()))
@@ -2641,7 +2891,7 @@ fn harness_physical_model_elevation_casts_shadow_before_fill_and_child() {
     );
 }
 
-// The `usesSaveLayer` fork (research plan trap §4.3) — controls WHERE the
+// The `usesSaveLayer` fork (research plan trap) — controls WHERE the
 // fill is drawn, not just whether. These two tests are the direct check
 // that a naive port didn't collapse the fork into "always fill outside"
 // or "always fill inside" (either would double-paint or bleed an edge).
@@ -2722,9 +2972,9 @@ fn harness_physical_model_fills_inside_clip_when_save_layer() {
     );
 }
 
-// Trap §4.4 regression at the render-object level (see the unit-level
+// Trap regression at the render-object level (see the unit-level
 // regression in `proxy::physical_model::tests` for the formula check) plus
-// the hit-test divergence trap §4.2: `RenderPhysicalModel` ALWAYS tests the
+// the hit-test divergence trap: `RenderPhysicalModel` ALWAYS tests the
 // clip shape, even though it never exposes a public clipper — a deliberate,
 // precedent-backed divergence from the oracle's `_clipper != null` gate,
 // which for `RenderPhysicalModel` specifically never engages (see the
@@ -2742,7 +2992,7 @@ fn harness_physical_model_hit_test_always_tests_circle_shape_excludes_bbox_corne
 
     // (1, 1) is inside the 100x40 bounding box but outside the inscribed
     // ellipse (rx=50, ry=20 centered at (50, 20)) — the ellipse-not-circle
-    // formula from trap §4.4 makes this exclusion asymmetric per axis.
+    // formula makes this exclusion asymmetric per axis.
     assert_eq!(run.hit_first(1.0, 1.0), None);
     // The ellipse center is always inside.
     assert_eq!(run.hit_first(50.0, 20.0), Some(run.id("child")));
@@ -2750,33 +3000,37 @@ fn harness_physical_model_hit_test_always_tests_circle_shape_excludes_bbox_corne
 
 #[test]
 fn harness_physical_shape_hit_test_triangular_clipper() {
-    let run = RenderTester::mount(
-        box_node(RenderPhysicalShape::new(
-            |size: Size| {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let run = lane.enter(|| {
+        let target = handle
+            .register_path_clipper(|size: Size| {
                 let mut p = Path::new();
                 p.move_to(Point::new(size.width * 0.5, px(0.0)));
                 p.line_to(Point::new(size.width, size.height));
                 p.line_to(Point::new(px(0.0), size.height));
                 p.close();
                 p
-            },
-            Color::WHITE,
-        ))
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
-    )
-    .with_size(Size::new(px(100.0), px(100.0)))
-    .run_layout();
+            })
+            .expect("register triangle path target");
+        RenderTester::mount(
+            box_node(RenderPhysicalShape::new(Color::WHITE).with_path_clip_target(target))
+                .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+        )
+        .with_size(Size::new(px(100.0), px(100.0)))
+        .run_layout()
+    });
 
     // The oracle and the "always test shape" convention already agree for
     // `RenderPhysicalShape` (it always has a clipper), so this is a plain
     // shape hit-test, not a divergence test.
     assert_eq!(
-        run.hit_first(1.0, 1.0),
+        lane.enter(|| run.hit_first(1.0, 1.0)),
         None,
         "top-left bounding-box corner is outside the triangle"
     );
     assert_eq!(
-        run.hit_first(50.0, 90.0),
+        lane.enter(|| run.hit_first(50.0, 90.0)),
         Some(run.id("child")),
         "near the base midpoint must be inside the triangle"
     );
@@ -2784,9 +3038,11 @@ fn harness_physical_shape_hit_test_triangular_clipper() {
 
 #[test]
 fn harness_physical_shape_falls_back_to_whole_rect_when_clipper_cleared() {
-    let mut run = RenderTester::mount(
-        box_node(RenderPhysicalShape::new(
-            |size: Size| {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let target = lane.enter(|| {
+        handle
+            .register_path_clipper(|size: Size| {
                 // A clipper covering only the top-left quadrant.
                 let mut p = Path::new();
                 p.add_rect(Rect::from_origin_size(
@@ -2794,24 +3050,29 @@ fn harness_physical_shape_falls_back_to_whole_rect_when_clipper_cleared() {
                     Size::new(size.width * 0.5, size.height * 0.5),
                 ));
                 p
-            },
-            Color::WHITE,
-        ))
-        .label("shape")
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
-    )
-    .with_size(Size::new(px(100.0), px(100.0)))
-    .run_layout();
+            })
+            .expect("register quadrant path target")
+    });
+    let mut run = lane.enter(|| {
+        RenderTester::mount(
+            box_node(RenderPhysicalShape::new(Color::WHITE).with_path_clip_target(target))
+                .label("shape")
+                .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+        )
+        .with_size(Size::new(px(100.0), px(100.0)))
+        .run_layout()
+    });
 
     // Before clearing: outside the top-left-quadrant clip, no hit.
-    assert_eq!(run.hit_first(90.0, 90.0), None);
+    let first_hit = lane.enter(|| run.hit_first(90.0, 90.0));
+    assert_eq!(first_hit, None);
     assert!(
         run.descendant_property("RenderPhysicalShape", "custom_clipper")
             .is_some()
     );
 
     run.update::<RenderPhysicalShape>(run.id("shape"), |node| {
-        assert!(node.set_clipper::<fn(Size) -> Path>(None));
+        assert!(node.set_path_clip_target(None));
     });
     run.relayout();
 
@@ -2850,7 +3111,7 @@ fn harness_physical_model_self_describes_shape_border_radius_and_colors() {
             "border_radius",
         ],
     );
-    // Trap §4.1 regression: the oracle's own `debugFillProperties` bug
+    // Trap regression: the oracle's own `debugFillProperties` bug
     // passes `color` a second time instead of `shadowColor` — this must
     // read back the real shadow color, not the fill color.
     assert_eq!(
@@ -2865,19 +3126,23 @@ fn harness_physical_model_self_describes_shape_border_radius_and_colors() {
 
 #[test]
 fn harness_physical_shape_self_describes_custom_clipper_and_colors() {
-    let run = RenderTester::mount(
-        box_node(RenderPhysicalShape::new(
-            |size: Size| {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let run = lane.enter(|| {
+        let target = handle
+            .register_path_clipper(|size: Size| {
                 let mut p = Path::new();
                 p.add_rect(Rect::from_origin_size(Point::ZERO, size));
                 p
-            },
-            Color::WHITE,
-        ))
-        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
-    )
-    .with_constraints(loose(200.0))
-    .run_layout();
+            })
+            .expect("register physical shape path target");
+        RenderTester::mount(
+            box_node(RenderPhysicalShape::new(Color::WHITE).with_path_clip_target(target))
+                .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+        )
+        .with_constraints(loose(200.0))
+        .run_layout()
+    });
 
     assert_descendant_properties(
         &run.diagnostics(),
@@ -3130,9 +3395,8 @@ fn harness_flex_dry_layout_returns_real_size() {
 /// 100 → `flex.offset.dy == 90`.  Before the fix the flex returned `None`,
 /// so the outer fell back to the flex's height (30px) and placed it at 70.
 ///
-/// Red before Slice A (flex has no `compute_distance_to_actual_baseline` override,
-/// returns `None`, outer baseline falls back to child height → offset 70 ≠ 90).
-/// Green after.
+/// Fails without a `compute_distance_to_actual_baseline` override on flex
+/// (returns `None`, outer baseline falls back to child height → offset 70 ≠ 90).
 #[test]
 fn harness_flex_row_reports_highest_baseline() {
     let run = RenderTester::mount(
@@ -3172,7 +3436,7 @@ fn harness_flex_row_reports_highest_baseline() {
 /// After fix the outer baseline positions the flex so its baseline (5) sits at
 /// 50 → `flex.offset.dy == 45`.  Before the fix the flex returned `None` → 20.
 ///
-/// Red before Slice A, green after.
+/// Fails without the baseline override, passes with it.
 #[test]
 fn harness_flex_column_reports_first_baseline() {
     let run = RenderTester::mount(
@@ -3215,8 +3479,7 @@ fn harness_flex_column_reports_first_baseline() {
 ///
 /// Expected dry baseline: `min(10 + 0, 30 + 0) = 10.0`.
 ///
-/// Red before Slice B (`compute_dry_baseline` not overridden → returns `None`).
-/// Green after.
+/// Fails without a `compute_dry_baseline` override (returns `None`).
 #[test]
 fn harness_flex_dry_baseline_equals_committed() {
     let constraints = BoxConstraints::loose(Size::new(px(300.0), px(100.0)));
@@ -3246,7 +3509,7 @@ fn harness_flex_dry_baseline_equals_committed() {
     assert!(
         (dry - 10.0).abs() < 0.1,
         "flex dry baseline must equal committed baseline (~10.0); got {dry}; \
-         before Slice B compute_dry_baseline was not overridden and returned None",
+         without a compute_dry_baseline override this would return None",
     );
 }
 
@@ -4113,7 +4376,7 @@ fn harness_sliver_ignore_pointer_passes_hits_when_inactive() {
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("item")));
 }
 
-// ─── RenderSliverList (U4.2 request seam — INERT without U4.3 child manager) ─
+// ─── RenderSliverList (request seam — INERT without a child manager) ─────────
 
 #[test]
 fn harness_sliver_list_zero_items_reports_zero_geometry() {
@@ -4367,7 +4630,7 @@ fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
 fn harness_sliver_list_lazy_zero_items_reports_zero_geometry() {
     // Empty source — build closure always returns None, so perform_layout
     // produces zero scroll_extent and self-describes via diagnostics.
-    let list = RenderSliverListLazy::new(0, 48.0, std::sync::Arc::new(|_| None), None);
+    let list = RenderSliverListLazy::new(0, 48.0, std::sync::Arc::new(|_| None));
     let run = RenderTester::mount(viewport(sliver_node(list).label("lazy")))
         .with_size(Size::new(px(300.0), px(400.0)))
         .run_layout();
@@ -6452,7 +6715,7 @@ fn harness_table_unset_cell_alignment_follows_a_later_default_change_but_an_expl
 // ============================================================================
 //
 // Every test below constructs its own `AnimationController` (a fresh,
-// never-pumped `Scheduler`, per ADR-0013 D2) and, where the test needs to
+// never-pumped `Scheduler`) and, where the test needs to
 // drive the retarget animation across frames, keeps a `Clone` of it (`driver`)
 // to call `tick_at(seconds_since_the_current_run_started)` directly —
 // mirroring how `flui-animation`'s own controller tests and `Vsync::tick_all`
@@ -6484,7 +6747,6 @@ fn harness_render_animated_size_start_state_snaps_to_child_size_with_no_animatio
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let run = RenderTester::mount(
@@ -6513,7 +6775,6 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6583,7 +6844,6 @@ fn harness_render_animated_size_clip_appears_mid_animation_and_disappears_once_s
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6625,7 +6885,6 @@ fn harness_render_animated_size_respects_alignment_for_the_oversized_child_mid_a
         ArcCurve::new(Curves::Linear),
         Alignment::BOTTOM_RIGHT,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6659,7 +6918,6 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6715,7 +6973,6 @@ fn harness_render_animated_size_baseline_matches_child_baseline_plus_recorded_of
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6765,7 +7022,6 @@ fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_off
         ArcCurve::new(Curves::Linear),
         Alignment::BOTTOM_RIGHT,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6946,6 +7202,47 @@ fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
         run.sliver_geometry(header_id).paint_extent,
         0.0,
         "past max_extent: fully scrolled off, paint_extent clamps to 0",
+    );
+}
+
+#[test]
+fn harness_sliver_persistent_header_stretch_reports_data_signal_on_crossing() {
+    let signal = StretchTriggerSignal::new();
+    let header =
+        RenderSliverScrollingPersistentHeader::new(40.0, 120.0).with_stretch_configuration(
+            OverScrollHeaderStretchConfiguration::new(50.0, Some(signal.clone())),
+        );
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    assert_eq!(signal.count(), 0);
+
+    let vp_id = run.id("viewport");
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(-60.0);
+    });
+    run.relayout();
+
+    assert_eq!(
+        signal.count(),
+        1,
+        "stretch trigger should report one data-plane signal when overscroll crosses threshold"
+    );
+
+    run.relayout();
+    assert_eq!(
+        signal.count(),
+        1,
+        "staying past the threshold must not retrigger without crossing back"
     );
 }
 
@@ -7298,6 +7595,220 @@ fn harness_sliver_persistent_header_floating_snap_animation_drives_effective_scr
 }
 
 // ============================================================================
+// RenderLayoutBuilder (ADR-0017) — the render half of the
+// build-during-layout seam. It publishes constraints; it never builds.
+//
+// Parity is NOT claimed: `.flutter/` is absent from this checkout, so these
+// assertions encode the algorithm recorded in ADR-0017, not a verified match
+// against `widgets/layout_builder.dart`. Full parity verification against
+// that oracle remains the gate.
+// ============================================================================
+
+/// A layout pass must publish the **real** incoming constraints — not a
+/// placeholder, and not a default. This is the regression that catches a
+/// reprise of the pre-rewrite `LayoutBuilder`, whose builder was handed
+/// `BoxConstraints::UNCONSTRAINED` (commit `bb58a8fa`).
+#[test]
+fn harness_layout_builder_publishes_the_real_incoming_constraints() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let incoming = BoxConstraints::new(px(10.0), px(120.0), px(20.0), px(90.0));
+
+    let _run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(incoming)
+    .run_layout();
+
+    assert_eq!(
+        cell.constraints(),
+        Some(incoming),
+        "the builder must see the exact constraints the parent imposed"
+    );
+    assert!(
+        cell.needs_build(),
+        "the first-ever publish must schedule the builder"
+    );
+}
+
+/// Changed constraints re-publish and re-raise `needs_build`, so the binding's
+/// fixpoint rebuilds the child against the new constraints.
+#[test]
+fn harness_layout_builder_republishes_when_constraints_change() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let first = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(first)
+    .run_layout();
+
+    assert_eq!(cell.constraints(), Some(first));
+    // Simulate `service_layout_builders` having built against `first`.
+    cell.commit();
+    assert!(!cell.needs_build());
+
+    let second = BoxConstraints::tight(Size::new(px(60.0), px(80.0)));
+    run.owner_mut().set_root_constraints(Some(second));
+    run.relayout();
+
+    assert_eq!(
+        cell.constraints(),
+        Some(second),
+        "a resized parent must publish the new constraints"
+    );
+    assert!(
+        cell.needs_build(),
+        "changed constraints must schedule a rebuild"
+    );
+}
+
+/// Unchanged constraints must NOT re-raise `needs_build` after a commit.
+///
+/// This is what terminates the layout<->build fixpoint: a level-triggered flag
+/// would re-dirty the element on every pass and the frame would never settle.
+#[test]
+fn harness_layout_builder_same_constraints_do_not_rebuild() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    cell.commit();
+    assert!(!cell.needs_build());
+
+    // Force a second pass with the SAME constraints.
+    let root = run.root();
+    run.owner_mut().mark_needs_layout(root);
+    run.relayout();
+
+    assert_eq!(cell.constraints(), Some(constraints));
+    assert!(
+        !cell.needs_build(),
+        "republishing the committed constraints must not re-dirty the element"
+    );
+}
+
+/// The child is laid out under the builder's own constraints (not loosened),
+/// and the builder sizes itself to `constraints.constrain(child_size)`.
+#[test]
+fn harness_layout_builder_lays_child_out_with_published_constraints() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    // Loose constraints: a tight child would prove nothing about pass-through.
+    let incoming = BoxConstraints::new(px(40.0), px(120.0), px(30.0), px(90.0));
+
+    let run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            // A 20x20 box under min 40x30 must be stretched to the minimum by
+            // the constraints it receives — proving they were passed through.
+            .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(incoming)
+    .run_layout();
+
+    let child = run.box_geometry(run.id("child"));
+    assert_eq!(
+        child,
+        Size::new(px(40.0), px(30.0)),
+        "the child must be laid out under the builder's constraints, not loosened ones"
+    );
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        incoming.constrain(child),
+        "the builder sizes to constrain(child_size) — it follows its child"
+    );
+}
+
+/// With no child (a freshly mounted builder, before the element layer has run
+/// the builder even once) the size is `constraints.biggest()`.
+#[test]
+fn harness_layout_builder_without_child_takes_the_biggest_size() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let incoming = BoxConstraints::new(px(10.0), px(120.0), px(20.0), px(90.0));
+
+    let run = RenderTester::mount(box_node(RenderLayoutBuilder::new(Arc::clone(&cell))))
+        .with_constraints(incoming)
+        .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        incoming.biggest(),
+        "a childless layout builder fills the space it was given"
+    );
+    // Publishing happens whether or not a child exists — that is precisely how
+    // the element layer learns which constraints to build the first child for.
+    assert_eq!(cell.constraints(), Some(incoming));
+    assert!(cell.needs_build());
+}
+
+/// Dry layout is unsupported (Flutter parity: `_RenderLayoutBuilder.computeDryLayout`
+/// asserts `debugCannotComputeDryLayout` and returns `Size.zero`). It must also
+/// not publish: a dry probe is a hypothetical, and dirtying the cell from one
+/// would rebuild the element against constraints the node was never laid out with.
+#[test]
+fn harness_layout_builder_dry_layout_is_unsupported_and_does_not_publish() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let laid_out = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(laid_out)
+    .run_layout();
+    cell.commit();
+
+    let probe = BoxConstraints::new(px(0.0), px(70.0), px(0.0), px(70.0));
+    let root = run.root();
+    let dry = run.dry_layout(root, probe);
+
+    assert_eq!(
+        dry,
+        Size::ZERO,
+        "dry layout must refuse: the built child was built for other constraints, \
+         so answering from it would be confidently wrong"
+    );
+    assert_eq!(
+        cell.constraints(),
+        Some(laid_out),
+        "a dry probe must not overwrite the published constraints"
+    );
+    assert!(
+        !cell.needs_build(),
+        "a dry probe must not dirty the cell — it would rebuild against a \
+         hypothetical the node was never laid out with"
+    );
+}
+
+/// Intrinsics are unsupported and answer `0.0` (Flutter parity: all four
+/// `computeMin/MaxIntrinsic*` return `0.0` after an assert that throws outside
+/// `debugCheckingIntrinsics`).
+#[test]
+fn harness_layout_builder_intrinsics_are_unsupported() {
+    let cell = Arc::new(LayoutConstraintsCell::new());
+    let mut run = RenderTester::mount(
+        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+            .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::tight(Size::new(px(100.0), px(50.0))))
+    .run_layout();
+
+    let root = run.root();
+    assert_eq!(run.min_intrinsic_width(root, f32::INFINITY), 0.0);
+    assert_eq!(run.max_intrinsic_width(root, f32::INFINITY), 0.0);
+    assert_eq!(run.min_intrinsic_height(root, f32::INFINITY), 0.0);
+    assert_eq!(run.max_intrinsic_height(root, f32::INFINITY), 0.0);
+}
+
+// ============================================================================
 // Catalog guard — every exported render type must be exercised above
 // ============================================================================
 
@@ -7349,4 +7860,496 @@ fn render_object_types_match_exports() {
         catalog, exported,
         "RENDER_OBJECT_TYPES must match `pub use` exports in objects/mod.rs",
     );
+}
+
+// ── RenderTheater ─────────────────────────────────────────────────────────────
+
+/// `skip_count == 0` must be indistinguishable from `RenderStack` with
+/// `StackFit::Expand`: `size = constraints.biggest`, every child tight to it.
+#[test]
+fn harness_theater_skip_count_zero_is_stack_expand() {
+    let theater = RenderTester::mount(
+        box_node(RenderTheater::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(box_node(RenderColoredBox::green(30.0, 30.0)).label("top")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let stack = RenderTester::mount(
+        box_node(RenderStack::new().with_fit(StackFit::Expand))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("bottom"))
+            .child(box_node(RenderColoredBox::green(30.0, 30.0)).label("top")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let expected = Size::new(px(200.0), px(200.0));
+    assert_eq!(theater.box_geometry(theater.root()), expected);
+    assert_eq!(stack.box_geometry(stack.root()), expected);
+    for label in ["bottom", "top"] {
+        assert_eq!(
+            theater.box_geometry(theater.id(label)),
+            stack.box_geometry(stack.id(label)),
+            "child `{label}` must be laid out exactly as StackFit::Expand does",
+        );
+    }
+    assert_eq!(
+        theater.hit_first(10.0, 10.0),
+        Some(theater.id("top")),
+        "with nothing skipped the topmost child wins the hit test",
+    );
+    assert_descendant_properties(&theater.diagnostics(), "RenderTheater", &["skip_count"]);
+}
+
+/// The leading `skip_count` children are offstage: not laid out, not painted,
+/// not hit-tested. Flutter's `_childrenInPaintOrder` / `_childrenInHitTestOrder`
+/// both start at `_firstOnstageChild` (`overlay.dart:1424-1458`), and
+/// `performLayout` only walks paint order (`:1481-1484`).
+#[test]
+fn harness_theater_skips_leading_children_in_layout_paint_and_hit_test() {
+    let run = RenderTester::mount(
+        box_node(RenderTheater::new().with_skip_count(1))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("offstage"))
+            .child(box_node(RenderColoredBox::green(30.0, 30.0)).label("onstage")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(200.0), px(200.0)),
+        "skipping children must not change the theater's own size",
+    );
+    assert_eq!(
+        run.try_box_geometry(run.id("offstage")),
+        None,
+        "the skipped child must never be laid out — it has no committed geometry",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("onstage")),
+        Size::new(px(200.0), px(200.0)),
+        "the onstage child is still tight to the theater's size",
+    );
+    assert_eq!(
+        run.hit_first(10.0, 10.0),
+        Some(run.id("onstage")),
+        "the skipped child must not be hit-testable",
+    );
+
+    let painted = run
+        .display_commands()
+        .into_iter()
+        .map(|cmd| cmd.line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        painted.contains("#00FF00FF"),
+        "onstage green child must paint; commands:\n{painted}",
+    );
+    assert!(
+        !painted.contains("#FF0000FF"),
+        "offstage red child must not paint; commands:\n{painted}",
+    );
+}
+
+/// Intrinsics and dry layout must ignore the offstage children too —
+/// `_RenderTheater` passes `_firstOnstageChild` to `getIntrinsicDimension`
+/// (`overlay.dart:1359-1389`).
+#[test]
+fn harness_theater_intrinsics_ignore_offstage_children() {
+    let mut run = RenderTester::mount(
+        box_node(RenderTheater::new().with_skip_count(1))
+            .child(
+                box_node(RenderSizedBox::new(Some(px(150.0)), Some(px(150.0)))).label("offstage"),
+            )
+            .child(box_node(RenderSizedBox::new(Some(px(40.0)), Some(px(40.0)))).label("onstage")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.max_intrinsic_width(run.root(), f32::INFINITY),
+        40.0,
+        "the 150px offstage child must not widen the theater's intrinsic width",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), loose(200.0)),
+        Size::new(px(200.0), px(200.0)),
+        "dry layout is constraints.biggest, exactly as performLayout sizes",
+    );
+}
+
+// ── Ancestor paint transforms (ADR-0021) ──────────────────────────────────────
+//
+// `PipelineOwner::transform_to` composes one
+// `RenderObject::apply_paint_transform` per level. The default body is the paint
+// pipeline's own composition — `paint_transform(size)` then a translation by the
+// child's committed offset — so `RenderTransform`, `RenderRotatedBox` and
+// `RenderFittedBox` need **no override**: their existing `paint_transform` feeds
+// it. `RenderFractionalTranslation` and `RenderFlow` do need one, because their
+// paint bypasses the committed offset (`paint_child_at` / a per-child transform
+// scope). These tests pin both halves.
+
+/// `RenderTransform::uniform_scale(2.0)` pivots about the box's centre, so on a
+/// 20×20 box the child's local origin lands at (-10, -10) and its centre stays
+/// put. A transform_to that ignored `paint_transform` would report (0, 0).
+#[test]
+fn harness_transform_to_respects_a_render_transform_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderTransform::uniform_scale(2.0))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("child is a descendant of root");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, -10.0, -10.0, "the scaled child's origin");
+    let (x, y) = transform.transform_point(px(10.0), px(10.0));
+    assert_transform_point(x, y, 10.0, 10.0, "the centre is the scale pivot");
+}
+
+/// One quarter turn maps a 30×20 child into a 20×30 box: the child's local
+/// origin lands at the box's top-right, and its far corner at the bottom-left.
+#[test]
+fn harness_transform_to_respects_a_rotated_box_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(1))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(20.0), px(30.0)));
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, 20.0, 0.0, "the rotated child's origin");
+    let (x, y) = transform.transform_point(px(30.0), px(20.0));
+    assert_transform_point(x, y, 0.0, 30.0, "the rotated child's far corner");
+}
+
+/// `BoxFit::Contain` scales a 20×10 child by 4 into an 80×80 box and centres the
+/// 80×40 result vertically.
+#[test]
+fn harness_transform_to_respects_a_fitted_box_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderFittedBox::new(
+            BoxFit::Contain,
+            Alignment::CENTER,
+            Clip::None,
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(20.0, 10.0)).label("child")),
+    )
+    .with_size(Size::new(px(80.0), px(80.0)))
+    .run_layout();
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, 0.0, 20.0, "the fitted child's origin");
+    let (x, y) = transform.transform_point(px(20.0), px(10.0));
+    assert_transform_point(x, y, 80.0, 60.0, "the fitted child's far corner");
+}
+
+/// **The override case.** `RenderFractionalTranslation` lays its child out at the
+/// origin and shifts it at paint time through `paint_child_at`, so the child's
+/// *committed* offset is `Offset::ZERO` and the default composition would report
+/// no shift at all. Flutter's `applyPaintTransform` translates by
+/// `translation * size` (`proxy_box.dart`); on a 40×40 box a (-0.5, 0.25)
+/// fraction is (-20, 10).
+#[test]
+fn harness_transform_to_respects_fractional_translation() {
+    let run = RenderTester::mount(
+        box_node(RenderFractionalTranslation::translated(
+            TranslationFraction::new(-0.5, 0.25),
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::ZERO,
+        "the child is laid out at the origin — the shift is paint-time only, \
+         which is exactly why the default composition is wrong here",
+    );
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, -20.0, 10.0, "the fractionally translated origin");
+}
+
+/// **The other override case.** A flow paints each child under a per-child
+/// transform the delegate chooses, never at its committed offset. FLUI caches no
+/// per-child matrix, so `apply_paint_transform` replays `paint_children` — the
+/// same replay `hit_test` already does. `StepFlowDelegate` steps 30px per child.
+#[test]
+fn harness_transform_to_respects_a_flow_ancestor() {
+    let run = RenderTester::mount(
+        box_node(RenderFlow::new(Arc::new(StepFlowDelegate { step: 30.0 })))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("b"))
+            .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("c")),
+    )
+    .with_size(Size::new(px(200.0), px(50.0)))
+    .run_layout();
+
+    for (label, expected_x) in [("a", 0.0), ("b", 30.0), ("c", 60.0)] {
+        let transform = run
+            .owner()
+            .transform_to(run.id(label), run.root())
+            .expect("descendant");
+        let (x, y) = transform.transform_point(px(0.0), px(0.0));
+        assert_transform_point(x, y, expected_x, 0.0, label);
+    }
+}
+
+/// Nesting the two override cases inside a transforming ancestor: the walk must
+/// compose every level, outermost first.
+#[test]
+fn harness_transform_to_composes_a_whole_chain() {
+    let run = RenderTester::mount(
+        box_node(RenderTransform::uniform_scale(2.0))
+            .label("root")
+            .child(
+                box_node(RenderFractionalTranslation::translated(
+                    TranslationFraction::new(0.5, 0.0),
+                ))
+                .label("shift")
+                .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let transform = run
+        .owner()
+        .transform_to(run.id("child"), run.root())
+        .expect("descendant");
+
+    // `shift` is 20×20, so it moves the child +10 in x. `root` is 20×20 and
+    // scales ×2 about its centre: x' = 2·(10) − 10 = 10, y' = 2·0 − 10 = −10.
+    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    assert_transform_point(x, y, 10.0, -10.0, "scale ∘ fractional translation");
+}
+
+/// Asserts a transformed point, with the tolerance a 4×4 float matrix needs
+/// (a quarter turn leaves ~2e-6 of residue on the zeroed axis).
+fn assert_transform_point(
+    x: flui_types::Pixels,
+    y: flui_types::Pixels,
+    expected_x: f32,
+    expected_y: f32,
+    what: &str,
+) {
+    assert!(
+        (x.0 - expected_x).abs() < 1e-4 && (y.0 - expected_y).abs() < 1e-4,
+        "{what}: expected ({expected_x}, {expected_y}), got ({}, {})",
+        x.0,
+        y.0,
+    );
+}
+
+// ── RenderSubtreeAnchor (ADR-0021) ───────────────────────────────────────────
+//
+// The anchor's whole job is identity: publish its own `RenderId` while mounted,
+// clear it when it leaves. `attach(RepaintHandle)` is the first — and only —
+// hook where that id exists (`RepaintHandle::id()`); `detach()` is its mirror.
+// Everything else must be invisible.
+
+/// `attach` publishes the render object's **real** id — the one the pipeline
+/// knows it by, not a fabricated or zeroed placeholder.
+#[test]
+fn harness_subtree_anchor_attach_publishes_the_real_render_id() {
+    let anchor = SubtreeAnchor::new();
+    assert_eq!(anchor.get(), None, "an anchor names nothing before mount");
+    assert!(!anchor.is_anchored());
+
+    let run = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(anchor.clone()))
+            .label("anchor")
+            .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        anchor.get(),
+        Some(run.id("anchor")),
+        "the published id must be the anchor node's own RenderId"
+    );
+    assert!(anchor.is_anchored());
+}
+
+/// `detach` clears it. A published id that outlived its node would let a caller
+/// resolve — and measure — a subtree that has left the tree.
+#[test]
+fn harness_subtree_anchor_detach_clears_the_published_id() {
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+
+    let anchor = SubtreeAnchor::new();
+    let mut owner = PipelineOwner::new();
+
+    let root = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    owner.set_root_id(Some(root));
+    assert_eq!(anchor.get(), Some(root), "mounted");
+
+    owner.remove_render_object(root);
+    assert_eq!(anchor.get(), None, "a stale anchor must resolve to nothing");
+    assert!(!anchor.is_anchored());
+}
+
+/// Re-anchoring updates the published id rather than keeping the first one —
+/// a route rebuilt into a new render node must not hand out the old node's id.
+#[test]
+fn harness_subtree_anchor_reattach_updates_the_published_id() {
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+
+    let anchor = SubtreeAnchor::new();
+    let mut owner = PipelineOwner::new();
+
+    let first = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    assert_eq!(anchor.get(), Some(first));
+
+    owner.remove_render_object(first);
+    assert_eq!(anchor.get(), None);
+
+    let second = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    assert_eq!(anchor.get(), Some(second));
+    assert_ne!(first, second, "the fixture must actually mint a new id");
+}
+
+/// Two anchors never cross-talk: each render object publishes only into the cell
+/// it was constructed with.
+#[test]
+fn harness_subtree_anchor_publishes_only_into_its_own_cell() {
+    let (first, second) = (SubtreeAnchor::new(), SubtreeAnchor::new());
+    let run = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(first.clone()))
+            .label("outer")
+            .child(
+                box_node(RenderSubtreeAnchor::new(second.clone()))
+                    .label("inner")
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("leaf")),
+            ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(first.get(), Some(run.id("outer")));
+    assert_eq!(second.get(), Some(run.id("inner")));
+    assert_ne!(first.get(), second.get());
+}
+
+/// **Transparency.** Inserting an anchor changes no geometry, no paint, and no
+/// hit-test outcome. Asserted against the identical tree without one.
+#[test]
+fn harness_subtree_anchor_is_layout_paint_and_hit_test_transparent() {
+    let anchored = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(SubtreeAnchor::new()))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let plain = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 24.0)).label("child"))
+        .with_constraints(loose(200.0))
+        .run_frame();
+
+    assert_eq!(
+        anchored.box_geometry(anchored.root()),
+        plain.box_geometry(plain.root()),
+        "the anchor adopts its child's size",
+    );
+    assert_eq!(
+        anchored.box_geometry(anchored.id("child")),
+        plain.box_geometry(plain.id("child")),
+        "and lays the child out under its own constraints",
+    );
+    assert_eq!(
+        anchored.offset(anchored.id("child")),
+        Offset::ZERO,
+        "no shift"
+    );
+
+    let painted = |run: &flui_rendering::testing::FrameRun| {
+        run.display_commands()
+            .into_iter()
+            .map(|cmd| cmd.line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(
+        painted(&anchored),
+        painted(&plain),
+        "the anchor paints nothing of its own"
+    );
+
+    assert_eq!(
+        anchored.hit_first(10.0, 10.0),
+        Some(anchored.id("child")),
+        "hits pass through to the child, not absorbed by the anchor"
+    );
+    assert_eq!(
+        anchored.hit_first(100.0, 100.0),
+        None,
+        "and a miss stays a miss"
+    );
+}
+
+/// A childless anchor must not absorb hits, and must not pretend to have size.
+#[test]
+fn harness_subtree_anchor_without_a_child_takes_the_smallest_size_and_absorbs_no_hits() {
+    let run = RenderTester::mount(box_node(RenderSubtreeAnchor::new(SubtreeAnchor::new())))
+        .with_constraints(loose(200.0))
+        .run_frame();
+
+    assert_eq!(run.box_geometry(run.root()), Size::ZERO);
+    assert_eq!(run.hit_first(0.0, 0.0), None);
+}
+
+/// It is deliberately **not** a repaint boundary — that is the one thing it does
+/// differently from `RenderRepaintBoundary`, which Flutter is forced to use for
+/// this job (`routes.dart:1229`).
+#[test]
+fn harness_subtree_anchor_is_not_a_repaint_boundary() {
+    let run = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(SubtreeAnchor::new()))
+            .label("root")
+            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert!(
+        !run.structure().contains(&"Transform"),
+        "no layer effect of its own"
+    );
+    assert_descendant_properties(&run.diagnostics(), "RenderSubtreeAnchor", &["render_id"]);
 }

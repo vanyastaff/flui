@@ -39,7 +39,7 @@ pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, 
 pub use memo::Memo;
 pub use parent_data::{ParentDataConfig, ParentDataView};
 pub use proxy::ProxyView;
-pub use render::RenderView;
+pub use render::{RenderObjectContext, RenderObjectContextError, RenderView};
 pub use root::{RootRenderElement, RootRenderView};
 pub use stateful::{StatefulView, ViewState};
 pub use stateless::StatelessView;

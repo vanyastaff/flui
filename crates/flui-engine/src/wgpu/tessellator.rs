@@ -49,7 +49,7 @@ fn fill_rule_for(fill_type: flui_types::painting::PathFillType) -> FillRule {
 
 /// Errors that can occur during tessellation
 ///
-/// Cycle 4: `#[non_exhaustive]` future-compat marker.
+/// `#[non_exhaustive]` future-compat marker.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TessellationError {
@@ -58,13 +58,13 @@ pub enum TessellationError {
 
     #[error("Stroke tessellation failed: {0}")]
     StrokeFailed(String),
-    // Cycle 4 wave 5 E-10: `InvalidPath` variant dropped. Workspace
-    // grep returned zero constructors -- the tessellator's surface
-    // builders (`Path::builder().begin(...).line_to(...).build()`)
-    // can't produce invalid lyon `Path`s through the live entry
-    // points, and the analogous `TessellationError::InvalidPath` in
-    // `flui-painting` is a separate type (different message body)
-    // wired only on the painting-side path builder.
+    // No `InvalidPath` variant: a workspace-wide search found no code that
+    // would need to construct one. The tessellator's surface builders
+    // (`Path::builder().begin(...).line_to(...).build()`) cannot produce an
+    // invalid lyon `Path` through their live entry points, and the
+    // similarly-named `TessellationError::InvalidPath` in `flui-painting` is
+    // a separate type (different message body) used only by the
+    // painting-side path builder.
 }
 
 pub type Result<T> = std::result::Result<T, TessellationError>;
@@ -271,12 +271,11 @@ impl Tessellator {
         ))
     }
 
-    // Cycle 4 wave 5 E-10: `tessellate_rect` and
-    // `tessellate_rounded_rect` deleted. Both were forward-looking
-    // convenience wrappers that built a tiny `lyon::Path` then
-    // forwarded to `tessellate_fill`; zero production callsites in
-    // the workspace (painter drives rects through the instancing
-    // path, not lyon tessellation). The two unit tests that
+    // `tessellate_rect` and `tessellate_rounded_rect` were removed. Both
+    // were forward-looking convenience wrappers that built a tiny
+    // `lyon::Path` and forwarded it to `tessellate_fill`, but nothing in the
+    // workspace called them: the painter draws rects through the
+    // instancing path, not lyon tessellation. The two unit tests that
     // exercised them were deleted alongside the methods.
 
     /// Tessellate a circle
@@ -941,12 +940,11 @@ impl Tessellator {
         Ok((all_vertices, all_indices))
     }
 
-    // Cycle 4 wave 5 E-10: `tessellate_flui_path_dashed_stroke`
-    // deleted. Workspace grep returned zero callers; the live
-    // dashed-stroke entry point is `tessellate_dashed_stroke` on
-    // a lyon `Path` (used by painter's outline pipeline). The
-    // FLUI-to-lyon conversion lives in the `IntoLyonPath` trait
-    // below -- a caller can do
+    // `tessellate_flui_path_dashed_stroke` was removed: a workspace-wide
+    // search found no callers. The live dashed-stroke entry point is
+    // `tessellate_dashed_stroke` on a lyon `Path` (used by the painter's
+    // outline pipeline). The FLUI-to-lyon conversion lives in the
+    // `IntoLyonPath` trait below -- a caller can do
     // `tessellate_dashed_stroke(&flui_path.to_lyon_path(), paint, dp)`
     // in one line if the helper is needed again, but no one needs
     // it today.
@@ -1298,12 +1296,11 @@ mod tests {
         Pixels(v)
     }
 
-    // Cycle 4 wave 5 E-10: `test_tessellate_rect` and
-    // `test_tessellate_rounded_rect` deleted alongside the methods
-    // they exercised. No production callsite drove them; their
-    // assertions (`!vertices.is_empty()` etc.) were trivially true
-    // for any non-degenerate input -- they documented the shape of
-    // the wrapper, not behavior worth pinning.
+    // `test_tessellate_rect` and `test_tessellate_rounded_rect` were
+    // removed alongside the methods they exercised. No production code
+    // called them, and their assertions (`!vertices.is_empty()` etc.)
+    // were trivially true for any non-degenerate input -- they documented
+    // the shape of the wrapper, not behavior worth pinning down.
 
     #[test]
     fn test_tessellate_circle() {

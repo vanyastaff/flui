@@ -133,7 +133,7 @@ impl RenderTester {
     }
 
     /// Enables semantics on the built [`PipelineOwner`] before any phase
-    /// runs (ADR-0014 D1: lazily creates a `SemanticsOwner`).
+    /// runs (lazily creates a `SemanticsOwner`, see ADR-0014).
     ///
     /// Without this, `run_semantics` (and therefore [`Self::run_to_semantics`]
     /// / [`Self::run_frame`]'s semantics phase) is a no-op — semantics stays
@@ -882,7 +882,7 @@ impl SemanticsRun {
     /// (see [`RenderTester::with_semantics_enabled`]).
     ///
     /// `None` when semantics was never enabled — `run_semantics` is then a
-    /// no-op and no `SemanticsOwner` was ever lazily created (ADR-0014 D1).
+    /// no-op and no `SemanticsOwner` was ever lazily created (see ADR-0014).
     #[must_use]
     pub fn semantics_owner(&self) -> Option<&crate::semantics::SemanticsOwner> {
         self.owner.semantics_owner()
@@ -901,7 +901,7 @@ impl Probe for SemanticsRun {
     }
 }
 
-// `has_overflow` moved to `flui-objects/tests/helpers.rs` (flui-objects extraction
-// plan §2): it downcasts to concrete objects (RenderFittedBox/Stack/Viewport)
+// `has_overflow` moved to `flui-objects/tests/helpers.rs` (part of the flui-objects
+// extraction plan): it downcasts to concrete objects (RenderFittedBox/Stack/Viewport)
 // which now live in flui-objects, not flui-rendering. Moved verbatim so
 // `tests/harness_snapshot.rs` (also moved) keeps using it from its new home.

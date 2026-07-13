@@ -59,7 +59,7 @@ impl PipelineOwner<Layout> {
 
             // Take the dirty nodes and replace with empty set
             // This allows new nodes to be added during layout (routed
-            // to mid_layout_marks per U22; drained back at end of
+            // to mid_layout_marks; drained back at end of
             // iteration below).
             let dirty_nodes = self.scheduler.take_layout_batch_shallow_first();
 
@@ -73,21 +73,20 @@ impl PipelineOwner<Layout> {
 
             // Process each dirty node.
             //
-            // **D-block PR-A1 U23:** layout_dirty_root replaces the
-            // legacy layout_node_with_children no-op recursion. Each
-            // dirty entry is laid out via the pre-acquired-subtree
-            // walk (U20.1) protected by LayoutCycleGuard (U21).
-            // Constraints come from cached state (post-frame-1) OR
-            // the binding-set root_constraints (frame-1 root).
+            // layout_dirty_root replaces the legacy
+            // layout_node_with_children no-op recursion. Each dirty
+            // entry is laid out via the pre-acquired-subtree walk
+            // protected by LayoutCycleGuard. Constraints come from
+            // cached state (post-frame-1) OR the binding-set
+            // root_constraints (frame-1 root).
             for dirty_node in dirty_nodes {
-                // PR-A1 U23 P2 review fix (Copilot 3294417924): skip
-                // entries whose NEEDS_LAYOUT flag was already cleared
-                // earlier in this iteration. Common case: a parent's
-                // layout_child callback recursively lays out a child
-                // whose dirty-queue entry was queued separately
-                // (e.g., insert_child_render_object enqueues both).
-                // Re-laying out the child would be redundant +
-                // potentially side-effectful.
+                // Skip entries whose NEEDS_LAYOUT flag was already
+                // cleared earlier in this iteration. Common case: a
+                // parent's layout_child callback recursively lays out
+                // a child whose dirty-queue entry was queued
+                // separately (e.g., insert_child_render_object
+                // enqueues both). Re-laying out the child would be
+                // redundant + potentially side-effectful.
                 let already_clean = self
                     .render_tree
                     .get(dirty_node.id)
@@ -102,16 +101,15 @@ impl PipelineOwner<Layout> {
                 }
 
                 let Some(constraints) = self.cached_or_root_constraints(dirty_node.id) else {
-                    // PR-A1 U23 P2 review fix (Copilot 3294417942):
-                    // dropping the dirty entry here without recovery
+                    // Dropping the dirty entry here without recovery
                     // strands the work. The two real cases this hits:
                     //   1. Root id with root_constraints unset — the
                     //      binding should have called
                     //      set_root_constraints BEFORE run_frame.
-                    //      U23's set_root_constraints fix auto-marks
-                    //      root dirty when constraints land, so the
-                    //      next run_layout picks up the deferred
-                    //      work automatically.
+                    //      set_root_constraints auto-marks root dirty
+                    //      when constraints land, so the next
+                    //      run_layout picks up the deferred work
+                    //      automatically.
                     //   2. Non-root id with no cached constraints
                     //      AND no parent-driven layout yet — the
                     //      shallow-first dirty queue sort means the
@@ -135,9 +133,9 @@ impl PipelineOwner<Layout> {
                     continue;
                 };
                 if let Err(e) = self.layout_dirty_root(dirty_node.id, constraints) {
-                    // PR-A1 U22 P1 review fix (Codex 3294365736): drain
-                    // mid-phase marks back into `dirty` even on error
-                    // path so they survive across phase invocations.
+                    // Drain mid-phase marks back into `dirty` even on
+                    // the error path so they survive across phase
+                    // invocations.
                     let _ = self.scheduler.exit_phase(PhaseKind::Layout);
                     return Err(e);
                 }
@@ -152,10 +150,11 @@ impl PipelineOwner<Layout> {
                 self.add_node_needing_paint(dirty_node.id, dirty_node.depth);
             }
 
-            // PR-A1 U22 P1 review fix (Codex 3294365736): exit_phase clears
-            // debug_doing_layout AND drains mid_layout_marks back into `dirty`
-            // so the outer while condition picks up marks routed to the side
-            // queue during this iteration's `debug_doing_layout = true` window.
+            // exit_phase clears debug_doing_layout AND drains
+            // mid_layout_marks back into `dirty` so the outer while
+            // condition picks up marks routed to the side queue
+            // during this iteration's `debug_doing_layout = true`
+            // window.
             let _ = self.scheduler.exit_phase(PhaseKind::Layout);
         }
 
@@ -165,7 +164,7 @@ impl PipelineOwner<Layout> {
         // This is the Rust-native alternative to Flutter's
         // `invokeLayoutCallback`.
         //
-        // U3c D3 — true Remove → Insert → Update ordering. Previously the
+        // True Remove → Insert → Update ordering. Previously the
         // apply loop was strict FIFO with only a remove-vs-update skip,
         // which let a frame that enqueues both Remove and Insert apply them
         // in arbitrary order. Stable-partition into three buckets and apply
@@ -292,7 +291,7 @@ impl PipelineOwner<Layout> {
                     parent.insert_child(clamped, child_id);
                 }
 
-                // D1 (lazy-sliver re-entrant build contract): install the
+                // Part of the lazy-sliver re-entrant build contract: install the
                 // logical index on the fresh child's parent-data so the lazy
                 // sliver consumer can reconcile it on the next pass.
                 //
@@ -404,7 +403,7 @@ impl PipelineOwner<Layout> {
     /// Returns the constraints to apply when laying out `id` as a
     /// dirty root.
     ///
-    /// **D-block PR-A1 U23:** sourced from (in priority order):
+    /// Sourced from (in priority order):
     ///
     /// 1. The node's cached `state.constraints()` — set on the
     ///    previous frame's successful layout. This is the common
@@ -441,21 +440,19 @@ impl PipelineOwner<Layout> {
         None
     }
 
-    /// D-block PR-A1b3 U20 — production disjoint-borrow layout walk.
+    /// Production disjoint-borrow layout walk.
     ///
     /// Lays out the subtree rooted at `id` with the supplied
     /// `constraints`, running `RenderObject::perform_layout_raw` against a
-    /// typed [`crate::protocol::BoxLayoutCtx`] populated with the parent's direct children
-    /// (companion memo D1). Returns the parent's computed `Size` on
-    /// success.
+    /// typed [`crate::protocol::BoxLayoutCtx`] populated with the parent's
+    /// direct children. Returns the parent's computed `Size` on success.
     ///
     /// Replaces the recursion shape of `layout_node_with_children`
     /// (which only walks the dirty tree without invoking per-node
     /// layout — see the audit comment in that method). The
-    /// pipeline-side `run_layout` outer loop is rewired to this method
-    /// in U23.
+    /// pipeline-side `run_layout` outer loop is wired to this method.
     ///
-    /// # Mechanism (U20.1 — pre-acquired subtree borrows)
+    /// # Mechanism (pre-acquired subtree borrows)
     ///
     /// 1. **Collect ids**: `RenderTree::collect_subtree_ids(id)` walks
     ///    the subtree in DFS pre-order producing
@@ -492,9 +489,9 @@ impl PipelineOwner<Layout> {
     ///    `NEEDS_LAYOUT` stays set on the parent so the next dirty
     ///    walk re-runs the subtree.
     ///
-    /// # Soundness (U20.1 fix — Miri-clean)
+    /// # Soundness (Miri-clean)
     ///
-    /// The prior PR-A1b3 design (PR #144) used a recursive raw-pointer
+    /// The prior design used a recursive raw-pointer
     /// re-entry into `RenderTree` from inside the layout-child callback —
     /// outer `&mut RenderEntry` was held LIVE across `perform_layout_raw`
     /// while the inner call synthesised a fresh `&mut RenderTree` from
@@ -502,7 +499,7 @@ impl PipelineOwner<Layout> {
     /// the outer tag (latent UB; Miri flagged the 2-level and 3-level
     /// happy paths).
     ///
-    /// The U20.1 redesign eliminates the inner reborrow entirely. All
+    /// This redesign eliminates the inner reborrow entirely. All
     /// N disjoint `&mut RenderNode` borrows are acquired in ONE call to
     /// `get_subtree_mut` (single `&mut Slab` reborrow scope, mirroring
     /// `get_parent_and_children_mut`). The callback then acquires one
@@ -517,14 +514,14 @@ impl PipelineOwner<Layout> {
     /// for each slot lives independently because `NodePtr` is a raw
     /// pointer (SharedReadWrite permission on the allocation, distinct
     /// derived Unique tags per slot reborrow). Miri verifies this on
-    /// the existing U20 integration tests.
+    /// the existing integration tests.
     ///
     /// # Error handling
     ///
     /// - **Leaf-path panics** in user `perform_layout` → caught by
     ///   `layout_leaf_only`'s `catch_unwind`, returned as
     ///   [`crate::error::RenderError::Poisoned`].
-    /// - **Non-leaf-path panics** (PR-A1b3 review fix): wrapped in
+    /// - **Non-leaf-path panics**: wrapped in
     ///   `catch_unwind` at the non-leaf `perform_layout_raw` call site,
     ///   returned as the same [`crate::error::RenderError::Poisoned`].
     ///   Symmetric with the leaf path.
@@ -551,16 +548,16 @@ impl PipelineOwner<Layout> {
     /// `FlexParentData` on `RenderFlex`) trigger a
     /// `BoxLayoutCtx::from_erased` debug-assert mismatch in debug builds
     /// and silently fail to downcast in release builds. Pipeline-driven
-    /// flex layout is out of scope for D-block; per-render-object
+    /// flex layout is out of scope for this method; per-render-object
     /// `T::ParentData` dispatch lands as a Core.1 follow-up alongside the
     /// real `RenderFlex` slice integration.
     ///
-    /// # Cycle / depth safety (U21 wired)
+    /// # Cycle / depth safety
     ///
-    /// Three-layer cycle protection (U20.1 + U21 combined):
+    /// Three-layer cycle protection:
     ///
     /// 1. `collect_subtree_ids` terminates safely on cycles via its
-    ///    `visited` `HashSet<RenderId>` short-circuit (PR #145) —
+    ///    `visited` `HashSet<RenderId>` short-circuit —
     ///    the cyclic id is visited at most once, the cycle edge is
     ///    silently dropped from the collected subtree, deduplicated
     ///    `Vec<RenderId>` returns. No hang / OOM at the collect
@@ -570,7 +567,7 @@ impl PipelineOwner<Layout> {
     ///    No double-borrow attempt at acquisition.
     /// 3. `layout_subtree_borrowed` marks each `id`'s in-flight flag in
     ///    `SubtreeArena::by_id` via the
-    ///    `LayoutCycleGuard` RAII on entry (U21). A `perform_layout`
+    ///    `LayoutCycleGuard` RAII on entry. A `perform_layout`
     ///    body that calls `layout_child` for an ancestor id already
     ///    in flight hits the guard's `enter` collision check →
     ///    returns [`crate::error::RenderError::LayoutCycle`]
@@ -591,8 +588,7 @@ impl PipelineOwner<Layout> {
     /// `catch_unwind` wrapper, the cycle set stays consistent across
     /// frames — a panic does not leak an in-flight id.
     ///
-    /// **U23 wiring is now soundness-unblocked.** `run_layout` may
-    /// wire `layout_dirty_root` per its dirty-queue iteration in U23.
+    /// `run_layout`'s dirty-queue iteration calls this method directly.
     pub fn layout_dirty_root(
         &mut self,
         id: RenderId,
@@ -615,21 +611,21 @@ impl PipelineOwner<Layout> {
         let result = arena.layout_child(id, constraints);
 
         // Step 5: drain all three arena sinks (re-entrant build contract v1,
-        // ADR-0003 Decision 2 + U3c D2 + U4.2 request seam).
+        // per ADR-0003 Decision 2).
         // Take all three (owned), then DROP `arena` to release the &mut RenderTree
         // subtree borrow before touching `&mut self`.
         //
-        // D3 ordering: Remove → Insert → Request.  Removes first so that an
+        // Ordering: Remove → Insert → Request.  Removes first so that an
         // off-band child evicted this pass does not collide with the Insert that
         // replaces it in the same batch.  Requests last because they carry no
-        // pre-built object and do not mutate the tree in U4.2.
+        // pre-built object and do not mutate the tree.
         let pending_removes = arena.take_pending_removes();
         let pending_builds = arena.take_pending_builds();
         let pending_child_requests = arena.take_pending_child_requests();
         let pending_retain_bands = arena.take_pending_retain_bands();
         drop(arena);
 
-        // Apply removes first (D3 ordering).  Each entry is `(parent, child)`:
+        // Apply removes first.  Each entry is `(parent, child)`:
         // the parent is the sliver's own node_id (tagged at push time in
         // ErasedSliverLayoutCtx::dispose_box_child), NOT the walk root `id`.
         // Using `id` here would misdirect `mark_needs_layout` to the viewport
@@ -649,12 +645,12 @@ impl PipelineOwner<Layout> {
         }
 
         // Move child-build requests into the owner's observable buffer so the
-        // binding layer (U4.3) can consume them after the frame.  No tree
-        // mutation here — the requests are inert until U4.3 wires up a manager.
+        // binding layer can consume them after the frame.  No tree
+        // mutation here — the requests are inert until a manager wires them up.
         self.pending_child_requests.extend(pending_child_requests);
 
-        // Move retain-band signals from element-owned slivers (U4.3 removal
-        // half) into the owner's observable buffer.  The binding layer drains
+        // Move retain-band signals from element-owned slivers into the
+        // owner's observable buffer.  The binding layer drains
         // these via `take_pending_retain_bands` to drive `SparseChildren::
         // retain_band` on the element side, skipping `dispose_box_child` to
         // avoid the ABA double-remove.

@@ -8,9 +8,10 @@
 //! Anchors use the workspace-canonical [`Alignment`] coordinate system —
 //! `flui_types::painting::Alignment` re-exports the canonical
 //! `flui_types::layout::Alignment` — `(-1, -1)` = top-left, `(0, 0)` =
-//! center, `(+1, +1)` = bottom-right. The pre-cycle representation used
-//! `Offset<Pixels>` in a 0..1 visual-fraction range; the U7 migration unifies
-//! anchor expression with the rest of the painting API and matches Flutter
+//! center, `(+1, +1)` = bottom-right. The earlier representation used
+//! `Offset<Pixels>` in a 0..1 visual-fraction range; anchors were migrated
+//! to `Alignment` to unify anchor expression with the rest of the painting
+//! API and to match Flutter's
 //! [`painting/alignment.dart`](https://api.flutter.dev/flutter/painting/Alignment-class.html).
 
 use flui_types::{

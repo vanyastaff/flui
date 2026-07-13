@@ -2,9 +2,9 @@
 //! `flui_tree::IndexedSlot<ElementId>` and round-trips with `Option<ElementId>`
 //! previous-sibling payload semantics.
 //!
-//! Migration target for U3 (audit Finding #3, R2). Covers AE8: prelude
-//! co-import of `flui_view::prelude::*` and `flui_tree::prelude::*` must
-//! compile without `IndexedSlot` ambiguity.
+//! Also confirms (audit Finding #3) that co-importing
+//! `flui_view::prelude::*` and `flui_tree::prelude::*` compiles without
+//! `IndexedSlot` ambiguity.
 
 use flui_foundation::ElementId;
 use flui_tree::IndexedSlot;
@@ -58,7 +58,7 @@ fn element_slot_preserves_value_semantics() {
 
 #[test]
 fn ae8_prelude_co_import_compiles() {
-    // AE8: importing both preludes must not collide. `IndexedSlot` appears
+    // Importing both preludes must not collide. `IndexedSlot` appears
     // in both -- flui-view's must be the re-export, so there is exactly one
     // type at that name.
     use flui_tree::prelude::*;

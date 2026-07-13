@@ -188,7 +188,7 @@ impl DirtyTracker {
                 };
                 // Idempotent flag set — the AtomicRenderFlags fetch-or is a
                 // no-op when the bit is already set. The walk does NOT
-                // short-circuit on "already marked": even with U23's
+                // short-circuit on "already marked": even with the
                 // `run_layout` → `layout_dirty_root` wiring (which clears
                 // NEEDS_LAYOUT after each successful layout via
                 // `layout_subtree_borrowed`), a stale flag can persist
@@ -213,9 +213,9 @@ impl DirtyTracker {
             };
             let (is_boundary, depth, parent) = step;
             if is_boundary {
-                // Codex P1 (PR #139 review): always enqueue the boundary for
-                // this invalidation with a dedup check so multiple
-                // marks-in-same-frame don't push duplicate entries.
+                // Always enqueue the boundary for this invalidation, with a
+                // dedup check so multiple marks-in-same-frame don't push
+                // duplicate entries.
                 if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) {
                     // Wake the platform: an idle event loop must produce a
                     // frame for this invalidation (Flutter parity:
@@ -836,7 +836,7 @@ mod tests {
     // Mid-phase routing + drain tests
     // =========================================================================
 
-    /// Direct test of the U22 mid-phase routing → drain integration using a
+    /// Direct test of the mid-phase routing → drain integration using a
     /// DirtyTracker pair directly (no PipelineOwner needed for this path).
     #[test]
     fn mid_phase_layout_marks_route_to_side_queue_then_drain_back() {

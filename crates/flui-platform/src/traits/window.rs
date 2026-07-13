@@ -71,8 +71,9 @@ use winit::window::Window;
 /// PlatformWindow>`). Callbacks are invoked by the platform's event loop when
 /// native events arrive.
 ///
-/// The take/restore dispatch pattern ensures reentrancy safety:
-/// the callback storage lock is released before the callback is invoked.
+/// Callback storage locks are released before user code is invoked. Nested
+/// notifications share one causal FIFO across event kinds; see
+/// [`crate::WindowCallbacks`] for nested input return semantics.
 pub trait PlatformWindow: Send + Sync {
     /// Get the window size in physical pixels (device pixels)
     fn physical_size(&self) -> Size<DevicePixels>;
@@ -191,6 +192,12 @@ pub trait PlatformWindow: Send + Sync {
 
     // ==================== Callback Registration ====================
 
+    /// All callbacks registered on a window must be invoked on the same
+    /// platform/event-loop thread that registered them. `Send` permits backend
+    /// storage and wake plumbing; it is not permission to execute a UI callback
+    /// on an arbitrary worker thread. Backends must marshal first or reject the
+    /// dispatch when they cannot uphold this contract.
+    ///
     /// Register a callback for input events (pointer, keyboard)
     ///
     /// The callback receives a `PlatformInput` and returns a
@@ -301,8 +308,8 @@ pub trait PlatformWindow: Send + Sync {
 /// Concrete winit window wrapper
 ///
 /// Wraps `winit::window::Window` to implement `PlatformWindow`.
-/// Includes per-window callbacks for event delivery using the
-/// take/restore dispatch pattern for reentrancy safety.
+/// Includes per-window callbacks for event delivery using the causal FIFO
+/// dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,

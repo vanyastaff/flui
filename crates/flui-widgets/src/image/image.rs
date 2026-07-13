@@ -168,7 +168,7 @@ impl RenderView for Image {
     type Protocol = BoxProtocol;
     type RenderObject = RenderImage;
 
-    fn create_render_object(&self) -> RenderImage {
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> RenderImage {
         // Resolve eagerly; on failure emit a warning and render a zero-sized
         // placeholder box. `intrinsic_size = Size::ZERO` gives
         // `constraints.smallest()` under loose layout so the box occupies no
@@ -189,7 +189,11 @@ impl RenderView for Image {
         render
     }
 
-    fn update_render_object(&self, render: &mut RenderImage) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render: &mut RenderImage,
+    ) {
         // Always push layout/paint config — cheap field writes.
         render.set_fit(self.fit);
         render.set_alignment(self.alignment);
@@ -285,7 +289,7 @@ mod tests {
     #[test]
     fn create_render_object_uses_a_zero_size_placeholder_on_decode_failure() {
         let widget = Image::new(AlwaysFails);
-        let render = widget.create_render_object();
+        let render = widget.create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert!(render.image().is_none());
         assert_eq!(render.compute_size(&loose()), Size::ZERO);
@@ -294,14 +298,14 @@ mod tests {
     #[test]
     fn update_render_object_clears_the_image_but_keeps_the_intrinsic_size_on_resolve_failure() {
         let widget = Image::new(FailsAfterFirstCall::new());
-        let mut render = widget.create_render_object();
+        let mut render = widget.create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert!(render.image().is_some(), "first resolve must succeed");
         let size_before = render.compute_size(&loose());
         assert_eq!(size_before, Size::new(px(40.0), px(30.0)));
 
         // Second resolve (inside update_render_object) fails.
-        widget.update_render_object(&mut render);
+        widget.update_render_object(&flui_view::RenderObjectContext::detached(), &mut render);
 
         assert!(
             render.image().is_none(),
@@ -318,7 +322,7 @@ mod tests {
     #[test]
     fn width_and_height_overrides_reach_the_render_object() {
         let widget = Image::new(AlwaysFails).width(100.0).height(80.0);
-        let render = widget.create_render_object();
+        let render = widget.create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert_eq!(render.width(), Some(px(100.0)));
         assert_eq!(render.height(), Some(px(80.0)));

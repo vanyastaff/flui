@@ -72,9 +72,9 @@ use super::view::View;
 ///     Container::new().color(theme.primary_color)
 /// }
 /// ```
-pub trait InheritedView: Clone + Send + Sync + 'static + Sized {
+pub trait InheritedView: Clone + 'static + Sized {
     /// The data type this InheritedView provides.
-    type Data: Clone + Send + Sync + 'static;
+    type Data: Clone + 'static;
 
     /// Get the data to provide to descendants.
     fn data(&self) -> &Self::Data;
@@ -143,11 +143,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for DummyView {

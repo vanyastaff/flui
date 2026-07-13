@@ -303,7 +303,10 @@ impl RenderView for Semantics {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSemanticsAnnotations;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSemanticsAnnotations::from_configuration(self.configuration.clone())
             .with_container(self.options.contains(SemanticsOptions::CONTAINER))
             .with_explicit_child_nodes(
@@ -314,7 +317,11 @@ impl RenderView for Semantics {
             .with_block_user_actions(self.options.contains(SemanticsOptions::BLOCK_USER_ACTIONS))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_configuration(self.configuration.clone());
         render_object.set_container(self.options.contains(SemanticsOptions::CONTAINER));
         render_object.set_explicit_child_nodes(
@@ -364,11 +371,19 @@ impl RenderView for MergeSemantics {
     type Protocol = BoxProtocol;
     type RenderObject = RenderMergeSemantics;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderMergeSemantics::default()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 
     fn has_children(&self) -> bool {
         self.child.is_some()
@@ -424,11 +439,18 @@ impl RenderView for ExcludeSemantics {
     type Protocol = BoxProtocol;
     type RenderObject = RenderExcludeSemantics;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderExcludeSemantics::new(self.excluding)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_excluding(self.excluding);
     }
 
@@ -486,7 +508,8 @@ mod tests {
             .text_direction(TextDirection::Rtl)
             .role(SemanticsRole::Dialog);
 
-        let render_object = widget.create_render_object();
+        let render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
         let config = render_object.configuration();
 
         assert_eq!(
@@ -531,7 +554,8 @@ mod tests {
             .exclude_semantics(true)
             .block_user_actions(true);
 
-        let render_object = widget.create_render_object();
+        let render_object =
+            widget.create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert!(render_object.container());
         assert!(render_object.explicit_child_nodes());
@@ -541,7 +565,8 @@ mod tests {
 
     #[test]
     fn semantics_defaults_are_all_off() {
-        let render_object = Semantics::new().create_render_object();
+        let render_object =
+            Semantics::new().create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert!(!render_object.container());
         assert!(!render_object.explicit_child_nodes());
@@ -552,14 +577,18 @@ mod tests {
 
     #[test]
     fn semantics_update_render_object_reapplies_configuration_and_options() {
-        let mut render_object = Semantics::new().create_render_object();
+        let mut render_object =
+            Semantics::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(!render_object.container());
 
         let updated = Semantics::new()
             .label("updated")
             .container(true)
             .button(true);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert!(render_object.container());
         assert!(render_object.configuration().is_button());
@@ -579,7 +608,8 @@ mod tests {
         let properties = SemanticsProperties::new()
             .with_label("from properties")
             .with_button(true);
-        let render_object = Semantics::from_properties(&properties).create_render_object();
+        let render_object = Semantics::from_properties(&properties)
+            .create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert_eq!(
             render_object
@@ -596,7 +626,8 @@ mod tests {
         let mut config = SemanticsConfiguration::new();
         config.set_selected(true);
 
-        let render_object = Semantics::from_configuration(config).create_render_object();
+        let render_object = Semantics::from_configuration(config)
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(render_object.configuration().is_selected());
     }
 
@@ -616,7 +647,8 @@ mod tests {
 
     #[test]
     fn merge_semantics_declares_a_boundary_that_merges_descendants() {
-        let render_object = MergeSemantics::new().create_render_object();
+        let render_object =
+            MergeSemantics::new().create_render_object(&flui_view::RenderObjectContext::detached());
         let mut config = SemanticsConfiguration::new();
         render_object.describe_semantics_configuration(&mut config);
 
@@ -640,23 +672,28 @@ mod tests {
 
     #[test]
     fn exclude_semantics_defaults_to_excluding_and_toggles_off() {
-        let default_render_object = ExcludeSemantics::new().create_render_object();
+        let default_render_object = ExcludeSemantics::new()
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(default_render_object.excludes_semantics_subtree());
 
         let disabled = ExcludeSemantics::new()
             .excluding(false)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(!disabled.excludes_semantics_subtree());
     }
 
     #[test]
     fn exclude_semantics_update_render_object_reapplies_excluding() {
-        let mut render_object = ExcludeSemantics::new().create_render_object();
+        let mut render_object = ExcludeSemantics::new()
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(render_object.excludes_semantics_subtree());
 
         ExcludeSemantics::new()
             .excluding(false)
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
         assert!(!render_object.excludes_semantics_subtree());
     }
 

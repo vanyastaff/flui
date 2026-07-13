@@ -43,7 +43,7 @@ use std::any::{Any, TypeId};
 /// `ElementBase::on_notification(TypeId, &dyn Any) -> bool` handler
 /// protocol does the runtime-type check + downcast at the dispatch
 /// boundary; user-impls don't need to provide any methods, the empty
-/// body `impl Notification for MyEvent {}` is enough. Plan U13 / R10.
+/// body `impl Notification for MyEvent {}` is enough.
 ///
 /// # Flutter Equivalent
 ///
@@ -68,7 +68,7 @@ pub trait Notification: Any + Send + Sync + 'static {
     /// Default impl returns `self` — sound because `Notification: Any`
     /// makes the `&Self` -> `&dyn Any` coercion automatic. User-impls
     /// like `impl Notification for ScrollNotification {}` work without
-    /// any method body. Plan U13.
+    /// any method body.
     fn as_any(&self) -> &dyn Any
     where
         Self: Sized,

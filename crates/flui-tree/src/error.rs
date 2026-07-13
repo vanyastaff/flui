@@ -115,10 +115,10 @@ pub enum TreeError {
 
     /// Internal error (should not happen).
     ///
-    /// Indicates a bug in the tree implementation. Audit T-16:
-    /// payload `Box<str>` rather than `String` — internal-error
-    /// messages are read-only after construction, so `String`'s
-    /// growth-capacity overhead is wasted.
+    /// Indicates a bug in the tree implementation. The payload is
+    /// `Box<str>` rather than `String` — internal-error messages are
+    /// read-only after construction, so `String`'s growth-capacity
+    /// overhead is wasted.
     #[error("internal error: {0}")]
     Internal(Box<str>),
 
@@ -126,8 +126,8 @@ pub enum TreeError {
     /// child-count contract (`Leaf` got a child, `Single` got more
     /// than one, `Optional` got more than one, etc.).
     ///
-    /// Audit T-13: unifies the arity error surface — `ArityError`
-    /// lived in a separate module without a `TreeError` variant,
+    /// This variant unifies the arity error surface: `ArityError` used
+    /// to live in a separate module without a `TreeError` variant,
     /// which forced callers that span both surfaces to compose two
     /// error types. This variant adopts `#[from]` so `?`-propagation
     /// from arity-storage code into tree-level code is one step.

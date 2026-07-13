@@ -336,7 +336,7 @@ fn append_display_list_at_offset_zero_is_passthrough() {
     assert_eq!(dl.bounds(), child_bounds);
 }
 
-/// Cycle 5 U11 / audit P-11 regression: the per-command-walk
+/// Regression test: the per-command-walk
 /// implementation must produce per-command transforms identical to
 /// the pre-change `DisplayList::clone() + apply_transform()` shape.
 ///

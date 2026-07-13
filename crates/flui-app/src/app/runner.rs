@@ -12,7 +12,7 @@ use super::{AppBinding, AppConfig};
 /// This is the internal implementation called by `run_app()`.
 pub fn run_app_impl<V>(root: V)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     run_app_with_config_impl(root, AppConfig::default());
 }
@@ -22,7 +22,7 @@ where
 /// This is the internal implementation called by `run_app_with_config()`.
 pub fn run_app_with_config_impl<V>(root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     // Initialize logging
     init_logging();
@@ -67,7 +67,7 @@ where
 /// Initialize logging based on environment.
 fn init_logging() {
     // Use flui_foundation::log for cross-platform logging (desktop, Android, iOS, WASM).
-    // Module was merged from the standalone flui-log crate in D-block PR-C-1 U2.
+    // Module was merged from the standalone flui-log crate.
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
         "info,flui_app=debug,flui_view=debug,flui_rendering=debug,wgpu=warn".to_string()
     });
@@ -83,8 +83,455 @@ fn init_logging() {
 }
 
 // ============================================================================
-// Desktop Implementation (Windows, macOS, Linux) via flui-platform
+// Platform-neutral owner-thread realm host (ADR-0027)
 // ============================================================================
+
+#[cfg(not(target_os = "ios"))]
+thread_local! {
+    /// Transitional owner-thread host shared by desktop, Android, and wasm.
+    /// The platform callback surface still requires `Send`, so the `!Send`
+    /// realm remains in owner TLS until that seam is retired. Access is only
+    /// through the stamped FIFO dispatcher below.
+    static PLATFORM_REALM_HOST: std::cell::RefCell<RealmHost> =
+        const { std::cell::RefCell::new(RealmHost::new()) };
+}
+
+#[cfg(not(target_os = "ios"))]
+struct RealmHost {
+    realm: Option<super::ui_realm::UiRealm>,
+    queue: std::collections::VecDeque<RealmEvent>,
+    draining: bool,
+    owner_thread: Option<std::thread::ThreadId>,
+    realm_id: Option<flui_foundation::RealmId>,
+}
+
+#[cfg(not(target_os = "ios"))]
+impl RealmHost {
+    const fn new() -> Self {
+        Self {
+            realm: None,
+            queue: std::collections::VecDeque::new(),
+            draining: false,
+            owner_thread: None,
+            realm_id: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[cfg(not(target_os = "ios"))]
+struct RealmDispatcher {
+    owner_thread: std::thread::ThreadId,
+    realm_id: flui_foundation::RealmId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(not(target_os = "ios"))]
+enum RealmDispatchError {
+    WrongThread,
+    StaleRealm,
+    RealmUnavailable,
+}
+
+#[cfg(not(target_os = "ios"))]
+enum RealmEvent {
+    Input(flui_platform::traits::PlatformInput),
+    Resize {
+        size: flui_types::Size<flui_types::geometry::Pixels>,
+        scale_factor: f32,
+        apply_surface: Box<dyn FnOnce()>,
+    },
+    Lifecycle(flui_platform::traits::LifecycleEvent),
+    Active(bool),
+    Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
+}
+
+#[cfg(not(target_os = "ios"))]
+impl RealmEvent {
+    fn run(self, realm: &super::ui_realm::UiRealm) {
+        match self {
+            Self::Input(input) => AppBinding::instance().handle_input(input),
+            Self::Resize {
+                size,
+                scale_factor,
+                apply_surface,
+            } => {
+                apply_surface();
+                AppBinding::instance()
+                    .render_pipeline_mut()
+                    .set_device_pixel_ratio(scale_factor);
+                AppBinding::instance().request_redraw();
+                tracing::trace!(?size, scale_factor, "realm resize committed");
+            }
+            Self::Lifecycle(event) => AppBinding::instance().transition_lifecycle(event),
+            Self::Active(active) => {
+                let event = if active {
+                    flui_platform::traits::LifecycleEvent::Activated
+                } else {
+                    flui_platform::traits::LifecycleEvent::Deactivated
+                };
+                AppBinding::instance().transition_lifecycle(event);
+            }
+            Self::Frame(run) => run(realm),
+        }
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+fn install_platform_realm(realm: super::ui_realm::UiRealm) -> RealmDispatcher {
+    let owner_thread = std::thread::current().id();
+    let realm_id = realm.realm_id();
+    PLATFORM_REALM_HOST.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.realm = Some(realm);
+        state.owner_thread = Some(owner_thread);
+        state.realm_id = Some(realm_id);
+    });
+    RealmDispatcher {
+        owner_thread,
+        realm_id,
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+fn dispatch_platform_realm(
+    dispatcher: RealmDispatcher,
+    event: RealmEvent,
+) -> Result<(), RealmDispatchError> {
+    if std::thread::current().id() != dispatcher.owner_thread {
+        tracing::error!(?dispatcher, "rejecting realm callback on non-owner thread");
+        return Err(RealmDispatchError::WrongThread);
+    }
+    let realm = PLATFORM_REALM_HOST.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if state.realm_id != Some(dispatcher.realm_id) {
+            return Err(if state.realm_id.is_some() {
+                RealmDispatchError::StaleRealm
+            } else {
+                RealmDispatchError::RealmUnavailable
+            });
+        }
+        state.queue.push_back(event);
+        if state.draining || state.realm.is_none() {
+            return Ok(None);
+        }
+        let first = state
+            .queue
+            .pop_front()
+            .expect("BUG: event was enqueued before starting realm dispatch");
+        state.draining = true;
+        Ok(state.realm.take().map(|realm| (realm, first)))
+    })?;
+    let Some((realm, first)) = realm else {
+        return Ok(());
+    };
+
+    // Never hold the TLS RefCell borrow across user/platform callbacks. Catch
+    // only to restore the host invariants; the original panic is resumed.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut next = Some(first);
+        while let Some(event) = next {
+            realm.enter(|realm| event.run(realm));
+            next = PLATFORM_REALM_HOST.with(|slot| slot.borrow_mut().queue.pop_front());
+        }
+    }));
+    PLATFORM_REALM_HOST.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.realm = Some(realm);
+        state.draining = false;
+    });
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn teardown_platform_realm() {
+    let (realm, queued) = PLATFORM_REALM_HOST.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let realm = state.realm.take();
+        let queued = std::mem::take(&mut state.queue);
+        state.draining = false;
+        state.owner_thread = None;
+        state.realm_id = None;
+        (realm, queued)
+    });
+    // Destructors may re-enter platform/framework code. Drop only after the
+    // TLS borrow and incarnation identity have been released.
+    drop(queued);
+    drop(realm);
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn queued_hot_reload_hook(
+    sender: super::ui_realm::UiCommandSender,
+) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        if let Err(error) = sender.request_hot_reload(flui_hot_reload::HotReloadTier::HotReload) {
+            tracing::warn!(
+                ?error,
+                "ignoring hot-reload request for a dead or busy realm"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod realm_dispatch_tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use super::*;
+
+    fn install_test_realm() -> RealmDispatcher {
+        let app = AppBinding::instance();
+        install_platform_realm(super::super::ui_realm::UiRealm::for_test(app))
+    }
+
+    #[test]
+    fn reentrant_frame_event_is_queued_fifo() {
+        let dispatcher = install_test_realm();
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let outer = Rc::clone(&order);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::Frame(Box::new(move |_| {
+                outer.borrow_mut().push(1);
+                let nested = Rc::clone(&outer);
+                dispatch_platform_realm(
+                    dispatcher,
+                    RealmEvent::Frame(Box::new(move |_| {
+                        nested.borrow_mut().push(3);
+                    })),
+                )
+                .expect("nested event queues");
+                outer.borrow_mut().push(2);
+            })),
+        )
+        .expect("outer event dispatches");
+        assert_eq!(*order.borrow(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn late_event_never_crosses_realm_incarnations() {
+        let stale = install_test_realm();
+        PLATFORM_REALM_HOST.with(|slot| {
+            let mut state = slot.borrow_mut();
+            let realm = state.realm.take();
+            state.queue.clear();
+            state.realm_id = None;
+            drop(state);
+            drop(realm);
+        });
+        assert_eq!(
+            dispatch_platform_realm(stale, RealmEvent::Frame(Box::new(|_| {}))),
+            Err(RealmDispatchError::RealmUnavailable)
+        );
+
+        let current = install_test_realm();
+        assert_eq!(
+            dispatch_platform_realm(stale, RealmEvent::Frame(Box::new(|_| {}))),
+            Err(RealmDispatchError::StaleRealm)
+        );
+        dispatch_platform_realm(current, RealmEvent::Frame(Box::new(|_| {})))
+            .expect("current incarnation dispatches");
+    }
+
+    #[test]
+    fn panic_restores_dispatch_host_for_next_event() {
+        let dispatcher = install_test_realm();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = dispatch_platform_realm(
+                dispatcher,
+                RealmEvent::Frame(Box::new(|_| panic!("test panic"))),
+            );
+        }));
+        assert!(panic.is_err());
+
+        let ran = Rc::new(RefCell::new(false));
+        let ran_in_event = Rc::clone(&ran);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::Frame(Box::new(move |_| {
+                *ran_in_event.borrow_mut() = true;
+            })),
+        )
+        .expect("host restored");
+        assert!(*ran.borrow());
+    }
+
+    #[test]
+    fn callback_on_wrong_thread_is_rejected() {
+        let dispatcher = install_test_realm();
+        let result = std::thread::spawn(move || {
+            dispatch_platform_realm(dispatcher, RealmEvent::Frame(Box::new(|_| {})))
+        })
+        .join()
+        .expect("worker test thread");
+        assert_eq!(result, Err(RealmDispatchError::WrongThread));
+    }
+
+    #[test]
+    fn nested_resize_and_lifecycle_wait_until_frame_returns() {
+        let dispatcher = install_test_realm();
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let outer = Rc::clone(&order);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::Frame(Box::new(move |_| {
+                outer.borrow_mut().push(1);
+                dispatch_platform_realm(
+                    dispatcher,
+                    RealmEvent::Lifecycle(flui_platform::traits::LifecycleEvent::Activated),
+                )
+                .expect("lifecycle queues");
+                let resize = Rc::clone(&outer);
+                dispatch_platform_realm(
+                    dispatcher,
+                    RealmEvent::Resize {
+                        size: flui_types::Size::new(
+                            flui_types::geometry::px(640.0),
+                            flui_types::geometry::px(480.0),
+                        ),
+                        scale_factor: 2.0,
+                        apply_surface: Box::new(move || resize.borrow_mut().push(3)),
+                    },
+                )
+                .expect("resize queues");
+                outer.borrow_mut().push(2);
+            })),
+        )
+        .expect("frame dispatches");
+        assert_eq!(*order.borrow(), vec![1, 2, 3]);
+        assert_eq!(
+            AppBinding::instance().lifecycle_state(),
+            super::super::lifecycle::LifecycleState::Active
+        );
+    }
+
+    #[test]
+    fn teardown_drops_queued_destructors_outside_tls_borrow() {
+        struct ReenterOnDrop {
+            dispatcher: RealmDispatcher,
+            dropped: Rc<RefCell<bool>>,
+        }
+
+        impl Drop for ReenterOnDrop {
+            fn drop(&mut self) {
+                let result =
+                    dispatch_platform_realm(self.dispatcher, RealmEvent::Frame(Box::new(|_| {})));
+                assert_eq!(result, Err(RealmDispatchError::RealmUnavailable));
+                *self.dropped.borrow_mut() = true;
+            }
+        }
+
+        let dispatcher = install_test_realm();
+        let dropped = Rc::new(RefCell::new(false));
+        let probe = ReenterOnDrop {
+            dispatcher,
+            dropped: Rc::clone(&dropped),
+        };
+        PLATFORM_REALM_HOST.with(|slot| {
+            slot.borrow_mut()
+                .queue
+                .push_back(RealmEvent::Frame(Box::new(move |_| drop(probe))));
+        });
+        teardown_platform_realm();
+        assert!(*dropped.borrow());
+    }
+
+    #[test]
+    fn old_registered_hot_reload_hook_cannot_touch_recreated_realm() {
+        use flui_hot_reload::{register_request_rebuild, request_rebuild};
+
+        let runtime_a = super::super::ui_realm::UiRealm::for_test(AppBinding::instance());
+        let sender_a = runtime_a.command_sender();
+        let old_a_hook = queued_hot_reload_hook(sender_a.clone());
+        let registration_a = register_request_rebuild(queued_hot_reload_hook(sender_a));
+        let _realm_a = install_platform_realm(runtime_a);
+        teardown_platform_realm();
+
+        let runtime_b = super::super::ui_realm::UiRealm::for_test(AppBinding::instance());
+        let sender_b = runtime_b.command_sender();
+        let realm_b = install_platform_realm(runtime_b);
+        let registration_b = register_request_rebuild(queued_hot_reload_hook(sender_b));
+        drop(registration_a);
+
+        old_a_hook();
+        let after_old = Rc::new(RefCell::new(None));
+        let after_old_in_frame = Rc::clone(&after_old);
+        dispatch_platform_realm(
+            realm_b,
+            RealmEvent::Frame(Box::new(move |realm| {
+                *after_old_in_frame.borrow_mut() = Some(realm.drain_commands());
+            })),
+        )
+        .expect("B frame dispatches");
+        assert_eq!(
+            *after_old.borrow(),
+            Some(super::super::ui_realm::DrainReport::default()),
+            "stale A hook must not enqueue into B"
+        );
+
+        std::thread::spawn(request_rebuild)
+            .join()
+            .expect("worker-side rebuild request");
+        let after_current = Rc::new(RefCell::new(None));
+        let after_current_in_frame = Rc::clone(&after_current);
+        dispatch_platform_realm(
+            realm_b,
+            RealmEvent::Frame(Box::new(move |realm| {
+                *after_current_in_frame.borrow_mut() = Some(realm.drain_commands());
+            })),
+        )
+        .expect("B frame dispatches");
+        assert_eq!(
+            after_current.borrow().as_ref().map(|report| report.invoked),
+            Some(1),
+            "current B hook must dispatch exactly once"
+        );
+
+        drop(registration_b);
+        teardown_platform_realm();
+    }
+
+    #[test]
+    fn whole_frame_event_keeps_realm_global_key_scope_active() {
+        let app = AppBinding::instance();
+        let realm = super::super::ui_realm::UiRealm::for_test(app);
+        let key = flui_view::GlobalKey::<()>::new();
+        let element = flui_foundation::ElementId::new(91);
+        realm
+            .widgets()
+            .with_build_owner_mut(|owner| owner.register_global_key(key.id(), element));
+        let dispatcher = install_platform_realm(realm);
+        let key_after_frame = key.clone();
+
+        assert_eq!(key.current_element(), None, "scope starts inactive");
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::Frame(Box::new(move |_| {
+                assert_eq!(key.current_element(), Some(element));
+            })),
+        )
+        .expect("frame dispatches");
+        assert_eq!(
+            key_after_frame.current_element(),
+            None,
+            "frame scope is restored"
+        );
+        teardown_platform_realm();
+    }
+}
 
 #[cfg(all(
     not(target_os = "android"),
@@ -93,14 +540,14 @@ fn init_logging() {
 ))]
 fn run_desktop<V>(root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     use std::sync::Arc;
 
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
     use flui_hot_reload::{
-        HotReloadTier, WorkerPollOutcome, WorkerReloadDriver, engine::env, set_request_rebuild,
+        HotReloadTier, WorkerPollOutcome, WorkerReloadDriver, engine::env, register_request_rebuild,
     };
     use flui_platform::{
         WindowOptions,
@@ -118,11 +565,7 @@ where
         .clone()
         .or_else(|| std::env::var(env::WORKER_PLUGIN).ok().map(Into::into))
         .map(WorkerReloadDriver::new);
-    if worker_driver.is_some() {
-        set_request_rebuild(|| {
-            AppBinding::instance().perform_hot_reload(HotReloadTier::HotReload);
-        });
-    }
+    let has_worker_driver = worker_driver.is_some();
     let worker_driver = Arc::new(Mutex::new(worker_driver));
 
     let platform = flui_platform::current_platform().expect("Failed to initialize platform");
@@ -156,12 +599,25 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
+    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
+    {
+        Ok(realm) => realm,
+        Err(e) => {
+            tracing::error!(error = %e, "UiRealm construction failed");
+            return;
+        }
+    };
+    ui_realm.bind_to_app(AppBinding::instance());
     let logical = window.logical_size();
-    if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
-        &root,
-        logical.width.0 as f32,
-        logical.height.0 as f32,
-    ) {
+    let attach = ui_realm.enter(|realm| {
+        AppBinding::instance().attach_root_widget_with_size(
+            realm,
+            &root,
+            logical.width.0 as f32,
+            logical.height.0 as f32,
+        )
+    });
+    if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
     }
@@ -183,10 +639,9 @@ where
     //   never held across any `inner` critical section.
     // Therefore: no lock ordering conflict.
     {
-        let widgets = AppBinding::instance().widgets();
-        widgets.set_on_need_frame(|| {
-            AppBinding::instance().wake_frame();
-        });
+        let widgets = ui_realm.widgets();
+        let wake = AppBinding::instance().frame_wake_callback();
+        widgets.set_on_need_frame(move || wake());
     }
 
     // Wire `on_build_scheduled` on the BuildOwner so a dirty-element
@@ -195,31 +650,39 @@ where
     // which runs during a build while the AppBinding `widgets` write lock is
     // held — so it must NOT re-lock `widgets`. It calls `wake_frame`
     // directly (the same effect as the `on_need_frame` callback above),
-    // which touches only the `active_window` leaf lock. Routing instead
-    // through `WidgetsBinding::instance().handle_build_scheduled()` would be
-    // doubly wrong: that global singleton is a different binding from the
-    // AppBinding-owned one whose `on_need_frame` was just registered (so the
-    // wake silently never fires), and reaching the owned binding via
-    // `widgets()` would deadlock on the held write lock.
+    // which touches only the `active_window` leaf lock. The callback must not
+    // re-enter widget state while `BuildOwner` is scheduling; realm entry is
+    // reserved for the outer event/frame dispatch boundary.
     {
-        let widgets = AppBinding::instance().widgets();
+        let widgets = ui_realm.widgets();
         widgets.with_build_owner_mut(|build_owner| {
-            build_owner.set_on_build_scheduled(|| {
-                AppBinding::instance().wake_frame();
-            });
+            let wake = AppBinding::instance().frame_wake_callback();
+            build_owner.set_on_build_scheduled(move || wake());
         });
     }
+
+    // 3c. Construct the per-window owner and its bounded command inbox.
+    // The wake is the existing chain: `wake_frame` sets
+    // `needs_redraw` and queues a `RedrawRequested`, so a command sent to an
+    // idle loop produces the frame whose drain observes it.
+    //
+    tracing::info!(
+        realm_id = ?ui_realm.realm_id(),
+        inbox_capacity = ui_realm.command_sender().capacity(),
+        "UiRealm constructed"
+    );
+    let hot_reload_sender = ui_realm.command_sender();
+    let realm_dispatch = install_platform_realm(ui_realm);
+    let rebuild_registration = has_worker_driver
+        .then(|| register_request_rebuild(queued_hot_reload_hook(hot_reload_sender)));
 
     // 4. Wrap renderer for callback sharing
     let renderer = Arc::new(Mutex::new(renderer));
 
     // 5. Register input callback -> AppBinding::handle_input()
     window.on_input(Box::new(move |input: PlatformInput| {
-        AppBinding::instance().handle_input(input);
-        DispatchEventResult {
-            propagate: false,
-            default_prevented: true,
-        }
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+        DispatchEventResult::resolved(false, true)
     }));
 
     // 6. Register frame callback -> scheduler + AppBinding::render_frame()
@@ -227,16 +690,46 @@ where
     let worker_driver_frame = Arc::clone(&worker_driver);
     let frame_budget =
         std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
-    let mut last_frame_started: Option<web_time::Instant> = None;
+    let last_frame_started = Arc::new(Mutex::new(None::<web_time::Instant>));
     window.on_request_frame(Box::new(move || {
-        if let Some(ref mut driver) = *worker_driver_frame.lock()
-            && matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. })
-        {
-            AppBinding::instance().perform_hot_reload(HotReloadTier::HotReload);
-        }
+        let renderer_frame = Arc::clone(&renderer_frame);
+        let worker_driver_frame = Arc::clone(&worker_driver_frame);
+        let last_frame_started = Arc::clone(&last_frame_started);
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Frame(Box::new(move |realm| {
+            if let Some(ref mut driver) = *worker_driver_frame.lock()
+                && matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. })
+            {
+                AppBinding::instance()
+                    .perform_hot_reload_entered(realm, HotReloadTier::HotReload);
+            }
 
-        let binding = AppBinding::instance();
-        let scheduler = Scheduler::instance();
+            let binding = AppBinding::instance();
+            let scheduler = Scheduler::instance();
+
+        // Owner-inbox drain: commands and worker results
+        // commit HERE, at the frame boundary while the scheduler phase is
+        // Idle — never inside the frame transaction below. Runs before the
+        // dirty gate so a command-driven redraw request is observed by the
+        // very frame its wake produced.
+        //
+        // The runtime is TAKEN out of the slot for the drain (and restored
+        // after) so drained user closures never run under the RefCell
+        // borrow: a command that re-enters this frame callback through a
+        // nested platform pump then finds an empty slot and skips the
+        // drain, instead of panicking the borrow.
+            let inbox_redraw = {
+                let report = realm.drain_commands();
+                if report != super::ui_realm::DrainReport::default() {
+                    tracing::trace!(?report, "owner inbox drained");
+                }
+                realm.take_redraw_request()
+            };
+
+            let dirty =
+                inbox_redraw || binding.needs_redraw() || binding.has_pending_work(realm);
+            if !dirty && !scheduler.is_frame_scheduled() {
+                return;
+            }
 
         // On-demand rendering: skip frame if nothing changed. A frame
         // the SCHEDULER scheduled (a pending animation ticker callback)
@@ -244,17 +737,12 @@ where
         // at the end of the previous frame, so without this check the
         // gate starves tickers after one frame — the wake hook gets the
         // event loop here, and this lets the pump actually run.
-        let dirty = binding.needs_redraw() || binding.has_pending_work();
-        if !dirty && !scheduler.is_frame_scheduled() {
-            return;
-        }
-
         // Pace pure ticker-driven frames to the configured target FPS.
         // WM_PAINT-style redraw requests carry no vsync: an animation
         // re-requesting a redraw every frame would otherwise spin the
         // render loop as fast as the CPU allows (observed: ~30 000 fps
         // with a Mailbox present mode). Dirty work renders immediately.
-        if !dirty && let Some(started) = last_frame_started {
+            if !dirty && let Some(started) = *last_frame_started.lock() {
             let elapsed = started.elapsed();
             if elapsed < frame_budget {
                 std::thread::sleep(
@@ -265,8 +753,8 @@ where
             }
         }
 
-        let now = web_time::Instant::now();
-        last_frame_started = Some(now);
+            let now = web_time::Instant::now();
+            *last_frame_started.lock() = Some(now);
 
         // Scheduler callbacks (animations). NOTE: the global `Scheduler` is driven
         // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
@@ -275,59 +763,71 @@ where
         // animations register with `Vsync`; plain controllers carry a private
         // `Scheduler` ticker, never the global one), so the origins never need to
         // agree and no controller is advanced twice.
-        let _frame_id = scheduler.handle_begin_frame(now);
-        scheduler.handle_draw_frame();
+        // The ONE shared frame ordering — begin (transient +
+        // microtasks + the single async-driver poll) -> persistent callbacks ->
+        // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
+        // drives the same helper on its binding-local scheduler.
+            scheduler.drive_frame(now, || {
+            // Render frame via AppBinding
+            let mut r = renderer_frame.lock();
+                binding.render_frame_entered(realm, &mut *r);
 
-        // Render frame via AppBinding
-        let mut r = renderer_frame.lock();
-        binding.render_frame(&mut *r);
-
-        // GPU device-loss recovery: if the device was lost during this frame
-        // (detected by the wgpu callback that fired between render_frame calls),
-        // attempt a synchronous rebuild on the runner thread. `pollster` is
-        // already a dep and safe to use here — the desktop runner owns this
-        // synchronous callback, not an async executor.
-        if r.is_device_lost() {
-            match pollster::block_on(r.recover()) {
-                Ok(()) => {
-                    tracing::warn!("GPU device lost — recovered successfully");
-                    // `wake_frame` (not `request_redraw`) so an idle winit loop
-                    // actually queues a `RedrawRequested`: device loss is
-                    // detected on a quiescent loop, where only flipping the
-                    // `needs_redraw` flag would leave the recovered renderer
-                    // idle until the next external input/resize.
-                    AppBinding::instance().wake_frame();
-                }
-                Err(e) => {
-                    // Driver may still be resetting. Log and let the next frame
-                    // retry; the device-lost flag remains set so recover() will
-                    // be tried again.
-                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+            // GPU device-loss recovery: if the device was lost during this frame
+            // (detected by the wgpu callback that fired between render_frame calls),
+            // attempt a synchronous rebuild on the runner thread. `pollster` is
+            // already a dep and safe to use here — the desktop runner owns this
+            // synchronous callback, not an async executor.
+            if r.is_device_lost() {
+                match pollster::block_on(r.recover()) {
+                    Ok(()) => {
+                        tracing::warn!("GPU device lost — recovered successfully");
+                        // `wake_frame` (not `request_redraw`) so an idle winit loop
+                        // actually queues a `RedrawRequested`: device loss is
+                        // detected on a quiescent loop, where only flipping the
+                        // `needs_redraw` flag would leave the recovered renderer
+                        // idle until the next external input/resize.
+                        AppBinding::instance().wake_frame();
+                    }
+                    Err(e) => {
+                        // Driver may still be resetting. Log and let the next frame
+                        // retry; the device-lost flag remains set so recover() will
+                        // be tried again.
+                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                    }
                 }
             }
-        }
+            });
+        })));
     }));
 
     // 7. Register resize callback -> renderer.resize()
     let renderer_resize = Arc::clone(&renderer);
     window.on_resize(Box::new(move |size, scale_factor| {
-        let w = (size.width.0 * scale_factor) as u32;
-        let h = (size.height.0 * scale_factor) as u32;
-        renderer_resize.lock().resize(w, h);
-        // A monitor change can change the DPR — keep the paint root's
-        // scale in sync with the surface.
-        AppBinding::instance()
-            .render_pipeline_mut()
-            .set_device_pixel_ratio(scale_factor);
-        AppBinding::instance().request_redraw();
+        let apply_size = size;
+        let renderer_resize = Arc::clone(&renderer_resize);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Resize {
+                size,
+                scale_factor,
+                apply_surface: Box::new(move || {
+                    let w = (apply_size.width.0 * scale_factor) as u32;
+                    let h = (apply_size.height.0 * scale_factor) as u32;
+                    renderer_resize.lock().resize(w, h);
+                }),
+            },
+        );
     }));
 
     // 8. Lifecycle callbacks
 
     // Platform quit -> transition to Terminating
-    platform.on_quit(Box::new(|| {
+    platform.on_quit(Box::new(move || {
         tracing::info!("Platform quit");
-        AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+        );
     }));
 
     // Window close -> log and let the platform handle quit
@@ -343,17 +843,15 @@ where
     }));
 
     // Window active status -> lifecycle Activated/Deactivated
-    window.on_active_status_change(Box::new(|active| {
-        let event = if active {
-            LifecycleEvent::Activated
-        } else {
-            LifecycleEvent::Deactivated
-        };
-        AppBinding::instance().transition_lifecycle(event);
+    window.on_active_status_change(Box::new(move |active| {
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
     }));
 
     // Mark lifecycle as started
-    AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
+    let _ = dispatch_platform_realm(
+        realm_dispatch,
+        RealmEvent::Lifecycle(LifecycleEvent::Started),
+    );
 
     // 9. Request initial redraw
     window.request_redraw();
@@ -367,6 +865,12 @@ where
     platform.run(Box::new(|| {
         tracing::info!("Platform ready");
     }));
+
+    // Event loop exited: drop the runtime now (releases the at-most-one
+    // claim; outstanding senders turn `OwnerGone`) instead of at thread
+    // death.
+    drop(rebuild_registration);
+    teardown_platform_realm();
 }
 
 /// Register the hit-test root `RenderView` with the `RendererBinding`
@@ -374,9 +878,10 @@ where
 ///
 /// `WidgetsBinding::attach_root_widget` bootstraps the *paint* render tree
 /// (`RootRenderElement` → `PipelineOwner`), but hit testing routes through the
-/// `RendererBinding`'s own per-view registry. V-7 keeps these two `RenderView`s
-/// mapped independently: the paint root lives in the `PipelineOwner`; the
-/// hit-test root is registered here by the runner after attach.
+/// `RendererBinding`'s own per-view registry. These two `RenderView`s are
+/// kept mapped independently by design: the paint root lives in the
+/// `PipelineOwner`; the hit-test root is registered here by the runner
+/// after attach.
 fn register_hit_test_render_view() {
     use std::sync::Arc;
 
@@ -406,7 +911,7 @@ fn register_hit_test_render_view() {
 #[cfg(target_os = "android")]
 pub fn run_app_android<V>(app: android_activity::AndroidApp, root: V)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     run_app_android_with_config(app, root, AppConfig::default());
 }
@@ -427,7 +932,7 @@ where
 #[cfg(target_os = "android")]
 pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     init_logging();
 
@@ -442,7 +947,7 @@ where
 #[cfg(target_os = "android")]
 fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     use std::{path::PathBuf, sync::Arc};
 
@@ -497,15 +1002,29 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
+    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
+    {
+        Ok(realm) => realm,
+        Err(error) => {
+            tracing::error!(%error, "UiRealm construction failed");
+            return;
+        }
+    };
+    ui_realm.bind_to_app(AppBinding::instance());
     let logical = window.logical_size();
-    if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
-        &root,
-        logical.width.0 as f32,
-        logical.height.0 as f32,
-    ) {
+    let attach = ui_realm.enter(|realm| {
+        AppBinding::instance().attach_root_widget_with_size(
+            realm,
+            &root,
+            logical.width.0 as f32,
+            logical.height.0 as f32,
+        )
+    });
+    if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
     }
+    let realm_dispatch = install_platform_realm(ui_realm);
     register_hit_test_render_view();
 
     // 4. Wrap renderer for callback sharing
@@ -513,93 +1032,100 @@ where
 
     // 5. Register input callback -> AppBinding::handle_input()
     window.on_input(Box::new(move |input: PlatformInput| {
-        AppBinding::instance().handle_input(input);
-        DispatchEventResult {
-            propagate: false,
-            default_prevented: true,
-        }
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+        DispatchEventResult::resolved(false, true)
     }));
 
     // 6. Register frame callback -- with hot-reload plugin override
     let renderer_frame = Arc::clone(&renderer);
     let hot_reload_frame = Arc::clone(&hot_reload);
     window.on_request_frame(Box::new(move || {
-        let mut r = renderer_frame.lock();
-        let (w, h) = r.size();
-        let mut hr = hot_reload_frame.lock();
+        let renderer_frame = Arc::clone(&renderer_frame);
+        let hot_reload_frame = Arc::clone(&hot_reload_frame);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Frame(Box::new(move |realm| {
+                let mut r = renderer_frame.lock();
+                let (w, h) = r.size();
+                let mut hr = hot_reload_frame.lock();
 
-        // Poll for plugin updates (mtime check, auto-reload)
-        hr.poll(w as f32, h as f32);
+                // Poll for plugin updates (mtime check, auto-reload).
+                hr.poll(w as f32, h as f32);
 
-        // If plugin is active, use its Scene instead of AppBinding's pipeline
-        if let Some(scene) = hr.build_scene(w as f32, h as f32) {
-            drop(hr);
-            if let Err(e) = r.render_scene(&scene) {
-                tracing::error!("Plugin render failed: {:?}", e);
-            }
-            return;
-        }
-        drop(hr);
-        drop(r);
-
-        // Normal path: use AppBinding's widget pipeline
-        let binding = AppBinding::instance();
-        // Same gate as the desktop path: a scheduler-scheduled frame
-        // (pending animation ticker) is work even when nothing is dirty.
-        if !binding.needs_redraw()
-            && !binding.has_pending_work()
-            && !Scheduler::instance().is_frame_scheduled()
-        {
-            return;
-        }
-
-        let now = web_time::Instant::now();
-        let scheduler = Scheduler::instance();
-        let _frame_id = scheduler.handle_begin_frame(now);
-        scheduler.handle_draw_frame();
-
-        let mut r = renderer_frame.lock();
-        binding.render_frame(&mut *r);
-
-        // GPU device-loss recovery (same logic as the desktop path).
-        if r.is_device_lost() {
-            match pollster::block_on(r.recover()) {
-                Ok(()) => {
-                    tracing::warn!("GPU device lost — recovered successfully");
-                    // `wake_frame` (not `request_redraw`) so an idle winit loop
-                    // actually queues a `RedrawRequested`: device loss is
-                    // detected on a quiescent loop, where only flipping the
-                    // `needs_redraw` flag would leave the recovered renderer
-                    // idle until the next external input/resize.
-                    AppBinding::instance().wake_frame();
+                // If a scene plugin is active it owns this presentation frame,
+                // but the callback still executes inside the realm entry scope.
+                if let Some(scene) = hr.build_scene(w as f32, h as f32) {
+                    drop(hr);
+                    if let Err(e) = r.render_scene(&scene) {
+                        tracing::error!("Plugin render failed: {:?}", e);
+                    }
+                    return;
                 }
-                Err(e) => {
-                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                drop(hr);
+                drop(r);
+
+                let binding = AppBinding::instance();
+                let has_pending = binding.has_pending_work(realm);
+                if !binding.needs_redraw()
+                    && !has_pending
+                    && !Scheduler::instance().is_frame_scheduled()
+                {
+                    return;
                 }
-            }
-        }
+
+                let now = web_time::Instant::now();
+                let scheduler = Scheduler::instance();
+                // Scheduler callbacks and rendering share ONE `UiRealm::enter`
+                // dynamic extent; callbacks may legally resolve realm-local
+                // capabilities throughout the complete frame transaction.
+                scheduler.drive_frame(now, || {
+                    let mut r = renderer_frame.lock();
+                    binding.render_frame_entered(realm, &mut *r);
+
+                    if r.is_device_lost() {
+                        match pollster::block_on(r.recover()) {
+                            Ok(()) => {
+                                tracing::warn!("GPU device lost — recovered successfully");
+                                AppBinding::instance().wake_frame();
+                            }
+                            Err(e) => {
+                                tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                            }
+                        }
+                    }
+                });
+            })),
+        );
     }));
 
     // 7. Register resize callback -> renderer.resize()
     let renderer_resize = Arc::clone(&renderer);
     window.on_resize(Box::new(move |size, scale_factor| {
-        let w = (size.width.0 * scale_factor) as u32;
-        let h = (size.height.0 * scale_factor) as u32;
-        renderer_resize.lock().resize(w, h);
-        // A monitor change can change the DPR — keep the paint root's
-        // scale in sync with the surface.
-        AppBinding::instance()
-            .render_pipeline_mut()
-            .set_device_pixel_ratio(scale_factor as f32);
-        AppBinding::instance().request_redraw();
+        let apply_size = size;
+        let renderer_resize = Arc::clone(&renderer_resize);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Resize {
+                size,
+                scale_factor,
+                apply_surface: Box::new(move || {
+                    let w = (apply_size.width.0 * scale_factor) as u32;
+                    let h = (apply_size.height.0 * scale_factor) as u32;
+                    renderer_resize.lock().resize(w, h);
+                }),
+            },
+        );
     }));
 
     // 8. Lifecycle callbacks
 
     // Platform quit -> transition to Terminating
-    platform.on_quit(Box::new(|| {
+    platform.on_quit(Box::new(move || {
         tracing::info!("Platform quit");
-        AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+        );
     }));
 
     // Window close (fired by Android Destroy event)
@@ -608,17 +1134,15 @@ where
     }));
 
     // Window active status -> lifecycle Activated/Deactivated
-    window.on_active_status_change(Box::new(|active| {
-        let event = if active {
-            LifecycleEvent::Activated
-        } else {
-            LifecycleEvent::Deactivated
-        };
-        AppBinding::instance().transition_lifecycle(event);
+    window.on_active_status_change(Box::new(move |active| {
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
     }));
 
     // Mark lifecycle as started
-    AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
+    let _ = dispatch_platform_realm(
+        realm_dispatch,
+        RealmEvent::Lifecycle(LifecycleEvent::Started),
+    );
 
     // 9. Request initial redraw
     window.request_redraw();
@@ -632,6 +1156,7 @@ where
     platform.run(Box::new(|| {
         tracing::info!("Android platform ready");
     }));
+    teardown_platform_realm();
 }
 
 // ============================================================================
@@ -651,7 +1176,7 @@ fn run_ios(_config: AppConfig) {
 #[cfg(target_arch = "wasm32")]
 fn run_web<V>(root: V, config: AppConfig)
 where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
+    V: View + StatelessView + Clone + 'static,
 {
     use std::sync::Arc;
 
@@ -672,9 +1197,11 @@ where
 
     // 1. Open window (creates canvas) before run() since run() takes ownership
     let options: WindowOptions = (&config).into();
-    let window = platform
-        .open_window(options)
-        .expect("Failed to create canvas window");
+    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::from(
+        platform
+            .open_window(options)
+            .expect("Failed to create canvas window"),
+    );
 
     // 2. Shared renderer slot — starts as None, filled async once the WebGPU
     //    adapter is available. `Option` lets the frame callback skip frames that
@@ -683,20 +1210,13 @@ where
 
     let phys_size = window.physical_size();
     let renderer_init = Arc::clone(&renderer);
-    let renderer_window = window.as_ref() as *const dyn flui_platform::PlatformWindow;
+    let renderer_window = Arc::clone(&window);
 
-    // SAFETY: On wasm32, the runtime is single-threaded and cooperative.
-    // The raw pointer to the window is valid for the duration of
-    // `spawn_local` because `window` is alive in the enclosing scope, which
-    // is not dropped until `platform.run()` ends (after `spawn_local`
-    // completes). The pointer is cast back to a shared reference only inside
-    // the `async move` block, and no other task can alias or mutate the
-    // window concurrently on the single-threaded wasm executor.
-    #[allow(unsafe_code)]
+    // The future owns a strong window reference. This is required because the
+    // browser platform installs RAF and returns immediately, and startup can
+    // also return early before the window reaches AppBinding.
     wasm_bindgen_futures::spawn_local(async move {
-        // SAFETY: See the block-level SAFETY comment above.
-        let window_ref = unsafe { &*renderer_window };
-        let handle = PlatformWindowHandle(window_ref);
+        let handle = PlatformWindowHandle(renderer_window.as_ref());
         let mut r = match Renderer::new(&handle).await {
             Ok(r) => r,
             Err(e) => {
@@ -715,97 +1235,117 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
+    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
+    {
+        Ok(realm) => realm,
+        Err(error) => {
+            tracing::error!(%error, "UiRealm construction failed");
+            return;
+        }
+    };
+    ui_realm.bind_to_app(AppBinding::instance());
     let logical = window.logical_size();
-    if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
-        &root,
-        logical.width.0 as f32,
-        logical.height.0 as f32,
-    ) {
+    let attach = ui_realm.enter(|realm| {
+        AppBinding::instance().attach_root_widget_with_size(
+            realm,
+            &root,
+            logical.width.0 as f32,
+            logical.height.0 as f32,
+        )
+    });
+    if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
     }
+    let realm_dispatch = install_platform_realm(ui_realm);
     register_hit_test_render_view();
 
     // 4. Register input callback
     window.on_input(Box::new(move |input: PlatformInput| {
-        AppBinding::instance().handle_input(input);
-        DispatchEventResult {
-            propagate: false,
-            default_prevented: true,
-        }
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+        DispatchEventResult::resolved(false, true)
     }));
 
     // 5. Register frame callback
     let renderer_frame = Arc::clone(&renderer);
     window.on_request_frame(Box::new(move || {
-        let binding = AppBinding::instance();
-
-        // Same gate as the desktop path: a scheduler-scheduled frame
-        // (pending animation ticker) is work even when nothing is dirty.
-        if !binding.needs_redraw()
-            && !binding.has_pending_work()
-            && !Scheduler::instance().is_frame_scheduled()
-        {
-            return;
-        }
-
-        let now = web_time::Instant::now();
-        let scheduler = Scheduler::instance();
-        let _frame_id = scheduler.handle_begin_frame(now);
-        scheduler.handle_draw_frame();
-
-        // Renderer may not be ready yet (async init in flight). Skip this frame;
-        // the spawn_local will call request_redraw once the renderer is ready.
-        let mut slot = renderer_frame.lock();
-        let Some(r) = slot.as_mut() else {
-            return;
-        };
-
-        binding.render_frame(r);
-
-        // GPU device-loss recovery on wasm. `block_on` is unavailable, but
-        // wasm32 is single-threaded and `spawn_local` is the correct async
-        // dispatch. We drop the `slot` guard before spawning so the future can
-        // re-acquire the lock without deadlocking.
-        if r.is_device_lost() {
-            drop(slot); // release the lock before spawning the async recovery
-            let renderer_recover = Arc::clone(&renderer_frame);
-            wasm_bindgen_futures::spawn_local(async move {
-                // Take the renderer OUT of the slot so the lock is NOT held
-                // across `.await`. wasm32 is single-threaded: holding the
-                // `parking_lot::Mutex` guard across `recover().await` (which
-                // suspends in `request_adapter`/`request_device`) would let the
-                // next `on_request_frame` block forever on `lock()` — a hard
-                // hang. While recovery is in flight the slot is `None`, so frame
-                // callbacks skip rendering instead of blocking. A racing second
-                // spawn finds `None` here and returns — no double recovery.
-                let Some(mut renderer) = renderer_recover.lock().take() else {
+        let renderer_frame = Arc::clone(&renderer_frame);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Frame(Box::new(move |realm| {
+                let binding = AppBinding::instance();
+                let has_pending = binding.has_pending_work(realm);
+                if !binding.needs_redraw()
+                    && !has_pending
+                    && !Scheduler::instance().is_frame_scheduled()
+                {
                     return;
-                };
-                let result = renderer.recover().await;
-                // Restore the renderer regardless of outcome; a failed recover
-                // leaves the device lost and the next frame re-detects + retries.
-                *renderer_recover.lock() = Some(renderer);
-                match result {
-                    Ok(()) => {
-                        tracing::warn!("GPU device lost — recovered successfully");
-                        // `wake_frame` so the idle rAF loop is pumped — see the
-                        // native paths; flipping `needs_redraw` alone would leave
-                        // the recovered renderer idle until the next input event.
-                        AppBinding::instance().wake_frame();
-                    }
-                    Err(e) => {
-                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
-                    }
                 }
-            });
-        }
+
+                let now = web_time::Instant::now();
+                let scheduler = Scheduler::instance();
+                // Scheduler callbacks and rendering share one realm entry.
+                scheduler.drive_frame(now, || {
+                    let mut slot = renderer_frame.lock();
+                    let Some(r) = slot.as_mut() else {
+                        return;
+                    };
+
+                    binding.render_frame_entered(realm, r);
+
+                    if r.is_device_lost() {
+                        drop(slot);
+                        let renderer_recover = Arc::clone(&renderer_frame);
+                        wasm_bindgen_futures::spawn_local(async move {
+                            // Never hold the renderer mutex across `.await`.
+                            let Some(mut renderer) = renderer_recover.lock().take() else {
+                                return;
+                            };
+                            let result = renderer.recover().await;
+                            *renderer_recover.lock() = Some(renderer);
+                            match result {
+                                Ok(()) => {
+                                    tracing::warn!("GPU device lost — recovered successfully");
+                                    AppBinding::instance().wake_frame();
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                                }
+                            }
+                        });
+                    }
+                });
+            })),
+        );
+    }));
+
+    let renderer_resize = Arc::clone(&renderer);
+    window.on_resize(Box::new(move |size, scale_factor| {
+        let apply_size = size;
+        let renderer_resize = Arc::clone(&renderer_resize);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Resize {
+                size,
+                scale_factor,
+                apply_surface: Box::new(move || {
+                    if let Some(renderer) = renderer_resize.lock().as_mut() {
+                        let width = (apply_size.width.0 * scale_factor) as u32;
+                        let height = (apply_size.height.0 * scale_factor) as u32;
+                        renderer.resize(width, height);
+                    }
+                }),
+            },
+        );
     }));
 
     // 6. Lifecycle callbacks
-    platform.on_quit(Box::new(|| {
+    platform.on_quit(Box::new(move || {
         tracing::info!("Web platform quit");
-        AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+        );
     }));
 
     window.on_close(Box::new(move || {
@@ -813,17 +1353,17 @@ where
         // On web, no explicit quit mechanism needed
     }));
 
-    window.on_active_status_change(Box::new(|active| {
-        let event = if active {
-            LifecycleEvent::Activated
-        } else {
-            LifecycleEvent::Deactivated
-        };
-        AppBinding::instance().transition_lifecycle(event);
+    window.on_active_status_change(Box::new(move |active| {
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
     }));
 
+    let _ = dispatch_platform_realm(
+        realm_dispatch,
+        RealmEvent::Lifecycle(LifecycleEvent::Started),
+    );
+
     // 7. Store window
-    AppBinding::instance().set_window(window);
+    AppBinding::instance().set_shared_window(window);
 
     tracing::info!("Web platform initialized with callbacks");
 
@@ -831,10 +1371,18 @@ where
     platform.run(Box::new(|| {
         tracing::info!("Web platform ready");
     }));
+    // `WebPlatform::run` installs the RAF callback and returns immediately;
+    // tearing down here would destroy the realm before the first frame. The
+    // host therefore remains owner-TLS resident for the page lifetime. An
+    // explicit web detach/quit ownership hook is deferred until the platform
+    // exposes a callback whose lifetime encloses the RAF registration.
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use flui_types::geometry::px;
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
@@ -855,6 +1403,34 @@ mod tests {
         fn create_element(&self) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateless(self)
         }
+    }
+
+    #[derive(Clone)]
+    struct OwnerLocalRoot {
+        value: Rc<Cell<usize>>,
+    }
+
+    impl StatelessView for OwnerLocalRoot {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            self.value.set(self.value.get() + 1);
+            TestView.boxed()
+        }
+    }
+
+    impl View for OwnerLocalRoot {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+
+    #[test]
+    fn runner_entrypoints_accept_owner_local_root_state() {
+        static_assertions::assert_not_impl_any!(OwnerLocalRoot: Send, Sync);
+
+        std::hint::black_box(run_app_impl::<OwnerLocalRoot> as fn(OwnerLocalRoot));
+        std::hint::black_box(
+            run_app_with_config_impl::<OwnerLocalRoot> as fn(OwnerLocalRoot, AppConfig),
+        );
     }
 
     #[test]

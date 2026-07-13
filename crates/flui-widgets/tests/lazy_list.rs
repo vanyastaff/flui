@@ -1,8 +1,8 @@
-//! Integration tests for the lazy-sliver backend (U4.3).
+//! Integration tests for the lazy-sliver backend.
 //!
 //! Exercises the 7 correctness paths the single-node `LeafBox` harness missed.
-//! Each test uses the headless frame driver (`pump_frame`) which, since U4.3,
-//! calls `service_child_requests` after `run_frame` — so two `tick` calls
+//! Each test uses the headless frame driver (`pump_frame`) which, since the
+//! child-manager wiring landed, calls `service_child_requests` after `run_frame` — so two `tick` calls
 //! are enough to settle a visible window: the first dispatches the child-build
 //! request; the second lays out the now-built children.
 //!
@@ -15,7 +15,7 @@
 //!    `ChildManager::service` (build new, evict off-band), runs a second
 //!    `build_scope` for freshly-scheduled children, marks the sliver dirty,
 //!    and finalizes any inactive elements (including sparse children pushed
-//!    by `on_unmount` — F3).
+//!    by `on_unmount` because the host's own `child_ids` stays empty).
 //!
 //! So: after `lay_out` the sliver has no children; after `tick1` children are
 //! built and the sliver is marked dirty; after `tick2` the sliver lays out
@@ -38,7 +38,7 @@ use flui_widgets::prelude::*;
 /// fits within the viewport must have exactly N item render nodes in the tree,
 /// plus 1 for the `RenderViewport` and 1 for the `RenderSliverList`.
 ///
-/// Exercises the basic request→service→layout path (F1, F8 plan obligations).
+/// Exercises the basic request→service→layout path end to end.
 #[test]
 fn lazy_list_view_builder_builds_visible_items() {
     // 3 items × 48 px = 144 px total; viewport height = 200 px → all visible.
@@ -103,12 +103,12 @@ fn lazy_list_view_builder_none_at_k_caps_build_count() {
 }
 
 // ============================================================================
-// Test 3 — F2: multi-node child view (subtree build + subtree evict soundness)
+// Test 3 — multi-node child view (subtree build + subtree evict soundness)
 // ============================================================================
 
 /// Each item is a `Padding` wrapping a `SizedBox` — two render nodes per item.
 ///
-/// Exercises F2: `SparseChildren::ensure` must schedule a full second
+/// Exercises how `SparseChildren::ensure` must schedule a full second
 /// `build_scope` pass so the Padding element builds its SizedBox child, and
 /// `SparseChildren::evict` must remove the child's **whole subtree** (both
 /// render nodes), not just the root node.
@@ -200,18 +200,19 @@ fn lazy_list_view_builder_third_tick_is_idempotent() {
 }
 
 // ============================================================================
-// Test 5 — F3: host unmount cleans up all lazy children
+// Test 5 — host unmount cleans up all lazy children
 // ============================================================================
 
 /// A `StatefulView` that starts as a `ListView::builder` then switches to a
 /// plain `SizedBox`. After the switch is pumped, all lazy children and their
-/// render nodes must be gone — F3: `on_unmount` pushes sparse children to the
+/// render nodes must be gone: `on_unmount` pushes sparse children to the
 /// inactive queue; `service_child_requests`'s unconditional `finalize_tree`
 /// pre-pass then drains the queue even when no layout requests are pending.
 ///
-/// Without the F3 fix, `finalize_tree` skipped sparse children because they
-/// never appear in the host's `child_ids` (F4 invariant) and
-/// `service_child_requests` would early-return before reaching `finalize_tree`.
+/// Before that fix, `finalize_tree` skipped sparse children because they
+/// never appear in the host's `child_ids` (the host stays empty by
+/// invariant) and `service_child_requests` would early-return before
+/// reaching `finalize_tree`.
 #[derive(Clone, StatefulView)]
 struct MaybeListView {
     show_list: Arc<AtomicBool>,
@@ -288,16 +289,16 @@ fn lazy_list_view_builder_host_unmount_cleans_render_nodes() {
     // Switch to SizedBox — triggers a StatefulView rebuild that unmounts the list.
     show_list.store(false, Ordering::Relaxed);
     // `pump` marks root dirty and drives one frame. `service_child_requests`
-    // unconditionally finalizes inactive_elements (F3 fix), so lazy children
-    // pushed by `on_unmount` are cleaned up in the same frame.
+    // unconditionally finalizes inactive_elements, so lazy children pushed
+    // by `on_unmount` are cleaned up in the same frame.
     laid.pump();
 
-    // After unmount the lazy children must have been cleaned up (F3).
+    // After unmount the lazy children must have been cleaned up.
     // Only the SizedBox render node remains.
     let nodes_after_unmount = laid.render_node_count();
     assert_eq!(
         nodes_after_unmount, 1,
-        "after unmounting the ListView all lazy children must be cleaned up (F3); \
+        "after unmounting the ListView all lazy children must be cleaned up; \
          got {nodes_after_unmount} render nodes (expected 1 for the SizedBox)"
     );
 
@@ -381,14 +382,14 @@ fn lazy_list_view_builder_convergence_stabilizes() {
 }
 
 // ============================================================================
-// Test 7 — F5: off-band eviction is bounded (no ABA double-remove)
+// Test 7 — off-band eviction is bounded (no ABA double-remove)
 // ============================================================================
 
 /// A large list where the viewport shows only a few items. After settling,
 /// the render tree must contain only the visible + cache-band items, not all
 /// N — confirming that off-band children are evicted correctly via the
 /// retain-band channel (not `dispose_box_child`, which would double-remove
-/// render nodes owned by the element tree, the F5 ABA bug).
+/// render nodes owned by the element tree — an ABA-style bug).
 ///
 /// A post-settle relayout tick must not grow the node count (no leak) and
 /// must not panic (the ABA would surface as a slab-index panic).
@@ -426,7 +427,7 @@ fn lazy_list_view_builder_off_band_eviction_bounded() {
          in a 96 px viewport (expected ≤20)"
     );
 
-    // A further relayout tick must not panic (no ABA double-remove, F5) and
+    // A further relayout tick must not panic (no ABA double-remove) and
     // must not grow the node count.
     laid.tick();
     let nodes_after_relayout = laid.render_node_count();

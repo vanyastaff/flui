@@ -1059,6 +1059,13 @@ impl AnimationController {
         self.notifier.len()
     }
 
+    /// Number of registered status listeners. Test-only, for the same reason:
+    /// `AnimationSwitch::dispose` must detach both of the listeners it attached.
+    #[cfg(test)]
+    pub(crate) fn debug_status_listener_count(&self) -> usize {
+        self.inner.lock().status_listeners.len()
+    }
+
     /// Reset run state and (re)start the ticker for a fresh run from epoch 0.
     fn restart_ticker(&self, inner: &mut AnimationControllerInner) {
         inner.run_epoch_secs = 0.0;

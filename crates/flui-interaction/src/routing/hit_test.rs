@@ -17,27 +17,32 @@
 //! - HitTestResult: gestures/hit_test.dart
 //! - HitTestEntry: gestures/hit_test.dart
 
-use std::sync::Arc;
-
 pub use flui_foundation::RenderId;
 use flui_types::geometry::{Matrix4, Offset, Pixels};
 
 use crate::{
     events::{CursorIcon, PointerEvent, ScrollEventData},
     routing::MouseTrackerAnnotation,
+    routing::interaction_lane::{PointerTarget, ScrollTarget, active_dispatch_handle},
 };
 
 // ============================================================================
-// EVENT PROPAGATION
+// EVENT PROPAGATION (scroll arbitration only)
 // ============================================================================
 
-/// Event propagation control.
+/// Scroll-claim propagation control.
+///
+/// Ordinary pointer delivery has no propagation result: every hit target
+/// receives its locally transformed event in leaf-first order (ADR-0027,
+/// Flutter `GestureBinding.dispatchEvent` parity). Only the pointer-signal /
+/// scroll resolver keeps a claiming result, mirroring Flutter's separate
+/// `PointerSignalResolver` arbitration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EventPropagation {
-    /// Keep dispatching the event to the remaining entries on the route.
+    /// Keep dispatching the scroll event to the remaining entries.
     #[default]
     Continue,
-    /// Stop dispatching; entries deeper on the route do not see the event.
+    /// Claim the scroll event; entries deeper on the route do not see it.
     Stop,
 }
 
@@ -54,16 +59,6 @@ impl EventPropagation {
         matches!(self, Self::Stop)
     }
 }
-
-// ============================================================================
-// HANDLER TYPE ALIASES
-// ============================================================================
-
-/// Handler for pointer events.
-pub type PointerEventHandler = Arc<dyn Fn(&PointerEvent) -> EventPropagation + Send + Sync>;
-
-/// Handler for scroll events.
-pub type ScrollEventHandler = Arc<dyn Fn(&ScrollEventData) -> EventPropagation + Send + Sync>;
 
 // ============================================================================
 // HIT TEST BEHAVIOR
@@ -105,6 +100,10 @@ impl HitTestBehavior {
 
 /// Base hit test entry.
 ///
+/// Data-only (`Send + Sync`): executable pointer callbacks live in the
+/// owner-local interaction lane and are addressed through the entry's
+/// [`PointerTarget`] identity, never stored here.
+///
 /// Flutter equivalent: `HitTestEntry<T extends HitTestTarget>`
 #[derive(Clone)]
 pub struct HitTestEntry {
@@ -115,11 +114,11 @@ pub struct HitTestEntry {
     /// Set automatically when added to HitTestResult.
     pub transform: Option<Matrix4>,
 
-    /// Optional pointer event handler.
-    pub handler: Option<PointerEventHandler>,
+    /// Data-plane identity of this target's owner-local pointer handler.
+    pub pointer_target: Option<PointerTarget>,
 
-    /// Optional scroll event handler.
-    pub scroll_handler: Option<ScrollEventHandler>,
+    /// Data-plane identity of this target's owner-local scroll handler.
+    pub scroll_target: Option<ScrollTarget>,
 
     /// Mouse cursor for this target.
     pub cursor: CursorIcon,
@@ -134,9 +133,9 @@ impl std::fmt::Debug for HitTestEntry {
         f.debug_struct("HitTestEntry")
             .field("target", &self.target)
             .field("has_transform", &self.transform.is_some())
-            .field("has_handler", &self.handler.is_some())
+            .field("has_pointer_target", &self.pointer_target.is_some())
             .field("cursor", &self.cursor)
-            .field("has_scroll_handler", &self.scroll_handler.is_some())
+            .field("has_scroll_target", &self.scroll_target.is_some())
             .field("has_mouse_annotation", &self.mouse_annotation.is_some())
             .finish_non_exhaustive()
     }
@@ -148,20 +147,8 @@ impl HitTestEntry {
         Self {
             target,
             transform: None,
-            handler: None,
-            scroll_handler: None,
-            cursor: CursorIcon::Default,
-            mouse_annotation: None,
-        }
-    }
-
-    /// Creates entry with a handler.
-    pub fn with_handler(target: RenderId, handler: PointerEventHandler) -> Self {
-        Self {
-            target,
-            transform: None,
-            handler: Some(handler),
-            scroll_handler: None,
+            pointer_target: None,
+            scroll_target: None,
             cursor: CursorIcon::Default,
             mouse_annotation: None,
         }
@@ -179,15 +166,15 @@ impl HitTestEntry {
         self
     }
 
-    /// Builder: set handler.
-    pub fn handler(mut self, handler: PointerEventHandler) -> Self {
-        self.handler = Some(handler);
+    /// Builder: set the owner-local pointer target identity.
+    pub fn pointer_target(mut self, target: PointerTarget) -> Self {
+        self.pointer_target = Some(target);
         self
     }
 
-    /// Builder: set scroll handler.
-    pub fn scroll_handler(mut self, handler: ScrollEventHandler) -> Self {
-        self.scroll_handler = Some(handler);
+    /// Builder: set the owner-local scroll target identity.
+    pub fn scroll_target(mut self, target: ScrollTarget) -> Self {
+        self.scroll_target = Some(target);
         self
     }
 
@@ -414,9 +401,9 @@ impl HitTestResult {
         self.path.iter()
     }
 
-    /// Returns an iterator over entries with scroll handlers.
-    pub fn entries_with_scroll_handlers(&self) -> impl Iterator<Item = &HitTestEntry> {
-        self.path.iter().filter(|e| e.scroll_handler.is_some())
+    /// Returns an iterator over entries with scroll targets.
+    pub fn entries_with_scroll_targets(&self) -> impl Iterator<Item = &HitTestEntry> {
+        self.path.iter().filter(|e| e.scroll_target.is_some())
     }
 
     /// Clears all entries and transforms.
@@ -427,31 +414,80 @@ impl HitTestResult {
         self.local_transforms.clear();
     }
 
-    /// Dispatches a pointer event to all entries.
+    /// Dispatches a pointer event to every entry, leaf-first, through the
+    /// active owner lane.
+    ///
+    /// Resolves an ephemeral route over the path's pointer targets, invokes it
+    /// synchronously with per-entry local transforms and per-target panic
+    /// isolation, and releases the route before returning (or before resuming
+    /// a captured panic). Delivery never stops early: ordinary pointer events
+    /// have no propagation result (Flutter `GestureBinding.dispatchEvent`
+    /// parity).
+    ///
+    /// Must run on the owner thread inside an active interaction lane scope
+    /// (a binding's `dispatch_pointer` / owner scope). Without one, entries
+    /// carrying pointer targets cannot be delivered; the typed boundary error
+    /// is traced and the event is dropped.
     pub fn dispatch(&self, event: &PointerEvent) {
-        for entry in &self.path {
-            if let Some(handler) = &entry.handler {
-                let local_event = if let Some(ref transform) = entry.transform {
-                    if let Some(inverse) = transform.try_inverse() {
-                        transform_pointer_event(event, &inverse)
-                    } else {
-                        continue;
-                    }
-                } else {
-                    event.clone()
-                };
-
-                if handler(&local_event).should_stop() {
-                    break;
-                }
+        if !self.path.iter().any(|e| e.pointer_target.is_some()) {
+            return;
+        }
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "pointer dispatch outside an active interaction lane; event not delivered"
+                );
+                return;
+            }
+        };
+        let resolution = match handle.resolve_pointer_route(&self.path) {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "pointer route resolution failed; event not delivered"
+                );
+                return;
+            }
+        };
+        for miss in resolution.misses() {
+            tracing::debug!(
+                path_index = miss.path_index(),
+                "hit path target unregistered before resolution"
+            );
+        }
+        let token = resolution.token();
+        let delivery = handle.invoke_pointer_route(token, event);
+        // Mandatory cleanup precedes any resumed panic: the ephemeral route is
+        // released whether or not a target panicked.
+        if let Err(error) = handle.release_route(token) {
+            tracing::error!(?error, "failed to release ephemeral pointer route");
+        }
+        match delivery {
+            Ok(Some(panic)) => panic.resume(),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::error!(?error, "pointer route invocation failed");
             }
         }
     }
 
     /// Dispatches a scroll event to all entries.
     pub fn dispatch_scroll(&self, event: &ScrollEventData) -> bool {
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "scroll dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
         for entry in &self.path {
-            if let Some(handler) = &entry.scroll_handler {
+            if let Some(target) = entry.scroll_target {
                 let local_event = if let Some(ref transform) = entry.transform {
                     if let Some(inverse) = transform.try_inverse() {
                         transform_scroll_event(event, &inverse)
@@ -462,8 +498,15 @@ impl HitTestResult {
                     *event
                 };
 
-                if handler(&local_event).should_stop() {
-                    return true;
+                match handle.invoke_scroll_target(target, &local_event) {
+                    Ok(propagation) if propagation.should_stop() => return true,
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::debug!(
+                            ?error,
+                            "scroll target unavailable during owner-lane dispatch"
+                        );
+                    }
                 }
             }
         }
@@ -539,7 +582,7 @@ impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
 // HELPER FUNCTIONS
 // ============================================================================
 
-fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> PointerEvent {
+pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> PointerEvent {
     use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
 
     let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
@@ -656,62 +699,212 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_with_handler() {
-        use std::sync::{Arc, Mutex};
+    fn dispatch_delivers_through_the_active_lane() {
+        use std::cell::Cell;
+        use std::rc::Rc;
 
-        let mut result = HitTestResult::new();
-        let called = Arc::new(Mutex::new(false));
-        let called_clone = called.clone();
+        use crate::routing::InteractionLane;
 
-        let handler = Arc::new(move |_: &PointerEvent| {
-            *called_clone.lock().unwrap() = true;
-            EventPropagation::Continue
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let delivered = Rc::new(Cell::new(false));
+        lane.enter(|| {
+            let probe = Rc::clone(&delivered);
+            let target = handle
+                .register_pointer(move |_| probe.set(true))
+                .expect("register");
+            let mut result = HitTestResult::new();
+            result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+
+            let event = crate::events::make_down_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                PointerType::Mouse,
+            );
+            result.dispatch(&event);
         });
-
-        result.add(HitTestEntry::new(RenderId::new(1)).handler(handler));
-
-        let event = crate::events::make_down_event(
-            Offset::new(Pixels(50.0), Pixels(50.0)),
-            PointerType::Mouse,
-        );
-        result.dispatch(&event);
-
-        assert!(*called.lock().unwrap());
+        assert!(delivered.get());
     }
 
     #[test]
-    fn test_dispatch_stop_propagation() {
-        use std::sync::{Arc, Mutex};
+    fn dispatch_reaches_every_target_leaf_first_without_stopping() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
 
-        let mut result = HitTestResult::new();
-        let first_called = Arc::new(Mutex::new(false));
-        let second_called = Arc::new(Mutex::new(false));
+        use crate::routing::InteractionLane;
 
-        let first_clone = first_called.clone();
-        let second_clone = second_called.clone();
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let order = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let leaf_order = Rc::clone(&order);
+            let leaf = handle
+                .register_pointer(move |_| leaf_order.borrow_mut().push("leaf"))
+                .expect("register leaf");
+            let root_order = Rc::clone(&order);
+            let root = handle
+                .register_pointer(move |_| root_order.borrow_mut().push("root"))
+                .expect("register root");
 
-        // First stops propagation
-        let handler1 = Arc::new(move |_: &PointerEvent| {
-            *first_clone.lock().unwrap() = true;
-            EventPropagation::Stop
+            // Leaf-first path order: children push their entries before the
+            // ancestor. No propagation result exists to stop delivery early.
+            let mut result = HitTestResult::new();
+            result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(leaf));
+            result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(root));
+
+            let event = crate::events::make_down_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                PointerType::Mouse,
+            );
+            result.dispatch(&event);
         });
+        assert_eq!(&*order.borrow(), &["leaf", "root"]);
+    }
 
-        // Second should not be called
-        let handler2 = Arc::new(move |_: &PointerEvent| {
-            *second_clone.lock().unwrap() = true;
-            EventPropagation::Continue
+    #[test]
+    fn dispatch_applies_the_entry_local_transform() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::events::PointerEventExt as _;
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        lane.enter(|| {
+            let position_probe = Rc::clone(&observed);
+            let target = handle
+                .register_pointer(move |event| position_probe.set(event.position()))
+                .expect("register");
+            let mut result = HitTestResult::new();
+            // The entry sits in a subtree translated by (10, 20): the handler
+            // must observe the event mapped into its local space.
+            result.push_offset(Offset::new(Pixels(10.0), Pixels(20.0)));
+            result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+            result.pop_transform();
+
+            let event = crate::events::make_down_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                PointerType::Mouse,
+            );
+            result.dispatch(&event);
         });
+        assert_eq!(observed.get(), Offset::new(Pixels(40.0), Pixels(30.0)));
+    }
 
-        result.add(HitTestEntry::new(RenderId::new(1)).handler(handler1));
-        result.add(HitTestEntry::new(RenderId::new(2)).handler(handler2));
+    #[test]
+    fn dispatch_scroll_uses_owner_local_scroll_target() {
+        use std::cell::Cell;
+        use std::rc::Rc;
 
-        let event = crate::events::make_down_event(
-            Offset::new(Pixels(50.0), Pixels(50.0)),
-            PointerType::Mouse,
-        );
-        result.dispatch(&event);
+        use crate::events::{PointerEvent, ScrollEventData, make_scroll_event};
+        use crate::routing::InteractionLane;
 
-        assert!(*first_called.lock().unwrap());
-        assert!(!*second_called.lock().unwrap());
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let delivered = Rc::new(Cell::new(false));
+        lane.enter(|| {
+            let probe = Rc::clone(&delivered);
+            let target = handle
+                .register_scroll(move |_| {
+                    probe.set(true);
+                    EventPropagation::Stop
+                })
+                .expect("register");
+            let mut result = HitTestResult::new();
+            result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
+
+            let event = make_scroll_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                Offset::new(Pixels(0.0), Pixels(10.0)),
+            );
+            let PointerEvent::Scroll(event) = event else {
+                panic!("expected scroll event");
+            };
+            let scroll = ScrollEventData::from(&event);
+            assert!(result.dispatch_scroll(&scroll));
+        });
+        assert!(delivered.get());
+    }
+
+    #[test]
+    fn dispatch_scroll_stops_at_first_claiming_target() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::events::{PointerEvent, ScrollEventData, make_scroll_event};
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let order = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let first_order = Rc::clone(&order);
+            let first = handle
+                .register_scroll(move |_| {
+                    first_order.borrow_mut().push("first");
+                    EventPropagation::Stop
+                })
+                .expect("register first");
+            let second_order = Rc::clone(&order);
+            let second = handle
+                .register_scroll(move |_| {
+                    second_order.borrow_mut().push("second");
+                    EventPropagation::Continue
+                })
+                .expect("register second");
+
+            let mut result = HitTestResult::new();
+            result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(first));
+            result.add(HitTestEntry::new(RenderId::new(2)).scroll_target(second));
+
+            let event = make_scroll_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                Offset::new(Pixels(0.0), Pixels(10.0)),
+            );
+            let PointerEvent::Scroll(event) = event else {
+                panic!("expected scroll event");
+            };
+            let scroll = ScrollEventData::from(&event);
+            assert!(result.dispatch_scroll(&scroll));
+        });
+        assert_eq!(&*order.borrow(), &["first"]);
+    }
+
+    #[test]
+    fn dispatch_scroll_applies_the_entry_local_transform() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::events::{PointerEvent, ScrollEventData, make_scroll_event};
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        lane.enter(|| {
+            let position_probe = Rc::clone(&observed);
+            let target = handle
+                .register_scroll(move |event| {
+                    position_probe.set(event.position);
+                    EventPropagation::Stop
+                })
+                .expect("register");
+            let mut result = HitTestResult::new();
+            result.push_offset(Offset::new(Pixels(10.0), Pixels(20.0)));
+            result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
+            result.pop_transform();
+
+            let event = make_scroll_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                Offset::new(Pixels(0.0), Pixels(10.0)),
+            );
+            let PointerEvent::Scroll(event) = event else {
+                panic!("expected scroll event");
+            };
+            let scroll = ScrollEventData::from(&event);
+            assert!(result.dispatch_scroll(&scroll));
+        });
+        assert_eq!(observed.get(), Offset::new(Pixels(40.0), Pixels(30.0)));
     }
 }

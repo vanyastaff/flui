@@ -1,10 +1,7 @@
 //! [`EditableText`] — single-line editable text backed by a
 //! [`TextEditingController`].
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering as AtomicOrdering},
-};
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
@@ -103,6 +100,13 @@ impl EditableText {
 pub struct EditableTextState {
     /// Focus node representing this field in the global focus tree.
     focus_node: Arc<FocusNode>,
+    /// Publishes the field's `RenderId` while mounted, so the node's rect
+    /// provider can measure it for reading-order traversal.
+    anchor: flui_objects::SubtreeAnchor,
+    /// The node this field's node hangs under — the nearest enclosing focus
+    /// parent at mount, or the root scope's backing node. Detached from in
+    /// `dispose`.
+    parent: Option<Arc<FocusNode>>,
     /// Clone of the controller captured in `create_state`; used to register
     /// listeners in `init_state` without needing the `view` reference.
     controller: TextEditingController,
@@ -114,12 +118,9 @@ pub struct EditableTextState {
     /// text changes (forwarded from the controller listener) **and** on focus
     /// changes (forwarded from the FocusManager listener).
     rebuild_notifier: flui_foundation::notifier::ChangeNotifier,
-    /// Gate to silence the FocusManager listener after dispose.
-    ///
-    /// `FocusManager::add_listener` has no per-listener removal API; we use
-    /// this flag instead so the closure becomes a no-op once the widget is
-    /// unmounted.
-    is_disposed: Arc<AtomicBool>,
+    /// ID for the focus-change listener we added to the [`FocusManager`], so
+    /// dispose removes exactly ours.
+    focus_listener_id: Option<ListenerId>,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -136,21 +137,29 @@ impl StatefulView for EditableText {
     fn create_state(&self) -> EditableTextState {
         EditableTextState {
             focus_node: FocusNode::with_debug_label("EditableText"),
+            anchor: flui_objects::SubtreeAnchor::new(),
+            parent: None,
             controller: self.controller.clone(),
             controller_listener_id: None,
             rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
-            is_disposed: Arc::new(AtomicBool::new(false)),
+            focus_listener_id: None,
         }
     }
 }
 
 impl ViewState<EditableText> for EditableTextState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
-        // 1. Attach our focus node to the global focus tree so it can receive
-        //    focus and be discovered by Tab traversal.
-        FocusManager::global()
-            .root_scope()
-            .attach_node(&self.focus_node);
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        // 1. Attach our focus node under the nearest enclosing `FocusScope` —
+        //    a `ModalRoute`'s per-route scope when this field sits in a page —
+        //    falling back to the root scope, and publish the
+        //    node on the controller so the enclosing `TextField`'s tap can
+        //    focus *this* field.
+        let parent = crate::interaction::enclosing_focus_parent(ctx);
+        parent.attach_node(&self.focus_node);
+        self.controller
+            .set_focus_node_id(Some(self.focus_node.id()));
+        self.parent = Some(parent);
+        crate::interaction::install_rect_provider(&self.focus_node, &self.anchor, ctx);
 
         // 2. Register a key handler with the FocusManager.  Only fires when
         //    this node is the primary-focused node.
@@ -167,22 +176,19 @@ impl ViewState<EditableText> for EditableTextState {
 
         // 4. Forward FocusManager focus-change events into the rebuild notifier
         //    so the caret appears / disappears immediately when this field
-        //    gains or loses focus.  A disposed-flag gates the closure since
-        //    FocusManager has no per-listener remove API.
+        //    gains or loses focus. Removed by id in `dispose`.
         let rebuild_notifier_for_focus = self.rebuild_notifier.clone();
-        let is_disposed = Arc::clone(&self.is_disposed);
         let node_id = self.focus_node.id();
-        FocusManager::global().add_listener(Arc::new(move |previous, current| {
-            if is_disposed.load(AtomicOrdering::Acquire) {
-                return;
-            }
-            // Only rebuild when this node's focus state actually changed.
-            let was_focused = previous == Some(node_id);
-            let now_focused = current == Some(node_id);
-            if was_focused != now_focused {
-                rebuild_notifier_for_focus.notify_listeners();
-            }
-        }));
+        self.focus_listener_id = Some(FocusManager::global().add_listener(Rc::new(
+            move |previous, current| {
+                // Only rebuild when this node's focus state actually changed.
+                let was_focused = previous == Some(node_id);
+                let now_focused = current == Some(node_id);
+                if was_focused != now_focused {
+                    rebuild_notifier_for_focus.notify_listeners();
+                }
+            },
+        )));
     }
 
     fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -191,23 +197,35 @@ impl ViewState<EditableText> for EditableTextState {
         let caret_height = view.caret_height;
         let caret_color = view.caret_color;
 
-        AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
-            build_field_view(&controller, &focus_node, caret_height, caret_color)
-        })
+        crate::navigator::AnchoredBox::new(
+            self.anchor.clone(),
+            AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
+                build_field_view(&controller, &focus_node, caret_height, caret_color)
+            }),
+        )
     }
 
     fn dispose(&mut self) {
-        // Signal the focus listener closure to become a no-op.
-        self.is_disposed.store(true, AtomicOrdering::Release);
+        self.focus_node.clear_rect_provider();
+        // Remove the focus-change listener we registered in init_state.
+        if let Some(id) = self.focus_listener_id.take() {
+            FocusManager::global().remove_listener(id);
+        }
 
-        // Unregister the key handler from the FocusManager.
+        // Unregister the key handler from the FocusManager, and withdraw the
+        // node from the controller — an unmounted field must not be a tap
+        // target.
         FocusManager::global().unregister_key_handler(self.focus_node.id());
+        self.controller.set_focus_node_id(None);
 
-        // Detach the focus node from the global tree (also clears primary focus
-        // if this node held it).
-        FocusManager::global()
-            .root_scope()
-            .detach_node(self.focus_node.id());
+        // Detach the focus node from wherever it hangs (also clears primary
+        // focus if this node held it).
+        if let Some(parent) = self.parent.take() {
+            match parent.as_scope() {
+                Some(scope) => scope.detach_node(self.focus_node.id()),
+                None => parent.detach_node(self.focus_node.id()),
+            }
+        }
 
         // Remove the controller listener we registered in init_state.
         if let Some(id) = self.controller_listener_id.take() {
@@ -229,7 +247,7 @@ impl ViewState<EditableText> for EditableTextState {
 /// Only `KeyState::Down` events (which cover key-repeat) are acted upon.
 /// Returns `true` when the event is consumed so propagation stops.
 fn build_key_handler(controller: TextEditingController) -> KeyEventCallback {
-    Arc::new(move |event| {
+    Rc::new(move |event| {
         if event.state != KeyState::Down {
             return false;
         }
@@ -291,11 +309,18 @@ impl RenderView for EditableTextRenderView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderEditable;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.build_render_object();
     }
 }

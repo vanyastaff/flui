@@ -7,6 +7,7 @@ use flui_foundation::ElementId;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, IntoView, Lifecycle, StatelessView, View, ViewExt,
 };
+use static_assertions::assert_not_impl_any;
 
 // ============================================================================
 // Test View
@@ -543,16 +544,14 @@ fn test_element_node_debug() {
 }
 
 // ============================================================================
-// Thread Safety Tests
+// Ownership Tests
 // ============================================================================
 
 #[test]
-fn test_tree_send_sync() {
-    // Compile-time assertion: ElementTree must be Send + Sync. The bound
-    // check fails to compile if the property regresses (e.g., a new non-
-    // Send/Sync field is added to ElementBase or to the tree itself).
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<ElementTree>();
+fn tree_is_owner_local() {
+    // The element tree stores type-erased UI owner-plane elements; render data
+    // remains the cross-thread boundary, not this tree.
+    assert_not_impl_any!(ElementTree: Send, Sync);
 }
 
 // ============================================================================

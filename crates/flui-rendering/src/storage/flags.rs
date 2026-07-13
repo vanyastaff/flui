@@ -143,7 +143,7 @@ bitflags! {
     /// Bit 8: NEEDS_LAYOUT_PROPAGATION
     /// Bit 9: NEEDS_PAINT_PROPAGATION
     /// Bit 10: WAS_REPAINT_BOUNDARY
-    /// Bit 11: NEEDS_COMPOSITING_BITS_UPDATE (PR-A2 U32)
+    /// Bit 11: NEEDS_COMPOSITING_BITS_UPDATE
     /// Bits 12-31: Reserved for future use
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,15 +245,15 @@ bitflags! {
         /// this on the render object as `_wasRepaintBoundary`; in FLUI it
         /// lives here so the paint phase can flip the bit through a single
         /// atomic store rather than acquiring a write lock on the trait
-        /// object). See `docs/PORT.md` Refusal trigger 1 and the U2 exemplar
-        /// refactor that introduced this flag.
+        /// object). See `docs/PORT.md` Refusal trigger 1 — this flag was
+        /// introduced alongside the refactor that removed the
+        /// `RwLock<Box<dyn RenderObject<P>>>` field.
         ///
         /// Flutter equivalent: `_wasRepaintBoundary` field on `RenderObject`.
         const WAS_REPAINT_BOUNDARY = 1 << 10;
 
-        /// **PR-A2 U32 (memo D3-3):** marks a node whose compositing-bits
-        /// subtree walk must be re-run on the next `run_compositing`
-        /// invocation.
+        /// Marks a node whose compositing-bits subtree walk must be
+        /// re-run on the next `run_compositing` invocation.
         ///
         /// Distinct from `NEEDS_COMPOSITING` (bit 2): this flag is the
         /// *scheduling* signal (the node is queued in
@@ -752,9 +752,8 @@ impl AtomicRenderFlags {
     /// Marks the render object as needing a compositing-bits subtree walk
     /// on the next `run_compositing` invocation.
     ///
-    /// **PR-A2 U32 (memo D3-3):** distinct from `mark_needs_compositing`
-    /// — this is the *scheduling* signal (paired with the dirty-queue
-    /// push in
+    /// Distinct from `mark_needs_compositing` — this is the *scheduling*
+    /// signal (paired with the dirty-queue push in
     /// [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update)),
     /// whereas `NEEDS_COMPOSITING` is the *computed result* of the
     /// walk.
@@ -767,9 +766,8 @@ impl AtomicRenderFlags {
 
     /// Clears the needs-compositing-bits-update flag.
     ///
-    /// **PR-A2 U32:** called by `run_compositing` after the subtree
-    /// walk visits this node and updates its `NEEDS_COMPOSITING`
-    /// result bit.
+    /// Called by `run_compositing` after the subtree walk visits this
+    /// node and updates its `NEEDS_COMPOSITING` result bit.
     #[inline]
     pub fn clear_needs_compositing_bits_update(&self) {
         self.remove(RenderFlags::NEEDS_COMPOSITING_BITS_UPDATE);

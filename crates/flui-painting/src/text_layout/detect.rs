@@ -1,6 +1,6 @@
 //! RTL/LTR detection helpers.
 //!
-//! Mythos chain U6 extracted these from the 1,243-LOC
+//! Extracted from the 1,243-LOC
 //! `text_layout.rs` god module. Uses Unicode codepoint ranges to
 //! classify characters as strong-LTR, strong-RTL, or neutral.
 

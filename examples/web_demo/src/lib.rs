@@ -83,10 +83,7 @@ pub fn start() {
                 );
             }
         }
-        DispatchEventResult {
-            propagate: false,
-            default_prevented: true,
-        }
+        DispatchEventResult::resolved(false, true)
     }));
 
     // Register frame callback

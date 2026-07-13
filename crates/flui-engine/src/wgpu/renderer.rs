@@ -173,6 +173,21 @@ struct WindowedGpuStack {
 }
 
 /// Cross-platform GPU renderer
+///
+/// `Send` (see the `unsafe impl Send` below, justified there) but
+/// deliberately never `Sync`: the raster owner
+/// (`crate::raster_owner::RasterOwner`) has sole mutable access to the
+/// `Renderer`/`Surface`/`Device`/`Queue` it wraps, and a shared `&Renderer`
+/// across threads would defeat that single-mutator contract. No field
+/// grants `Sync` today, so this already holds without a marker type; the
+/// doctest below pins the contract so a future field addition that
+/// accidentally makes every field `Sync` fails loudly at compile time
+/// instead of silently reopening `Arc<Renderer>` shared-mutation:
+///
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<flui_engine::wgpu::Renderer>();
+/// ```
 pub struct Renderer {
     // `instance` and `adapter` are kept alive for the lifetime of the renderer
     // because `wgpu::Surface<'static>` and `wgpu::Device` depend on them. They
@@ -1357,9 +1372,9 @@ impl Renderer {
         } else {
             Backend::new(&mut painter)
         };
-        // Cycle 4 U-8: bind the frame render target so the
-        // DisplayList-level `render_backdrop_filter` path (U-9)
-        // can flush + blur the same target the layer-level path uses.
+        // Bind the frame render target so the DisplayList-level
+        // `render_backdrop_filter` path can flush + blur the same
+        // target the layer-level path uses.
         // When intermediate-active, `render_view`/`render_texture` point
         // at the intermediate; otherwise they point at the swapchain.
         // Without this bind, that command path falls back to passthrough
@@ -1510,7 +1525,7 @@ impl Renderer {
     /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
     /// `FollowerLayer` is handled specially too — its render-time position
     /// is resolved against `link_registry` and the already-fully-built
-    /// `tree` (design research plan §4) before its children render.
+    /// `tree` before its children render.
     ///
     /// # Occlusion culling
     ///
@@ -3160,7 +3175,7 @@ mod tests {
     // pixel-readback proof.
     //
     // Render-object-harness-level testing cannot check on-screen positioning
-    // (design research plan §6, "explicitly out of harness scope") — these
+    // (explicitly out of harness scope) — these
     // tests exercise the REAL `render_layer_recursive` Follower special case
     // (not a hand-rolled stand-in) against a real GPU texture, reading back
     // actual rendered pixels.
@@ -3204,7 +3219,7 @@ mod tests {
 
     /// (a) A `Layer::Follower` linked to a `Layer::Leader` under a DIFFERENT
     /// `Layer::Offset` ancestor (the cross-repaint-boundary case that
-    /// motivated the whole render-time-resolution design, plan §4) must
+    /// motivated the whole render-time-resolution design) must
     /// render its subtree at the LEADER's resolved position, not at its own
     /// natural (pre-resolution) tree position.
     #[test]
@@ -3356,7 +3371,7 @@ mod tests {
     /// (b) An unlinked Follower (no `Layer::Leader` registered under its
     /// `link`) with `show_when_unlinked = true` renders its subtree at its
     /// own `target_offset` — the plain paint-origin-relative fallback, NOT
-    /// routed through `calculate_offset` (plan §7.4).
+    /// routed through `calculate_offset`.
     #[test]
     fn follower_gpu_unlinked_show_when_unlinked_true_renders_at_target_offset() {
         use super::super::backend::Backend;
@@ -3724,7 +3739,7 @@ mod tests {
         );
     }
 
-    /// THE TRAP regression test (design research plan §4): a `ShaderMask`
+    /// THE TRAP regression test: a `ShaderMask`
     /// whose `bounds()` origin is NOT `(0, 0)` and which sits under a
     /// non-zero-offset `Layer::Offset` ancestor must still render its masked
     /// content at the CORRECT on-screen position — not shifted/clipped by a

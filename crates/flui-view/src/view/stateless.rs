@@ -44,13 +44,13 @@ use crate::context::BuildContext;
 /// `StatelessView` **non-object-safe** — no `dyn StatelessView` use
 /// exists or is needed. The `View` trait
 /// (super::view::View) is the object-safe boundary;
-/// `StatelessView` is implementation-side (Phase 3 §U22, FR-007).
+/// `StatelessView` is implementation-side (FR-007).
 ///
 /// # Note
 ///
 /// Types implementing `StatelessView` must also implement `Clone`.
 /// Use the derive macro: `#[derive(Clone)]`
-pub trait StatelessView: Clone + Send + Sync + 'static {
+pub trait StatelessView: Clone + 'static {
     /// Build the child View tree.
     ///
     /// Called whenever this View needs to be rendered. The returned
@@ -73,8 +73,8 @@ pub trait StatelessView: Clone + Send + Sync + 'static {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView;
 }
 
-// The legacy `impl_stateless_view!` declarative macro was deleted in
-// Phase 3 §U24 (FR-010 "MUST NOT be two parallel authoring paths").
+// The legacy `impl_stateless_view!` declarative macro was deleted
+// (FR-010 "MUST NOT be two parallel authoring paths").
 // Widget authors now write `#[derive(StatelessView)]` from
 // `flui-macros` instead; the derive is re-exported from
 // `flui_view::prelude` for ergonomic single-import access. See

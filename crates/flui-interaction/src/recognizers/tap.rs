@@ -23,7 +23,7 @@
 //! If no button-specific callback is registered, the event is
 //! silently dropped (the recogniser stays a no-op for that button).
 
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
@@ -87,7 +87,7 @@ impl TapButton {
 }
 
 /// Callback for tap events
-pub type TapCallback = Arc<dyn Fn(TapDetails) + Send + Sync>;
+pub type TapCallback = Rc<dyn Fn(TapDetails)>;
 
 /// Details about a tap gesture
 #[derive(Debug, Clone, PartialEq)]
@@ -128,7 +128,7 @@ pub struct TapGestureRecognizer {
     state: RecognizerBase,
 
     /// Callbacks
-    callbacks: Arc<Mutex<TapCallbacks>>,
+    callbacks: Rc<RefCell<TapCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<TapState>>,
@@ -255,7 +255,7 @@ impl TapGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(TapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
             pending_down: Arc::new(Mutex::new(None)),
@@ -271,7 +271,7 @@ impl TapGestureRecognizer {
     ) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(TapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(settings)),
             pending_down: Arc::new(Mutex::new(None)),
@@ -296,11 +296,8 @@ impl TapGestureRecognizer {
     }
 
     /// Set the tap down callback
-    pub fn with_on_tap_down(
-        self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_tap_down = Some(Arc::new(callback));
+    pub fn with_on_tap_down(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_tap_down = Some(Rc::new(callback));
         self
     }
 
@@ -308,38 +305,29 @@ impl TapGestureRecognizer {
     ///
     /// This callback is triggered when a pointer that initiated a tap moves
     /// but stays within the slop tolerance.
-    pub fn with_on_tap_move(
-        self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_tap_move = Some(Arc::new(callback));
+    pub fn with_on_tap_move(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_tap_move = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap up callback
-    pub fn with_on_tap_up(
-        self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_tap_up = Some(Arc::new(callback));
+    pub fn with_on_tap_up(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_tap_up = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap callback (called on successful tap)
-    pub fn with_on_tap(
-        self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_tap = Some(Arc::new(callback));
+    pub fn with_on_tap(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap cancel callback
     pub fn with_on_tap_cancel(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tap_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -350,36 +338,36 @@ impl TapGestureRecognizer {
     /// Set the secondary-button tap-down callback.
     pub fn with_on_secondary_tap_down(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_secondary_tap_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap_down = Some(Rc::new(callback));
         self
     }
 
     /// Set the secondary-button tap-up callback.
     pub fn with_on_secondary_tap_up(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_secondary_tap_up = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap_up = Some(Rc::new(callback));
         self
     }
 
     /// Set the secondary-button tap callback (fires on successful up).
     pub fn with_on_secondary_tap(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_secondary_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the secondary-button tap-cancel callback.
     pub fn with_on_secondary_tap_cancel(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_secondary_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -390,36 +378,36 @@ impl TapGestureRecognizer {
     /// Set the tertiary-button tap-down callback.
     pub fn with_on_tertiary_tap_down(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_tertiary_tap_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap_down = Some(Rc::new(callback));
         self
     }
 
     /// Set the tertiary-button tap-up callback.
     pub fn with_on_tertiary_tap_up(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_tertiary_tap_up = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap_up = Some(Rc::new(callback));
         self
     }
 
     /// Set the tertiary-button tap callback (fires on successful up).
     pub fn with_on_tertiary_tap(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_tertiary_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the tertiary-button tap-cancel callback.
     pub fn with_on_tertiary_tap_cancel(
         self: Arc<Self>,
-        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+        callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_tertiary_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -451,7 +439,7 @@ impl TapGestureRecognizer {
         let Some(pending) = self.pending_down.lock().take() else {
             return;
         };
-        let callback = self.callbacks.lock().down(pending.button).cloned();
+        let callback = self.callbacks.borrow().down(pending.button).cloned();
         if let Some(cb) = callback {
             cb(pending.details);
         }
@@ -477,7 +465,7 @@ impl TapGestureRecognizer {
         // Fire per-button tap-down first (Flutter ordering), then up + tap.
         self.fire_pending_tap_down();
         let (up_cb, tap_cb) = {
-            let cbs = self.callbacks.lock();
+            let cbs = self.callbacks.borrow();
             (
                 cbs.up(pending_up.button).cloned(),
                 cbs.tap(pending_up.button).cloned(),
@@ -517,7 +505,7 @@ impl TapGestureRecognizer {
         {
             *self.gesture_state.lock() = TapState::Cancelled;
             // Notify the down-button cancel slot if any was wired.
-            let cancel_cb = self.callbacks.lock().cancel(down_btn).cloned();
+            let cancel_cb = self.callbacks.borrow().cancel(down_btn).cloned();
             if let Some(cb) = cancel_cb {
                 let details = TapDetails {
                     global_position: position,
@@ -562,7 +550,7 @@ impl TapGestureRecognizer {
             // the down.
             let button = self.pending_down.lock().as_ref().map(|p| p.button);
             if let Some(btn) = button {
-                let cancel_cb = self.callbacks.lock().cancel(btn).cloned();
+                let cancel_cb = self.callbacks.borrow().cancel(btn).cloned();
                 if let Some(cb) = cancel_cb {
                     let details = TapDetails {
                         global_position: position,
@@ -587,7 +575,7 @@ impl TapGestureRecognizer {
             // Call on_tap_move callback (primary-only — Flutter has no
             // secondary/tertiary move; a primary-button tap that moves is
             // still observed by `on_tap_move`).
-            if let Some(callback) = self.callbacks.lock().on_tap_move.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_tap_move.clone() {
                 let details = TapDetails {
                     global_position: position,
                     local_position: position,
@@ -725,7 +713,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        let mut callbacks = self.callbacks.lock();
+        let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_tap_down = None;
         callbacks.on_tap_move = None;
         callbacks.on_tap_up = None;
@@ -828,6 +816,7 @@ impl GestureArenaMember for TapGestureRecognizer {
 mod tests {
     use super::*;
     use crate::arena::GestureArena;
+    use std::cell::Cell;
     use ui_events::pointer::PointerButton;
 
     fn pos(x: f32, y: f32) -> Offset<Pixels> {
@@ -902,6 +891,26 @@ mod tests {
         recognizer.handle_event(&primary_up(position));
 
         assert!(*tapped.lock());
+    }
+
+    #[test]
+    fn tap_callback_accepts_owner_local_rc_state() {
+        let arena = GestureArena::new();
+        let taps = Rc::new(Cell::new(0));
+        let taps_for_callback = taps.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_details| {
+            taps_for_callback.set(taps_for_callback.get() + 1);
+        });
+
+        let pointer = PointerId::PRIMARY;
+        let position = pos(24.0, 42.0);
+
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&primary_down(position));
+        recognizer.handle_event(&primary_up(position));
+
+        assert_eq!(taps.get(), 1);
     }
 
     #[test]
