@@ -12,15 +12,155 @@ use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, loose, size};
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_interaction::{FocusManager, FocusNode};
 use flui_scheduler::Scheduler;
 use flui_view::prelude::{BuildContext, StatefulView, StatelessView};
 use flui_view::{
     BoxedView, BuildContextExt, BuildOwner, ElementTree, ErrorView, IntoView, ViewExt, ViewState,
 };
-use flui_widgets::{SizedBox, TickerMode, Visibility, VsyncScope};
+use flui_widgets::{Focus, SizedBox, TickerMode, Visibility, VsyncScope};
 use parking_lot::Mutex;
 
 const FRAME: Duration = Duration::from_millis(20);
+
+static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, StatefulView)]
+struct FocusLifecycleProbe {
+    node: Arc<FocusNode>,
+    init_count: Arc<AtomicUsize>,
+    dispose_count: Arc<AtomicUsize>,
+}
+
+struct FocusLifecycleProbeState {
+    node: Arc<FocusNode>,
+    init_count: Arc<AtomicUsize>,
+    dispose_count: Arc<AtomicUsize>,
+}
+
+impl StatefulView for FocusLifecycleProbe {
+    type State = FocusLifecycleProbeState;
+
+    fn create_state(&self) -> Self::State {
+        FocusLifecycleProbeState {
+            node: Arc::clone(&self.node),
+            init_count: Arc::clone(&self.init_count),
+            dispose_count: Arc::clone(&self.dispose_count),
+        }
+    }
+}
+
+impl std::fmt::Debug for FocusLifecycleProbeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FocusLifecycleProbeState")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ViewState<FocusLifecycleProbe> for FocusLifecycleProbeState {
+    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+        self.init_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn dispose(&mut self) {
+        self.dispose_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn build(&self, _view: &FocusLifecycleProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&self.node))
+    }
+}
+
+#[derive(Clone, StatelessView)]
+struct FocusVisibilityHost {
+    visible: Arc<AtomicBool>,
+    maintain_focusability: Arc<AtomicBool>,
+    mounted: Arc<AtomicBool>,
+    probe: FocusLifecycleProbe,
+}
+
+impl StatelessView for FocusVisibilityHost {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        if self.mounted.load(Ordering::Relaxed) {
+            Visibility::new(self.probe.clone())
+                .visible(self.visible.load(Ordering::Relaxed))
+                .maintain_state(true)
+                .maintain_focusability(self.maintain_focusability.load(Ordering::Relaxed))
+                .boxed()
+        } else {
+            SizedBox::shrink().boxed()
+        }
+    }
+}
+
+#[test]
+fn visibility_focus_policy_tracks_hidden_state_without_remounting() {
+    let _guard = FOCUS_TEST_LOCK.lock();
+    let manager = FocusManager::global();
+    manager.unfocus();
+
+    let node = FocusNode::with_debug_label("visibility-focus-probe");
+    let init_count = Arc::new(AtomicUsize::new(0));
+    let dispose_count = Arc::new(AtomicUsize::new(0));
+    let visible = Arc::new(AtomicBool::new(true));
+    let maintain_focusability = Arc::new(AtomicBool::new(false));
+    let mounted = Arc::new(AtomicBool::new(true));
+    let host = FocusVisibilityHost {
+        visible: Arc::clone(&visible),
+        maintain_focusability: Arc::clone(&maintain_focusability),
+        mounted: Arc::clone(&mounted),
+        probe: FocusLifecycleProbe {
+            node: Arc::clone(&node),
+            init_count: Arc::clone(&init_count),
+            dispose_count: Arc::clone(&dispose_count),
+        },
+    };
+    let mut laid = lay_out(host, loose(100.0));
+
+    node.request_focus();
+    assert!(node.has_primary_focus());
+    assert_eq!(init_count.load(Ordering::Relaxed), 1);
+
+    visible.store(false, Ordering::Relaxed);
+    laid.pump();
+    assert_eq!(manager.primary_focus(), None);
+    node.request_focus();
+    assert_eq!(manager.primary_focus(), None);
+    assert_eq!(init_count.load(Ordering::Relaxed), 1);
+    assert_eq!(dispose_count.load(Ordering::Relaxed), 0);
+
+    visible.store(true, Ordering::Relaxed);
+    laid.pump();
+    assert_eq!(
+        manager.primary_focus(),
+        None,
+        "showing does not auto-refocus"
+    );
+    node.request_focus();
+    assert!(node.has_primary_focus());
+
+    maintain_focusability.store(true, Ordering::Relaxed);
+    visible.store(false, Ordering::Relaxed);
+    laid.pump();
+    assert!(node.has_primary_focus());
+    manager.unfocus();
+    node.request_focus();
+    assert!(
+        node.has_primary_focus(),
+        "maintain_focusability allows a fresh request while hidden"
+    );
+
+    maintain_focusability.store(false, Ordering::Relaxed);
+    laid.pump();
+    assert_eq!(manager.primary_focus(), None);
+    assert_eq!(init_count.load(Ordering::Relaxed), 1);
+    assert_eq!(dispose_count.load(Ordering::Relaxed), 0);
+
+    mounted.store(false, Ordering::Relaxed);
+    laid.pump();
+    assert_eq!(dispose_count.load(Ordering::Relaxed), 1);
+    manager.unfocus();
+}
 
 #[derive(Clone, StatefulView)]
 struct AnimationProbe {
@@ -211,6 +351,25 @@ fn maintain_animation_accepts_either_valid_setter_order() {
 }
 
 #[test]
+fn maintain_focusability_accepts_either_valid_setter_order() {
+    let first = lay_out(
+        Visibility::new(SizedBox::new(10.0, 10.0))
+            .maintain_focusability(true)
+            .maintain_state(true),
+        loose(100.0),
+    );
+    let second = lay_out(
+        Visibility::new(SizedBox::new(10.0, 10.0))
+            .maintain_state(true)
+            .maintain_focusability(true),
+        loose(100.0),
+    );
+
+    assert_eq!(first.size(first.root()), size(10.0, 10.0));
+    assert_eq!(second.size(second.root()), size(10.0, 10.0));
+}
+
+#[test]
 fn hidden_default_without_ambient_vsync_preserves_pass_through_behavior() {
     let controller = animation_controller();
     let (probe, found_ambient, _init_count, _dispose_count) = animation_probe(&controller);
@@ -374,6 +533,30 @@ fn invalid_maintain_animation_configuration_builds_one_error_child() {
     );
 }
 
+#[cfg(debug_assertions)]
+#[test]
+fn invalid_maintain_focusability_configuration_builds_one_error_child() {
+    let view = Visibility::new(SizedBox::new(10.0, 10.0)).maintain_focusability(true);
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+
+    let child_ids: Vec<_> = tree
+        .iter_nodes()
+        .filter_map(|(id, node)| (node.parent() == Some(root_id)).then_some(id))
+        .collect();
+    assert_eq!(child_ids.len(), 1);
+    assert_eq!(
+        tree.get(child_ids[0])
+            .expect("the substituted error child should exist")
+            .element()
+            .view_type_id(),
+        TypeId::of::<ErrorView>()
+    );
+}
+
 #[test]
 fn default_visible_shows_the_child_directly_with_no_offstage_wrapper() {
     let laid = lay_out(Visibility::new(SizedBox::new(30.0, 20.0)), loose(1000.0));
@@ -447,7 +630,11 @@ fn maintain_state_true_and_hidden_wraps_the_child_in_an_offstage_offstage() {
     );
     // The child render node must still be present in the tree (state kept
     // alive), unlike the maintain_state = false replacement path.
-    assert_eq!(laid.render_node_count(), 2, "RenderOffstage + the child");
+    assert_eq!(
+        laid.render_node_count(),
+        3,
+        "RenderOffstage + RenderSubtreeAnchor + the child"
+    );
 }
 
 /// The widget-level consequence of `RenderOffstage`'s layout contract: a
@@ -475,9 +662,20 @@ fn maintain_state_true_and_hidden_lays_the_child_out_at_full_size() {
         size(0.0, 0.0),
         "the Offstage box takes constraints.smallest() — zero, under loose"
     );
+    let anchor_id = laid.only_child(offstage_id);
+    let expected_anchor_id = laid.find_by_render_type("RenderSubtreeAnchor");
     assert_eq!(
-        laid.size(laid.only_child(offstage_id)),
+        anchor_id, expected_anchor_id,
+        "Focus inserts its established transparent render anchor"
+    );
+    assert_eq!(
+        laid.size(anchor_id),
         size(30.0, 20.0),
-        "but the hidden child reaches its real geometry"
+        "the anchor preserves the hidden child's real geometry"
+    );
+    assert_eq!(
+        laid.size(laid.only_child(anchor_id)),
+        size(30.0, 20.0),
+        "the raw hidden child reaches its real geometry"
     );
 }

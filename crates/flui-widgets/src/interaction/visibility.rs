@@ -6,7 +6,7 @@ use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::animated::TickerMode;
-use crate::interaction::Offstage;
+use crate::interaction::{ExcludeFocus, Offstage};
 use crate::layout::SizedBox;
 
 /// Controls whether its child is shown, hidden, or hidden while keeping its
@@ -25,6 +25,7 @@ use crate::layout::SizedBox;
 ///    descendant animations while hidden. This keeps the child's state alive
 ///    and allows it to snap back to its last state when made visible again.
 ///    Paint and hit-testing are suppressed by `Offstage` when hidden.
+///    Hidden focus behavior is configured by [`ExcludeFocus`].
 ///
 /// 3. **Interactive-while-hidden (`maintain_interactivity = true`, requires
 ///    `maintain_state = true`):** deferred — full support requires
@@ -50,6 +51,7 @@ pub struct Visibility {
     visible: bool,
     maintain_state: bool,
     maintain_animation: bool,
+    maintain_focusability: bool,
     maintain_interactivity: bool,
     replacement: BoxedView,
     child: BoxedView,
@@ -64,6 +66,7 @@ impl Visibility {
             visible: true,
             maintain_state: false,
             maintain_animation: false,
+            maintain_focusability: false,
             maintain_interactivity: false,
             replacement: SizedBox::shrink().boxed(),
             child: child.into_view().boxed(),
@@ -104,6 +107,19 @@ impl Visibility {
         self
     }
 
+    /// Keep retained descendants focusable while the child is hidden (default
+    /// `false`).
+    ///
+    /// Requires `maintain_state = true` and is only effective while hidden.
+    /// With the default `false`, hiding a retained subtree clears its primary
+    /// focus to `None`; FLUI does not yet perform Flutter's enclosing-scope
+    /// previously-focused-child fallback.
+    #[must_use]
+    pub fn maintain_focusability(mut self, maintain_focusability: bool) -> Self {
+        self.maintain_focusability = maintain_focusability;
+        self
+    }
+
     /// Allow pointer events to reach the child even when it is not visible.
     ///
     /// Requires `maintain_state = true`. Full implementation is deferred until
@@ -130,6 +146,7 @@ impl fmt::Debug for Visibility {
             .field("visible", &self.visible)
             .field("maintain_state", &self.maintain_state)
             .field("maintain_animation", &self.maintain_animation)
+            .field("maintain_focusability", &self.maintain_focusability)
             .field("maintain_interactivity", &self.maintain_interactivity)
             .finish_non_exhaustive()
     }
@@ -140,6 +157,10 @@ impl StatelessView for Visibility {
         debug_assert!(
             self.maintain_state || !self.maintain_animation,
             "maintain_animation requires maintain_state"
+        );
+        debug_assert!(
+            self.maintain_state || !self.maintain_focusability,
+            "maintain_focusability requires maintain_state"
         );
 
         // Flutter oracle: `indexed_stack.dart` `Visibility.build`.
@@ -153,10 +174,14 @@ impl StatelessView for Visibility {
         // `maintain_interactivity` is accepted but has no additional effect
         // until `maintainSize` is implemented (documented divergence above).
         let result: BoxedView = if self.maintain_state {
+            let focusable_child = ExcludeFocus::new(self.child.clone())
+                .excluding(!self.visible && !self.maintain_focusability)
+                .into_view()
+                .boxed();
             let child = if self.maintain_animation {
-                self.child.clone()
+                focusable_child
             } else {
-                TickerMode::new(self.child.clone())
+                TickerMode::new(focusable_child)
                     .enabled(self.visible)
                     .into_view()
                     .boxed()

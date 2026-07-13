@@ -579,6 +579,59 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 }
 
+// ============================================================================
+// ExcludeFocus
+// ============================================================================
+
+/// Prevents its subtree from receiving focus while exclusion is active.
+///
+/// Exclusion is active by default. Activating it unfocuses an already-focused
+/// descendant, which is not automatically restored when exclusion is disabled.
+/// FLUI currently clears primary focus to `None`; unlike Flutter, it does not
+/// yet move focus to the enclosing scope's previously focused child.
+/// Descendants' own request-focus flags are not rewritten.
+#[derive(Clone, StatelessView)]
+pub struct ExcludeFocus {
+    excluding: bool,
+    child: BoxedView,
+}
+
+impl ExcludeFocus {
+    /// Creates an excluding focus boundary around `child`.
+    pub fn new(child: impl IntoView) -> Self {
+        Self {
+            excluding: true,
+            child: child.into_view().boxed(),
+        }
+    }
+
+    /// Whether focus is excluded from the subtree (default `true`).
+    ///
+    /// See [`ExcludeFocus`] for eviction and focus-destination semantics.
+    #[must_use]
+    pub fn excluding(mut self, excluding: bool) -> Self {
+        self.excluding = excluding;
+        self
+    }
+}
+
+impl std::fmt::Debug for ExcludeFocus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExcludeFocus")
+            .field("excluding", &self.excluding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl StatelessView for ExcludeFocus {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Focus::new(self.child.clone())
+            .can_request_focus(false)
+            .skip_traversal(true)
+            .descendants_are_focusable(!self.excluding)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_view::ViewExt;
@@ -596,6 +649,21 @@ mod tests {
         node: Arc<FocusNode>,
         autofocus: bool,
         on_focus_change: Option<FocusChangeHandler>,
+    }
+
+    #[derive(Clone, StatelessView)]
+    struct ExcludeHost {
+        excluding: bool,
+        node: Arc<FocusNode>,
+    }
+
+    impl StatelessView for ExcludeHost {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            ExcludeFocus::new(
+                Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&self.node)),
+            )
+            .excluding(self.excluding)
+        }
     }
 
     impl View for Host {
@@ -620,6 +688,48 @@ mod tests {
                 .into_view()
                 .boxed()
         }
+    }
+
+    #[test]
+    fn exclude_focus_refuses_allows_evicts_idempotently_and_does_not_refocus() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let node = FocusNode::with_debug_label("exclude-focus-unit-child");
+        let mut harness = mount(ExcludeHost {
+            excluding: true,
+            node: Arc::clone(&node),
+        });
+        node.request_focus();
+        assert_eq!(manager.primary_focus(), None);
+
+        harness.swap_root(ExcludeHost {
+            excluding: false,
+            node: Arc::clone(&node),
+        });
+        node.request_focus();
+        assert!(node.has_primary_focus());
+
+        harness.swap_root(ExcludeHost {
+            excluding: true,
+            node: Arc::clone(&node),
+        });
+        assert_eq!(manager.primary_focus(), None);
+        harness.swap_root(ExcludeHost {
+            excluding: true,
+            node: Arc::clone(&node),
+        });
+        assert_eq!(manager.primary_focus(), None);
+
+        harness.swap_root(ExcludeHost {
+            excluding: false,
+            node: Arc::clone(&node),
+        });
+        assert_eq!(manager.primary_focus(), None);
+        node.request_focus();
+        assert!(node.has_primary_focus());
+        manager.unfocus();
     }
 
     /// The mount shape (`_FocusState.initState` + `FocusScope`,

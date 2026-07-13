@@ -13,7 +13,7 @@
 //! The focus system mirrors Flutter's design:
 //!
 //! ```text
-//! FocusManager (singleton)
+//! FocusManager (owner-thread TLS)
 //!     └── rootScope: FocusScopeNode
 //!             ├── FocusNode (button)
 //!             ├── FocusScopeNode (dialog)
@@ -28,15 +28,11 @@
 //! - `hasFocus` = any descendant has focus, `hasPrimaryFocus` = this node has
 //!   focus
 //!
-//! # Singleton manager (I-4 closure)
+//! # Owner-thread focus manager
 //!
-//! Prior incarnations of this module held a `manager:
-//! RwLock<Option<Weak<FocusManagerInner>>>` reference on each
-//! [`FocusNode`], plus a private `FocusManagerInner` Arc-based dual
-//! state living alongside the public [`crate::FocusManager`] singleton.
-//! The current design collapses that into a single singleton: focus nodes reach the
-//! manager via [`crate::FocusManager::global`] without any weak-ref
-//! dance — the singleton is always live and globally reachable.
+//! Focus nodes reach the current owner thread's TLS manager through
+//! [`crate::FocusManager::global`]. They do not store a per-node manager
+//! reference or consult a parallel registry.
 //!
 //! # Example
 //!
@@ -161,10 +157,10 @@ impl KeyEventResult {
 ///
 /// # Manager access
 ///
-/// Focus nodes no longer hold a `Weak<FocusManagerInner>` — they reach
-/// the [`crate::FocusManager`] singleton via [`crate::FocusManager::global`]
-/// directly. The [`Self::is_attached`] flag still gates focus operations so
-/// nodes that haven't been mounted into the tree behave as no-ops.
+/// Focus nodes do not store a manager reference; they reach the current owner
+/// thread's TLS [`crate::FocusManager`] through
+/// [`crate::FocusManager::global`]. The [`Self::is_attached`] flag still gates
+/// focus operations for nodes outside that owner's focus tree.
 pub struct FocusNode {
     /// Unique identifier for this node.
     id: FocusNodeId,
@@ -305,9 +301,21 @@ impl FocusNode {
     }
 
     /// Sets whether descendants are focusable.
+    ///
+    /// On a `true` to `false` change, focus held by this node or any descendant
+    /// is cleared; the node's own future eligibility is unchanged. FLUI
+    /// currently clears primary focus to `None` and does not yet apply
+    /// Flutter's previously-focused-child fallback in the enclosing scope.
     pub fn set_descendants_are_focusable(&self, focusable: bool) {
-        self.descendants_are_focusable
-            .store(focusable, AtomicOrdering::Release);
+        let previous = self
+            .descendants_are_focusable
+            .swap(focusable, AtomicOrdering::AcqRel);
+        if previous == focusable {
+            return;
+        }
+        if !focusable && self.has_focus() {
+            crate::FocusManager::global().unfocus();
+        }
     }
 
     /// Returns whether this node is attached to the focus tree.
@@ -371,8 +379,8 @@ impl FocusNode {
     /// Returns whether this node has focus (this node or any descendant).
     ///
     /// This is `true` if any node in this subtree has primary focus.
-    /// Reaches the [`crate::FocusManager`] singleton directly (no Weak
-    /// upgrade dance) — singleton always live.
+    /// Queries the current owner thread's manager directly; its TLS instance
+    /// is initialized by [`crate::FocusManager::global`].
     ///
     /// Gated on `is_attached()` so detached nodes
     /// (still holding a stale FocusManager.primary_focus ID после
@@ -608,9 +616,8 @@ impl FocusNode {
         // Set parent
         *child.parent.write() = Some(Arc::downgrade(self));
 
-        // Mark as attached — the singleton manager is always reachable
-        // via FocusManager::global, so no per-node manager reference
-        // needs to be propagated.
+        // Mark as attached. Focus operations later resolve the current owner
+        // thread's TLS manager, so no manager reference is propagated.
         child.attached.store(true, AtomicOrdering::Release);
 
         // Add to children
@@ -897,9 +904,8 @@ impl FocusScopeNode {
         *self.traversal_edge_behavior.write() = behavior;
     }
 
-    /// Sets focus to the first focusable child via the singleton — in
-    /// **policy order**, not attach order (a pre-existing divergence from
-    /// Flutter's `findFirstFocus`, fixed with ADR-0026).
+    /// Sets focus to the first focusable child through the current owner
+    /// thread's TLS manager, in **policy order**, not attach order.
     pub fn set_first_focus(self: &Arc<Self>) {
         if let ResolvedStep::Focus(id) = self.resolve_traversal(None, true) {
             crate::FocusManager::global().request_focus(id);
@@ -935,8 +941,8 @@ impl FocusScopeNode {
     /// against whichever [`crate::FocusManager`] it owns. (This scope's own
     /// stepping methods perform it against the owner-thread manager, because
     /// that is what a `FocusScopeNode` can reach; [`crate::FocusManager::focus_next`]
-    /// performs it against itself, which is what lets a test manager traverse
-    /// without touching the singleton.)
+    /// performs it against its caller-owned receiver, so a test manager
+    /// traverses without mutating the owner thread's TLS manager.)
     ///
     /// Three-state by construction (ADR-0026): a cursor **outside** this
     /// scope resolves to [`ResolvedStep::None`] without consulting the edge
@@ -1052,7 +1058,7 @@ impl FocusScopeNode {
         }
     }
 
-    /// Carry out a resolved step against the global manager.
+    /// Carry out a resolved step against the current owner thread's TLS manager.
     fn perform(step: ResolvedStep) -> bool {
         match step {
             ResolvedStep::Focus(id) => {
@@ -1133,7 +1139,8 @@ pub enum TraversalEdgeBehavior {
 
 /// The intent one traversal step resolved to. The resolver is pure; the
 /// caller performs the intent against whichever [`crate::FocusManager`] it
-/// owns (the singleton in production, an instance in tests).
+/// owns. Scope convenience methods use the current owner thread's TLS manager;
+/// manager methods use their caller-owned receiver, including in tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedStep {
     /// Move the primary focus here.
@@ -1222,13 +1229,14 @@ impl ReadingOrderPolicy {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     use super::*;
 
-    /// Tests that drive the process-global [`FocusManager`] serialize here —
-    /// nextest isolates test *binaries*, not the threads inside one, and a
-    /// concurrent test would see (or clobber) this one's primary focus.
+    /// Tests that mutate or observe primary focus retain conservative fixture
+    /// serialization across test owners. Each owner thread has independent TLS
+    /// focus state; this prevents overlapping fixtures rather than cross-owner
+    /// state clobbering.
     static GLOBAL_FOCUS_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     #[test]
@@ -1268,7 +1276,8 @@ mod tests {
         let manager = crate::FocusManager::global();
         manager.unfocus();
 
-        // Under the global root, as widget-owned scopes are: focus-history
+        // Under the current owner thread's root, as widget-owned scopes are:
+        // focus-history
         // recording resolves the focused node by descending from the root.
         let scope_a = FocusScopeNode::with_debug_label("adopt-from");
         let scope_b = FocusScopeNode::with_debug_label("adopt-to");
@@ -1316,7 +1325,7 @@ mod tests {
         assert!(!moved.has_primary_focus());
         assert_eq!(manager.primary_focus(), None, "detach still unfocuses");
 
-        // Leave the process-global root the way this test found it.
+        // Leave this owner thread's focus root the way this test found it.
         manager
             .root_scope()
             .detach_node(scope_a.as_focus_node().id());
@@ -1368,7 +1377,7 @@ mod tests {
 
     #[test]
     fn test_focus_manager_owns_root_scope() {
-        // The singleton's root scope is constructed eagerly and attached.
+        // A caller-owned manager constructs and attaches its root eagerly.
         let manager = crate::FocusManager::new_for_test();
         assert!(manager.root_scope().as_focus_node().is_attached());
         assert!(manager.primary_focus().is_none());
@@ -1455,5 +1464,107 @@ mod tests {
             !child.can_request_focus(),
             "descendants_are_focusable=false must prevent descendant focus"
         );
+    }
+
+    #[test]
+    fn disabling_descendant_focus_evicts_self_and_allows_later_self_request() {
+        let _guard = GLOBAL_FOCUS_LOCK.lock();
+        let manager = crate::FocusManager::global();
+        manager.unfocus();
+
+        let policy = FocusNode::with_debug_label("policy-self");
+        manager.root_scope().attach_node(&policy);
+        policy.request_focus();
+        assert!(policy.has_primary_focus());
+
+        policy.set_descendants_are_focusable(false);
+        assert_eq!(manager.primary_focus(), None);
+        assert!(
+            policy.can_request_focus(),
+            "the policy does not disable itself"
+        );
+
+        policy.request_focus();
+        assert!(
+            policy.has_primary_focus(),
+            "a later explicit request may focus the policy node itself"
+        );
+
+        manager.root_scope().detach_node(policy.id());
+        manager.unfocus();
+    }
+
+    #[test]
+    fn disabling_descendant_focus_evicts_deep_primary_once_and_reenable_does_not_refocus() {
+        let _guard = GLOBAL_FOCUS_LOCK.lock();
+        let manager = crate::FocusManager::global();
+        manager.unfocus();
+
+        let policy = FocusNode::with_debug_label("policy");
+        let middle = FocusNode::with_debug_label("middle");
+        let leaf = FocusNode::with_debug_label("leaf");
+        manager.root_scope().attach_node(&policy);
+        policy.attach_node(&middle);
+        middle.attach_node(&leaf);
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&edges);
+        let listener = manager.add_listener(Rc::new(move |previous, current| {
+            captured.borrow_mut().push((previous, current));
+        }));
+
+        leaf.request_focus();
+        edges.borrow_mut().clear();
+        policy.set_descendants_are_focusable(false);
+        assert_eq!(manager.primary_focus(), None);
+        assert_eq!(
+            edges.borrow().as_slice(),
+            &[(Some(leaf.id()), None)],
+            "one policy transition emits exactly one eviction edge"
+        );
+
+        policy.set_descendants_are_focusable(false);
+        policy.set_descendants_are_focusable(true);
+        assert_eq!(
+            manager.primary_focus(),
+            None,
+            "re-enabling does not refocus"
+        );
+        assert_eq!(edges.borrow().len(), 1, "idempotent writes emit no edge");
+
+        leaf.request_focus();
+        assert!(
+            leaf.has_primary_focus(),
+            "a later descendant request succeeds"
+        );
+
+        manager.remove_listener(listener);
+        manager.root_scope().detach_node(policy.id());
+        manager.unfocus();
+    }
+
+    #[test]
+    fn disabling_descendant_focus_preserves_unrelated_sibling_primary() {
+        let _guard = GLOBAL_FOCUS_LOCK.lock();
+        let manager = crate::FocusManager::global();
+        manager.unfocus();
+
+        let policy = FocusNode::with_debug_label("policy");
+        let policy_child = FocusNode::with_debug_label("policy-child");
+        let sibling = FocusNode::with_debug_label("sibling");
+        manager.root_scope().attach_node(&policy);
+        manager.root_scope().attach_node(&sibling);
+        policy.attach_node(&policy_child);
+        sibling.request_focus();
+
+        policy.set_descendants_are_focusable(false);
+        assert!(
+            sibling.has_primary_focus(),
+            "disabling one subtree must not clear an unrelated sibling"
+        );
+
+        manager.root_scope().detach_node(policy.id());
+        manager.root_scope().detach_node(sibling.id());
+        manager.unfocus();
     }
 }

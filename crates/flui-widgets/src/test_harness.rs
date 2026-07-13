@@ -23,22 +23,21 @@ pub(crate) struct Harness {
     binding: HeadlessBinding,
     root_element: ElementId,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
-    /// Held for the harness's whole lifetime, so every mounted test serializes on
-    /// the process-global `FocusManager`: a `ModalRoute` activates a focus scope the
-    /// moment it becomes current (`modal_route.rs`), so *any* Navigator mount writes
-    /// global focus state — not just the focus tests. Reentrant, so a focus test may
-    /// also lock explicitly on the same thread.
+    /// Held for the harness's whole lifetime as conservative focus-fixture
+    /// serialization across test owners. Each owner thread resolves independent
+    /// TLS focus state; the guard prevents overlapping fixtures rather than
+    /// cross-owner state clobbering. Reentrant, so explicit locking composes.
     _focus_guard: parking_lot::ReentrantMutexGuard<'static, ()>,
 }
 
-/// Serializes every test that touches the process-global `FocusManager`.
+/// Conservatively serializes mounted focus fixtures across test owners.
 ///
 /// **Reentrant**: [`mount`] takes it for the returned [`Harness`]'s lifetime — so a
 /// test never has to remember to — and a focus test that *also* locks it explicitly
 /// (for pre-mount manager setup) nests on the same thread without deadlock. nextest
-/// isolates test *binaries*, not the threads inside one, so two focus-touching tests
-/// in this crate's lib binary would otherwise clobber each other's primary focus and
-/// active scope under `cargo test`'s in-process parallelism.
+/// isolates test *binaries*, not threads inside one. Each owner thread has
+/// independent TLS focus state; the guard is fixture isolation rather than
+/// protection against cross-owner state clobbering.
 pub(crate) static FOCUS_TEST_LOCK: parking_lot::ReentrantMutex<()> =
     parking_lot::ReentrantMutex::new(());
 
@@ -64,8 +63,9 @@ pub(crate) enum PostFrameCapability {
 
 /// [`mount`], but able to withhold the post-frame capability.
 pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapability) -> Harness {
-    // Serialize on the global FocusManager before touching the tree; held until the
-    // Harness drops (see FOCUS_TEST_LOCK). Reentrant, so an explicit lock composes.
+    // Conservatively serialize mounted focus fixtures before touching the tree;
+    // held until the Harness drops. Each owner has independent TLS focus state,
+    // so this is fixture isolation, not cross-owner clobber protection.
     let focus_guard = FOCUS_TEST_LOCK.lock();
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
     let mut build_owner = flui_view::BuildOwner::new();
