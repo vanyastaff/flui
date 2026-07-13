@@ -36,7 +36,11 @@
 //!   → `RenderOffstage(offstage=false)` wrapping the child's `RenderConstrainedBox`
 //!
 //! Divergences:
-//! - `maintainAnimation` and `maintainSize` are deferred (need `TickerMode`).
+//! - `maintainAnimation` matches Flutter for descendants registered through an
+//!   ambient `VsyncScope`, including production `AppBinding` roots. With no
+//!   ambient scope, FLUI's `TickerMode` intentionally passes the child through
+//!   to preserve wall-clock fallback behavior.
+//! - `maintainSize` is deferred.
 //! - `maintain_interactivity` is accepted but is a no-op until `maintainSize`
 //!   lands. Tested to confirm it does not panic or break the tree.
 //! - Flutter wraps in `_VisibilityScope`; FLUI omits that scope widget.
