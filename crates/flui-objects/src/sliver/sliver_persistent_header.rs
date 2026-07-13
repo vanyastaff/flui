@@ -98,7 +98,7 @@
 //!    FLUI's `RenderViewport::max_scroll_obstruction_extent_before`. The
 //!    requirement to report the field correctly stands; only the described
 //!    mechanism was corrected.
-//! 6. The stretch-trigger callback is **edge-triggered** (`stretch_offset >=
+//! 6. The stretch-trigger signal is **edge-triggered** (`stretch_offset >=
 //!    trigger && last_stretch_offset <= trigger`), firing once per crossing,
 //!    not once per frame spent above the trigger.
 //! 7. A trap the oracle itself doesn't call out: `layout_child`'s own
@@ -108,7 +108,15 @@
 //!    only on `stretch_configuration.is_some()`, no scroll-offset check).
 //!    Reusing one for the other silently changes stretch behavior.
 
-use std::{fmt, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    marker::PhantomData,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use flui_animation::{
     Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, Curves, FloatTween,
@@ -133,33 +141,65 @@ use flui_rendering::{
 // Configuration types
 // =============================================================================
 
-/// Specifies how a stretched header triggers a callback on overscroll.
+/// Data-plane signal raised when a stretched header crosses its trigger offset.
+///
+/// This is intentionally not a callback. `RenderSliverPersistentHeader` is a
+/// render object and must not store executable UI closures; owner/widget code can
+/// hold a clone, compare [`count`](Self::count), and invoke an owner-local
+/// callback from the UI runtime.
+#[derive(Clone, Default)]
+pub struct StretchTriggerSignal {
+    count: Arc<AtomicU64>,
+}
+
+impl StretchTriggerSignal {
+    /// Creates an untriggered signal.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of edge-trigger crossings reported so far.
+    #[must_use]
+    pub fn count(&self) -> u64 {
+        self.count.load(Ordering::SeqCst)
+    }
+
+    fn notify(&self) {
+        self.count.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl fmt::Debug for StretchTriggerSignal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StretchTriggerSignal")
+            .field("count", &self.count())
+            .finish()
+    }
+}
+
+/// Specifies how a stretched header reports overscroll trigger crossings.
 ///
 /// Flutter parity: `OverScrollHeaderStretchConfiguration` (`:33-46`). The
-/// callback fires **edge-triggered** — exactly once per crossing of
+/// signal fires **edge-triggered** — exactly once per crossing of
 /// `stretch_trigger_offset` — see `PersistentHeaderCore::layout_child`.
 #[derive(Clone)]
 pub struct OverScrollHeaderStretchConfiguration {
-    /// The overscroll extent required to trigger `on_stretch_trigger`.
+    /// The overscroll extent required to notify [`stretch_trigger`](Self::stretch_trigger).
     pub stretch_trigger_offset: f32,
-    /// Fired once per crossing of `stretch_trigger_offset`. Modeled as a
-    /// synchronous, fire-and-forget callback: Dart's `AsyncCallback` return
-    /// value is never awaited at the oracle's own call site either, and FLUI
-    /// forbids `async fn` in layout hot paths.
-    pub on_stretch_trigger: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Data-only notification raised once per crossing of
+    /// `stretch_trigger_offset`.
+    pub stretch_trigger: Option<StretchTriggerSignal>,
 }
 
 impl OverScrollHeaderStretchConfiguration {
     /// Creates a stretch configuration with an explicit trigger offset and
-    /// callback.
+    /// optional data-plane signal.
     #[must_use]
-    pub fn new(
-        stretch_trigger_offset: f32,
-        on_stretch_trigger: Option<Arc<dyn Fn() + Send + Sync>>,
-    ) -> Self {
+    pub fn new(stretch_trigger_offset: f32, stretch_trigger: Option<StretchTriggerSignal>) -> Self {
         Self {
             stretch_trigger_offset,
-            on_stretch_trigger,
+            stretch_trigger,
         }
     }
 }
@@ -168,7 +208,7 @@ impl Default for OverScrollHeaderStretchConfiguration {
     fn default() -> Self {
         Self {
             stretch_trigger_offset: 100.0,
-            on_stretch_trigger: None,
+            stretch_trigger: None,
         }
     }
 }
@@ -177,7 +217,7 @@ impl fmt::Debug for OverScrollHeaderStretchConfiguration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OverScrollHeaderStretchConfiguration")
             .field("stretch_trigger_offset", &self.stretch_trigger_offset)
-            .field("has_on_stretch_trigger", &self.on_stretch_trigger.is_some())
+            .field("has_stretch_trigger", &self.stretch_trigger.is_some())
             .finish()
     }
 }
@@ -313,7 +353,7 @@ impl PersistentHeaderCore {
     /// - a stretch-offset formula gated on `constraints.scroll_offset ==
     ///   0.0` — **distinct** from [`Self::stretch_offset_for_geometry`]
     ///   (trap #7);
-    /// - the edge-triggered `on_stretch_trigger` callback (trap #6).
+    /// - the edge-triggered stretch trigger signal (trap #6).
     ///
     /// Returns the child's post-layout main-axis extent (`0.0` if there is no
     /// child, matching the oracle's `childExtent` getter for a `null` child).
@@ -369,11 +409,11 @@ impl PersistentHeaderCore {
         };
 
         if let Some(cfg) = self.stretch_configuration.as_ref()
-            && let Some(callback) = cfg.on_stretch_trigger.as_ref()
+            && let Some(trigger) = cfg.stretch_trigger.as_ref()
             && stretch_offset >= cfg.stretch_trigger_offset
             && self.last_stretch_offset <= cfg.stretch_trigger_offset
         {
-            callback();
+            trigger.notify();
         }
         self.last_stretch_offset = stretch_offset;
 
@@ -1259,10 +1299,28 @@ mod tests {
     // ---- PersistentHeaderCore pure formulas --------------------------------
     //
     // `layout_child`'s own change-detection guard and edge-triggered stretch
-    // callback (traps #1, #6, #7) need a live `SliverLayoutContext` to drive
+    // trigger signal (traps #1, #6, #7) need a live `SliverLayoutContext` to drive
     // the child's box layout, so those are proven end-to-end in
     // `render_object_harness.rs` (`harness_sliver_persistent_header_stretch_*`)
     // rather than re-derived by hand here.
+
+    #[test]
+    fn stretch_trigger_signal_is_data_plane_and_clone_shared() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<StretchTriggerSignal>();
+
+        let signal = StretchTriggerSignal::new();
+        let cloned = signal.clone();
+        assert_eq!(signal.count(), 0);
+
+        cloned.notify();
+
+        assert_eq!(
+            signal.count(),
+            1,
+            "stretch trigger signal clones share the same data-plane counter"
+        );
+    }
 
     #[test]
     fn stretch_offset_for_geometry_ignores_scroll_offset_unlike_layout_child() {

@@ -15,6 +15,8 @@
 
 mod common;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -27,7 +29,6 @@ use flui_widgets::{
     ColoredBox, GestureDetector, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation,
     SimpleRoute, VsyncScope,
 };
-use parking_lot::Mutex;
 
 /// The routes use the framework default, 300 ms.
 const TRANSITION: Duration = Duration::from_millis(300);
@@ -39,25 +40,26 @@ const FRAME: Duration = Duration::from_millis(50);
 
 /// Records every `(animation, secondary_animation)` pair a page builder sees.
 #[derive(Clone, Default)]
-struct Seen(Arc<Mutex<Vec<(f32, f32)>>>);
+struct Seen(Rc<RefCell<Vec<(f32, f32)>>>);
 
 impl Seen {
     fn last(&self) -> Option<(f32, f32)> {
-        self.0.lock().last().copied()
+        self.0.borrow().last().copied()
     }
     fn builds(&self) -> usize {
-        self.0.lock().len()
+        self.0.borrow().len()
     }
 }
 
 /// A page that records both animations on each build.
 fn recording_page(
     seen: &Seen,
-) -> impl Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + Send + Sync + 'static
-{
+) -> impl Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static {
     let seen = seen.clone();
     move |_ctx, animation, secondary| {
-        seen.0.lock().push((animation.value(), secondary.value()));
+        seen.0
+            .borrow_mut()
+            .push((animation.value(), secondary.value()));
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }
 }

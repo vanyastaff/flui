@@ -7187,6 +7187,47 @@ fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
 }
 
 #[test]
+fn harness_sliver_persistent_header_stretch_reports_data_signal_on_crossing() {
+    let signal = StretchTriggerSignal::new();
+    let header =
+        RenderSliverScrollingPersistentHeader::new(40.0, 120.0).with_stretch_configuration(
+            OverScrollHeaderStretchConfiguration::new(50.0, Some(signal.clone())),
+        );
+    let mut run = RenderTester::mount(viewport_multi_with_scroll(
+        0.0,
+        [
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+            filler_sliver(),
+        ],
+    ))
+    .with_size(Size::new(px(300.0), px(400.0)))
+    .run_layout();
+
+    assert_eq!(signal.count(), 0);
+
+    let vp_id = run.id("viewport");
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(-60.0);
+    });
+    run.relayout();
+
+    assert_eq!(
+        signal.count(),
+        1,
+        "stretch trigger should report one data-plane signal when overscroll crosses threshold"
+    );
+
+    run.relayout();
+    assert_eq!(
+        signal.count(),
+        1,
+        "staying past the threshold must not retrigger without crossing back"
+    );
+}
+
+#[test]
 fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent()
 {
     let header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);

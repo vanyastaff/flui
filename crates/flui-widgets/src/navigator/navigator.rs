@@ -617,7 +617,7 @@ impl NavigatorHandle {
         RouteBinding::new(
             route,
             queue,
-            Arc::new(move || {
+            Rc::new(move || {
                 if let Some(shared) = weak.upgrade() {
                     shared.pump_route_commands();
                 }

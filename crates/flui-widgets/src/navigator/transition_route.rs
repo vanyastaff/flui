@@ -457,7 +457,7 @@ impl<T> TransitionRoute<T> {
         // release the reference when the route above is disposed, but only if we
         // are still pointing at it — a stale disposal must not clobber a newer parent.
         let inner = Arc::downgrade(&self.inner);
-        peer.completed.on_completed(Arc::new(move || {
+        peer.completed.on_completed(Rc::new(move || {
             let Some(inner) = inner.upgrade() else { return };
             let mut parent = inner.secondary_parent.lock();
             let still_ours = matches!(

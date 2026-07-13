@@ -5,6 +5,8 @@
 //! overlay, what the heroes look like while it flies, where the shuttle is aimed, and
 //! what is left behind when it lands.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -1310,7 +1312,7 @@ fn hero_page_with(
     tag_name: &'static str,
     w: f32,
     h: f32,
-    configure: impl Fn(Hero) -> Hero + Send + Sync + 'static,
+    configure: impl Fn(Hero) -> Hero + 'static,
 ) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
@@ -1387,14 +1389,23 @@ fn a_push_eases_on_the_destination_hero_curve() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
+    let configure_calls = Rc::new(Cell::new(0));
+    let configure_calls_for_page = Rc::clone(&configure_calls);
 
     let transition = fly(
         &navigator,
         &mut harness,
         hero_page("shared", 30.0, 20.0),
-        hero_page_with("shared", 60.0, 45.0, |hero| hero.curve(Threshold::new(0.9))),
+        hero_page_with("shared", 60.0, 45.0, move |hero| {
+            configure_calls_for_page.set(configure_calls_for_page.get() + 1);
+            hero.curve(Threshold::new(0.9))
+        }),
     );
     harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    assert!(
+        configure_calls.get() > 0,
+        "hero page configuration must accept owner-local Rc<Cell<_>> state"
+    );
 
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     assert_rect_close(

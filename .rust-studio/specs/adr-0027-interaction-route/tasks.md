@@ -322,6 +322,57 @@ and navigation ownership contract are complete.
   animation_listener --lib`, `cargo check -p flui-view --tests`, `cargo clippy
   -p flui-view --all-targets -- -D warnings`, and `cargo fmt -p flui-view
   --check` pass.
+- 2026-07-12 test-authoring cleanup checkpoint (Task 7): stale test helpers
+  stopped requiring thread-safe user closures where the production API is
+  owner-local. `Listener` integration counters now use `Rc<Cell<_>>`, route page
+  builder observations use `Rc<RefCell<_>>`, and the hero page-configuration
+  helper accepts/captures `Rc<Cell<_>>` state. This does not weaken any
+  render/data-plane boundary; it prevents tests from accidentally reintroducing
+  `Send + Sync` as an authoring requirement. Evidence: `cargo test -p
+  flui-widgets --test listener`, `cargo test -p flui-widgets --test routes
+  page_route_push_builds_the_page_and_completes_its_entrance`, `cargo test -p
+  flui-widgets a_push_eases_on_the_destination_hero_curve --lib`, `cargo fmt -p
+  flui-widgets -- --check`, `git diff --check`, and `cargo clippy -p
+  flui-widgets --all-targets -- -D warnings` pass.
+- 2026-07-12 stale callback-doc cleanup checkpoint (Task 7/9 prep): examples and
+  docs no longer teach `Send + Sync` as the UI callback shape. `ProxyView`'s
+  gesture example and `Memo`'s stale-closure tripwire now model owner-local
+  `Rc<dyn Fn()>`; `flui-interaction` README/gesture docs describe the
+  ADR-0027 owner-local callback versus data-plane token split instead of saying
+  every recognizer/callback is thread-safe. Evidence: `cargo test -p flui-view
+  stale_closure_tripwire_documents_known_limitation --lib`, `cargo test -p
+  flui-widgets --test listener`, `cargo fmt -p flui-view -p flui-widgets --
+  --check`, `git diff --check`, `cargo clippy -p flui-view -p flui-widgets
+  --all-targets -- -D warnings`, and a stale-doc `rg` scan pass.
+- 2026-07-12 navigator binding owner-local checkpoint (Task 7): private
+  executable route lifecycle callbacks stopped using thread-safe ownership.
+  `RouteBinding::wake` moved from `Arc<dyn Fn()>` to `Rc<dyn Fn()>`, and
+  `CompletedSignal` moved from `Mutex<Vec<Arc<dyn Fn()>>>` to owner-local
+  `RefCell<Vec<Rc<dyn Fn()>>>` plus a `Cell<bool>` completion bit. The command
+  queue, route ids, transition peer registry handles, route entries, modal
+  handles, and approved `NavigatorCommandTarget` data-plane token remain
+  separate from executable callbacks. Evidence: `cargo check -p flui-widgets
+  --tests`, `cargo test -p flui-widgets route_binding_wake_accepts_owner_local_rc_state
+  --lib`, `cargo test -p flui-widgets completed_signal_accepts_owner_local_rc_state
+  --lib`, `cargo test -p flui-widgets transition_route --lib`, `cargo fmt -p
+  flui-widgets -p flui-view -- --check`, `git diff --check`, stale-pattern `rg`
+  over navigator binding/callers, and `cargo clippy -p flui-widgets
+  --all-targets -- -D warnings` pass.
+- 2026-07-12 persistent-header stretch checkpoint (Task 7): executable
+  `on_stretch_trigger` callback storage was removed from
+  `OverScrollHeaderStretchConfiguration`. Render layout now raises a data-only
+  `StretchTriggerSignal` (`Arc<AtomicU64>` counter) when the existing edge
+  crossing condition fires. This keeps `RenderSliverPersistentHeader` free of
+  user closures while preserving the bridge needed for a future owner/widget
+  layer to drain the counter and invoke an owner-local `Rc` callback. Evidence:
+  `cargo check -p flui-objects --tests`, `cargo test -p flui-objects
+  stretch_trigger_signal_is_data_plane_and_clone_shared --lib`, `cargo test -p
+  flui-objects --test render_object_harness
+  harness_sliver_persistent_header_stretch_reports_data_signal_on_crossing`,
+  stale-pattern `rg` for `on_stretch_trigger` / render-level callback storage,
+  `cargo fmt -p flui-objects -p flui-widgets -p flui-view -- --check`,
+  `git diff --check`, and `cargo clippy -p flui-objects -p flui-widgets
+  --all-targets -- -D warnings` pass.
 - Tasks 3–5 must check the corresponding `.flutter/` sources before claiming parity.
   A green gate without behavioral evidence does not satisfy their acceptance slices.
 - No task may introduce a generic UI-thread executor, queue the current pointer event,

@@ -22,9 +22,10 @@ use super::view::View;
 ///
 /// ```rust,ignore
 /// use flui_view::{ProxyView, BuildContext, View};
+/// use std::rc::Rc;
 ///
 /// struct GestureDetector {
-///     on_tap: Option<Box<dyn Fn() + Send + Sync>>,
+///     on_tap: Option<Rc<dyn Fn()>>,
 ///     child: Box<dyn View>,
 /// }
 ///

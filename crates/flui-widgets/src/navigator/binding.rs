@@ -62,8 +62,10 @@
 //!
 //! [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
 
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_animation::{Animation, Vsync};
@@ -137,7 +139,7 @@ pub(crate) enum TransitionGroup {
     Page,
 }
 
-/// A one-shot "this route is disposed" signal with callbacks.
+/// A one-shot "this route is disposed" owner-local signal with callbacks.
 ///
 /// Flutter uses a `Future`; FLUI's routes are driven synchronously from the flush,
 /// so a plain callback list is both sufficient and observable. Private: this is
@@ -145,31 +147,27 @@ pub(crate) enum TransitionGroup {
 /// train-hopping contract needs it. It does — see `transition_route.rs`.
 #[derive(Default)]
 pub(crate) struct CompletedSignal {
-    done: Mutex<bool>,
-    listeners: Mutex<Vec<Arc<dyn Fn()>>>,
+    done: Cell<bool>,
+    listeners: RefCell<Vec<Rc<dyn Fn()>>>,
 }
 
 impl CompletedSignal {
     /// Run `callback` when the route completes, or **now** if it already has.
-    pub(crate) fn on_completed(&self, callback: Arc<dyn Fn()>) {
-        if *self.done.lock() {
+    pub(crate) fn on_completed(&self, callback: Rc<dyn Fn()>) {
+        if self.done.get() {
             callback();
             return;
         }
-        self.listeners.lock().push(callback);
+        self.listeners.borrow_mut().push(callback);
     }
 
     /// Fire once. Later `on_completed` calls run immediately.
     pub(crate) fn complete(&self) {
-        {
-            let mut done = self.done.lock();
-            if *done {
-                return;
-            }
-            *done = true;
+        if self.done.replace(true) {
+            return;
         }
         // Snapshot then fire: a callback may re-enter the route.
-        let callbacks: Vec<_> = self.listeners.lock().drain(..).collect();
+        let callbacks = std::mem::take(&mut *self.listeners.borrow_mut());
         for callback in callbacks {
             callback();
         }
@@ -179,7 +177,7 @@ impl CompletedSignal {
 impl fmt::Debug for CompletedSignal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompletedSignal")
-            .field("done", &*self.done.lock())
+            .field("done", &self.done.get())
             .finish_non_exhaustive()
     }
 }
@@ -257,7 +255,7 @@ pub(crate) struct RouteBinding {
     route: RouteId,
     queue: RouteCommandQueue,
     /// Applies the queue if the history is not currently locked. See *Correction 1*.
-    wake: Arc<dyn Fn()>,
+    wake: Rc<dyn Fn()>,
     /// The navigator's clock. `Mutex` because `NavigatorState::init_state`
     /// resolves it after the handle (and therefore any seeded binding) exists.
     vsync: RouteVsync,
@@ -271,7 +269,7 @@ impl RouteBinding {
     pub(crate) fn new(
         route: RouteId,
         queue: RouteCommandQueue,
-        wake: Arc<dyn Fn()>,
+        wake: Rc<dyn Fn()>,
         vsync: RouteVsync,
         registries: RouteRegistries,
     ) -> Self {
@@ -380,8 +378,8 @@ impl RouteBinding {
 
     /// The entrance transition finished — Flutter's `whenCompleteOrCancel`.
     ///
-    /// Safe to call from inside a flush (a zero-duration transition), from an
-    /// animation status listener, or from any thread.
+    /// Safe to call from inside a flush (a zero-duration transition) or from an
+    /// owner-runtime animation status bridge.
     pub(crate) fn notify_push_completed(&self) {
         self.raise(RouteCommand::PushCompleted(self.route));
     }

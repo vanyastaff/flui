@@ -88,4 +88,5 @@ pub use sliver::{
     RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy, RenderSliverOffstage,
     RenderSliverOpacity, RenderSliverPadding, RenderSliverPinnedPersistentHeader,
     RenderSliverScrollingPersistentHeader, RenderSliverToBoxAdapter, RenderViewport,
+    StretchTriggerSignal,
 };

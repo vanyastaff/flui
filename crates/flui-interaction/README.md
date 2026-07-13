@@ -368,13 +368,16 @@ let settings = GestureSettings {
 
 ---
 
-## Thread Safety
+## Ownership and threading
 
-All types are `Send + Sync`:
+FLUI separates executable UI ownership from data-plane routing:
 
-- `FocusManager` uses `RwLock` for global state
-- `GestureArena` uses `Mutex` for entry management
-- Recognizers are individually thread-safe
+- recognizer callbacks, focus/key callbacks, and mouse-region callbacks are
+  owner-local and may capture `Rc` UI state;
+- pointer events, route identities, and other data-plane tokens keep the
+  thread-safety required by the embedding/runtime boundary;
+- executable callbacks should stay in the owner runtime, not in render storage
+  or a generic cross-thread executor.
 
 ---
 

@@ -13,11 +13,11 @@
 //! no build owner, no render pipeline, no overlay — `route_stack_flush_is_pure_data`
 //! checks that claim against the sources rather than asserting it in prose.
 
-use std::sync::Arc;
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use parking_lot::Mutex;
 
-use super::binding::{RouteBinding, RouteCommand};
+use super::binding::{CompletedSignal, RouteBinding, RouteCommand};
 use super::history::RouteHistory;
 use super::lifecycle::RouteLifecycle;
 use super::observer::{NavigatorObserver, Notification, Observation};
@@ -1232,8 +1232,8 @@ impl Route for SeamRoute {
 /// Deliberately a **no-op**: the whole point of the command queue is that a command raised
 /// during a flush is drained by that flush, so `wake` has nothing to do. Commands
 /// raised *outside* a flush are applied by the explicit `flush` the test drives.
-fn inert_wake() -> Arc<dyn Fn()> {
-    Arc::new(|| {})
+fn inert_wake() -> Rc<dyn Fn()> {
+    Rc::new(|| {})
 }
 
 fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
@@ -1249,6 +1249,48 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
             modals: Arc::new(Mutex::new(std::collections::HashMap::new())),
         },
     )
+}
+
+#[test]
+fn route_binding_wake_accepts_owner_local_rc_state() {
+    let history = RouteHistory::new();
+    let route = RouteId::next();
+    let wake_calls = Rc::new(Cell::new(0));
+    let wake_calls_for_binding = Rc::clone(&wake_calls);
+    let binding = RouteBinding::new(
+        route,
+        history.command_queue(),
+        Rc::new(move || wake_calls_for_binding.set(wake_calls_for_binding.get() + 1)),
+        Arc::new(Mutex::new(None)),
+        super::binding::RouteRegistries {
+            peers: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            entries: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            subtrees: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            modals: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        },
+    );
+
+    binding.notify_push_completed();
+
+    assert_eq!(
+        wake_calls.get(),
+        1,
+        "RouteBinding wake is an owner-local callback"
+    );
+}
+
+#[test]
+fn completed_signal_accepts_owner_local_rc_state() {
+    let completed = CompletedSignal::default();
+    let calls = Rc::new(Cell::new(0));
+    let calls_for_callback = Rc::clone(&calls);
+    completed.on_completed(Rc::new(move || {
+        calls_for_callback.set(calls_for_callback.get() + 1);
+    }));
+
+    completed.complete();
+
+    assert_eq!(calls.get(), 1, "completed callbacks are owner-local");
 }
 
 /// A route raising `finalize()` from `did_pop` — i.e. **inside** the flush that
