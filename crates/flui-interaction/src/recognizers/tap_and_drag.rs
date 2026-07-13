@@ -122,18 +122,18 @@ pub struct TapDragEndDetails {
 // ============================================================================
 
 /// Callback fired when the primary pointer contacts the screen.
-pub type TapDragDownCallback = Arc<dyn Fn(TapDragDownDetails)>;
+pub type TapDragDownCallback = Rc<dyn Fn(TapDragDownDetails)>;
 /// Callback fired when the pointer lifts before crossing drag slop (a tap).
-pub type TapDragUpCallback = Arc<dyn Fn(TapDragUpDetails)>;
+pub type TapDragUpCallback = Rc<dyn Fn(TapDragUpDetails)>;
 /// Callback fired when the pointer crosses drag slop and the drag begins.
-pub type TapDragStartCallback = Arc<dyn Fn(TapDragStartDetails)>;
+pub type TapDragStartCallback = Rc<dyn Fn(TapDragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
-pub type TapDragUpdateCallback = Arc<dyn Fn(TapDragUpdateDetails)>;
+pub type TapDragUpdateCallback = Rc<dyn Fn(TapDragUpdateDetails)>;
 /// Callback fired when the pointer lifts and the drag completes.
-pub type TapDragEndCallback = Arc<dyn Fn(TapDragEndDetails)>;
+pub type TapDragEndCallback = Rc<dyn Fn(TapDragEndDetails)>;
 /// Callback fired when the sequence is cancelled (arena loss or pointer
 /// cancel) — neither the tap nor the drag outcome will fire.
-pub type TapDragCancelCallback = Arc<dyn Fn()>;
+pub type TapDragCancelCallback = Rc<dyn Fn()>;
 
 // ============================================================================
 // Recogniser
@@ -279,14 +279,14 @@ impl TapAndDragGestureRecognizer {
         self: Arc<Self>,
         cb: impl Fn(TapDragDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_down = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_tap_down = Some(Rc::new(cb));
         self
     }
 
     /// Register the tap-up callback (fires when the pointer lifts before
     /// crossing drag slop, resolving the sequence as a tap).
     pub fn with_on_tap_up(self: Arc<Self>, cb: impl Fn(TapDragUpDetails) + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_up = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_tap_up = Some(Rc::new(cb));
         self
     }
 
@@ -296,7 +296,7 @@ impl TapAndDragGestureRecognizer {
         self: Arc<Self>,
         cb: impl Fn(TapDragStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_drag_start = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_drag_start = Some(Rc::new(cb));
         self
     }
 
@@ -306,7 +306,7 @@ impl TapAndDragGestureRecognizer {
         self: Arc<Self>,
         cb: impl Fn(TapDragUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_drag_update = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_drag_update = Some(Rc::new(cb));
         self
     }
 
@@ -316,14 +316,14 @@ impl TapAndDragGestureRecognizer {
         self: Arc<Self>,
         cb: impl Fn(TapDragEndDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_drag_end = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_drag_end = Some(Rc::new(cb));
         self
     }
 
     /// Register the cancel callback (fires when the sequence is cancelled by
     /// an arena loss or a pointer-cancel event).
     pub fn with_on_cancel(self: Arc<Self>, cb: impl Fn() + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_cancel = Some(Arc::new(cb));
+        self.callbacks.borrow_mut().on_cancel = Some(Rc::new(cb));
         self
     }
 

@@ -57,7 +57,9 @@
 //! | Tap → drag use case | yes | no (use [`TapAndDragGestureRecognizer`](crate::recognizers::TapAndDragGestureRecognizer)) |
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
+    rc::Rc,
     sync::{Arc, Weak},
     time::Instant,
 };
@@ -119,7 +121,7 @@ pub enum MultiDragAxis {
 /// interactive region). When `Some(handle)` is returned, the recogniser calls
 /// `update`/`end`/`cancel` on that handle.
 pub type MultiDragStartCallback =
-    Arc<dyn Fn(PointerId, Offset<Pixels>) -> Option<Box<dyn MultiDragHandle>> + Send + Sync>; // PORT-CHECK-OK-DYN: per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
+    Rc<dyn Fn(PointerId, Offset<Pixels>) -> Option<Box<dyn MultiDragHandle>>>; // PORT-CHECK-OK-DYN: per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
 
 /// Per-pointer state. Mirrors Flutter's `MultiDragPointerState`.
 ///
@@ -227,7 +229,7 @@ pub struct MultiDragGestureRecognizer {
     /// (≤10 in practice on touch screens).
     pointers: Arc<Mutex<HashMap<PointerId, MultiDragPointerState>>>,
     /// User callback fired on acceptance.
-    on_start: Arc<Mutex<Option<MultiDragStartCallback>>>,
+    on_start: Rc<RefCell<Option<MultiDragStartCallback>>>,
     /// Device-specific gesture settings.
     settings: Arc<Mutex<GestureSettings>>,
 }
@@ -249,7 +251,7 @@ impl MultiDragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             pointers: Arc::new(Mutex::new(HashMap::new())),
-            on_start: Arc::new(Mutex::new(None)),
+            on_start: Rc::new(RefCell::new(None)),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
     }
@@ -264,7 +266,7 @@ impl MultiDragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             pointers: Arc::new(Mutex::new(HashMap::new())),
-            on_start: Arc::new(Mutex::new(None)),
+            on_start: Rc::new(RefCell::new(None)),
             settings: Arc::new(Mutex::new(settings)),
         })
     }
@@ -272,7 +274,7 @@ impl MultiDragGestureRecognizer {
     /// Set the per-pointer start callback. The callback may return `None` to
     /// reject the drag (caller can read pointer position to filter by region).
     pub fn with_on_start(self: Arc<Self>, callback: MultiDragStartCallback) -> Arc<Self> {
-        *self.on_start.lock() = Some(callback);
+        *self.on_start.borrow_mut() = Some(callback);
         self
     }
 
@@ -348,7 +350,7 @@ impl MultiDragGestureRecognizer {
         kind: PointerType,
         timestamp: Instant,
     ) {
-        let on_start = self.on_start.lock().clone();
+        let on_start = self.on_start.borrow().clone();
         let mut map = self.pointers.lock();
         let Some(state) = map.get_mut(&pointer) else {
             return;
@@ -546,7 +548,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         for handle in removed {
             handle.cancel();
         }
-        *self.on_start.lock() = None;
+        *self.on_start.borrow_mut() = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -584,6 +586,8 @@ impl GestureArenaMember for MultiDragGestureRecognizer {
 mod tests {
     use super::*;
     use crate::events::{make_cancel_event, make_move_event_for_id, make_up_event_for_id};
+    use std::cell::Cell;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Test handle that counts update/end/cancel invocations.
@@ -655,10 +659,9 @@ mod tests {
         let arena = crate::arena::GestureArena::new();
         let cancels = Arc::new(AtomicUsize::new(0));
         let cancels_cb = cancels.clone();
-        let rec =
-            MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(Arc::new(
-                move |_pointer, _pos| Some(Box::new(counting_handle(cancels_cb.clone())) as _),
-            ));
+        let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
+            Rc::new(move |_pointer, _pos| Some(Box::new(counting_handle(cancels_cb.clone())) as _)),
+        );
 
         let p = PointerId::PRIMARY;
         rec.add_pointer(p, Offset::new(Pixels(0.0), Pixels(0.0)));
@@ -688,7 +691,7 @@ mod tests {
         // pointer and rejects other members contending for it.
         let arena = crate::arena::GestureArena::new();
         let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
-            .with_on_start(Arc::new(|_pointer, _pos| {
+            .with_on_start(Rc::new(|_pointer, _pos| {
                 Some(Box::new(counting_handle(Arc::new(AtomicUsize::new(0)))) as _)
             }));
 
@@ -735,6 +738,36 @@ mod tests {
     }
 
     #[test]
+    fn on_start_accepts_owner_local_rc_state() {
+        let arena = crate::arena::GestureArena::new();
+        let starts = Rc::new(Cell::new(0));
+        let starts_for_callback = Rc::clone(&starts);
+        let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
+            Rc::new(move |_pointer, _pos| {
+                starts_for_callback.set(starts_for_callback.get() + 1);
+                Some(Box::new(CountingHandle {
+                    updates: Arc::new(AtomicUsize::new(0)),
+                    ends: Arc::new(AtomicUsize::new(0)),
+                    cancels: Arc::new(AtomicUsize::new(0)),
+                }))
+            }),
+        );
+
+        rec.add_pointer(pointer_id(1), Offset::new(Pixels(0.0), Pixels(0.0)));
+        rec.handle_event(&make_move_event_for_id(
+            pointer_id(1),
+            Offset::new(Pixels(25.0), Pixels(0.0)),
+            PointerType::Touch,
+        ));
+
+        assert_eq!(
+            starts.get(),
+            1,
+            "multi-drag start callback captured Rc<Cell<_>>"
+        );
+    }
+
+    #[test]
     fn each_pointer_gets_independent_drag() {
         // Two pointers, both with handles, both moved past slop.
         // Verifies per-pointer isolation: one drag's events don't leak
@@ -746,7 +779,7 @@ mod tests {
         let updates_p2 = Arc::new(AtomicUsize::new(0));
         let p1_updates = updates_p1.clone();
         let p2_updates = updates_p2.clone();
-        let rec2 = rec.with_on_start(Arc::new(move |pointer, _pos| {
+        let rec2 = rec.with_on_start(Rc::new(move |pointer, _pos| {
             if pointer == pointer_id(1) {
                 Some(Box::new(CountingHandle {
                     updates: p1_updates.clone(),
@@ -802,7 +835,7 @@ mod tests {
         let first = Arc::new(Mutex::new(None));
         let first_clone = first.clone();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
-            Arc::new(move |_pointer, _pos| {
+            Rc::new(move |_pointer, _pos| {
                 Some(Box::new(FirstDeltaRecorder {
                     first: first_clone.clone(),
                 }))
@@ -837,7 +870,7 @@ mod tests {
         let ends = Arc::new(AtomicUsize::new(0));
         let ends_clone = ends.clone();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
-            Arc::new(move |_pointer, _pos| {
+            Rc::new(move |_pointer, _pos| {
                 Some(Box::new(CountingHandle {
                     updates: Arc::new(AtomicUsize::new(0)),
                     ends: ends_clone.clone(),
@@ -868,7 +901,7 @@ mod tests {
         let ends = Arc::new(AtomicUsize::new(0));
         let ends_clone = ends.clone();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
-            Arc::new(move |_pointer, _pos| {
+            Rc::new(move |_pointer, _pos| {
                 Some(Box::new(CountingHandle {
                     updates: Arc::new(AtomicUsize::new(0)),
                     ends: ends_clone.clone(),
@@ -899,7 +932,7 @@ mod tests {
         let updates = Arc::new(AtomicUsize::new(0));
         let updates_clone = updates.clone();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Horizontal).with_on_start(
-            Arc::new(move |_pointer, _pos| {
+            Rc::new(move |_pointer, _pos| {
                 Some(Box::new(CountingHandle {
                     updates: updates_clone.clone(),
                     ends: Arc::new(AtomicUsize::new(0)),
@@ -934,7 +967,7 @@ mod tests {
         let c7 = cancels_p7.clone();
         let c8 = cancels_p8.clone();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
-            Arc::new(move |pointer, _pos| {
+            Rc::new(move |pointer, _pos| {
                 if pointer == pointer_id(7) {
                     Some(Box::new(CountingHandle {
                         updates: Arc::new(AtomicUsize::new(0)),
@@ -977,7 +1010,7 @@ mod tests {
         let cancels = Arc::new(AtomicUsize::new(0));
         let cancels_clone = cancels.clone();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
-            Arc::new(move |_pointer, _pos| {
+            Rc::new(move |_pointer, _pos| {
                 Some(Box::new(CountingHandle {
                     updates: Arc::new(AtomicUsize::new(0)),
                     ends: Arc::new(AtomicUsize::new(0)),
@@ -1004,7 +1037,7 @@ mod tests {
         // silently, no further updates flow to it.
         let arena = crate::arena::GestureArena::new();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free)
-            .with_on_start(Arc::new(|_pointer, _pos| None));
+            .with_on_start(Rc::new(|_pointer, _pos| None));
         rec.add_pointer(pointer_id(11), Offset::new(Pixels(0.0), Pixels(0.0)));
         rec.handle_event(&make_move_event_for_id(
             pointer_id(11),

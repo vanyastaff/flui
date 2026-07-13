@@ -96,13 +96,6 @@ pub struct RenderAnimatedSize {
     clip_behavior: Clip,
     /// Value-change subscription on `controller`, torn down in `detach`.
     listener_id: Option<ListenerId>,
-    /// `on_end` subscription on `controller`'s status channel, torn down in
-    /// `detach`.
-    status_listener_id: Option<ListenerId>,
-    /// Registered unconditionally in `attach` (not gated on `is_some()`), so
-    /// a later [`set_on_end`](Self::set_on_end) needs no re-subscription —
-    /// the closure reads this cell live on every status fire.
-    on_end: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
 
 impl RenderAnimatedSize {
@@ -115,7 +108,6 @@ impl RenderAnimatedSize {
         curve: ArcCurve,
         alignment: Alignment,
         clip_behavior: Clip,
-        on_end: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Self {
         let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
         let animation = CurvedAnimation::new(parent, curve.clone());
@@ -130,8 +122,6 @@ impl RenderAnimatedSize {
             has_visual_overflow: false,
             clip_behavior,
             listener_id: None,
-            status_listener_id: None,
-            on_end: Arc::new(parking_lot::Mutex::new(on_end)),
         }
     }
 
@@ -171,12 +161,6 @@ impl RenderAnimatedSize {
         let parent: Arc<dyn Animation<f32>> = Arc::new(self.controller.clone());
         self.animation = CurvedAnimation::new(parent, curve.clone());
         self.curve = curve;
-    }
-
-    /// Sets the completion callback. No dirty-marking — matches the oracle's
-    /// inert setter (`animated_size.dart:171-176`).
-    pub fn set_on_end(&self, on_end: Option<Arc<dyn Fn() + Send + Sync>>) {
-        *self.on_end.lock() = on_end;
     }
 
     /// The current alignment.
@@ -453,16 +437,6 @@ impl RenderBox for RenderAnimatedSize {
             let _ = mark_handle.mark_needs_layout();
         })));
 
-        let on_end = self.on_end.clone();
-        self.status_listener_id =
-            Some(self.controller.add_status_listener(Arc::new(move |status| {
-                if status == AnimationStatus::Completed
-                    && let Some(cb) = on_end.lock().as_ref()
-                {
-                    cb();
-                }
-            })));
-
         // Resume an interrupted resizing animation in case the node wasn't
         // marked dirty already (oracle animated_size.dart:225-227).
         if matches!(
@@ -484,9 +458,6 @@ impl RenderBox for RenderAnimatedSize {
         if let Some(id) = self.listener_id.take() {
             self.controller.remove_listener(id);
         }
-        if let Some(id) = self.status_listener_id.take() {
-            self.controller.remove_status_listener(id);
-        }
     }
 }
 
@@ -507,7 +478,6 @@ mod tests {
             ArcCurve::new(flui_animation::Curves::Linear),
             Alignment::CENTER,
             Clip::HardEdge,
-            None,
         )
     }
 
@@ -678,74 +648,6 @@ mod tests {
         assert!(!ro.controller.is_animating());
         assert_eq!(ro.size_tween.begin, snapped);
         assert_eq!(ro.size_tween.end, snapped);
-    }
-
-    // ---- on_end fires exactly once per completed run ----------------------
-
-    #[test]
-    fn on_end_fires_on_completion_via_status_listener() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let ro = render(50);
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls2 = calls.clone();
-        ro.set_on_end(Some(Arc::new(move || {
-            calls2.fetch_add(1, Ordering::SeqCst);
-        })));
-
-        // attach() registers the status listener.
-        let status_id = ro.controller.add_status_listener(Arc::new({
-            let on_end = ro.on_end.clone();
-            move |status| {
-                if status == AnimationStatus::Completed
-                    && let Some(cb) = on_end.lock().as_ref()
-                {
-                    cb();
-                }
-            }
-        }));
-
-        let _ = ro.controller.forward_from(Some(1.0)); // settles immediately -> Completed
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        ro.controller.remove_status_listener(status_id);
-    }
-
-    #[test]
-    fn set_on_end_swap_is_read_live_by_the_existing_subscription() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let ro = render(50);
-        let first_calls = Arc::new(AtomicUsize::new(0));
-        let first_calls2 = first_calls.clone();
-        ro.set_on_end(Some(Arc::new(move || {
-            first_calls2.fetch_add(1, Ordering::SeqCst);
-        })));
-
-        let status_id = ro.controller.add_status_listener(Arc::new({
-            let on_end = ro.on_end.clone();
-            move |status| {
-                if status == AnimationStatus::Completed
-                    && let Some(cb) = on_end.lock().as_ref()
-                {
-                    cb();
-                }
-            }
-        }));
-
-        // Swap the callback BEFORE the run completes — the live cell must be
-        // read at fire time, not captured at subscribe time.
-        let second_calls = Arc::new(AtomicUsize::new(0));
-        let second_calls2 = second_calls.clone();
-        ro.set_on_end(Some(Arc::new(move || {
-            second_calls2.fetch_add(1, Ordering::SeqCst);
-        })));
-
-        let _ = ro.controller.forward_from(Some(1.0));
-        assert_eq!(first_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(second_calls.load(Ordering::SeqCst), 1);
-
-        ro.controller.remove_status_listener(status_id);
     }
 
     // ---- attach on Changed/Unstable immediately requests a layout ---------

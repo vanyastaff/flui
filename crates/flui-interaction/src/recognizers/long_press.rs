@@ -31,16 +31,16 @@ use crate::{
 };
 
 /// Callback for long press down events (initial contact)
-pub type LongPressDownCallback = Arc<dyn Fn(LongPressDownDetails)>;
+pub type LongPressDownCallback = Rc<dyn Fn(LongPressDownDetails)>;
 
 /// Callback for simple long press recognition (no details)
-pub type LongPressSimpleCallback = Arc<dyn Fn()>;
+pub type LongPressSimpleCallback = Rc<dyn Fn()>;
 
 /// Callback for long press start events
-pub type LongPressStartCallback = Arc<dyn Fn(LongPressStartDetails)>;
+pub type LongPressStartCallback = Rc<dyn Fn(LongPressStartDetails)>;
 
 /// Callback for long press move/up/cancel events
-pub type LongPressCallback = Arc<dyn Fn(LongPressDetails)>;
+pub type LongPressCallback = Rc<dyn Fn(LongPressDetails)>;
 
 /// Details about long press down (initial contact)
 #[derive(Debug, Clone, PartialEq)]
@@ -200,7 +200,7 @@ impl LongPressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(LongPressDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_long_press_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_down = Some(Rc::new(callback));
         self
     }
 
@@ -210,7 +210,7 @@ impl LongPressGestureRecognizer {
     /// duration threshold is reached. For detailed information, use
     /// `with_on_long_press_start` instead.
     pub fn with_on_long_press(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_long_press = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press = Some(Rc::new(callback));
         self
     }
 
@@ -219,7 +219,7 @@ impl LongPressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(LongPressStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_long_press_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_start = Some(Rc::new(callback));
         self
     }
 
@@ -229,7 +229,7 @@ impl LongPressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_long_press_move_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_move_update = Some(Rc::new(callback));
         self
     }
 
@@ -239,7 +239,7 @@ impl LongPressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_long_press_up = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_up = Some(Rc::new(callback));
         self
     }
 
@@ -252,7 +252,7 @@ impl LongPressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_long_press_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_end = Some(Rc::new(callback));
         self
     }
 
@@ -261,7 +261,7 @@ impl LongPressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_long_press_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_long_press_cancel = Some(Rc::new(callback));
         self
     }
 

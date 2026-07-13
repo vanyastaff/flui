@@ -44,7 +44,7 @@
     dead_code
 )]
 
-use std::{fmt, sync::Arc};
+use std::{fmt, rc::Rc, sync::Arc};
 
 use flui_foundation::{Listenable, ListenerId};
 
@@ -264,7 +264,7 @@ pub struct AnimationListener {
     /// concrete listenable type is captured at construction time
     /// (when the typed `V::listenable()` call site is in scope) — the
     /// closure body merely `Arc::clone`s the captured handle.
-    pub listenable_provider: Box<dyn Fn() -> Arc<dyn Listenable> + Send + Sync>,
+    pub listenable_provider: Rc<dyn Fn() -> Arc<dyn Listenable>>,
     /// Identifier returned by the `Listenable::add_listener` call;
     /// passed to `remove_listener` on detach.
     pub listener_id: ListenerId,
@@ -274,7 +274,7 @@ impl AnimationListener {
     /// Construct a listener handle from a captured listenable provider
     /// and the listener-id returned by the matching `add_listener` call.
     pub fn new(
-        listenable_provider: Box<dyn Fn() -> Arc<dyn Listenable> + Send + Sync>,
+        listenable_provider: Rc<dyn Fn() -> Arc<dyn Listenable>>,
         listener_id: ListenerId,
     ) -> Self {
         Self {
@@ -285,10 +285,8 @@ impl AnimationListener {
 
     /// Re-acquire the captured listenable handle.
     ///
-    /// Invokes the stored thunk, which `Arc::clone`s the listenable
-    /// captured at construction time. The closure is `Send + Sync`
-    /// (required by the field bound), so calls are safe across
-    /// threads.
+    /// Invokes the stored owner-local thunk, which `Arc::clone`s the
+    /// listenable captured at construction time.
     pub fn listenable(&self) -> Arc<dyn Listenable> {
         (self.listenable_provider)()
     }
@@ -797,7 +795,7 @@ mod tests {
         let notifier: Arc<dyn Listenable> = Arc::new(ChangeNotifier::new());
         let captured = Arc::clone(&notifier);
         let listener =
-            AnimationListener::new(Box::new(move || Arc::clone(&captured)), ListenerId::new(1));
+            AnimationListener::new(Rc::new(move || Arc::clone(&captured)), ListenerId::new(1));
 
         // Call the thunk; the returned handle must point at the
         // same listenable we captured.
@@ -815,12 +813,35 @@ mod tests {
 
         let notifier: Arc<dyn Listenable> = Arc::new(ChangeNotifier::new());
         let listener =
-            AnimationListener::new(Box::new(move || Arc::clone(&notifier)), ListenerId::new(42));
+            AnimationListener::new(Rc::new(move || Arc::clone(&notifier)), ListenerId::new(42));
         let debug = format!("{listener:?}");
         assert!(debug.contains("AnimationListener"));
         assert!(debug.contains("listener_id"));
         // The thunk closure must NOT leak into Debug output — there
-        // is no useful representation for `Box<dyn Fn() -> ...>`.
+        // is no useful representation for the provider closure.
         assert!(!debug.contains("listenable_provider"));
+    }
+
+    #[test]
+    fn animation_listener_provider_accepts_owner_local_rc_state() {
+        use std::cell::Cell;
+
+        use flui_foundation::{ChangeNotifier, ListenerId};
+
+        let notifier: Arc<dyn Listenable> = Arc::new(ChangeNotifier::new());
+        let calls = Rc::new(Cell::new(0));
+        let calls_for_provider = Rc::clone(&calls);
+        let captured = Arc::clone(&notifier);
+        let listener = AnimationListener::new(
+            Rc::new(move || {
+                calls_for_provider.set(calls_for_provider.get() + 1);
+                Arc::clone(&captured)
+            }),
+            ListenerId::new(7),
+        );
+
+        let returned = listener.listenable();
+        assert!(Arc::ptr_eq(&returned, &notifier));
+        assert_eq!(calls.get(), 1);
     }
 }

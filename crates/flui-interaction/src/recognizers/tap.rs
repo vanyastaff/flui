@@ -87,7 +87,7 @@ impl TapButton {
 }
 
 /// Callback for tap events
-pub type TapCallback = Arc<dyn Fn(TapDetails)>;
+pub type TapCallback = Rc<dyn Fn(TapDetails)>;
 
 /// Details about a tap gesture
 #[derive(Debug, Clone, PartialEq)]
@@ -297,7 +297,7 @@ impl TapGestureRecognizer {
 
     /// Set the tap down callback
     pub fn with_on_tap_down(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tap_down = Some(Rc::new(callback));
         self
     }
 
@@ -306,19 +306,19 @@ impl TapGestureRecognizer {
     /// This callback is triggered when a pointer that initiated a tap moves
     /// but stays within the slop tolerance.
     pub fn with_on_tap_move(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_move = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tap_move = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap up callback
     pub fn with_on_tap_up(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_up = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tap_up = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap callback (called on successful tap)
     pub fn with_on_tap(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tap = Some(Rc::new(callback));
         self
     }
 
@@ -327,7 +327,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tap_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -340,7 +340,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_secondary_tap_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap_down = Some(Rc::new(callback));
         self
     }
 
@@ -349,7 +349,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_secondary_tap_up = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap_up = Some(Rc::new(callback));
         self
     }
 
@@ -358,7 +358,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_secondary_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap = Some(Rc::new(callback));
         self
     }
 
@@ -367,7 +367,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_secondary_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_secondary_tap_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -380,7 +380,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tertiary_tap_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap_down = Some(Rc::new(callback));
         self
     }
 
@@ -389,7 +389,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tertiary_tap_up = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap_up = Some(Rc::new(callback));
         self
     }
 
@@ -398,7 +398,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tertiary_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap = Some(Rc::new(callback));
         self
     }
 
@@ -407,7 +407,7 @@ impl TapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(TapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_tertiary_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_tertiary_tap_cancel = Some(Rc::new(callback));
         self
     }
 

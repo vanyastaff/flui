@@ -27,16 +27,16 @@ pub const FORCE_PRESS_START_PRESSURE: f32 = 0.4;
 pub const FORCE_PRESS_PEAK_PRESSURE: f32 = 0.85;
 
 /// Callback for force press start events
-pub type ForcePressStartCallback = Arc<dyn Fn(ForcePressDetails)>;
+pub type ForcePressStartCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Callback for force press update events
-pub type ForcePressUpdateCallback = Arc<dyn Fn(ForcePressDetails)>;
+pub type ForcePressUpdateCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Callback for force press peak events
-pub type ForcePressPeakCallback = Arc<dyn Fn(ForcePressDetails)>;
+pub type ForcePressPeakCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Callback for force press end events
-pub type ForcePressEndCallback = Arc<dyn Fn(ForcePressDetails)>;
+pub type ForcePressEndCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Recognizes force press gestures based on pressure sensitivity
 ///
@@ -208,7 +208,7 @@ impl ForcePressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
         self
     }
 
@@ -219,7 +219,7 @@ impl ForcePressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
         self
     }
 
@@ -230,7 +230,7 @@ impl ForcePressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_peak = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_peak = Some(Rc::new(callback));
         self
     }
 
@@ -241,7 +241,7 @@ impl ForcePressGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
         self
     }
 

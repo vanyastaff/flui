@@ -20,16 +20,16 @@ use crate::{
 };
 
 /// Callback for scale start events
-pub type ScaleStartCallback = Arc<dyn Fn(ScaleStartDetails)>;
+pub type ScaleStartCallback = Rc<dyn Fn(ScaleStartDetails)>;
 
 /// Callback for scale update events
-pub type ScaleUpdateCallback = Arc<dyn Fn(ScaleUpdateDetails)>;
+pub type ScaleUpdateCallback = Rc<dyn Fn(ScaleUpdateDetails)>;
 
 /// Callback for scale end events
-pub type ScaleEndCallback = Arc<dyn Fn(ScaleEndDetails)>;
+pub type ScaleEndCallback = Rc<dyn Fn(ScaleEndDetails)>;
 
 /// Callback for scale cancel events
-pub type ScaleCancelCallback = Arc<dyn Fn()>;
+pub type ScaleCancelCallback = Rc<dyn Fn()>;
 
 /// Details about scale gesture start
 #[derive(Debug, Clone, PartialEq)]
@@ -206,7 +206,7 @@ impl ScaleGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(ScaleStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
         self
     }
 
@@ -215,7 +215,7 @@ impl ScaleGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(ScaleUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
         self
     }
 
@@ -224,13 +224,13 @@ impl ScaleGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(ScaleEndDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
         self
     }
 
     /// Set the scale cancel callback
     pub fn with_on_scale_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_cancel = Some(Rc::new(callback));
         self
     }
 

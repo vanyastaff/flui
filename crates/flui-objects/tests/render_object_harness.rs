@@ -6728,7 +6728,6 @@ fn harness_render_animated_size_start_state_snaps_to_child_size_with_no_animatio
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let run = RenderTester::mount(
@@ -6757,7 +6756,6 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6827,7 +6825,6 @@ fn harness_render_animated_size_clip_appears_mid_animation_and_disappears_once_s
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6869,7 +6866,6 @@ fn harness_render_animated_size_respects_alignment_for_the_oversized_child_mid_a
         ArcCurve::new(Curves::Linear),
         Alignment::BOTTOM_RIGHT,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6903,7 +6899,6 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -6959,7 +6954,6 @@ fn harness_render_animated_size_baseline_matches_child_baseline_plus_recorded_of
         ArcCurve::new(Curves::Linear),
         Alignment::CENTER,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(
@@ -7009,7 +7003,6 @@ fn harness_render_animated_size_fast_path_tight_constraints_snaps_and_leaves_off
         ArcCurve::new(Curves::Linear),
         Alignment::BOTTOM_RIGHT,
         Clip::HardEdge,
-        None,
     );
 
     let mut run = RenderTester::mount(

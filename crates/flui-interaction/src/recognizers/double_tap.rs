@@ -29,7 +29,7 @@ use crate::{
 };
 
 /// Callback for double tap events
-pub type DoubleTapCallback = Arc<dyn Fn(DoubleTapDetails)>;
+pub type DoubleTapCallback = Rc<dyn Fn(DoubleTapDetails)>;
 
 /// Details about a double tap gesture
 #[derive(Debug, Clone, PartialEq)]
@@ -183,7 +183,7 @@ impl DoubleTapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(DoubleTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_double_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_double_tap = Some(Rc::new(callback));
         self
     }
 
@@ -192,7 +192,7 @@ impl DoubleTapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(DoubleTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_double_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_double_tap_cancel = Some(Rc::new(callback));
         self
     }
 

@@ -108,15 +108,15 @@ pub struct DragEndDetails {
 pub use crate::processing::Velocity;
 
 /// Callback fired when a pointer contacts the screen and might begin a drag.
-pub type DragDownCallback = Arc<dyn Fn(DragDownDetails)>;
+pub type DragDownCallback = Rc<dyn Fn(DragDownDetails)>;
 /// Callback fired when the drag is recognized (slop crossed and arena won).
-pub type DragStartCallback = Arc<dyn Fn(DragStartDetails)>;
+pub type DragStartCallback = Rc<dyn Fn(DragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
-pub type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails)>;
+pub type DragUpdateCallback = Rc<dyn Fn(DragUpdateDetails)>;
 /// Callback fired when the pointer lifts and the drag completes.
-pub type DragEndCallback = Arc<dyn Fn(DragEndDetails)>;
+pub type DragEndCallback = Rc<dyn Fn(DragEndDetails)>;
 /// Callback fired when the gesture is cancelled (e.g. the arena rejects it).
-pub type DragCancelCallback = Arc<dyn Fn()>;
+pub type DragCancelCallback = Rc<dyn Fn()>;
 
 /// Recognizes drag gestures
 ///
@@ -321,7 +321,7 @@ impl DragGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(DragDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_down = Some(Rc::new(callback));
         self
     }
 
@@ -330,7 +330,7 @@ impl DragGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(DragStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
         self
     }
 
@@ -339,19 +339,19 @@ impl DragGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(DragUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag end callback
     pub fn with_on_end(self: Arc<Self>, callback: impl Fn(DragEndDetails) + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag cancel callback
     pub fn with_on_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_cancel = Some(Rc::new(callback));
         self
     }
 

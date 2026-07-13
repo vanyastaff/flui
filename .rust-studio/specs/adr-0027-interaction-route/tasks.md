@@ -16,7 +16,7 @@ Flutter semantics. This file is the durable source of truth. Status: ☐ todo ·
 | 1 | Land the inert `InteractionLane`, non-ABA IDs, owner-local registry, resolved-route storage, and typed errors without changing production dispatch. | Lane/gesture/cell/route auto-traits; `WrongThread`, `InactiveRealm`, `WrongRealm`, `OwnerGone`, `TargetGone`, and `StaleRoute`; borrows end before invoke/drop; stale identities cannot alias reused slots or realms. | `systems-perf-lead` | — | ☑ done |
 | 2 | Give `UiRealm` and `HeadlessBinding` one interaction lane, activate it with owner scopes, add the narrow `RenderObjectContext`, and eliminate the test harness's double binding. | LIFO/unwind-safe activation; wrong-realm and two-realm isolation; create/update can register and replace handlers; headless pointer helpers use the same binding/lane as the mounted tree. | `chief-architect` | 1 | ☑ done |
 | 3 | Atomically migrate ordinary pointer delivery to data-only targets and one resolver/invoker used by cached and direct dispatch. | Every-target leaf-first synchronous delivery with local transforms and no `EventPropagation::Stop`; Down resolves/caches before arena close; Move reuses; Up/Cancel delivers before sweep/release; unmount/rebuild lifetime rules; per-target panic continuation and cleanup before unwind. | `api-design-lead` | 2 | ☑ done |
-| 4 | Atomically owner-localize `GestureBinding`, arena members, recognizers, and gesture callback storage, including the minimum View/State bound ripple. | No gesture callback remains behind `Arc<Mutex<_>>` or `Send + Sync`; no gesture-detail token/queue bridge; long-press, double-tap, tap, and pan retain Flutter ordering through real `HeadlessBinding`; render data remains `Send + Sync`. | `systems-perf-lead` | 3 | ◐ in-progress |
+| 4 | Atomically owner-localize `GestureBinding`, arena members, recognizers, and gesture callback storage, including the minimum View/State bound ripple. | No gesture callback remains behind `Arc<Mutex<_>>` or `Send + Sync`; no gesture-detail token/queue bridge; long-press, double-tap, tap, and pan retain Flutter ordering through real `HeadlessBinding`; render data remains `Send + Sync`. | `systems-perf-lead` | 3 | ☑ done |
 | 5 | Atomically migrate `MouseRegion` and mouse tracking to data-only targets with owner-local strong annotations. | Enter/hover/exit are local callbacks; previous annotations survive long enough to emit Exit after removal; new/current annotation diffing and panic/drop behavior are covered without executable closures in render storage. | `api-design-lead` | 4 | ☑ done |
 | 6 | Complete ADR-0027 step 2c with a realm-local `NavigatorHandle` and `UiCommandSender` as the only cross-thread navigation ingress. | Navigation mutations are owner-thread capabilities; no generic UI-thread executor or cross-thread closure API; wrong/dead realm behavior is typed and tested. | `api-design-lead` | 2 | ☑ done |
 | 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ◐ in-progress |
@@ -93,6 +93,24 @@ and navigation ownership contract are complete.
   restore `Send + Sync` to UI callbacks: it is the Task 6/7 `Navigator`/animation
   owner-lane bridge seam, where render-safe `Animation/Listenable` data must remain
   `Send + Sync` while route/widget actions execute on the owner lane.
+- 2026-07-12 Task 4 closure checkpoint: recognizer callback aliases now use
+  owner-local `Rc<dyn Fn>` rather than `Arc<dyn Fn>` across tap, double-tap,
+  long-press, drag, multi-tap, tap-and-drag, scale, and force-press.
+  `MultiDragStartCallback` also moved from `Arc<dyn Fn + Send + Sync>` stored
+  behind `Arc<Mutex<Option<_>>>` to `Rc<dyn Fn>` stored behind
+  `Rc<RefCell<Option<_>>>`. Recognizer handles, arena members, pointer states,
+  settings, and returned `MultiDragHandle` objects keep their existing shared
+  data/identity contracts; the executable gesture callback plane is owner-local.
+  Evidence: `cargo check -p flui-interaction --tests`, `cargo test -p
+  flui-interaction on_start_accepts_owner_local_rc_state --lib`, `cargo test
+  -p flui-interaction tap_callback_accepts_owner_local_rc_state --lib`, `cargo
+  test -p flui-interaction multidrag --lib`, `cargo test -p flui-interaction
+  --lib`, `cargo check -p flui-widgets --tests`, `cargo test -p
+  flui-interaction --test headless_long_press`, `cargo test -p flui-widgets
+  --test gesture_detector_advanced`, `cargo fmt -p flui-interaction -p
+  flui-widgets --check`, `cargo clippy -p flui-interaction -p flui-widgets
+  --all-targets -- -D warnings`, and a grep guard for stale recognizer
+  callback `Arc`/`Send + Sync` storage pass.
 - 2026-07-12 follow-up checkpoint: the two `flui-widgets --lib` animation-listener
   seams are now bridged without weakening the data plane. `HeroFlight` no longer
   captures `FlightInner`/`FlightManager` in `ProxyAnimation` callbacks: value ticks
@@ -280,6 +298,30 @@ and navigation ownership contract are complete.
   flui-widgets shortcuts --lib`, `cargo test -p flui-widgets --lib`, `cargo
   fmt -p flui-interaction -p flui-widgets`, and `cargo clippy -p
   flui-interaction -p flui-widgets --all-targets -- -D warnings` pass.
+- 2026-07-12 `AnimatedSize::on_end` bridge checkpoint (Task 7):
+  `AnimatedSize::on_end` moved from `Arc<dyn Fn() + Send + Sync>` to
+  owner-local `Rc<dyn Fn()>`. `RenderAnimatedSize` no longer stores, updates,
+  subscribes, or invokes the user callback; it only keeps the render/layout
+  controller listener that marks layout dirty. The owning `AnimatedSizeState`
+  subscribes to the controller status channel with a data-only `Send + Sync`
+  listener that increments an atomic completion counter and schedules a rebuild
+  via `RebuildHandle`; owner-local `build` drains the counter and invokes the
+  latest callback. Evidence: `cargo test -p flui-widgets --test animated_size
+  animated_size_on_end_accepts_owner_local_rc_state`, `cargo test -p
+  flui-widgets --test animated_size`, `cargo test -p flui-objects
+  animated_size --lib`, `cargo test -p flui-objects --test
+  render_object_harness harness_render_animated_size`, `cargo clippy -p
+  flui-objects -p flui-widgets --all-targets -- -D warnings`, and stale-pattern
+  grep for render-level `on_end` callback storage pass.
+- 2026-07-12 `AnimationListener` provider checkpoint (Task 7):
+  `AnimationListener::listenable_provider` moved from
+  `Box<dyn Fn() -> Arc<dyn Listenable> + Send + Sync>` to owner-local
+  `Rc<dyn Fn() -> Arc<dyn Listenable>>`. The thunk only re-clones the
+  captured listenable in the element owner plane; the listenable itself remains
+  the data-plane rebuild source. Evidence: `cargo test -p flui-view
+  animation_listener --lib`, `cargo check -p flui-view --tests`, `cargo clippy
+  -p flui-view --all-targets -- -D warnings`, and `cargo fmt -p flui-view
+  --check` pass.
 - Tasks 3–5 must check the corresponding `.flutter/` sources before claiming parity.
   A green gate without behavioral evidence does not satisfy their acceptance slices.
 - No task may introduce a generic UI-thread executor, queue the current pointer event,

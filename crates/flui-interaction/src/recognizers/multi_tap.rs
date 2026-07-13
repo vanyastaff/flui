@@ -29,7 +29,7 @@ use crate::{
 };
 
 /// Callback for multi-tap events
-pub type MultiTapCallback = Arc<dyn Fn(MultiTapDetails)>;
+pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;
 
 /// Details about a multi-tap gesture
 #[derive(Debug, Clone, PartialEq)]
@@ -205,7 +205,7 @@ impl MultiTapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(MultiTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_multi_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_multi_tap = Some(Rc::new(callback));
         self
     }
 
@@ -214,7 +214,7 @@ impl MultiTapGestureRecognizer {
         self: Arc<Self>,
         callback: impl Fn(MultiTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_multi_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_multi_tap_cancel = Some(Rc::new(callback));
         self
     }
 
