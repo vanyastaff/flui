@@ -11,7 +11,14 @@ description = "Hot-reload support for FLUI scene plugins via dynamic library loa
 
 [features]
 default = []
-app-plugin = ["dep:flui-foundation", "dep:flui-view", "flui-view/runtime-internals", "dep:flui-rendering", "dep:flui-types", "dep:parking_lot"]
+app-plugin = [
+    "dep:flui-foundation",
+    "dep:flui-view",
+    "flui-view/runtime-internals",
+    "dep:flui-rendering",
+    "dep:flui-types",
+    "dep:parking_lot",
+]
 # Layer 1: debounced source watching for `flui-cli` / `flui-devtools`
 source-watch = ["dep:notify-debouncer-mini"]
 

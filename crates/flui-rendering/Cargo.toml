@@ -28,9 +28,9 @@ bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = "2.0"
 dyn-clone = "1.0"
-slab = "0.4"                       # For RenderTree storage
+slab = "0.4"                             # For RenderTree storage
 crossbeam-channel = { workspace = true } # PipelineOwnerHandle bounded mark-dirty channel
-rustc-hash = { workspace = true }  # FxHashSet for layout cycle guard
+rustc-hash = { workspace = true }        # FxHashSet for layout cycle guard
 
 # Segmented-stack growth for the recursive pipeline walks (layout /
 # paint / hit-test / intrinsics). A ~1000-level chain overflows the
