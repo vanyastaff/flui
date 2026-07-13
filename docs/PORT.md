@@ -459,8 +459,8 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Object?` (nullable untyped) | `Option<Box<dyn Any + Send>>` at FFI boundary only — usually a sign the source needs a typed enum | Flag with `// TODO(port): typed-enum candidate`. |
 | `void` (return) | `()` | Never `Result<(), ()>` — use `Result<(), ErrorType>` if fallible. |
 | `Never` (return) | `!` (never type) or `core::convert::Infallible` | Diverging fns use `-> !`; type-system slot for "this Result branch is impossible" uses `Infallible`. |
-| `Function` (untyped) | **forbidden** — narrow to `fn(Args) -> R` (zero-overhead fn pointer) or `Box<dyn Fn(Args) -> R + Send + Sync>` (owned callback storage, sanctioned by FR-029 #5) | Typed function pointers always win when the call site has a fixed signature. |
-| `typedef Cb = void Function(int)` | `type Cb = fn(i32);` for zero-overhead; `type Cb = Box<dyn Fn(i32) + Send + Sync>;` for owned storage | Owned-storage variant carries the `+ Send + Sync` bound to interop with `Listenable` plumbing. |
+| `Function` (untyped) | **forbidden** — narrow to `fn(Args) -> R` (zero-overhead fn pointer), `Rc<dyn Fn(Args) -> R>` for owner-authored UI callbacks, or `Box/Arc<dyn Fn(Args) -> R + Send + Sync>` only for data-plane/shared-service storage | Typed function pointers always win when the call site has a fixed signature. ADR-0027 forbids teaching `Send + Sync` as the default UI callback shape. |
+| `typedef Cb = void Function(int)` | `type Cb = fn(i32);` for zero-overhead; `type Cb = Rc<dyn Fn(i32)>` for owner-local UI storage; `Box/Arc<dyn Fn(i32) + Send + Sync>` only for data-plane/shared-service storage | Owner-plane callbacks may capture `Rc<Cell<_>>`; data-plane callbacks must not capture UI state. |
 | `Symbol` | `&'static str` or `core::any::TypeId` | Use `TypeId` for the `InheritedView` registry; use `&'static str` for `debug_name` slots. |
 | `DateTime` | `std::time::SystemTime` (wall clock) or `std::time::Instant` (monotonic) | Use `Instant` for frame timing; `SystemTime` for serialised timestamps only. |
 | `Duration` | `std::time::Duration` | 1:1. |
@@ -498,8 +498,8 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Notification` | `Notification` trait (sanctioned by FR-029) + `NotifiableElement` | `flui-view`. Bubble dispatch via element walk. |
 | `ChangeNotifier` | `Listenable` trait (sanctioned by FR-029) | `flui-foundation`. Multiple impls; `ChangeNotifier` struct is a default fan-out impl. |
 | `ValueNotifier<T>` | `ValueNotifier<T>` struct implementing `Listenable` | `flui-foundation`. |
-| `ValueChanged<T>` callback | `Arc<dyn Fn(T) + Send + Sync>` (owned storage — matches `crates/flui-foundation/src/callbacks.rs:70`) or `&dyn Fn(T)` (borrowed param) | Storage form sanctioned by FR-029 #5. `Arc` not `Box` because the listener registry clones callbacks across notifier fan-out. Note: `crates/flui-foundation/ARCHITECTURE.md:62` is stale and still says `Box<dyn Fn(T)>` — graft pending. |
-| `VoidCallback` | `Arc<dyn Fn() + Send + Sync>` (storage — matches `crates/flui-foundation/src/callbacks.rs:51`) or `&dyn Fn()` (param) | Same. |
+| `ValueChanged<T>` callback | `Rc<dyn Fn(T)>` for owner-authored widget/view callbacks; `Arc<dyn Fn(T) + Send + Sync>` only for data-plane/shared-service callback aliases such as `flui-foundation::ValueChanged` | ADR-0027 split: widget authoring is owner-local; listener registries or cross-thread services keep explicit thread-safe aliases. |
+| `VoidCallback` | `Rc<dyn Fn()>` for owner-authored widget/view callbacks; `Arc<dyn Fn() + Send + Sync>` only for data-plane/shared-service aliases such as `flui-foundation::VoidCallback` | Same split. Do not add `Send + Sync` to public widget callbacks unless the callback is actually executed off the owner lane. |
 | `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (active; see `## Index`). |
 | `Listenable` (Dart base class) | `Listenable` trait — `flui-foundation` | Multiple-source: also see `Animation` for animation-as-listenable. |
 | `mixin Foo on Bar` | `trait Foo` + `#[delegate(Foo)]` via `ambassador` (workspace dep) | See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "mixin". |
@@ -556,7 +556,7 @@ Patterns, not types. When a Dart construct could compile to multiple Rust shapes
 |---|---|---|
 | `(int x) => x * 2` (arrow lambda) | `\|x: i32\| x * 2` | Type annotation usually elided. |
 | `(int x) { return x * 2; }` (block lambda) | `\|x: i32\| { x * 2 }` | Same. |
-| `void Function() cb = () { ... };` (storage) | `let cb: Box<dyn Fn() + Send + Sync> = Box::new(\|\| { ... });` | Storage form per FR-029 #5. |
+| `void Function() cb = () { ... };` (storage) | `let cb: Rc<dyn Fn()> = Rc::new(\|\| { ... });` for owner-plane UI storage; use `Arc<dyn Fn() + Send + Sync>` only for explicit data-plane/shared-service storage | ADR-0027 owner-local callback default. |
 | `cb()` (invocation) | `cb()` | Boxed closures call directly. |
 | capture by reference (Dart default) | move closures explicitly with `move \|\| { ... }` when crossing threads | Rust closure capture is inferred; `move` forces by-value. |
 

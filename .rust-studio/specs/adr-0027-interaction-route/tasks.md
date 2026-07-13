@@ -2,7 +2,7 @@
 
 # Tasks: ADR-0027 owner-routed interaction routes
 
-- **Spec:** [`spec.md`](spec.md)   ·   **Updated:** `2026-07-12`
+- **Spec:** [`spec.md`](spec.md)   ·   **Updated:** `2026-07-13`
 
 ## Task list
 
@@ -20,8 +20,8 @@ Flutter semantics. This file is the durable source of truth. Status: ☐ todo ·
 | 5 | Atomically migrate `MouseRegion` and mouse tracking to data-only targets with owner-local strong annotations. | Enter/hover/exit are local callbacks; previous annotations survive long enough to emit Exit after removal; new/current annotation diffing and panic/drop behavior are covered without executable closures in render storage. | `api-design-lead` | 4 | ☑ done |
 | 6 | Complete ADR-0027 step 2c with a realm-local `NavigatorHandle` and `UiCommandSender` as the only cross-thread navigation ingress. | Navigation mutations are owner-thread capabilities; no generic UI-thread executor or cross-thread closure API; wrong/dead realm behavior is typed and tested. | `api-design-lead` | 2 | ☑ done |
 | 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ☑ done |
-| 8 | Verify Flutter parity, destruction/reentrancy safety, public API shape, and measured routing cost across the completed slice. | Cached/direct parity; unmount/rebuild/stale-route/realm teardown cases; `DropProbe` owner-thread/outside-borrow coverage; nested/reentrant and panic cleanup; Criterion 1/4/16-target baselines and common-Move allocation evidence; semver/API review. | `qa-lead` | 7 | ◐ in-progress |
-| 9 | Reconcile ADR-0027 and project documentation with the implementation, run final gates, and complete `/spec-verify`. | ADR status and consequences match shipped ownership; architecture/API docs contain no obsolete closure path; format, inventory, port-check, clippy, tests, doctests, docs, and applicable platform/render gates pass with evidence. | `chief-architect` | 8 | ☐ todo |
+| 8 | Verify Flutter parity, destruction/reentrancy safety, public API shape, and measured routing cost across the completed slice. | Cached/direct parity; unmount/rebuild/stale-route/realm teardown cases; `DropProbe` owner-thread/outside-borrow coverage; nested/reentrant and panic cleanup; Criterion 1/4/16-target baselines and common-Move allocation evidence; semver/API review. | `qa-lead` | 7 | ☑ done |
+| 9 | Reconcile ADR-0027 and project documentation with the implementation, run final gates, and complete `/spec-verify`. | ADR status and consequences match shipped ownership; architecture/API docs contain no obsolete closure path; format, inventory, port-check, clippy, tests, doctests, docs, and applicable platform/render gates pass with evidence. | `chief-architect` | 8 | ☑ done |
 
 ## Critical path
 
@@ -462,7 +462,7 @@ and navigation ownership contract are complete.
   `Rc<dyn Fn(RawPointerEvent)>`, and `RawInputHandler` internal state moved
   from `Arc<Mutex<_>>` / `Arc<AtomicBool>` to `Rc<RefCell<_>>` / `Rc<Cell<_>>`.
   Raw input is now an owner-runtime direct-input facility instead of a
-  thread-safe callback container. Event conversion, delta tracking,
+  cross-thread callback container. Event conversion, delta tracking,
   enable/disable behavior, reset, and pointer-position queries are preserved.
   Evidence: `cargo check -p flui-interaction --tests`, `cargo test -p
   flui-interaction raw_input --lib`, and stale-pattern `rg` for raw input
@@ -496,6 +496,67 @@ and navigation ownership contract are complete.
   clip_path --lib`, `cargo test -p flui-widgets --test clip`, and stale-pattern
   `rg` for public `ClipPath` `Send + Sync` / render-storage clipper bridge
   pass.
+- 2026-07-13 Task 8 verification checkpoint: Flutter
+  `gestures/binding.dart` was re-checked for the pointer-route contract:
+  `_hitTests` is cached at Down, reused for Move, removed at Up/Cancel, and
+  every hit-test entry is delivered even after an earlier target throws. FLUI's
+  owner-routed model preserves the retained-path behavior, with the Rust
+  adaptation that per-target panics are captured, later targets still run, and
+  the first panic resumes only after mandatory cleanup. Safety evidence:
+  `cargo test -p flui-interaction interaction_lane --lib`, `cargo test -p
+  flui-interaction --test interaction_lane`, `cargo test -p flui-interaction
+  down_caches_route_and_up_delivers_after_target_unregisters --lib`, `cargo
+  test -p flui-interaction cached_route --lib`, `cargo test -p
+  flui-interaction per_target_panic --lib`, `cargo test -p flui-interaction
+  mouse_tracker --lib`, `cargo test -p flui-interaction
+  flush_pending_moves_with_resampling_off_dispatches_directly --lib`, `cargo
+  test -p flui-interaction
+  flush_with_resampling_on_dispatches_move_not_drops_it --lib`, and `cargo
+  test -p flui-interaction dispatch_scroll --lib` pass. Perf/allocation
+  evidence: added `pointer_route_bench` with 1/4/16-target Criterion baselines
+  for route resolution, cached common-Move invocation, and direct dispatch;
+  `cargo bench -p flui-interaction --bench pointer_route_bench -- --sample-size
+  10 --measurement-time 1 --warm-up-time 1` reports cached common-Move
+  invocation at approximately 31 ns / 39 ns / 63 ns for 1/4/16 targets, direct
+  dispatch at approximately 124 ns / 194 ns / 563 ns, and route resolution at
+  approximately 77 ns / 98 ns / 282 ns. Added
+  `pointer_route_hot_path.rs`, whose counted test proves cached Move route
+  invocation allocates zero heap after setup; `cargo test -p flui-interaction
+  --test pointer_route_hot_path` passes. API/semver evidence:
+  `cargo public-api` diff against `HEAD~1` shows expected MAJOR-class
+  pre-1.0 changes (`RectProvider` from `Arc + Send + Sync` to owner-local
+  `Rc`, plus additive `ShaderMaskTarget` / `resolve_shader_mask_target`);
+  `cargo semver-checks check-release -p flui-interaction --baseline-rev
+  HEAD~1` passes because it does not detect that type-alias bound break, so
+  the public-api diff is the authoritative classification for that slice.
+  Broader `cargo semver-checks check-release -p flui-interaction
+  --baseline-rev origin/main` correctly requires a new major/pre-1.0 breaking
+  release for the ADR-0027 branch: public owner-runtime types intentionally
+  lose `Send`/`Sync`, old executable closure fields/methods disappear, and
+  hit-test/mouse/focus traversal APIs change shape. `cargo doc -p
+  flui-interaction --no-deps`, `cargo fmt -p flui-interaction -- --check`,
+  `git diff --check`, `cargo clippy -p flui-interaction --all-targets --
+  -D warnings`, and `cargo bench -p flui-interaction --bench
+  pointer_route_bench --no-run` pass.
+- 2026-07-13 Task 9 verification checkpoint: ADR-0027 and port docs now match
+  the shipped owner-affine interaction-routing wave. The ADR records the
+  landed owner-routed callback seams, `NavigatorHandle` owner-affinity,
+  `UiCommandSender` navigation ingress, typed render/hit-test targets, and
+  the required pre-1.0 breaking release classification. `docs/PORT.md`,
+  `crates/flui-view/UNIFIED_ELEMENT.md`, and
+  `crates/flui-foundation/src/callbacks.rs` no longer teach `Send + Sync` as
+  the default shape for owner-authored UI callbacks; they distinguish
+  owner-plane `Rc<dyn Fn...>` storage from data-plane/shared-service
+  `Arc`/`Box + Send + Sync` storage. A stale-pattern scan for the old callback
+  and gesture/Navigator wording is clean. Final gates: `just fmt-check`,
+  `just inventory-check`, `just port-check`, `git diff --check`,
+  `just clippy`, `cargo nextest run --workspace --exclude flui-platform`
+  (6247 passed, 4 skipped), `just test-doc`, and
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude flui-platform
+  --no-deps --document-private-items` pass. `flui-platform` tests remain
+  intentionally excluded from the final test gate because AGENTS.md documents
+  those native platform contract tests as excluded from CI while the Linux
+  platform stubs are under investigation.
 - Tasks 3–5 must check the corresponding `.flutter/` sources before claiming parity.
   A green gate without behavioral evidence does not satisfy their acceptance slices.
 - No task may introduce a generic UI-thread executor, queue the current pointer event,

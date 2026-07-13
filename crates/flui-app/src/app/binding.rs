@@ -260,7 +260,7 @@ impl AppBinding {
     /// below the root (`AnimatedOpacity`, `AnimatedContainer`, …) registers its
     /// controller into the binding's vsync registry without any app-author
     /// boilerplate — the binding ticks that registry once per frame
-    /// (before the build phase in [`draw_frame`](Self::draw_frame)).
+    /// (before the frame's build phase).
     ///
     /// ## Invariant — the binding owns the root scope
     ///
@@ -279,7 +279,7 @@ impl AppBinding {
     /// # Errors
     ///
     /// Forwards every [`AttachError`](flui_view::AttachError) the
-    /// underlying [`WidgetsBinding::attach_root_widget`] returns —
+    /// underlying [`flui_view::WidgetsBinding::attach_root_widget`] returns —
     /// notably [`AttachError::AlreadyAttached`](flui_view::AttachError::AlreadyAttached)
     /// when a root widget is already mounted. Callers MUST handle the
     /// `Result`: an earlier version logged the error and swallowed it,
@@ -338,7 +338,7 @@ impl AppBinding {
     /// # Errors
     ///
     /// Forwards every [`AttachError`](flui_view::AttachError) from
-    /// [`WidgetsBinding::attach_root_widget_with_size`].
+    /// [`flui_view::WidgetsBinding::attach_root_widget_with_size`].
     pub(crate) fn attach_root_widget_with_size<V>(
         &self,
         realm: &super::ui_realm::UiRealm,
@@ -1261,8 +1261,8 @@ mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
 
         use flui_interaction::PointerId;
-        use flui_interaction::events::{PointerEvent, PointerType, make_down_event_for_id};
-        use flui_interaction::routing::HitTestResult;
+        use flui_interaction::events::{PointerType, make_down_event_for_id};
+        use flui_interaction::routing::{HitTestResult, PointerRouteHandler};
         use flui_types::geometry::{Offset, Pixels};
 
         // A handler registered on the gesture binding the public accessor
@@ -1278,8 +1278,7 @@ mod tests {
 
         let fired = Arc::new(AtomicBool::new(false));
         let f = fired.clone();
-        let handler: Arc<dyn Fn(&PointerEvent) + Send + Sync> =
-            Arc::new(move |_| f.store(true, Ordering::Relaxed));
+        let handler: PointerRouteHandler = Rc::new(move |_| f.store(true, Ordering::Relaxed));
         app.gestures().pointer_router().add_route(pointer, handler);
 
         // Dispatch straight through the accessor-exposed binding via the
